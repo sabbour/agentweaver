@@ -1375,6 +1375,17 @@ public interface ISandboxLeaseStore
         SandboxLeaseProvisionIntent intent,
         CancellationToken cancellationToken);
 
+    /// <summary>Reserves a P1 Sandbox operation and binding link atomically under the Environment owner lock.</summary>
+    Task<SandboxLeaseReservation> ReserveP1ProvisionAsync(
+        EnvironmentGenerationFence fence,
+        string idempotencyKey,
+        string workspaceVolumeId,
+        SandboxLeaseProvisionIntent intent,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task> beforeCommitCheck) =>
+        throw new NotSupportedException("The Sandbox lease owner cannot retain P1 creation links.");
+
     /// <summary>Reads the current lease while requiring the exact current Environment fence.</summary>
     Task<SandboxLeaseSnapshot?> GetCurrentAsync(
         EnvironmentGenerationFence fence,
@@ -1419,6 +1430,20 @@ public interface ISandboxLeaseStore
         CancellationToken cancellationToken,
         Guid? providerAttemptId = null,
         string? providerErrorCode = null);
+
+    /// <summary>Commits the actual P1 Sandbox resource and binding link in the owner transaction.</summary>
+    Task<SandboxLeaseSnapshot> CompleteP1ProvisionAsync(
+        Guid operationId,
+        EnvironmentGenerationFence fence,
+        SandboxProvisionedResource? provisionedResource,
+        bool effectMayHaveApplied,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Guid? providerAttemptId = null,
+        string? providerErrorCode = null,
+        Func<CancellationToken, Task>? beforeCommitCheck = null,
+        bool p1BindingCurrent = true) =>
+        throw new NotSupportedException("The Sandbox lease owner cannot retain P1 creation links.");
 
     /// <summary>Begins a durable provider attempt before making an external Sandbox call.</summary>
     Task<SandboxProviderAttemptReservation> BeginProviderAttemptAsync(

@@ -6,7 +6,11 @@ namespace Agentweaver.Environment;
 /// <summary>HTTP input for creating a volume with its provider specification and idempotency key.</summary>
 public sealed record CreateWorkspaceVolumeApiRequest(
     WorkspaceVolumeSpec Specification,
-    string IdempotencyKey);
+    string IdempotencyKey)
+{
+    /// <summary>Exact Core invocation expected for this P1-specific metadata creation.</summary>
+    public P1InvocationBindingExpectation? P1Binding { get; init; }
+}
 
 /// <summary>
 /// Applies caller authorization and runtime host evidence to workspace-volume lifecycle operations.
@@ -16,7 +20,8 @@ public sealed class EnvironmentWorkspaceVolumeManager(
     IProjectsConfigClient projects,
     IEnvironmentLifecycleStore lifecycleStore,
     WorkspaceVolumeService workspaceVolumes,
-    EnvironmentRuntimeBootstrapDelivery? runtimeDelivery = null)
+    EnvironmentRuntimeBootstrapDelivery? runtimeDelivery = null,
+    IEnvironmentP1InvocationBindingReader? p1BindingReader = null)
 {
     /// <summary>Resolves the exact active volume flush request for a current suspend operation.</summary>
     public async Task<WorkspaceVolumeApiFlushRequest> ResolveSuspendAsync(
@@ -99,6 +104,8 @@ public sealed class EnvironmentWorkspaceVolumeManager(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (request.P1Binding is not null)
+            throw new RuntimeAuthorizationException("p1_internal_route_required");
         ArgumentNullException.ThrowIfNull(request.Specification);
         ArgumentNullException.ThrowIfNull(request.IdempotencyKey);
         var (fence, checkAuthorization) = await AuthorizeMutationAsync(
@@ -120,6 +127,87 @@ public sealed class EnvironmentWorkspaceVolumeManager(
             checkAuthorization).ConfigureAwait(false);
     }
 
+    /// <summary>Creates P1 volume metadata only under a retained Environment binding and exact run-bound authority.</summary>
+    public async Task<EnvironmentWorkspaceVolumeSnapshot> CreateP1Async(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        string environmentId,
+        string volumeId,
+        CreateWorkspaceVolumeApiRequest request,
+        RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Specification);
+        ArgumentNullException.ThrowIfNull(actor);
+        var expectation = request.P1Binding?.Validate() ??
+            throw new RuntimeAuthorizationException("p1_invocation_binding_expectation_required");
+        ArgumentNullException.ThrowIfNull(request.IdempotencyKey);
+        if (!string.Equals(request.Specification.VolumeId, volumeId, StringComparison.Ordinal))
+            throw new ArgumentException("The Create specification volume ID must match the route.", nameof(request));
+
+        var p1Context = await AuthorizeP1MutationAsync(
+            caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
+        var bindingReader = p1BindingReader ??
+            throw new RuntimeAuthorizationException("p1_invocation_binding_unavailable");
+        var binding = await EnvironmentP1InvocationBindingVerifier.ReadAndValidateAsync(
+            bindingReader,
+            actor,
+            p1Context.Fence.Owner,
+            p1Context.Authorization,
+            expectation,
+            cancellationToken).ConfigureAwait(false);
+
+        async Task CheckP1BindingAsync(CancellationToken token)
+        {
+            try
+            {
+                await p1Context.CheckAuthorization(token).ConfigureAwait(false);
+                var currentAuthorization = await projects.GetAuthorizationContextAsync(caller, token)
+                    .ConfigureAwait(false);
+                var current = await EnvironmentP1InvocationBindingVerifier.ReadAndValidateAsync(
+                    bindingReader,
+                    actor,
+                    p1Context.Fence.Owner,
+                    currentAuthorization,
+                    expectation,
+                    token).ConfigureAwait(false);
+                if (current != binding)
+                    throw new RuntimeAuthorizationException("p1_invocation_binding_changed");
+            }
+            catch (RuntimeAuthorizationException)
+            {
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                throw new RuntimeAuthorizationException(
+                    "p1_invocation_binding_unavailable", null, exception);
+            }
+        }
+
+        return await workspaceVolumes.CreateP1Async(
+            p1Context.Fence,
+            new WorkspaceVolumeTransitionRequest(
+                volumeId,
+                WorkspaceVolumeTransitionKind.Create,
+                0,
+                0,
+                0,
+                null,
+                request.IdempotencyKey,
+                request.Specification).ValidateFor(WorkspaceVolumeTransitionKind.Create),
+            binding,
+            cancellationToken,
+            p1Context.CheckAuthorization,
+            CheckP1BindingAsync).ConfigureAwait(false);
+    }
+
     /// <summary>Provisioning wrapper that applies current authorization around the provider operation.</summary>
     public Task<WorkspaceVolumeLifecycleResult> ProvisionAsync(
         CurrentCallerRequest caller,
@@ -128,13 +216,15 @@ public sealed class EnvironmentWorkspaceVolumeManager(
         string environmentId,
         string volumeId,
         WorkspaceVolumeApiTransitionRequest request,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        RuntimeActorAuthorization? actor = null) =>
         ApplyAsync(
             caller, projectId, runId, environmentId, volumeId, request,
             WorkspaceVolumeTransitionKind.Provision,
             static (service, fence, transition, token, check) =>
                 service.ProvisionAsync(fence, transition, token, check),
-            cancellationToken);
+            cancellationToken,
+            actor);
 
     /// <summary>Replacement wrapper that applies current authorization around the provider operation.</summary>
     public Task<WorkspaceVolumeLifecycleResult> ReplaceAsync(
@@ -276,10 +366,72 @@ public sealed class EnvironmentWorkspaceVolumeManager(
         WorkspaceVolumeTransitionKind operation,
         Func<WorkspaceVolumeService, EnvironmentGenerationFence, WorkspaceVolumeTransitionRequest,
             CancellationToken, Func<CancellationToken, Task>, Task<WorkspaceVolumeLifecycleResult>> execute,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        RuntimeActorAuthorization? actor = null)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var (fence, checkAuthorization) = await AuthorizeMutationAsync(
+        if (request.P1Binding is { } expectation)
+        {
+            if (operation != WorkspaceVolumeTransitionKind.Provision)
+                throw new RuntimeAuthorizationException("p1_invocation_binding_operation_unsupported");
+            if (actor is null)
+                throw new RuntimeAuthorizationException("p1_invocation_binding_actor_required");
+            var p1Context = await AuthorizeP1MutationAsync(
+                caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
+            var bindingReader = p1BindingReader ??
+                throw new RuntimeAuthorizationException("p1_invocation_binding_unavailable");
+            var binding = await EnvironmentP1InvocationBindingVerifier.ReadAndValidateAsync(
+                bindingReader,
+                actor,
+                p1Context.Fence.Owner,
+                p1Context.Authorization,
+                expectation,
+                cancellationToken).ConfigureAwait(false);
+
+            async Task CheckP1Binding(CancellationToken token)
+            {
+                try
+                {
+                    await p1Context.CheckAuthorization(token).ConfigureAwait(false);
+                    var currentAuthorization = await projects.GetAuthorizationContextAsync(caller, token)
+                        .ConfigureAwait(false);
+                    var current = await EnvironmentP1InvocationBindingVerifier.ReadAndValidateAsync(
+                        bindingReader,
+                        actor,
+                        p1Context.Fence.Owner,
+                        currentAuthorization,
+                        expectation,
+                        token).ConfigureAwait(false);
+                    if (current != binding)
+                        throw new RuntimeAuthorizationException("p1_invocation_binding_changed");
+                }
+                catch (RuntimeAuthorizationException)
+                {
+                    throw;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    throw new RuntimeAuthorizationException(
+                        "p1_invocation_binding_unavailable", null, exception);
+                }
+            }
+
+            return await workspaceVolumes.ProvisionP1Async(
+                p1Context.Fence,
+                request.ToTransition(volumeId, operation),
+                binding,
+                cancellationToken,
+                p1Context.CheckAuthorization,
+                CheckP1Binding).ConfigureAwait(false);
+        }
+
+        if (actor is not null)
+            throw new RuntimeAuthorizationException("p1_invocation_binding_request_invalid");
+        var (fence, checkAuthorization, _) = await AuthorizeMutationWithProjectCheckAsync(
             caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
         return await execute(
             workspaceVolumes,
@@ -287,6 +439,49 @@ public sealed class EnvironmentWorkspaceVolumeManager(
             request.ToTransition(volumeId, operation),
             cancellationToken,
             checkAuthorization).ConfigureAwait(false);
+    }
+
+    private async Task<(EnvironmentGenerationFence Fence,
+        ProjectAuthorizationContextResponse Authorization,
+        Func<CancellationToken, Task> CheckAuthorization)> AuthorizeP1MutationAsync(
+            CurrentCallerRequest caller,
+            string projectId,
+            string runId,
+            string environmentId,
+            CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ValidateRouteIdentity(projectId, runId, environmentId);
+        var initial = await ReadCurrentAuthorizationContextAsync(
+            caller, projectId, runId, tenantId: null, cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(initial.BoundProjectId, projectId, StringComparison.Ordinal) ||
+            !string.Equals(initial.BoundRunId, runId, StringComparison.Ordinal) ||
+            !HasPermission(initial, projectId, ProjectAuthorizationPermission.ReadRunSelection))
+            throw new ProjectsConfigApiException(
+                "run_selection_not_authorized",
+                "P1 Environment creation requires ReadRunSelection authority bound to the exact project and run.");
+        var owner = new EnvironmentOwnerIdentity(
+            initial.TenantId, projectId, runId, environmentId);
+        var lifecycle = await lifecycleStore.GetAsync(owner, cancellationToken).ConfigureAwait(false)
+            ?? throw new EnvironmentLifecycleException(
+                "environment_unknown",
+                "The exact Environment owner tuple is not registered.");
+        await lifecycleStore.RequireActiveAsync(lifecycle.Fence, cancellationToken).ConfigureAwait(false);
+
+        async Task CheckAuthorization(CancellationToken token)
+        {
+            var current = await ReadCurrentAuthorizationContextAsync(
+                caller, projectId, runId, owner.TenantId, token).ConfigureAwait(false);
+            if (!EnvironmentEgressManager.SameAuthorizationContext(initial, current) ||
+                !string.Equals(current.BoundProjectId, projectId, StringComparison.Ordinal) ||
+                !string.Equals(current.BoundRunId, runId, StringComparison.Ordinal) ||
+                !HasPermission(current, projectId, ProjectAuthorizationPermission.ReadRunSelection))
+                throw new ProjectsConfigApiException(
+                    "authorization_changed",
+                    "The run-bound ReadRunSelection authority changed during the P1 Environment operation.");
+        }
+
+        return (lifecycle.Fence, initial, CheckAuthorization);
     }
 
     private async Task<(EnvironmentGenerationFence Fence, Func<CancellationToken, Task> CheckAuthorization)>

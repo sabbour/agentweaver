@@ -345,7 +345,7 @@ test('Environment EF migrations map to the reviewed ordered schema versions', ()
 
   assert.deepEqual(catalog, migrationIds);
   assert.deepEqual(plan.environmentVersions, Array.from({ length: catalog.length }, (_, index) => index + 1));
-  assert.match(source, /private const int CurrentSchemaVersion = 11;/);
+  assert.match(source, /private const int CurrentSchemaVersion = 12;/);
   assert.match(source, /context\.Database\.GetMigrations\(\)/);
 });
 
@@ -362,7 +362,7 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 121);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 122);
   const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
   assert.deepEqual(projectsConfig.tables.find(table => table.table === 'casting_generation_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);
@@ -380,8 +380,12 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     ['chief_of_staff_priority_links', ['SELECT', 'INSERT', 'DELETE']],
   ])
     assert.deepEqual(orchestrator.tables.find(item => item.table === table).privileges, privileges);
-  assert.deepEqual(plan.services.map(service => service.functions.length), [6, 0, 4, 4, 23]);
-  assert.equal(plan.services.flatMap(service => service.functions).length, 37);
+  assert.deepEqual(plan.services.map(service => service.functions.length), [6, 1, 4, 4, 23]);
+  assert.equal(plan.services.flatMap(service => service.functions).length, 38);
+  assert.deepEqual(plan.services.find(service => service.schema === 'environment').functions, [{
+    signature: 'enforce_p1_creation_link_immutability()',
+    execute: false,
+  }]);
   const projectSetupGuard = plan.services
     .find(service => service.schema === 'projects_config')
     ?.functions.find(item => item.signature === 'reject_project_setup_operation_mutation()');
@@ -429,7 +433,7 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     const functions = readdirSync(directory)
       .filter(file => file.endsWith('.sql') || file.endsWith('.cs'))
       .flatMap(file => [...readFileSync(new URL(file, directory), 'utf8').matchAll(
-        /CREATE(?: OR REPLACE)? FUNCTION (?:"?\{schema\}"?|projects_config)\.([a-z_0-9]+)\(([\s\S]*?)\)/g)]
+        /CREATE(?: OR REPLACE)? FUNCTION (?:"?\{schema\}"?|projects_config|environment)\.([a-z_0-9]+)\(([\s\S]*?)\)/g)]
         .map(match => `${match[1]}(${match[2].trim() ? match[2].split(',')
           .map(parameter => parameter.trim().split(/\s+/).at(-1)).join(', ') : ''})`));
     assert.deepEqual(functions.sort(), plan.services[index].functions.map(item => item.signature).sort());

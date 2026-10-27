@@ -49,6 +49,20 @@ tooling is not switched to this operation by this source change. See [P1
 project setup receipt](./runtime-configuration.md#p1-project-setup-receipt)
 for the migration, grant-catalog, and operator-command boundaries.
 
+## P1 Environment creation binding
+
+`P1InvocationBindingExpectation` carries the expected Core and setup invocation
+IDs, setup receipt hash, accepted-selection hash, root session, and execution
+fence. These are comparison values, not caller-issued authority. Environment
+reads the actual current binding from Core using the authenticated actor and
+retains the owner-generated creation operation and result in its local
+transaction. A pending generation is not an actual provider reference.
+
+The [Environment creation contract](../architecture/environment-sandbox.md#p1-invocation-bound-creation)
+describes the source-only boundary, immutable identities, non-enrollment of old
+resources, remote-read race, and separate future Host/native join. It adds no
+sign-in flow, live grant, or deployment evidence.
+
 ## Caller attention
 
 The Orchestrator's `UserNotification` projects persisted pending coordinator

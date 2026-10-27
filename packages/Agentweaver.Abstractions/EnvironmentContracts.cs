@@ -108,7 +108,11 @@ public sealed record EnvironmentLifecycleTransitionRequest
 /// <summary>New lifecycle snapshot and whether the request replayed an earlier transition.</summary>
 public sealed record EnvironmentLifecycleTransitionResult(
     EnvironmentLifecycleSnapshot Snapshot,
-    bool Replayed);
+    bool Replayed)
+{
+    /// <summary>Exact persisted lifecycle operation ID, when returned by an owner that retains it.</summary>
+    public Guid? OperationId { get; init; }
+}
 
 /// <summary>Operations that change a workspace volume's provider resource or attachment state.</summary>
 public enum EnvironmentWorkspaceVolumeOperation
@@ -555,6 +559,14 @@ public interface IEnvironmentLifecycleStore
         CancellationToken cancellationToken,
         Func<CancellationToken, Task>? beforeCommitCheck = null);
 
+    /// <summary>Registers a P1 Environment and binds it to the verified invocation in the same owner transaction.</summary>
+    Task<EnvironmentLifecycleTransitionResult> TransitionP1Async(
+        EnvironmentLifecycleTransitionRequest request,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task> beforeCommitCheck) =>
+        throw new NotSupportedException("The Environment lifecycle owner cannot retain P1 creation links.");
+
     /// <summary>Reserves an apply/revoke effect for an exact network policy generation.</summary>
     Task<EnvironmentNetworkEffectReservation> ReserveNetworkEffectAsync(
         EnvironmentGenerationFence fence,
@@ -614,6 +626,16 @@ public interface IEnvironmentLifecycleStore
         string idempotencyKey,
         CancellationToken cancellationToken);
 
+    /// <summary>Creates P1 volume metadata and retains its exact binding in the same owner transaction.</summary>
+    Task<EnvironmentWorkspaceVolumeSnapshot> CreateP1WorkspaceVolumeAsync(
+        EnvironmentGenerationFence environmentFence,
+        string volumeId,
+        JsonElement specification,
+        string idempotencyKey,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task> beforeCommitCheck);
+
     /// <summary>Reserves provider provisioning against expected transition, resource, and data generations.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeProvisionAsync(
         EnvironmentGenerationFence environmentFence,
@@ -624,6 +646,19 @@ public interface IEnvironmentLifecycleStore
         string idempotencyKey,
         CancellationToken cancellationToken);
 
+    /// <summary>Reserves a P1 volume provision while checking Core again under the Environment owner lock.</summary>
+    Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveP1WorkspaceVolumeProvisionAsync(
+        EnvironmentGenerationFence environmentFence,
+        string volumeId,
+        long expectedTransitionRevision,
+        long expectedResourceGeneration,
+        long expectedDataGeneration,
+        string idempotencyKey,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task> beforeCommitCheck) =>
+        throw new NotSupportedException("The Environment owner cannot retain P1 Workspace creation links.");
+
     /// <summary>Completes provisioning only with the effect status and exact negotiated Storage resource.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeProvisionAsync(
         Guid operationId,
@@ -633,6 +668,19 @@ public interface IEnvironmentLifecycleStore
         WorkspaceVolumeProviderBindingSnapshot? providerBinding,
         bool effectVerified,
         CancellationToken cancellationToken);
+
+    /// <summary>Commits a P1 volume resource and its binding link atomically after current-binding revalidation.</summary>
+    Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteP1WorkspaceVolumeProvisionAsync(
+        Guid operationId,
+        EnvironmentGenerationFence environmentFence,
+        bool effectMayHaveApplied,
+        ProviderResourceRef? providerResource,
+        WorkspaceVolumeProviderBindingSnapshot? providerBinding,
+        bool effectVerified,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null) =>
+        throw new NotSupportedException("The Environment owner cannot retain P1 Workspace creation links.");
 
     /// <summary>Reconciles an uncertain volume-provision operation against current provider state.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeProvisionReconciledAsync(

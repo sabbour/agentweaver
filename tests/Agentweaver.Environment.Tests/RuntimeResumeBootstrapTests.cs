@@ -539,6 +539,15 @@ public sealed partial class RuntimeResumeBootstrapTests
         public virtual Task<SandboxLeaseReservation> ReserveProvisionAsync(EnvironmentGenerationFence fence,
             string idempotencyKey, SandboxLeaseProvisionIntent intent, CancellationToken cancellationToken) =>
             throw new BeforeEffectReachedException();
+        public virtual Task<SandboxLeaseReservation> ReserveP1ProvisionAsync(
+            EnvironmentGenerationFence fence,
+            string idempotencyKey,
+            string workspaceVolumeId,
+            SandboxLeaseProvisionIntent intent,
+            P1InvocationBinding binding,
+            CancellationToken cancellationToken,
+            Func<CancellationToken, Task> beforeCommitCheck) =>
+            throw new BeforeEffectReachedException();
         public virtual Task<SandboxLeaseSnapshot?> GetCurrentAsync(
             EnvironmentGenerationFence fence, CancellationToken cancellationToken) =>
             Task.FromResult<SandboxLeaseSnapshot?>(lease);
@@ -554,6 +563,18 @@ public sealed partial class RuntimeResumeBootstrapTests
             SandboxProvisionedResource? provisionedResource, bool effectMayHaveApplied,
             CancellationToken cancellationToken, Guid? providerAttemptId = null, string? providerErrorCode = null) =>
             throw new NotSupportedException();
+        public virtual Task<SandboxLeaseSnapshot> CompleteP1ProvisionAsync(
+            Guid operationId,
+            EnvironmentGenerationFence fence,
+            SandboxProvisionedResource? provisionedResource,
+            bool effectMayHaveApplied,
+            P1InvocationBinding binding,
+            CancellationToken cancellationToken,
+            Guid? providerAttemptId = null,
+            string? providerErrorCode = null,
+            Func<CancellationToken, Task>? beforeCommitCheck = null,
+            bool p1BindingCurrent = true) =>
+            throw new BeforeEffectReachedException();
         public virtual Task<SandboxProviderAttemptReservation> BeginProviderAttemptAsync(
             SandboxProviderAttemptRequest request, CancellationToken cancellationToken) =>
             throw new NotSupportedException();

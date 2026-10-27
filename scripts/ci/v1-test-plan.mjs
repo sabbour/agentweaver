@@ -13,6 +13,13 @@ export const testMatrix = suites.flatMap(([name, project]) =>
 
 export const brokerWeightsPath = fileURLToPath(new URL('./broker-test-weights.json', import.meta.url));
 
+export const environmentP1RequiredMethods = [
+  'P1EnvironmentRegistrationLinksTheCommittedOperationAndRejectsRetrofitting',
+  'P1ConcurrentRegistrationRetriesRetainOneExactBinding',
+  'P1WorkspaceVolumeCompletionLinksTheRealProviderIdentityAndRetainsUncertainResults',
+  'P1SandboxCompletionLinksTheActualProviderResourceAndLeaseFence',
+].map((name) => `Agentweaver.Environment.Tests.EnvironmentP1CreationLinkPostgresTests.${name}`);
+
 export function loadBrokerWeights(path = brokerWeightsPath) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
@@ -73,6 +80,22 @@ export function verifyTrx(xml) {
   }
 }
 
+/** Require actual passing results, not discovery or compilation, for each named owner-transaction test. */
+export function verifyRequiredMethods(xml, methods) {
+  const methodsById = new Map([...xml.matchAll(/<UnitTest\b[^>]*\bid="([^"]+)"[\s\S]*?<TestMethod\b[^>]*className="([^"]+)"[^>]*name="([^"]+)"/g)]
+    .map((match) => [match[1], `${match[2]}.${match[3]}`]));
+  const results = [...xml.matchAll(/<UnitTestResult\b([^>]*)>/g)].map(([, attributes]) => ({
+    method: methodsById.get(attributes.match(/\btestId="([^"]+)"/)?.[1]),
+    outcome: attributes.match(/\boutcome="([^"]+)"/)?.[1],
+  }));
+  for (const method of methods) {
+    const matches = results.filter((result) => result.method === method);
+    if (!matches.length || matches.some((result) => result.outcome !== 'Passed')) {
+      throw new Error(`Required test did not execute successfully: ${method}`);
+    }
+  }
+}
+
 function run(args, capture = false) {
   const result = spawnSync(process.env.DOTNET_HOST_PATH || 'dotnet', args, {
     encoding: 'utf8', stdio: capture ? 'pipe' : 'inherit', maxBuffer: 32 * 1024 * 1024,
@@ -118,6 +141,7 @@ function main([command, name]) {
   run(args);
   const trx = readFileSync(`${directory}/${entry.name}.trx`, 'utf8');
   verifyTrx(trx);
+  if (entry.name === 'environment') verifyRequiredMethods(trx, environmentP1RequiredMethods);
   if (methods) {
     const executed = new Set([...trx.matchAll(/<TestMethod\b[^>]*className="([^"]+)"[^>]*name="([^"]+)"/g)]
       .map((match) => `${match[1]}.${match[2]}`));

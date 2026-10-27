@@ -163,6 +163,8 @@ builder.Services.AddSingleton(ciliumOptions);
 // Owner API clients use the mounted backend CA; public issuer discovery keeps system trust.
 builder.Services.AddHttpClient<EnvironmentRuntimeOwnerContextClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
     .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
+builder.Services.AddScoped<IEnvironmentP1InvocationBindingReader>(services =>
+    services.GetRequiredService<EnvironmentRuntimeOwnerContextClient>());
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddHttpClient<
         ISandboxBuildTestAcceptedCommandVerifier,

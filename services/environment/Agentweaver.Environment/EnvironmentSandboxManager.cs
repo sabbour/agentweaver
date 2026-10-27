@@ -20,10 +20,14 @@ public sealed record SandboxProvisionApiRequest(
     long NetworkPolicyGeneration,
     string IdempotencyKey)
 {
+    /// <summary>Exact Core invocation expected for this P1-specific Sandbox provider creation.</summary>
+    public P1InvocationBindingExpectation? P1Binding { get; init; }
+
     /// <summary>Validates workspace, generation, mount, and idempotency fields before provider work begins.</summary>
     public SandboxProvisionApiRequest Validate()
     {
         _ = new WorkspaceVolumeReference("project", VolumeId, VolumeResourceGeneration).Validate();
+        P1Binding?.Validate();
         if (DataGeneration < 0 || NetworkPolicyGeneration < 1 ||
             string.IsNullOrWhiteSpace(IdempotencyKey) ||
             IdempotencyKey.Length > 128 ||
@@ -132,7 +136,8 @@ public sealed class EnvironmentSandboxManager(
     CiliumEgressProviderOptions ciliumOptions,
     EnvironmentEgressManager egressManager,
     EnvironmentRuntimeSuspendReleaseAuthority? suspendReleaseAuthority = null,
-    TimeProvider? timeProvider = null)
+    TimeProvider? timeProvider = null,
+    IEnvironmentP1InvocationBindingReader? p1BindingReader = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
@@ -143,8 +148,9 @@ public sealed class EnvironmentSandboxManager(
         string runId,
         string environmentId,
         SandboxProvisionApiRequest request,
-        CancellationToken cancellationToken) =>
-        ProvisionCoreAsync(caller, projectId, runId, environmentId, request, cancellationToken);
+        CancellationToken cancellationToken,
+        RuntimeActorAuthorization? actor = null) =>
+        ProvisionCoreAsync(caller, projectId, runId, environmentId, request, cancellationToken, actor: actor);
 
     /// <summary>Provisions a resume Sandbox while rechecking the exact accepted resume request.</summary>
     internal Task<EnvironmentSandboxResult> ProvisionResumeAsync(
@@ -169,13 +175,19 @@ public sealed class EnvironmentSandboxManager(
         SandboxProvisionApiRequest request,
         CancellationToken cancellationToken,
         RuntimeWorkspaceResumeRequest? resume = null,
-        Func<CancellationToken, Task>? requireCurrent = null)
+        Func<CancellationToken, Task>? requireCurrent = null,
+        RuntimeActorAuthorization? actor = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         request = request.Validate();
         sandboxOptions.Validate();
         var context = await AuthorizeAsync(
-            caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
+            caller,
+            projectId,
+            runId,
+            environmentId,
+            cancellationToken,
+            requireRunBoundReadSelection: request.P1Binding is not null).ConfigureAwait(false);
         var candidate = ResolveSandboxCandidate(context.Selection.RunSelection);
         var workspace = await ReadWorkspaceAsync(
             context.Fence, context.Selection.RunSelection, request, cancellationToken).ConfigureAwait(false);
@@ -184,7 +196,58 @@ public sealed class EnvironmentSandboxManager(
             context.Fence,
             context.Selection,
             request.NetworkPolicyGeneration,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            runBoundRead: context.RequiresRunBoundReadSelection).ConfigureAwait(false);
+
+        P1InvocationBinding? p1Binding = null;
+        if (request.P1Binding is { } p1Expectation)
+        {
+            p1Binding = await EnvironmentP1InvocationBindingVerifier.ReadAndValidateAsync(
+                p1BindingReader ??
+                    throw new RuntimeAuthorizationException("p1_invocation_binding_unavailable"),
+                actor,
+                context.Fence.Owner,
+                context.Selection.Authorization,
+                p1Expectation,
+                cancellationToken).ConfigureAwait(false);
+        }
+        else if (actor is not null)
+        {
+            throw new RuntimeAuthorizationException("p1_invocation_binding_request_invalid");
+        }
+
+        async Task CheckP1BindingAsync(CancellationToken token)
+        {
+            if (p1Binding is null)
+                return;
+            try
+            {
+                await EnsureP1AuthorizationUnchangedAsync(caller, context, token).ConfigureAwait(false);
+                var current = await EnvironmentP1InvocationBindingVerifier.ReadAndValidateAsync(
+                    p1BindingReader ??
+                        throw new RuntimeAuthorizationException("p1_invocation_binding_unavailable"),
+                    actor,
+                    context.Fence.Owner,
+                    context.Selection.Authorization,
+                    request.P1Binding!,
+                    token).ConfigureAwait(false);
+                if (current != p1Binding)
+                    throw new RuntimeAuthorizationException("p1_invocation_binding_changed");
+            }
+            catch (RuntimeAuthorizationException)
+            {
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                throw new RuntimeAuthorizationException(
+                    "p1_invocation_binding_unavailable", null, exception);
+            }
+        }
 
         var optionsSnapshot = JsonSerializer.SerializeToElement(sandboxOptions, JsonOptions);
         var intent = new SandboxLeaseProvisionIntent(
@@ -197,12 +260,50 @@ public sealed class EnvironmentSandboxManager(
             JsonSerializer.SerializeToElement(request, JsonOptions));
         if (requireCurrent is not null)
             await requireCurrent(cancellationToken).ConfigureAwait(false);
-        var reservation = await leaseStore.ReserveProvisionAsync(
-            context.Fence,
-            request.IdempotencyKey,
-            intent,
-            cancellationToken).ConfigureAwait(false);
+        var reservation = p1Binding is null
+            ? await leaseStore.ReserveProvisionAsync(
+                context.Fence,
+                request.IdempotencyKey,
+                intent,
+                cancellationToken).ConfigureAwait(false)
+            : await leaseStore.ReserveP1ProvisionAsync(
+                context.Fence,
+                request.IdempotencyKey,
+                request.VolumeId,
+                intent,
+                p1Binding,
+                cancellationToken,
+                CheckP1BindingAsync).ConfigureAwait(false);
         var lease = reservation.Lease;
+        Task<SandboxLeaseSnapshot> CompleteProvisionOwnerAsync(
+            SandboxProvisionedResource? resource,
+            bool effectMayHaveApplied,
+            CancellationToken token,
+            Guid? attemptId = null,
+            string? errorCode = null,
+            bool revalidateP1 = false,
+            bool p1BindingCurrent = false) =>
+            p1Binding is null
+                ? leaseStore.CompleteProvisionAsync(
+                    lease.OperationId,
+                    context.Fence,
+                    resource,
+                    effectMayHaveApplied,
+                    token,
+                    attemptId,
+                    errorCode)
+                : leaseStore.CompleteP1ProvisionAsync(
+                    lease.OperationId,
+                    context.Fence,
+                    resource,
+                    effectMayHaveApplied,
+                    p1Binding,
+                    token,
+                    attemptId,
+                    errorCode,
+                    revalidateP1 ? CheckP1BindingAsync : null,
+                    p1BindingCurrent);
+
         if (lease.State != SandboxLeaseState.Provisioning)
         {
             if (requireCurrent is not null)
@@ -262,6 +363,7 @@ public sealed class EnvironmentSandboxManager(
                 JsonOptions);
             if (requireCurrent is not null)
                 await requireCurrent(cancellationToken).ConfigureAwait(false);
+            await CheckP1BindingAsync(cancellationToken).ConfigureAwait(false);
             lease = await leaseStore.SaveProviderRequestAsync(
                 lease.OperationId,
                 context.Fence,
@@ -272,6 +374,7 @@ public sealed class EnvironmentSandboxManager(
 
             if (requireCurrent is not null)
                 await requireCurrent(cancellationToken).ConfigureAwait(false);
+            await CheckP1BindingAsync(cancellationToken).ConfigureAwait(false);
             workspaceAttachmentAttempted = true;
             await AttachWorkspaceForSandboxAsync(
                 context.Fence,
@@ -286,7 +389,8 @@ public sealed class EnvironmentSandboxManager(
                 context.Fence,
                 context.Selection,
                 request.NetworkPolicyGeneration,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                runBoundRead: context.RequiresRunBoundReadSelection).ConfigureAwait(false);
             var latestWorkspace = await ReadWorkspaceAsync(
                 context.Fence, context.Selection.RunSelection, request, cancellationToken).ConfigureAwait(false);
             if (!SameWorkspace(workspace, latestWorkspace) ||
@@ -300,7 +404,9 @@ public sealed class EnvironmentSandboxManager(
             await lifecycleStore.RequireActiveAsync(context.Fence, cancellationToken).ConfigureAwait(false);
             if (requireCurrent is not null)
                 await requireCurrent(cancellationToken).ConfigureAwait(false);
+            await CheckP1BindingAsync(cancellationToken).ConfigureAwait(false);
             await VerifyWorkspaceClusterIdentityAsync(latestWorkspace, cancellationToken).ConfigureAwait(false);
+            await CheckP1BindingAsync(cancellationToken).ConfigureAwait(false);
             providerAttemptStarted = true;
             var attemptReservation = await leaseStore.BeginProviderAttemptAsync(
                 SandboxProviderAttemptRequest.ForProvision(lease),
@@ -312,20 +418,19 @@ public sealed class EnvironmentSandboxManager(
                     "A durable Sandbox provider attempt already exists; another provision call was not started.",
                     SandboxProviderAttemptReceipt.From(attemptReservation.Attempt));
             providerAttemptId = attemptReservation.Attempt.AttemptId;
+            await CheckP1BindingAsync(cancellationToken).ConfigureAwait(false);
             providerCallStarted = true;
             provisioned = await sandboxProvider.ProvisionAsync(
                 provisionRequest, cancellationToken).ConfigureAwait(false);
         }
         catch (SandboxProviderException exception)
         {
-            _ = await leaseStore.CompleteProvisionAsync(
-                lease.OperationId,
-                context.Fence,
-                provisionedResource: null,
-                effectMayHaveApplied: exception.EffectMayHaveApplied,
-                cancellationToken: CancellationToken.None,
-                providerAttemptId: providerAttemptId,
-                providerErrorCode: exception.Code).ConfigureAwait(false);
+            _ = await CompleteProvisionOwnerAsync(
+                resource: null,
+                exception.EffectMayHaveApplied,
+                CancellationToken.None,
+                providerAttemptId,
+                exception.Code).ConfigureAwait(false);
             throw;
         }
         catch (OperationCanceledException)
@@ -338,47 +443,39 @@ public sealed class EnvironmentSandboxManager(
                     workspaceAttachmentTransitionRevision!.Value,
                     CancellationToken.None).ConfigureAwait(false);
             if (providerAttemptId is not null)
-                _ = await leaseStore.CompleteProvisionAsync(
-                    lease.OperationId,
-                    context.Fence,
-                    provisionedResource: null,
+                _ = await CompleteProvisionOwnerAsync(
+                    resource: null,
                     effectMayHaveApplied: true,
-                    cancellationToken: CancellationToken.None,
+                    CancellationToken.None,
                     providerAttemptId,
-                    providerErrorCode: "provider_cancelled").ConfigureAwait(false);
+                    errorCode: "provider_cancelled").ConfigureAwait(false);
             else if (!providerAttemptStarted)
-                _ = await leaseStore.CompleteProvisionAsync(
-                    lease.OperationId,
-                    context.Fence,
-                    provisionedResource: null,
+                _ = await CompleteProvisionOwnerAsync(
+                    resource: null,
                     effectMayHaveApplied: false,
-                    cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                    CancellationToken.None).ConfigureAwait(false);
             throw;
         }
         catch (Exception exception) when (
             providerCallStarted && exception is (ArgumentException or InvalidOperationException or JsonException))
         {
-            _ = await leaseStore.CompleteProvisionAsync(
-                lease.OperationId,
-                context.Fence,
-                provisionedResource: null,
+            _ = await CompleteProvisionOwnerAsync(
+                resource: null,
                 effectMayHaveApplied: true,
-                cancellationToken: CancellationToken.None,
+                CancellationToken.None,
                 providerAttemptId,
-                providerErrorCode: "provider_invalid_result").ConfigureAwait(false);
+                errorCode: "provider_invalid_result").ConfigureAwait(false);
             throw;
         }
         catch (Exception exception) when (
             providerCallStarted && exception is (IOException or HttpRequestException or TimeoutException))
         {
-            _ = await leaseStore.CompleteProvisionAsync(
-                lease.OperationId,
-                context.Fence,
-                provisionedResource: null,
+            _ = await CompleteProvisionOwnerAsync(
+                resource: null,
                 effectMayHaveApplied: true,
-                cancellationToken: CancellationToken.None,
+                CancellationToken.None,
                 providerAttemptId,
-                providerErrorCode: "provider_transport_unknown").ConfigureAwait(false);
+                errorCode: "provider_transport_unknown").ConfigureAwait(false);
             throw;
         }
         catch (Exception exception) when (
@@ -398,22 +495,36 @@ public sealed class EnvironmentSandboxManager(
                     workspace.Snapshot,
                     workspaceAttachmentTransitionRevision!.Value,
                     CancellationToken.None).ConfigureAwait(false);
-            _ = await leaseStore.CompleteProvisionAsync(
-                lease.OperationId,
-                context.Fence,
-                provisionedResource: null,
+            _ = await CompleteProvisionOwnerAsync(
+                resource: null,
                 effectMayHaveApplied: false,
-                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None).ConfigureAwait(false);
             throw;
         }
 
-        lease = await leaseStore.CompleteProvisionAsync(
-            lease.OperationId,
-            context.Fence,
-            provisioned ?? throw new InvalidOperationException("The Sandbox provider returned no resource."),
-            effectMayHaveApplied: true,
-            cancellationToken: CancellationToken.None,
-            providerAttemptId: providerAttemptId).ConfigureAwait(false);
+        var exactResource = provisioned ?? throw new InvalidOperationException(
+            "The Sandbox provider returned no resource.");
+        try
+        {
+            lease = await CompleteProvisionOwnerAsync(
+                exactResource,
+                effectMayHaveApplied: true,
+                CancellationToken.None,
+                providerAttemptId,
+                revalidateP1: p1Binding is not null,
+                p1BindingCurrent: true).ConfigureAwait(false);
+        }
+        catch (RuntimeAuthorizationException) when (p1Binding is not null)
+        {
+            _ = await CompleteProvisionOwnerAsync(
+                exactResource,
+                effectMayHaveApplied: true,
+                CancellationToken.None,
+                providerAttemptId,
+                errorCode: "p1_invocation_binding_changed",
+                p1BindingCurrent: false).ConfigureAwait(false);
+            throw;
+        }
         await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
         if (requireCurrent is not null)
             await requireCurrent(cancellationToken).ConfigureAwait(false);
@@ -573,7 +684,8 @@ public sealed class EnvironmentSandboxManager(
                     authorization.Authorization, selection);
                 await egressManager.VerifyNetworkForSandboxAsync(
                     caller, lifecycle.Fence, selected, provision.NetworkPolicyGeneration,
-                    callbackCancellationToken, runBoundRead).ConfigureAwait(false);
+                    callbackCancellationToken, runBoundRead, ownerLockAlreadyHeld: runBoundRead)
+                    .ConfigureAwait(false);
                 var describe = CreateDescribeRequest(pinnedLease) with
                 {
                     RequireRuntimeEndpoint = requireRuntimeEndpoint
@@ -582,7 +694,8 @@ public sealed class EnvironmentSandboxManager(
                     .ConfigureAwait(false)).ValidateFor(describe);
                 await egressManager.VerifyNetworkForSandboxAsync(
                     caller, lifecycle.Fence, selected, provision.NetworkPolicyGeneration,
-                    callbackCancellationToken, runBoundRead).ConfigureAwait(false);
+                    callbackCancellationToken, runBoundRead, ownerLockAlreadyHeld: runBoundRead)
+                    .ConfigureAwait(false);
                 if (observation.State is not (SandboxObservedState.Finished or SandboxObservedState.Absent))
                     observation = observation with { VerifiedNetworkGeneration = provision.NetworkPolicyGeneration };
                 var pinnedOptions = pinnedLease.ProvisionIntent.OptionsSnapshot
@@ -1107,7 +1220,8 @@ public sealed class EnvironmentSandboxManager(
             context.Fence,
             currentContext.Selection,
             recovery.Request.NetworkPolicyGeneration,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            runBoundRead: currentContext.RequiresRunBoundReadSelection).ConfigureAwait(false);
         await EnsureSandboxWorkspaceAttachedAsync(
             context,
             recovery,
@@ -1120,7 +1234,8 @@ public sealed class EnvironmentSandboxManager(
             context.Fence,
             currentContext.Selection,
             recovery.Request.NetworkPolicyGeneration,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            runBoundRead: currentContext.RequiresRunBoundReadSelection).ConfigureAwait(false);
         lease = await RequireCurrentLeaseAsync(context.Fence, lease, cancellationToken).ConfigureAwait(false);
 
         SandboxProvisionedResource provisioned;
@@ -1385,7 +1500,8 @@ public sealed class EnvironmentSandboxManager(
         CancellationToken cancellationToken)
     {
         _ = await egressManager.VerifyNetworkForSandboxAsync(
-            caller, context.Fence, context.Selection, networkPolicyGeneration, cancellationToken)
+            caller, context.Fence, context.Selection, networkPolicyGeneration, cancellationToken,
+            runBoundRead: context.RequiresRunBoundReadSelection)
             .ConfigureAwait(false);
         var describeRequest = CreateDescribeRequest(lease);
         var observation = (await sandboxProvider.DescribeAsync(
@@ -1400,7 +1516,8 @@ public sealed class EnvironmentSandboxManager(
                 "sandbox_fence_stale",
                 "The Sandbox lease changed during provider observation.");
         _ = await egressManager.VerifyNetworkForSandboxAsync(
-            caller, context.Fence, currentContext.Selection, networkPolicyGeneration, cancellationToken)
+            caller, context.Fence, currentContext.Selection, networkPolicyGeneration, cancellationToken,
+            runBoundRead: currentContext.RequiresRunBoundReadSelection)
             .ConfigureAwait(false);
         if (observation.State is not (SandboxObservedState.Finished or SandboxObservedState.Absent))
             observation = observation with { VerifiedNetworkGeneration = networkPolicyGeneration };
@@ -1590,30 +1707,67 @@ public sealed class EnvironmentSandboxManager(
         string projectId,
         string runId,
         string environmentId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requireRunBoundReadSelection = false)
     {
         ArgumentNullException.ThrowIfNull(caller);
-        var initialAuthorization = await projects.GetAuthorizationContextAsync(
-            caller, cancellationToken).ConfigureAwait(false);
-        var owner = new EnvironmentOwnerIdentity(
-            initialAuthorization.TenantId,
-            projectId,
-            runId,
-            environmentId);
-        var selection = await egressManager.GetAuthorizedRunSelectionAsync(
-            caller, owner, cancellationToken).ConfigureAwait(false);
-        if (!EnvironmentEgressManager.SameAuthorizationContext(
-                initialAuthorization,
-                selection.Authorization))
-            throw new ProjectsConfigApiException(
-                "authorization_changed",
-                "Projects authorization changed while the Sandbox owner was resolved.");
+        EnvironmentOwnerIdentity owner;
+        EnvironmentEgressManager.AuthorizedSelection selection;
+        if (requireRunBoundReadSelection)
+        {
+            var runBound = await egressManager.GetAuthorizedRunEnvironmentPlacementReadAsync(
+                caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
+            owner = runBound.Owner;
+            selection = await egressManager.GetAuthorizedRunEnvironmentSelectionAsync(
+                caller, owner, cancellationToken).ConfigureAwait(false);
+            if (!EnvironmentEgressManager.SameAuthorizationContext(
+                    runBound.Authorization, selection.Authorization))
+                throw new ProjectsConfigApiException(
+                    "authorization_changed",
+                    "Projects authorization changed while the run-bound Sandbox owner was resolved.");
+        }
+        else
+        {
+            var initialAuthorization = await projects.GetAuthorizationContextAsync(
+                caller, cancellationToken).ConfigureAwait(false);
+            owner = new EnvironmentOwnerIdentity(
+                initialAuthorization.TenantId,
+                projectId,
+                runId,
+                environmentId);
+            selection = await egressManager.GetAuthorizedRunSelectionAsync(
+                caller, owner, cancellationToken).ConfigureAwait(false);
+            if (!EnvironmentEgressManager.SameAuthorizationContext(
+                    initialAuthorization, selection.Authorization))
+                throw new ProjectsConfigApiException(
+                    "authorization_changed",
+                    "Projects authorization changed while the Sandbox owner was resolved.");
+        }
         var lifecycle = await lifecycleStore.GetAsync(owner, cancellationToken).ConfigureAwait(false)
             ?? throw new EnvironmentLifecycleException(
                 "environment_unknown",
                 "The exact Environment owner tuple is not registered.");
         await lifecycleStore.RequireActiveAsync(lifecycle.Fence, cancellationToken).ConfigureAwait(false);
-        return new(lifecycle.Fence, selection);
+        return new(lifecycle.Fence, selection, requireRunBoundReadSelection);
+    }
+
+    private async Task<AuthorizedSandboxContext> EnsureP1AuthorizationUnchangedAsync(
+        CurrentCallerRequest caller,
+        AuthorizedSandboxContext context,
+        CancellationToken cancellationToken)
+    {
+        var latest = await egressManager.GetAuthorizedRunEnvironmentSelectionAsync(
+            caller, context.Fence.Owner, cancellationToken).ConfigureAwait(false);
+        if (!EnvironmentEgressManager.SameAuthorizationContext(
+                context.Selection.Authorization,
+                latest.Authorization) ||
+            !JsonNode.DeepEquals(
+                JsonSerializer.SerializeToNode(context.Selection.RunSelection, JsonOptions),
+                JsonSerializer.SerializeToNode(latest.RunSelection, JsonOptions)))
+            throw new ProjectsConfigApiException(
+                "authorization_changed",
+                "The run-bound ReadRunSelection authority or immutable run selection changed during P1 Sandbox creation.");
+        return new(context.Fence, latest, context.RequiresRunBoundReadSelection);
     }
 
     /// <summary>Reads the volume and requires a strict-consistency workspace specification for this Environment.</summary>
@@ -2164,8 +2318,11 @@ public sealed class EnvironmentSandboxManager(
         CancellationToken cancellationToken)
     {
         await lifecycleStore.RequireActiveAsync(context.Fence, cancellationToken).ConfigureAwait(false);
-        var latest = await egressManager.GetAuthorizedRunSelectionAsync(
-            caller, context.Fence.Owner, cancellationToken).ConfigureAwait(false);
+        var latest = context.RequiresRunBoundReadSelection
+            ? await egressManager.GetAuthorizedRunEnvironmentSelectionAsync(
+                caller, context.Fence.Owner, cancellationToken).ConfigureAwait(false)
+            : await egressManager.GetAuthorizedRunSelectionAsync(
+                caller, context.Fence.Owner, cancellationToken).ConfigureAwait(false);
         if (!EnvironmentEgressManager.SameAuthorizationContext(
                 context.Selection.Authorization,
                 latest.Authorization) ||
@@ -2175,7 +2332,7 @@ public sealed class EnvironmentSandboxManager(
             throw new ProjectsConfigApiException(
                 "authorization_changed",
                 "The current Projects authorization or immutable run selection changed during the Sandbox operation.");
-        return new(context.Fence, latest);
+        return new(context.Fence, latest, context.RequiresRunBoundReadSelection);
     }
 
     private EnvironmentEgressSelector CreateEgressSelector(
@@ -2441,5 +2598,6 @@ public sealed class EnvironmentSandboxManager(
     /// <summary>Bundles the accepted caller authority, Environment fence, and run selection for Sandbox operations.</summary>
     private sealed record AuthorizedSandboxContext(
         EnvironmentGenerationFence Fence,
-        EnvironmentEgressManager.AuthorizedSelection Selection);
+        EnvironmentEgressManager.AuthorizedSelection Selection,
+        bool RequiresRunBoundReadSelection = false);
 }

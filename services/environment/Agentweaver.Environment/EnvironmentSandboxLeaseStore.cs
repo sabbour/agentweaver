@@ -26,11 +26,44 @@ public sealed class EnvironmentSandboxLeaseStore(
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
     /// <summary>Reserves one provision generation, reusing only a matching idempotency key and immutable intent.</summary>
-    public async Task<SandboxLeaseReservation> ReserveProvisionAsync(
+    public Task<SandboxLeaseReservation> ReserveProvisionAsync(
         EnvironmentGenerationFence fence,
         string idempotencyKey,
         SandboxLeaseProvisionIntent intent,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        ReserveProvisionCoreAsync(fence, idempotencyKey, intent, cancellationToken, null, null);
+
+    /// <summary>Reserves a P1 Sandbox operation and immutable binding link atomically before provider work.</summary>
+    public Task<SandboxLeaseReservation> ReserveP1ProvisionAsync(
+        EnvironmentGenerationFence fence,
+        string idempotencyKey,
+        string workspaceVolumeId,
+        SandboxLeaseProvisionIntent intent,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task> beforeCommitCheck)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        ArgumentNullException.ThrowIfNull(beforeCommitCheck);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceVolumeId);
+        return ReserveProvisionCoreAsync(
+            fence,
+            idempotencyKey,
+            intent,
+            cancellationToken,
+            binding,
+            beforeCommitCheck,
+            workspaceVolumeId);
+    }
+
+    private async Task<SandboxLeaseReservation> ReserveProvisionCoreAsync(
+        EnvironmentGenerationFence fence,
+        string idempotencyKey,
+        SandboxLeaseProvisionIntent intent,
+        CancellationToken cancellationToken,
+        P1InvocationBinding? p1Binding,
+        Func<CancellationToken, Task>? beforeCommitCheck,
+        string? workspaceVolumeId = null)
     {
         ArgumentNullException.ThrowIfNull(fence);
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
@@ -44,6 +77,27 @@ public sealed class EnvironmentSandboxLeaseStore(
         await EnvironmentLifecycleStore.AcquireOwnerLockAsync(
             connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
         await RequireActiveOwnerAsync(connection, transaction, fence, cancellationToken).ConfigureAwait(false);
+        if (p1Binding is not null)
+        {
+            await EnvironmentP1CreationLinkStore.RequireRetainedResourceLinkAsync(
+                connection,
+                transaction,
+                fence.Owner,
+                "Environment",
+                fence.Owner.EnvironmentId,
+                fence.LifecycleGeneration,
+                p1Binding,
+                cancellationToken).ConfigureAwait(false);
+            await EnvironmentP1CreationLinkStore.RequireRetainedResourceLinkAsync(
+                connection,
+                transaction,
+                fence.Owner,
+                "WorkspaceVolumeMetadata",
+                workspaceVolumeId ?? throw new ArgumentNullException(nameof(workspaceVolumeId)),
+                fence.LifecycleGeneration,
+                p1Binding,
+                cancellationToken).ConfigureAwait(false);
+        }
 
         var replay = await ReadByIdempotencyAsync(
             connection, transaction, fence.Owner, idempotencyKey, cancellationToken).ConfigureAwait(false);
@@ -53,6 +107,19 @@ public sealed class EnvironmentSandboxLeaseStore(
                 throw new EnvironmentLifecycleException(
                     "sandbox_idempotency_conflict",
                     "The sandbox idempotency key was already used for a different provision intent.");
+            if (p1Binding is not null)
+                await EnvironmentP1CreationLinkStore.RequireSameBindingAsync(
+                    connection,
+                    transaction,
+                    fence.Owner,
+                    replay.Value.Lease.OperationId,
+                    "Sandbox",
+                    replay.Value.Lease.OperationId.ToString("D"),
+                    fence.LifecycleGeneration,
+                    p1Binding,
+                    cancellationToken).ConfigureAwait(false);
+            if (beforeCommitCheck is not null)
+                await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return new(replay.Value.Lease, Replayed: true);
         }
@@ -66,6 +133,8 @@ public sealed class EnvironmentSandboxLeaseStore(
             throw new EnvironmentLifecycleException(
                 "sandbox_lease_capacity_exceeded",
                 "This Environment already has a Sandbox lease that is active or requires reconciliation.");
+        if (p1Binding is not null)
+            await beforeCommitCheck!(cancellationToken).ConfigureAwait(false);
         if (current is not null)
         {
             await using var clearCurrent = new NpgsqlCommand($"""
@@ -139,6 +208,32 @@ public sealed class EnvironmentSandboxLeaseStore(
         var lease = await ReadByOperationAsync(
             connection, transaction, operationId, fence.Owner, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The sandbox lease reservation was not persisted.");
+        if (p1Binding is not null)
+        {
+            if (p1Binding.ContractVersion != 1 ||
+                p1Binding.TenantId != fence.Owner.TenantId ||
+                p1Binding.ProjectId != fence.Owner.ProjectId ||
+                p1Binding.RunId != fence.Owner.RunId)
+                throw new EnvironmentLifecycleException(
+                    "p1_invocation_binding_mismatch",
+                    "The P1 binding does not match the Sandbox Environment owner.");
+            await EnvironmentP1CreationLinkStore.InsertPendingAsync(
+                connection,
+                transaction,
+                fence.Owner,
+                operationId,
+                "Sandbox",
+                operationId.ToString("D"),
+                fence.LifecycleGeneration,
+                resourceGeneration,
+                fencingGeneration,
+                transitionRevision: null,
+                p1Binding,
+                now,
+                cancellationToken).ConfigureAwait(false);
+        }
+        if (beforeCommitCheck is not null)
+            await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new(lease, Replayed: false);
     }
@@ -684,14 +779,65 @@ public sealed class EnvironmentSandboxLeaseStore(
     }
 
     /// <summary>Completes provisioning only when the provider result matches the reserved lease generation and fence.</summary>
-    public async Task<SandboxLeaseSnapshot> CompleteProvisionAsync(
+    public Task<SandboxLeaseSnapshot> CompleteProvisionAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,
         SandboxProvisionedResource? provisionedResource,
         bool effectMayHaveApplied,
         CancellationToken cancellationToken,
         Guid? providerAttemptId = null,
-        string? providerErrorCode = null)
+        string? providerErrorCode = null) =>
+        CompleteProvisionCoreAsync(
+            operationId,
+            fence,
+            provisionedResource,
+            effectMayHaveApplied,
+            cancellationToken,
+            providerAttemptId,
+            providerErrorCode,
+            p1Binding: null,
+            beforeCommitCheck: null,
+            p1BindingCurrent: true);
+
+    /// <summary>Persists a P1 Sandbox result and exact binding link under the owner lock and transaction.</summary>
+    public Task<SandboxLeaseSnapshot> CompleteP1ProvisionAsync(
+        Guid operationId,
+        EnvironmentGenerationFence fence,
+        SandboxProvisionedResource? provisionedResource,
+        bool effectMayHaveApplied,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Guid? providerAttemptId = null,
+        string? providerErrorCode = null,
+        Func<CancellationToken, Task>? beforeCommitCheck = null,
+        bool p1BindingCurrent = true)
+    {
+        if (p1BindingCurrent && beforeCommitCheck is null)
+            throw new ArgumentNullException(nameof(beforeCommitCheck));
+        return CompleteProvisionCoreAsync(
+            operationId,
+            fence,
+            provisionedResource,
+            effectMayHaveApplied,
+            cancellationToken,
+            providerAttemptId,
+            providerErrorCode,
+            binding,
+            beforeCommitCheck,
+            p1BindingCurrent);
+    }
+
+    private async Task<SandboxLeaseSnapshot> CompleteProvisionCoreAsync(
+        Guid operationId,
+        EnvironmentGenerationFence fence,
+        SandboxProvisionedResource? provisionedResource,
+        bool effectMayHaveApplied,
+        CancellationToken cancellationToken,
+        Guid? providerAttemptId,
+        string? providerErrorCode,
+        P1InvocationBinding? p1Binding,
+        Func<CancellationToken, Task>? beforeCommitCheck,
+        bool p1BindingCurrent)
     {
         ArgumentNullException.ThrowIfNull(fence);
         if (operationId == Guid.Empty)
@@ -717,6 +863,18 @@ public sealed class EnvironmentSandboxLeaseStore(
             throw new EnvironmentLifecycleException(
                 "environment_fence_stale",
                 "The Sandbox operation belongs to a stale Environment lifecycle fence.");
+        if (p1Binding is not null)
+            await EnvironmentP1CreationLinkStore.RequireSameBindingAsync(
+                connection,
+                transaction,
+                fence.Owner,
+                operationId,
+                "Sandbox",
+                operationId.ToString("D"),
+                fence.LifecycleGeneration,
+                p1Binding,
+                cancellationToken)
+                .ConfigureAwait(false);
         var attempt = providerAttemptId is { } exactAttemptId
             ? await ReadProviderAttemptByIdAsync(
                 connection, transaction, exactAttemptId, fence.Owner, cancellationToken).ConfigureAwait(false)
@@ -736,6 +894,42 @@ public sealed class EnvironmentSandboxLeaseStore(
             ValidateProvisionedResource(lease, provisionedResource);
         var ownerFenceIsActive = await IsOwnerFenceActiveAsync(
             connection, transaction, fence, cancellationToken).ConfigureAwait(false);
+
+        async Task CompleteP1LinkAsync(
+            SandboxLeaseSnapshot completedLease,
+            SandboxProvisionedResource? resultResource)
+        {
+            if (p1Binding is null)
+                return;
+            var actual = resultResource ?? completedLease.ProvisionedResource;
+            var linkState = actual is not null &&
+                p1BindingCurrent &&
+                completedLease.State == SandboxLeaseState.Active
+                    ? "Completed"
+                    : actual is not null || effectMayHaveApplied
+                        ? "Uncertain"
+                        : "Failed";
+            await EnvironmentP1CreationLinkStore.CompleteAsync(
+                connection,
+                transaction,
+                fence.Owner,
+                operationId,
+                "Sandbox",
+                operationId.ToString("D"),
+                fence.LifecycleGeneration,
+                p1Binding,
+                linkState,
+                completedLease.ResourceGeneration,
+                completedLease.ProviderFencingGeneration,
+                transitionRevision: null,
+                completedLease.LeaseRevision,
+                actual?.Resource,
+                actual?.ProviderBinding,
+                timeProvider.GetUtcNow(),
+                cancellationToken).ConfigureAwait(false);
+            if (beforeCommitCheck is not null)
+                await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
+        }
 
         var outcome = JsonSerializer.SerializeToElement(new
         {
@@ -781,6 +975,9 @@ public sealed class EnvironmentSandboxLeaseStore(
             throw ProviderAttemptUnresolved(attempt);
         }
 
+        if (p1Binding is not null && p1BindingCurrent)
+            await beforeCommitCheck!(cancellationToken).ConfigureAwait(false);
+
         var samePersistedResource =
             lease.ProvisionedResource is not null &&
             provisionedResource is not null &&
@@ -800,6 +997,8 @@ public sealed class EnvironmentSandboxLeaseStore(
                     attempt.OutcomeRecordedAt ?? timeProvider.GetUtcNow(),
                     attempt.ResolvedAt ?? timeProvider.GetUtcNow(),
                     cancellationToken).ConfigureAwait(false);
+            if (beforeCommitCheck is not null)
+                await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return lease;
         }
@@ -856,6 +1055,7 @@ public sealed class EnvironmentSandboxLeaseStore(
             var lateRetiredLease = await ReadByOperationAsync(
                 connection, transaction, operationId, fence.Owner, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("The late Sandbox resource cleanup was not persisted.");
+            await CompleteP1LinkAsync(lateRetiredLease, provisionedResource).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return lateRetiredLease;
         }
@@ -952,6 +1152,7 @@ public sealed class EnvironmentSandboxLeaseStore(
             var lateResult = await ReadByOperationAsync(
                 connection, transaction, operationId, fence.Owner, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("The late Sandbox provider result was not persisted.");
+            await CompleteP1LinkAsync(lateResult, provisionedResource).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return lateResult;
         }
@@ -971,6 +1172,7 @@ public sealed class EnvironmentSandboxLeaseStore(
                     attempt.OutcomeRecordedAt ?? timeProvider.GetUtcNow(),
                     attempt.ResolvedAt ?? timeProvider.GetUtcNow(),
                     cancellationToken).ConfigureAwait(false);
+            await CompleteP1LinkAsync(lease, provisionedResource).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return lease;
         }
@@ -991,6 +1193,7 @@ public sealed class EnvironmentSandboxLeaseStore(
                 outcome,
                 providerErrorCode,
                 cancellationToken).ConfigureAwait(false);
+            await CompleteP1LinkAsync(lease, provisionedResource).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return lease;
         }
@@ -1002,7 +1205,9 @@ public sealed class EnvironmentSandboxLeaseStore(
                 "sandbox_provider_result_conflict",
                 "The retiring Sandbox operation returned a different provider resource.");
 
-        var nextState = lease.State switch
+        var nextState = p1Binding is not null && !p1BindingCurrent
+            ? SandboxLeaseState.ReconciliationRequired
+            : lease.State switch
         {
             SandboxLeaseState.Provisioning when provisionedResource is not null => SandboxLeaseState.Active,
             SandboxLeaseState.Provisioning when effectMayHaveApplied => SandboxLeaseState.ReconciliationRequired,
@@ -1116,6 +1321,7 @@ public sealed class EnvironmentSandboxLeaseStore(
         var result = await ReadByOperationAsync(
             connection, transaction, operationId, fence.Owner, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The Sandbox provision result was not persisted.");
+        await CompleteP1LinkAsync(result, provisionedResource).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result;
     }
