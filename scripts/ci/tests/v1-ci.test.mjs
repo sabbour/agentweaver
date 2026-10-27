@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { classify } from '../v1-changes.mjs';
-import { brokerShardCount, loadBrokerWeights, measureWeights, partitionMethods, testMatrix, verifyTrx } from '../v1-test-plan.mjs';
+import { brokerShardCount, environmentP1RequiredMethods, loadBrokerWeights, measureWeights, partitionMethods, testMatrix, verifyRequiredMethods, verifyTrx } from '../v1-test-plan.mjs';
 import { suites } from '../../coverage/dotnet.mjs';
 
 const workflow = readFileSync(new URL('../../../.github/workflows/v1-ci.yml', import.meta.url), 'utf8');
@@ -100,6 +100,34 @@ test('TRX receipts reject zero execution, missing counters and failures while pr
     '<Counters total="2" executed="2" passed="1" failed="1" />']) {
     assert.throws(() => verifyTrx(xml), /TRX receipt/);
   }
+});
+
+test('required owner-transaction methods must have passing results for every executed theory case', () => {
+  const method = 'Agentweaver.Environment.Tests.P1CreationPostgresTests.OwnerTransaction';
+  const definition = '<UnitTest id="a"><TestMethod className="Agentweaver.Environment.Tests.P1CreationPostgresTests" name="OwnerTransaction" /></UnitTest>';
+  const result = (outcome, id = 'a') => `<UnitTestResult testId="${id}" outcome="${outcome}" />`;
+  verifyRequiredMethods(definition + result('Passed'), [method]);
+  verifyRequiredMethods(definition + result('Passed') + result('Passed'), [method]);
+  for (const xml of [
+    definition,
+    definition + result('NotExecuted'),
+    definition + result('Failed'),
+    definition + result('Passed') + result('NotExecuted'),
+    definition + result('Passed', 'foreign'),
+    result('Passed'),
+  ]) {
+    assert.throws(() => verifyRequiredMethods(xml, [method]), /Required test did not execute successfully/);
+  }
+});
+
+test('Environment P1 owner tests are explicitly enforced after the actual CI test invocation', () => {
+  const runner = readFileSync(new URL('../v1-test-plan.mjs', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../../../tests/Agentweaver.Environment.Tests/EnvironmentP1CreationLinkPostgresTests.cs', import.meta.url), 'utf8');
+  assert.equal(environmentP1RequiredMethods.length, 4);
+  for (const method of environmentP1RequiredMethods) {
+    assert.ok(source.includes(`Task ${method.split('.').at(-1)}()`), method);
+  }
+  assert.match(runner, /run\(args\);[\s\S]*verifyTrx\(trx\);[\s\S]*if \(entry.name === 'environment'\) verifyRequiredMethods\(trx, environmentP1RequiredMethods\)/);
 });
 
 test('workflow preserves aggregate name, source provenance, native checks, release validation and P1', async () => {

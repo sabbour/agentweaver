@@ -238,6 +238,10 @@ sequenceDiagram
 This receipt proves only the Projects setup transaction. It does not authorize
 or prove Environment/Sandbox resource creation, establish a cross-database
 transaction, or by itself bind a native runtime observation to the invocation.
+Environment separately consumes the
+[current Core invocation binding before creation](./environment-sandbox.md#p1-invocation-bound-creation)
+and retains its own operation/result identities; that local owner transaction
+does not extend the lifetime of Projects or Core authority locks.
 The P1 fixture runner is not wired to this endpoint by this change.
 
 The hosted reasoning publication contains only supported effort names and the

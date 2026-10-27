@@ -61,7 +61,7 @@ public sealed class EnvironmentWorkspaceVolumeApiTests
                 "/workspace-volumes", StringComparison.Ordinal) == true)
             .ToArray();
 
-        Assert.Equal(10, volumeEndpoints.Length);
+        Assert.Equal(12, volumeEndpoints.Length);
         Assert.All(volumeEndpoints, endpoint =>
         {
             Assert.Contains(endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>(), _ => true);
@@ -71,6 +71,12 @@ public sealed class EnvironmentWorkspaceVolumeApiTests
             endpoint.RoutePattern.RawText!.Contains("attach", StringComparison.OrdinalIgnoreCase));
         Assert.Single(volumeEndpoints, endpoint =>
             endpoint.RoutePattern.RawText!.EndsWith("/{volumeId}/flush", StringComparison.Ordinal));
+        Assert.Contains(volumeEndpoints, endpoint =>
+            endpoint.RoutePattern.RawText ==
+            "/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}");
+        Assert.Contains(volumeEndpoints, endpoint =>
+            endpoint.RoutePattern.RawText ==
+            "/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}/provision");
         var resolver = Assert.Single(((IEndpointRouteBuilder)app).DataSources
             .SelectMany(source => source.Endpoints).OfType<RouteEndpoint>(), endpoint =>
             endpoint.RoutePattern.RawText == "/internal/runtime/suspend/resolve");

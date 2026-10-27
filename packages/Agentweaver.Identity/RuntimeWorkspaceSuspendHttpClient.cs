@@ -47,6 +47,9 @@ public sealed record WorkspaceVolumeApiTransitionRequest(
     string IdempotencyKey,
     long? NextDataGeneration = null)
 {
+    /// <summary>Exact Core invocation expected for a P1-specific provider provision; omitted for ordinary writes.</summary>
+    public P1InvocationBindingExpectation? P1Binding { get; init; }
+
     /// <summary>Converts API fields into the validated workspace transition contract.</summary>
     public WorkspaceVolumeTransitionRequest ToTransition(
         string volumeId,

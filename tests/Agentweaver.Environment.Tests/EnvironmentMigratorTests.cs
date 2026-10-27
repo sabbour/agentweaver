@@ -13,6 +13,6 @@ public sealed class EnvironmentMigratorTests
             .UseNpgsql("Host=localhost;Database=design_time;Username=design_time")
             .Options;
 
-        Assert.Equal(Enumerable.Range(1, 11), EnvironmentMigrator.ValidateMigrationCatalog(options));
+        Assert.Equal(Enumerable.Range(1, 12), EnvironmentMigrator.ValidateMigrationCatalog(options));
     }
 }

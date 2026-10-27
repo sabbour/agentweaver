@@ -150,8 +150,11 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
             """, ("schemas", state.Plan.Services.Skip(1).Select(service => service.Schema).ToArray())));
     }
 
-    [Fact]
-    public async Task ContinuationRejectsRuntimeFunctionGrantOnMigratedServiceBeforeCreatingNextSchema()
+    [Theory]
+    [InlineData("environment")]
+    [InlineData("knowledge")]
+    public async Task ContinuationRejectsRuntimeFunctionGrantOnMigratedServiceBeforeCreatingNextSchema(
+        string grantedService)
     {
         await using var state = await ContinuationState.CreateAsync(fixture);
         await state.CreateProjectsPrefixAsync();
@@ -176,7 +179,7 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
         {
             await using var connection = await state.DataSource.OpenConnectionAsync();
             await AssertSchemaOwnedAndRuntimeDeniedAsync(connection, service, state);
-            if (service.Service == "knowledge")
+            if (service.Service == grantedService)
             {
                 var function = service.Functions.First();
                 await ExecuteAsync(connection, $"""
@@ -202,13 +205,16 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
                 CancellationToken.None));
 
         Assert.Contains("EXECUTE", failure.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("events-and-sessions:schema_created", stages);
+        var nextServices = state.Plan.Services
+            .SkipWhile(service => service.Service != grantedService).Skip(1).ToArray();
+        foreach (var service in nextServices)
+            Assert.DoesNotContain($"{service.Service}:schema_created", stages);
         await using var verify = await state.DataSource.OpenConnectionAsync();
         Assert.True(await ScalarAsync<bool>(verify, """
             SELECT NOT EXISTS (
                 SELECT 1 FROM pg_catalog.pg_namespace
                 WHERE nspname = ANY(@schemas))
-            """, ("schemas", state.Plan.Services.Skip(3).Select(service => service.Schema).ToArray())));
+            """, ("schemas", nextServices.Select(service => service.Schema).ToArray())));
     }
 
     [Fact]

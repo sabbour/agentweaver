@@ -87,6 +87,91 @@ accepted as aliases.
 
 ## Authorization and API
 
+### P1 invocation-bound creation
+
+The internal P1 source path consumes Core's current invocation binding before Environment
+reserves creation work. A Projects setup receipt alone is not admission to
+Environment, and a Core binding alone is not proof of a provider resource.
+Environment checks the authenticated actor and exact tenant, project, run, root
+session, invocation IDs, receipt and accepted-selection hashes, and execution
+fence against the current Core read. Missing, stale, revoked, foreign, or
+unsupported bindings are rejected rather than replaced with ordinary creation.
+
+These authenticated owner routes use the existing exact run-bound
+`ReadRunSelection` authority plus the current Core binding. They are not mapped
+through Gateway or MCP. Ordinary public creation still requires `WriteProjects`
+and rejects P1 input; Projects still withholds `WriteProjects` from run-bound
+tokens. The internal path does not change sign-in, claims, or role grants.
+
+| Method and internal route | Creation fact |
+| --- | --- |
+| `POST /internal/projects/{projectId}/runs/{runId}/environments` | Register the owner and retain its actual lifecycle operation ID and generation. |
+| `POST /internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}` | Create volume metadata with its own operation/revision link, under an already-bound Environment. |
+| `POST /internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}/provision` | Reserve provider work only for already-bound volume metadata; retain the actual Storage result separately. |
+| `POST /internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/provision` | Reserve the Sandbox under the retained Environment and volume metadata bindings; retain the actual provider result and lease fences. |
+
+Each body requires `p1Binding` with `coreInvocationId`, `setupInvocationId`,
+`setupReceiptHash`, `rootSessionId`, `acceptedSelectionHash`, and
+`executionFence`, alongside the existing operation fields. These expected
+values never substitute for the authenticated Core response.
+
+The creation record is committed in the same Environment owner transaction as
+the operation it describes. Registration, a reserved volume or Sandbox
+operation, and a completed provider result are distinct facts. Only a committed
+provider result can retain the real provider reference; a planned reference or
+successful reservation must not be presented as that result. Existing resources
+without a retained creation binding cannot be enrolled retroactively.
+
+Schema version 12 stores these facts in `environment.p1_creation_links`.
+`WorkspaceVolumeMetadata` is a completed metadata-only fact, distinct from a
+`WorkspaceVolume` provider reservation. Pending provider links retain the
+operation ID and reserved generations but no invented provider identity.
+Completed links retain the real provider seam, ID, resource reference and
+binding, plus the volume transition revision or Sandbox provider fence and
+lease revision. The operation ID joins the owner record for the exact data
+generation and request/result snapshot. Sandbox resource identity is the
+owner-generated operation ID, not a relabeled Pod UID.
+
+Binding and reservation fields are immutable. A pending provider link can be
+finalized once as `Completed`, `Failed`, or `Uncertain`; failed or uncertain
+links are never upgraded into P1 evidence by a later recovery or retry.
+Ordinary resource recovery remains separate. Only retained completed creation
+facts can qualify for a later observation join.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Core
+    participant Environment
+    participant Provider
+    Caller->>Environment: Request P1 creation with expected binding
+    Environment->>Core: Authenticated current-binding read
+    Core-->>Environment: Current exact run and root binding, no-store
+    Note over Core,Environment: Remote reads do not hold a distributed lock
+    Environment->>Environment: Owner lock; validate binding; commit operation link
+    Environment->>Core: Recheck before provider effect
+    Core-->>Environment: Current binding or denial
+    Environment->>Provider: Exact reserved operation and generations
+    Provider-->>Environment: Actual result and provider identity
+    Environment->>Environment: Owner transaction; retain result and binding link
+    Note over Environment,Provider: Pod configuration is not native mount success
+```
+
+The bounded verification callback runs under the existing Environment owner
+lock. It must not acquire that lock again through an Environment placement,
+registration, or lease route, and must not perform provider effects. A callback
+failure rolls back its local owner transaction. Current checks are repeated
+after bounded callbacks and before effects where required by the creation
+path. They are remote reads, not a distributed lock: Core or Projects authority
+can change after a response and before Environment commits or dispatches. This
+slice does not claim current-at-commit revocation across services.
+
+The retained creation identities prepare a later Host/native observation join.
+They do not implement that join, prove a native mount, run the P1 fixture, or
+close the parent integration issue. `PodObservation` and downward-API fields
+remain configuration/control-plane observations, distinct from Host's actual
+Linux mount observation.
+
 Environment lifecycle registration and release use separate owner routes.
 Registration accepts only `idempotencyKey`; the tenant and actor come from the
 fresh Projects context, and the exact immutable run selection is resolved and

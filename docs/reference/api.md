@@ -742,8 +742,11 @@ The read joins the actual accepted run and active root session, compares the
 current execution fence and selection hash, and checks fresh Projects
 selection and actor authority. A missing binding returns `404`; stale evidence
 returns `409`. Historical acceptance is not current authority, and an existing
-root without a binding cannot be enrolled afterward. This contract does not
-implement Environment resource consumption or Host runtime observation.
+root without a binding cannot be enrolled afterward. Environment's separate
+[P1 creation path](../architecture/environment-sandbox.md#p1-invocation-bound-creation)
+consumes this read before its own creation effects and retains operation/result
+links in Environment owner transactions. The Core response alone is not a
+provider-resource receipt or a Host/native observation join.
 
 ### Run messages
 
@@ -1467,6 +1470,15 @@ These are native owner routes, not Gateway or first-party MCP operations.
 | POST | `/internal/provider-lifecycle/reports` | Bearer | Returns `503 environment_provider_lifecycle_unavailable`; report ingestion is not implemented. |
 
 ### Workspace volumes
+
+For P1-specific creation, use the authenticated
+[internal Environment creation routes](../architecture/environment-sandbox.md#p1-invocation-bound-creation),
+not the public routes below. They require exact run-bound `ReadRunSelection`,
+a current Core invocation binding, and retained Environment/volume creation
+links. They do not grant run-bound callers public `WriteProjects` authority.
+`p1Binding` contains the exact expected invocation IDs, receipt and selection
+hashes, root session, and execution fence. Missing or changed evidence fails
+closed before new creation mutations; no fallback to ordinary creation occurs.
 
 Prefix:
 `/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes`.
