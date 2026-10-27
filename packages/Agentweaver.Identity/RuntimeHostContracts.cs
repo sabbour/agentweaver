@@ -125,6 +125,43 @@ public sealed record RuntimeHostReadinessReceipt(
     public RuntimeHostRecoveryReceipt? Recovery { get; init; }
 }
 
+/// <summary>Host-owned current readiness, Pod identity, and actual workspace mount observation.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeHostReadinessEvidenceReceipt(
+    int ContractVersion,
+    DateTimeOffset ObservedAt,
+    RuntimeHostReadinessReceipt Readiness,
+    SandboxPodObservation EnvironmentPodObservation,
+    string EnvironmentPodObservationHash,
+    RuntimeHostWorkspaceMountEvidence WorkspaceMount,
+    string RegistrationHash,
+    string SourceHash,
+    string NativeSessionHash);
+
+/// <summary>Read-only Linux mount identity observed from the AgentHost process.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeHostWorkspaceMountEvidence(
+    int ContractVersion,
+    DateTimeOffset ObservedAt,
+    string PodUid,
+    string MountPath,
+    ulong MountId,
+    uint DeviceMajor,
+    uint DeviceMinor,
+    ulong DirectoryInode,
+    string FileSystemType,
+    bool ReadOnly,
+    string MountInfoSha256);
+
+/// <summary>Strict request to read one persisted Orchestrator numeric-limit denial.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeHostNumericLimitDenialReadRequest(
+    RuntimeHostSessionProof? Proof,
+    Guid AttemptId)
+{
+    public override string ToString() => nameof(RuntimeHostNumericLimitDenialReadRequest) + " [REDACTED]";
+}
+
 /// <summary>Recovery source used to recreate a native SDK conversation.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter<RuntimeHostRecoveryMode>))]
 public enum RuntimeHostRecoveryMode
