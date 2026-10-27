@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createP1Fixture, p1FixtureProjectName, summarizeP1FixtureCleanup,
+  createP1Fixture, createP1IdempotencyKey, createP1JournalSeedIdempotencyKey,
+  p1FixtureProjectName, summarizeP1FixtureCleanup,
 } from '../p1-fixture-setup.mjs';
 import { validateP1RunnerPlanInput } from '../p1-journey-input.mjs';
 import { runP1SurfaceJourney } from '../p1-surface-runner.mjs';
@@ -26,6 +27,7 @@ function apiFor({
   tenantId = TENANT_ID,
   platformRuntimeRevision = 7,
   failures = {},
+  journalEvents = [],
 } = {}) {
   let project;
   const assignments = new Map();
@@ -35,6 +37,7 @@ function apiFor({
   let gate;
   let gateResolved = false;
   const calls = [];
+  const journalReceipts = [];
   const baseUrl = 'https://environment.controlled.test/';
   const methods = {
     getAuthorizationContext: 'GET',
@@ -58,6 +61,8 @@ function apiFor({
     approveGate: 'POST',
     rejectGate: 'POST',
     sendMessage: 'POST',
+    sendProjectRunMessage: 'POST',
+    replayRunEvents: 'GET',
   };
   const paths = {
     getAuthorizationContext: '/api/v1/authorization/context',
@@ -81,6 +86,8 @@ function apiFor({
     approveGate: '/api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/decisions/gates/{requestId}/approve',
     rejectGate: '/api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/decisions/gates/{requestId}/reject',
     sendMessage: '/api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/messages',
+    sendProjectRunMessage: '/api/v1/projects/{projectId}/runs/{runId}/messages',
+    replayRunEvents: '/api/v1/projects/{projectId}/runs/{runId}/events',
   };
   const api = {
     target: new URL(baseUrl),
@@ -106,6 +113,11 @@ function apiFor({
           },
         };
       }
+      if (operationId === 'sendProjectRunMessage') {
+        operation['x-agentweaver-owner'] = 'Orchestrator';
+        operation.parameters = [{ in: 'header', name: 'Idempotency-Key', required: true }];
+        operation.requestBody = { required: true };
+      }
       return [operationId, operation];
     })),
     schemas: new Map([['UpdateProjectRequest', {
@@ -118,10 +130,12 @@ function apiFor({
       },
     }]]),
     calls,
+    journalEvents,
+    journalReceipts,
     resolveGate() { gateResolved = true; },
     async discover() {},
-    async invoke(operationId, { pathParameters = {}, query, body } = {}) {
-      calls.push({ operationId, pathParameters, query, body });
+    async invoke(operationId, { pathParameters = {}, query, body, headers } = {}) {
+      calls.push({ operationId, pathParameters, query, body, headers });
       const result = (status, transientResponseBody) => ({
         operationId, status, transientResponseBody,
       });
@@ -298,6 +312,39 @@ function apiFor({
             recipientSessionId: body.recipientSessionId,
             status: 'accepted',
           });
+        case 'sendProjectRunMessage': {
+          if (actorId !== ACTOR_ID) return result(403, { code: 'forbidden' });
+          const receipt = {
+            ownerMessageId: '00000000-0000-4000-8000-000000000031',
+            messageId: '00000000-0000-4000-8000-000000000032',
+            threadId: '00000000-0000-4000-8000-000000000033',
+            threadSequence: journalEvents.length + 1,
+            projectId: pathParameters.projectId,
+            runId: pathParameters.runId,
+            rootSessionId: root.rootSessionId,
+            recipientSessionId: body.targetSessionId ?? root.rootSessionId,
+            status: 'accepted',
+            sender: { issuer: ISSUER, subject: actorId },
+          };
+          journalReceipts.push(receipt);
+          // Only this controlled Gateway operation appends an addressed-message event to the test journal.
+          journalEvents.push({
+            eventId: receipt.messageId,
+            identity: {
+              projectId: receipt.projectId,
+              runId: receipt.runId,
+              sessionId: receipt.rootSessionId,
+            },
+            position: journalEvents.length + 1,
+          });
+          return result(200, receipt);
+        }
+        case 'replayRunEvents':
+          return result(200, {
+            events: [...journalEvents],
+            nextCursor: journalEvents.length ? 'journal-page-cursor-1' : null,
+            hasMore: false,
+          });
         case 'readSessionTree':
           return result(200, {
             rootSessionId: root.rootSessionId,
@@ -410,6 +457,135 @@ function journeySourceEvidence(input) {
     },
   };
 }
+
+test('execute journal fixture seeds one owner event and the API runner replays that exact event', async () => {
+  const fixturePlan = validateP1RunnerPlanInput(plan('journal'));
+  const journalEvents = [];
+  assert.equal(journalEvents.length, 0);
+  const setupApi = apiFor({ journey: 'journal' });
+  let runApi;
+  const deniedApi = apiFor({ actorId: 'denied-actor', journalEvents });
+  const fixture = await createP1Fixture(fixturePlan, {
+    api: setupApi,
+    invocationId: INVOCATION_ID,
+    acquireRunIdentity: async binding => {
+      runApi = apiFor({
+        bound: true,
+        journey: 'journal',
+        expectedRunId: binding.runId,
+        journalEvents,
+      });
+      return {
+        token: 'run-token',
+        deniedToken: 'denied-token',
+        projectId: binding.projectId,
+        runId: binding.runId,
+        api: runApi,
+        deniedApi,
+      };
+    },
+  });
+  const replayPages = [];
+  let cleanupAttempted = false;
+  const invoke = fixture.api.invoke.bind(fixture.api);
+  fixture.api.invoke = async (operationId, options) => {
+    const call = await invoke(operationId, options);
+    if (operationId === 'replayRunEvents') replayPages.push(call.transientResponseBody);
+    return call;
+  };
+  try {
+    const sendCall = fixture.api.calls.find(call => call.operationId === 'sendProjectRunMessage');
+    const receipt = fixture.api.journalReceipts[0];
+    assert.equal(fixturePlan.executionIntent, 'execute');
+    assert.equal(fixturePlan.journey, 'journal');
+    assert.equal(journalEvents.length, 1);
+    assert.deepEqual(sendCall.body, { text: 'Controlled P1 journal fixture event.' });
+    assert.deepEqual(sendCall.pathParameters, {
+      projectId: fixture.input.pins.ownerFences.projectId,
+      runId: fixture.input.pins.ownerFences.runId,
+    });
+    assert.equal(sendCall.headers['Idempotency-Key'],
+      createP1JournalSeedIdempotencyKey(INVOCATION_ID));
+    assert.notEqual(sendCall.headers['Idempotency-Key'], createP1IdempotencyKey(INVOCATION_ID));
+    assert.notEqual(sendCall.headers['Idempotency-Key'],
+      createP1JournalSeedIdempotencyKey('00000000-0000-4000-8000-000000000099'));
+    assert.equal(receipt.status, 'accepted');
+    assert.equal(receipt.projectId, fixture.input.pins.ownerFences.projectId);
+    assert.equal(receipt.runId, fixture.input.pins.ownerFences.runId);
+    assert.equal(receipt.rootSessionId, fixture.input.pins.ownerFences.rootSessionId);
+    assert.equal(receipt.recipientSessionId, fixture.input.pins.ownerFences.rootSessionId);
+    assert.equal(receipt.sender.issuer, ISSUER);
+    assert.equal(receipt.sender.subject, ACTOR_ID);
+    assert.equal(receipt.threadSequence, 1);
+    assert.ok(receipt.ownerMessageId);
+    assert.ok(receipt.messageId);
+    assert.ok(receipt.threadId);
+    assert.equal(journalEvents[0].eventId, receipt.messageId);
+    assert.deepEqual(journalEvents[0].identity, {
+      projectId: receipt.projectId,
+      runId: receipt.runId,
+      sessionId: receipt.rootSessionId,
+    });
+    assert.ok(Number.isSafeInteger(journalEvents[0].position));
+    assert.ok(journalEvents[0].position > 0);
+    const rootAcceptIndex = fixture.api.calls.findIndex(call => call.operationId === 'acceptRunRoot');
+    const rootStatusIndex = fixture.api.calls.findIndex(call => call.operationId === 'readRunStatus');
+    const rootSessionStatusIndex = fixture.api.calls.findIndex(call => call.operationId === 'readSessionStatus');
+    const messageIndex = fixture.api.calls.findIndex(call => call.operationId === 'sendProjectRunMessage');
+    assert.ok(rootAcceptIndex < rootStatusIndex && rootStatusIndex < messageIndex);
+    assert.ok(rootAcceptIndex < rootSessionStatusIndex && rootSessionStatusIndex < messageIndex);
+    assert.equal(fixture.api.calls.filter(call => call.operationId === 'sendProjectRunMessage').length, 1);
+
+    const result = await runP1SurfaceJourney('api', fixture.input, {
+      api: fixture.api,
+      deniedApi: fixture.deniedApi,
+      sourceEvidence: journeySourceEvidence(fixturePlan),
+      clock: () => Date.parse('2026-10-13T00:00:00.000Z'),
+    });
+    assert.equal(result.surfaceStatus, 'passed', JSON.stringify(result));
+    assert.deepEqual(result.observations.journal, { eventCount: 1, pageCount: 1 });
+    assert.equal(replayPages.length, 1);
+    assert.deepEqual(replayPages[0].events, journalEvents);
+    assert.ok(replayPages[0].nextCursor);
+    assert.equal(replayPages[0].nextCursor, 'journal-page-cursor-1');
+    assert.notEqual(replayPages[0].nextCursor, receipt.messageId);
+    const replayCall = fixture.api.calls.find(call => call.operationId === 'replayRunEvents');
+    assert.deepEqual(replayCall.query, { limit: 100 });
+    assert.equal(Object.hasOwn(replayCall.query, 'cursor'), false);
+    assert.strictEqual(fixture.deniedApi.journalEvents, journalEvents);
+    assert.equal(fixture.deniedApi.calls.some(call =>
+      call.operationId === 'sendProjectRunMessage'), false);
+
+    const eventCount = journalEvents.length;
+    const deniedWrite = await fixture.deniedApi.invoke('sendProjectRunMessage', {
+      pathParameters: {
+        projectId: receipt.projectId,
+        runId: receipt.runId,
+      },
+      body: { text: 'Denied actor must not append an event.' },
+      headers: { 'Idempotency-Key': 'denied-actor-write' },
+    });
+    assert.equal(deniedWrite.status, 403);
+    assert.equal(journalEvents.length, eventCount);
+    cleanupAttempted = true;
+    const cleanup = await fixture.cleanup();
+    assert.deepEqual(cleanup, {
+      invocationId: INVOCATION_ID,
+      state: 'cleaned',
+      tenantId: TENANT_ID,
+      projectId: fixture.input.pins.ownerFences.projectId,
+      projectRevision: 2,
+      projectState: 'archived',
+      projectConfigurationRevision: 4,
+      assignmentId: ORCHESTRATOR_ASSIGNMENT_ID,
+      assignmentRevision: 2,
+      ownerAssignmentId: OWNER_ASSIGNMENT_ID,
+      ownerAssignmentRevision: 2,
+    });
+  } finally {
+    if (!cleanupAttempted) await fixture.cleanup();
+  }
+});
 
 async function createJourneyFixture(journey) {
   const input = validateP1RunnerPlanInput(plan(journey));
@@ -641,6 +817,22 @@ test('one-account fixture setup never reads a denied token or creates a denied A
   assert.equal(fixture.deniedApi, undefined);
   assert.equal(Object.hasOwn(fixture.input.pins.fixtureScope, 'deniedActor'), false);
   await fixture.cleanup();
+});
+
+test('fixture setup refuses missing or non-execute intent before any API write', async () => {
+  for (const intent of [undefined, 'preview']) {
+    const fixturePlan = plan('journal');
+    if (intent === undefined) delete fixturePlan.executionIntent;
+    else fixturePlan.executionIntent = intent;
+    const api = apiFor({ journey: 'journal' });
+    await assert.rejects(createP1Fixture(fixturePlan, {
+      api,
+      invocationId: INVOCATION_ID,
+      acquireRunIdentity: async () => { throw new Error('Identity must not be acquired.'); },
+    }), /executionIntent/);
+    assert.equal(api.calls.length, 0);
+    assert.equal(api.calls.some(call => call.method === 'POST'), false);
+  }
 });
 
 test('TenantAdmin setup with Owner and Orchestrator grants accepts selection without platform defaults', async () => {
@@ -972,6 +1164,86 @@ test('setup cleanup archives and revokes when a later setup step fails', async (
   const cleanup = await setupFailure.p1SetupCleanup();
   assert.equal(cleanup.state, 'cleaned');
   assert.equal(cleanup.projectState, 'archived');
+});
+
+test('journal fixture setup refuses when the discovered owner message operation is unavailable', async () => {
+  const setupApi = apiFor({ journey: 'journal' });
+  let runApi;
+  const fixturePlan = validateP1RunnerPlanInput(plan('journal'));
+  let setupFailure;
+  try {
+    await createP1Fixture(fixturePlan, {
+      api: setupApi,
+      invocationId: INVOCATION_ID,
+      acquireRunIdentity: async binding => {
+        runApi = apiFor({ bound: true, expectedRunId: binding.runId, journey: 'journal' });
+        runApi.operations.delete('sendProjectRunMessage');
+        return {
+          token: 'run-token',
+          deniedToken: 'denied-token',
+          projectId: binding.projectId,
+          runId: binding.runId,
+          api: runApi,
+          deniedApi: apiFor({ actorId: 'denied-actor' }),
+        };
+      },
+    });
+  } catch (error) {
+    setupFailure = error;
+  }
+  assert.match(setupFailure?.message ?? '', /sendProjectRunMessage operation/);
+  assert.equal(setupFailure.p1SetupState.setupIndeterminate, false);
+  assert.equal(runApi.calls.some(call => call.operationId === 'acceptRunRoot'), false);
+  assert.equal(runApi.calls.some(call => call.operationId === 'sendProjectRunMessage'), false);
+  assert.equal((await setupFailure.p1SetupCleanup()).state, 'cleaned');
+});
+
+test('invalid accepted journal-message receipt is indeterminate and is never retried or cleaned up', async () => {
+  const setupApi = apiFor({ journey: 'journal' });
+  const journalEvents = [];
+  let runApi;
+  const fixturePlan = validateP1RunnerPlanInput(plan('journal'));
+  let setupFailure;
+  try {
+    await createP1Fixture(fixturePlan, {
+      api: setupApi,
+      invocationId: INVOCATION_ID,
+      acquireRunIdentity: async binding => {
+        runApi = apiFor({
+          bound: true,
+          expectedRunId: binding.runId,
+          journey: 'journal',
+          journalEvents,
+        });
+        const invoke = runApi.invoke.bind(runApi);
+        runApi.invoke = async (operationId, options) => {
+          const call = await invoke(operationId, options);
+          if (operationId !== 'sendProjectRunMessage') return call;
+          return {
+            ...call,
+            transientResponseBody: { ...call.transientResponseBody, recipientSessionId: 'foreign-root' },
+          };
+        };
+        return {
+          token: 'run-token',
+          deniedToken: 'denied-token',
+          projectId: binding.projectId,
+          runId: binding.runId,
+          api: runApi,
+          deniedApi: apiFor({ actorId: 'denied-actor' }),
+        };
+      },
+    });
+  } catch (error) {
+    setupFailure = error;
+  }
+  assert.match(setupFailure?.message ?? '', /exact accepted journal message receipt/);
+  assert.equal(setupFailure.p1SetupState.setupIndeterminate, true);
+  assert.equal(journalEvents.length, 1);
+  assert.equal(runApi.calls.filter(call => call.operationId === 'sendProjectRunMessage').length, 1);
+  assert.equal((await setupFailure.p1SetupCleanup()).state, 'indeterminate');
+  assert.equal(setupApi.calls.some(call =>
+    ['revokeProjectRoleAssignment', 'updateProject'].includes(call.operationId)), false);
 });
 
 test('a failed durable UI action marker prevents the UI write', async () => {

@@ -21,6 +21,11 @@ export function createP1IdempotencyKey(invocationId) {
   return stableUuid(invocationId, 'surface-idempotency');
 }
 
+/** Derive the journal-seed message key separately from later surface mutation keys. */
+export function createP1JournalSeedIdempotencyKey(invocationId) {
+  return stableUuid(invocationId, 'journal-message-idempotency');
+}
+
 /** Return the project name that binds a P1 fixture project to its persisted invocation. */
 export function p1FixtureProjectName(invocationId) {
   return `p1-${invocationId.toLowerCase()}`;
@@ -63,11 +68,12 @@ function parametersFor(api, operationId, values) {
 }
 
 /** Invoke one discovered owner operation and validate its actual status receipt. */
-async function invoke(api, operationId, values, body, statuses, query) {
+async function invoke(api, operationId, values, body, statuses, query, headers) {
   const call = await api.invoke(operationId, {
     pathParameters: parametersFor(api, operationId, values),
     ...(query === undefined ? {} : { query }),
     ...(body === undefined ? {} : { body }),
+    ...(headers === undefined ? {} : { headers }),
   });
   return { call, value: requireResponse(api, operationId, call, statuses) };
 }
@@ -146,6 +152,41 @@ function requireRoot(root, projectId, runId, rootSessionId) {
     throw new Error('The owner did not return the exact accepted root and execution fence.');
   }
   return root;
+}
+
+/** Require the discovered run-message operation to retain its owner and idempotency contract. */
+function requireJournalMessageOperation(api) {
+  const operation = api.operations.get('sendProjectRunMessage');
+  const idempotencyKey = operation?.parameters?.find(parameter =>
+    parameter.in === 'header' && parameter.name?.toLowerCase() === 'idempotency-key');
+  if (operation?.method !== 'POST'
+    || operation.path !== '/api/v1/projects/{projectId}/runs/{runId}/messages'
+    || operation['x-agentweaver-owner'] !== 'Orchestrator'
+    || operation.requestBody?.required !== true
+    || idempotencyKey?.required !== true) {
+    throw new Error('The discovered Gateway sendProjectRunMessage operation does not expose its required owner contract.');
+  }
+}
+
+/** Require the exact accepted receipt returned for the journal-seeding run message. */
+function requireJournalMessageReceipt(receipt, projectId, runId, rootSessionId, actor) {
+  const keys = [
+    'messageId', 'ownerMessageId', 'projectId', 'recipientSessionId', 'rootSessionId',
+    'runId', 'sender', 'status', 'threadId', 'threadSequence',
+  ];
+  const senderKeys = ['issuer', 'subject'];
+  if (!receipt || Object.keys(receipt).sort().join(',') !== keys.sort().join(',')
+    || !UUID.test(receipt.ownerMessageId ?? '') || !UUID.test(receipt.messageId ?? '')
+    || !UUID.test(receipt.threadId ?? '')
+    || !Number.isSafeInteger(receipt.threadSequence) || receipt.threadSequence < 1
+    || receipt.projectId !== projectId || receipt.runId !== runId
+    || receipt.rootSessionId !== rootSessionId || receipt.recipientSessionId !== rootSessionId
+    || receipt.status !== 'accepted'
+    || !receipt.sender || Object.keys(receipt.sender).sort().join(',') !== senderKeys.join(',')
+    || receipt.sender.issuer !== actor.issuer || receipt.sender.subject !== actor.actorId) {
+    throw new Error('The owner did not return the exact accepted journal message receipt.');
+  }
+  return receipt;
 }
 
 /** Read run and root-session status concurrently and verify the new owner fence. */
@@ -301,6 +342,9 @@ export async function createP1Fixture(plan, {
   createId,
 }) {
   if (!UUID.test(invocationId ?? '')) throw new Error('A persisted P1 setup invocation ID is required.');
+  if (plan?.executionIntent !== 'execute') {
+    throw new Error('P1 runner input must explicitly set executionIntent to "execute".');
+  }
   if (typeof acquireRunIdentity !== 'function') {
     throw new Error('An already-authorized run identity provider is required.');
   }
@@ -489,12 +533,25 @@ export async function createP1Fixture(plan, {
       runApi, 'getAuthorizationContext', {}, undefined, [200]);
     requireContext(runAuthorization, actor, { projectId, runId });
 
+    if (plan.journey === 'journal') requireJournalMessageOperation(runApi);
     const acceptedRoot = (await invoke(runApi, 'acceptRunRoot', { projectId, runId }, {
       sessionId: rootSessionId,
     }, [201])).value;
     const root = requireRoot(acceptedRoot, projectId, runId, rootSessionId);
     const rootEvidence = await readRootEvidence(
       runApi, projectId, runId, rootSessionId, root.executionFence);
+
+    if (plan.journey === 'journal') {
+      // Journal journeys need one committed owner event; this accepted message does not dispatch native work.
+      await setupStep('seed-journal-message', async () => {
+        const { value: receipt } = await invoke(runApi, 'sendProjectRunMessage', {
+          projectId, runId,
+        }, { text: 'Controlled P1 journal fixture event.' }, [200], undefined, {
+          'Idempotency-Key': createP1JournalSeedIdempotencyKey(invocationId),
+        });
+        return requireJournalMessageReceipt(receipt, projectId, runId, rootSessionId, actor);
+      });
+    }
 
     let childReceipt;
     let childTree;

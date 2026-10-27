@@ -441,6 +441,16 @@ doubles, not a browser. These tests check fixture creation, selected surface
 calls, cleanup outcomes, and refusal of unverified ownership claims. They do
 not prove live owner behavior, native model execution, or deployment.
 
+The controlled P1 journal regression starts with an empty in-memory event
+journal. Fixture setup discovers and invokes the Gateway
+`sendProjectRunMessage` operation with its run-bound token and an
+invocation-scoped `Idempotency-Key`, then checks the exact accepted receipt
+before the API surface runner replays the event and validates its identity,
+cursor, and position. This records one owner-addressed event; it does not
+dispatch native work. Missing execution intent or an invalid owner contract is
+refused, and an ambiguous message result leaves cleanup indeterminate rather
+than retrying the write.
+
 The one-account P1 sign-in launcher also has a real browser regression that
 uses loopback redirects only. Install the Playwright test browser and run it:
 

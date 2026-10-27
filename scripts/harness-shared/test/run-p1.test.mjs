@@ -314,13 +314,21 @@ test('P1 CLI rejects non-execute input before credentials or network activity', 
   const inputPath = path.join(directory, 'input.json');
   const outputPath = path.join(directory, 'evidence.jsonl');
   const output = [];
+  const calls = [];
   try {
     await writeFile(inputPath, JSON.stringify({ executionIntent: 'preview' }), { encoding: 'utf8' });
     const code = await runP1Cli([
       '--surface', 'api', '--input', inputPath, '--output', outputPath,
       '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
-    ], {}, { log: text => output.push(text), error: text => output.push(text) });
+    ], {}, { log: text => output.push(text), error: text => output.push(text) }, {
+      async prepareDeploymentEvidence() { calls.push('deployment'); },
+      createSetupApi() { calls.push('setup-api'); },
+      async createFixture() { calls.push('fixture'); },
+      async createSurfaceAdapters() { calls.push('adapters'); },
+      async runSurfaceJourney() { calls.push('journey'); },
+    });
     assert.equal(code, 2);
+    assert.deepEqual(calls, []);
     const lines = (await readFile(outputPath, 'utf8')).trim().split('\n');
     const line = lines.at(-1);
     const result = JSON.parse(line);
