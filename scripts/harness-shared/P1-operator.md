@@ -25,6 +25,10 @@ v1.0.14 is also pinned for P1 evidence only. Its lightweight tag resolves to
 source commit `4105e2f2520659e7c9c636cf34972661fa26342f`, and its
 `publication.json` asset is pinned to SHA-256
 `21dc5b63e3bab229e8e8df07cc083ce94d48c031c045af3f7ba438a93fbe5538`.
+v1.0.15 is pinned for P1 evidence only. Its lightweight tag resolves to source
+commit `d35c4851f591aca0f623559e1a03e3bed722f20f`, and its `publication.json`
+asset is pinned to SHA-256
+`3be9dfd2a28616f0208a052e58c72069c102eafdef0961dc69765466e1d198f0`.
 
 Deployment and service evidence stay pinned to the release commit and source
 tree. Reused images keep their original build labels. The harness verifies

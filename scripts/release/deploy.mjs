@@ -299,6 +299,15 @@ const BOOTSTRAP_RELEASES = Object.freeze({
     allowLightweightTag: true,
     additionalProductComponents: Object.freeze(['Agentweaver.Providers.Sessions.AgentSessions']),
   }),
+  // Pin v1.0.15 for P1 evidence only; its lightweight tag and publication asset are exact.
+  'v1.0.15': Object.freeze({
+    sourceSha: 'd35c4851f591aca0f623559e1a03e3bed722f20f',
+    publicationSha256: '3be9dfd2a28616f0208a052e58c72069c102eafdef0961dc69765466e1d198f0',
+    continuation: false,
+    p1EvidenceOnly: true,
+    allowLightweightTag: true,
+    additionalProductComponents: Object.freeze(['Agentweaver.Providers.Sessions.AgentSessions']),
+  }),
 });
 
 /**
@@ -309,7 +318,8 @@ function deployableBootstrapRelease(tag) {
   const bootstrapRelease = BOOTSTRAP_RELEASES[tag];
   // A whole-release deployment owns its live rollout and receipt. Applying the same release through
   // the older bootstrap path would create a second, conflicting deployment history.
-  return bootstrapRelease && !bootstrapRelease.wholeReleaseDeployed ? bootstrapRelease : undefined;
+  return bootstrapRelease && !bootstrapRelease.wholeReleaseDeployed
+    && !bootstrapRelease.p1EvidenceOnly ? bootstrapRelease : undefined;
 }
 
 /** Lists the pinned releases that the pre-acceptance bootstrap deployment accepts. */
@@ -667,7 +677,7 @@ function validateSourceBoundDraftManifest(manifest, publication, {
     ...(bootstrapRelease.additionalProductComponents ?? []),
   ].sort();
   if (ids.length !== expected.length || ids.some((id, index) => id !== expected[index])) {
-    fail(`v1.0.14 draft manifest must contain exactly the ${expected.length} product components`);
+    fail(`${releaseTag} draft manifest must contain exactly the ${expected.length} product components`);
   }
 
   const deploymentManifest = structuredClone(manifest);

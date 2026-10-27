@@ -483,6 +483,10 @@ archive measurements against the publication's original build source.
 Downstream journeys accept that checked binding without changing the release
 source pins, and reject mismatched measurements or an older source supplied
 without preparation. These are controlled local checks, not live acceptance.
+Draft P1 manifests admit only releases explicitly pinned for evidence
+verification; an evidence-only pin never authorizes a deployment. See
+`scripts/harness-shared/P1-operator.md` for the reviewed source and publication
+pairs.
 
 To check timing-sensitive changes, run the browser suite repeatedly, both
 normally and with `NODE_V8_COVERAGE` set to a local output directory. Keep

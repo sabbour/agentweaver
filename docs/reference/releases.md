@@ -370,6 +370,9 @@ With `--execute`, the command checks live Deployments and completes the
 run-binding readback before printing a success result. A failed check prints a
 deployment error and exits non-zero.
 
+The v1.0.15 release is pinned for P1 evidence verification only. That pin does
+not authorize deployment or indicate release acceptance.
+
 The only historical-release exception is a v1.0.14 redeployment with this
 descriptor. It verifies the pinned lightweight tag and publication asset,
 requires a clean helper checkout descended from the pinned source, rejects
