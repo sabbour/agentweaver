@@ -478,10 +478,20 @@ receipt atomically in the Projects database. Same-invocation retries recheck
 current authority and the exact readback. This receipt is not authorization or
 proof for run, Environment, Sandbox, or runtime creation.
 
+`GET /api/v1/p1/invocations/{invocationId}/setup` forwards to the same Projects
+path with `GET`. It requires the same unbound scopes, current TenantAdmin,
+selected tenant, and empty body/query, and returns only the current validated
+receipt with `Cache-Control: no-store`. It exclusively calls the existing
+read function: an unknown or foreign locator returns `403`, stale setup state
+returns `409`, and no read can create projects, assignments, audits, or setup
+rows. It is REST-only, excluded from MCP, and bounded to 16 KiB like issuance.
+It proves current state at the owner read, not a cross-service revocation lock
+or Core invocation provenance.
+
 | Status | Problem code | Meaning |
 | --- | --- | --- |
 | `400` | `invalid_project_setup_request` | The invocation ID, tenant header, body, or query is invalid. |
-| `403` | `forbidden` | The bearer lacks the required scope/current TenantAdmin authority, or the selected tenant does not match. |
+| `403` | `forbidden` | The bearer lacks the required scope/current TenantAdmin authority, the selected tenant does not match, or the read locator is unknown or belongs to another actor/tenant. |
 | `409` | `project_setup_invocation_conflict`, `project_setup_receipt_stale` | The invocation conflicts with an existing receipt or its current readback is stale. |
 
 ### P1 setup authority audit

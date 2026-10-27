@@ -129,6 +129,11 @@ public static class GatewayRouteCatalog
             "createP1InvocationSetup", "Create a P1 fixture project setup receipt",
             requiresTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
             maximumResponseBytes: 16 * 1024, excludeFromMcp: true);
+        Add("GET", GatewayOwner.Projects, "/p1/invocations/{invocationId:guid}/setup",
+            "/api/p1/invocations/{invocationId:guid}/setup",
+            "readP1InvocationSetup", "Read a current P1 fixture project setup receipt",
+            requiresTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: 16 * 1024, excludeFromMcp: true);
         Add("GET", GatewayOwner.Projects, "/projects/{projectId}", "/api/projects/{projectId}",
             "getProject", "Read a project", ["runId"], forwardTenantSelector: true);
         Add("PATCH", GatewayOwner.Projects, "/projects/{projectId}", "/api/projects/{projectId}",
