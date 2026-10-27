@@ -147,6 +147,7 @@ test('missing live inputs keep both required acceptance slots blocked', async ()
   assert.deepEqual(result.ownerObservation, { status: 'not-requested' });
   assert.deepEqual(result.liveObservations, {
     creditDenials: { status: 'not-requested' },
+    numericDenials: { status: 'not-requested' },
     replacementRecovery: { status: 'not-requested' },
   });
   assert.deepEqual(result.probes.map(probe => probe.name), probeNames);
