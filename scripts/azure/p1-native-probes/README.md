@@ -265,8 +265,9 @@ node --test scripts\azure\p1-native-probes\*.test.mjs scripts\harness-shared\tes
 ```
 
 The owner response regressions are synthetic; no database, cluster fixtures or
-live P1 run is performed. This subtree suite is not selected by the current
-`test:harness`/`test:azure` CI globs; run it explicitly for this change.
+live P1 run is performed. The complete subtree suite is also selected by
+`npm run test:harness` in the existing v1 CI harness job. The CI contract test
+guards that selector against accidentally dropping the native suite.
 
 The CLI is a thin execution seam, not a fixture or authority producer. Importing
 `cli.mjs` is inert. `--execute` expresses execution intent, not an authorization
