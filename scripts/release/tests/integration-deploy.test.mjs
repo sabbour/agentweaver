@@ -569,7 +569,7 @@ test('Broker run-binding preflight checks the full server chain and raw CA bytes
   assert.equal(shadowMocks.rawCalls, 0);
 });
 
-test('release preflight allows run-binding settings only when both runtime ConfigMaps are absent or configured', () => {
+test('release preflight allows interrupted run-binding replacement but strict verification requires both maps', () => {
   const binding = runBinding();
   const configMaps = runBindingConfigMaps(binding);
   const bindingKeys = {
@@ -599,10 +599,21 @@ test('release preflight allows run-binding settings only when both runtime Confi
   for (const key of bindingKeys['projects-config-runtime-config']) {
     delete brokerConfiguredOnly['projects-config-runtime-config'][key];
   }
-  const partial = brokerRunBindingMocks(binding, { configMaps: brokerConfiguredOnly });
+  const interrupted = brokerRunBindingMocks(binding, { configMaps: brokerConfiguredOnly });
+  const preflight = verifyBrokerRunBindingConfiguration(binding, target, {
+    ...interrupted, allowMissingSettings: true,
+  });
+  assert.equal(preflight.runBindingSettingsConfigured, false);
+  assert.throws(() => verifyBrokerRunBindingConfiguration(binding, target, interrupted),
+    /projects-config-runtime-config must contain exactly the required/);
+
+  const incompleteBrokerMap = runBindingConfigMaps(binding);
+  delete incompleteBrokerMap['identity-broker-runtime-config-v2']
+    .IdentityBroker__RunBinding__ProjectsAudience;
+  const incomplete = brokerRunBindingMocks(binding, { configMaps: incompleteBrokerMap });
   assert.throws(() => verifyBrokerRunBindingConfiguration(binding, target, {
-    ...partial, allowMissingSettings: true,
-  }), /wholly absent or present in both runtime ConfigMaps/);
+    ...incomplete, allowMissingSettings: true,
+  }), /identity-broker-runtime-config-v2 must contain exactly the required/);
 });
 
 test('Broker run-binding validates the chain with the platform X.509 path builder', { skip: !hasPowerShell7 }, () => {

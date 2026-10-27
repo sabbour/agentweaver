@@ -1420,6 +1420,12 @@ matching Broker and Projects Config settings, Pod fingerprints, and two
 port-8443 Cilium policies only in a temporary Kustomize copy. It remains
 read-only unless `--execute` is supplied and can replace only those two
 immutable runtime ConfigMaps after its guarded preflight.
+Preflight also permits a partially completed rollout in which one map is
+absent and the other already matches; incomplete values within either map
+still fail, and post-apply verification requires both maps.
+For v1.0.14 run-binding redeployment only, a clean newer helper checkout may
+be used after it verifies the pinned release receipt and unchanged
+source-owned deployment inputs.
 
 ## Identity PostgreSQL access
 

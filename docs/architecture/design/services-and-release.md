@@ -611,6 +611,9 @@ plans guarded replacement only for the two immutable Broker and Projects
 Config runtime ConfigMaps, and verifies the applied configuration and live
 readbacks. Both deploy commands remain opt-in; `release:deploy` is read-only
 without `--execute`. The image workflow does not enable run binding.
+During recovery, preflight accepts either runtime ConfigMap as absent or fully
+matching; a map with incomplete or conflicting binding values fails.
+Post-apply verification requires both maps to be fully configured.
 
 ### Local published-image deployment
 
@@ -618,7 +621,11 @@ The operator-hosted `release:deploy` command is a separate consumer of the
 existing source-bound publication receipt and release manifest. It accepts only
 an annotated v1 GitHub Release at the exact clean source commit, verifies all
 ten product image digests against the immutable publication result and GHCR,
-and never builds, pushes, or imports an image. Nine services run as shared
+and never builds, pushes, or imports an image. For v1.0.14 run-binding
+redeployment only, a newer clean helper checkout is allowed when it descends
+from the pinned release source and its source-owned Kustomize and release
+inputs are unchanged; project files are validated at the pinned source.
+Nine services run as shared
 Deployments and private ClusterIP Services. AgentHost remains per-Sandbox:
 read-only GHCR verification resolves its exact published `linux/amd64` child
 digest, validates the config against prepared source labels, and measures the

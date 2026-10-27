@@ -219,6 +219,13 @@ const PROJECTS_CONFIG_HOSTNAME = 'projects-config.agentweaver.svc.cluster.local'
 const SERVER_AUTH_EKU = '1.3.6.1.5.5.7.3.1';
 const BACKEND_TLS_CA_CONFIGMAP = 'service-backend-ca';
 const BOOTSTRAP_RELEASE_TAG = 'v1.0.0';
+const RUN_BINDING_RELEASE_SOURCE_PATHS = Object.freeze([
+  KUSTOMIZE_INSTALL_PATH,
+  path.join('scripts', 'release', 'runtime-list.mjs'),
+  path.join('scripts', 'release', 'kustomize-runtime.mjs'),
+  path.join('scripts', 'release', 'pack.mjs'),
+  path.join('scripts', 'release', 'validate.mjs'),
+]);
 const BOOTSTRAP_RELEASES = Object.freeze({
   [BOOTSTRAP_RELEASE_TAG]: Object.freeze({
     sourceSha: PARTIAL_PUBLICATION.sourceSha,
@@ -588,9 +595,9 @@ export function validateTarget(target) {
 }
 
 /** Validates that the release manifest is published, source-bound, and consistent with repository files. */
-export function validatePublishedManifest(manifest, { root, sourceSha }) {
+export function validatePublishedManifest(manifest, { root, sourceSha, readProject }) {
   if (!SHA.test(sourceSha ?? '')) fail('release source SHA must be a lowercase full Git commit SHA');
-  validateManifest(manifest, { root });
+  validateManifest(manifest, { root, ...(readProject ? { readProject } : {}) });
   if (manifest.stage !== 'release') {
     fail('the supplied manifest is still draft; an already-published release composition is required');
   }
@@ -618,6 +625,44 @@ export function validatePublishedManifest(manifest, { root, sourceSha }) {
   const probe = manifest.components.find((component) => component.id === 'Agentweaver.FoundationProbe');
   if (probe && (probe.kind !== 'service' || probe.version !== '0.0.1')) {
     fail('FoundationProbe is acceptance-only at 0.0.1 and must remain outside product deployment');
+  }
+  return manifest;
+}
+
+/** Validates the source-versioned manifest used only for the v1.0.14 run-binding redeployment. */
+export function validateRunBindingPublishedManifest(manifest, {
+  root, sourceSha, releaseTag, readProject,
+}) {
+  const bootstrapRelease = BOOTSTRAP_RELEASES[releaseTag];
+  if (releaseTag !== 'v1.0.14' || sourceSha !== bootstrapRelease?.sourceSha) {
+    fail('run-binding redeployment requires the exact published v1.0.14 source');
+  }
+  const projectReader = readProject ? { readProject } : {};
+  // Validate the historical Probe against its source version, then apply release evidence rules to product components.
+  const sourceShapeManifest = structuredClone(manifest);
+  sourceShapeManifest.stage = 'draft';
+  delete sourceShapeManifest.evidence;
+  validateManifest(sourceShapeManifest, { root, ...projectReader });
+  const releaseValidationManifest = structuredClone(manifest);
+  releaseValidationManifest.components = releaseValidationManifest.components.filter(
+    (component) => component.id !== 'Agentweaver.FoundationProbe');
+  releaseValidationManifest.compatibility = releaseValidationManifest.compatibility.filter(
+    (entry) => entry.consumer !== 'Agentweaver.FoundationProbe' &&
+      entry.dependency !== 'Agentweaver.FoundationProbe');
+  validateManifest(releaseValidationManifest, { root, ...projectReader });
+  if (manifest.stage !== 'release' || manifest.evidence?.sourceSha !== sourceSha ||
+      manifest.evidence?.deploymentSha !== sourceSha) {
+    fail('v1.0.14 release manifest evidence must match the exact published source commit');
+  }
+  const product = manifest.components.filter((component) =>
+    component.id !== 'Agentweaver.FoundationProbe');
+  const ids = product.map((component) => component.id).sort();
+  const expected = [
+    ...PRODUCT_COMPONENTS,
+    ...(bootstrapRelease.additionalProductComponents ?? []),
+  ].sort();
+  if (ids.length !== expected.length || ids.some((id, index) => id !== expected[index])) {
+    fail(`v1.0.14 release manifest must contain exactly the ${expected.length} product components`);
   }
   return manifest;
 }
@@ -1912,6 +1957,40 @@ export async function verifyBootstrapRelease(tag, publication, { root, run, publ
   });
 }
 
+/**
+ * Allows the pinned v1.0.14 workloads to be redeployed with run binding from a newer helper checkout.
+ */
+export async function verifyRunBindingRelease(tag, publication, { root, run, publicationSha256 }) {
+  if (tag !== 'v1.0.14') {
+    fail('run-binding redeployment from a newer helper checkout is limited to v1.0.14');
+  }
+  const sourceSha = await verifyBootstrapRelease(tag, publication, { root, run, publicationSha256 });
+  const helperSha = run('git', ['rev-parse', 'HEAD'], { cwd: root }).trim();
+  if (!SHA.test(helperSha)) fail('deployment helper HEAD must be a full Git commit SHA');
+  const mergeBase = run('git', ['merge-base', sourceSha, helperSha], { cwd: root }).trim();
+  if (mergeBase !== sourceSha) {
+    fail('the v1.0.14 deployment helper must descend from the exact published source commit');
+  }
+  // Keep the newer helper limited to code changes; workload-generating inputs must remain source-identical.
+  const changedPaths = run('git', [
+    'diff', '--name-only', sourceSha, helperSha, '--', ...RUN_BINDING_RELEASE_SOURCE_PATHS,
+  ], { cwd: root }).trim();
+  if (changedPaths) {
+    fail(`v1.0.14 run-binding deployment inputs differ from the published source: ${changedPaths}`);
+  }
+  return sourceSha;
+}
+
+function readSourceProjectAtCommit(file, { root, sourceSha, run }) {
+  const relativePath = path.relative(root, file);
+  if (!relativePath || relativePath === '..' ||
+      relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+    fail('release manifest project files must remain within the deployment helper repository');
+  }
+  const sourcePath = relativePath.split(path.sep).join('/');
+  return run('git', ['show', `${sourceSha}:${sourcePath}`], { cwd: root });
+}
+
 function projectAksTargetReadback(value) {
   return {
     id: value?.id,
@@ -2305,10 +2384,7 @@ export function verifyBrokerRunBindingConfiguration(binding, target, {
     brokerConfig, brokerSettings, 'identity-broker-runtime-config-v2');
   const projectsSettingsConfigured = verifySettings(
     projectsConfig, projectsSettings, 'projects-config-runtime-config');
-  if (brokerSettingsConfigured !== projectsSettingsConfigured) {
-    fail('Broker run-binding settings must be wholly absent or present in both runtime ConfigMaps');
-  }
-  if (!brokerSettingsConfigured && !allowMissingSettings) {
+  if ((!brokerSettingsConfigured || !projectsSettingsConfigured) && !allowMissingSettings) {
     fail('Broker run-binding settings must be present in both runtime ConfigMaps');
   }
 
@@ -2835,7 +2911,14 @@ export async function deployRelease(options = {}, dependencies = {}) {
     rm: dependencies.checkpointRm ?? rmSync,
   };
   const manifest = options.manifest ?? parseJson(readFile(path.resolve(root, parsed.manifestPath), 'utf8'), 'release manifest');
-  const publication = options.publication ?? parseJson(readFile(path.resolve(root, parsed.publicationPath), 'utf8'), 'publication receipt');
+  const publicationText = options.publication === undefined
+    ? readFile(path.resolve(root, parsed.publicationPath), 'utf8')
+    : undefined;
+  const publication = options.publication ?? parseJson(publicationText, 'publication receipt');
+  const publicationSha256 = options.publicationSha256 ??
+    (publicationText === undefined
+      ? undefined
+      : createHash('sha256').update(publicationText).digest('hex'));
   const completion = parsed.completionPath
     ? options.completion ?? parseJson(readFile(path.resolve(root, parsed.completionPath), 'utf8'), 'completion receipt')
     : undefined;
@@ -2851,11 +2934,16 @@ export async function deployRelease(options = {}, dependencies = {}) {
     ((receipt, published, source) => verifyPartialPublicationCompletion(receipt, published, source,
       (file, args, input) => run(file, args, input === undefined ? {} : { input })));
   const verifySource = async () => {
+    const historicalRunBindingDeployment = brokerRunBinding !== undefined &&
+      parsed.releaseTag === 'v1.0.14' && !parsed.preAcceptance;
     const source = parsed.preAcceptance
       ? await (dependencies.verifyBootstrapRelease ?? verifyBootstrapRelease)(
         parsed.releaseTag, publication, { root, run })
-      : await (dependencies.verifyRelease ?? verifyRelease)(
-        parsed.releaseTag, publication, { root, run });
+      : historicalRunBindingDeployment
+        ? await (dependencies.verifyRunBindingRelease ?? verifyRunBindingRelease)(
+          parsed.releaseTag, publication, { root, run, publicationSha256 })
+        : await (dependencies.verifyRelease ?? verifyRelease)(
+          parsed.releaseTag, publication, { root, run });
     if (bootstrapRelease?.continuation) {
       if (!completion) fail('pre-acceptance bootstrap requires its exact continuation completion proof');
       await verifyCompletion(completion, publication, source);
@@ -2866,11 +2954,19 @@ export async function deployRelease(options = {}, dependencies = {}) {
     return source;
   };
   const sourceSha = await verifySource();
+  const readPublishedProject = dependencies.readSourceProjectAtCommit ?? readSourceProjectAtCommit;
+  const readSourceProject = brokerRunBinding !== undefined && parsed.releaseTag === 'v1.0.14'
+    ? file => readPublishedProject(file, { root, sourceSha, run })
+    : undefined;
   const deploymentManifest = parsed.preAcceptance
     ? validateBootstrapManifest(manifest, publication, {
       root, sourceSha, releaseTag: parsed.releaseTag, manifestPath: parsed.manifestPath, run,
     })
-    : validatePublishedManifest(manifest, { root, sourceSha });
+    : readSourceProject
+      ? validateRunBindingPublishedManifest(manifest, {
+        root, sourceSha, releaseTag: parsed.releaseTag, readProject: readSourceProject,
+      })
+      : validatePublishedManifest(manifest, { root, sourceSha });
   const images = validatePublicationReceipt(publication, deploymentManifest, sourceSha);
   // Reuse the injected fetch and delay seams for every pre- and post-apply registry read.
   const verifyImages = dependencies.verifyImages ?? (async (refs) => {

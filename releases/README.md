@@ -1211,7 +1211,9 @@ namespace, and node-bound arguments. Use the approved subscription and tenant
 IDs, resource group `agentweaver`, cluster `agentweaver-aks`, namespace
 `agentweaver`, and node bounds 2–3. It does not select a default Azure
 account, change kubectl context, or request credentials.
-The local checkout must be clean at the exact annotated release tag commit.
+Ordinary final-release deployment requires a clean checkout at the exact
+annotated release tag commit. The v1.0.14 run-binding exception described below
+uses a clean newer helper checkout instead.
 The checked-in runtime List source supplies the nine shared Deployment/Service
 pairs from the validated publication receipt. It also requires the existing
 Projects provider-catalog ConfigMap name and the exact reviewed source commit.
@@ -1249,9 +1251,43 @@ certificate and configuration inputs and checks any changed immutable runtime
 ConfigMaps; only `identity-broker-runtime-config-v2` and
 `projects-config-runtime-config` can be replaced in this opt-in path.
 
-The default is a read-only dry-run. It verifies the annotated GitHub tag and
-published Release, the source-bound immutable publication result, all 23
-product components, and ten GHCR image digests. It checks the exact
+For the v1.0.14 run-binding redeployment, use a clean helper checkout descended
+from the pinned release source. This is the only historical-release exception:
+the command verifies the exact lightweight tag and publication asset hash,
+checks that the source-owned Kustomize and release inputs have not changed,
+validates manifest project files from the pinned source, and requires the
+receipt image digests to match the checked-in P0 image pins. It does not enable
+ordinary historical redeployment. Preflight can recover when one run-binding
+ConfigMap is absent and the other already matches; partial or conflicting
+settings still fail, and successful post-apply verification requires both.
+
+Run the dry-run with the v1.0.14 release artifacts and the reviewed provider
+catalog source commit:
+
+```powershell
+npm run release:deploy -- v1.0.14 `
+  --manifest <published-release-manifest.json> `
+  --publication <publication.json> `
+  --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
+  --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
+  --resource-group agentweaver `
+  --cluster agentweaver-aks `
+  --namespace agentweaver `
+  --node-min 2 `
+  --node-max 3 `
+  --provider-catalog-configmap projects-config-provider-catalog `
+  --provider-catalog-source-commit b002620bd8cb53a971b6d5b082d6ab43dbf11fb7 `
+  --broker-run-binding artifacts/release/broker-run-binding.json
+```
+
+After reviewing the read-only result and confirming the target, repeat the
+command with `--execute` to apply the release and binding.
+
+For the current release composition, the default is a read-only dry-run. It
+verifies the annotated GitHub tag and published Release, the source-bound
+immutable publication result, all 23 product components, and ten GHCR image
+digests. The v1.0.14 run-binding exception validates its source-versioned
+manifest and exact product inventory instead. The command checks the exact
 Azure/kubectl target, nine generated shared-service runtime pairs, existing
 references, required Cilium policy names, and client-rendered Kubernetes
 resources. The receipt-measured
