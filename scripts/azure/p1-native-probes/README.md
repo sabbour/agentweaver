@@ -192,12 +192,14 @@ These reads are not a substitute for invocation ownership or native mount eviden
 ## Explicit native CLI and provider module
 
 **Native execution is blocked.** After validating the module shape, the CLI
-exits 2 at `native_authority_join` with a precise missing-contract diagnostic.
-Legacy modules never invoke provider methods. Modules with the optional
+exits 2 at `native_authority_join`. A validated owner join reports the precise
+`native_no_send_effect_proof_missing` gap; an absent or invalid owner authority
+retains the generic missing-authority diagnostic. Legacy modules never invoke
+provider methods. Modules with the optional
 `nativeAuthorityProvider.readCurrent()` perform bounded, read-only owner
-observations; they still never invoke the native runner and leave the exclusively
-reserved output empty; that file is not an acceptance envelope. The controlled
-runner tests below are not evidence that the CLI has this authority join.
+observations; the CLI invokes no auth, journey, readiness, or process method,
+never invokes the native runner, and leaves the exclusively reserved output
+empty. The reserved file is not an acceptance envelope.
 
 ### Source-owned partial owner reader
 
@@ -229,33 +231,35 @@ receipt, status and endpoint fields are not authority. Reads use these real rout
 | --- | --- |
 | Core | `/internal/runtime/registrations/{runtimeInstanceId}` |
 | Core | `/internal/projects/{projectId}/runs/{runId}/p1-invocation-binding` |
-| Environment | `/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}/pod-observation` |
-| Host | `/runtime/v1/readiness/evidence` |
+| Environment | `/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}/p1-creation-binding` |
+| Host | `/runtime/v1/readiness/p1-evidence` |
 
 Each GET rejects redirects, uses no-store, a 10-second transport/body deadline,
-and a streamed 64-KiB response limit. The current registration supplies the route
-identities and must match the trusted actor. Core must identify the same root
-session, accepted selection and execution fence. Environment's resource/claim ID
-must match registration placement; Host's mount Pod UID must separately match
-Environment's actual Pod UID. Provider resource, lifecycle/provider fences,
-workspace attachment and Host registration revision must agree. Pod observation,
-Core binding and complete registration are read again after the Host observation;
-changes reject. Owner bodies, credentials, registration endpoints and model
-credential references are never returned or printed. Host hash fields are checked
-for shape only, not rehashed as independent cryptographic proof.
+requires `Cache-Control: no-store`, and enforces a streamed 64-KiB response
+limit. The current registration supplies the route identities and must match
+the trusted actor. Core must identify the same root session, accepted selection
+and execution fence. Environment's exact P1 binding, Environment fence, four
+completed creation records and Pod observation must join to that registration.
+The Sandbox creation `resourceId` is the operation GUID; its separate
+`providerResource.resourceId` is the provider-returned SandboxClaim UID and must
+match registration and Pod claim identity. The Host envelope's creation join,
+Host Pod observation and actual mount must agree. Environment creation is read
+again after Host, followed by Core binding and complete registration; only the
+Pod observation's `observedAt` may differ across those reads. Unknown or missing
+response fields reject. Owner bodies, credentials, registration endpoints and
+model credential references are never returned or printed. Host hash fields
+are checked for shape only, not rehashed as independent cryptographic proof.
 
-The result is always `status: "blocked"` with
-`code: "environment_creation_binding_read_contract_missing"` and a small partial
-observation identifying the Core invocation, runtime revision, claim and Pod.
-As inspected at proposed #2425 head
-`9b943bcad4e74217cedb65910e00ea9982b49ecf`, Environment retains creation links but
-does not expose a stable authenticated creation-binding read/response contract.
-This reader intentionally contains no guessed route or schema for that dependency.
-Its journey authorizer always denies and its runner readiness adapter refuses use.
-Even an injected authority provider returning `passed` cannot unblock the CLI.
-Root provenance and Host mount observations do not prove Environment creation,
-child execution, native no-send/cursor effects, network isolation, storage byte
-isolation, or generic replacement. All existing required acceptance slots remain.
+A valid join still returns `status: "blocked"` and
+`code: "native_no_send_effect_proof_missing"`, with
+`acceptanceEvidence: false` and `nativeNoSendProven: false`. Its partial
+observation contains only joined operation IDs and provider-returned claim/Pod
+identities. The journey authorizer always denies and the readiness adapter
+throws. Even a fake authority result of `passed` or `acceptanceEvidence: true`
+cannot unblock the CLI. This bounded consumer does not provide native no-send,
+cursor, effect, or dispatch acknowledgments, the other runner proof slots,
+child execution, network isolation, storage-byte isolation, or generic
+replacement. It makes no live acceptance claim.
 
 Run the fixture-free source-route/type contract test and controlled transport
 regressions with:
@@ -299,8 +303,8 @@ these three keys, implementing the methods and return contracts in
 keys block. In particular, it cannot supply `fetch`, `processProvider`, or `now`.
 The CLI uses Node's HTTP transport, the real clock, and
 `createP1NativeProcessProvider(input.pins.context)` without process overrides.
-It cannot execute the runner until the missing owner contracts are integrated;
-it does not add a pass, substitute receipts, or manufacture acceptance evidence.
+It never executes the runner; it does not add a pass, substitute receipts, or
+manufacture acceptance evidence.
 
 The module is executable trusted code, not sandboxed configuration. Review and
 pin its source separately. Its import and factory must be side-effect-free:
@@ -325,22 +329,13 @@ fields:
 }
 ```
 
-The partial owner reader consumes this observation directly from Environment;
-it is not a runner ownership receipt. It must be derived only from
-validated actual Pod, Sandbox, and PVC reads, then reread the exact Pod UID and
-`resourceVersion` before returning; when present, `RuntimeEndpoint.PodUid`
-must match. Its environment fence and provision operation do not establish an
-invocation binding. Core/Projects must separately supply authoritative,
-revocation-checked invocation-to-exact-owner/resource creation authority.
-Until that contract exists and the runner validates it, invocation binding is
-missing and the CLI remains blocked; matching an owner, Pod, or provision
-operation alone is insufficient. An `authorizationId` is only a lookup key,
-never authorization. The future join must authenticate and reread current
-authority before and after the read; bind the exact invocation, session,
-Environment, claim resource and fences; and compare the separately validated
-Environment `PodObservation.podUid`, actual native Pod UID and Host
-downward-API self UID. Registration `placementUid` must remain the claim UID
-throughout that join, including replacement and stale-read rejection.
+The P1 creation-binding route returns this observation alongside the exact
+creation records and full Core binding. The consumer validates those records
+against the current registration, then compares the Host's independently
+observed Pod UID and mounted workspace. This source-only read is not a runner
+ownership receipt or acceptance result. The CLI remains blocked until native
+no-send/cursor/effect/dispatch acknowledgments and the remaining runner proof
+slots are wired and validated.
 
 `workspaceAttachment` and `isolationConfigurationVerified` describe
 configuration only. They do not prove that the Host process sees the actual
@@ -362,10 +357,12 @@ Before genuine use, the fixture/Environment/RuntimeHost owners must supply:
   an owner-backed mapping of actions to allowed journeys, and an independent
   current RuntimeHost registration/readiness reader bound to the exact placement
   and Pod UID. Readiness must not echo the input receipt as a fresh observation.
-- Invocation-to-exact-resource creation authority from Core/Projects with
-  revocation checks; the Environment Pod observation and its provision
-  operation are not a substitute. Its configuration-only workspace attachment
-  fields do not substitute for native Host filesystem mount evidence.
+- The source-owned Environment/Core/Host creation join described above is
+  current owner observation only; the native runner still needs exact
+  invocation-owned disposable fixture receipts and an owner-backed action-to-
+  journey mapping. Do not substitute caller-supplied receipts or the
+  configuration-only workspace attachment for native Host filesystem mount
+  evidence.
 - The pinned kubeconfig context with normal HTTPS/TLS validation and approved
   native access, fixed `kubectl` and `hubble` executables, and an independently
   authenticated, owner-verified Hubble Relay for that cluster at

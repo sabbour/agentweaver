@@ -9,6 +9,7 @@ const PROVIDERS = Object.freeze({
   journeyAuthorizer: 'authorize',
   runtimeReadinessProvider: 'readCurrent',
 });
+const NATIVE_PROOF_GAP = 'native_no_send_effect_proof_missing';
 
 function parseArguments(argv) {
   if (argv.length === 1 && argv[0] === '--help') return { help: true };
@@ -63,6 +64,7 @@ export async function loadP1NativeProviders(input, modulePath) {
 export async function runP1NativeProbeCli(argv, { stdout = process.stdout, stderr = process.stderr } = {}) {
   let output;
   let stage = 'arguments';
+  let nativeAuthorityJoined = false;
   try {
     const options = parseArguments(argv);
     if (options.help) {
@@ -78,19 +80,19 @@ export async function runP1NativeProbeCli(argv, { stdout = process.stdout, stder
     stage = 'native_authority_join';
     if (providers.nativeAuthorityProvider) {
       const authority = await providers.nativeAuthorityProvider.readCurrent();
-      if (authority?.status === 'blocked' &&
-        authority.code === 'environment_creation_binding_read_contract_missing') {
-        stderr.write('Missing contract: Environment has no stable authenticated creation-binding read; current Core/Pod/Host observations are partial evidence only.\n');
+      if (authority?.status === 'blocked' && authority.code === NATIVE_PROOF_GAP &&
+        authority.acceptanceEvidence === false && authority.nativeNoSendProven === false) {
+        nativeAuthorityJoined = true;
+        stderr.write(`Native proof gap: ${NATIVE_PROOF_GAP}; no-send, effect, cursor, and dispatch acknowledgments remain absent.\n`);
       }
     }
-    // The current three-provider contract cannot establish invocation ownership or Pod self-identity.
-    // Do not execute native effects until the owner contracts are joined and validated here.
+    // Owner observations are not native acceptance evidence; this CLI never starts the runner.
     throw new Error('native_authority_join_unavailable');
   } catch {
     // Provider and filesystem errors can contain credentials or raw owner responses.
     stderr.write(`P1 native CLI blocked at ${stage}; no acceptance pass is claimed.\n`);
-    if (stage === 'native_authority_join') {
-      stderr.write('Missing contract: authenticated invocation-bound Environment authority joined to current PodObservation and Host downward-API Pod UID. authorizationId alone is lookup-only, not authority.\n');
+    if (stage === 'native_authority_join' && !nativeAuthorityJoined) {
+      stderr.write('Missing authority proof: a current authenticated Core/Environment/Host join was not established; no acceptance pass is claimed.\n');
     }
     if (stage === 'arguments') stderr.write(`${USAGE}\n`);
     return 2;

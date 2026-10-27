@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -35,7 +34,7 @@ const factory = `export function createP1NativeProviders({ input }) {
 }`;
 
 async function fixture(t, source = factory) {
-  const directory = await mkdtemp(join(tmpdir(), 'p1-native-cli-'));
+  const directory = await mkdtemp(join(process.cwd(), '.p1-native-cli-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const inputPath = join(directory, 'input.json');
   const providerPath = join(directory, 'owner-providers.mjs');
@@ -66,14 +65,12 @@ test('importing the CLI is inert and help requires no inputs or providers', () =
   assert.match(result.stdout, /--execute.*--provider-module/);
 });
 
-test('standalone CLI blocks missing invocation and Pod identity join without executing providers or claiming evidence', async t => {
+test('standalone CLI blocks a legacy module without native authority', async t => {
   const f = await fixture(t);
   const result = execute(f.args);
   assert.equal(result.status, 2, result.stderr);
   assert.match(result.stderr, /blocked at native_authority_join/);
-  assert.match(result.stderr, /authenticated invocation-bound Environment authority/);
-  assert.match(result.stderr, /PodObservation and Host downward-API Pod UID/);
-  assert.match(result.stderr, /authorizationId alone is lookup-only/);
+  assert.match(result.stderr, /Missing authority proof/);
   assert.doesNotMatch(result.stderr, /must not acquire|must-not-replace/);
   assert.equal(result.stdout, '');
   assert.equal(await readFile(f.outputPath, 'utf8'), '');
@@ -154,10 +151,13 @@ test('provider contract and load errors block without leaking raw provider failu
   }
 });
 
-test('optional owner reads report missing creation contract and cannot unblock native execution', async t => {
+test('optional owner reads cannot claim acceptance or unblock native execution', async t => {
   for (const result of [
-    { status: 'blocked', code: 'environment_creation_binding_read_contract_missing' },
-    { status: 'passed' },
+    {
+      status: 'blocked', code: 'native_no_send_effect_proof_missing',
+      acceptanceEvidence: false, nativeNoSendProven: false,
+    },
+    { status: 'passed', acceptanceEvidence: true, nativeNoSendProven: true },
   ]) {
     const source = factory.replace('authProvider:', `nativeAuthorityProvider: {
       async readCurrent() { return ${JSON.stringify(result)}; }
@@ -166,7 +166,13 @@ test('optional owner reads report missing creation contract and cannot unblock n
     const output = execute(f.args);
     assert.equal(output.status, 2);
     assert.match(output.stderr, /blocked at native_authority_join/);
-    if (result.status === 'blocked') assert.match(output.stderr, /creation-binding read/);
+    if (result.status === 'blocked') {
+      assert.match(output.stderr, /native_no_send_effect_proof_missing/);
+      assert.doesNotMatch(output.stderr, /Missing authority proof/);
+    } else {
+      assert.match(output.stderr, /Missing authority proof/);
+    }
+    assert.equal(output.stdout, '');
     assert.equal(await readFile(f.outputPath, 'utf8'), '');
   }
   const f = await fixture(t, factory.replace('authProvider:', `nativeAuthorityProvider: {
@@ -176,4 +182,34 @@ test('optional owner reads report missing creation contract and cannot unblock n
   assert.equal(output.status, 2);
   assert.doesNotMatch(output.stderr, /private-owner-response/);
   assert.equal(await readFile(f.outputPath, 'utf8'), '');
+});
+
+test('a joined partial result still leaves output empty and never calls auth, journey, or readiness', async t => {
+  const f = await fixture(t);
+  const marker = join(f.directory, 'unexpected-provider-call');
+  const source = `import { writeFileSync } from 'node:fs';
+const mark = name => writeFileSync(${JSON.stringify(marker)}, name + '\\n', { flag: 'a' });
+export function createP1NativeProviders() {
+  return {
+    nativeAuthorityProvider: { async readCurrent() {
+      return {
+        status: 'blocked', code: 'native_no_send_effect_proof_missing',
+        acceptanceEvidence: false, nativeNoSendProven: false,
+        partialObservation: { sandboxClaimUid: 'provider-claim-uid', podUid: 'host-pod-uid' },
+      };
+    } },
+    authProvider: { getValidatedToken() { mark('auth'); } },
+    journeyAuthorizer: { authorize() { mark('journey'); } },
+    runtimeReadinessProvider: { readCurrent() { mark('readiness'); } },
+  };
+}`;
+  await writeFile(f.providerPath, source);
+  const output = execute(f.args);
+  assert.equal(output.status, 2);
+  assert.match(output.stderr, /blocked at native_authority_join/);
+  assert.match(output.stderr, /native_no_send_effect_proof_missing/);
+  assert.doesNotMatch(output.stderr, /Missing authority proof/);
+  assert.equal(output.stdout, '');
+  assert.equal(await readFile(f.outputPath, 'utf8'), '');
+  await assert.rejects(readFile(marker), { code: 'ENOENT' });
 });
