@@ -90,6 +90,33 @@ A committed source receipt survives restart and supports explicit accounting ret
 The library does not run a relay or persist the in-memory callback queue.
 Failed writes remain explicit errors, not successful acknowledgments.
 
+`RuntimeP1InvocationBindingHttpClient.ReadRootAsync` reads the existing Core
+`GET /internal/projects/{projectId}/runs/{runId}/p1-invocation-binding` endpoint
+using the original actor bearer and tenant selector. Compose it with the fixed
+Orchestrator HTTPS origin and a client using
+`RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler` (or its system-trust
+redirect-disabled handler where appropriate), with a finite owner timeout.
+The transport rejects redirects, caching, malformed JSON and responses over
+16 KiB, including streamed bodies. Parsing rejects missing, unknown, duplicate,
+or incorrectly cased contract fields.
+The reader compares tenant, project, run, root session, actor, execution fence,
+and accepted-selection hash with the supplied registration and reads that exact
+registration from its owner both before and after the Core wait.
+Membership and root-state versions are checked for valid shape, not compared to
+invented registration fields; their current authority remains Core's responsibility.
+The registration must be active, unexpired and unchanged. A child registration
+cannot use the root binding as its own invocation provenance.
+
+This is a usable production reader, not a new Host HTTP route or an automatic
+bootstrap requirement. Ordinary runs need not have P1 setup provenance.
+The follow-on integration point is a P1-specific observation path beside
+`RuntimeAgentHost.ReadReadinessEvidenceAsync`, once it has retained Host/Events
+cursor-effect acknowledgment and Environment-created lineage to compare.
+Neither exists in this reader. General observation/readiness and generic
+replacement/no-send receipts are unchanged and are not invocation-bound P1
+evidence. The returned Core binding alone proves neither child execution nor
+resource creation.
+
 The combined local test uses actual Broker, Core, Projects, Environment,
 Orchestrator, SDK, and Events code with disposable PostgreSQL.
 External GitHub and Key Vault HTTP, placement, SDK transport, catalog, and pricing inputs remain controlled.
