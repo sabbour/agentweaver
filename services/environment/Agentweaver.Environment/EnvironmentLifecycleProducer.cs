@@ -12,6 +12,15 @@ public interface IEnvironmentLifecycleProducer
         CancellationToken cancellationToken,
         Func<CancellationToken, Task>? beforeCommitCheck = null);
 
+    /// <summary>Registers a new Environment with an exact previously verified P1 binding and owner transaction link.</summary>
+    Task<EnvironmentLifecycleTransitionResult> RegisterP1Async(
+        EnvironmentOwnerIdentity owner,
+        string idempotencyKey,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task> beforeCommitCheck) =>
+        throw new NotSupportedException("The Environment lifecycle owner cannot retain P1 creation links.");
+
     /// <summary>Applies a state transition only when the supplied lifecycle generation is still current.</summary>
     Task<EnvironmentLifecycleTransitionResult> TransitionAsync(
         EnvironmentGenerationFence expectedFence,
@@ -39,6 +48,28 @@ public sealed class EnvironmentLifecycleProducer(IEnvironmentLifecycleStore stor
                 expectedLifecycleGeneration: 0,
                 EnvironmentLifecycleState.Active,
                 idempotencyKey),
+            cancellationToken,
+            beforeCommitCheck);
+    }
+
+    /// <summary>Creates a P1 Environment while persisting its immutable binding and operation link atomically.</summary>
+    public Task<EnvironmentLifecycleTransitionResult> RegisterP1Async(
+        EnvironmentOwnerIdentity owner,
+        string idempotencyKey,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task> beforeCommitCheck)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(binding);
+        ArgumentNullException.ThrowIfNull(beforeCommitCheck);
+        return store.TransitionP1Async(
+            new EnvironmentLifecycleTransitionRequest(
+                owner,
+                expectedLifecycleGeneration: 0,
+                EnvironmentLifecycleState.Active,
+                idempotencyKey),
+            binding,
             cancellationToken,
             beforeCommitCheck);
     }

@@ -35,7 +35,7 @@ const goodLogs = {
 const defaultSchemaRanges = {
   [digest('a')]: coreRange(),
   [digest('b')]: range(11, 11),
-  [digest('d')]: range(11, 11),
+  [digest('d')]: range(12, 12),
   [digest('f')]: range(10, 10),
 };
 
@@ -232,7 +232,7 @@ test('the reviewed plan includes 035 through 040, skips reserved Core 034, and m
   assert.ok(plan.coreVersions.includes(40));
   assert.equal(Math.max(...plan.coreVersions), 40);
   assert.deepEqual(plan.eventsVersions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-  assert.deepEqual(plan.environmentVersions, Array.from({ length: 11 }, (_, index) => index + 1));
+  assert.deepEqual(plan.environmentVersions, Array.from({ length: 12 }, (_, index) => index + 1));
 });
 
 test('P1 migration manifests render one identity, one egress, and three fail-closed Jobs', () => {
@@ -723,13 +723,13 @@ const apps = (running, expected = 'b') => [
   { deployment: 'events-and-sessions', component: 'Agentweaver.EventsAndSessions', status: 'mismatch',
     expected: eventsImage(expected), running: eventsImage(running) },
 ];
-const schemas = { environment: 11, orchestrator: 36, 'events-and-sessions': 10 };
+const schemas = { environment: 12, orchestrator: 36, 'events-and-sessions': 10 };
 test('the service order follows the schema ranges of the running and target images', () => {
   // Ranges are keyed by image reference, as the runner reads them from each image.
   const order = (running, target, current) => planServiceOrder({ appImages: apps('e'),
-    ranges: { [environmentImage('d')]: range(11, 11), [apps('e')[1].expected]: coreRange(),
+    ranges: { [environmentImage('d')]: range(12, 12), [apps('e')[1].expected]: coreRange(),
       [eventsImage('e')]: running, [eventsImage('b')]: target },
-    targetSchema: schemas, currentSchema: { environment: 11, orchestrator: 31, 'events-and-sessions': current } });
+    targetSchema: schemas, currentSchema: { environment: 12, orchestrator: 31, 'events-and-sessions': current } });
   // The running image accepts the target schema: migrate first; deploying is optional.
   let result = order(range(8, 10), range(10, 10), 8);
   assert.equal(result.order, 'migrate-first');
@@ -785,9 +785,9 @@ test('the schema range comes from the readiness check in the migrator source', (
     'Agentweaver.EventsAndSessions'), range(Math.max(...plan.eventsVersions), Math.max(...plan.eventsVersions)));
   const environmentSource = readFileSync(
     'services/environment/Agentweaver.Environment/EnvironmentMigrator.cs', 'utf8');
-  assert.deepEqual(schemaRangeFromSource(environmentSource, 'Agentweaver.Environment'), range(11, 11));
-  assert.deepEqual(schemaRangeFromSource(environmentSource.replace('CurrentSchemaVersion = 11', 'CurrentSchemaVersion = 10'),
-    'Agentweaver.Environment'), range(10, 10));
+  assert.deepEqual(schemaRangeFromSource(environmentSource, 'Agentweaver.Environment'), range(12, 12));
+  assert.deepEqual(schemaRangeFromSource(environmentSource.replace('CurrentSchemaVersion = 12', 'CurrentSchemaVersion = 11'),
+    'Agentweaver.Environment'), range(11, 11));
   assert.equal(schemaRangeFromSource(environmentSource.replace('pending.Length > 0', 'pending.Length > 1'),
     'Agentweaver.Environment'), undefined);
   // An older image with no optional version accepts exactly its own highest version.

@@ -4,17 +4,21 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 
 namespace Agentweaver.Environment;
 
 /// <summary>Input for creating the active Environment owned by one project run.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record EnvironmentRegistrationApiRequest(string IdempotencyKey)
+public sealed record EnvironmentRegistrationApiRequest(
+    string IdempotencyKey,
+    P1InvocationBindingExpectation? P1Binding = null)
 {
     /// <summary>Validates the registration key and returns this request for fluent endpoint handling.</summary>
     public EnvironmentRegistrationApiRequest Validate()
     {
         ValidateIdempotencyKey(IdempotencyKey);
+        P1Binding?.Validate();
         return this;
     }
 
@@ -48,7 +52,8 @@ public sealed record EnvironmentReleaseApiRequest(long ExpectedLifecycleGenerati
 /// </summary>
 public sealed class EnvironmentLifecycleManager(
     EnvironmentEgressManager authorization,
-    IEnvironmentLifecycleProducer lifecycleProducer)
+    IEnvironmentLifecycleProducer lifecycleProducer,
+    IEnvironmentP1InvocationBindingReader? p1BindingReader = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -62,30 +67,92 @@ public sealed class EnvironmentLifecycleManager(
         string projectId,
         string runId,
         EnvironmentRegistrationApiRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        RuntimeActorAuthorization? actor = null)
     {
         ArgumentNullException.ThrowIfNull(caller);
         request = (request ?? throw new ArgumentNullException(nameof(request))).Validate();
         ValidateRouteIdentity(projectId, runId);
 
-        var initialAuthorization = await authorization.GetAuthorizedRunEnvironmentControlContextAsync(
-            caller, projectId, runId, cancellationToken).ConfigureAwait(false);
-        var owner = new EnvironmentOwnerIdentity(
-            initialAuthorization.TenantId,
-            projectId,
-            runId,
-            CreateEnvironmentId(initialAuthorization.TenantId, projectId, runId, request.IdempotencyKey));
-        var accepted = await authorization.GetAuthorizedRunSelectionAsync(
-            caller, owner, cancellationToken).ConfigureAwait(false);
+        ProjectAuthorizationContextResponse initialAuthorization;
+        EnvironmentOwnerIdentity owner;
+        if (request.P1Binding is not null)
+        {
+            initialAuthorization = await authorization.GetAuthorizedRunEnvironmentPlacementReadContextAsync(
+                caller, projectId, runId, cancellationToken).ConfigureAwait(false);
+            owner = new EnvironmentOwnerIdentity(
+                initialAuthorization.TenantId,
+                projectId,
+                runId,
+                CreateEnvironmentId(
+                    initialAuthorization.TenantId, projectId, runId, request.IdempotencyKey));
+        }
+        else
+        {
+            initialAuthorization = await authorization.GetAuthorizedRunEnvironmentControlContextAsync(
+                caller, projectId, runId, cancellationToken).ConfigureAwait(false);
+            owner = new EnvironmentOwnerIdentity(
+                initialAuthorization.TenantId,
+                projectId,
+                runId,
+                CreateEnvironmentId(initialAuthorization.TenantId, projectId, runId, request.IdempotencyKey));
+        }
+        var accepted = request.P1Binding is null
+            ? await authorization.GetAuthorizedRunSelectionAsync(
+                caller, owner, cancellationToken).ConfigureAwait(false)
+            : await authorization.GetAuthorizedRunEnvironmentSelectionAsync(
+                caller, owner, cancellationToken).ConfigureAwait(false);
         EnsureSameAuthorization(initialAuthorization, accepted.Authorization);
 
-        return await lifecycleProducer.RegisterAsync(
-            owner,
-            request.IdempotencyKey,
-            cancellationToken,
-            token => RecheckAuthorizationAndSelectionAsync(
-                caller, owner, initialAuthorization, accepted.RunSelection, token)).ConfigureAwait(false);
+        P1InvocationBinding? p1Binding = null;
+        if (request.P1Binding is { } expectation)
+            p1Binding = await ReadCurrentP1BindingAsync(
+                actor, owner, accepted.Authorization, expectation, cancellationToken).ConfigureAwait(false);
+
+        async Task BeforeCommitAsync(CancellationToken token)
+        {
+            await RecheckAuthorizationAndSelectionAsync(
+                caller,
+                owner,
+                initialAuthorization,
+                accepted.RunSelection,
+                request.P1Binding is not null,
+                token).ConfigureAwait(false);
+            if (p1Binding is not null)
+            {
+                var current = await ReadCurrentP1BindingAsync(
+                    actor,
+                    owner,
+                    accepted.Authorization,
+                    request.P1Binding!,
+                    token).ConfigureAwait(false);
+                if (current != p1Binding)
+                    throw new RuntimeAuthorizationException("p1_invocation_binding_changed");
+            }
+        }
+
+        return p1Binding is null
+            ? await lifecycleProducer.RegisterAsync(
+                owner, request.IdempotencyKey, cancellationToken, BeforeCommitAsync).ConfigureAwait(false)
+            : await lifecycleProducer.RegisterP1Async(
+                owner, request.IdempotencyKey, p1Binding, cancellationToken, BeforeCommitAsync)
+                .ConfigureAwait(false);
     }
+
+    private Task<P1InvocationBinding> ReadCurrentP1BindingAsync(
+        RuntimeActorAuthorization? actor,
+        EnvironmentOwnerIdentity owner,
+        ProjectAuthorizationContextResponse authorizationContext,
+        P1InvocationBindingExpectation expectation,
+        CancellationToken cancellationToken) =>
+        EnvironmentP1InvocationBindingVerifier.ReadAndValidateAsync(
+            p1BindingReader ??
+                throw new RuntimeAuthorizationException("p1_invocation_binding_unavailable"),
+            actor,
+            owner,
+            authorizationContext,
+            expectation,
+            cancellationToken);
 
     /// <summary>
     /// Releases the selected Environment only if its lifecycle generation and current run authority still match.
@@ -116,7 +183,8 @@ public sealed class EnvironmentLifecycleManager(
             request.IdempotencyKey,
             cancellationToken,
             token => RecheckAuthorizationAndSelectionAsync(
-                caller, owner, initialAuthorization, accepted.RunSelection, token)).ConfigureAwait(false);
+                caller, owner, initialAuthorization, accepted.RunSelection,
+                requireRunBoundReadSelection: false, cancellationToken: token)).ConfigureAwait(false);
     }
 
     /// <summary>Derives a stable Environment ID from tenant, project, run, and idempotency-key material.</summary>
@@ -142,10 +210,14 @@ public sealed class EnvironmentLifecycleManager(
         EnvironmentOwnerIdentity owner,
         ProjectAuthorizationContextResponse originalAuthorization,
         EffectiveNetworkPolicySelection originalSelection,
+        bool requireRunBoundReadSelection,
         CancellationToken cancellationToken)
     {
-        var current = await authorization.GetAuthorizedRunSelectionAsync(
-            caller, owner, cancellationToken).ConfigureAwait(false);
+        var current = requireRunBoundReadSelection
+            ? await authorization.GetAuthorizedRunEnvironmentSelectionAsync(
+                caller, owner, cancellationToken).ConfigureAwait(false)
+            : await authorization.GetAuthorizedRunSelectionAsync(
+                caller, owner, cancellationToken).ConfigureAwait(false);
         EnsureSameAuthorization(originalAuthorization, current.Authorization);
         if (!JsonNode.DeepEquals(
                 JsonSerializer.SerializeToNode(originalSelection, JsonOptions),

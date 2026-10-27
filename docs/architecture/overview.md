@@ -19,6 +19,12 @@ migrations. The P1 maintenance runner starts its migration Job with the
 reviewed runtime grant plan; normal startup checks migration history and fails
 while a migration is pending.
 
+For P1-specific creation, Environment consumes the
+[current Core invocation binding](./environment-sandbox.md#p1-invocation-bound-creation)
+before effects and retains its own operation/result link. Registration and
+provider reservation are not provider-resource proof. The source path does not
+join Host/native observations or establish a cross-service transaction.
+
 The Identity Broker is the host for caller authentication and secret-redemption authorization. It constructs the Key Vault backend and the authorization wrapper; it is a service host in source, not a claim that a service is deployed.
 
 Its separate migration Job applies the canonical explicit runtime table grants

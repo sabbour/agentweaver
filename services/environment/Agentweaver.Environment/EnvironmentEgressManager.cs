@@ -868,6 +868,44 @@ public sealed class EnvironmentEgressManager(
         CancellationToken cancellationToken) =>
         GetAuthorizedSelectionAsync(caller, owner, cancellationToken);
 
+    internal async Task<AuthorizedSelection> GetAuthorizedRunEnvironmentSelectionAsync(
+        CurrentCallerRequest caller,
+        EnvironmentOwnerIdentity owner,
+        CancellationToken cancellationToken)
+    {
+        var authorization = await GetAuthorizedRunEnvironmentPlacementReadContextAsync(
+            caller, owner.ProjectId, owner.RunId, cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(authorization.TenantId, owner.TenantId, StringComparison.Ordinal))
+            throw new ProjectsConfigApiException(
+                "authorization_context_mismatch",
+                "The run-bound ReadRunSelection authority belongs to a different tenant.");
+        var selection = await projects.GetRunSelectionAsync(
+            caller, owner.ProjectId, owner.RunId, cancellationToken).ConfigureAwait(false);
+        ValidateAuthorizedRunSelection(selection, owner);
+        var current = await GetAuthorizedRunEnvironmentPlacementReadContextAsync(
+            caller, owner.ProjectId, owner.RunId, cancellationToken).ConfigureAwait(false);
+        if (!SameAuthorizationContext(authorization, current))
+            throw new ProjectsConfigApiException(
+                "authorization_changed",
+                "The run-bound ReadRunSelection authority changed while the accepted selection was read.");
+        return new AuthorizedSelection(current, selection);
+    }
+
+    private static void ValidateAuthorizedRunSelection(
+        EffectiveNetworkPolicySelection selection,
+        EnvironmentOwnerIdentity owner)
+    {
+        if (!string.Equals(selection.ProjectId, owner.ProjectId, StringComparison.Ordinal) ||
+            !string.Equals(selection.RunId, owner.RunId, StringComparison.Ordinal) ||
+            selection.ProjectRevision < 1 ||
+            selection.ProjectConfigurationRevision < 1 ||
+            selection.PlatformRuntimeRevision < 1 ||
+            string.IsNullOrWhiteSpace(selection.ContextRevision))
+            throw new ProjectsConfigApiException(
+                "invalid_run_selection",
+                "Projects & Config returned an incomplete or mismatched immutable run selection.");
+    }
+
     internal async Task<(EnvironmentOwnerIdentity Owner, ProjectAuthorizationContextResponse Authorization)>
         GetAuthorizedRunEnvironmentControlAsync(
             CurrentCallerRequest caller,
@@ -918,15 +956,26 @@ public sealed class EnvironmentEgressManager(
             string environmentId,
             CancellationToken cancellationToken)
     {
+        var authorization = await GetAuthorizedRunEnvironmentPlacementReadContextAsync(
+            caller, projectId, runId, cancellationToken).ConfigureAwait(false);
+        return (
+            new EnvironmentOwnerIdentity(authorization.TenantId, projectId, runId, environmentId),
+            authorization);
+    }
+
+    internal async Task<ProjectAuthorizationContextResponse> GetAuthorizedRunEnvironmentPlacementReadContextAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
         var authorization = await ReadCurrentAuthorizationContextAsync(
             caller, projectId, runId, tenantId: null, cancellationToken).ConfigureAwait(false);
         if (!HasRunBoundPlacementReadAuthority(authorization, projectId, runId))
             throw new ProjectsConfigApiException(
                 "run_selection_not_authorized",
                 "The current caller must have ReadRunSelection authority bound to this exact project and run.");
-        return (
-            new EnvironmentOwnerIdentity(authorization.TenantId, projectId, runId, environmentId),
-            authorization);
+        return authorization;
     }
 
     /// <summary>Requires the caller's run-bound placement-read grant to remain unchanged after resolving placement.</summary>
@@ -952,7 +1001,8 @@ public sealed class EnvironmentEgressManager(
         AuthorizedSelection selection,
         long policyGeneration,
         CancellationToken cancellationToken,
-        bool runBoundRead = false)
+        bool runBoundRead = false,
+        bool ownerLockAlreadyHeld = false)
     {
         ArgumentNullException.ThrowIfNull(caller);
         ArgumentNullException.ThrowIfNull(fence);
@@ -981,7 +1031,7 @@ public sealed class EnvironmentEgressManager(
             fence.Owner.RunId,
             providerOptions.Namespace);
         // Runtime reads already retain this owner's lease lock; taking it again would deadlock.
-        if (runBoundRead)
+        if (ownerLockAlreadyHeld)
             await lifecycleStore.ReadVerifiedNetworkPolicyGenerationAsync(
                 fence, $"{selector.Namespace}/{selector.PolicyName}", policyGeneration,
                 cancellationToken).ConfigureAwait(false);

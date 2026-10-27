@@ -216,6 +216,13 @@ these guards; no setup-ledger table access is added to Projects.
 Readiness accepts the complete schema before 040 for ordinary interactive
 runs. P1 request provenance and binding require 040. This source change does
 not apply the migration or grants to a live database.
+Environment schema version 12 adds `environment.p1_creation_links` for
+invocation-bound creation. Its planned runtime rights are `SELECT, INSERT,
+UPDATE`, with no `DELETE` or `TRUNCATE`. An owner trigger protects the retained
+binding and reservation identity and allows only one transition from `Pending`
+to a finalized result. The finalized provider reference is distinct from a
+reserved generation. This migration and the updated grant-plan hash are
+source-only; this change does not apply them or authorize a live grant.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
 Its planned access is exactly `SELECT, INSERT`; it adds no `UPDATE`, `DELETE`,

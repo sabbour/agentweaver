@@ -72,12 +72,42 @@ public sealed class EnvironmentLifecycleStore(
     /// Applies a lifecycle transition under an owner lock and records its idempotency result in the same transaction.
     /// The optional authority check runs before commit, including on exact replays.
     /// </summary>
-    public async Task<EnvironmentLifecycleTransitionResult> TransitionAsync(
+    public Task<EnvironmentLifecycleTransitionResult> TransitionAsync(
         EnvironmentLifecycleTransitionRequest request,
         CancellationToken cancellationToken,
-        Func<CancellationToken, Task>? beforeCommitCheck = null)
+        Func<CancellationToken, Task>? beforeCommitCheck = null) =>
+        TransitionCoreAsync(request, cancellationToken, beforeCommitCheck, p1Binding: null);
+
+    /// <summary>Registers a P1 Environment and records its binding and exact operation in the owner transaction.</summary>
+    public Task<EnvironmentLifecycleTransitionResult> TransitionP1Async(
+        EnvironmentLifecycleTransitionRequest request,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task> beforeCommitCheck)
+    {
+        ArgumentNullException.ThrowIfNull(beforeCommitCheck);
+        return TransitionCoreAsync(request, cancellationToken, beforeCommitCheck, binding);
+    }
+
+    private async Task<EnvironmentLifecycleTransitionResult> TransitionCoreAsync(
+        EnvironmentLifecycleTransitionRequest request,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck,
+        P1InvocationBinding? p1Binding)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (p1Binding is not null &&
+            (request.ExpectedLifecycleGeneration != 0 ||
+             request.TargetState != EnvironmentLifecycleState.Active ||
+             p1Binding.ContractVersion != 1 ||
+             p1Binding.TenantId != request.Owner.TenantId ||
+             p1Binding.ProjectId != request.Owner.ProjectId ||
+             p1Binding.RunId != request.Owner.RunId ||
+             p1Binding.CoreInvocationId == Guid.Empty ||
+             p1Binding.ExecutionFence < 1))
+            throw new EnvironmentLifecycleException(
+                "p1_invocation_binding_mismatch",
+                "A P1 binding can only be consumed by the exact initial Environment registration.");
         var fingerprint = LifecycleFingerprint(request);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
@@ -97,12 +127,26 @@ public sealed class EnvironmentLifecycleStore(
                     "The Environment lifecycle idempotency key was already used for a different transition.");
             if (beforeCommitCheck is not null)
                 await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
+            if (p1Binding is not null)
+                await EnvironmentP1CreationLinkStore.RequireSameBindingAsync(
+                    connection,
+                    transaction,
+                    request.Owner,
+                    previous.Value.OperationId,
+                    "Environment",
+                    request.Owner.EnvironmentId,
+                    previous.Value.Generation,
+                    p1Binding,
+                    cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return new(
                 new EnvironmentLifecycleSnapshot(
                     new EnvironmentGenerationFence(request.Owner, previous.Value.Generation),
                     previous.Value.State),
-                Replayed: true);
+                Replayed: true)
+            {
+                OperationId = previous.Value.OperationId
+            };
         }
 
         if (request.TargetState == EnvironmentLifecycleState.Released)
@@ -117,6 +161,9 @@ public sealed class EnvironmentLifecycleStore(
                 transaction,
                 request.Owner,
                 cancellationToken).ConfigureAwait(false);
+
+        if (p1Binding is not null)
+            await beforeCommitCheck!(cancellationToken).ConfigureAwait(false);
 
         var now = timeProvider.GetUtcNow();
         EnvironmentLifecycleSnapshot snapshot;
@@ -175,6 +222,7 @@ public sealed class EnvironmentLifecycleStore(
             snapshot = Snapshot(request.Owner, reader.GetInt64(0), reader.GetString(1));
         }
 
+        var operationId = Guid.NewGuid();
         await using (var operation = new NpgsqlCommand($"""
             INSERT INTO {LifecycleOperations}
                 (operation_id, tenant_id, project_id, run_id, environment_id, idempotency_key,
@@ -185,7 +233,7 @@ public sealed class EnvironmentLifecycleStore(
                  @request_fingerprint, @expected_generation, @result_generation, @result_state, @created_at)
             """, connection, transaction))
         {
-            operation.Parameters.AddWithValue("operation_id", NpgsqlDbType.Uuid, Guid.NewGuid());
+            operation.Parameters.AddWithValue("operation_id", NpgsqlDbType.Uuid, operationId);
             AddOwnerParameters(operation, request.Owner);
             operation.Parameters.AddWithValue("idempotency_key", NpgsqlDbType.Text, request.IdempotencyKey);
             operation.Parameters.AddWithValue("request_fingerprint", NpgsqlDbType.Text, fingerprint);
@@ -202,10 +250,20 @@ public sealed class EnvironmentLifecycleStore(
             await operation.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        if (p1Binding is not null)
+            await EnvironmentP1CreationLinkStore.InsertEnvironmentAsync(
+                connection,
+                transaction,
+                request.Owner,
+                operationId,
+                snapshot.Fence.LifecycleGeneration,
+                p1Binding,
+                now,
+                cancellationToken).ConfigureAwait(false);
         if (beforeCommitCheck is not null)
             await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return new(snapshot, Replayed: false);
+        return new(snapshot, Replayed: false) { OperationId = operationId };
     }
 
     /// <summary>Reserves one generation-fenced network effect, replaying only an identical idempotency request.</summary>
@@ -682,6 +740,48 @@ public sealed class EnvironmentLifecycleStore(
             reservation.CurrentProviderBinding);
     }
 
+    /// <summary>Creates P1 volume metadata and retains its exact binding in the owner transaction.</summary>
+    public async Task<EnvironmentWorkspaceVolumeSnapshot> CreateP1WorkspaceVolumeAsync(
+        EnvironmentGenerationFence environmentFence,
+        string volumeId,
+        JsonElement specification,
+        string idempotencyKey,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task> beforeCommitCheck)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        ArgumentNullException.ThrowIfNull(beforeCommitCheck);
+        if (specification.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException(
+                "Create requires the immutable workspace-volume specification as a JSON object.",
+                nameof(specification));
+        var reservation = await ReserveWorkspaceVolumeOperationAsync(
+            environmentFence,
+            volumeId,
+            expectedTransitionRevision: 0,
+            expectedResourceGeneration: 0,
+            expectedDataGeneration: 0,
+            nextDataGeneration: null,
+            EnvironmentWorkspaceVolumeOperation.Create,
+            idempotencyKey,
+            specification.GetRawText(),
+            cancellationToken,
+            binding,
+            beforeCommitCheck).ConfigureAwait(false);
+        return new(
+            environmentFence,
+            volumeId,
+            reservation.TargetTransitionRevision,
+            reservation.TargetResourceGeneration,
+            reservation.TargetDataGeneration,
+            reservation.TargetPhase,
+            EnvironmentWorkspaceVolumeOperation.Create,
+            specification.Clone(),
+            reservation.CurrentResource,
+            reservation.CurrentProviderBinding);
+    }
+
     /// <summary>Reserves a provision operation against the current volume revision before calling the storage provider.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeProvisionAsync(
         EnvironmentGenerationFence environmentFence,
@@ -703,6 +803,36 @@ public sealed class EnvironmentLifecycleStore(
             specificationJson: null,
             cancellationToken);
 
+    /// <summary>Reserves the P1 provider write and records the exact binding before any storage effect.</summary>
+    public Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveP1WorkspaceVolumeProvisionAsync(
+        EnvironmentGenerationFence environmentFence,
+        string volumeId,
+        long expectedTransitionRevision,
+        long expectedResourceGeneration,
+        long expectedDataGeneration,
+        string idempotencyKey,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task> beforeCommitCheck)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        ArgumentNullException.ThrowIfNull(beforeCommitCheck);
+        return ReserveWorkspaceVolumeTransitionCoreAsync(
+            new WorkspaceVolumeTransitionCommand(
+                environmentFence,
+                volumeId,
+                expectedTransitionRevision,
+                expectedResourceGeneration,
+                expectedDataGeneration,
+                NextDataGeneration: null,
+                EnvironmentWorkspaceVolumeOperation.Provision,
+                idempotencyKey,
+                SpecificationJson: null),
+            cancellationToken,
+            binding,
+            beforeCommitCheck);
+    }
+
     /// <summary>Records the provider resource after checking the provision reservation and owner fence.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeProvisionAsync(
         Guid operationId,
@@ -722,6 +852,32 @@ public sealed class EnvironmentLifecycleStore(
             effectVerified,
             durableFlushVerified: false,
             cancellationToken);
+
+    /// <summary>Commits a P1 provider result and immutable invocation link in the same Environment transaction.</summary>
+    public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteP1WorkspaceVolumeProvisionAsync(
+        Guid operationId,
+        EnvironmentGenerationFence environmentFence,
+        bool effectMayHaveApplied,
+        ProviderResourceRef? providerResource,
+        WorkspaceVolumeProviderBindingSnapshot? providerBinding,
+        bool effectVerified,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null) =>
+        effectVerified && beforeCommitCheck is null
+            ? throw new ArgumentNullException(nameof(beforeCommitCheck))
+            : CompleteWorkspaceVolumeTransitionCoreAsync(
+            operationId,
+            environmentFence,
+            EnvironmentWorkspaceVolumeOperation.Provision,
+            effectMayHaveApplied,
+            providerResource,
+            providerBinding,
+            effectVerified,
+            durableFlushVerified: false,
+            cancellationToken,
+            beforeCommitCheck: beforeCommitCheck,
+            p1Binding: binding);
 
     /// <summary>Reconciles a provision reservation with the resource observed from the storage provider.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeProvisionReconciledAsync(
@@ -1444,7 +1600,9 @@ public sealed class EnvironmentLifecycleStore(
         EnvironmentWorkspaceVolumeOperation operation,
         string idempotencyKey,
         string? specificationJson,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        P1InvocationBinding? p1Binding = null,
+        Func<CancellationToken, Task>? beforeCommitCheck = null) =>
         ReserveWorkspaceVolumeTransitionCoreAsync(
             new WorkspaceVolumeTransitionCommand(
                 environmentFence,
@@ -1456,12 +1614,16 @@ public sealed class EnvironmentLifecycleStore(
                 operation,
                 idempotencyKey,
                 specificationJson),
-            cancellationToken);
+            cancellationToken,
+            p1Binding,
+            beforeCommitCheck);
 
     /// <summary>Locks the owner, validates expected volume revisions, and records an idempotent provider reservation.</summary>
     private async Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeTransitionCoreAsync(
         WorkspaceVolumeTransitionCommand request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        P1InvocationBinding? p1Binding = null,
+        Func<CancellationToken, Task>? beforeCommitCheck = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidateWorkspaceVolumeCommand(request);
@@ -1472,6 +1634,28 @@ public sealed class EnvironmentLifecycleStore(
             .ConfigureAwait(false);
         await RequireActiveInTransactionAsync(connection, transaction, request.EnvironmentFence, cancellationToken)
             .ConfigureAwait(false);
+        if (p1Binding is not null)
+        {
+            await EnvironmentP1CreationLinkStore.RequireRetainedResourceLinkAsync(
+                connection,
+                transaction,
+                request.EnvironmentFence.Owner,
+                "Environment",
+                request.EnvironmentFence.Owner.EnvironmentId,
+                request.EnvironmentFence.LifecycleGeneration,
+                p1Binding,
+                cancellationToken).ConfigureAwait(false);
+            if (request.Operation != EnvironmentWorkspaceVolumeOperation.Create)
+                await EnvironmentP1CreationLinkStore.RequireRetainedResourceLinkAsync(
+                    connection,
+                    transaction,
+                    request.EnvironmentFence.Owner,
+                    "WorkspaceVolumeMetadata",
+                    request.VolumeId,
+                    request.EnvironmentFence.LifecycleGeneration,
+                    p1Binding,
+                    cancellationToken).ConfigureAwait(false);
+        }
 
         var previous = await ReadWorkspaceVolumeOperationByIdempotencyAsync(
             connection,
@@ -1486,6 +1670,21 @@ public sealed class EnvironmentLifecycleStore(
                 throw new EnvironmentLifecycleException(
                     "environment_volume_idempotency_conflict",
                     "The workspace-volume idempotency key was already used for a different owner transition.");
+            if (p1Binding is not null)
+                await EnvironmentP1CreationLinkStore.RequireSameBindingAsync(
+                    connection,
+                    transaction,
+                    request.EnvironmentFence.Owner,
+                    previous.Value.Operation.OperationId,
+                    previous.Value.Operation.Operation == EnvironmentWorkspaceVolumeOperation.Create
+                        ? "WorkspaceVolumeMetadata"
+                        : "WorkspaceVolume",
+                    request.VolumeId,
+                    request.EnvironmentFence.LifecycleGeneration,
+                    p1Binding,
+                    cancellationToken).ConfigureAwait(false);
+            if (beforeCommitCheck is not null)
+                await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return ToVolumeReservation(previous.Value.Operation, replayed: true);
         }
@@ -1558,8 +1757,42 @@ public sealed class EnvironmentLifecycleStore(
             targetResource,
             expectedProviderBinding,
             targetProviderBinding);
+        if (p1Binding is not null)
+            await beforeCommitCheck!(cancellationToken).ConfigureAwait(false);
         await InsertWorkspaceVolumeOwnerEffectAsync(
             connection, transaction, operation, cancellationToken).ConfigureAwait(false);
+        if (p1Binding is not null)
+        {
+            if (request.Operation == EnvironmentWorkspaceVolumeOperation.Create)
+                await EnvironmentP1CreationLinkStore.InsertCompletedWorkspaceVolumeMetadataAsync(
+                    connection,
+                    transaction,
+                    request.EnvironmentFence.Owner,
+                    operation.OperationId,
+                    request.VolumeId,
+                    request.EnvironmentFence.LifecycleGeneration,
+                    operation.TargetTransitionRevision,
+                    p1Binding,
+                    now,
+                    cancellationToken).ConfigureAwait(false);
+            else
+                await EnvironmentP1CreationLinkStore.InsertPendingAsync(
+                    connection,
+                    transaction,
+                    request.EnvironmentFence.Owner,
+                    operation.OperationId,
+                    "WorkspaceVolume",
+                    request.VolumeId,
+                    request.EnvironmentFence.LifecycleGeneration,
+                    operation.TargetResourceGeneration,
+                    providerFencingGeneration: null,
+                    operation.TargetTransitionRevision,
+                    p1Binding,
+                    now,
+                    cancellationToken).ConfigureAwait(false);
+        }
+        if (beforeCommitCheck is not null)
+            await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return ToVolumeReservation(operation, replayed: false);
     }
@@ -1576,7 +1809,8 @@ public sealed class EnvironmentLifecycleStore(
         bool durableFlushVerified,
         CancellationToken cancellationToken,
         WorkspaceVolumeFlushEvidence? flushEvidence = null,
-        Func<CancellationToken, Task>? beforeCommitCheck = null)
+        Func<CancellationToken, Task>? beforeCommitCheck = null,
+        P1InvocationBinding? p1Binding = null)
     {
         ArgumentNullException.ThrowIfNull(fence);
         if (expectedOperation == EnvironmentWorkspaceVolumeOperation.Flush && effectVerified && flushEvidence is null)
@@ -1602,6 +1836,18 @@ public sealed class EnvironmentLifecycleStore(
             throw new EnvironmentLifecycleException(
                 "environment_volume_operation_mismatch",
                 "The reserved workspace-volume operation does not match the typed completion method.");
+        if (p1Binding is not null)
+            await EnvironmentP1CreationLinkStore.RequireSameBindingAsync(
+                connection,
+                transaction,
+                fence.Owner,
+                operationId,
+                "WorkspaceVolume",
+                operation.ResourceId,
+                operation.Fence.LifecycleGeneration,
+                p1Binding,
+                cancellationToken)
+                .ConfigureAwait(false);
         if (flushEvidence is not null)
         {
             flushEvidence = flushEvidence.Validate();
@@ -1718,6 +1964,27 @@ public sealed class EnvironmentLifecycleStore(
                     timeProvider.GetUtcNow(),
                     cancellationToken).ConfigureAwait(false);
         }
+        if (p1Binding is not null)
+            await EnvironmentP1CreationLinkStore.CompleteAsync(
+                connection,
+                transaction,
+                fence.Owner,
+                operationId,
+                "WorkspaceVolume",
+                operation.ResourceId,
+                operation.Fence.LifecycleGeneration,
+                p1Binding,
+                complete
+                    ? "Completed"
+                    : effectMayHaveApplied ? "Uncertain" : "Failed",
+                operation.TargetResourceGeneration,
+                providerFencingGeneration: null,
+                operation.TargetTransitionRevision,
+                leaseRevision: null,
+                providerResource,
+                providerBinding,
+                timeProvider.GetUtcNow(),
+                cancellationToken).ConfigureAwait(false);
         if (beforeCommitCheck is not null)
             await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -2676,7 +2943,7 @@ public sealed class EnvironmentLifecycleStore(
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<(string Fingerprint, long Generation, EnvironmentLifecycleState State)?>
+    private static async Task<(string Fingerprint, long Generation, EnvironmentLifecycleState State, Guid OperationId)?>
         ReadLifecycleOperationAsync(
             NpgsqlConnection connection,
             NpgsqlTransaction transaction,
@@ -2685,7 +2952,7 @@ public sealed class EnvironmentLifecycleStore(
             CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand($"""
-            SELECT request_fingerprint, result_lifecycle_generation, result_state
+            SELECT request_fingerprint, result_lifecycle_generation, result_state, operation_id
             FROM {LifecycleOperations}
             WHERE tenant_id = @tenant_id AND project_id = @project_id
               AND run_id = @run_id AND environment_id = @environment_id
@@ -2695,7 +2962,7 @@ public sealed class EnvironmentLifecycleStore(
         command.Parameters.AddWithValue("idempotency_key", NpgsqlDbType.Text, idempotencyKey);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
-            ? (reader.GetString(0), reader.GetInt64(1), ParseLifecycleState(reader.GetString(2)))
+            ? (reader.GetString(0), reader.GetInt64(1), ParseLifecycleState(reader.GetString(2)), reader.GetGuid(3))
             : null;
     }
 

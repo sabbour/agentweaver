@@ -9,6 +9,15 @@ the placement.
 Releasing a Sandbox does not delete the Environment or its workspace data. A
 ready Pod alone does not make an Environment ready for dispatch.
 
+P1-specific creation additionally checks Core's current invocation binding
+before reserving or issuing effects. Environment retains the exact creation
+operation and result in its own transaction; a saved Core binding or a planned
+provider name alone cannot prove a resource was created. Resources created
+without that retained binding cannot be enrolled later. See
+[P1 invocation-bound creation](../architecture/environment-sandbox.md#p1-invocation-bound-creation)
+for the remote-read race and the boundary before a future Host/native
+observation join.
+
 ## Find the implementation
 
 | Source | Responsibility |

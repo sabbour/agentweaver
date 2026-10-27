@@ -1480,6 +1480,16 @@ public sealed class EnvironmentEgressManagerTests
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<EnvironmentWorkspaceVolumeSnapshot> CreateP1WorkspaceVolumeAsync(
+            EnvironmentGenerationFence environmentFence,
+            string volumeId,
+            System.Text.Json.JsonElement specification,
+            string idempotencyKey,
+            P1InvocationBinding binding,
+            CancellationToken cancellationToken,
+            Func<CancellationToken, Task> beforeCommitCheck) =>
+            throw new NotSupportedException();
+
         public Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeProvisionAsync(
             EnvironmentGenerationFence environmentFence,
             string volumeId,

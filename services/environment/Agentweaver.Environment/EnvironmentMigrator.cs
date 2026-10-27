@@ -7,7 +7,7 @@ namespace Agentweaver.Environment;
 public static class EnvironmentMigrator
 {
     private const string LockName = "agentweaver.environment.migrate";
-    private const int CurrentSchemaVersion = 11;
+    private const int CurrentSchemaVersion = 12;
     private static readonly string[] SupportedMigrationIds =
     [
         "20261006150000_InitialEnvironmentLifecycle",
@@ -21,6 +21,7 @@ public static class EnvironmentMigrator
         "20261013190000_RuntimeBootstrapProfileReplacements",
         "20261014160000_SandboxProviderAttempts",
         "20261023074226_AddRemoteMcpConnectionAdapterPin",
+        "20261027123000_EnvironmentP1CreationLinks",
     ];
 
     /// <summary>Ordered versions assigned to the EF migration history for maintenance planning.</summary>
@@ -66,6 +67,7 @@ public static class EnvironmentMigrator
                AND pg_catalog.to_regclass('"environment"."remote_mcp_connection_configurations"') IS NOT NULL
                AND pg_catalog.to_regclass('"environment"."remote_mcp_catalog_snapshots"') IS NOT NULL
                AND pg_catalog.to_regclass('"environment"."remote_mcp_connection_idempotency"') IS NOT NULL
+               AND pg_catalog.to_regclass('"environment"."p1_creation_links"') IS NOT NULL
             """,
             connection);
         if (await schemaCheck.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
@@ -150,6 +152,11 @@ public static class EnvironmentMigrator
                AND NOT has_table_privilege(current_user, 'environment.remote_mcp_connection_idempotency', 'UPDATE')
                AND NOT has_table_privilege(current_user, 'environment.remote_mcp_connection_idempotency', 'DELETE')
                AND NOT has_table_privilege(current_user, 'environment.remote_mcp_connection_idempotency', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'environment.p1_creation_links', 'SELECT')
+               AND has_table_privilege(current_user, 'environment.p1_creation_links', 'INSERT')
+               AND has_table_privilege(current_user, 'environment.p1_creation_links', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'environment.p1_creation_links', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'environment.p1_creation_links', 'TRUNCATE')
             """,
             connection);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
