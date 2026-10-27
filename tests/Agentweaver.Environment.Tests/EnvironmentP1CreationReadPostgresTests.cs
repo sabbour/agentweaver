@@ -44,6 +44,10 @@ public sealed class EnvironmentP1CreationReadPostgresTests(EnvironmentPostgresFi
         await store.CompleteP1WorkspaceVolumeProvisionAsync(
             volume.OperationId, fence, true, storage, storageBinding, true, binding, default,
             _ => Task.CompletedTask);
+        var ready = (await store.GetWorkspaceVolumeAsync(fence, volumeId, default))!;
+        var bind = await store.ReserveWorkspaceVolumeBindAsync(
+            fence, volumeId, ready.TransitionRevision, ready.ResourceGeneration, ready.DataGeneration, "bind", default);
+        await store.CompleteWorkspaceVolumeBindAsync(bind.OperationId, fence, true, storage, true, default);
         var leases = new EnvironmentSandboxLeaseStore(fixture.DataSource, TimeProvider.System);
         var intent = new SandboxLeaseProvisionIntent("agent-sandbox", "1.0.0", 1, "options",
             JsonSerializer.SerializeToElement(new { image = "controlled-host" }),
