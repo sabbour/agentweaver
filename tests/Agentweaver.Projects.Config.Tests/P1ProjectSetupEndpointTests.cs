@@ -21,6 +21,107 @@ namespace Agentweaver.Projects.Config.Tests;
 public sealed partial class ProjectsConfigPostgresTests
 {
     [Fact]
+    public async Task P1SetupReadEndpointRechecksAuthorityAndNeverIssuesMissingReceipts()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var tenantId = $"p1-read-tenant-{Guid.NewGuid():N}";
+        var caller = await SeedCallerAsync(
+            db, authorityStore, $"p1-read-admin-{Guid.NewGuid():N}", tenantId,
+            ["api.read", "projects.admin", "projects.orchestrator"],
+            ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        var other = await SeedCallerAsync(
+            db, authorityStore, $"p1-read-other-{Guid.NewGuid():N}", tenantId,
+            ["api.read", "projects.admin", "projects.orchestrator"],
+            ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        var foreignTenant = $"p1-read-foreign-{Guid.NewGuid():N}";
+        var foreign = await SeedCallerAsync(
+            db, authorityStore, $"p1-read-foreign-admin-{Guid.NewGuid():N}", foreignTenant,
+            ["api.read", "projects.admin", "projects.orchestrator"],
+            ProjectAuthorityResourceType.Tenant, foreignTenant, ProjectAuthorityRole.TenantAdmin);
+        var grant = Assert.Single(caller.Grants.Where(item => item.Role == ProjectAuthorityRole.TenantAdmin));
+        var invocationId = Guid.NewGuid();
+        var issued = await P1ProjectSetupEndpoints.IssueAsync(
+            fixture.DataSource, caller, invocationId, grant, CancellationToken.None);
+        await using var app = await StartP1SetupServerAsync(fixture.DataSource);
+        using var client = app.GetTestClient();
+        var before = await CountsAsync();
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            using var request = ReadRequest(invocationId);
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.True(response.Headers.CacheControl?.NoStore);
+            var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.False(json.TryGetProperty("readback", out _));
+            Assert.False(json.TryGetProperty("accessToken", out _));
+            Assert.Equal(issued.Receipt, json.Deserialize<ProjectSetupReceipt>(new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        }
+
+        using (var missing = ReadRequest(Guid.NewGuid()))
+            await AssertProblemAsync(missing, HttpStatusCode.Forbidden, "forbidden");
+        using (var wrongOwner = SetupRequest(
+                   invocationId, other.ActorId, tenantId, method: HttpMethod.Get))
+            await AssertProblemAsync(wrongOwner, HttpStatusCode.Forbidden, "forbidden");
+        using (var foreignOwner = SetupRequest(
+                   invocationId, foreign.ActorId, foreignTenant, method: HttpMethod.Get))
+            await AssertProblemAsync(foreignOwner, HttpStatusCode.Forbidden, "forbidden");
+        using (var missingScope = SetupRequest(
+                   invocationId, caller.ActorId, tenantId, scope: "api.read projects.orchestrator",
+                   method: HttpMethod.Get))
+            await AssertProblemAsync(missingScope, HttpStatusCode.Forbidden, "forbidden");
+        using (var bound = SetupRequest(
+                   invocationId, caller.ActorId, tenantId, boundProjectId: issued.Receipt.ProjectId,
+                   method: HttpMethod.Get))
+            await AssertProblemAsync(bound, HttpStatusCode.Forbidden, "forbidden");
+        using (var query = SetupRequest(
+                   invocationId, caller.ActorId, tenantId, query: "?projectId=existing", method: HttpMethod.Get))
+            await AssertProblemAsync(query, HttpStatusCode.BadRequest, "invalid_project_setup_request");
+        using (var missingTenant = SetupRequest(
+                   invocationId, caller.ActorId, null, method: HttpMethod.Get))
+            await AssertProblemAsync(missingTenant, HttpStatusCode.BadRequest, "invalid_project_setup_request");
+        using (var body = ReadRequest(invocationId))
+        {
+            body.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+            await AssertProblemAsync(body, HttpStatusCode.BadRequest, "invalid_project_setup_request");
+        }
+        Assert.Equal(before, await CountsAsync());
+
+        await authorityStore.RevokeRoleAssignmentAsync(
+            issued.Receipt.AssignmentId, issued.Receipt.AssignmentRevision, caller.ActorId);
+        var afterRevocation = await CountsAsync();
+        using (var stale = ReadRequest(invocationId))
+            await AssertProblemAsync(stale, HttpStatusCode.Conflict, "project_setup_receipt_stale");
+        Assert.Equal(afterRevocation, await CountsAsync());
+
+        await authorityStore.RevokeRoleAssignmentAsync(grant.AssignmentId, grant.Revision, caller.ActorId);
+        afterRevocation = await CountsAsync();
+        using (var revoked = ReadRequest(invocationId))
+            await AssertProblemAsync(revoked, HttpStatusCode.Forbidden, "forbidden");
+        Assert.Equal(afterRevocation, await CountsAsync());
+
+        HttpRequestMessage ReadRequest(Guid id) =>
+            SetupRequest(id, caller.ActorId, tenantId, method: HttpMethod.Get);
+
+        async Task<(int Projects, int Roles, int Audits, int Operations)> CountsAsync() => (
+            await db.Projects.CountAsync(),
+            await db.RoleAssignments.CountAsync(),
+            await db.AuthorityAudit.CountAsync(),
+            await db.ProjectSetupOperations.CountAsync());
+
+        async Task AssertProblemAsync(HttpRequestMessage request, HttpStatusCode status, string code)
+        {
+            using var response = await client.SendAsync(request);
+            Assert.Equal(status, response.StatusCode);
+            Assert.True(response.Headers.CacheControl?.NoStore);
+            Assert.Equal(code, (await response.Content.ReadFromJsonAsync<JsonElement>())
+                .GetProperty("code").GetString());
+        }
+    }
+
+    [Fact]
     public async Task P1SetupEndpointIssuesExactReceiptAndRejectsChangedActorAndInvalidRequest()
     {
         await using var db = CreateDbContext();
@@ -216,6 +317,31 @@ public sealed partial class ProjectsConfigPostgresTests
             directRead.Parameters.AddWithValue("invocation_id", invocationId);
             var denied = await Assert.ThrowsAsync<PostgresException>(() => directRead.ExecuteReaderAsync());
             Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, denied.SqlState);
+
+            await ExecuteOwnerSqlAsync($"""
+                REVOKE EXECUTE ON FUNCTION projects_config.issue_p1_project(
+                    uuid, text, text, text, uuid, bigint, uuid, bigint) FROM "{roleName}";
+                GRANT SELECT ON projects_config.tenant_memberships,
+                    projects_config.project_role_assignments TO "{roleName}";
+                """);
+            await using var app = await StartP1SetupServerAsync(restrictedDataSource);
+            using var client = app.GetTestClient();
+            using var readRequest = SetupRequest(
+                invocationId, caller.ActorId, tenantId, method: HttpMethod.Get);
+            using var readResponse = await client.SendAsync(readRequest);
+            Assert.Equal(HttpStatusCode.OK, readResponse.StatusCode);
+            Assert.Equal(issued.Receipt, await readResponse.Content.ReadFromJsonAsync<ProjectSetupReceipt>());
+            var before = (
+                await db.Projects.CountAsync(), await db.RoleAssignments.CountAsync(),
+                await db.AuthorityAudit.CountAsync(), await db.ProjectSetupOperations.CountAsync());
+            using var unknown = SetupRequest(
+                Guid.NewGuid(), caller.ActorId, tenantId, method: HttpMethod.Get);
+            Assert.Equal(HttpStatusCode.Forbidden, await SendStatusAsync(client, unknown));
+            using var deniedIssue = SetupRequest(Guid.NewGuid(), caller.ActorId, tenantId);
+            Assert.Equal(HttpStatusCode.Forbidden, await SendStatusAsync(client, deniedIssue));
+            Assert.Equal(before, (
+                await db.Projects.CountAsync(), await db.RoleAssignments.CountAsync(),
+                await db.AuthorityAudit.CountAsync(), await db.ProjectSetupOperations.CountAsync()));
         }
         finally
         {
@@ -409,10 +535,11 @@ public sealed partial class ProjectsConfigPostgresTests
         string? scope = null,
         string? boundProjectId = null,
         string? tenantAssertion = null,
-        string? query = null)
+        string? query = null,
+        HttpMethod? method = null)
     {
         var request = new HttpRequestMessage(
-            HttpMethod.Post,
+            method ?? HttpMethod.Post,
             $"/api/p1/invocations/{invocationId:D}/setup{query}");
         request.Headers.Add("X-Test-Subject", subject);
         request.Headers.Add(

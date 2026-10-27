@@ -27,6 +27,7 @@ internal static partial class GatewayOpenApi
             ["dismissUserNotification"] = C(null, null, "204"),
             ["createProject"] = C("CreateProjectRequest", "ProjectSummary", "201"),
             ["createP1InvocationSetup"] = C(null, "P1ProjectSetupReceipt", "200"),
+            ["readP1InvocationSetup"] = C(null, "P1ProjectSetupReceipt", "200"),
             ["getProject"] = C(null, "ProjectSummary", "200"),
             ["updateProject"] = C("UpdateProjectRequest", "ProjectSummary", "200"),
             ["listProjectRoleAssignments"] = C(null, "ProjectRoleAssignmentList", "200"),
@@ -355,7 +356,7 @@ internal static partial class GatewayOpenApi
                             : "Owner response; returned by the owning service.",
                         (route.OperationId is "readRuntimeObservationV1" or "getProjectConfigurationChoices" or
                         "getHostedModelReasoningCatalog" or "getProjectAgentHistory" or
-                        "readProjectSetupAuthorityAudit" or "createP1InvocationSetup" or
+                        "readProjectSetupAuthorityAudit" or "createP1InvocationSetup" or "readP1InvocationSetup" or
                         "readProjectTeamSync" or "commitProjectTeamSync") && status == "200"
                             ? new Dictionary<string, object>(StringComparer.Ordinal)
                             {
@@ -371,7 +372,7 @@ internal static partial class GatewayOpenApi
                                             "Hosted reasoning catalog responses are not cacheable.",
                                         "readProjectSetupAuthorityAudit" =>
                                             "Authority audit responses are not cacheable.",
-                                        "createP1InvocationSetup" =>
+                                        "createP1InvocationSetup" or "readP1InvocationSetup" =>
                                             "Privileged setup receipts are not cacheable.",
                                         "readProjectTeamSync" or "commitProjectTeamSync" =>
                                             "Private repository team-sync responses are not cacheable.",
@@ -579,12 +580,12 @@ else if (route.OperationId is
             responses["403"] = ProblemResponse(
                 "The caller is not a current tenant admin or Owner of every linked project, or the token lacks api.read or is resource-bound.");
         }
-        else if (route.OperationId == "createP1InvocationSetup")
+        else if (route.OperationId is "createP1InvocationSetup" or "readP1InvocationSetup")
         {
             responses["400"] = ProblemResponse("The invocation ID or setup-only request is invalid.");
             responses["403"] = ProblemResponse(
                 "The unbound caller lacks the required scopes or current TenantAdmin authority, the selected tenant does not match, or the setup receipt is no longer current.");
-            responses["409"] = ProblemResponse("The invocation has already been used with conflicting intent.");
+            responses["409"] = ProblemResponse("The invocation conflicts with its receipt or its current readback is stale.");
             responses["503"] = ProblemResponse("The Projects owner is unavailable.");
         }
         else if (route.OperationId is "assignProjectRole" or "revokeProjectRoleAssignment")
@@ -630,6 +631,16 @@ else if (route.OperationId is
                 "Exact replays recheck current authority. No body, existing project ID or resource ID is accepted. " +
                 "Returns only the genuine setup receipt with no-store. This is not run, Environment, Sandbox or " +
                 "runtime creation authorization.";
+        }
+        else if (route.OperationId == "readP1InvocationSetup")
+        {
+            description +=
+                " Requires the existing unbound api.read, projects.admin and projects.orchestrator bearer, " +
+                "the selected tenant and current TenantAdmin authority. Calls only the existing read function, " +
+                "rechecking current authority and exact setup readback. An unknown, foreign or revoked locator " +
+                "is denied without issuing a project, assignments, audits or setup rows. Accepts no body or query. " +
+                "Returns only the immutable Projects setup receipt with no-store, not resource creation authority " +
+                "or a guarantee that authority remains unchanged after the read.";
         }
         else if (route.OperationId == "sendProjectRunMessage")
         {

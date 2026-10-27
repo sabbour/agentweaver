@@ -15,8 +15,10 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class GatewayP1SetupTests
 {
-    [Fact]
-    public async Task SetupIsPurposeLimitedBoundedAndExcludedFromMcp()
+    [Theory]
+    [InlineData("post", "createP1InvocationSetup")]
+    [InlineData("get", "readP1InvocationSetup")]
+    public async Task SetupIsPurposeLimitedBoundedAndExcludedFromMcp(string method, string operationId)
     {
         using var rsa = RSA.Create(2048);
         await using var gateway = await GatewayResourceServer.StartAsync(
@@ -26,8 +28,8 @@ public sealed class GatewayP1SetupTests
         response.EnsureSuccessStatusCode();
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var operation = document.RootElement.GetProperty("paths")
-            .GetProperty("/api/v1/p1/invocations/{invocationId}/setup").GetProperty("post");
-        Assert.Equal("createP1InvocationSetup", operation.GetProperty("operationId").GetString());
+            .GetProperty("/api/v1/p1/invocations/{invocationId}/setup").GetProperty(method);
+        Assert.Equal(operationId, operation.GetProperty("operationId").GetString());
         Assert.Equal("Projects", operation.GetProperty("x-agentweaver-owner").GetString());
         Assert.True(operation.GetProperty("x-agentweaver-mcp-excluded").GetBoolean());
         Assert.True(!operation.TryGetProperty("requestBody", out var body) ||
@@ -50,15 +52,17 @@ public sealed class GatewayP1SetupTests
         Assert.DoesNotContain("environmentId",
             schema.GetProperty("properties").EnumerateObject().Select(value => value.Name));
         var route = Assert.Single(GatewayRouteCatalog.Routes,
-            value => value.OperationId == "createP1InvocationSetup");
+            value => value.OperationId == operationId);
         Assert.Equal("/api/p1/invocations/{invocationId:guid}/setup", route.OwnerPath);
         Assert.False(route.HasJsonBody);
         Assert.True(route.RequiresTenantSelector);
         Assert.Equal(16 * 1024L, route.MaximumResponseBytes);
     }
 
-    [Fact]
-    public async Task SetupForwardsOnlyExistingBearerAndTenantToProjectsAndPreservesUnavailable()
+    [Theory]
+    [InlineData("POST")]
+    [InlineData("GET")]
+    public async Task SetupForwardsOnlyExistingBearerAndTenantToProjectsAndPreservesUnavailable(string method)
     {
         using var rsa = RSA.Create(2048);
         var signingKey = new RsaSecurityKey(rsa);
@@ -76,7 +80,7 @@ public sealed class GatewayP1SetupTests
             signingKey, () => new SetupOwnerHandler(request =>
             {
                 calls++;
-                Assert.Equal(HttpMethod.Post, request.Method);
+                Assert.Equal(new HttpMethod(method), request.Method);
                 Assert.Equal($"/api/p1/invocations/{invocationId:D}/setup", request.RequestUri!.AbsolutePath);
                 Assert.Equal(bearer, request.Headers.Authorization?.Parameter);
                 Assert.Equal("tenant-a", request.Headers.GetValues("X-Agentweaver-Tenant").Single());
@@ -90,7 +94,7 @@ public sealed class GatewayP1SetupTests
                 return result;
             }),
             (_, _, _) => throw new InvalidOperationException("Setup must call Projects only."));
-        using var request = new HttpRequestMessage(HttpMethod.Post,
+        using var request = new HttpRequestMessage(new HttpMethod(method),
             $"/api/v1/p1/invocations/{invocationId:D}/setup");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
         request.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
@@ -98,7 +102,7 @@ public sealed class GatewayP1SetupTests
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.Equal(1, calls);
         Assert.Contains("project_setup_authority_unavailable", await response.Content.ReadAsStringAsync());
-        using var withBody = new HttpRequestMessage(HttpMethod.Post,
+        using var withBody = new HttpRequestMessage(new HttpMethod(method),
             $"/api/v1/p1/invocations/{invocationId:D}/setup");
         withBody.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
         withBody.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
@@ -108,7 +112,7 @@ public sealed class GatewayP1SetupTests
         Assert.Equal(HttpStatusCode.BadRequest, rejectedBody.StatusCode);
         Assert.True(rejectedBody.Headers.CacheControl?.NoStore);
         Assert.Equal(1, calls);
-        using var unframedBody = new HttpRequestMessage(HttpMethod.Post,
+        using var unframedBody = new HttpRequestMessage(new HttpMethod(method),
             $"/api/v1/p1/invocations/{invocationId:D}/setup")
         {
             Version = HttpVersion.Version20,
@@ -122,7 +126,7 @@ public sealed class GatewayP1SetupTests
         Assert.Equal(HttpStatusCode.BadRequest, rejectedUnframedBody.StatusCode);
         Assert.True(rejectedUnframedBody.Headers.CacheControl?.NoStore);
         Assert.Equal(1, calls);
-        using var withQuery = new HttpRequestMessage(HttpMethod.Post,
+        using var withQuery = new HttpRequestMessage(new HttpMethod(method),
             $"/api/v1/p1/invocations/{invocationId:D}/setup?projectId=existing-project");
         withQuery.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
         withQuery.Headers.Add("X-Agentweaver-Tenant", "tenant-a");

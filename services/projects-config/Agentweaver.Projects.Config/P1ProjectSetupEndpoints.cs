@@ -22,74 +22,80 @@ internal static class P1ProjectSetupEndpoints
     public static IEndpointRouteBuilder MapP1ProjectSetupEndpoint(this IEndpointRouteBuilder app)
     {
         var invocations = app.MapGroup("/api/p1/invocations").RequireAuthorization();
-        invocations.MapPost("/{invocationId:guid}/setup", async (
-            Guid invocationId,
-            HttpContext context,
-            ProjectAuthorizationOwner authorizationOwner,
-            NpgsqlDataSource dataSource,
-            CancellationToken cancellationToken) =>
-        {
-            context.Response.Headers.CacheControl = "no-store";
-            using var bodyProbeTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            bodyProbeTimeout.CancelAfter(BodyProbeTimeout);
-            try
-            {
-                if (invocationId == Guid.Empty ||
-                    context.Request.QueryString.HasValue ||
-                    await HasNonemptyBodyAsync(context.Request, bodyProbeTimeout.Token).ConfigureAwait(false))
-                    throw ProjectConfigException.Invalid(
-                        "invalid_project_setup_request",
-                        "The P1 setup request accepts only its invocation ID and tenant header.");
-
-                var tenantValues = context.Request.Headers[ProjectAuthorizationOwner.TenantSelectorHeader];
-                if (tenantValues.Count != 1 || string.IsNullOrWhiteSpace(tenantValues[0]))
-                    throw ProjectConfigException.Invalid(
-                        "invalid_project_setup_request",
-                        $"Exactly one {ProjectAuthorizationOwner.TenantSelectorHeader} header is required.");
-
-                var caller = await authorizationOwner.ResolveAsync(
-                    context.User,
-                    [tenantValues[0]],
-                    cancellationToken).ConfigureAwait(false);
-                caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
-                caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
-                caller.RequireScope(ProjectAuthorizationOwner.OrchestratorScope);
-                caller.RequireUnboundRequest();
-
-                var tenantAdminGrants = caller.Grants.Where(grant =>
-                    grant.ResourceType == ProjectAuthorityResourceType.Tenant &&
-                    string.Equals(grant.ResourceId, caller.TenantId, StringComparison.Ordinal) &&
-                    grant.Role == ProjectAuthorityRole.TenantAdmin).ToArray();
-                if (tenantAdminGrants.Length != 1)
-                    throw ProjectConfigException.Forbidden();
-
-                var result = await IssueAsync(
-                    dataSource,
-                    caller,
-                    invocationId,
-                    tenantAdminGrants[0],
-                    cancellationToken).ConfigureAwait(false);
-                ValidateResult(result, caller, invocationId);
-                return Results.Ok(result.Receipt);
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                return Results.Problem(
-                    title: "request_body_timeout",
-                    detail: "The P1 setup request body did not complete within the allowed time.",
-                    statusCode: StatusCodes.Status408RequestTimeout,
-                    extensions: new Dictionary<string, object?> { ["code"] = "request_body_timeout" });
-            }
-            catch (ProjectConfigException exception)
-            {
-                return Results.Problem(
-                    title: exception.Code,
-                    detail: exception.Message,
-                    statusCode: exception.StatusCode,
-                    extensions: new Dictionary<string, object?> { ["code"] = exception.Code });
-            }
-        }).WithName("CreateP1InvocationSetup");
+        invocations.MapPost("/{invocationId:guid}/setup", HandleSetupAsync)
+            .WithName("CreateP1InvocationSetup");
+        invocations.MapGet("/{invocationId:guid}/setup", HandleSetupAsync)
+            .WithName("ReadP1InvocationSetup");
         return app;
+    }
+
+    private static async Task<IResult> HandleSetupAsync(
+        Guid invocationId,
+        HttpContext context,
+        ProjectAuthorizationOwner authorizationOwner,
+        NpgsqlDataSource dataSource,
+        CancellationToken cancellationToken)
+    {
+        context.Response.Headers.CacheControl = "no-store";
+        using var bodyProbeTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bodyProbeTimeout.CancelAfter(BodyProbeTimeout);
+        try
+        {
+            if (invocationId == Guid.Empty ||
+                context.Request.QueryString.HasValue ||
+                await HasNonemptyBodyAsync(context.Request, bodyProbeTimeout.Token).ConfigureAwait(false))
+                throw ProjectConfigException.Invalid(
+                    "invalid_project_setup_request",
+                    "The P1 setup request accepts only its invocation ID and tenant header.");
+
+            var tenantValues = context.Request.Headers[ProjectAuthorizationOwner.TenantSelectorHeader];
+            if (tenantValues.Count != 1 || string.IsNullOrWhiteSpace(tenantValues[0]))
+                throw ProjectConfigException.Invalid(
+                    "invalid_project_setup_request",
+                    $"Exactly one {ProjectAuthorizationOwner.TenantSelectorHeader} header is required.");
+
+            var caller = await authorizationOwner.ResolveAsync(
+                context.User,
+                [tenantValues[0]],
+                cancellationToken).ConfigureAwait(false);
+            caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+            caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+            caller.RequireScope(ProjectAuthorizationOwner.OrchestratorScope);
+            caller.RequireUnboundRequest();
+
+            var tenantAdminGrants = caller.Grants.Where(grant =>
+                grant.ResourceType == ProjectAuthorityResourceType.Tenant &&
+                string.Equals(grant.ResourceId, caller.TenantId, StringComparison.Ordinal) &&
+                grant.Role == ProjectAuthorityRole.TenantAdmin).ToArray();
+            if (tenantAdminGrants.Length != 1)
+                throw ProjectConfigException.Forbidden();
+
+            var result = HttpMethods.IsPost(context.Request.Method)
+                ? await IssueAsync(
+                    dataSource, caller, invocationId, tenantAdminGrants[0], cancellationToken)
+                    .ConfigureAwait(false)
+                : await ReadAsync(
+                    dataSource, caller, invocationId, tenantAdminGrants[0], cancellationToken)
+                    .ConfigureAwait(false);
+            ValidateResult(result, caller, invocationId);
+            return Results.Ok(result.Receipt);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Results.Problem(
+                title: "request_body_timeout",
+                detail: "The P1 setup request body did not complete within the allowed time.",
+                statusCode: StatusCodes.Status408RequestTimeout,
+                extensions: new Dictionary<string, object?> { ["code"] = "request_body_timeout" });
+        }
+        catch (ProjectConfigException exception)
+        {
+            return Results.Problem(
+                title: exception.Code,
+                detail: exception.Message,
+                statusCode: exception.StatusCode,
+                extensions: new Dictionary<string, object?> { ["code"] = exception.Code });
+        }
     }
 
     internal static async Task<P1ProjectSetupFunctionResult> IssueAsync(

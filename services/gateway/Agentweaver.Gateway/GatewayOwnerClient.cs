@@ -68,11 +68,11 @@ public sealed partial class GatewayOwnerClient(
     {
         try
         {
-            if (route.OperationId == "createP1InvocationSetup")
+            if (route.OperationId is "createP1InvocationSetup" or "readP1InvocationSetup")
                 context.Response.Headers.CacheControl = "no-store";
             var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
             using var timeout = CreateOwnerTimeout(cancellationToken);
-            if (route.OperationId == "createP1InvocationSetup" &&
+            if (route.OperationId is ("createP1InvocationSetup" or "readP1InvocationSetup") &&
                 (context.Request.ContentLength is > 0 ||
                  context.Request.Headers.ContainsKey("Transfer-Encoding") ||
                  context.Request.QueryString.HasValue ||

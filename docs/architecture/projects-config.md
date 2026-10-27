@@ -96,6 +96,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | Route | Operation |
 | --- | --- |
 | `POST /api/p1/invocations/{invocationId}/setup` | Create or exactly replay the P1 invocation's immutable Projects setup receipt using the authenticated approved TenantAdmin. Accepts no body or query and cannot select a project ID or perform cleanup. |
+| `GET /api/p1/invocations/{invocationId}/setup` | Read an existing invocation's setup receipt after current authority and exact readback checks. Never issues a missing receipt or creates resources. Same unbound scopes and TenantAdmin checks as issuance. |
 | `POST /api/projects` | Create an active project and its initial configuration revision. |
 | `GET /api/projects` | List projects visible through current project roles; a tenant administrator sees all projects in that tenant. |
 | `GET /api/projects/{projectId}` | Read an authorized project summary. |
@@ -184,6 +185,16 @@ guard verifies the exact function execution rights, the PUBLIC revocation, and
 the continued absence of direct runtime access to `project_setup_operations`.
 No separate HTTP-host database identity, general table grant, cleanup
 privilege, or live grant change is part of this source change.
+
+`GET /api/p1/invocations/{invocationId}/setup` exposes only the existing
+`read_p1_project` function. It uses the same authenticated actor, selected tenant,
+unbound token, scopes, and current TenantAdmin checks as issuance, accepts no body
+or query, and returns only the validated receipt with `Cache-Control: no-store`.
+Unknown or foreign invocations are denied with `403`; stale setup state returns
+`409`. There is no fallback to issuance and no project, role, audit, or setup-row
+write. Repeated reads do not hold Projects authority locks across a later
+consumer transaction: revocation after a read is not guaranteed to precede a
+Core commit.
 
 This receipt proves only the Projects setup transaction. It does not authorize
 or prove Environment/Sandbox resource creation, establish a cross-database
