@@ -1,6 +1,9 @@
+using System.Collections.Immutable;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
 using Agentweaver.Identity;
+using Agentweaver.Providers.Sandbox.AgentSandbox;
 
 namespace Agentweaver.Environment.Tests;
 
@@ -14,6 +17,53 @@ public sealed class EnvironmentP1CreationReadTests
     private static readonly ProviderResourceRef Sandbox = new(ProviderSeam.Sandbox, "sandbox", "claim", 1);
     private static readonly ProviderResourceRef Storage = new(ProviderSeam.Storage, "storage", "pvc", 1);
     private static readonly Guid SandboxOperation = Guid.NewGuid();
+
+    [Fact]
+    public void CurrentWorkspaceProjectionSeparatesPlannedAndReturnedIdentities()
+    {
+        const string mountPath = "/workspace/agentweaver/project";
+        var empty = JsonSerializer.SerializeToElement(new { });
+        var planned = SandboxResourceIdentity.CreatePlannedReference(
+            Sandbox.ProviderId, "options", Fence, 1, 1, SandboxOperation);
+        Assert.NotEqual(planned.ResourceId, Sandbox.ResourceId);
+        var request = new SandboxProvisionApiRequest("volume", 1, 0, mountPath, false, 1, "sandbox");
+        var negotiation = new WorkspaceVolumeAttachmentNegotiation(
+            "project", "environment", "run", new("project", "volume", 1), planned, Storage, Fence,
+            0, mountPath, false, WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim).Validate();
+        var attachment = new SandboxWorkspaceAttachment(negotiation, JsonSerializer.SerializeToElement(
+            new AgentSandboxPersistentVolumeClaimAttachment(1, Storage.ProviderId, "namespace", "pvc", Storage.ResourceId),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        var recovery = new EnvironmentSandboxManager.SandboxProviderRecoveryIntent(
+            1, request, attachment, ImmutableDictionary<string, string>.Empty, 4);
+        var resource = new SandboxProvisionedResource(Sandbox, new(Guid.NewGuid()), new("placement"),
+            ImmutableHashSet.Create(SandboxCapabilities.VmIsolation), [],
+            new(Sandbox.ProviderId, "1.0.0", 1, "options", empty, empty));
+        var lease = new SandboxLeaseSnapshot(
+            Fence, 1, 1, 1, SandboxOperation, SandboxLeaseState.Active,
+            new(Sandbox.ProviderId, "1.0.0", 1, "options", empty, empty,
+                JsonSerializer.SerializeToElement(recovery, new JsonSerializerOptions(JsonSerializerDefaults.Web))),
+            resource, null, null, null, null, null, true, Now)
+        { LeaseRevision = 3, LeaseExpiresAt = Now.AddMinutes(1), CreatedAt = Now.AddMinutes(-1) };
+        var spec = new WorkspaceVolumeSpec("volume", "project", new(WorkspaceVolumeOwnerKind.Run, "run"),
+            "environment", WorkspaceVolumeBindingMode.Environment, WorkspaceVolumeAccessMode.ReadWriteMany,
+            8, Storage.ProviderId, WorkspaceVolumeConsistency.Strict, WorkspaceVolumeReclaimPolicy.Delete,
+            WorkspaceVolumeOwnerDeletionPolicy.Retain, []);
+        var snapshot = new EnvironmentWorkspaceVolumeSnapshot(
+            Fence, "volume", 4, 1, 0, EnvironmentWorkspaceVolumeState.Attached, EnvironmentWorkspaceVolumeOperation.Attach,
+            JsonSerializer.SerializeToElement(spec), Storage,
+            new(Storage.ProviderId, "1.0.0", 1, "options", empty,
+                JsonSerializer.SerializeToElement(new { @namespace = "namespace", claimName = "pvc", claimUid = Storage.ResourceId })));
+
+        var projected = EnvironmentSandboxManager.ProjectRuntimeWorkspace(Fence, lease, snapshot);
+        Assert.Equal(planned, projected.Workspace.SandboxResource);
+        Assert.Equal(Storage, projected.Workspace.StorageResource);
+        var foreign = recovery with { Workspace = attachment with
+            { Negotiation = negotiation with { SandboxResource = planned with { ResourceId = "foreign" } } } };
+        Assert.Throws<EnvironmentLifecycleException>(() => EnvironmentSandboxManager.ProjectRuntimeWorkspace(
+            Fence, lease with { ProvisionIntent = lease.ProvisionIntent with
+                { ProviderRequest = JsonSerializer.SerializeToElement(foreign, new JsonSerializerOptions(JsonSerializerDefaults.Web)) } },
+            snapshot));
+    }
 
     [Fact]
     public void ReadRequiresActualCompletedRecordsAndDoesNotRetrofitMissingLinks()

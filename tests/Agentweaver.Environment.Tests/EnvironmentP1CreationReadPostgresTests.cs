@@ -11,6 +11,8 @@ namespace Agentweaver.Environment.Tests;
 public sealed class EnvironmentP1CreationReadPostgresTests(EnvironmentPostgresFixture fixture)
     : IClassFixture<EnvironmentPostgresFixture>
 {
+    private const string MountPath = "/workspace/agentweaver/project";
+
     [Fact]
     public async Task ReadsActualOwnerCommittedRecordsWithoutWritesAndRejectsForeignOrStaleJoins()
     {
@@ -62,11 +64,11 @@ public sealed class EnvironmentP1CreationReadPostgresTests(EnvironmentPostgresFi
         var attach = await store.ReserveWorkspaceVolumeAttachAsync(
             fence, volumeId, bound.TransitionRevision, bound.ResourceGeneration, bound.DataGeneration, "attach", default);
         var request = new SandboxProvisionApiRequest(volumeId, bound.ResourceGeneration, bound.DataGeneration,
-            "/workspace/project", false, 1, "sandbox");
+            MountPath, false, 1, "sandbox");
         var negotiation = new WorkspaceVolumeAttachmentNegotiation(
             owner.ProjectId, owner.EnvironmentId, owner.RunId, new(owner.ProjectId, volumeId, bound.ResourceGeneration),
             planned, storage, fence, bound.DataGeneration, request.MountPath, false,
-            WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim);
+            WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim).Validate();
         var recovery = new EnvironmentSandboxManager.SandboxProviderRecoveryIntent(
             1, request, new(negotiation, JsonSerializer.SerializeToElement(
                 new AgentSandboxPersistentVolumeClaimAttachment(1, storage.ProviderId, "namespace", "pvc", storage.ResourceId))),
@@ -87,7 +89,7 @@ public sealed class EnvironmentP1CreationReadPostgresTests(EnvironmentPostgresFi
         var pod = new SandboxPodObservation(1, DateTimeOffset.UtcNow, fence, sandbox,
             active.ProviderFencingGeneration, active.OperationId, new string('c', 64),
             "namespace", sandbox.ResourceId, "sandbox-uid", "pod", "pod-uid", "42", 1, "Running",
-            new("namespace", "pvc", storage.ResourceId, "/workspace/project", false), true);
+            new("namespace", "pvc", storage.ResourceId, MountPath, false), true);
 
         var before = await SnapshotAsync(owner);
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
