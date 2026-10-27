@@ -6,6 +6,37 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class RuntimeHostWorkspaceMountObservationTests
 {
+    [LinuxOnlyFact]
+    public void ObserveUsesRealProcMountAndRejectsRootAndOrdinaryDirectoryFallbacks()
+    {
+        var observer = new LinuxRuntimeWorkspaceMountObserver();
+        var observedAt = DateTimeOffset.UtcNow;
+        var proc = observer.Observe("/proc", expectedReadOnly: false, "linux-test-pod", observedAt);
+
+        Assert.Equal("/proc", proc.MountPath);
+        Assert.Equal("proc", proc.FileSystemType);
+        Assert.NotEqual(0UL, proc.MountId);
+        Assert.False(proc.ReadOnly);
+        Assert.Equal(observedAt, proc.ObservedAt);
+        Assert.Matches("^[0-9a-f]{64}$", proc.MountInfoSha256);
+
+        var rootFailure = Assert.Throws<RuntimeAuthorizationException>(() =>
+            observer.Observe("/", expectedReadOnly: false, "linux-test-pod", observedAt));
+        Assert.Equal("runtime_workspace_mount_mismatch", rootFailure.Code);
+
+        var ordinaryDirectory = Directory.CreateTempSubdirectory("agentweaver-mount-observer-");
+        try
+        {
+            var directoryFailure = Assert.Throws<RuntimeAuthorizationException>(() =>
+                observer.Observe(ordinaryDirectory.FullName, expectedReadOnly: false, "linux-test-pod", observedAt));
+            Assert.Equal("runtime_workspace_mount_mismatch", directoryFailure.Code);
+        }
+        finally
+        {
+            ordinaryDirectory.Delete();
+        }
+    }
+
     [Fact]
     public void ReadReceiptUsesOpenedDirectoryMountAndDoesNotExposeMountSource()
     {
@@ -92,4 +123,13 @@ public sealed class RuntimeHostWorkspaceMountObservationTests
         string? superblockMode = null) =>
         $"1 0 0:1 / / rw,relatime - overlay overlay rw\n" +
         $"{mountId} 1 {device} / {mountPoint} {mode},relatime - ext4 {source} {superblockMode ?? mode},relatime";
+}
+
+public sealed class LinuxOnlyFactAttribute : FactAttribute
+{
+    public LinuxOnlyFactAttribute()
+    {
+        if (!OperatingSystem.IsLinux())
+            Skip = "Exercises Linux open/statx and /proc/self/mountinfo; run in Linux CI.";
+    }
 }

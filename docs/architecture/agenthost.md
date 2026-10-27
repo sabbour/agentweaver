@@ -728,6 +728,7 @@ The host tests cover authenticated HTTP, exact replay, current-owner rejection, 
 Workflow-bound tests cover admission denial, changed admission, stale authority, missing native proof, failed receipt persistence, and no acknowledgment or resend.
 Native suspend tests hold an admitted turn, verify its exact cache receipt and replay, and reject abort-only evidence.
 They also reject changed operation authority, mismatched Core echoes, and unsigned HTTP requests before cache disclosure.
+The Linux CI Broker test matrix runs `RuntimeHostWorkspaceMountObservationTests.ObserveUsesRealProcMountAndRejectsRootAndOrdinaryDirectoryFallbacks` on its Ubuntu runner. That test calls the production observer against the exact `/proc` mount and actual root and temporary-directory paths, exercising `open`, `statx`, and `/proc/self/mountinfo`; the latter two paths must fail closed. It does not prove that the configured AgentHost workspace is mounted in a real Sandbox. Other mount parser tests use synthetic mountinfo, and readiness endpoint tests inject a controlled observer; Windows runs skip the Linux syscall test body.
 These controlled Host tests do not prove a persisted Core suspend operation or PostgreSQL suspend success.
 The combined Broker scenario connects current Projects authority, Identity connection rotation, Orchestrator receipts, native SDK callbacks, and Events/PostgreSQL accounting.
 It covers ordinary native cache and accounting, not a completed suspend operation.
