@@ -126,7 +126,7 @@ public static class GatewayRouteCatalog
             "createProject", "Create a project", body: true, forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, "/p1/invocations/{invocationId:guid}/setup",
             "/api/p1/invocations/{invocationId:guid}/setup",
-            "createP1InvocationSetup", "Create an invocation-owned P1 fixture project",
+            "createP1InvocationSetup", "Create a P1 fixture project setup receipt",
             requiresTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
             maximumResponseBytes: 16 * 1024, excludeFromMcp: true);
         Add("GET", GatewayOwner.Projects, "/projects/{projectId}", "/api/projects/{projectId}",

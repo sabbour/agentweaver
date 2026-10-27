@@ -150,52 +150,45 @@ Revision conflicts and a reused run ID with a different request return conflict 
 endpoint for the upstream P1 fixture producer. It requires the existing
 authenticated bearer token, exactly one `X-Agentweaver-Tenant` header, and the
 existing `api.read`, `projects.admin`, and `projects.orchestrator` scopes. The
-service resolves that principal afresh against the separately configured
-Projects authority connection, then pins it to the existing approved issuer,
-subject, and tenant. A current TenantAdmin grant is still required.
+service resolves that principal against current Projects authority and requires
+exactly one active TenantAdmin assignment for the selected tenant.
 
 The route accepts no body or query parameters. It creates or exactly replays
-only the existing `ProjectsConfigPrivilegedAuthorityStore` setup operation.
-The response is the immutable `ProjectSetupReceipt` itself, not the store's
-readback or cleanup result. A replay rechecks current membership and
-TenantAdmin authority and returns the receipt only while the project, initial
-configuration, Orchestrator assignment, Owner assignment, and both audit
-events still match the active receipt. Cleaned, revoked, stale, or mismatched
-state is rejected. The route has no cleanup operation and does not authorize
-Environment or runtime resource creation. The existing P1 fixture runner is
-not wired to this source endpoint by this change.
+`projects_config.issue_p1_project`, a `SECURITY DEFINER` function that creates
+the project, initial configuration, Owner and Orchestrator assignments, audit
+events, and immutable `project_setup_operations` receipt in one Projects
+database transaction. The function serializes on invocation ID and permits
+only an exact-owner retry. It calls `projects_config.read_p1_project`, which
+revalidates the current membership and exact active TenantAdmin assignment,
+then verifies the immutable receipt, active project, initial configuration,
+assignments, and audit links before returning the bounded receipt and readback.
+Changed ownership, revoked authority, cleanup, stale revisions, or mismatched
+records fail closed. The HTTP response contains only the receipt.
 
-The endpoint's authority principal needs only the following database access:
+The endpoint uses the existing Projects runtime connection. Its runtime
+principal receives `EXECUTE` on the two functions through the grant catalog,
+but no direct access to `project_setup_operations` or other setup-ledger
+tables:
 
 | Object | Minimum privilege | Purpose |
 | --- | --- | --- |
-| `projects_config` schema | `USAGE` | Resolve the service tables and lock function. |
-| `tenant_memberships` | `SELECT` | Resolve the authenticated actor's current active membership. |
-| `projects`, `project_configuration_revisions` | `SELECT`, `INSERT` | Recheck a replay and atomically create the project and initial configuration. |
-| `project_role_assignments` | `SELECT`, `INSERT` | Recheck the active TenantAdmin and receipt assignments; insert the initial Orchestrator and Owner assignments. |
-| `authority_audit` | `SELECT`, `INSERT` | Recheck and append the two immutable assignment events. |
-| `project_setup_operations` | `SELECT`, `INSERT` | Recheck and persist the immutable invocation receipt. |
-| `projects_config.__ef_migrations_history` | `SELECT` | Verify that the configured authority database has no pending migrations. |
-| `projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)` | `EXECUTE` | Use the existing `SECURITY DEFINER` routine to lock current membership and matching active TenantAdmin rows before the exact assignment-ID/revision check. |
+| `projects_config.issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)` | `EXECUTE` | Create or exactly replay the invocation's setup transaction. |
+| `projects_config.read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)` | `EXECUTE` | Recheck current authority and return bounded receipt/readback. |
+| `projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)` | `EXECUTE` | Existing current membership/role lock used by Projects authorization and the setup functions. |
 
-No membership writes, table `UPDATE`, `DELETE`, or `TRUNCATE`, sequence
-privileges, schema `CREATE`, or broad/default grants are needed. In particular,
-the setup route does not need cleanup's project or role-assignment updates.
-The direct TenantAdmin read intentionally has no row-lock clause: the existing
-security-definer routine already holds the required `FOR SHARE` locks. This
-avoids granting column `UPDATE` merely to satisfy PostgreSQL's row-lock
-privilege check. Normal startup separately verifies that the Projects runtime
-principal has no access to `project_setup_operations`.
+Both new functions pin `search_path`, revoke execution from `PUBLIC`, and are
+available to the runtime only through the explicit function entries in the
+P1 PostgreSQL grant catalog. Projects migration
+`20261027142501_AddP1ProjectSetupFunctions` creates them. The service startup
+guard verifies the exact function execution rights, the PUBLIC revocation, and
+the continued absence of direct runtime access to `project_setup_operations`.
+No separate HTTP-host database identity, general table grant, cleanup
+privilege, or live grant change is part of this source change.
 
-The HTTP host also verifies this exact setup-only privilege boundary at
-startup, including column-level updates, privileged role attributes or
-memberships, and schema/table/function ownership; excess capability prevents
-the route from serving. This guard does not change the standalone setup
-command. The matching
-[P1 setup authority permission inventory](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/lib/p1-project-setup-authority-plan.mjs)
-is a declarative, source-only review artifact. It is not executable SQL, does
-not select or assign a principal, and applies no live grants; any later
-deployment must separately approve and apply the exact permissions.
+This receipt proves only the Projects setup transaction. It does not authorize
+or prove Environment/Sandbox resource creation, establish a cross-database
+transaction, or by itself bind a native runtime observation to the invocation.
+The P1 fixture runner is not wired to this endpoint by this change.
 
 The hosted reasoning publication contains only supported effort names and the
 binding reference, connection, revision, and verification time. AgentHost does

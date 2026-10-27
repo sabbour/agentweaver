@@ -11,7 +11,6 @@ const sourceConfiguration = JSON.parse(readFileSync(runtimeConfigUrl, 'utf8')).d
 
 function fixture() {
   const input = structuredClone(example);
-  delete input.privilegedSetupConfiguration;
   input.configuration.ProjectsConfig__Authentication__Authority =
     'https://agentweaver.test.eastus2euap.aksapp.io/';
   input.configuration.ProjectsConfig__Authentication__Audience = 'projects-test-audience';
@@ -30,53 +29,13 @@ test('example remains incomplete until Broker authentication values are supplied
   assert.throws(() => renderProjectsProfile(example), /explicit nonempty string/);
 });
 
-/** Supply test-only approved authority values; these do not provision or authorize an identity. */
-function privilegedFixture() {
+test('runtime profile rejects any alternate setup authority configuration', () => {
   const input = fixture();
-  input.privilegedSetupConfiguration = {
-    ConnectionStrings__ProjectsConfigAuthority: input.configuration.ConnectionStrings__ProjectsConfig
-      .replace('Username=agentweaver-id-projects-config;', 'Username=approved_setup_authority;'),
-    ProjectsConfig__AuthorityDatabase__WorkloadIdentity__TenantId:
-      input.configuration.ProjectsConfig__Database__WorkloadIdentity__TenantId,
-    ProjectsConfig__AuthorityDatabase__WorkloadIdentity__ClientId: '11111111-2222-4333-8444-555555555555',
-    ProjectsConfig__AuthorityDatabase__WorkloadIdentity__TokenFilePath:
-      input.configuration.ProjectsConfig__Database__WorkloadIdentity__TokenFilePath,
-    ProjectsConfig__PrivilegedSetup__ApprovedIssuer: input.configuration.ProjectsConfig__Authentication__Authority,
-    ProjectsConfig__PrivilegedSetup__ApprovedSubject: 'approved-test-subject',
-    ProjectsConfig__PrivilegedSetup__ApprovedTenantId:
-      input.configuration.ProjectsConfig__Database__WorkloadIdentity__TenantId,
-  };
-  return input;
-}
-
-test('explicit privileged setup settings are rendered without changing runtime identity or input', () => {
-  const input = privilegedFixture();
-  const before = structuredClone(input);
-  assert.deepEqual(renderProjectsProfile(input), {
-    data: { ...input.configuration, ...input.privilegedSetupConfiguration },
-  });
-  assert.deepEqual(input, before);
+  input.privilegedSetupConfiguration = {};
+  assert.throws(() => renderProjectsProfile(input), /unsupported field 'privilegedSetupConfiguration'/);
 });
 
-test('privileged setup settings are all-or-none and exclude secrets and foreign settings', () => {
-  for (const key of Object.keys(privilegedFixture().privilegedSetupConfiguration)) {
-    const missing = privilegedFixture();
-    delete missing.privilegedSetupConfiguration[key];
-    assert.throws(() => renderProjectsProfile(missing), /missing field/, key);
-    for (const value of [null, '', ' padded ', 'bad\nvalue', 1]) {
-      const input = privilegedFixture();
-      input.privilegedSetupConfiguration[key] = value;
-      assert.throws(() => renderProjectsProfile(input), /explicit nonempty string/, key);
-    }
-  }
-  for (const key of ['Password', 'AccessToken', 'AZURE_CLIENT_SECRET']) {
-    const input = privilegedFixture();
-    input.privilegedSetupConfiguration[key] = 'controlled-secret';
-    assert.throws(() => renderProjectsProfile(input), /unsupported field/);
-  }
-});
-
-test('privileged setup never substitutes runtime, migration or foreign database authority', () => {
+test('privileged setup configuration is rejected instead of creating a second authority path', () => {
   const key = 'ConnectionStrings__ProjectsConfigAuthority';
   for (const mutate of [
     input => { input.privilegedSetupConfiguration[key] = input.configuration.ConnectionStrings__ProjectsConfig; },
@@ -92,9 +51,12 @@ test('privileged setup never substitutes runtime, migration or foreign database 
     input => { input.privilegedSetupConfiguration.ProjectsConfig__PrivilegedSetup__ApprovedIssuer = 'https://foreign.test/'; },
     input => { input.privilegedSetupConfiguration.ProjectsConfig__PrivilegedSetup__ApprovedTenantId = 'foreign-tenant'; },
   ]) {
-    const input = privilegedFixture();
+    const input = fixture();
+    input.privilegedSetupConfiguration = {
+      ConnectionStrings__ProjectsConfigAuthority: input.configuration.ConnectionStrings__ProjectsConfig,
+    };
     mutate(input);
-    assert.throws(() => renderProjectsProfile(input), /Privileged setup requires/);
+    assert.throws(() => renderProjectsProfile(input), /unsupported field 'privilegedSetupConfiguration'/);
   }
 });
 test('validator returns only runtime data and does not mutate its input', () => {

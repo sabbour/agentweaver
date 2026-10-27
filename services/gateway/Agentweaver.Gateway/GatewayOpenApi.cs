@@ -583,10 +583,9 @@ else if (route.OperationId is
         {
             responses["400"] = ProblemResponse("The invocation ID or setup-only request is invalid.");
             responses["403"] = ProblemResponse(
-                "The unbound caller does not match the approved actor and tenant, lacks existing scopes or current TenantAdmin authority, or the setup receipt is no longer current.");
+                "The unbound caller lacks the required scopes or current TenantAdmin authority, the selected tenant does not match, or the setup receipt is no longer current.");
             responses["409"] = ProblemResponse("The invocation has already been used with conflicting intent.");
-            responses["503"] = ProblemResponse(
-                "The explicitly configured privileged authority capability is unavailable; the runtime database identity is never a substitute.");
+            responses["503"] = ProblemResponse("The Projects owner is unavailable.");
         }
         else if (route.OperationId is "assignProjectRole" or "revokeProjectRoleAssignment")
         {
@@ -624,11 +623,13 @@ else if (route.OperationId is
         {
             description +=
                 " Requires the existing unbound api.read, projects.admin and projects.orchestrator bearer, " +
-                "the selected tenant, the approved actor and current TenantAdmin authority. The separate " +
-                "privileged owner transaction creates the project, initial configuration, Owner and Orchestrator " +
-                "assignments and immutable setup receipt; exact replays recheck current authority. No body, " +
-                "existing project ID or resource ID is accepted. Returns only the genuine setup receipt with " +
-                "no-store. This is not run, Environment, Sandbox or runtime creation authorization.";
+                "the selected tenant and current TenantAdmin authority. The Projects owner calls its " +
+                "SECURITY DEFINER issue function, which atomically creates the project, initial configuration, " +
+                "Owner and Orchestrator assignments, audit events and immutable setup receipt; the runtime " +
+                "principal receives only EXECUTE on the issue/read functions, not direct setup-ledger access. " +
+                "Exact replays recheck current authority. No body, existing project ID or resource ID is accepted. " +
+                "Returns only the genuine setup receipt with no-store. This is not run, Environment, Sandbox or " +
+                "runtime creation authorization.";
         }
         else if (route.OperationId == "sendProjectRunMessage")
         {

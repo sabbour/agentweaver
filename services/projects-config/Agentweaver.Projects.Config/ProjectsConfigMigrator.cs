@@ -104,154 +104,31 @@ public static class ProjectsConfigMigrator
                    current_user,
                    'projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)',
                    'EXECUTE')
-            """,
-            connection);
-        if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
-            throw new InvalidOperationException(
-                "The Projects & Config runtime database principal must have SELECT on authority tables, no membership writes, no DELETE or TRUNCATE on authority tables, SELECT/INSERT/UPDATE but no DELETE/TRUNCATE on hosted_model_reasoning_catalog, no access to project_setup_operations, EXECUTE on projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean), and no schema CREATE privilege. Role-assignment writes are optional, but when present they must be exactly INSERT on project_role_assignments and authority_audit plus UPDATE on project_role_assignments (state, revision, revoked_by, revoked_at).");
-    }
-
-    /// <summary>Requires the HTTP setup capability to have exactly its setup-only authority inventory.</summary>
-    /// <exception cref="InvalidOperationException">The authority principal has missing or excess privilege.</exception>
-    public static async Task VerifyP1SetupAuthorityAsync(
-        NpgsqlDataSource dataSource,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(dataSource);
-        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = new NpgsqlCommand(
-            """
-            WITH expected_tables(table_name, can_select, can_insert) AS (
-                VALUES
-                    ('__ef_migrations_history', true, false),
-                    ('tenant_memberships', true, false),
-                    ('projects', true, true),
-                    ('project_configuration_revisions', true, true),
-                    ('project_role_assignments', true, true),
-                    ('authority_audit', true, true),
-                    ('project_setup_operations', true, true)
-            ),
-            role_state AS (
-                SELECT oid, rolsuper, rolcreatedb, rolcreaterole, rolreplication,
-                       rolbypassrls, rolinherit
-                FROM pg_catalog.pg_roles
-                WHERE rolname = current_user
-            ),
-            setup_lock AS (
-                SELECT pg_catalog.to_regprocedure(
-                    'projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)') AS oid
-            )
-            SELECT EXISTS (SELECT 1 FROM role_state)
-               AND current_user <> 'postgres'
-               AND current_user !~* 'migration'
-               AND NOT (SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication
-                        OR rolbypassrls OR rolinherit FROM role_state)
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM pg_catalog.pg_auth_members AS membership
-                   WHERE membership.member = (SELECT oid FROM role_state))
-               AND has_schema_privilege(current_user, 'projects_config', 'USAGE')
-               AND NOT has_schema_privilege(current_user, 'projects_config', 'CREATE')
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM pg_catalog.pg_database AS db
-                   WHERE db.datname = current_database()
-                     AND db.datdba = (SELECT oid FROM role_state))
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM pg_catalog.pg_namespace AS ns
-                   WHERE ns.nspname = 'projects_config'
-                     AND ns.nspowner = (SELECT oid FROM role_state))
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM pg_catalog.pg_class AS rel
-                   JOIN pg_catalog.pg_namespace AS ns ON ns.oid = rel.relnamespace
-                   WHERE ns.nspname = 'projects_config'
-                     AND rel.relowner = (SELECT oid FROM role_state))
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM pg_catalog.pg_proc AS routine
-                   JOIN pg_catalog.pg_namespace AS ns ON ns.oid = routine.pronamespace
-                   WHERE ns.nspname = 'projects_config'
-                     AND routine.proowner = (SELECT oid FROM role_state))
-               AND (SELECT oid IS NOT NULL FROM setup_lock)
-               AND has_function_privilege(current_user, (SELECT oid FROM setup_lock), 'EXECUTE')
-               AND EXISTS (
-                   SELECT 1
-                   FROM pg_catalog.pg_proc AS routine
-                   CROSS JOIN LATERAL pg_catalog.aclexplode(
-                       COALESCE(routine.proacl, pg_catalog.acldefault('f', routine.proowner))) AS acl
-                   WHERE routine.oid = (SELECT oid FROM setup_lock)
-                     AND acl.grantee = (SELECT oid FROM role_state)
-                     AND acl.privilege_type = 'EXECUTE')
+               AND has_function_privilege(
+                   current_user,
+                   'projects_config.issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
+                   'EXECUTE')
+               AND has_function_privilege(
+                   current_user,
+                   'projects_config.read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
+                   'EXECUTE')
                AND NOT EXISTS (
                    SELECT 1
                    FROM pg_catalog.pg_proc AS routine
                    CROSS JOIN LATERAL pg_catalog.aclexplode(
                        COALESCE(routine.proacl, pg_catalog.acldefault('f', routine.proowner))) AS acl
-                   WHERE routine.oid = (SELECT oid FROM setup_lock)
+                   WHERE routine.oid IN (
+                       pg_catalog.to_regprocedure(
+                           'projects_config.issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)'),
+                       pg_catalog.to_regprocedure(
+                           'projects_config.read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)'))
                      AND acl.grantee = 0
                      AND acl.privilege_type = 'EXECUTE')
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM pg_catalog.pg_proc AS routine
-                   JOIN pg_catalog.pg_namespace AS ns ON ns.oid = routine.pronamespace
-                   CROSS JOIN LATERAL pg_catalog.aclexplode(
-                       COALESCE(routine.proacl, pg_catalog.acldefault('f', routine.proowner))) AS acl
-                   WHERE ns.nspname = 'projects_config'
-                     AND routine.oid <> (SELECT oid FROM setup_lock)
-                     AND acl.grantee = (SELECT oid FROM role_state))
-               AND EXISTS (
-                   SELECT 1
-                   FROM pg_catalog.pg_proc AS routine
-                   WHERE routine.oid = (SELECT oid FROM setup_lock)
-                     AND routine.prosecdef)
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM pg_catalog.pg_proc AS routine
-                   JOIN pg_catalog.pg_namespace AS ns ON ns.oid = routine.pronamespace
-                   WHERE ns.nspname = 'projects_config'
-                     AND routine.prosecdef
-                     AND routine.oid <> (SELECT oid FROM setup_lock)
-                     AND has_function_privilege(current_user, routine.oid, 'EXECUTE'))
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM pg_catalog.pg_class AS rel
-                   JOIN pg_catalog.pg_namespace AS ns ON ns.oid = rel.relnamespace
-                   LEFT JOIN expected_tables AS expected ON expected.table_name = rel.relname
-                   WHERE ns.nspname = 'projects_config'
-                     AND rel.relkind IN ('r', 'p')
-                     AND (
-                         has_table_privilege(current_user, rel.oid, 'SELECT')
-                             IS DISTINCT FROM COALESCE(expected.can_select, false)
-                         OR has_table_privilege(current_user, rel.oid, 'INSERT')
-                             IS DISTINCT FROM COALESCE(expected.can_insert, false)
-                         OR (NOT COALESCE(expected.can_select, false)
-                             AND has_any_column_privilege(current_user, rel.oid, 'SELECT'))
-                         OR (NOT COALESCE(expected.can_insert, false)
-                             AND has_any_column_privilege(current_user, rel.oid, 'INSERT'))
-                         OR has_table_privilege(current_user, rel.oid, 'UPDATE')
-                         OR has_any_column_privilege(current_user, rel.oid, 'UPDATE')
-                         OR has_table_privilege(current_user, rel.oid, 'DELETE')
-                         OR has_table_privilege(current_user, rel.oid, 'TRUNCATE')
-                         OR has_table_privilege(current_user, rel.oid, 'REFERENCES')
-                         OR has_any_column_privilege(current_user, rel.oid, 'REFERENCES')
-                         OR has_table_privilege(current_user, rel.oid, 'TRIGGER')))
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM pg_catalog.pg_class AS rel
-                   JOIN pg_catalog.pg_namespace AS ns ON ns.oid = rel.relnamespace
-                   WHERE ns.nspname = 'projects_config'
-                     AND rel.relkind = 'S'
-                     AND (
-                         has_sequence_privilege(current_user, rel.oid, 'USAGE')
-                         OR has_sequence_privilege(current_user, rel.oid, 'SELECT')
-                         OR has_sequence_privilege(current_user, rel.oid, 'UPDATE')))
             """,
             connection);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
             throw new InvalidOperationException(
-                "The Projects & Config P1 setup authority principal must be a non-inheriting, non-owner, non-migration role with exactly the declared setup schema/table/function privileges, no extra table or column rights, no sequence rights, and no privileged role attributes or memberships.");
+                "The Projects & Config runtime database principal must have SELECT on authority tables, no membership writes, no DELETE or TRUNCATE on authority tables, SELECT/INSERT/UPDATE but no DELETE/TRUNCATE on hosted_model_reasoning_catalog, no access to project_setup_operations, EXECUTE on projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean), issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint), and read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint), and no schema CREATE privilege. Role-assignment writes are optional, but when present they must be exactly INSERT on project_role_assignments and authority_audit plus UPDATE on project_role_assignments (state, revision, revoked_by, revoked_at).");
     }
 
     /// <summary>

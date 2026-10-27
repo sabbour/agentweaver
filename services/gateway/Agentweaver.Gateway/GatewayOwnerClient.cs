@@ -71,17 +71,17 @@ public sealed partial class GatewayOwnerClient(
             if (route.OperationId == "createP1InvocationSetup")
                 context.Response.Headers.CacheControl = "no-store";
             var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
+            using var timeout = CreateOwnerTimeout(cancellationToken);
             if (route.OperationId == "createP1InvocationSetup" &&
                 (context.Request.ContentLength is > 0 ||
                  context.Request.Headers.ContainsKey("Transfer-Encoding") ||
                  context.Request.QueryString.HasValue ||
-                 await HasP1SetupBodyAsync(context.Request, cancellationToken).ConfigureAwait(false)))
+                 await HasP1SetupBodyAsync(context.Request, timeout.Token).ConfigureAwait(false)))
             {
                 await WriteProblemAsync(context, "invalid_project_setup_request", StatusCodes.Status400BadRequest)
                     .ConfigureAwait(false);
                 return;
             }
-            using var timeout = CreateOwnerTimeout(cancellationToken);
             using var boundedBody = await BufferBoundedRequestAsync(context, route, timeout.Token).ConfigureAwait(false);
             using var request = CreateOwnerRequest(context, route, bearer, boundedBody);
             using var response = await SendAsync(route.Owner, request, timeout.Token).ConfigureAwait(false);

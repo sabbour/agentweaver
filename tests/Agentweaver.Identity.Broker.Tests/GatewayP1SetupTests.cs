@@ -132,10 +132,64 @@ public sealed class GatewayP1SetupTests
         Assert.Equal(1, calls);
     }
 
+    [Fact]
+    public async Task SetupBodyProbeHonorsOwnerRequestTimeout()
+    {
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var token = new JwtSecurityToken(
+            new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
+            "https://api.test",
+            [new Claim("sub", "setup-actor"),
+                new Claim("scope", "api.read projects.admin projects.orchestrator")],
+            DateTime.UtcNow.AddMinutes(-1), DateTime.UtcNow.AddMinutes(5),
+            new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256));
+        var bearer = new JwtSecurityTokenHandler().WriteToken(token);
+        var ownerCalls = 0;
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            signingKey, () => new HttpClientHandler(),
+            (_, _, _) =>
+            {
+                ownerCalls++;
+                throw new InvalidOperationException("The owner must not be called for a stalled body.");
+            },
+            ownerRequestTimeout: TimeSpan.FromSeconds(1));
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post, $"/api/v1/p1/invocations/{Guid.NewGuid():D}/setup")
+        {
+            Content = new StalledContent(),
+            Version = HttpVersion.Version20,
+            VersionPolicy = HttpVersionPolicy.RequestVersionExact,
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+        request.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
+
+        using var response = await gateway.Client.SendAsync(
+            request, HttpCompletionOption.ResponseHeadersRead).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.GatewayTimeout, response.StatusCode);
+        Assert.Equal(0, ownerCalls);
+    }
+
     private sealed class LengthlessContent : HttpContent
     {
         protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
             stream.WriteAsync(Encoding.UTF8.GetBytes("{}")).AsTask();
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    private sealed class StalledContent : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            Task.Delay(Timeout.InfiniteTimeSpan);
+
+        protected override Task SerializeToStreamAsync(
+            Stream stream, TransportContext? context, CancellationToken cancellationToken) =>
+            Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
 
         protected override bool TryComputeLength(out long length)
         {

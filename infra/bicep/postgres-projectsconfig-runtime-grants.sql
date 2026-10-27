@@ -6,6 +6,14 @@
 SELECT format(
   'GRANT EXECUTE ON FUNCTION projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean) TO %I',
   :'runtime_role') \gexec
+-- P1 setup uses only these SECURITY DEFINER functions; the runtime role receives
+-- no direct access to project_setup_operations or its other backing tables.
+SELECT format(
+  'GRANT EXECUTE ON FUNCTION projects_config.issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint) TO %I',
+  :'runtime_role') \gexec
+SELECT format(
+  'GRANT EXECUTE ON FUNCTION projects_config.read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint) TO %I',
+  :'runtime_role') \gexec
 
 -- Project role-assignment API. The runtime service checks for a current TenantAdmin
 -- and writes an authority_audit row in the same transaction as each change.

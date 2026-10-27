@@ -19,16 +19,6 @@ const requiredConfiguration = [
   'ProjectsConfig__Authentication__Authority',
   'ProjectsConfig__Authentication__Audience',
 ];
-const privilegedConfigurationFields = [
-  'ConnectionStrings__ProjectsConfigAuthority',
-  'ProjectsConfig__AuthorityDatabase__WorkloadIdentity__TenantId',
-  'ProjectsConfig__AuthorityDatabase__WorkloadIdentity__ClientId',
-  'ProjectsConfig__AuthorityDatabase__WorkloadIdentity__TokenFilePath',
-  'ProjectsConfig__PrivilegedSetup__ApprovedIssuer',
-  'ProjectsConfig__PrivilegedSetup__ApprovedSubject',
-  'ProjectsConfig__PrivilegedSetup__ApprovedTenantId',
-];
-
 // Projects Config receives only the eligibility fields of the AgentHost model bindings. Model IDs, provider
 // URLs, headers and credential references stay with AgentHost, so those keys are rejected here. References
 // cannot contain ':' or '__' because .NET reads both as configuration hierarchy separators.
@@ -116,40 +106,9 @@ function validateKnowledgeOwnerAddress(value) {
     throw new Error('Projects Knowledge address requires the in-cluster HTTPS owner root on port 8443.');
 }
 
-/** Validate explicitly approved setup settings without elevating or reusing the runtime principal. */
-function privilegedConfiguration(input, runtime) {
-  exactFields(input, privilegedConfigurationFields, 'Privileged setup configuration');
-  for (const key of privilegedConfigurationFields) {
-    if (typeof input[key] !== 'string' || !input[key].trim() ||
-        input[key] !== input[key].trim() || /[\u0000-\u001f\u007f]/.test(input[key]))
-      throw new Error(`Privileged setup configuration: '${key}' requires an explicit nonempty string.`);
-  }
-  const connection = input.ConnectionStrings__ProjectsConfigAuthority;
-  const role = /^Host=[^;]+;Port=5432;Database=agentweaver;Username=([a-z_][a-z0-9_-]{0,62});SSL Mode=VerifyFull$/.exec(connection)?.[1];
-  if (!role || role === 'postgres' || /migration/i.test(role) ||
-      connection !== fixedConfiguration.ConnectionStrings__ProjectsConfig.replace(
-        'Username=agentweaver-id-projects-config;', `Username=${role};`) ||
-      role === 'agentweaver-id-projects-config')
-    throw new Error('Privileged setup requires the same database, VerifyFull, and a separate approved password-free authority role.');
-  const identity = 'ProjectsConfig__AuthorityDatabase__WorkloadIdentity__';
-  const guid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!guid.test(input[`${identity}ClientId`]) ||
-      /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(input[`${identity}ClientId`]) ||
-      input[`${identity}ClientId`].toLowerCase() === clientId ||
-      input[`${identity}TenantId`] !== tenantId ||
-      input[`${identity}TokenFilePath`] !== runtime.ProjectsConfig__Database__WorkloadIdentity__TokenFilePath)
-    throw new Error('Privileged setup requires a separate approved workload identity in the admitted tenant with the projected token path.');
-  if (input.ProjectsConfig__PrivilegedSetup__ApprovedIssuer !== runtime.ProjectsConfig__Authentication__Authority ||
-      input.ProjectsConfig__PrivilegedSetup__ApprovedTenantId !== tenantId ||
-      !/^[a-z0-9._:-]{1,256}$/i.test(input.ProjectsConfig__PrivilegedSetup__ApprovedSubject))
-    throw new Error('Privileged setup requires the exact Broker issuer, admitted tenant, and an approved opaque subject.');
-  return input;
-}
-
 /** Validate the fixed P0 database and Broker settings without generating Kubernetes resources. */
 export function renderProjectsProfile(input) {
-  const hasPrivilegedSetup = Object.hasOwn(input ?? {}, 'privilegedSetupConfiguration');
-  exactFields(input, ['configuration', ...(hasPrivilegedSetup ? ['privilegedSetupConfiguration'] : [])], 'Projects profile');
+  exactFields(input, ['configuration'], 'Projects profile');
 
   const data = input.configuration;
   exactFields(data, requiredConfiguration, 'Projects configuration',
@@ -165,10 +124,7 @@ export function renderProjectsProfile(input) {
   }
   issuerHost(data.ProjectsConfig__Authentication__Authority);
   validateModelBindings(data);
-  return { data: {
-    ...data,
-    ...(hasPrivilegedSetup ? privilegedConfiguration(input.privilegedSetupConfiguration, data) : {}),
-  } };
+  return { data: { ...data } };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

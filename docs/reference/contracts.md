@@ -30,24 +30,24 @@ The source-only `POST /api/v1/p1/invocations/{invocationId}/setup`
 (`POST /api/p1/invocations/{invocationId}/setup` on Projects & Config)
 accepts no JSON body or existing project/resource IDs. It uses the current
 unbound actor token with the existing `api.read`, `projects.admin`, and
-`projects.orchestrator` scopes, explicit tenant selection, approved setup
-actor, and current TenantAdmin authority. It is excluded from MCP.
+`projects.orchestrator` scopes, explicit tenant selection, and current
+TenantAdmin authority. It is excluded from MCP.
 
-The separately configured privileged owner capability invokes the genuine
-setup transaction, creating the project, initial configuration, Owner and
-Orchestrator assignments, and immutable `ProjectSetupReceipt`. The `200`
-response is that receipt, not a caller assertion or project-name match.
-Exact retries recheck current authority and setup state; stale, revoked, or
-cleaned receipts cannot establish new authority. Responses are `no-store`.
-Absent owner capability returns `503`; it never falls back to the runtime
-database identity or grants runtime access to `project_setup_operations`.
+The runtime invokes the purpose-limited `SECURITY DEFINER`
+`issue_p1_project` function, which atomically creates the project, initial
+configuration, Owner and Orchestrator assignments, audit events, and immutable
+`ProjectSetupReceipt` in the Projects database. Exact retries are bound to the
+same actor, membership, and TenantAdmin assignment revision and recheck current
+authority plus setup state. Stale, revoked, reassigned, or cleaned receipts
+cannot establish new authority. The `200` response contains the receipt only;
+responses are `no-store`. Runtime has function `EXECUTE` rights, not direct
+access to `project_setup_operations`.
 
 The endpoint does not issue run, Environment, Sandbox, Pod, or AgentHost
-creation authorization. P1 tooling is not switched to this operation until
-its downstream issuance and cleanup contracts are implemented. The separate
-authority database principal, workload federation, and least-privilege
-permissions are later deployment prerequisites, not created or inferred by
-this source route. See [Privileged project setup](./runtime-configuration.md#privileged-project-setup).
+creation authorization and does not establish cross-database atomicity. P1
+tooling is not switched to this operation by this source change. See [P1
+project setup receipt](./runtime-configuration.md#p1-project-setup-receipt)
+for the migration, grant-catalog, and operator-command boundaries.
 
 ## Caller attention
 

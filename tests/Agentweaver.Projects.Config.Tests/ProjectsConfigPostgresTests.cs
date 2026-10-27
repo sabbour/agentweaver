@@ -3100,6 +3100,12 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                 GRANT EXECUTE ON FUNCTION projects_config.lock_casting_authority(
                     uuid, text, text, text, bigint, text, boolean) TO "{roleName}"
                 """);
+            await ExecuteOwnerSqlAsync($"""
+                GRANT EXECUTE ON FUNCTION
+                    projects_config.issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint),
+                    projects_config.read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)
+                TO "{roleName}"
+                """);
             await ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(runtimeDataSource);
 
             await using var privilegeCheck = await fixture.DataSource.OpenConnectionAsync();
@@ -3134,6 +3140,26 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                        @role,
                        'projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)',
                        'EXECUTE')
+                   AND has_function_privilege(
+                       @role,
+                       'projects_config.issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
+                       'EXECUTE')
+                   AND has_function_privilege(
+                       @role,
+                       'projects_config.read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
+                       'EXECUTE')
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM pg_catalog.pg_proc AS routine
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                           COALESCE(routine.proacl, pg_catalog.acldefault('f', routine.proowner))) AS acl
+                       WHERE routine.oid IN (
+                           pg_catalog.to_regprocedure(
+                               'projects_config.issue_p1_project(uuid,text,text,text,uuid,bigint,uuid,bigint)'),
+                           pg_catalog.to_regprocedure(
+                               'projects_config.read_p1_project(uuid,text,text,text,uuid,bigint,uuid,bigint)'))
+                         AND acl.grantee = 0
+                         AND acl.privilege_type = 'EXECUTE')
                    AND NOT EXISTS (
                        SELECT 1
                        FROM pg_catalog.pg_proc AS routine
