@@ -55,6 +55,13 @@ public sealed class RuntimeStartupException(string code, SandboxStartupBudgetFai
 /// </summary>
 public sealed class RuntimeAgentHost : IAsyncDisposable
 {
+    private static readonly JsonSerializerOptions EnvironmentPodObservationJson =
+        new(JsonSerializerDefaults.Web)
+        {
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+        };
+
     private readonly RuntimeAgentHostOptions _options;
     private readonly HttpClient _http;
     private readonly HttpClient? _hostedCatalogCredentialHttp;
@@ -1343,8 +1350,26 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         var path = $"/internal/projects/{Uri.EscapeDataString(binding.ProjectId)}/runs/{Uri.EscapeDataString(binding.RunId)}" +
             $"/environments/{Uri.EscapeDataString(binding.EnvironmentId)}/coordination/sessions/{Uri.EscapeDataString(binding.SessionId)}" +
             $"/runtime-bootstrap/profiles/{Uri.EscapeDataString(binding.ProfileId)}/pod-observation";
-        return await RuntimeOwnerHttpTransport.SendAsync<SandboxPodObservation>(
-            _http, _options.EnvironmentAddress, path, actor, null, token).ConfigureAwait(false);
+        using var document = await RuntimeOwnerHttpTransport.SendBoundedAsync<JsonDocument>(
+            _http, _options.EnvironmentAddress, path, actor, null,
+            maximumBytes: 32 * 1024, allowNotFound: false, cancellationToken: token).ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_pod_observation_invalid");
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("workspaceAttachment", out var attachment) ||
+            attachment.ValueKind != JsonValueKind.Object ||
+            !attachment.TryGetProperty("readOnly", out var readOnly) ||
+            readOnly.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            throw new RuntimeAuthorizationException("runtime_pod_observation_invalid");
+        try
+        {
+            return JsonSerializer.Deserialize<SandboxPodObservation>(root, EnvironmentPodObservationJson)
+                ?? throw new RuntimeAuthorizationException("runtime_pod_observation_invalid");
+        }
+        catch (JsonException)
+        {
+            throw new RuntimeAuthorizationException("runtime_pod_observation_invalid");
+        }
     }
 
     private void RequireCurrentPodObservation(

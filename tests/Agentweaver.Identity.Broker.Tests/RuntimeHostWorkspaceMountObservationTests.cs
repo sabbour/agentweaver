@@ -37,6 +37,24 @@ public sealed class RuntimeHostWorkspaceMountObservationTests
         Assert.Equal("/workspace data", receipt.MountPath);
     }
 
+    [Fact]
+    public void ReadReceiptIncludesReadOnlySuperblockState()
+    {
+        var mountInfo = MountLine(42, "0:48", "/workspace", "rw", "opaque-source",
+            superblockMode: "ro");
+
+        var failure = Assert.Throws<RuntimeAuthorizationException>(() =>
+            LinuxRuntimeWorkspaceMountObserver.CreateReceipt(
+                mountInfo, "/workspace", expectedReadOnly: false, "pod-uid",
+                DateTimeOffset.UtcNow, 42, 0, 48, 1234));
+        Assert.Equal("runtime_workspace_mount_mismatch", failure.Code);
+
+        var receipt = LinuxRuntimeWorkspaceMountObserver.CreateReceipt(
+            mountInfo, "/workspace", expectedReadOnly: true, "pod-uid",
+            DateTimeOffset.UtcNow, 42, 0, 48, 1234);
+        Assert.True(receipt.ReadOnly);
+    }
+
     [Theory]
     [InlineData("/workspace", "0:49", 42UL, false, "runtime_workspace_mount_mismatch")]
     [InlineData("/workspace", "0:48", 41UL, false, "runtime_workspace_mount_mismatch")]
@@ -70,7 +88,8 @@ public sealed class RuntimeHostWorkspaceMountObservationTests
     }
 
     private static string MountLine(
-        ulong mountId, string device, string mountPoint, string mode, string source) =>
+        ulong mountId, string device, string mountPoint, string mode, string source,
+        string? superblockMode = null) =>
         $"1 0 0:1 / / rw,relatime - overlay overlay rw\n" +
-        $"{mountId} 1 {device} / {mountPoint} {mode},relatime - ext4 {source} {mode},relatime";
+        $"{mountId} 1 {device} / {mountPoint} {mode},relatime - ext4 {source} {superblockMode ?? mode},relatime";
 }

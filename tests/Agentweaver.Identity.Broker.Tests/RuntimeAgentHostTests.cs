@@ -2575,6 +2575,29 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Fact]
+    public async Task ReadinessEvidenceRejectsMissingEnvironmentMountMode()
+    {
+        await using var fixture = new HostFixture(hostPodUid: "pod-uid");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await fixture.ConfigureAsync(timeout.Token);
+        var json = JsonSerializer.Serialize(fixture.Readiness.Observation.PodObservation, HostFixture.Json);
+        var observation = System.Text.Json.Nodes.JsonNode.Parse(json)!.AsObject();
+        observation["workspaceAttachment"]!.AsObject().Remove("readOnly");
+        fixture.PodObservationJsonOverride = observation.ToJsonString(HostFixture.Json);
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+
+        using var response = await client.GetAsync("/runtime/v1/readiness/evidence", timeout.Token);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>(HostFixture.Json, timeout.Token);
+        Assert.Equal("runtime_pod_observation_invalid", error.GetProperty("code").GetString());
+    }
+
+    [Fact]
     public async Task NumericLimitDenialReadReturnsOnlyCurrentPersistedReceipt()
     {
         await using var fixture = new HostFixture();
@@ -2785,6 +2808,7 @@ public sealed class RuntimeAgentHostTests
         public ConcurrentQueue<Guid> HostedCatalogCredentialRequests { get; } = new();
         public int PodObservationReads => Volatile.Read(ref _podObservationReads);
         public Action<int>? AfterPodObservationRead { get; set; }
+        public string? PodObservationJsonOverride { get; set; }
         public RuntimeNumericLimitDenialReceipt? NumericLimitDenialReceipt { get; set; }
         public Guid PlatformDefaultConnectionId { get; set; } = Guid.NewGuid();
         public long PlatformDefaultsRevision { get; set; } = 1;
@@ -3348,7 +3372,9 @@ public sealed class RuntimeAgentHostTests
             if (path.EndsWith("/pod-observation", StringComparison.Ordinal))
             {
                 var count = Interlocked.Increment(ref _podObservationReads);
-                var response = Response(request, Readiness.Observation.PodObservation);
+                var response = PodObservationJsonOverride is { } json
+                    ? JsonResponse(request, json)
+                    : Response(request, Readiness.Observation.PodObservation);
                 AfterPodObservationRead?.Invoke(count);
                 return response;
             }
@@ -3872,6 +3898,13 @@ public sealed class RuntimeAgentHostTests
             new(status)
             {
                 RequestMessage = request, Content = JsonContent.Create(body, options: Json),
+                Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
+            };
+        private static HttpResponseMessage JsonResponse(HttpRequestMessage request, string json) =>
+            new(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
                 Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
             };
         private static byte[] CorruptFirstByte(byte[] bytes)

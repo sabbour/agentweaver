@@ -104,12 +104,20 @@ internal sealed class LinuxRuntimeWorkspaceMountObserver : IRuntimeWorkspaceMoun
             mountId == 0 || !TryDevice(fields[2], out var major, out var minor))
             throw new RuntimeAuthorizationException("runtime_workspace_mount_info_invalid");
 
-        var mountOptions = fields[5].Split(',', StringSplitOptions.RemoveEmptyEntries);
-        var readOnly = mountOptions.Contains("ro", StringComparer.Ordinal);
-        if (readOnly == mountOptions.Contains("rw", StringComparer.Ordinal))
-            throw new RuntimeAuthorizationException("runtime_workspace_mount_info_invalid");
+        var mountReadOnly = ParseReadOnlyOption(fields[5]);
+        var superblockReadOnly = ParseReadOnlyOption(fields[separator + 3]);
         return new(mountId, major, minor, DecodePath(fields[4]), fields[separator + 1],
-            readOnly, line);
+            mountReadOnly || superblockReadOnly, line);
+    }
+
+    private static bool ParseReadOnlyOption(string value)
+    {
+        var options = value.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        var readOnly = options.Contains("ro", StringComparer.Ordinal);
+        var readWrite = options.Contains("rw", StringComparer.Ordinal);
+        if (readOnly == readWrite)
+            throw new RuntimeAuthorizationException("runtime_workspace_mount_info_invalid");
+        return readOnly;
     }
 
     private static string DecodePath(string value)
