@@ -292,6 +292,7 @@ public static class EnvironmentEndpoints
         MapRuntimePlacement("");
         MapRuntimePlacement("/readiness");
         MapRuntimePlacement("/pod-observation");
+        MapRuntimePlacement("/p1-creation-binding");
         MapRuntimePlacement("/workspace");
 
         void MapRuntimePlacement(string suffix) => endpoints.MapGet(
@@ -321,6 +322,10 @@ public static class EnvironmentEndpoints
                 try
                 {
                     var actor = new RuntimeActorAuthorization(bearer, caller.TenantSelector);
+                    if (suffix == "/p1-creation-binding")
+                        return Results.Ok(await context.RequestServices.GetRequiredService<EnvironmentP1CreationReader>()
+                            .ReadAsync(actor, projectId, runId, sessionId, environmentId, profileId, profiles,
+                                cancellationToken, profileReplacements).ConfigureAwait(false));
                     if (suffix == "/pod-observation")
                         return Results.Ok(await reader.GetPodObservationAsync(
                             actor, projectId, runId, sessionId, environmentId, profileId, profiles,

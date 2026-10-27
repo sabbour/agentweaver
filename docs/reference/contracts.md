@@ -60,7 +60,9 @@ transaction. A pending generation is not an actual provider reference.
 
 The [Environment creation contract](../architecture/environment-sandbox.md#p1-invocation-bound-creation)
 describes the source-only boundary, immutable identities, non-enrollment of old
-resources, remote-read race, and separate future Host/native join. It adds no
+resources and remote-read race. The separate [creation evidence reads](./p1-creation-evidence.md)
+define the authenticated Environment response and bounded root-only Host consumer;
+native CLI acceptance remains separate. It adds no
 sign-in flow, live grant, or deployment evidence.
 
 ## Caller attention

@@ -166,7 +166,9 @@ path. They are remote reads, not a distributed lock: Core or Projects authority
 can change after a response and before Environment commits or dispatches. This
 slice does not claim current-at-commit revocation across services.
 
-The retained creation identities prepare a later Host/native observation join.
+The [creation evidence reads](../reference/p1-creation-evidence.md) expose the
+retained identities through the current owner-locked runtime read path and a
+separate root-only Host consumer. Native CLI consumption remains separate.
 They do not implement that join, prove a native mount, run the P1 fixture, or
 close the parent integration issue. `PodObservation` and downward-API fields
 remain configuration/control-plane observations, distinct from Host's actual

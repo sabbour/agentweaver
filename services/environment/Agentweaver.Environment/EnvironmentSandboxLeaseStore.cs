@@ -2574,7 +2574,7 @@ public sealed class EnvironmentSandboxLeaseStore(
                    StringComparison.Ordinal);
     }
 
-    private static async Task<SandboxLeaseSnapshot?> ReadCurrentAsync(
+    internal static async Task<SandboxLeaseSnapshot?> ReadCurrentAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         EnvironmentOwnerIdentity owner,

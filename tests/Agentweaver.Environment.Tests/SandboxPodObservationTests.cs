@@ -27,8 +27,10 @@ public sealed class SandboxPodObservationTests
         "namespace", "claim-uid", "sandbox-uid", "pod-name", "pod-uid", "42", 1, "Running",
         new("namespace", "workspace-pvc", "pvc-uid", "/workspace/project", false), true);
 
-    [Fact]
-    public void PodObservationRouteRequiresAuthenticationAndIsReadOnly()
+    [Theory]
+    [InlineData("/pod-observation")]
+    [InlineData("/p1-creation-binding")]
+    public void PodObservationRouteRequiresAuthenticationAndIsReadOnly(string suffix)
     {
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddAuthorization();
@@ -41,7 +43,7 @@ public sealed class SandboxPodObservationTests
         var route = Assert.Single(((IEndpointRouteBuilder)app).DataSources
             .SelectMany(source => source.Endpoints).OfType<RouteEndpoint>(),
             endpoint => endpoint.RoutePattern.RawText!.EndsWith(
-                "/runtime-bootstrap/profiles/{profileId}/pod-observation", StringComparison.Ordinal));
+                "/runtime-bootstrap/profiles/{profileId}" + suffix, StringComparison.Ordinal));
         Assert.NotEmpty(route.Metadata.GetOrderedMetadata<IAuthorizeData>());
         Assert.DoesNotContain(route.Metadata, item => item is IAllowAnonymous);
         Assert.Equal(["GET"], route.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods);

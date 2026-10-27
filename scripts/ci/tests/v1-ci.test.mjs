@@ -122,8 +122,9 @@ test('required owner-transaction methods must have passing results for every exe
 
 test('Environment P1 owner tests are explicitly enforced after the actual CI test invocation', () => {
   const runner = readFileSync(new URL('../v1-test-plan.mjs', import.meta.url), 'utf8');
-  const source = readFileSync(new URL('../../../tests/Agentweaver.Environment.Tests/EnvironmentP1CreationLinkPostgresTests.cs', import.meta.url), 'utf8');
-  assert.equal(environmentP1RequiredMethods.length, 4);
+  const source = ['EnvironmentP1CreationLinkPostgresTests', 'EnvironmentP1CreationReadPostgresTests']
+    .map((name) => readFileSync(new URL(`../../../tests/Agentweaver.Environment.Tests/${name}.cs`, import.meta.url), 'utf8')).join('\n');
+  assert.equal(environmentP1RequiredMethods.length, 5);
   for (const method of environmentP1RequiredMethods) {
     assert.ok(source.includes(`Task ${method.split('.').at(-1)}()`), method);
   }

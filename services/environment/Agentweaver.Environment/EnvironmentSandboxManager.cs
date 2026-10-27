@@ -2149,7 +2149,10 @@ public sealed class EnvironmentSandboxManager(
             throw new EnvironmentLifecycleException(
                 "workspace_volume_unknown", "The exact Sandbox Workspace volume does not exist.");
         if (lease.Fence != fence || attachment.EnvironmentFence != fence ||
-            attachment.SandboxResource != lease.ProvisionedResource?.Resource ||
+            lease.ProvisionedResource is null ||
+            attachment.SandboxResource != SandboxResourceIdentity.CreatePlannedReference(
+                lease.ProvisionIntent.ProviderId, lease.ProvisionIntent.OptionsRevision, fence,
+                lease.ResourceGeneration, lease.ProviderFencingGeneration, lease.OperationId) ||
             snapshot.EnvironmentFence != fence || snapshot.VolumeId != request.VolumeId ||
             attachment.Volume != new WorkspaceVolumeReference(
                 fence.Owner.ProjectId, request.VolumeId, request.VolumeResourceGeneration) ||
@@ -2183,7 +2186,7 @@ public sealed class EnvironmentSandboxManager(
     }
 
     /// <summary>Deserializes and validates the immutable recovery intent stored with a Sandbox lease.</summary>
-    private static SandboxProviderRecoveryIntent ReadProviderRecoveryIntent(SandboxLeaseSnapshot lease)
+    internal static SandboxProviderRecoveryIntent ReadProviderRecoveryIntent(SandboxLeaseSnapshot lease)
     {
         SandboxProviderRecoveryIntent recovery;
         try
@@ -2566,7 +2569,7 @@ public sealed class EnvironmentSandboxManager(
         string ClusterIdentity);
 
     /// <summary>Persisted provider intent needed to reconcile an uncertain Sandbox operation.</summary>
-    private sealed record SandboxProviderRecoveryIntent(
+    internal sealed record SandboxProviderRecoveryIntent(
         int ContractVersion,
         SandboxProvisionApiRequest Request,
         SandboxWorkspaceAttachment Workspace,

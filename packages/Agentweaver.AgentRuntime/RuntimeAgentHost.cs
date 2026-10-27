@@ -1098,6 +1098,27 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             sourceHash, RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(session.Facts.SdkSessionId)));
     }
 
+    /// <summary>Joins current root creation provenance to separate Host observation evidence.</summary>
+    public async Task<RuntimeHostP1EvidenceReceipt> ReadP1EvidenceAsync(
+        RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        var session = _session ?? throw new RuntimeAuthorizationException("runtime_host_not_ready");
+        await RequireCallerAsync(session.Registration, actor, token).ConfigureAwait(false);
+        var reader = new RuntimeP1CreationBindingHttpClient(
+            _http, _options.OrchestratorAddress, _options.EnvironmentAddress, actor, _time);
+        var before = await reader.ReadRootAsync(session.Registration, token).ConfigureAwait(false);
+        var host = await ReadReadinessEvidenceAsync(actor, token).ConfigureAwait(false);
+        var after = await reader.ReadRootAsync(session.Registration, token).ConfigureAwait(false);
+        if (host.RegistrationHash != RuntimeContractValidation.RegistrationHash(session.Registration) ||
+            before with { PodObservation = after.PodObservation } != after ||
+            before.PodObservation with { ObservedAt = default } != after.PodObservation with { ObservedAt = default } ||
+            host.EnvironmentPodObservation with { ObservedAt = default } != after.PodObservation with { ObservedAt = default })
+            throw new RuntimeAuthorizationException("runtime_p1_creation_binding_changed");
+        await session.RequireCurrentAsync(token).ConfigureAwait(false);
+        return new(1, _time.GetUtcNow(), after, host);
+    }
+
     /// <summary>Reads one persisted Orchestrator numeric-limit denial for the current Host registration.</summary>
     internal async Task<RuntimeNumericLimitDenialReceipt> ReadNumericLimitDenialAsync(
         RuntimeHostNumericLimitDenialReadRequest request,

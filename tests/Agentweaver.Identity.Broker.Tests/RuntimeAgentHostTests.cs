@@ -2489,6 +2489,66 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Fact]
+    public async Task P1EvidenceJoinsActualHostConsumerToBothOwnerReadsWithoutChangingOrdinaryReadiness()
+    {
+        await using var fixture = new HostFixture(hostPodUid: "pod-uid");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await fixture.ConfigureAsync(timeout.Token);
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+
+        using var response = await client.GetAsync("/runtime/v1/readiness/p1-evidence", timeout.Token);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        var evidence = await response.Content.ReadFromJsonAsync<RuntimeHostP1EvidenceReceipt>(HostFixture.Json, timeout.Token);
+        Assert.NotNull(evidence);
+        Assert.Equal(fixture.P1Binding, evidence.Creation.Binding);
+        Assert.Equal(evidence.Creation.PodObservation, evidence.Host.EnvironmentPodObservation);
+        Assert.Equal("pod-uid", evidence.Host.WorkspaceMount.PodUid);
+        Assert.Equal(2, fixture.P1CreationReads);
+        fixture.P1Creation = null;
+        using var ordinary = await client.GetAsync("/runtime/v1/readiness", timeout.Token);
+        Assert.Equal(HttpStatusCode.OK, ordinary.StatusCode);
+        using var missing = await client.GetAsync("/runtime/v1/readiness/p1-evidence", timeout.Token);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, missing.StatusCode);
+        Assert.DoesNotContain(fixture.Sdk.Requests, item => item.Method == "session.send");
+    }
+
+    [Theory]
+    [InlineData("foreign-binding")]
+    [InlineData("stale-resource")]
+    [InlineData("pod-replaced")]
+    [InlineData("creation-changed")]
+    [InlineData("child")]
+    public async Task P1EvidenceRejectsMissingForeignStaleOrReplacedJoins(string fault)
+    {
+        await using var fixture = new HostFixture(hostPodUid: "pod-uid");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await fixture.ConfigureAsync(timeout.Token);
+        var creation = fixture.P1Creation!;
+        fixture.P1Creation = fault switch
+        {
+            "foreign-binding" => creation with { Binding = creation.Binding with { CoreInvocationId = Guid.NewGuid() } },
+            "stale-resource" => creation with { SandboxProvision = creation.SandboxProvision with
+                { ProviderResource = creation.SandboxProvision.ProviderResource! with { Generation = 2 } } },
+            "pod-replaced" => creation with { PodObservation = creation.PodObservation with { PodUid = "replacement" } },
+            _ => creation
+        };
+        if (fault == "creation-changed")
+            fixture.AfterP1CreationRead = count =>
+            {
+                if (count == 1)
+                    fixture.P1Creation = creation with { Environment = creation.Environment with { OperationId = Guid.NewGuid() } };
+            };
+        if (fault == "child")
+            fixture.P1Binding = fixture.P1Binding with { RootSessionId = "parent-session" };
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => fixture.Host.ReadP1EvidenceAsync(fixture.Actor, timeout.Token));
+    }
+
+    [Fact]
     public async Task ReadinessEvidenceBindsHostMountToCurrentEnvironmentPodIdentity()
     {
         await using var fixture = new HostFixture(hostPodUid: "pod-uid");
@@ -2809,6 +2869,10 @@ public sealed class RuntimeAgentHostTests
         public int PodObservationReads => Volatile.Read(ref _podObservationReads);
         public Action<int>? AfterPodObservationRead { get; set; }
         public string? PodObservationJsonOverride { get; set; }
+        public P1InvocationBinding P1Binding { get; set; } = null!;
+        public EnvironmentP1CreationBinding? P1Creation { get; set; }
+        public int P1CreationReads { get; private set; }
+        public Action<int>? AfterP1CreationRead { get; set; }
         public RuntimeNumericLimitDenialReceipt? NumericLimitDenialReceipt { get; set; }
         public Guid PlatformDefaultConnectionId { get; set; } = Guid.NewGuid();
         public long PlatformDefaultsRevision { get; set; } = 1;
@@ -2928,6 +2992,19 @@ public sealed class RuntimeAgentHostTests
                         true)
                 },
                 new(120, 120, 120, 120, 120, 600), factory.WorkingDirectory);
+            P1Binding = new(1, Guid.NewGuid(), Guid.NewGuid(), new string('b', 64),
+                b.TenantId, b.ProjectId, b.RunId, b.SessionId, b.ActorIssuer, b.ActorId, Guid.NewGuid(), 1,
+                b.AcceptedSelectionHash, b.ExecutionFence, 1, Time.Now.AddMinutes(-1));
+            var p1Pod = Readiness.Observation.PodObservation!;
+            var p1CreatedAt = Time.Now.AddSeconds(-10);
+            P1Creation = new(1, P1Binding, p1Pod.EnvironmentFence,
+                new(Guid.NewGuid(), "Environment", b.EnvironmentId, null, null, null, null, null, p1CreatedAt, p1CreatedAt),
+                new(Guid.NewGuid(), "WorkspaceVolumeMetadata", "volume", 0, null, 1, null, null, p1CreatedAt, p1CreatedAt),
+                new(Guid.NewGuid(), "WorkspaceVolume", "volume", 1, null, 2, null,
+                    new(ProviderSeam.Storage, "storage", "storage-resource", 1), p1CreatedAt, p1CreatedAt),
+                new(p1Pod.ProvisionOperationId, "Sandbox", p1Pod.ProvisionOperationId.ToString("D"),
+                    p1Pod.Resource.Generation, p1Pod.FencingGeneration, null, 1, p1Pod.Resource, p1CreatedAt, p1CreatedAt),
+                p1Pod);
             _http = new(new Handler(SendOwnerAsync));
             Host = new(new(b.ConfigureEndpoint, new("https://broker.test/"), new("https://orchestrator.test/"),
                     new("https://environment.test/"), new("https://events.test/"),
@@ -3369,6 +3446,15 @@ public sealed class RuntimeAgentHostTests
             }
             if (path.EndsWith("/readiness", StringComparison.Ordinal))
                 return Response(request, Readiness);
+            if (path.EndsWith("/p1-invocation-binding", StringComparison.Ordinal))
+                return Response(request, P1Binding);
+            if (path.EndsWith("/p1-creation-binding", StringComparison.Ordinal))
+            {
+                var response = Response(request, P1Creation, P1Creation is null ? HttpStatusCode.NotFound : HttpStatusCode.OK);
+                P1CreationReads++;
+                AfterP1CreationRead?.Invoke(P1CreationReads);
+                return response;
+            }
             if (path.EndsWith("/pod-observation", StringComparison.Ordinal))
             {
                 var count = Interlocked.Increment(ref _podObservationReads);
