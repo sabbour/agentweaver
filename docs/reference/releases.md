@@ -366,9 +366,13 @@ descriptor. It verifies the pinned lightweight tag and publication asset,
 requires a clean helper checkout descended from the pinned source, rejects
 changes to source-owned Kustomize and release inputs, and reads the exact
 source-bound draft `releases/foundation.json` and its project files from that
-pinned source. The v1.0.14 image digests must match the checked-in P0 image
-pins. This reconfigures the already-published installation; it does not create
-persona evidence or claim release acceptance. See the
+pinned source. The verified publication image digests and AgentHost runtime
+measurements are rendered into a temporary copy of the source-owned Kustomize
+bundle and checked against the same receipt; checked-in pins remain unchanged.
+This is the only historical exception for run-binding redeployment; the
+separate v1.0.0 bootstrap path is unchanged. This reconfigures the
+already-published installation; it does not create persona evidence or claim
+release acceptance. See the
 [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#local-v1-release-deployment)
 for the command shape; do not use this exception for other historical releases.
 

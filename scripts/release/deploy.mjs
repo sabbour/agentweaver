@@ -2617,8 +2617,10 @@ function addBrokerRunBindingKustomizeResources(directory, images, providerCatalo
   writeFileSync(kustomizationPath, stringifyYaml(kustomization), 'utf8');
 }
 
-/** Selects the checked-in release bundle or a temporary v1.0.0 compatibility render. */
-function prepareKustomizeSource(root, releaseTag, images, providerCatalog, brokerRunBinding) {
+/** Selects the checked-in release bundle or a temporary source-derived receipt-pinned render. */
+function prepareKustomizeSource(
+  root, releaseTag, images, providerCatalog, brokerRunBinding, runBindingRedeployment = false,
+) {
   if (providerCatalog.configMapName !== P0_PROVIDER_CATALOG_CONFIG_MAP) {
     fail(`the checked-in P0 installation uses ${P0_PROVIDER_CATALOG_CONFIG_MAP} as its provider catalog`);
   }
@@ -2648,7 +2650,10 @@ function prepareKustomizeSource(root, releaseTag, images, providerCatalog, broke
   if (sourcePinsMatch && sourceRuntimeMatches && !binding) {
     return { path: KUSTOMIZE_INSTALL_PATH, cleanup: () => undefined };
   }
-  if ((!sourcePinsMatch || !sourceRuntimeMatches) && releaseTag !== BOOTSTRAP_RELEASE_TAG) {
+  const mayRenderReceiptPins = releaseTag === BOOTSTRAP_RELEASE_TAG ||
+    (runBindingRedeployment && releaseTag === 'v1.0.14' && binding !== undefined);
+  // The published v1.0.14 receipt may pin newer images than its unchanged source Kustomize bundle.
+  if ((!sourcePinsMatch || !sourceRuntimeMatches) && !mayRenderReceiptPins) {
     fail('checked-in P0 Kustomize images and runtime pins must match the exact publication receipt');
   }
 
@@ -2701,7 +2706,7 @@ function prepareKustomizeSource(root, releaseTag, images, providerCatalog, broke
         temporaryDirectory, images, providerCatalog, binding, TARGET.namespace);
     }
     if (!matchesKustomizeRuntimeInputs(temporaryDirectory, images, providerCatalog)) {
-      fail('temporary v1.0.0 Kustomize source does not match its publication receipt');
+      fail('temporary source-derived P0 Kustomize bundle does not match its publication receipt');
     }
     return {
       path: temporaryDirectory,
@@ -2962,7 +2967,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
     sourceCommit: parsed.providerCatalogSourceCommit,
   };
   const kustomizeSource = prepareKustomizeSource(
-    root, parsed.releaseTag, images, providerCatalog, brokerRunBinding);
+    root, parsed.releaseTag, images, providerCatalog, brokerRunBinding, runBindingRedeployment);
   try {
     const renderedText = run('kubectl', ['kustomize', kustomizeSource.path], { cwd: root });
     const installation = validateKustomizeInstall(

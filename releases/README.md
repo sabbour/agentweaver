@@ -1256,10 +1256,14 @@ from the pinned release source. This is the only historical-release exception:
 the command verifies the exact lightweight tag and publication asset hash,
 checks that the source-owned Kustomize and release inputs have not changed,
 requires the exact draft `releases/foundation.json` from the pinned source,
-validates its project files from that source, and requires the receipt image
-digests to match the checked-in P0 image pins. This reconfigures the
-already-published installation; it does not create persona evidence or claim
-release acceptance. It does not enable ordinary historical redeployment.
+validates its project files from that source, and renders the receipt-pinned
+images and AgentHost runtime measurements into a temporary copy of the
+source-owned Kustomize bundle. It verifies the rendered bundle against the
+same publication receipt and leaves the checked-in pins unchanged. This is the
+only historical exception for run-binding redeployment; the separate v1.0.0
+bootstrap path is unchanged. This reconfigures the already-published
+installation; it does not create persona evidence or claim release acceptance.
+It does not enable ordinary historical redeployment.
 Preflight can recover when one run-binding ConfigMap is absent and the other
 already matches; partial or conflicting settings still fail, and successful
 post-apply verification requires both.
