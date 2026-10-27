@@ -156,6 +156,10 @@ var knowledgeOwnerAddress = Agentweaver.Identity.RuntimeOwnerHttpTransport.Requi
     knowledgeBaseAddress);
 var runtimeIdentity = ProjectsConfigPostgresDataSource.ReadWorkloadIdentityOptions(
     builder.Configuration, "ProjectsConfig:Database:WorkloadIdentity");
+builder.Services.AddSingleton<P1ProjectSetupAuthorityCapability>(_ =>
+    P1ProjectSetupAuthorityCapability.CreateOptional(
+        builder.Configuration,
+        runtimeConnectionString));
 builder.Services.AddSingleton<TokenCredential>(_ => new WorkloadIdentityCredential(runtimeIdentity));
 builder.Services.AddSingleton<NpgsqlDataSource>(provider =>
     ProjectsConfigPostgresDataSource.Create(
@@ -313,8 +317,10 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 var app = builder.Build();
 var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
 var dbOptions = app.Services.GetRequiredService<DbContextOptions<ProjectsConfigDbContext>>();
+var p1ProjectSetupAuthority = app.Services.GetRequiredService<P1ProjectSetupAuthorityCapability>();
 await ProjectsConfigMigrator.VerifyMigrationsAppliedAsync(dataSource, dbOptions);
 await ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(dataSource);
+await p1ProjectSetupAuthority.VerifyMigrationsAppliedAsync();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
@@ -323,6 +329,7 @@ app.MapGet("/health/ready", async (ProjectsConfigDbContext db, CancellationToken
         ? Results.Ok(new { status = "ready" })
         : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
 app.MapProjectConfigEndpoints(enableBrokerRunBinding: brokerRunBindingAudienceUri is not null);
+app.MapP1ProjectSetupEndpoint();
 app.MapIssueSyncAuthority(issueSyncIdentity);
 app.MapSkillMarketplaceEndpoints();
 app.MapSkillContentEndpoints();

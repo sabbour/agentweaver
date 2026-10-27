@@ -95,6 +95,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 
 | Route | Operation |
 | --- | --- |
+| `POST /api/p1/invocations/{invocationId}/setup` | Create or exactly replay the P1 invocation's immutable Projects setup receipt using the authenticated approved TenantAdmin. Accepts no body or query and cannot select a project ID or perform cleanup. |
 | `POST /api/projects` | Create an active project and its initial configuration revision. |
 | `GET /api/projects` | List projects visible through current project roles; a tenant administrator sees all projects in that tenant. |
 | `GET /api/projects/{projectId}` | Read an authorized project summary. |
@@ -142,6 +143,59 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import` | Import selected bytes with the expected content digest and idempotency key into the existing Skills content store. |
 
 Revision conflicts and a reused run ID with a different request return conflict responses. Invalid configuration and run-selection context return client errors; missing projects and inaccessible tenant-owned projects do not disclose their existence.
+
+### P1 setup receipt endpoint
+
+`POST /api/p1/invocations/{invocationId}/setup` is a purpose-limited source
+endpoint for the upstream P1 fixture producer. It requires the existing
+authenticated bearer token, exactly one `X-Agentweaver-Tenant` header, and the
+existing `api.read`, `projects.admin`, and `projects.orchestrator` scopes. The
+service resolves that principal afresh against the separately configured
+Projects authority connection, then pins it to the existing approved issuer,
+subject, and tenant. A current TenantAdmin grant is still required.
+
+The route accepts no body or query parameters. It creates or exactly replays
+only the existing `ProjectsConfigPrivilegedAuthorityStore` setup operation.
+The response is the immutable `ProjectSetupReceipt` itself, not the store's
+readback or cleanup result. A replay rechecks current membership and
+TenantAdmin authority and returns the receipt only while the project, initial
+configuration, Orchestrator assignment, Owner assignment, and both audit
+events still match the active receipt. Cleaned, revoked, stale, or mismatched
+state is rejected. The route has no cleanup operation and does not authorize
+Environment or runtime resource creation. The existing P1 fixture runner is
+not wired to this source endpoint by this change.
+
+The endpoint's authority principal needs only the following database access:
+
+| Object | Minimum privilege | Purpose |
+| --- | --- | --- |
+| `projects_config` schema | `USAGE` | Resolve the service tables and lock function. |
+| `tenant_memberships` | `SELECT` | Resolve the authenticated actor's current active membership. |
+| `projects`, `project_configuration_revisions` | `SELECT`, `INSERT` | Recheck a replay and atomically create the project and initial configuration. |
+| `project_role_assignments` | `SELECT`, `INSERT` | Recheck the active TenantAdmin and receipt assignments; insert the initial Orchestrator and Owner assignments. |
+| `authority_audit` | `SELECT`, `INSERT` | Recheck and append the two immutable assignment events. |
+| `project_setup_operations` | `SELECT`, `INSERT` | Recheck and persist the immutable invocation receipt. |
+| `projects_config.__ef_migrations_history` | `SELECT` | Verify that the configured authority database has no pending migrations. |
+| `projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)` | `EXECUTE` | Use the existing `SECURITY DEFINER` routine to lock current membership and matching active TenantAdmin rows before the exact assignment-ID/revision check. |
+
+No membership writes, table `UPDATE`, `DELETE`, or `TRUNCATE`, sequence
+privileges, schema `CREATE`, or broad/default grants are needed. In particular,
+the setup route does not need cleanup's project or role-assignment updates.
+The direct TenantAdmin read intentionally has no row-lock clause: the existing
+security-definer routine already holds the required `FOR SHARE` locks. This
+avoids granting column `UPDATE` merely to satisfy PostgreSQL's row-lock
+privilege check. Normal startup separately verifies that the Projects runtime
+principal has no access to `project_setup_operations`.
+
+The HTTP host also verifies this exact setup-only privilege boundary at
+startup, including column-level updates, privileged role attributes or
+memberships, and schema/table/function ownership; excess capability prevents
+the route from serving. This guard does not change the standalone setup
+command. The matching
+[P1 setup authority permission inventory](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/lib/p1-project-setup-authority-plan.mjs)
+is a declarative, source-only review artifact. It is not executable SQL, does
+not select or assign a principal, and applies no live grants; any later
+deployment must separately approve and apply the exact permissions.
 
 The hosted reasoning publication contains only supported effort names and the
 binding reference, connection, revision, and verification time. AgentHost does

@@ -753,6 +753,8 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                 throw ProjectConfigException.Forbidden();
         }
 
+        // The SECURITY DEFINER lock above already holds FOR SHARE on the active TenantAdmin assignment.
+        // Keep this exact ID/revision check unlocked so setup-only callers need no assignment UPDATE grant.
         await using var exactAdmin = new NpgsqlCommand(
             """
             SELECT assignment_id, revision
@@ -763,7 +765,6 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
               AND resource_id = @tenant_id
               AND role = 'TenantAdmin'
               AND state = 'Active'
-            FOR SHARE
             """,
             connection,
             transaction);

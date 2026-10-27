@@ -518,8 +518,8 @@ runtime principal must not read setup-operation receipts.
 
 | Setting | Contract |
 | --- | --- |
-| `ConnectionStrings__ProjectsConfigAuthority` | Required by `--privileged-project-setup`. Use a password-free connection to the same Projects & Config database, with a separately approved authority principal and `SSL Mode=VerifyFull`. |
-| `ProjectsConfig__AuthorityDatabase__WorkloadIdentity__TenantId`, `ClientId`, `TokenFilePath` | Required explicit workload identity for that authority principal. Use GUID tenant/client IDs and an absolute projected-token path. The approved identity must have the database grants needed for setup and cleanup. |
+| `ConnectionStrings__ProjectsConfigAuthority` | Optional capability for the Projects HTTP host and required by `--privileged-project-setup`. When enabling the P1 setup endpoint, use exactly the password-free `Host`, `Port`, `Database`, `Username`, and `SSL Mode=VerifyFull` fields, targeting the same single host, port, and database as runtime. The role must be distinct from runtime and not `postgres` or migration-named; `Service`, `Passfile`, multi-host, and other connection options are rejected. |
+| `ProjectsConfig__AuthorityDatabase__WorkloadIdentity__TenantId`, `ClientId`, `TokenFilePath` | Required alongside the authority connection for the HTTP endpoint and command. Use the same nonempty tenant GUID and projected token path as runtime, plus a nonempty client GUID distinct from runtime and any configured migration identity. |
 
 These authority settings are not supplied by the standard runtime ConfigMap.
 To validate them, supply the optional, all-or-none
@@ -529,9 +529,48 @@ empty values that you must replace with approved values, or remove the
 whole object for runtime-only validation. The validator returns the
 combined `data` map; it does not generate or apply Kubernetes resources.
 It rejects the runtime role or client ID, migration-role names, foreign
-database targets, and password-bearing connections. The authority client
-must be separately approved and federated to the ServiceAccount; validation
-does not establish that its federation or database grants exist.
+database targets, multi-host and extra connection options, and
+password-bearing connections. The authority client must be separately
+approved and federated to the ServiceAccount; validation does not establish
+that its federation or database grants exist.
+
+On the Projects HTTP host, configure both authority settings together to
+enable `POST /api/p1/invocations/{invocationId:guid}/setup`. If neither is
+configured, that route returns `503` with
+`project_setup_authority_unavailable`; partial or unsafe configuration fails
+startup. The endpoint uses the existing `ProjectsConfig:Authentication` and
+`ProjectsConfig:PrivilegedSetup` issuer, audience, approved subject, and
+approved tenant. It does not accept a token in the request body or add a
+sign-in, client, or OAuth scope. Its separate connection must use the same
+database host, port, and database as `ConnectionStrings__ProjectsConfig`;
+the runtime connection is never used as a fallback. Startup verifies the
+authority database's migration state before serving the route.
+
+The HTTP capability needs `USAGE` on `projects_config`; `SELECT` on
+`tenant_memberships`; `SELECT` and `INSERT` on `projects`,
+`project_configuration_revisions`, `project_role_assignments`,
+`authority_audit`, and `project_setup_operations`; and `SELECT` on
+`projects_config.__ef_migrations_history`. It also needs `EXECUTE` on the
+existing `projects_config.lock_casting_authority(uuid, text, text, text,
+bigint, text, boolean)` `SECURITY DEFINER` function. That function holds the
+membership and active TenantAdmin `FOR SHARE` locks; the endpoint's exact
+assignment-ID/revision read is deliberately not another row-lock query.
+No membership writes, table `UPDATE`, `DELETE`, or `TRUNCATE`, sequence
+privileges, schema `CREATE`, or broad/default grants are needed. In
+particular, the HTTP capability cannot perform cleanup updates. Keep the
+Projects runtime principal denied all access to
+`projects_config.project_setup_operations`.
+
+The HTTP host verifies this exact setup-only privilege inventory at startup.
+The authority role must be `NOINHERIT`, have no role memberships, privileged
+role attributes, or database/schema/table/function ownership, and must not
+have column-level updates or other excess access. Excess capability prevents
+the endpoint from serving. This guard does not change the standalone
+`--privileged-project-setup` command. The matching
+[P1 setup authority permission inventory](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/lib/p1-project-setup-authority-plan.mjs)
+is declarative and source-only: it is not executable SQL, does not select or
+assign a principal, and applies no live grants. Any deployment must separately
+approve and apply the permissions.
 
 The P1 runner no longer runs `--privileged-project-setup`. It creates the
 fixture project and its Owner and Orchestrator assignments through the
@@ -539,7 +578,10 @@ public API with the signed-in setup token. The command remains available for
 operators. Don't reuse migration credentials or change Broker trust as a
 workaround for a missing authority configuration. Missing authority
 configuration fails before the command opens a database connection; it
-does not establish the historical state of an invocation. See
+does not establish the historical state of an invocation. This source endpoint
+does not change the runner's API creation or cleanup path. It returns a
+Projects setup receipt only; it is not Environment or runtime resource
+authorization. See
 [Diagnose an indeterminate P1 project setup](../guide/troubleshooting.md#diagnose-an-indeterminate-p1-project-setup)
 for the reconciliation steps.
 
