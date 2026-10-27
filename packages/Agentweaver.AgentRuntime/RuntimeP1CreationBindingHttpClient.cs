@@ -50,6 +50,7 @@ public sealed class RuntimeP1CreationBindingHttpClient(
             throw new RuntimeAuthorizationException("runtime_p1_creation_binding_invalid");
         }
         RequireBinding(creation, root, registration, timeProvider.GetUtcNow());
+        // Recheck Core after the Environment read so this result is not joined to a changed root binding.
         var after = await _core.ReadRootAsync(registration, cancellationToken).ConfigureAwait(false);
         if (after != root)
             throw new RuntimeAuthorizationException("runtime_p1_binding_changed");
@@ -67,6 +68,7 @@ public sealed class RuntimeP1CreationBindingHttpClient(
             binding.EnvironmentLifecycleGeneration);
         var sandbox = new ProviderResourceRef(
             ProviderSeam.Sandbox, binding.PlacementProviderId!, binding.PlacementUid, binding.PlacementGeneration);
+        // Every identity and receipt must join the root registration to the exact observed Pod and created resources.
         if (creation.ContractVersion != 1 || creation.Binding != root ||
             creation.EnvironmentFence != fence || creation.PodObservation is not { } pod ||
             pod.EnvironmentFence != fence || pod.Resource != sandbox ||
@@ -95,6 +97,7 @@ public sealed class RuntimeP1CreationBindingHttpClient(
             provision.ProviderResource != sandbox || provision.ResourceGeneration != sandbox.Generation ||
             provision.ProviderFencingGeneration != pod.FencingGeneration || provision.LeaseRevision is not > 0 ||
             provision.TransitionRevision is not null ||
+            // The retained receipts must form one ordered creation chain within the root invocation's lifetime.
             environment.CompletedAt > metadata.CreatedAt || metadata.CompletedAt > workspace.CreatedAt ||
             workspace.CompletedAt > provision.CreatedAt ||
             new[] { environment, metadata, workspace, provision }.Any(receipt =>
