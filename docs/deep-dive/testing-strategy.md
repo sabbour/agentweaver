@@ -171,6 +171,17 @@ with empty evidence; native passes also require completed or not-required
 cleanup, and read-only dispatch-recovery passes must report no created
 resources.
 
+The [native probe CLI contract](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/p1-native-probes/README.md#explicit-native-cli-and-provider-module)
+documents the explicit `--execute` entry point and trusted owner-provider
+module. It retains the fixed process/HTTP transports and the existing owner,
+receipt, fence, and cleanup gates; it does not supply live owner adapters,
+create fixtures, sign in, or turn controlled tests into live evidence. Its
+focused suite runs without Azure or Kubernetes access:
+
+```powershell
+node --test scripts\azure\p1-native-probes\*.test.mjs
+```
+
 The P1 runner accepts two deployment evidence paths. An images-only integration
 publication requires its saved integration deployment receipt and the current
 checkout at the exact source commit. A published release uses the exact

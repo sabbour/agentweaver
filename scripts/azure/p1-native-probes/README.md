@@ -10,9 +10,9 @@ envelope. Each probe has `passed`, `failed`, or `blocked` status, redacted
 evidence, and an explicit cleanup result. Missing or mismatched pins, fences,
 UIDs, or live evidence block; they are never inferred.
 
-This is acceptance source, not a live acceptance command. Tests use injected
-fakes only. A caller must explicitly provide an HTTPS Environment origin, same-
-cluster pins, and the dependencies below. The two owner scopes may share an
+This is acceptance tooling, not evidence that live acceptance has run. Tests use
+injected fakes only. A caller must explicitly provide an HTTPS Environment
+origin, same-cluster pins, and the dependencies below. The two owner scopes may share an
 actor, but their tenant or project/run/Environment selector must differ. Both
 selectors are retained in owner receipts, and the cross-owner lifecycle and
 binding checks count only when the actual Environment response is HTTP 403.
@@ -179,6 +179,133 @@ actorId, tenantId }`; the token is held only in memory and sent as Bearer auth
 with `X-Agentweaver-Tenant`. It must never be placed in `input`, evidence,
 logs, or result objects. `authorize` returns `{ allowed: true, journey }`,
 where `journey` must exactly match a supplied opaque fixture value.
+
+The CLI currently accepts no Environment Pod-observation provider. The
+`runtimeReadinessProvider` is only the independent current RuntimeHost
+registration/readiness read checked against the exact placement and Pod UID;
+it is not a substitute for invocation ownership or native mount evidence.
+
+## Explicit native CLI and provider module
+
+The CLI is a thin execution seam, not a fixture or authority producer. Importing
+`cli.mjs` is inert. Run it only with separate authorization for the exact native
+journeys and disposable resources; `--execute` expresses execution intent, not
+an authorization grant:
+
+```powershell
+node scripts\azure\p1-native-probes\cli.mjs --execute --input C:\p1\native-input.json --provider-module C:\p1\owner-providers.mjs --output C:\p1\new-native-envelope.json
+```
+
+All three paths are explicit local paths, resolved from the working directory.
+The output parent directory must already exist, and the output file must be
+new. There is no sign-in, provider discovery, token-file option, shell/command
+option, fixture creation, role write, deployment, or automatic retry.
+
+The explicitly selected, trusted `.mjs` module must export this named factory:
+
+```js
+export async function createP1NativeProviders({ input }) {
+  // Return independently implemented owner adapters, not receipts or test fakes.
+  return { authProvider, journeyAuthorizer, runtimeReadinessProvider };
+}
+```
+
+`input` is a structured clone of the exact JSON input described above. The
+factory may not rewrite the runner's pins. The returned object must contain
+exactly these three keys, implementing the methods and return contracts in
+[Injected dependencies](#injected-dependencies). Missing methods or extra keys
+block. In particular, it cannot supply `fetch`, `processProvider`, or `now`.
+The CLI uses Node's HTTP transport, the real clock, and
+`createP1NativeProcessProvider(input.pins.context)` without process overrides.
+It preserves the runner's original checks and the exact sealed output envelope;
+it does not add a pass, substitute receipts, or reseal edited evidence.
+
+The module is executable trusted code, not sandboxed configuration. Review and
+pin its source separately. Its import and factory must be side-effect-free:
+they may construct adapters but must not sign in, acquire credentials, create
+fixtures, contact services, start processes, or mutate resources. The factory
+is loaded before the runner validates all receipt pins; do not put setup or
+live work in it. The CLI supplies no real owner implementation. A module that
+returns scripted observations cannot produce genuine acceptance evidence.
+
+An Environment owner may expose a read-only Pod observation with exactly these
+fields:
+
+```js
+{
+  contractVersion, observedAt, environmentFence, resource, fencingGeneration,
+  provisionOperationId, clusterIdentity, namespace, claimUid, sandboxUid,
+  podName, podUid, podResourceVersion, podGeneration, podPhase,
+  workspaceAttachment: {
+    namespace, claimName, claimUid, mountPath, readOnly
+  },
+  isolationConfigurationVerified
+}
+```
+
+Such an observation is not currently an accepted CLI provider or runner
+receipt. If a future owner adapter supplies it, it must be derived only from
+validated actual Pod, Sandbox, and PVC reads, then reread the exact Pod UID and
+`resourceVersion` before returning; when present, `RuntimeEndpoint.PodUid`
+must match. Its environment fence and provision operation do not establish an
+invocation binding. Core/Projects must separately supply authoritative,
+revocation-checked invocation-to-exact-owner/resource creation authority.
+Until that contract exists and the runner validates it, invocation binding is
+missing and the probe must remain blocked; matching an owner, Pod, or provision
+operation alone is insufficient.
+
+`workspaceAttachment` and `isolationConfigurationVerified` describe
+configuration only. They do not prove that the Host process sees the actual
+mounted filesystem or that owner isolation works. Those behaviors require the
+runner's separate native `mount-file` reads/writes against the exact Pod UID
+and owner, with exact marker cleanup. Do not map the Environment observation
+or those two configuration fields to a mounted-proof result.
+
+Before genuine use, the fixture/Environment/RuntimeHost owners must supply:
+
+- Both actual disposable owner scopes with current creation and observed
+  receipts, explicit resource IDs, UIDs, current fences, expiry, invocation ID,
+  and their exact opaque allowed journeys. No primary workflow resources.
+- The complete current provider/storage/runtime/source/image receipts above,
+  including accepted startup budgets, registration and source grant, digest,
+  cluster CA identity, mount allowlists, and policy/service identities. Expected
+  pins alone are not current readback evidence.
+- An already-authorized in-memory identity source for each exact owner selector,
+  an owner-backed mapping of actions to allowed journeys, and an independent
+  current RuntimeHost registration/readiness reader bound to the exact placement
+  and Pod UID. Readiness must not echo the input receipt as a fresh observation.
+- Invocation-to-exact-resource creation authority from Core/Projects with
+  revocation checks; the Environment Pod observation and its provision
+  operation are not a substitute. Its configuration-only workspace attachment
+  fields do not substitute for native Host filesystem mount evidence.
+- The pinned kubeconfig context with normal HTTPS/TLS validation and approved
+  native access, fixed `kubectl` and `hubble` executables, and an independently
+  authenticated, owner-verified Hubble Relay for that cluster at
+  `127.0.0.1:4245`. The CLI does not install tools or open a port-forward.
+
+Missing owner adapters, live authority, receipts, or prerequisites remain
+blocked. The CLI does not expand public API authority or convert surface
+fixtures into native fixtures. Keep the separately verified deployment/source
+provenance with the input and reviewed module; the envelope checksum detects
+content changes, not producer authenticity or deployment provenance.
+
+The CLI reserves the output exclusively before loading provider code. Runner
+results are written unchanged, flushed, and closed; exit codes are `0` for
+passed, `1` for failed, and `2` for blocked. Argument/input/output/provider
+preflight failures exit `2` with a fixed stage diagnostic, not raw errors,
+credentials, or an invented probe envelope. A reserved file may remain empty
+on preflight failure; it is not evidence. If persistence fails after the runner
+returns, the CLI prints the exact redacted, sealed envelope to stdout and
+exits `2`; preserve it and do not rerun mutations just to get a new file.
+
+Cleanup remains entirely in the existing runner: exact-content marker unlink,
+current owner/Pod UID checks, Environment-only abandon/reconcile/revoke, and
+explicit uncertainty that blocks an otherwise passing result. There is no
+extra CLI cleanup, direct Kubernetes delete, or broad resource sweep. If the
+process is interrupted or the runner does not return an envelope, effects and
+cleanup are unverified: the fixture owner must reconcile the original
+invocation and exact resource identities before a retry. The CLI cannot
+recover cleanup across process termination.
 
 ## Standalone credit-denial receipt reader
 
