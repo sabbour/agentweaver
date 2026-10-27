@@ -623,7 +623,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 internalPlacementProjection.ProviderPin.NegotiatedCapabilities));
         }
         Assert.Equal(
-            authorizationReadsBeforeInternalPlacement + 3,
+            authorizationReadsBeforeInternalPlacement + 4,
             selectionObserver.AuthorizationContextReadCount);
         using (var publicRunBoundPlacement = await SendAsync(
             environment.Client, HttpMethod.Get, $"{sandboxPath}/v1/placement", runToken, [TenantId]))

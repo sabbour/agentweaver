@@ -180,17 +180,26 @@ with `X-Agentweaver-Tenant`. It must never be placed in `input`, evidence,
 logs, or result objects. `authorize` returns `{ allowed: true, journey }`,
 where `journey` must exactly match a supplied opaque fixture value.
 
-The CLI currently accepts no Environment Pod-observation provider. The
-`runtimeReadinessProvider` is only the independent current RuntimeHost
-registration/readiness read checked against the exact placement and Pod UID;
-it is not a substitute for invocation ownership or native mount evidence.
+The CLI currently accepts no Environment Pod-observation or invocation-authority
+provider. The `runtimeReadinessProvider` returns
+`{ registration, readinessReceipt, acceptedOptions }`, independently read from
+the current RuntimeHost. The runner compares registration `binding.placementUid`
+with Environment's `placement.resource.resourceId` (the SandboxClaim UID), not
+with the native Pod UID. `expectedPodUid` is a separate actual Pod identity; a
+matching claim UID does not establish that the Host is running in that Pod.
+These reads are not a substitute for invocation ownership or native mount evidence.
 
 ## Explicit native CLI and provider module
 
+**Native execution is blocked.** After validating the module shape, the CLI
+exits 2 at `native_authority_join` with a precise missing-contract diagnostic.
+It never invokes provider methods or the native runner, and leaves its exclusively
+reserved output empty; that file is not an acceptance envelope. The controlled
+runner tests below are not evidence that the CLI has this authority join.
+
 The CLI is a thin execution seam, not a fixture or authority producer. Importing
-`cli.mjs` is inert. Run it only with separate authorization for the exact native
-journeys and disposable resources; `--execute` expresses execution intent, not
-an authorization grant:
+`cli.mjs` is inert. `--execute` expresses execution intent, not an authorization
+grant. The explicit invocation syntax is:
 
 ```powershell
 node scripts\azure\p1-native-probes\cli.mjs --execute --input C:\p1\native-input.json --provider-module C:\p1\owner-providers.mjs --output C:\p1\new-native-envelope.json
@@ -217,8 +226,8 @@ exactly these three keys, implementing the methods and return contracts in
 block. In particular, it cannot supply `fetch`, `processProvider`, or `now`.
 The CLI uses Node's HTTP transport, the real clock, and
 `createP1NativeProcessProvider(input.pins.context)` without process overrides.
-It preserves the runner's original checks and the exact sealed output envelope;
-it does not add a pass, substitute receipts, or reseal edited evidence.
+It cannot execute the runner until the missing owner contracts are integrated;
+it does not add a pass, substitute receipts, or manufacture acceptance evidence.
 
 The module is executable trusted code, not sandboxed configuration. Review and
 pin its source separately. Its import and factory must be side-effect-free:
@@ -251,8 +260,14 @@ must match. Its environment fence and provision operation do not establish an
 invocation binding. Core/Projects must separately supply authoritative,
 revocation-checked invocation-to-exact-owner/resource creation authority.
 Until that contract exists and the runner validates it, invocation binding is
-missing and the probe must remain blocked; matching an owner, Pod, or provision
-operation alone is insufficient.
+missing and the CLI remains blocked; matching an owner, Pod, or provision
+operation alone is insufficient. An `authorizationId` is only a lookup key,
+never authorization. The future join must authenticate and reread current
+authority before and after the read; bind the exact invocation, session,
+Environment, claim resource and fences; and compare the separately validated
+Environment `PodObservation.podUid`, actual native Pod UID and Host
+downward-API self UID. Registration `placementUid` must remain the claim UID
+throughout that join, including replacement and stale-read rejection.
 
 `workspaceAttachment` and `isolationConfigurationVerified` describe
 configuration only. They do not prove that the Host process sees the actual

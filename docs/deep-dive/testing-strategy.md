@@ -173,9 +173,15 @@ resources.
 
 The [native probe CLI contract](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/p1-native-probes/README.md#explicit-native-cli-and-provider-module)
 documents the explicit `--execute` entry point and trusted owner-provider
-module. It retains the fixed process/HTTP transports and the existing owner,
-receipt, fence, and cleanup gates; it does not supply live owner adapters,
-create fixtures, sign in, or turn controlled tests into live evidence. Its
+module. Native CLI execution currently exits blocked at `native_authority_join`:
+the three-provider API does not consume authenticated invocation authority,
+Environment PodObservation, or Host downward-API self-identity. A module that
+implements only that API cannot produce acceptance evidence. Registration
+`placementUid` identifies the SandboxClaim resource, independently of the actual
+Pod UID. Controlled runner regressions reject substitution and replacement of
+either identity; they do not prove the missing authority/PodObservation join.
+The CLI does not supply live owner adapters, create fixtures, sign in, or turn
+controlled tests into live evidence. Its
 focused suite runs without Azure or Kubernetes access:
 
 ```powershell

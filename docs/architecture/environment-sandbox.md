@@ -176,6 +176,73 @@ that reads the same Environment lease or perform provider effects. A successful
 placement read is not authorization for a later configure or provider effect;
 those operations recheck current authority and lease state independently.
 
+### Pod configuration observations
+
+`SandboxObservation.PodObservation` is an additive, optional
+`SandboxPodObservation`. The AgentSandbox provider populates it only from
+validated current Kubernetes Sandbox, Pod, and PVC reads, never ConfigMap
+identity. It carries `contractVersion`, `observedAt`, `environmentFence`,
+`resource`, `fencingGeneration`, `provisionOperationId`, `clusterIdentity`,
+`namespace`, `claimUid`, `sandboxUid`, `podName`, `podUid`,
+`podResourceVersion`, `podGeneration`, and `podPhase`. `resource.resourceId`
+and `claimUid` identify the SandboxClaim; `sandboxUid` identifies the Sandbox
+custom resource; `podUid` identifies the distinct actual Host Pod.
+`clusterIdentity` uses the CA-set digest described above.
+
+The provider rereads the exact Pod by namespace/name after its asynchronous
+PVC, runtime-class, event, and optional endpoint reads. A changed Pod UID or
+resource version, disappearance, foreign ownership, or a deleting Pod fails
+closed. `RuntimeEndpoint.PodUid`, when present, must equal the observed Pod UID.
+Absent Pods or missing Pod generation, resource version, or phase produce no
+Pod observation. Older Kubernetes versions can omit Pod generation; it is
+never inferred from the Sandbox, claim, or lease. Legacy startup reads remain
+available, but that missing observation is incomplete evidence.
+
+`workspaceAttachment` contains only the observed configuration's PVC
+`namespace`, `claimName`, `claimUid`, `mountPath`, and `readOnly` after the
+exact owner/fence/PVC checks. `isolationConfigurationVerified` describes
+the Pod security and runtime-class configuration. Neither proves successful
+filesystem mounting, storage reads/writes, byte isolation, or actual VM
+execution inside the Host.
+
+New AgentHost Pod templates inject `AGENTWEAVER_HOST_POD_UID` exclusively
+through Kubernetes Downward API `fieldRef` (`apiVersion: v1`,
+`fieldPath: metadata.uid`). A present identity variable must use that exact
+source, not a literal or another field. Legacy Pods without this additive
+variable remain inspectable, but cannot supply Host self-identity evidence;
+the Host's separate evidence path must reject missing or mismatched values
+against the observed `podUid`.
+
+For a strict read, use authenticated
+`GET /internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}/pod-observation`.
+It retains readiness's exact run-bound Projects authorization, current Core
+session context, profile resolution, and owner-locked current lease checks.
+It returns only the typed observation with `Cache-Control: no-store`; no
+provider options, recovery descriptors, or credential values are included.
+Missing Pod/attachment/isolation configuration, expired or changed owner
+fences, inconsistent placement, or unavailable current owner state fail closed.
+Incomplete configuration observations return `409` with
+`runtime_pod_observation_unavailable`; provider and authorization failures
+retain their existing error codes.
+
+This source API is **not live evidence** and is **not an invocation-bound
+ownership receipt**. It accepts no invocation ID. Native P1 acceptance still
+needs a separately authoritative invocation-to-creation binding for the exact
+actor, owner, session, execution fence, and resource, plus actual Host/native
+mounted-storage and isolation observations. Joining those receipts is a
+separate owner integration; a caller-supplied invocation ID cannot establish
+historical resource ownership.
+
+The source `EnvironmentRuntimePlacementReader.GetPodObservationAsync<TResult>`
+overload accepts a bounded read-only verification/projection callback with the
+current readiness context and typed Pod observation. It runs under the same
+retained Environment owner lock. Core owner context and current Projects
+authorization are rechecked after the callback, then the store checks the exact
+lease again before returning. The callback must use owner-retrieved creation
+bindings, never caller-asserted provenance. It must not perform effects,
+reenter placement APIs, or reacquire the same owner advisory lock. This hook
+does not itself implement invocation issuance, consumption, or durable receipts.
+
 Before creating or replacing a Runtime registration, Orchestrator calls the
 authenticated `POST .../runtime-bootstrap/profiles/{profileId}/resolve` owner
 route with the source profile ID. Environment reads the current run-authorized

@@ -254,7 +254,7 @@ function createInput() {
             runId: owners[0].runId,
             sessionId: owners[0].sessionId,
             environmentId: owners[0].environmentId,
-            placementUid: runtimeOwners[0].sandboxUid,
+            placementUid: runtimeOwners[0].sandboxResourceId,
             placementGeneration: runtimeOwners[0].sandboxResourceGeneration,
             profileId: 'agenthost-default',
             executionFence: owners[0].executionFence,
@@ -1068,6 +1068,83 @@ test('a mismatching current runtime read blocks every probe before mutation', as
 
   assert.equal(result.overallStatus, 'blocked');
   assert.ok(result.probes.every(probe => probe.code === 'agenthost_current_readback_mismatch'));
+  assert.deepEqual(harness.authorizations, []);
+  assert.ok(harness.calls.every(call => call.method === 'GET'));
+});
+
+test('registration claim UID and native Pod UID remain independent through readiness', async () => {
+  const input = createInput();
+  const runtime = input.pins.runtimeReceipt.owners[0];
+  const harness = successDependencies(input);
+  const reads = [];
+  const readCurrent = harness.dependencies.runtimeReadinessProvider.readCurrent;
+  harness.dependencies.runtimeReadinessProvider.readCurrent = async request => {
+    reads.push(request);
+    return readCurrent(request);
+  };
+
+  const result = await runP1NativeProbes(input, harness.dependencies);
+
+  assert.equal(result.overallStatus, 'passed', JSON.stringify(result.probes));
+  assert.notEqual(runtime.sandboxResourceId, runtime.sandboxUid);
+  assert.ok(reads.length >= 2);
+  for (const request of reads) {
+    assert.equal(request.placement.resource.resourceId, runtime.sandboxResourceId);
+    assert.equal(request.expectedPodUid, runtime.sandboxUid);
+  }
+  const evidence = result.probes.find(probe => probe.name === 'agenthost-image-readiness').evidence;
+  assert.equal(evidence.placementUid, runtime.sandboxResourceId);
+  assert.equal(evidence.podUid, runtime.sandboxUid);
+});
+
+test('a pinned Pod UID cannot masquerade as the registration claim UID', async () => {
+  for (const placementUid of ['foreign-claim-uid', 'pod-uid-a']) {
+    const input = createInput();
+    input.pins.runtimeReceipt.registration.binding.placementUid = placementUid;
+    const harness = successDependencies(input);
+
+    const result = await runP1NativeProbes(input, harness.dependencies);
+
+    assert.equal(result.overallStatus, 'blocked');
+    assert.ok(result.probes.every(probe => probe.code === 'runtime_owner_fence_mismatch'));
+    assert.deepEqual(harness.calls, []);
+    assert.deepEqual(harness.recipes, []);
+    assert.deepEqual(harness.authorizations, []);
+  }
+});
+
+test('a current registration with a replaced claim UID is rejected before mutation', async () => {
+  const input = createInput();
+  const harness = successDependencies(input);
+  const readCurrent = harness.dependencies.runtimeReadinessProvider.readCurrent;
+  harness.dependencies.runtimeReadinessProvider.readCurrent = async request => {
+    const current = structuredClone(await readCurrent(request));
+    current.registration.binding.placementUid = 'replaced-claim-uid';
+    return current;
+  };
+
+  const result = await runP1NativeProbes(input, harness.dependencies);
+
+  assert.equal(result.overallStatus, 'blocked');
+  assert.ok(result.probes.every(probe => probe.code === 'agenthost_current_readback_mismatch'));
+  assert.deepEqual(harness.authorizations, []);
+  assert.ok(harness.calls.every(call => call.method === 'GET'));
+});
+
+test('a replaced native Pod UID is rejected even when the claim UID is unchanged', async () => {
+  const input = createInput();
+  const harness = successDependencies(input);
+  const run = harness.dependencies.processProvider.run;
+  harness.dependencies.processProvider.run = async request => {
+    const observed = await run(request);
+    if (request.recipeId === 'observe-sandbox') observed.pod.uid = 'replacement-pod-uid';
+    return observed;
+  };
+
+  const result = await runP1NativeProbes(input, harness.dependencies);
+
+  assert.equal(result.overallStatus, 'blocked');
+  assert.ok(result.probes.every(probe => probe.code === 'sandbox_uid_mismatch'));
   assert.deepEqual(harness.authorizations, []);
   assert.ok(harness.calls.every(call => call.method === 'GET'));
 });

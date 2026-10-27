@@ -194,6 +194,61 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
     }
 
     [Fact]
+    public async Task PlacementRejectsExpiryDuringTheFinalAuthorizationAwait()
+    {
+        var (owner, lifecycle, store) = await CreateOwnerAsync();
+        var reservation = await store.ReserveProvisionAsync(lifecycle.Fence, "provision", Intent(), default);
+        var lease = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            store, reservation.Lease.OperationId, lifecycle.Fence, Resource(reservation.Lease), true, default);
+        var clock = new PlacementClock(lease.CreatedAt!.Value);
+        var invoked = false;
+        var projects = new ControlledAuthority(owner)
+        {
+            CanReadSelection = true,
+            BeforeRead = _ =>
+            {
+                if (invoked)
+                    clock.Now = lease.LeaseExpiresAt!.Value;
+                return Task.CompletedTask;
+            }
+        };
+        var error = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
+            Reader(projects, store, clock).GetCurrentPlacementCoreAsync(
+                Caller(owner), owner.ProjectId, owner.RunId, owner.EnvironmentId,
+                runBoundRead: true, (projection, _) =>
+                {
+                    invoked = true;
+                    return Task.FromResult(projection);
+                }, default));
+        Assert.True(invoked);
+        Assert.Equal("sandbox_lease_expired", error.Code);
+    }
+
+    [Fact]
+    public async Task PlacementRejectsReadAuthorityRevokedInsideTheOwnerLockedProjection()
+    {
+        var (owner, lifecycle, store) = await CreateOwnerAsync();
+        var reservation = await store.ReserveProvisionAsync(lifecycle.Fence, "provision", Intent(), default);
+        await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            store, reservation.Lease.OperationId, lifecycle.Fence, Resource(reservation.Lease), true, default);
+        var projects = new ControlledAuthority(owner) { CanReadSelection = true };
+        var invoked = false;
+        var error = await Assert.ThrowsAsync<ProjectsConfigApiException>(() =>
+            Reader(projects, store).GetCurrentPlacementCoreAsync(
+                Caller(owner), owner.ProjectId, owner.RunId, owner.EnvironmentId,
+                runBoundRead: true, (projection, _) =>
+                {
+                    invoked = true;
+                    Assert.NotNull(projection);
+                    projects.CanWrite = false;
+                    return Task.FromResult(projection);
+                }, default));
+        Assert.True(invoked);
+        Assert.Equal("authorization_changed", error.Code);
+        Assert.Equal(0, projects.SelectionReads);
+    }
+
+    [Fact]
     public async Task ConflictingIntentAndForeignProviderCompletionAreRejected()
     {
         var (_, lifecycle, store) = await CreateOwnerAsync();
@@ -561,7 +616,8 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
 
     private EnvironmentSandboxManager Reader(
         ControlledAuthority projects,
-        ISandboxLeaseStore store)
+        ISandboxLeaseStore store,
+        TimeProvider? timeProvider = null)
     {
         var options = new CiliumEgressProviderOptions(
             "agentweaver", new Version(1, 0, 0), 1, "options-1",
@@ -576,7 +632,13 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
             new(30, 30, 30, 30, 30, 120));
         var client = new KubernetesAgentSandboxClient(_kubernetes, KubernetesTestCaCertificate.Primary);
         return new(projects, lifecycle, store, new AgentSandboxProvider(sandboxOptions, client),
-            sandboxOptions, client, options, egress);
+            sandboxOptions, client, options, egress, timeProvider: timeProvider);
+    }
+
+    private sealed class PlacementClock(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+        public override DateTimeOffset GetUtcNow() => Now;
     }
 
     private static async Task RetireAsync(EnvironmentSandboxLeaseStore store, SandboxLeaseSnapshot active)
@@ -647,12 +709,16 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         public bool CanWrite { get; set; } = true;
         public bool CanReadSelection { get; init; }
         public Func<Task>? BeforeSecondRead { get; set; }
+        public Func<int, Task>? BeforeRead { get; init; }
         public int SelectionReads { get; private set; }
 
         public async Task<ProjectAuthorizationContextResponse> GetAuthorizationContextAsync(
             CurrentCallerRequest caller, CancellationToken cancellationToken)
         {
-            if (++_reads == 2 && BeforeSecondRead is not null)
+            _reads++;
+            if (BeforeRead is not null)
+                await BeforeRead(_reads);
+            if (_reads == 2 && BeforeSecondRead is not null)
                 await BeforeSecondRead();
             return new(1, "https://module-identity.test", "module-actor", owner.TenantId, 1,
                 owner.ProjectId, owner.RunId,

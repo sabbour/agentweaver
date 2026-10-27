@@ -314,6 +314,11 @@ public sealed partial class AgentSandboxProviderTests
             Assert.Equal(1000, container["securityContext"]!["runAsGroup"]!.GetValue<int>());
             Assert.Equal("/app", container["workingDir"]!.GetValue<string>());
             Assert.Equal("/workspace/agentweaver/project", container["env"]![1]!["value"]!.GetValue<string>());
+            var podIdentity = Assert.Single(container["env"]!.AsArray(),
+                item => item!["name"]!.GetValue<string>() == "AGENTWEAVER_HOST_POD_UID")!;
+            Assert.Equal("v1", podIdentity["valueFrom"]!["fieldRef"]!["apiVersion"]!.GetValue<string>());
+            Assert.Equal("metadata.uid", podIdentity["valueFrom"]!["fieldRef"]!["fieldPath"]!.GetValue<string>());
+            Assert.Null(podIdentity["value"]);
             Assert.Equal("/state", container["volumeMounts"]![1]!["mountPath"]!.GetValue<string>());
             Assert.Equal("/tmp", container["volumeMounts"]![2]!["mountPath"]!.GetValue<string>());
             Assert.Equal("agenthost-runtime-v1", podSpec["volumes"]![3]!["configMap"]!["name"]!.GetValue<string>());
@@ -369,6 +374,79 @@ public sealed partial class AgentSandboxProviderTests
         Assert.True(observation.VmIsolationVerified);
         Assert.True(observation.WorkspaceAttachmentVerified);
         Assert.Null(observation.VerifiedNetworkGeneration);
+        var podObservation = Assert.IsType<SandboxPodObservation>(observation.PodObservation);
+        Assert.Equal(fence, podObservation.EnvironmentFence);
+        Assert.Equal(provisioned.Resource, podObservation.Resource);
+        Assert.Equal(operationId, podObservation.ProvisionOperationId);
+        Assert.Equal(provisioned.Resource.ResourceId, podObservation.ClaimUid);
+        Assert.Equal("sandbox-uid", podObservation.SandboxUid);
+        Assert.Equal("sandbox-pod", podObservation.PodName);
+        Assert.Equal("pod-uid", podObservation.PodUid);
+        Assert.Equal("1", podObservation.PodResourceVersion);
+        Assert.Equal(1, podObservation.PodGeneration);
+        Assert.Equal("Running", podObservation.PodPhase);
+        Assert.Equal(await kubernetesClient.GetClusterIdentityAsync(), podObservation.ClusterIdentity);
+        Assert.Equal(new SandboxPodWorkspaceAttachment(
+            "agentweaver", "workspace-claim", "workspace-claim-uid",
+            "/workspace/agentweaver/project", false), podObservation.WorkspaceAttachment);
+        Assert.True(podObservation.IsolationConfigurationVerified);
+        Assert.Equal(leaseCreatedAt.AddSeconds(2), podObservation.ObservedAt);
+        var longMountPath = "/workspace/agentweaver/" + new string('w', 280);
+        var longRequest = NewRequest(1, 1, Guid.NewGuid());
+        longRequest = longRequest with
+        {
+            Workspace = longRequest.Workspace with
+            {
+                Negotiation = longRequest.Workspace.Negotiation with { MountPath = longMountPath }
+            }
+        };
+        var longHandler = new FakeKubernetesHandler();
+        using (var longHttp = new HttpClient(longHandler) { BaseAddress = new Uri("https://kubernetes.example/") })
+        {
+            var longProvider = new AgentSandboxProvider(options,
+                new KubernetesAgentSandboxClient(longHttp, KubernetesTestCaCertificate.Primary),
+                new FixedTimeProvider(leaseCreatedAt.AddSeconds(2)));
+            var longResource = await longProvider.ProvisionAsync(longRequest);
+            longHandler.AddReadySandbox(longResource.Resource.ResourceId, leaseCreatedAt);
+            var longObservation = await longProvider.DescribeAsync(new(
+                fence, longResource.Resource, 1, longResource.ProviderBinding, leaseCreatedAt));
+            Assert.Equal(longMountPath, longObservation.PodObservation!.WorkspaceAttachment!.MountPath);
+        }
+        foreach (var fault in new[] { "missing", "uid", "resourceVersion" })
+        {
+            handler.PodReadbackFault = fault;
+            var failure = await Assert.ThrowsAsync<SandboxProviderException>(
+                () => provider.DescribeAsync(describeRequest));
+            Assert.Equal("provider_resource_mismatch", failure.Code);
+        }
+        handler.PodReadbackFault = null;
+        foreach (var fault in new[] { "deleting", "owner", "claim" })
+        {
+            handler.PodObservationFault = fault;
+            await Assert.ThrowsAsync<SandboxProviderException>(() => provider.DescribeAsync(describeRequest));
+        }
+        foreach (var fault in new[] { "generation", "resourceVersion", "phase" })
+        {
+            handler.PodObservationFault = fault;
+            Assert.Null((await provider.DescribeAsync(describeRequest)).PodObservation);
+        }
+        handler.PodObservationFault = null;
+        handler.PodObservationFault = "mount";
+        var withoutMount = await provider.DescribeAsync(describeRequest);
+        Assert.False(withoutMount.WorkspaceAttachmentVerified);
+        Assert.Null(withoutMount.PodObservation!.WorkspaceAttachment);
+        handler.PodObservationFault = null;
+        if (agentHostProfile)
+        {
+            foreach (var fault in new[] { "literal-pod-uid", "wrong-pod-field" })
+            {
+                handler.PodObservationFault = fault;
+                await Assert.ThrowsAsync<SandboxProviderException>(() => provider.DescribeAsync(describeRequest));
+            }
+            handler.PodObservationFault = "legacy-pod-identity";
+            Assert.NotNull((await provider.DescribeAsync(describeRequest)).PodObservation);
+            handler.PodObservationFault = null;
+        }
         var imageReady = Assert.Single(observation.StartupPhases,
             phase => phase.Phase == SandboxStartupPhase.ImageReady);
         Assert.Equal("sha256:" + new string('a', 64), imageReady.ImageDigest);
@@ -394,6 +472,7 @@ public sealed partial class AgentSandboxProviderTests
                 ReceiverConfigureEndpoint =
                     new("https://runtime-receiver.agentweaver.svc.cluster.local:8443/runtime/v1/configure")
             }, endpointObservation.RuntimeEndpoint);
+            Assert.Equal(endpointObservation.RuntimeEndpoint!.PodUid, endpointObservation.PodObservation!.PodUid);
             Assert.Equal(SandboxObservedState.Pending, endpointObservation.State);
             foreach (var fault in new[]
             {
@@ -621,6 +700,8 @@ public sealed partial class AgentSandboxProviderTests
 
         public bool ImageAlreadyPresent { get; init; }
         public string ImageEventPodUid { get; set; } = "pod-uid";
+        public string? PodReadbackFault { get; set; }
+        public string? PodObservationFault { get; set; }
 
         public void AddReadySandbox(string claimUid, DateTimeOffset leaseCreatedAt)
         {
@@ -662,6 +743,8 @@ public sealed partial class AgentSandboxProviderTests
                             name = "sandbox-pod",
                             @namespace = "agentweaver",
                             uid = "pod-uid",
+                            resourceVersion = "1",
+                            generation = 1,
                             labels,
                             ownerReferences = new[] { new { uid = "sandbox-uid", controller = true } }
                         },
@@ -847,7 +930,41 @@ public sealed partial class AgentSandboxProviderTests
                                 string.Equals(value?.GetValue<string>(), pair.Value, StringComparison.Ordinal)))
                             filteredPods.Add(item!.DeepClone());
                     }
+                    foreach (var item in filteredPods)
+                    {
+                        switch (PodObservationFault)
+                        {
+                            case "generation": item!["metadata"]!["generation"] = null; break;
+                            case "resourceVersion": item!["metadata"]!["resourceVersion"] = null; break;
+                            case "phase": item!["status"]!["phase"] = null; break;
+                            case "deleting": item!["metadata"]!["deletionTimestamp"] = "2026-10-06T11:59:59Z"; break;
+                            case "owner": item!["metadata"]!["ownerReferences"]![0]!["uid"] = "foreign"; break;
+                            case "claim": item!["metadata"]!["labels"]!["agents.x-k8s.io/claim-uid"] = "foreign"; break;
+                            case "mount": item!["spec"]!["containers"]![0]!["volumeMounts"]![0]!["mountPath"] = "/wrong"; break;
+                            case "literal-pod-uid":
+                                item!["spec"]!["containers"]![0]!["env"]!.AsArray()[^1] =
+                                    new JsonObject { ["name"] = "AGENTWEAVER_HOST_POD_UID", ["value"] = "pod-uid" };
+                                break;
+                            case "wrong-pod-field":
+                                item!["spec"]!["containers"]![0]!["env"]!.AsArray()[^1]!["valueFrom"]!["fieldRef"]!["fieldPath"] =
+                                    "metadata.name";
+                                break;
+                            case "legacy-pod-identity":
+                                var environment = item!["spec"]!["containers"]![0]!["env"]!.AsArray();
+                                environment.RemoveAt(environment.Count - 1);
+                                break;
+                        }
+                    }
                     return JsonResponse(HttpStatusCode.OK, new JsonObject { ["items"] = filteredPods });
+                }
+                if (path == "api/v1/namespaces/agentweaver/pods/sandbox-pod")
+                {
+                    if (_podList is null || PodReadbackFault == "missing")
+                        return new HttpResponseMessage(HttpStatusCode.NotFound);
+                    var pod = _podList["items"]![0]!.DeepClone();
+                    if (PodReadbackFault is "uid" or "resourceVersion")
+                        pod["metadata"]![PodReadbackFault] = "changed";
+                    return JsonResponse(HttpStatusCode.OK, pod);
                 }
                 if (path.EndsWith("/sandboxclaims", StringComparison.Ordinal))
                 {

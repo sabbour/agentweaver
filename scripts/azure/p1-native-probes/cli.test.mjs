@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { loadP1NativeProviders } from './cli.mjs';
-import { validateP1NativeProbeResults } from '../../harness-shared/p1-acceptance-result.mjs';
 
 const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
 const input = {
@@ -67,19 +66,17 @@ test('importing the CLI is inert and help requires no inputs or providers', () =
   assert.match(result.stdout, /--execute.*--provider-module/);
 });
 
-test('standalone CLI retains a sealed blocked envelope for missing genuine receipts', async t => {
+test('standalone CLI blocks missing invocation and Pod identity join without executing providers or claiming evidence', async t => {
   const f = await fixture(t);
   const result = execute(f.args);
   assert.equal(result.status, 2, result.stderr);
-  assert.equal(result.stderr, '');
-  const envelope = JSON.parse(await readFile(f.outputPath, 'utf8'));
-  validateP1NativeProbeResults([envelope]);
-  assert.equal(envelope.overallStatus, 'blocked');
-  assert.equal(envelope.probes.length, 4);
-  assert.ok(envelope.probes.every(probe =>
-    probe.status === 'blocked' && probe.code === 'provider_receipt_mismatch'
-      && probe.cleanup.status === 'not-started'));
-  assert.doesNotMatch(JSON.stringify(envelope), /must not acquire|must-not-replace/);
+  assert.match(result.stderr, /blocked at native_authority_join/);
+  assert.match(result.stderr, /authenticated invocation-bound Environment authority/);
+  assert.match(result.stderr, /PodObservation and Host downward-API Pod UID/);
+  assert.match(result.stderr, /authorizationId alone is lookup-only/);
+  assert.doesNotMatch(result.stderr, /must not acquire|must-not-replace/);
+  assert.equal(result.stdout, '');
+  assert.equal(await readFile(f.outputPath, 'utf8'), '');
 });
 
 test('provider factory cannot rewrite pins or replace fixed transports or the clock', async t => {
