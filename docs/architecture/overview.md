@@ -25,7 +25,9 @@ before effects and retains its own operation/result link. Registration and
 provider reservation are not provider-resource proof. The separate
 [creation-evidence read and Host consumer](../reference/p1-creation-evidence.md)
 join actual retained records to current Pod and mount observations; native CLI
-consumption is not wired. These reads do not establish a cross-service transaction.
+consumption remains blocked on native no-send, cursor, effect/dispatch, and
+other runner proof slots. These reads do not establish a cross-service
+transaction or live acceptance.
 
 The Identity Broker is the host for caller authentication and secret-redemption authorization. It constructs the Key Vault backend and the authorization wrapper; it is a service host in source, not a claim that a service is deployed.
 

@@ -2,12 +2,37 @@ import { isDeepStrictEqual } from 'node:util';
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HASH = /^[a-f0-9]{64}$/;
-const missingCreation = 'environment_creation_binding_read_contract_missing';
+const creationGap = 'native_no_send_effect_proof_missing';
 const bindingFields = [
   'contractVersion', 'coreInvocationId', 'setupInvocationId', 'setupReceiptHash',
   'tenantId', 'projectId', 'runId', 'rootSessionId', 'actorIssuer', 'actorSubject',
   'membershipId', 'membershipRevision', 'acceptedSelectionHash', 'executionFence',
   'rootStateVersion', 'acceptedAt',
+];
+const creationFields = [
+  'contractVersion', 'binding', 'environmentFence', 'environment', 'workspaceMetadata',
+  'workspaceProvision', 'sandboxProvision', 'podObservation',
+];
+const receiptFields = [
+  'operationId', 'resourceKind', 'resourceId', 'resourceGeneration',
+  'providerFencingGeneration', 'transitionRevision', 'leaseRevision',
+  'providerResource', 'createdAt', 'completedAt',
+];
+const podFields = [
+  'contractVersion', 'observedAt', 'environmentFence', 'resource', 'fencingGeneration',
+  'provisionOperationId', 'clusterIdentity', 'namespace', 'claimUid', 'sandboxUid',
+  'podName', 'podUid', 'podResourceVersion', 'podGeneration', 'podPhase',
+  'workspaceAttachment', 'isolationConfigurationVerified',
+];
+const hostFields = [
+  'contractVersion', 'observedAt', 'readiness', 'environmentPodObservation',
+  'environmentPodObservationHash', 'workspaceMount', 'registrationHash', 'sourceHash',
+  'nativeSessionHash',
+];
+const hostEnvelopeFields = ['contractVersion', 'observedAt', 'creation', 'host'];
+const workspaceMountFields = [
+  'contractVersion', 'observedAt', 'podUid', 'mountPath', 'mountId', 'deviceMajor',
+  'deviceMinor', 'directoryInode', 'fileSystemType', 'readOnly', 'mountInfoSha256',
 ];
 const positive = value => Number.isSafeInteger(value) && value > 0;
 const text = value => typeof value === 'string' && value.length > 0 &&
@@ -21,6 +46,25 @@ const record = value => value !== null && typeof value === 'object' && !Array.is
 const requireValue = (condition, code) => {
   if (!condition) throw new Error(code);
 };
+const exactRecord = (value, fields) => record(value) &&
+  Object.keys(value).length === fields.length && fields.every(key => Object.hasOwn(value, key));
+
+function timestampTicks(value) {
+  if (typeof value !== 'string') return null;
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,7}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) return null;
+  const milliseconds = Date.parse(`${match[1]}${match[3]}`);
+  if (!Number.isFinite(milliseconds)) return null;
+  return BigInt(milliseconds) * 10_000n + BigInt((match[2] ?? '').padEnd(7, '0'));
+}
+
+function requireEnvironmentFence(fence, binding) {
+  requireValue(exactRecord(fence, ['owner', 'lifecycleGeneration']) &&
+    exactRecord(fence.owner, ['tenantId', 'projectId', 'runId', 'environmentId']) &&
+    ['tenantId', 'projectId', 'runId', 'environmentId'].every(key => fence.owner[key] === binding[key]) &&
+    fence.lifecycleGeneration === binding.environmentLifecycleGeneration,
+  'native_environment_fence_mismatch');
+}
 
 function createOwnerReader(owner) {
   requireValue(record(owner) && typeof owner.getAuthorization === 'function' &&
@@ -48,7 +92,9 @@ function createOwnerReader(owner) {
       });
       try {
         requireValue(response.status === 200 && !response.redirected &&
-          /^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type') ?? ''),
+          /^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '') &&
+          (response.headers.get('cache-control') ?? '').split(',')
+            .some(directive => /^no-store(?:\s*;|$)/i.test(directive.trim())),
         'native_owner_response_invalid');
         requireValue(response.body !== null, 'native_owner_body_missing');
         const reader = response.body.getReader();
@@ -103,6 +149,7 @@ function requireCore(provenance, binding) {
     ['coreInvocationId', 'setupInvocationId', 'membershipId'].every(key => guid(provenance[key])) &&
     ['membershipRevision', 'rootStateVersion', 'executionFence'].every(key => positive(provenance[key])) &&
     hash(provenance.setupReceiptHash) && hash(provenance.acceptedSelectionHash) &&
+    timestampTicks(provenance.acceptedAt) !== null &&
     currentTime(provenance.acceptedAt), 'native_core_binding_invalid');
   requireValue(['tenantId', 'projectId', 'runId', 'executionFence', 'acceptedSelectionHash']
     .every(key => provenance[key] === binding[key]) &&
@@ -113,9 +160,13 @@ function requireCore(provenance, binding) {
 function requirePod(pod, binding, clusterIdentity) {
   const owner = pod?.environmentFence?.owner;
   const attachment = pod?.workspaceAttachment;
-  requireValue(pod?.contractVersion === 1 && currentTime(pod.observedAt) &&
+  requireValue(exactRecord(pod, podFields) && pod.contractVersion === 1 &&
+    currentTime(pod.observedAt) && timestampTicks(pod.observedAt) !== null &&
     record(owner) && ['tenantId', 'projectId', 'runId', 'environmentId']
       .every(key => owner[key] === binding[key]) &&
+    exactRecord(pod.environmentFence, ['owner', 'lifecycleGeneration']) &&
+    exactRecord(owner, ['tenantId', 'projectId', 'runId', 'environmentId']) &&
+    exactRecord(pod.resource, ['seam', 'providerId', 'resourceId', 'generation']) &&
     pod.environmentFence.lifecycleGeneration === binding.environmentLifecycleGeneration &&
     pod.resource?.providerId === binding.placementProviderId &&
     pod.resource.resourceId === binding.placementUid &&
@@ -128,10 +179,17 @@ function requirePod(pod, binding, clusterIdentity) {
       .every(key => text(pod[key])) &&
     positive(pod.podGeneration) && pod.podPhase === 'Running' &&
     pod.isolationConfigurationVerified === true &&
-    attachment?.namespace === pod.namespace && text(attachment.claimName) &&
+    exactRecord(attachment, ['namespace', 'claimName', 'claimUid', 'mountPath', 'readOnly']) &&
+    attachment.namespace === pod.namespace && text(attachment.claimName) &&
     text(attachment.claimUid) && typeof attachment.mountPath === 'string' &&
     attachment.mountPath.startsWith('/') && attachment.mountPath.length <= 512 &&
     typeof attachment.readOnly === 'boolean', 'native_environment_pod_mismatch');
+}
+
+function withoutPodObservedAt(creation) {
+  const copy = structuredClone(creation);
+  delete copy.podObservation.observedAt;
+  return copy;
 }
 
 function withoutObservedAt(value) {
@@ -139,19 +197,101 @@ function withoutObservedAt(value) {
   return rest;
 }
 
+function requireEnvironmentCreation(creation, provenance, binding, clusterIdentity) {
+  requireValue(exactRecord(creation, creationFields) && creation.contractVersion === 1 &&
+    exactRecord(creation.binding, bindingFields) &&
+    isDeepStrictEqual(creation.binding, provenance),
+  'native_environment_creation_binding_mismatch');
+  requireEnvironmentFence(creation.environmentFence, binding);
+  const pod = creation.podObservation;
+  requirePod(pod, binding, clusterIdentity);
+
+  const receipts = [
+    creation.environment, creation.workspaceMetadata, creation.workspaceProvision,
+    creation.sandboxProvision,
+  ];
+  requireValue(receipts.every(receipt => exactRecord(receipt, receiptFields) &&
+    guid(receipt.operationId) && text(receipt.resourceKind) && text(receipt.resourceId) &&
+    (receipt.resourceGeneration === null || Number.isSafeInteger(receipt.resourceGeneration)) &&
+    (receipt.providerFencingGeneration === null || positive(receipt.providerFencingGeneration)) &&
+    (receipt.transitionRevision === null || positive(receipt.transitionRevision)) &&
+    (receipt.leaseRevision === null || positive(receipt.leaseRevision)) &&
+    (receipt.providerResource === null ||
+      exactRecord(receipt.providerResource, ['seam', 'providerId', 'resourceId', 'generation']) &&
+      ['sandbox', 'storage'].includes(receipt.providerResource.seam) &&
+      text(receipt.providerResource.providerId) && text(receipt.providerResource.resourceId) &&
+      positive(receipt.providerResource.generation)) &&
+    timestampTicks(receipt.createdAt) !== null && timestampTicks(receipt.completedAt) !== null &&
+    timestampTicks(receipt.createdAt) >= timestampTicks(provenance.acceptedAt) / 10n * 10n &&
+    timestampTicks(receipt.completedAt) >= timestampTicks(receipt.createdAt) &&
+    timestampTicks(receipt.completedAt) <= BigInt(Date.now()) * 10_000n),
+  'native_environment_creation_receipt_invalid');
+
+  const [environment, metadata, workspace, sandbox] = receipts;
+  requireValue(environment.resourceKind === 'Environment' &&
+    environment.resourceId === binding.environmentId &&
+    environment.resourceGeneration === null && environment.providerFencingGeneration === null &&
+    environment.transitionRevision === null && environment.leaseRevision === null &&
+    environment.providerResource === null &&
+    metadata.resourceKind === 'WorkspaceVolumeMetadata' &&
+    metadata.resourceGeneration === 0 && metadata.transitionRevision > 0 &&
+    metadata.providerResource === null && metadata.providerFencingGeneration === null &&
+    metadata.leaseRevision === null &&
+    workspace.resourceKind === 'WorkspaceVolume' && workspace.resourceId === metadata.resourceId &&
+    positive(workspace.resourceGeneration) &&
+    workspace.providerResource?.seam === 'storage' &&
+    workspace.providerResource.generation === workspace.resourceGeneration &&
+    positive(workspace.transitionRevision) &&
+    workspace.transitionRevision > metadata.transitionRevision &&
+    workspace.providerFencingGeneration === null && workspace.leaseRevision === null &&
+    sandbox.resourceKind === 'Sandbox' &&
+    sandbox.operationId === pod.provisionOperationId &&
+    sandbox.resourceId === pod.provisionOperationId &&
+    sandbox.resourceId !== binding.placementUid &&
+    sandbox.providerResource?.seam === 'sandbox' &&
+    sandbox.providerResource.providerId === binding.placementProviderId &&
+    sandbox.providerResource.resourceId === binding.placementUid &&
+    sandbox.providerResource.generation === binding.placementGeneration &&
+    sandbox.resourceGeneration === binding.placementGeneration &&
+    sandbox.providerFencingGeneration === pod.fencingGeneration &&
+    positive(sandbox.leaseRevision) &&
+    sandbox.leaseRevision <= binding.environmentLeaseRevision &&
+    sandbox.transitionRevision === null,
+  'native_environment_creation_receipt_mismatch');
+  const instants = receipts.map(receipt => ({
+    created: timestampTicks(receipt.createdAt),
+    completed: timestampTicks(receipt.completedAt),
+  }));
+  requireValue(instants[0].completed <= instants[1].created &&
+    instants[1].completed <= instants[2].created &&
+    instants[2].completed <= instants[3].created,
+  'native_environment_creation_sequence_mismatch');
+}
+
 function requireHost(host, pod, registration) {
   const readiness = host?.readiness;
   const mount = host?.workspaceMount;
-  requireValue(host?.contractVersion === 1 && currentTime(host.observedAt) &&
+  const readinessFields = [
+    'contractVersion', 'runtimeInstanceId', 'registrationRevision', 'executionFence',
+    'image', 'startupPhases', 'sourceGrant',
+  ];
+  requireValue(exactRecord(host, hostFields) && host.contractVersion === 1 &&
+    currentTime(host.observedAt) && timestampTicks(host.observedAt) !== null &&
+    exactRecord(readiness, readinessFields.concat(
+      ['resumeCache', 'recovery'].filter(key => Object.hasOwn(readiness ?? {}, key)))) &&
     readiness?.contractVersion === 1 &&
     readiness.runtimeInstanceId === registration.runtimeInstanceId &&
     readiness.registrationRevision === registration.revision &&
     readiness.executionFence === registration.binding.executionFence &&
     record(host.environmentPodObservation) &&
+    currentTime(host.environmentPodObservation.observedAt) &&
+    timestampTicks(host.environmentPodObservation.observedAt) !== null &&
     isDeepStrictEqual(withoutObservedAt(host.environmentPodObservation), withoutObservedAt(pod)) &&
+    exactRecord(host.environmentPodObservation, podFields) &&
     ['environmentPodObservationHash', 'registrationHash', 'sourceHash', 'nativeSessionHash']
       .every(key => hash(host[key])) &&
-    mount?.contractVersion === 1 && currentTime(mount.observedAt) &&
+    exactRecord(mount, workspaceMountFields) && mount.contractVersion === 1 &&
+    currentTime(mount.observedAt) && timestampTicks(mount.observedAt) !== null &&
     mount.podUid === pod.podUid && mount.mountPath === pod.workspaceAttachment.mountPath &&
     mount.readOnly === pod.workspaceAttachment.readOnly &&
     positive(mount.mountId) && positive(mount.directoryInode) &&
@@ -191,15 +331,25 @@ export function createP1NativeProviders({ input }, trusted) {
     const bindingPath = `${prefix}/p1-invocation-binding`;
     const provenance = await core(bindingPath);
     requireCore(provenance, binding);
-    const podPath = `${prefix}/environments/${encodeURIComponent(binding.environmentId)}/coordination/sessions/${encodeURIComponent(binding.sessionId)}/runtime-bootstrap/profiles/${encodeURIComponent(binding.profileId)}/pod-observation`;
-    const pod = await environment(podPath);
-    requirePod(pod, binding, clusterIdentity);
-    const evidence = await host('/runtime/v1/readiness/evidence');
-    requireHost(evidence, pod, before);
-    const afterPod = await environment(podPath);
-    requirePod(afterPod, binding, clusterIdentity);
-    requireValue(isDeepStrictEqual(withoutObservedAt(pod), withoutObservedAt(afterPod)),
-      'native_environment_observation_changed');
+    const creationPath = `${prefix}/environments/${encodeURIComponent(binding.environmentId)}/coordination/sessions/${encodeURIComponent(binding.sessionId)}/runtime-bootstrap/profiles/${encodeURIComponent(binding.profileId)}/p1-creation-binding`;
+    const creation = await environment(creationPath);
+    requireEnvironmentCreation(creation, provenance, binding, clusterIdentity);
+    const evidence = await host('/runtime/v1/readiness/p1-evidence');
+    requireValue(exactRecord(evidence, hostEnvelopeFields) && evidence.contractVersion === 1 &&
+      currentTime(evidence.observedAt) && timestampTicks(evidence.observedAt) !== null,
+    'native_host_p1_envelope_invalid');
+    requireEnvironmentCreation(evidence.creation, provenance, binding, clusterIdentity);
+    requireValue(isDeepStrictEqual(withoutPodObservedAt(creation), withoutPodObservedAt(evidence.creation)),
+      'native_environment_creation_changed');
+    requireHost(evidence.host, creation.podObservation, before);
+    requireValue(isDeepStrictEqual(
+      withoutObservedAt(evidence.creation.podObservation),
+      withoutObservedAt(evidence.host.environmentPodObservation)),
+    'native_host_pod_observation_mismatch');
+    const afterCreation = await environment(creationPath);
+    requireEnvironmentCreation(afterCreation, provenance, binding, clusterIdentity);
+    requireValue(isDeepStrictEqual(withoutPodObservedAt(creation), withoutPodObservedAt(afterCreation)),
+      'native_environment_creation_changed');
     const afterProvenance = await core(bindingPath);
     requireCore(afterProvenance, binding);
     requireValue(isDeepStrictEqual(provenance, afterProvenance), 'native_core_binding_changed');
@@ -207,14 +357,19 @@ export function createP1NativeProviders({ input }, trusted) {
     requireRegistration(after, runtimeInstanceId, actor);
     requireValue(isDeepStrictEqual(before, after), 'native_registration_changed');
 
-    // #2425 retains creation links but has no stable authenticated read contract.
-    // Never invent a route or enroll existing resources from caller receipts.
     return {
-      status: 'blocked', code: missingCreation,
+      status: 'blocked', code: creationGap,
+      acceptanceEvidence: false,
+      nativeNoSendProven: false,
       partialObservation: {
         coreInvocationId: provenance.coreInvocationId,
         runtimeInstanceId, registrationRevision: before.revision,
-        claimUid: pod.claimUid, podUid: pod.podUid,
+        environmentOperationId: creation.environment.operationId,
+        workspaceMetadataOperationId: creation.workspaceMetadata.operationId,
+        workspaceProvisionOperationId: creation.workspaceProvision.operationId,
+        sandboxProvisionOperationId: creation.sandboxProvision.operationId,
+        sandboxClaimUid: creation.sandboxProvision.providerResource.resourceId,
+        podUid: creation.podObservation.podUid,
       },
     };
   }
@@ -222,7 +377,7 @@ export function createP1NativeProviders({ input }, trusted) {
   return {
     authProvider: trusted.authProvider,
     journeyAuthorizer: {
-      async authorize() { return { allowed: false, code: missingCreation }; },
+      async authorize() { return { allowed: false, code: creationGap }; },
     },
     runtimeReadinessProvider: {
       async readCurrent() { throw new Error('native_readiness_authority_join_incomplete'); },

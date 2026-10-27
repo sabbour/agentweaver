@@ -75,11 +75,52 @@ Ordinary `/runtime/v1/readiness`, `/health/ready`, and
 `/runtime/v1/readiness/evidence` are unchanged. They do not require P1 creation
 records and must not be relabeled as invocation-specific acceptance.
 
+## Scoped downstream consumer
+
+The source-owned consumer in
+`scripts/azure/p1-native-probes/owner-providers.mjs` reads the Environment
+creation-binding route before Host, validates the Host P1-evidence envelope
+against that creation read, reads Environment creation again, then rechecks the
+Core root binding and complete Runtime registration. It requires the
+authenticated owner response to carry `Cache-Control: no-store`; responses are
+bounded, redirect-free, and checked against the exact record fields and
+nullability in the C# contracts.
+
+The join matches the entire Environment `binding` to Core and registration,
+checks the trusted actor, tenant, selection, root session and fences, validates
+all four immutable completed operations and their timestamp ordering, and
+joins the Environment fence to the provider-observed Pod. For Sandbox creation,
+the planned `resourceId` is the operation GUID. Its distinct
+`providerResource.resourceId` is the provider-returned SandboxClaim UID and is
+matched to registration placement and the Pod's claim/resource identity. It is
+not treated as the Pod UID. Host's existing readiness, Pod, and mount checks
+remain separate joins. Across the before/Host/after bracket, only Pod
+`observedAt` may vary; all creation identities and other fields must remain
+stable.
+
+A successful owner join is still only partial observation. It returns
+`status: "blocked"`, `code: "native_no_send_effect_proof_missing"`,
+`acceptanceEvidence: false`, and `nativeNoSendProven: false`, with a small
+sanitized summary of the joined operation IDs and claim/Pod identities. The
+journey authorizer continues to deny, the readiness adapter throws, and the
+CLI always exits blocked with an empty reserved output; it does not call auth,
+journey, readiness, or process methods or execute the runner. A fake
+`passed`/`acceptanceEvidence: true` provider result cannot bypass that block.
+Missing or invalid legacy authority keeps the generic missing-authority
+diagnostic.
+
+This slice does not provide the native no-send, cursor, effect, or dispatch
+acknowledgments or the remaining runner proof slots. It does not demonstrate
+child execution, network datapath enforcement, storage-byte isolation, generic
+replacement, or live acceptance. Controlled fixtures validate contract
+handling only; no live owner, database, cluster, or P1 run is used.
+
 ## Evidence limits
 
 The successful read joins actual retained creation provenance to current
 owner-authorized configuration observations and the Host's existing
 read-only mount observation. It is not proof of child execution, a native
 no-send check, network datapath enforcement, storage byte isolation, or a
-released/deployed product. Native CLI consumption is a separate integration;
-these source routes do not by themselves remove its acceptance blocker.
+released/deployed product. The source-owned native CLI consumer now performs
+this join, but remains blocked on the missing native proof slots described
+above; owner reads alone do not remove its acceptance blocker.
