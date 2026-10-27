@@ -136,6 +136,10 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   const jobs = parsed.jobs;
   assert.deepEqual(jobs.foundation.needs, ['changes', 'harness', 'go', 'images', 'node', 'web', 'dotnet', 'coverage']);
   const harnessCommands = jobs.harness.steps.map((step) => step.run ?? '').join('\n');
+  assert.match(harnessCommands, /npm run test:harness(?:\s|$)/);
+  const packageManifest = JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'));
+  assert.ok(packageManifest.scripts['test:harness'].split(/\s+/)
+    .includes('scripts/azure/p1-native-probes/*.test.mjs'));
   assert.match(harnessCommands, /npm run test:harness:signin-browser/);
   assert.doesNotMatch(harnessCommands, /--experimental-test-coverage|--coverage|run coverage/);
   assert.equal(jobs.foundation.if, '${{ always() }}');

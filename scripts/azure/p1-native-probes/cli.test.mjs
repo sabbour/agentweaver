@@ -153,3 +153,27 @@ test('provider contract and load errors block without leaking raw provider failu
     assert.equal(await readFile(f.outputPath, 'utf8'), '');
   }
 });
+
+test('optional owner reads report missing creation contract and cannot unblock native execution', async t => {
+  for (const result of [
+    { status: 'blocked', code: 'environment_creation_binding_read_contract_missing' },
+    { status: 'passed' },
+  ]) {
+    const source = factory.replace('authProvider:', `nativeAuthorityProvider: {
+      async readCurrent() { return ${JSON.stringify(result)}; }
+    }, authProvider:`);
+    const f = await fixture(t, source);
+    const output = execute(f.args);
+    assert.equal(output.status, 2);
+    assert.match(output.stderr, /blocked at native_authority_join/);
+    if (result.status === 'blocked') assert.match(output.stderr, /creation-binding read/);
+    assert.equal(await readFile(f.outputPath, 'utf8'), '');
+  }
+  const f = await fixture(t, factory.replace('authProvider:', `nativeAuthorityProvider: {
+    async readCurrent() { throw new Error('private-owner-response'); }
+  }, authProvider:`));
+  const output = execute(f.args);
+  assert.equal(output.status, 2);
+  assert.doesNotMatch(output.stderr, /private-owner-response/);
+  assert.equal(await readFile(f.outputPath, 'utf8'), '');
+});
