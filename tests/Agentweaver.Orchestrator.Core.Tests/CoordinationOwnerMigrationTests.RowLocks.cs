@@ -6,6 +6,92 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 
 public sealed partial class CoordinationOwnerMigrationTests
 {
+    [Fact]
+    public async Task RuntimeEvidenceLedgerIsInsertReadOnlyAndRejectsEveryMutation()
+    {
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        var role = "runtime_evidence_" + Guid.NewGuid().ToString("N");
+        var receiptId = Guid.NewGuid();
+        var attemptId = Guid.NewGuid();
+        var payloadHash = new string('a', 64);
+        async Task ExecuteAsync(string sql)
+        {
+            await using var command = new NpgsqlCommand(sql, connection, transaction);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        await ExecuteAsync($"""
+            CREATE ROLE "{role}" NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+            GRANT USAGE ON SCHEMA "{_schema}" TO "{role}";
+            GRANT SELECT, INSERT ON "{_schema}".maf_runtime_evidence_receipts TO "{role}";
+            INSERT INTO "{_schema}".accepted_runs
+                (project_id, run_id, accepted_selection, accepted_selection_hash,
+                 accepted_by_issuer, accepted_by_subject)
+            VALUES ('runtime-evidence-project', 'runtime-evidence-run', jsonb_build_object(),
+                    repeat('a', 64), 'issuer', 'actor');
+            SET LOCAL ROLE "{role}";
+            """);
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".maf_runtime_evidence_receipts
+                (project_id, run_id, receipt_id, receipt_kind, attempt_id, payload_hash, receipt_json)
+            VALUES ('runtime-evidence-project', 'runtime-evidence-run', @receipt, 'numeric-limit-denial',
+                @attempt, @hash, jsonb_build_object('projectId', 'runtime-evidence-project',
+                    'runId', 'runtime-evidence-run', 'receiptId', @receipt::text,
+                    'canonicalPayloadHash', @hash))
+            """, connection, transaction))
+        {
+            insert.Parameters.AddWithValue("receipt", receiptId);
+            insert.Parameters.AddWithValue("attempt", attemptId);
+            insert.Parameters.AddWithValue("hash", payloadHash);
+            Assert.Equal(1, await insert.ExecuteNonQueryAsync());
+        }
+        await using (var read = new NpgsqlCommand($"""
+            SELECT receipt_id FROM "{_schema}".maf_runtime_evidence_receipts
+            WHERE project_id = 'runtime-evidence-project' AND run_id = 'runtime-evidence-run'
+              AND attempt_id = @attempt
+            """, connection, transaction))
+        {
+            read.Parameters.AddWithValue("attempt", attemptId);
+            Assert.Equal(receiptId, await read.ExecuteScalarAsync());
+        }
+        await using (var privilege = new NpgsqlCommand($"""
+            SELECT has_table_privilege(current_user, @table, 'UPDATE'),
+                has_table_privilege(current_user, @table, 'DELETE'),
+                has_table_privilege(current_user, @table, 'TRUNCATE')
+            """, connection, transaction))
+        {
+            privilege.Parameters.AddWithValue("table", $"{_schema}.maf_runtime_evidence_receipts");
+            await using var reader = await privilege.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.False(reader.GetBoolean(0));
+            Assert.False(reader.GetBoolean(1));
+            Assert.False(reader.GetBoolean(2));
+        }
+        await ExecuteAsync("RESET ROLE");
+        await transaction.SaveAsync("before_evidence_update");
+        var update = await Assert.ThrowsAsync<PostgresException>(() => ExecuteAsync($"""
+            UPDATE "{_schema}".maf_runtime_evidence_receipts SET payload_hash = repeat('b', 64)
+            WHERE receipt_id = '{receiptId:D}'
+            """));
+        Assert.Equal(PostgresErrorCodes.RaiseException, update.SqlState);
+        await transaction.RollbackAsync("before_evidence_update");
+        await transaction.SaveAsync("before_evidence_delete");
+        var delete = await Assert.ThrowsAsync<PostgresException>(() => ExecuteAsync($"""
+            DELETE FROM "{_schema}".maf_runtime_evidence_receipts WHERE receipt_id = '{receiptId:D}'
+            """));
+        Assert.Equal(PostgresErrorCodes.RaiseException, delete.SqlState);
+        await transaction.RollbackAsync("before_evidence_delete");
+        await transaction.SaveAsync("before_evidence_truncate");
+        var truncate = await Assert.ThrowsAsync<PostgresException>(() => ExecuteAsync(
+            $"""TRUNCATE TABLE "{_schema}".maf_runtime_evidence_receipts"""));
+        Assert.Equal(PostgresErrorCodes.RaiseException, truncate.SqlState);
+        await transaction.RollbackAsync("before_evidence_truncate");
+        await transaction.RollbackAsync();
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+    }
+
     public static IEnumerable<object[]> InvalidRowLockGuards()
     {
         foreach (var (table, column) in new[]

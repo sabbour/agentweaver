@@ -9,8 +9,8 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests for the plan gates. They need no database: every gate throws before a connection opens.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "3e33e6b4f4f9eb981a12e937133d6b0cf25328ed56039cc077ee3470c6fb61d2";
-    private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38];
+    private const string ReviewedPlanSha256 = "c1283c2ab1071d4757aa5ece7fb8347bc80b11b2806d6229b1ad371d05a129f2";
+    private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38, 39];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 11)];
     private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 11)];
 
@@ -33,6 +33,7 @@ public sealed class PlannedRuntimeGrantsTests
         Assert.Contains(36, core.Versions);
         Assert.Contains(37, core.Versions);
         Assert.Contains(38, core.Versions);
+        Assert.Contains(39, core.Versions);
         Assert.DoesNotContain(34, core.Versions);
         Assert.Contains(35, core.Versions);
         Assert.NotEmpty(core.Tables);
@@ -43,7 +44,8 @@ public sealed class PlannedRuntimeGrantsTests
         foreach (var tableName in new[]
         {
             "maf_child_spawn_authorization_receipts",
-            "maf_child_spawn_authorization_consumptions"
+            "maf_child_spawn_authorization_consumptions",
+            "maf_runtime_evidence_receipts"
         })
         {
             var evidence = Assert.Single(core.Tables, table => table.Table == tableName);

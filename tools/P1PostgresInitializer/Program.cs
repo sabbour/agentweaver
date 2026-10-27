@@ -1052,8 +1052,10 @@ static async Task transactionCheckAsync(NpgsqlConnection connection, NpgsqlTrans
 static Task<MutationGuardState[]> ReadMutationGuardStatesAsync(NpgsqlConnection connection,
     NpgsqlTransaction transaction, ServicePlan service, CancellationToken cancellationToken)
 {
-    var protectedTables = service.Tables.Where(table => table.MutationDenialRequired).ToArray();
-    if (protectedTables.Length == 0) return Task.FromResult(Array.Empty<MutationGuardState>());
+    var protectedGuards = service.Tables.Where(table => table.MutationDenialRequired)
+        .SelectMany(table => InitializerChecks.GetMutationDenialGuards(table)
+            .Select(guard => (Table: table.Table, Guard: guard))).ToArray();
+    if (protectedGuards.Length == 0) return Task.FromResult(Array.Empty<MutationGuardState>());
     return ReadJsonAsync<MutationGuardState[]>(connection, transaction, """
         SELECT coalesce(jsonb_agg(jsonb_build_object(
           'table', expected.table_name,
@@ -1080,9 +1082,9 @@ static Task<MutationGuardState[]> ReadMutationGuardStatesAsync(NpgsqlConnection 
         LEFT JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
         LEFT JOIN pg_catalog.pg_namespace function_namespace ON function_namespace.oid = p.pronamespace
         """, cancellationToken,
-        new NpgsqlParameter("tables", protectedTables.Select(table => table.Table).ToArray()),
-        new NpgsqlParameter("triggers", protectedTables.Select(table => table.MutationDenialGuard!.Trigger).ToArray()),
-        new NpgsqlParameter("functions", protectedTables.Select(table => table.MutationDenialGuard!.Function).ToArray()),
+        new NpgsqlParameter("tables", protectedGuards.Select(item => item.Table).ToArray()),
+        new NpgsqlParameter("triggers", protectedGuards.Select(item => item.Guard.Trigger).ToArray()),
+        new NpgsqlParameter("functions", protectedGuards.Select(item => item.Guard.Function).ToArray()),
         new NpgsqlParameter("schema", service.Schema),
         new NpgsqlParameter("role", service.Role));
 }

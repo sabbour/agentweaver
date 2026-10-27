@@ -22,10 +22,10 @@ runtime role receives exactly `SELECT, INSERT, UPDATE` on
 `casting_generation_requests`; this grant is included in the same reviewed plan.
 Source validation does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`3e33e6b4f4f9eb981a12e937133d6b0cf25328ed56039cc077ee3470c6fb61d2`.
+`c1283c2ab1071d4757aa5ece7fb8347bc80b11b2806d6229b1ad371d05a129f2`.
 It is not an approval receipt. The runner uses its explicit registered
 version list, not contiguous numbering; the absent 017 does not require a
-placeholder. The Core list is 1-16, 18-33, and 35-38; 034 is not in the
+placeholder. The Core list is 1-16, 18-33, and 35-39; 034 is not in the
 catalog. Readiness ordering checks exact supported versions, not only range
 endpoints. Version 027 requires 026 only.
 Version 028 adds the append-only `guardrails_evaluations` table. It requires
@@ -90,7 +90,15 @@ operation before contacting Source Control, then record the pull-request
 number. Migration 038 is optional during readiness until its table and ledger
 entry are applied.
 
-The Core catalog and plan include 032, 033, and 035-038; the maintenance Job
+Migration `039_runtime_execution_evidence.sql` adds the dedicated append-only
+`maf_runtime_evidence_receipts` ledger. The runtime plan grants exactly
+`SELECT, INSERT`, with no column-scoped UPDATE. Separate source-owned guards
+reject row UPDATE/DELETE and statement TRUNCATE; initializer readback verifies
+both and the owner-only trigger function. Migration 039 is optional during
+readiness, but evidence reads and writes return `database_update_pending` until
+it is applied. These are source contracts, not approval to apply grants or deploy.
+
+The Core catalog and plan include 032, 033, and 035-039; the maintenance Job
 applies the included versions in order.
 Existing grants on the Priority link table cover the added columns.
 
