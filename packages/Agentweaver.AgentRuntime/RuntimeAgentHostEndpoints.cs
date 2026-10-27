@@ -63,10 +63,18 @@ public static class RuntimeAgentHostEndpoints
             (HttpContext context, RuntimeHostNativeCreditDenialReadRequest request, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,
                     actor => host.ReadNativeCreditDenialAsync(request, actor, token))).RequireAuthorization();
+        endpoints.MapPost("/runtime/v1/turns/numeric-limit-denials/read",
+            (HttpContext context, RuntimeHostNumericLimitDenialReadRequest request, CancellationToken token) =>
+                ExecuteAsync(context, configure, timeProvider,
+                    actor => host.ReadNumericLimitDenialAsync(request, actor, token))).RequireAuthorization();
         endpoints.MapGet("/runtime/v1/readiness",
             (HttpContext context, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,
                     actor => host.ReadinessAsync(actor, token))).RequireAuthorization();
+        endpoints.MapGet("/runtime/v1/readiness/evidence",
+            (HttpContext context, CancellationToken token) =>
+                ExecuteAsync(context, configure, timeProvider,
+                    actor => host.ReadReadinessEvidenceAsync(actor, token))).RequireAuthorization();
         endpoints.MapPost("/runtime/v1/a2a/message:send",
             (HttpContext context, RuntimeA2ASendRequest request, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,
@@ -130,6 +138,8 @@ public static class RuntimeAgentHostEndpoints
                 "runtime_owner_timeout" or "runtime_owner_contract_invalid" or
                 "runtime_owner_response_contract_invalid"
                 ? StatusCodes.Status503ServiceUnavailable
+                : failure.Code == "runtime_numeric_limit_denial_not_found"
+                    ? StatusCodes.Status404NotFound
                 : StatusCodes.Status403Forbidden;
             return failure.FixedCreditGuard is { } fixedCreditGuard
                 ? Results.Json(new { code = failure.Code, fixedCreditGuard }, statusCode: statusCode)

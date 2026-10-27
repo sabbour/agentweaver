@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Security.Cryptography;
+using System.Text;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Microsoft.Extensions.Logging;
@@ -65,6 +67,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     private readonly Func<string, WorkspaceVolumeFlushRequest, CancellationToken,
         Task<WorkspaceVolumeFlushReceipt>> _flushWorkspace;
     private readonly TimeProvider _time;
+    private readonly string? _hostPodUid;
+    private readonly IRuntimeWorkspaceMountObserver _workspaceMountObserver;
     private readonly SemaphoreSlim _configure = new(1, 1);
     private readonly object _queueLock = new();
     private readonly Queue<PendingTurn> _immediate = new();
@@ -103,10 +107,12 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         IRuntimeHostedModelReasoningCatalogSource? hostedModelReasoningCatalog = null,
         HttpClient? hostedCatalogCredentialHttp = null,
         Uri? hostedCatalogCredentialAddress = null,
-        HttpClient? hostedCatalogPublicationHttp = null)
+        HttpClient? hostedCatalogPublicationHttp = null,
+        string? hostPodUid = null)
         : this(options, http, owner, sessions, timeProvider,
             MountedWorkspaceFlush.FlushAndCreateReceiptAsync, logger, hostedModelReasoningCatalog,
-            hostedCatalogCredentialHttp, hostedCatalogCredentialAddress, hostedCatalogPublicationHttp)
+            hostedCatalogCredentialHttp, hostedCatalogCredentialAddress, hostedCatalogPublicationHttp,
+            workspaceMountObserver: null, hostPodUid: hostPodUid)
     {
     }
 
@@ -122,7 +128,9 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         IRuntimeHostedModelReasoningCatalogSource? hostedModelReasoningCatalog = null,
         HttpClient? hostedCatalogCredentialHttp = null,
         Uri? hostedCatalogCredentialAddress = null,
-        HttpClient? hostedCatalogPublicationHttp = null)
+        HttpClient? hostedCatalogPublicationHttp = null,
+        IRuntimeWorkspaceMountObserver? workspaceMountObserver = null,
+        string? hostPodUid = null)
     {
         _options = options.Validate();
         _http = http;
@@ -138,6 +146,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         _logger = logger ?? NullLogger.Instance;
         _flushWorkspace = flushWorkspace ?? throw new ArgumentNullException(nameof(flushWorkspace));
         _time = timeProvider;
+        _workspaceMountObserver = workspaceMountObserver ?? new LinuxRuntimeWorkspaceMountObserver();
+        _hostPodUid = hostPodUid;
         _dispatcher = DispatchAsync();
     }
 
@@ -1036,6 +1046,73 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         return ReadinessAsyncCore(actor, token);
     }
 
+    /// <summary>
+    /// Returns current authenticated Host readiness and read-only mount evidence joined to
+    /// Environment's exact current Pod observation. This is not invocation ownership evidence.
+    /// </summary>
+    public async Task<RuntimeHostReadinessEvidenceReceipt> ReadReadinessEvidenceAsync(
+        RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        var hostPodUid = _hostPodUid;
+        if (string.IsNullOrWhiteSpace(hostPodUid) || hostPodUid.Length > 256 ||
+            hostPodUid.Any(char.IsControl))
+            throw new RuntimeAuthorizationException("runtime_host_pod_identity_unavailable");
+
+        var readiness = await ReadinessAsync(actor, token).ConfigureAwait(false);
+        var session = _session
+            ?? throw new RuntimeAuthorizationException("runtime_host_not_ready");
+        var before = await ReadEnvironmentPodObservationAsync(session.Registration, actor, token)
+            .ConfigureAwait(false);
+        RequireCurrentPodObservation(before, session.Registration, hostPodUid);
+        var attachment = before.WorkspaceAttachment!;
+        var mount = _workspaceMountObserver.Observe(
+            _sessions.WorkingDirectory, attachment.ReadOnly, hostPodUid, _time.GetUtcNow());
+        var after = await ReadEnvironmentPodObservationAsync(session.Registration, actor, token)
+            .ConfigureAwait(false);
+        RequireCurrentPodObservation(after, session.Registration, hostPodUid);
+        if ((before with { ObservedAt = default }) != (after with { ObservedAt = default }))
+            throw new RuntimeAuthorizationException("runtime_pod_observation_changed");
+
+        await RequireCallerAsync(session.Registration, actor, token).ConfigureAwait(false);
+        await session.RequireCurrentAsync(token).ConfigureAwait(false);
+        var currentReadiness = await ReadinessAsync(actor, token).ConfigureAwait(false);
+        if (currentReadiness.RuntimeInstanceId != readiness.RuntimeInstanceId ||
+            currentReadiness.RegistrationRevision != readiness.RegistrationRevision ||
+            currentReadiness.ExecutionFence != readiness.ExecutionFence ||
+            currentReadiness.SourceGrant != readiness.SourceGrant)
+            throw new RuntimeAuthorizationException("runtime_registration_stale");
+
+        var sourceHash = RuntimeUsageSourceReceiptContract.HashSource(
+            session.Registration, session.Facts);
+        return new(1, _time.GetUtcNow(), currentReadiness, after,
+            RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(after)),
+            mount, RuntimeContractValidation.RegistrationHash(session.Registration),
+            sourceHash, RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(session.Facts.SdkSessionId)));
+    }
+
+    /// <summary>Reads one persisted Orchestrator numeric-limit denial for the current Host registration.</summary>
+    internal async Task<RuntimeNumericLimitDenialReceipt> ReadNumericLimitDenialAsync(
+        RuntimeHostNumericLimitDenialReadRequest request,
+        RuntimeActorAuthorization actor,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(actor);
+        if (request.AttemptId == Guid.Empty)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_request_invalid");
+        var proof = request.Proof
+            ?? throw new RuntimeAuthorizationException("runtime_session_proof_invalid");
+        var session = await RequireSessionAsync(proof, actor, token).ConfigureAwait(false);
+        var source = _usageSource
+            ?? throw new RuntimeAuthorizationException("runtime_usage_source_unavailable");
+        var receipt = await source.ReadNumericLimitDenialAsync(session, request.AttemptId, token)
+            .ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_not_found");
+        await RequireSessionAsync(proof, actor, token).ConfigureAwait(false);
+        return receipt;
+    }
+
     /// <summary>Builds readiness from the current registration and placement observations.</summary>
     private async Task<RuntimeHostReadinessReceipt> ReadinessAsyncCore(
         RuntimeActorAuthorization? requestActor, CancellationToken token)
@@ -1257,6 +1334,52 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         if (capturedMcpServer is not null && capturedMcpServer.Endpoint != placement.McpServer)
             throw new RuntimeAuthorizationException("runtime_mcp_server_binding_changed");
         return phases.OrderBy(phase => phase.Phase).ToImmutableArray();
+    }
+
+    private async Task<SandboxPodObservation> ReadEnvironmentPodObservationAsync(
+        RuntimeRegistration registration, RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        var binding = registration.Binding;
+        var path = $"/internal/projects/{Uri.EscapeDataString(binding.ProjectId)}/runs/{Uri.EscapeDataString(binding.RunId)}" +
+            $"/environments/{Uri.EscapeDataString(binding.EnvironmentId)}/coordination/sessions/{Uri.EscapeDataString(binding.SessionId)}" +
+            $"/runtime-bootstrap/profiles/{Uri.EscapeDataString(binding.ProfileId)}/pod-observation";
+        return await RuntimeOwnerHttpTransport.SendAsync<SandboxPodObservation>(
+            _http, _options.EnvironmentAddress, path, actor, null, token).ConfigureAwait(false);
+    }
+
+    private void RequireCurrentPodObservation(
+        SandboxPodObservation observation, RuntimeRegistration registration, string hostPodUid)
+    {
+        var binding = registration.Binding;
+        var now = _time.GetUtcNow();
+        var expectedResource = new ProviderResourceRef(
+            ProviderSeam.Sandbox, binding.PlacementProviderId!, binding.PlacementUid,
+            binding.PlacementGeneration);
+        var expectedFence = new EnvironmentGenerationFence(
+            new(binding.TenantId, binding.ProjectId, binding.RunId, binding.EnvironmentId),
+            binding.EnvironmentLifecycleGeneration);
+        var attachment = observation.WorkspaceAttachment;
+        if (observation.ContractVersion != 1 || observation.ObservedAt == default ||
+            observation.ObservedAt > now || observation.EnvironmentFence != expectedFence ||
+            observation.Resource != expectedResource ||
+            observation.FencingGeneration != binding.EnvironmentProviderFencingGeneration ||
+            observation.ProvisionOperationId == Guid.Empty ||
+            observation.ClusterIdentity is not { Length: 64 } cluster ||
+            cluster.Any(character => !char.IsAsciiHexDigitLower(character)) ||
+            string.IsNullOrWhiteSpace(observation.Namespace) ||
+            observation.ClaimUid != binding.PlacementUid ||
+            string.IsNullOrWhiteSpace(observation.SandboxUid) ||
+            string.IsNullOrWhiteSpace(observation.PodName) ||
+            observation.PodUid != hostPodUid ||
+            string.IsNullOrWhiteSpace(observation.PodResourceVersion) ||
+            observation.PodGeneration < 1 || observation.PodPhase != "Running" ||
+            !observation.IsolationConfigurationVerified ||
+            attachment is null || attachment.Namespace != observation.Namespace ||
+            string.IsNullOrWhiteSpace(attachment.ClaimName) ||
+            string.IsNullOrWhiteSpace(attachment.ClaimUid) ||
+            attachment.MountPath != _sessions.WorkingDirectory ||
+            attachment.MountPath != Path.GetFullPath(attachment.MountPath))
+            throw new RuntimeAuthorizationException("runtime_pod_observation_mismatch");
     }
 
     private sealed record CapturedMcpServer(RuntimeMcpServerEndpoint? Endpoint);

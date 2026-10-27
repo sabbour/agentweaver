@@ -95,8 +95,10 @@ sequenceDiagram
 | `POST /runtime/v1/configure` | Authenticated delivery of the pending, purpose-bound configure nonce. No model session starts on delivery alone. |
 | `POST /runtime/v1/configure/activate` | Contract version 1, exact registration, consume/exchange operation IDs, and the delivered configuration bytes. Exact replay returns the existing session. Changed bytes or bindings deny. |
 | `POST /runtime/v1/refresh` | Exact session proof and an operation ID. Rotation rechecks current Identity and owner authority. Exact replay does not rotate again. |
+| `POST /runtime/v1/turns/numeric-limit-denials/read` | Reads an existing Orchestrator numeric-limit denial by attempt ID. The owner receipt binds the current registration, source grant, accepted limit, checkpoint/dispatch (when present), and equal persisted before/after send-state hashes; an absent receipt is `404`. This is not a generic no-send or recovery receipt. |
 | `GET /runtime/v1/projects/{projectId}/hosted-model-reasoning-catalog` | Reads live supported reasoning levels for the project's enabled hosted model references. Identity checks the caller's connection and project read authority; the hosted token is returned only to AgentHost. The response is keyed by model reference and includes the project and binding revisions plus explicit unavailable states. |
 | `GET /runtime/v1/readiness` | Returns the existing noncredential `RuntimeHostReadinessReceipt` after the host revalidates the caller, registration, session, Observe grant, and readiness evidence. Ordinary configuration includes the source-derived recovery mode and its bound cache or journal evidence. It does not configure the SDK or send a turn. |
+| `GET /runtime/v1/readiness/evidence` | Independently revalidates current Host readiness and registration, reads the authenticated Environment `/pod-observation` twice, requires the downward-API `AGENTWEAVER_HOST_POD_UID` to equal the observed Pod UID, and reads Linux `/proc/self/mountinfo` plus `statx` for the opened workspace directory. It returns a redacted mount identity and hashes, not the mount source. Missing/mismatched identity, an absent exact mountpoint, a root-filesystem fallback, or a changed Pod UID/resourceVersion fails closed. This proves neither invocation ownership nor PVC data isolation. |
 | `POST /runtime/v1/a2a/message:send` | One `user` message with one `text` part, a GUID message ID, native context ID, exact runtime proof, and `immediate` or `enqueue` delivery. |
 | `GET /runtime/v1/readiness` | Authenticated current readiness receipt. Checks the caller, exact HTTPS configure audience, registration, source authority, and current placement. Does not start a turn or rotate a grant. |
 | `GET /health/live` | Process liveness only. |
@@ -138,6 +140,17 @@ does not return stored receipts, and neither path writes turn content or sends a
 model request.
 The authenticated readiness route does not reuse the configured actor as permission for a different caller.
 The health route remains a process probe, not caller authorization.
+
+The separate readiness evidence route is an observation, not an invocation receipt.
+Environment's Pod observation supplies Kubernetes Pod and configured workspace-attachment
+identity; the Host independently binds its downward-API Pod UID and opened workspace
+directory to the exact mount ID/device reported by the kernel. It intentionally does not
+expose a mount source string or treat configured PVC attachment as proof of the mounted
+filesystem's storage owner. Projects/Environment invocation issuance is not part of this
+route. The route cannot prove invocation ownership, replacement lineage, or generic
+no-send/recovery behavior. Only numeric-limit denials have the Orchestrator's current
+persisted send-state receipt; the replacement-comparison API remains explicitly blocked
+until its missing provenance is supplied.
 
 Hosted Copilot and BYOK remain distinct modes.
 Hosted selection names an Identity-owned connection, not a secret version or personal-provider fallback.

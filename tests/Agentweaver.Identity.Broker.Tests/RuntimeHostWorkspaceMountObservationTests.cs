@@ -1,0 +1,76 @@
+using Agentweaver.AgentRuntime;
+using Agentweaver.Identity;
+using Xunit;
+
+namespace Agentweaver.Identity.Broker.Tests;
+
+public sealed class RuntimeHostWorkspaceMountObservationTests
+{
+    [Fact]
+    public void ReadReceiptUsesOpenedDirectoryMountAndDoesNotExposeMountSource()
+    {
+        var source = "classified-storage-source";
+        var mountInfo = MountLine(42, "0:48", "/workspace", "rw", source);
+
+        var receipt = LinuxRuntimeWorkspaceMountObserver.CreateReceipt(
+            mountInfo, "/workspace", expectedReadOnly: false, "pod-uid",
+            DateTimeOffset.UtcNow, 42, 0, 48, 1234);
+
+        Assert.Equal(42UL, receipt.MountId);
+        Assert.Equal(0U, receipt.DeviceMajor);
+        Assert.Equal(48U, receipt.DeviceMinor);
+        Assert.False(receipt.ReadOnly);
+        Assert.Equal("ext4", receipt.FileSystemType);
+        Assert.DoesNotContain(source, System.Text.Json.JsonSerializer.Serialize(receipt));
+        Assert.Matches("^[0-9a-f]{64}$", receipt.MountInfoSha256);
+    }
+
+    [Fact]
+    public void ReadReceiptDecodesMountPointEscapesExactly()
+    {
+        var mountInfo = MountLine(42, "0:48", "/workspace\\040data", "rw", "opaque-source");
+
+        var receipt = LinuxRuntimeWorkspaceMountObserver.CreateReceipt(
+            mountInfo, "/workspace data", expectedReadOnly: false, "pod-uid",
+            DateTimeOffset.UtcNow, 42, 0, 48, 1234);
+
+        Assert.Equal("/workspace data", receipt.MountPath);
+    }
+
+    [Theory]
+    [InlineData("/workspace", "0:49", 42UL, false, "runtime_workspace_mount_mismatch")]
+    [InlineData("/workspace", "0:48", 41UL, false, "runtime_workspace_mount_mismatch")]
+    [InlineData("/workspace", "0:48", 42UL, true, "runtime_workspace_mount_mismatch")]
+    [InlineData("/", "0:1", 1UL, false, "runtime_workspace_mount_mismatch")]
+    public void ReadReceiptRejectsUnprovenMount(
+        string workspacePath, string observedDevice, ulong observedMount, bool expectedReadOnly, string code)
+    {
+        var mountInfo = MountLine(42, "0:48", "/workspace", "rw", "opaque-source");
+        var failure = Assert.Throws<RuntimeAuthorizationException>(() =>
+            LinuxRuntimeWorkspaceMountObserver.CreateReceipt(
+                mountInfo, workspacePath, expectedReadOnly, "pod-uid",
+                DateTimeOffset.UtcNow, observedMount,
+                uint.Parse(observedDevice.Split(':')[0]),
+                uint.Parse(observedDevice.Split(':')[1]), 1234));
+
+        Assert.Equal(code, failure.Code);
+    }
+
+    [Fact]
+    public void ReadReceiptRejectsMalformedMountInfoEscape()
+    {
+        var mountInfo = MountLine(42, "0:48", "/workspace\\08x", "rw", "opaque-source");
+
+        var failure = Assert.Throws<RuntimeAuthorizationException>(() =>
+            LinuxRuntimeWorkspaceMountObserver.CreateReceipt(
+                mountInfo, "/workspace", expectedReadOnly: false, "pod-uid",
+                DateTimeOffset.UtcNow, 42, 0, 48, 1234));
+
+        Assert.Equal("runtime_workspace_mount_info_invalid", failure.Code);
+    }
+
+    private static string MountLine(
+        ulong mountId, string device, string mountPoint, string mode, string source) =>
+        $"1 0 0:1 / / rw,relatime - overlay overlay rw\n" +
+        $"{mountId} 1 {device} / {mountPoint} {mode},relatime - ext4 {source} {mode},relatime";
+}
