@@ -108,7 +108,7 @@ test('Row locks use one column, never blanket UPDATE on append-only tables', () 
   const plan = buildP1PostgresPlan();
   const locks = plan.services.flatMap(service =>
     service.tables.filter(table => table.lockColumn).map(table => ({ service, table })));
-  assert.equal(locks.length, 11);
+  assert.equal(locks.length, 12);
   for (const { service, table } of locks) {
     assert.deepEqual(table.privileges, ['SELECT', 'INSERT']);
     assert.equal(table.mutationDenialRequired, true);
@@ -124,6 +124,7 @@ test('Row locks use one column, never blanket UPDATE on append-only tables', () 
   assert.deepEqual(locks.map(({ service, table }) =>
     `${service.schema}.${table.table}:${table.mutationDenialGuard.trigger}:` +
     `${table.mutationDenialGuard.function}:${table.mutationDenialGuard.triggerType}`).sort(), [
+    'events_sessions.messaging_provider_bindings:messaging_provider_bindings_no_update:reject_row_lock_record_update():19',
     'events_sessions.session_fork_lineage:session_fork_lineage_no_update:reject_row_lock_record_update():19',
     'events_sessions.session_provider_bindings:session_provider_bindings_no_update:reject_row_lock_record_update():19',
     'events_sessions.sessions:sessions_no_update:reject_row_lock_record_update():19',
@@ -267,13 +268,15 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       assert.ok(source.includes('(applied.Contains(37) && !applied.Contains(21))'));
       assert.ok(plan.coreVersions.includes(32));
     } else {
-      assert.deepEqual(plan.eventsVersions, Array.from({ length: 10 }, (_, index) => index + 1));
-      assert.ok(source.includes('private const int CurrentSchemaVersion = 10;'));
+      assert.deepEqual(plan.eventsVersions, Array.from({ length: 11 }, (_, index) => index + 1));
+      assert.ok(source.includes('private const int CurrentSchemaVersion = 11;'));
       assert.ok(source.includes('(applied.Contains(8) && !applied.Contains(7))'));
       assert.ok(source.includes('(applied.Contains(10) && !applied.Contains(9))'));
+      assert.ok(source.includes('(applied.Contains(11) && !applied.Contains(10))'));
       assert.ok(source.includes('10 => "Agentweaver.EventsAndSessions.Migrations.010_session_object_inventory.sql"'));
+      assert.ok(source.includes('11 => "Agentweaver.EventsAndSessions.Migrations.011_messaging_binding_row_lock.sql"'));
       assert.ok(source.includes('3 when legacyProjectFactsV2 => "Agentweaver.EventsAndSessions.Migrations.002_addressed_messages.sql"'));
-      assert.equal((source.match(/tgtype = 19/g) ?? []).length, 3);
+      assert.equal((source.match(/tgtype = 19/g) ?? []).length, 4);
     }
   }
 });
@@ -351,6 +354,7 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
   assert.deepEqual(plan.services.flatMap(service =>
     service.tables.filter(table => table.lockColumn)
       .map(table => `${service.schema}.${table.table}.${table.lockColumn}`)), [
+    'events_sessions.messaging_provider_bindings.run_id',
     'events_sessions.sessions.session_id',
     'events_sessions.session_provider_bindings.run_id',
     'events_sessions.session_fork_lineage.target_session_id',
@@ -398,6 +402,12 @@ test('Old and new guards retain distinct SQL states and row and truncate protect
     assert.ok(sql.includes('REVOKE ALL ON FUNCTION {schema}.reject_row_lock_record_update() FROM PUBLIC'));
     assert.doesNotMatch(sql, /\b(?:DELETE|TRUNCATE|RETURN)\b/);
   }
+  const messageBindingSql = readFileSync(new URL(
+    '../../../services/events-and-sessions/Agentweaver.EventsAndSessions/Migrations/011_messaging_binding_row_lock.sql',
+    import.meta.url), 'utf8');
+  assert.match(messageBindingSql,
+    /BEFORE UPDATE ON \{schema\}\.messaging_provider_bindings\s+FOR EACH ROW EXECUTE FUNCTION \{schema\}\.reject_row_lock_record_update\(\)/);
+  assert.doesNotMatch(messageBindingSql, /\b(?:DELETE|TRUNCATE|RETURN)\b/);
   for (const [owner, filename, functionName, tables] of [
     ['orchestrator/Agentweaver.Orchestrator', '019_session_suspend_resume.sql',
       'reject_session_consistency_manifest_mutation', ['session_consistency_manifests']],

@@ -79,6 +79,12 @@ const GROUPS = {
 
 const LOCK_GUARDS = {
   events_sessions: {
+    messaging_provider_bindings: {
+      column: 'run_id', trigger: 'messaging_provider_bindings_no_update',
+      function: 'reject_row_lock_record_update()', triggerType: 19,
+      message: 'Session identity, provider binding, and fork lineage records cannot be updated.',
+      sqlState: '55000',
+    },
     sessions: {
       column: 'session_id', trigger: 'sessions_no_update', function: 'reject_row_lock_record_update()',
       triggerType: 19, message: 'Session identity, provider binding, and fork lineage records cannot be updated.',
@@ -250,7 +256,7 @@ export function buildP1PostgresPlan() {
     coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38],
     // Bind each owner migration catalog into the reviewed plan hash.
     environmentVersions: Array.from({ length: 11 }, (_, index) => index + 1),
-    eventsVersions: Array.from({ length: 10 }, (_, index) => index + 1),
+    eventsVersions: Array.from({ length: 11 }, (_, index) => index + 1),
     executionRequirements: [
       'Exact reviewed source and actual Core merge are present in the current base.',
       'A separate approval permits the five SQL login mappings, schema initialization, and exact grants.',

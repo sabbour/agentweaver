@@ -186,8 +186,13 @@ request counts. Migration `007_native_usage_receipts.sql` adds immutable source
 receipts and run-scoped Cost bindings. Migration `008_row_lock_record_updates.sql`
 rejects every row update to `sessions`, `session_provider_bindings`, and
 `session_fork_lineage`. It permits inserts and row locks without permitting data changes.
-Ordinary startup requires version 8 and checks each enabled, unconditional update trigger.
-It rejects missing, disabled, conditional, column-limited, or wrong-function triggers.
+Startup verifies each enabled, unconditional update trigger and rejects missing,
+disabled, conditional, column-limited, or wrong-function triggers.
+Migration `011_messaging_binding_row_lock.sql` applies the same guard to
+`messaging_provider_bindings`. Message admission locks this immutable binding,
+so the runtime plan grants `UPDATE (run_id)` only to authorize that row lock;
+the trigger still rejects every update. Current startup requires version 11 and
+verifies this guard as well.
 The new migration does not change deletion rules or rewrite earlier migration records.
 
 `PostgresUsageLedger` implements the low-level `IUsageLedger` storage contract.
