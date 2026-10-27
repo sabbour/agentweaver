@@ -55,6 +55,7 @@ internal sealed class LinuxRuntimeWorkspaceMountObserver : IRuntimeWorkspaceMoun
             throw new RuntimeAuthorizationException("runtime_workspace_mount_identity_unavailable");
 
         var mountInfo = File.ReadAllText("/proc/self/mountinfo", Encoding.UTF8);
+        // The mount ID and device must match the opened directory, not only the configured path.
         return CreateReceipt(mountInfo, fullPath, expectedReadOnly, podUid, observedAt,
             statx.MountId, statx.DeviceMajor, statx.DeviceMinor, statx.Inode);
     }
@@ -81,6 +82,7 @@ internal sealed class LinuxRuntimeWorkspaceMountObserver : IRuntimeWorkspaceMoun
             .ToArray();
         var exact = entries.Where(entry => entry.MountPoint == mountPath).ToArray();
         var root = entries.Where(entry => entry.MountPoint == "/").ToArray();
+        // Require a distinct mount from root and match the live directory identity and requested access mode.
         if (exact.Length != 1 || root.Length != 1 ||
             exact[0].MountId == root[0].MountId ||
             exact[0].MountId != directoryMountId ||
@@ -115,6 +117,7 @@ internal sealed class LinuxRuntimeWorkspaceMountObserver : IRuntimeWorkspaceMoun
         var options = value.Split(',', StringSplitOptions.RemoveEmptyEntries);
         var readOnly = options.Contains("ro", StringComparer.Ordinal);
         var readWrite = options.Contains("rw", StringComparer.Ordinal);
+        // Missing or contradictory access flags make the mount record unreliable.
         if (readOnly == readWrite)
             throw new RuntimeAuthorizationException("runtime_workspace_mount_info_invalid");
         return readOnly;
@@ -130,6 +133,7 @@ internal sealed class LinuxRuntimeWorkspaceMountObserver : IRuntimeWorkspaceMoun
                 decoded.Append(value[index]);
                 continue;
             }
+            // mountinfo escapes path bytes as three-digit octal values; reject truncated or malformed escapes.
             if (index + 3 >= value.Length ||
                 value[index + 1] is < '0' or > '7' ||
                 value[index + 2] is < '0' or > '7' ||
