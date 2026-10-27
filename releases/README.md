@@ -1255,18 +1255,27 @@ For the v1.0.14 run-binding redeployment, use a clean helper checkout descended
 from the pinned release source. This is the only historical-release exception:
 the command verifies the exact lightweight tag and publication asset hash,
 checks that the source-owned Kustomize and release inputs have not changed,
-validates manifest project files from the pinned source, and requires the
-receipt image digests to match the checked-in P0 image pins. It does not enable
-ordinary historical redeployment. Preflight can recover when one run-binding
-ConfigMap is absent and the other already matches; partial or conflicting
-settings still fail, and successful post-apply verification requires both.
+requires the exact draft `releases/foundation.json` from the pinned source,
+and validates its project files from that source. It renders the receipt-pinned
+images for the nine shared service Deployments into a temporary copy of the
+source-owned Kustomize bundle. The AgentHost sandbox image is not updated:
+its digest, platform, and compressed pull bytes remain exactly as checked into
+the source for the live installation. The rendered bundle is verified against
+the publication receipt and checked-in inputs. This is the only historical
+exception for run-binding redeployment; the separate v1.0.0 bootstrap path is
+unchanged. This reconfigures the already-published installation; it does not
+create persona evidence or claim release acceptance. It does not enable
+ordinary historical redeployment.
+Preflight can recover when one run-binding ConfigMap is absent and the other
+already matches; partial or conflicting settings still fail, and successful
+post-apply verification requires both.
 
 Run the dry-run with the v1.0.14 release artifacts and the reviewed provider
 catalog source commit:
 
 ```powershell
 npm run release:deploy -- v1.0.14 `
-  --manifest <published-release-manifest.json> `
+  --manifest releases/foundation.json `
   --publication <publication.json> `
   --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
   --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
@@ -1286,8 +1295,9 @@ command with `--execute` to apply the release and binding.
 For the current release composition, the default is a read-only dry-run. It
 verifies the annotated GitHub tag and published Release, the source-bound
 immutable publication result, all 23 product components, and ten GHCR image
-digests. The v1.0.14 run-binding exception validates its source-versioned
-manifest and exact product inventory instead. The command checks the exact
+digests. The v1.0.14 run-binding exception validates its exact source-bound
+draft and product inventory to reconfigure the already-published installation;
+it does not perform native release acceptance. The command checks the exact
 Azure/kubectl target, nine generated shared-service runtime pairs, existing
 references, required Cilium policy names, and client-rendered Kubernetes
 resources. The receipt-measured

@@ -375,9 +375,16 @@ function publicationReceipt(manifest = releaseManifest(), receiptSourceSha = sou
   agentHostImageConfigDigest = `sha256:${'d'.repeat(64)}`,
   agentHostCompressedPullBytes = 123456,
   agentHostSourceTree = 'f'.repeat(40),
+  agentHostBuildSourceSha = receiptSourceSha,
   provenanceSha256 = 'b'.repeat(64),
 } = {}) {
   const product = manifest.components.filter(({ id }) => id !== 'Agentweaver.FoundationProbe');
+  const agentHostReuse = agentHostBuildSourceSha === receiptSourceSha ? undefined : {
+    sourceSha: agentHostBuildSourceSha,
+    sourceTree: agentHostSourceTree,
+    inputFingerprint: `sha256:${'1'.repeat(64)}`,
+    receiptSourceSha,
+  };
   return {
     schemaVersion: 1,
     sourceSha: receiptSourceSha,
@@ -387,24 +394,32 @@ function publicationReceipt(manifest = releaseManifest(), receiptSourceSha = sou
       .map((component) => component.id),
     planned: product.map((component) => {
       const isService = component.kind === 'service';
+      const buildSourceSha = component.id === 'Agentweaver.AgentHost'
+        ? agentHostBuildSourceSha
+        : receiptSourceSha;
       return {
         id: component.id,
         version: component.version,
         kind: isService ? 'image' : 'package',
         sha256: 'c'.repeat(64),
         destination: isService
-          ? `ghcr.io/sabbour/${componentImageRepository(component.id)}:${componentImageTag(component.version, receiptSourceSha)}`
+          ? `ghcr.io/sabbour/${componentImageRepository(component.id)}:${componentImageTag(component.version, buildSourceSha)}`
           : 'https://nuget.pkg.github.com/sabbour/index.json',
+        ...(component.id === 'Agentweaver.AgentHost' && agentHostReuse
+          ? { reused: agentHostReuse }
+          : {}),
       };
     }),
     published: product.map((component) => {
       const isService = component.kind === 'service';
       const isAgentHost = component.id === 'Agentweaver.AgentHost';
+      const buildSourceSha = isAgentHost ? agentHostBuildSourceSha : receiptSourceSha;
       const configDigest = agentHostImageConfigDigest;
       return {
         id: component.id,
         version: component.version,
         kind: isService ? 'image' : 'package',
+        ...(isAgentHost && agentHostReuse ? { reused: agentHostReuse } : {}),
         ...(isService
           ? {
             image: `ghcr.io/sabbour/${componentImageRepository(component.id)}@${component.imageDigest}`,
@@ -415,7 +430,7 @@ function publicationReceipt(manifest = releaseManifest(), receiptSourceSha = sou
               preparedOciMeasurement: {
                 kind: 'agenthost-image',
                 schemaVersion: 1,
-                sourceSha: receiptSourceSha,
+                sourceSha: buildSourceSha,
                 sourceTree: agentHostSourceTree,
                 image: {
                   digest: agentHostImageDigest,
@@ -3095,6 +3110,24 @@ test('v1.0.9 evidence verifies its exact annotated tag, source commit, and publi
 const v1011SourceSha = 'e2929bca622b5397804cdb05abed49befc86aa3d';
 const v1014SourceSha = '4105e2f2520659e7c9c636cf34972661fa26342f';
 const v1014PublicationSha256 = '21dc5b63e3bab229e8e8df07cc083ce94d48c031c045af3f7ba438a93fbe5538';
+const v1014AgentHostBuildSourceSha = '616b628885ae73fca1413c6ad7a28c30448b20ba';
+const v1014SourceTreeSha = 'dc9b7e5691e5d8b76e9c477f73c3a7b1455d8ef9';
+const v1014AgentHostImageConfigDigest =
+  'sha256:2f6ba27677528e3239df69625c755a740578ff9ac7efd0107599657a65f50976';
+const v1014AgentHostCompressedPullBytes = 322272533;
+/** Image digests from the immutable publication receipt bound to v1014SourceSha. */
+const v1014ImageDigests = Object.freeze({
+  'Agentweaver.AgentHost': 'sha256:ec2213d6e514a8e38c2e40ab86a60bca4d8b8823ec52eaee985f4a10397fa9d0',
+  'Agentweaver.Identity.Broker': 'sha256:295d68fefa33220fe0b4cec11e411410bdd97967d074d45742023e30a7b3ff4a',
+  'Agentweaver.EventsAndSessions': 'sha256:367c4ed4306de22e8faf3c73f57cfff045d9b330691e667eafe51778c2096276',
+  'Agentweaver.Gateway': 'sha256:a470e46494cd5efd0b93663ea4fb441fd041cd79014ca74f5dfe53f586da690e',
+  'Agentweaver.Mcp': 'sha256:849242c16abf6c375604e7d55dd6c50727d933b76665f8f21891a32b1a754eee',
+  'Agentweaver.Web': 'sha256:c11b0954e8da97b216feb0e815d75ea448c59477ac8567a8e788a14fa822c6e8',
+  'Agentweaver.Orchestrator': 'sha256:4f2d5cb00a452510a14eb88a3f0b16f42a78fc652072a00d49f1b0762710dc1d',
+  'Agentweaver.Environment': 'sha256:71c1b41325b808f2b4df5ad23215f4ee171b20a9d70330129d992d264864d33c',
+  'Agentweaver.Knowledge': 'sha256:052cda38aab476ced77dfffb486cee423380be3b8582aa3bc8cd4d20b73d74af',
+  'Agentweaver.Projects.Config': 'sha256:8b8041555a20e8b032ab5be4c10fe8a4281dc8d6cd8515d6eb9d51620c801bf9',
+});
 const v1014Manifest = JSON.parse(execFileSync('git', [
   'show', `${v1014SourceSha}:releases/foundation.json`,
 ], { cwd: root, encoding: 'utf8' }));
@@ -3216,16 +3249,16 @@ test('v1.0.14 evidence verifies its exact lightweight tag, publication digest, a
     root, run, publicationSha256: v1014PublicationSha256,
   }), /must descend from the exact published source commit/);
   mergeBase = v1014SourceSha;
-  await assert.rejects(verifyBootstrapRelease('v1.0.14', fixture.publication, {
+  await assert.rejects(verifyRunBindingRelease('v1.0.14', fixture.publication, {
     root, run, publicationSha256: 'f'.repeat(64),
   }), /publication\.json does not match its pinned SHA-256/);
 
   tagRef = { object: { type: 'commit', sha: 'f'.repeat(40) } };
-  await assert.rejects(verifyBootstrapRelease('v1.0.14', fixture.publication, {
+  await assert.rejects(verifyRunBindingRelease('v1.0.14', fixture.publication, {
     root, run, publicationSha256: v1014PublicationSha256,
   }), /must resolve to the exact published source commit/);
   tagRef = { object: { type: 'commit', sha: v1014SourceSha } };
-  await assert.rejects(verifyBootstrapRelease('v1.0.14',
+  await assert.rejects(verifyRunBindingRelease('v1.0.14',
     normalBootstrapFixture(v107Manifest, v1011SourceSha).publication, {
       root, run, publicationSha256: v1014PublicationSha256,
     }));
@@ -3531,7 +3564,7 @@ test('runtime manifest requires nine shared workloads and pins AgentHost through
   wrongHostMeasurement.items.find(({ kind, metadata }) =>
     kind === 'Deployment' && metadata.name === 'environment').spec.template.spec.containers[0].env
     .find(({ name }) => name === 'Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes').value = '1';
-  assert.throws(() => validateRuntimeManifest(wrongHostMeasurement, images, target.namespace), /exact measured AgentHost/);
+  assert.throws(() => validateRuntimeManifest(wrongHostMeasurement, images, target.namespace), /exact selected AgentHost/);
   const missingTls = structuredClone(rendered);
   const gateway = missingTls.items.find(({ kind, metadata }) =>
     kind === 'Deployment' && metadata.name === 'gateway');
@@ -4412,27 +4445,64 @@ test('release dry-run renders validated run-binding settings, policies, and work
   assert.equal(commands.length, 2);
 });
 
-test('v1.0.14 run-binding helper dry-run validates pinned projects and does not write', async (t) => {
+test('v1.0.14 run-binding reconfiguration accepts only the source-bound draft and does not write', async (t) => {
   const deploymentRoot = sourceFixtureRoot(
     v1014SourceSha, v1014Manifest, 'agentweaver-v1-0-14-run-binding-tests-');
   t.after(() => rmSync(deploymentRoot, { recursive: true, force: true }));
   const manifest = structuredClone(v1014Manifest);
-  manifest.stage = 'release';
-  for (const component of manifest.components) {
+  assert.throws(() => validatePublishedManifest(manifest, {
+    root: deploymentRoot,
+    sourceSha: v1014SourceSha,
+  }), /manifest is still draft/);
+  const imageManifest = structuredClone(manifest);
+  for (const component of imageManifest.components) {
     if (component.kind === 'service' && component.id !== 'Agentweaver.FoundationProbe') {
-      component.imageDigest = v107ImageDigests[component.id];
+      component.imageDigest = v1014ImageDigests[component.id];
     }
   }
-  manifest.evidence = releaseManifest().evidence;
-  manifest.evidence.sourceSha = v1014SourceSha;
-  manifest.evidence.deploymentSha = v1014SourceSha;
-  for (const run of manifest.evidence.personaRuns) run.sourceSha = v1014SourceSha;
-  const publication = publicationReceipt(manifest, v1014SourceSha, {
-    agentHostImageDigest: v107ImageDigests['Agentweaver.AgentHost'],
-    agentHostImageConfigDigest: v107AgentHostImageConfigDigest,
-    agentHostCompressedPullBytes: v107AgentHostCompressedPullBytes,
-    agentHostSourceTree: v107SourceTreeSha,
+  const publication = publicationReceipt(imageManifest, v1014SourceSha, {
+    agentHostImageDigest: v1014ImageDigests['Agentweaver.AgentHost'],
+    agentHostImageConfigDigest: v1014AgentHostImageConfigDigest,
+    agentHostCompressedPullBytes: v1014AgentHostCompressedPullBytes,
+    agentHostSourceTree: v1014SourceTreeSha,
+    agentHostBuildSourceSha: v1014AgentHostBuildSourceSha,
   });
+  const receiptImages = validatePublicationReceipt(publication, imageManifest, v1014SourceSha);
+  const sourceKustomizationPath = path.join(deploymentRoot, 'deploy', 'k8s', 'kustomization.yaml');
+  const sourceKustomizeRoot = path.join(deploymentRoot, 'deploy', 'k8s');
+  const sourceAgentHostRuntimePath = path.join(
+    deploymentRoot, 'deploy', 'k8s', 'profiles', 'agenthost', 'runtime-config.example.yaml');
+  const sourceEnvironmentPath = path.join(
+    deploymentRoot, 'deploy', 'k8s', 'base', 'workloads', 'environment-deployment.json');
+  const sourceSnapshots = new Map();
+  const collectSourceFiles = directory => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) collectSourceFiles(file);
+      else sourceSnapshots.set(file, readFileSync(file));
+    }
+  };
+  collectSourceFiles(sourceKustomizeRoot);
+  const checkedInKustomization = parseYaml(sourceSnapshots.get(sourceKustomizationPath).toString('utf8'));
+  assert.throws(() => validateKustomizeImagePins(checkedInKustomization, receiptImages),
+    /Kustomization image pin .* must match the publication receipt exactly/);
+  const sourceAgentHostImage = JSON.parse(parseYaml(sourceSnapshots.get(sourceAgentHostRuntimePath).toString('utf8'))
+    .data['appsettings.json']).AgentHost.Image;
+  const sourceAgentHostRuntime = parseYaml(sourceSnapshots.get(sourceAgentHostRuntimePath).toString('utf8'));
+  const sourceEnvironment = JSON.parse(sourceSnapshots.get(sourceEnvironmentPath).toString('utf8'));
+  const sourceEnvironmentValues = new Map(sourceEnvironment.spec.template.spec.containers[0].env
+    .map(({ name, value }) => [name, value]));
+  const sourceAgentHostPin = checkedInKustomization.images.find(({ name }) =>
+    name === 'ghcr.io/sabbour/agentweaver-agenthost');
+  assert.equal(sourceAgentHostImage.Digest, v107ImageDigests['Agentweaver.AgentHost']);
+  assert.equal(sourceAgentHostImage.CompressedPullBytes, v107AgentHostCompressedPullBytes);
+  assert.equal(sourceAgentHostImage.Digest, sourceAgentHostPin.digest);
+  assert.equal(sourceAgentHostImage.Platform, sourceEnvironmentValues.get(
+    'Environment__Sandbox__AgentSandbox__ContainerImagePlatform'));
+  assert.equal(String(sourceAgentHostImage.CompressedPullBytes), sourceEnvironmentValues.get(
+    'Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes'));
+  assert.notEqual(sourceAgentHostImage.Digest, v1014ImageDigests['Agentweaver.AgentHost']);
+  assert.notEqual(sourceAgentHostImage.CompressedPullBytes, v1014AgentHostCompressedPullBytes);
   const binding = {
     projectsOwnerAddress: 'https://projects-config.agentweaver.svc.cluster.local:8443/',
     projectsAudience: 'https://projects.agentweaver.io/run-binding',
@@ -4440,18 +4510,9 @@ test('v1.0.14 run-binding helper dry-run validates pinned projects and does not 
     projectsTrustBundleSha256: 'b'.repeat(64),
   };
   const writes = [];
+  const renderedBundles = [];
   let projectReads = 0;
-  const result = await deployRelease({
-    releaseTag: 'v1.0.14',
-    target,
-    manifest,
-    publication,
-    publicationSha256: v1014PublicationSha256,
-    providerCatalogConfigMapName: 'projects-config-provider-catalog',
-    providerCatalogSourceCommit: providerCatalogSourceSha,
-    brokerRunBinding: binding,
-    dryRun: true,
-  }, {
+  const dependencies = {
     ...agentSandboxTestDependencies(),
     root: deploymentRoot,
     verifyRunBindingRelease: async (tag, published, options) => {
@@ -4459,6 +4520,28 @@ test('v1.0.14 run-binding helper dry-run validates pinned projects and does not 
       assert.equal(published, publication);
       assert.equal(options.publicationSha256, v1014PublicationSha256);
       return v1014SourceSha;
+    },
+    verifyRelease: async (tag) => {
+      assert.equal(tag, 'v1.0.14');
+      return v1014SourceSha;
+    },
+    run: (file, args) => {
+      if (file === 'git' && args[0] === 'ls-tree') return 'releases/foundation.json';
+      if (file === 'git' && args[0] === 'show' &&
+          args[1] === `${v1014SourceSha}:releases/foundation.json`) {
+        return JSON.stringify(v1014Manifest);
+      }
+      if (file === 'kubectl' && args[0] === 'kustomize') {
+        const rendered = execFileSync(file, args, { cwd: deploymentRoot, encoding: 'utf8' });
+        renderedBundles.push(rendered);
+        return rendered;
+      }
+      if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') return '';
+      writes.push(args);
+      assert.equal(file, 'kubectl');
+      assert.equal(args[0], 'apply');
+      assert.ok(args.includes('--dry-run=client'));
+      return '';
     },
     readSourceProjectAtCommit: (file, options) => {
       assert.equal(options.sourceSha, v1014SourceSha);
@@ -4468,30 +4551,120 @@ test('v1.0.14 run-binding helper dry-run validates pinned projects and does not 
         cwd: root, encoding: 'utf8',
       });
     },
-    verifyImages: async () => verifiedImageDigests(manifest),
+    verifyImages: async () => verifiedImageDigests(imageManifest),
     verifyTarget: async () => ({ exact: true }),
     verifyPrerequisites: () => {},
     verifyBrokerRunBindingConfiguration: (_descriptor, _target, options) => {
       assert.equal(options.allowMissingSettings, true);
       return { runBindingSettingsConfigured: false };
     },
-    run: (file, args) => {
-      if (file === 'kubectl' && args[0] === 'kustomize') {
-        return execFileSync(file, args, { cwd: deploymentRoot, encoding: 'utf8' });
-      }
-      if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') return '';
-      writes.push(args);
-      assert.equal(file, 'kubectl');
-      assert.equal(args[0], 'apply');
-      assert.ok(args.includes('--dry-run=client'));
-      return '';
-    },
-  });
+  };
+  const deploy = (candidate, withBinding = true) => deployRelease({
+    releaseTag: 'v1.0.14',
+    target,
+    manifest: candidate,
+    manifestPath: 'releases/foundation.json',
+    publication,
+    publicationSha256: v1014PublicationSha256,
+    providerCatalogConfigMapName: 'projects-config-provider-catalog',
+    providerCatalogSourceCommit: providerCatalogSourceSha,
+    ...(withBinding ? { brokerRunBinding: binding } : {}),
+    dryRun: true,
+  }, dependencies);
+  const result = await deploy(manifest);
   assert.equal(result.dryRun, true);
+  assert.equal(result.resultType, 'run-binding-reconfiguration');
+  assert.equal(manifest.stage, 'draft');
+  assert.equal(manifest.evidence, undefined);
   assert.deepEqual(result.brokerRunBinding, { settingsConfigured: false, policiesRendered: 2 });
   assert.ok(projectReads > 0);
   assert.ok(writes.every(args => args.includes('--dry-run=client')));
   assert.equal(writes.length, 2);
+  assert.deepEqual(new Map(result.services.map(({ id, image }) => [id, image])),
+    new Map(receiptImages.filter(({ id }) => id !== 'Agentweaver.AgentHost')
+      .map(({ id, image }) => [id, image])));
+  assert.equal(result.perSandboxAgentHost,
+    `ghcr.io/sabbour/agentweaver-agenthost@${sourceAgentHostPin.digest}`);
+  assert.equal(renderedBundles.length, 1);
+  const renderedResources = parseKustomizeResources(renderedBundles[0]).items;
+  const renderedServiceImages = new Map(renderedResources
+    .filter(resource => resource.kind === 'Deployment')
+    .map(({ metadata, spec }) => [metadata.name, spec.template.spec.containers[0].image]));
+  assert.deepEqual(renderedServiceImages,
+    new Map(receiptImages.filter(({ id }) => id !== 'Agentweaver.AgentHost')
+      .map(({ name, image }) => [name, image])));
+  const environment = renderedResources.find(resource =>
+    resource.kind === 'Deployment' && resource.metadata.name === 'environment');
+  assert.ok(environment);
+  const environmentValues = new Map(environment.spec.template.spec.containers[0].env
+    .map(({ name, value }) => [name, value]));
+  assert.equal(environmentValues.get('Environment__Sandbox__AgentSandbox__ContainerImage'),
+    `ghcr.io/sabbour/agentweaver-agenthost@${sourceAgentHostPin.digest}`);
+  assert.equal(environmentValues.get('Environment__Sandbox__AgentSandbox__ContainerImagePlatform'),
+    sourceEnvironmentValues.get('Environment__Sandbox__AgentSandbox__ContainerImagePlatform'));
+  assert.equal(environmentValues.get('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes'),
+    sourceEnvironmentValues.get('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes'));
+  const renderedAgentHostConfig = renderedResources.find(resource =>
+    resource.kind === 'ConfigMap' && resource.metadata.name === 'agenthost-runtime-v1');
+  assert.ok(renderedAgentHostConfig);
+  assert.equal(renderedAgentHostConfig.data['appsettings.json'],
+    sourceAgentHostRuntime.data['appsettings.json']);
+  assert.deepEqual(JSON.parse(renderedAgentHostConfig.data['appsettings.json']).AgentHost.Image,
+    sourceAgentHostImage);
+  for (const [file, snapshot] of sourceSnapshots) {
+    assert.deepEqual(readFileSync(file), snapshot, `${path.relative(deploymentRoot, file)} unchanged`);
+  }
+  const runtimeSnapshot = sourceSnapshots.get(sourceAgentHostRuntimePath);
+  const invalidRuntime = parseYaml(runtimeSnapshot.toString('utf8'));
+  const invalidSettings = JSON.parse(invalidRuntime.data['appsettings.json']);
+  invalidSettings.AgentHost.Image.Platform = 'linux/arm64';
+  invalidRuntime.data['appsettings.json'] = JSON.stringify(invalidSettings, null, 2);
+  writeFileSync(sourceAgentHostRuntimePath, stringifyYaml(invalidRuntime), 'utf8');
+  try {
+    await assert.rejects(deploy(manifest),
+      /checked-in AgentHost runtime image digest, platform, and compressed pull bytes must be complete and match its Kustomize pin/);
+  } finally {
+    writeFileSync(sourceAgentHostRuntimePath, runtimeSnapshot);
+  }
+  await assert.rejects(deploy(manifest, false),
+    /manifest is still draft; an already-published release composition is required/);
+
+  const modifiedManifest = structuredClone(manifest);
+  modifiedManifest.components.find(component => component.id === 'Agentweaver.Gateway').version = '1.0.1';
+  await assert.rejects(deploy(modifiedManifest),
+    /differs from releases\/foundation\.json at the published source commit/);
+});
+
+test('a different historical release with run binding still requires matching checked-in P0 pins', async () => {
+  const manifest = releaseManifest();
+  manifest.evidence.sourceSha = p0SourceSha;
+  manifest.evidence.deploymentSha = p0SourceSha;
+  for (const run of manifest.evidence.personaRuns) run.sourceSha = p0SourceSha;
+  const publication = publicationReceipt(manifest, p0SourceSha);
+  const binding = {
+    projectsOwnerAddress: 'https://projects-config.agentweaver.svc.cluster.local:8443/',
+    projectsAudience: 'https://projects.agentweaver.io/run-binding',
+    projectsServerCertificateSha256: 'a'.repeat(64),
+    projectsTrustBundleSha256: 'b'.repeat(64),
+  };
+  await assert.rejects(deployRelease({
+    releaseTag: 'v1.0.13',
+    target,
+    manifest,
+    publication,
+    providerCatalogConfigMapName: 'projects-config-provider-catalog',
+    providerCatalogSourceCommit: providerCatalogSourceSha,
+    brokerRunBinding: binding,
+    dryRun: true,
+  }, {
+    ...agentSandboxTestDependencies(),
+    root: p0Root,
+    verifyRelease: async () => p0SourceSha,
+    verifyImages: async () => verifiedImageDigests(manifest),
+    verifyTarget: () => assert.fail('target verification must not run after a Kustomize pin mismatch'),
+    verifyPrerequisites: () => assert.fail('prerequisite verification must not run after a Kustomize pin mismatch'),
+    run: () => assert.fail('no Kubernetes command may run after a Kustomize pin mismatch'),
+  }), /checked-in P0 Kustomize images and runtime pins must match the exact publication receipt/);
 });
 
 test('dry-run refuses a GHCR receipt that omits the measured AgentHost platform manifest', async () => {
@@ -4835,7 +5008,7 @@ test('live deployment verification checks source probes and the published Enviro
     .find(entry => entry.name === 'Environment__Sandbox__AgentSandbox__ContainerImage').value =
       'ghcr.io/sabbour/agentweaver-agenthost@sha256:' + 'f'.repeat(64);
   assert.throws(() => verifyLiveDeployment(images, target, accepted,
-    { root, run: makeRun(wrongAgentHostPin) }), /exact published AgentHost/);
+    { root, run: makeRun(wrongAgentHostPin) }), /exact selected AgentHost/);
 
   const wrongProbe = structuredClone(runtime);
   wrongProbe.items.find(item => item.kind === 'Deployment' && item.metadata.name === 'environment')

@@ -364,9 +364,18 @@ but rejects incomplete values in either map; after apply both maps must match.
 The only historical-release exception is a v1.0.14 redeployment with this
 descriptor. It verifies the pinned lightweight tag and publication asset,
 requires a clean helper checkout descended from the pinned source, rejects
-changes to source-owned Kustomize and release inputs, and reads manifest
-project files from that pinned source. The v1.0.14 image digests must match the
-checked-in P0 image pins. See the [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#local-v1-release-deployment)
+changes to source-owned Kustomize and release inputs, and reads the exact
+source-bound draft `releases/foundation.json` and its project files from that
+pinned source. The publication image digests for the nine shared service
+Deployments are rendered into a temporary copy of the source-owned Kustomize
+bundle and checked against the same receipt. The AgentHost sandbox image is
+not updated: its digest, platform, and compressed pull bytes remain exactly
+as checked into the source for the live installation. This is the only
+historical exception for run-binding redeployment; the separate v1.0.0
+bootstrap path is unchanged. This reconfigures the already-published
+installation; it does not create persona evidence or claim release acceptance.
+See the
+[release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#local-v1-release-deployment)
 for the command shape; do not use this exception for other historical releases.
 
 Review the verified source, image digests, target, runtime prerequisites, and
