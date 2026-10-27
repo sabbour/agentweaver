@@ -2489,6 +2489,178 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Fact]
+    public async Task ReadinessEvidenceBindsHostMountToCurrentEnvironmentPodIdentity()
+    {
+        await using var fixture = new HostFixture(hostPodUid: "pod-uid");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await fixture.ConfigureAsync(timeout.Token);
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+
+        using var response = await client.GetAsync("/runtime/v1/readiness/evidence", timeout.Token);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        var evidence = await response.Content.ReadFromJsonAsync<RuntimeHostReadinessEvidenceReceipt>(
+            HostFixture.Json, timeout.Token);
+        Assert.NotNull(evidence);
+        Assert.Equal("pod-uid", evidence.EnvironmentPodObservation.PodUid);
+        Assert.Equal(evidence.EnvironmentPodObservation.PodUid, evidence.WorkspaceMount.PodUid);
+        Assert.Equal(fixture.WorkingDirectory, evidence.WorkspaceMount.MountPath);
+        Assert.Equal(fixture.Registration.RuntimeInstanceId, evidence.Readiness.RuntimeInstanceId);
+        Assert.Equal(RuntimeContractValidation.RegistrationHash(fixture.Registration), evidence.RegistrationHash);
+        Assert.Matches("^[0-9a-f]{64}$", evidence.EnvironmentPodObservationHash);
+        Assert.Matches("^[0-9a-f]{64}$", evidence.SourceHash);
+        Assert.Equal(2, fixture.PodObservationReads);
+        Assert.Empty(fixture.NativeAdmissions);
+        Assert.DoesNotContain(fixture.Sdk.Requests, item => item.Method == "session.send");
+    }
+
+    [Theory]
+    [InlineData(null, "runtime_host_pod_identity_unavailable")]
+    [InlineData("replacement-pod", "runtime_pod_observation_mismatch")]
+    public async Task ReadinessEvidenceFailsClosedWithoutExactHostPodIdentity(
+        string? hostPodUid, string expectedCode)
+    {
+        await using var fixture = new HostFixture(hostPodUid: hostPodUid);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await fixture.ConfigureAsync(timeout.Token);
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+
+        using var response = await client.GetAsync("/runtime/v1/readiness/evidence", timeout.Token);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>(HostFixture.Json, timeout.Token);
+        Assert.Equal(expectedCode, error.GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task ReadinessEvidenceRejectsPodReplacementDuringMountObservation()
+    {
+        await using var fixture = new HostFixture(hostPodUid: "pod-uid");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await fixture.ConfigureAsync(timeout.Token);
+        fixture.AfterPodObservationRead = count =>
+        {
+            if (count == 1)
+            {
+                var observation = fixture.Readiness.Observation.PodObservation!;
+                fixture.Readiness = fixture.Readiness with
+                {
+                    Observation = fixture.Readiness.Observation with
+                    {
+                        PodObservation = observation with { PodResourceVersion = "2" }
+                    }
+                };
+            }
+        };
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+
+        using var response = await client.GetAsync("/runtime/v1/readiness/evidence", timeout.Token);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>(HostFixture.Json, timeout.Token);
+        Assert.Equal("runtime_pod_observation_changed", error.GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task ReadinessEvidenceRejectsMissingEnvironmentMountMode()
+    {
+        await using var fixture = new HostFixture(hostPodUid: "pod-uid");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await fixture.ConfigureAsync(timeout.Token);
+        var json = JsonSerializer.Serialize(fixture.Readiness.Observation.PodObservation, HostFixture.Json);
+        var observation = System.Text.Json.Nodes.JsonNode.Parse(json)!.AsObject();
+        observation["workspaceAttachment"]!.AsObject().Remove("readOnly");
+        fixture.PodObservationJsonOverride = observation.ToJsonString(HostFixture.Json);
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+
+        using var response = await client.GetAsync("/runtime/v1/readiness/evidence", timeout.Token);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>(HostFixture.Json, timeout.Token);
+        Assert.Equal("runtime_pod_observation_invalid", error.GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task NumericLimitDenialReadReturnsOnlyCurrentPersistedReceipt()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var readiness = await fixture.ConfigureAsync(timeout.Token);
+        var proof = fixture.Proof(readiness);
+        var attemptId = Guid.NewGuid();
+        var expected = fixture.CreateNumericLimitDenialReceipt(attemptId, proof);
+        fixture.NumericLimitDenialReceipt = expected;
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+
+        using var response = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/numeric-limit-denials/read",
+            new RuntimeHostNumericLimitDenialReadRequest(proof, attemptId), HostFixture.Json, timeout.Token);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var receipt = await response.Content.ReadFromJsonAsync<RuntimeNumericLimitDenialReceipt>(
+            HostFixture.Json, timeout.Token);
+        Assert.Equal(expected, receipt);
+        Assert.Equal(attemptId, receipt!.AttemptId);
+        Assert.Equal(receipt.SendStateBeforeHash, receipt.SendStateAfterHash);
+    }
+
+    [Fact]
+    public async Task NumericLimitDenialReadDoesNotTurnMissingOrMismatchedOwnerStateIntoEvidence()
+    {
+        await using var missing = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var readiness = await missing.ConfigureAsync(timeout.Token);
+        var proof = missing.Proof(readiness);
+        using var server = await missing.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = missing.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", missing.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+
+        using var absent = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/numeric-limit-denials/read",
+            new RuntimeHostNumericLimitDenialReadRequest(proof, Guid.NewGuid()),
+            HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.NotFound, absent.StatusCode);
+
+        var attemptId = Guid.NewGuid();
+        var foreignFence = missing.CreateNumericLimitDenialReceipt(attemptId, proof) with
+        {
+            ExecutionFence = 2,
+            CanonicalPayloadHash = string.Empty
+        };
+        missing.NumericLimitDenialReceipt = RuntimeNumericLimitDenialReceipt.Seal(foreignFence);
+        using var mismatch = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/numeric-limit-denials/read",
+            new RuntimeHostNumericLimitDenialReadRequest(proof, attemptId),
+            HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.Forbidden, mismatch.StatusCode);
+        var error = await mismatch.Content.ReadFromJsonAsync<JsonElement>(HostFixture.Json, timeout.Token);
+        Assert.Equal("runtime_numeric_limit_denial_conflict", error.GetProperty("code").GetString());
+    }
+
+    [Fact]
     public async Task OrdinaryReplacementReadinessReportsConsumedNativeCache()
     {
         await using var source = new HostFixture(workflowBound: true);
@@ -2616,6 +2788,7 @@ public sealed class RuntimeAgentHostTests
         private readonly string _hash = RuntimeContractValidation.Hash("{}"u8);
         private RuntimeModelCredentialGrantReceipt? _model;
         private SdkSessionFacts? _facts;
+        private int _podObservationReads;
         private long _sourceRevision = 1;
         private int _position;
         private readonly ConcurrentDictionary<Guid, SessionMaterialReadResult> _material = new();
@@ -2633,6 +2806,10 @@ public sealed class RuntimeAgentHostTests
             (Guid DispatchId, RuntimeCreditLimitDenialStage Stage), RuntimeNativeTurnNoSendReceipt>
             _nativeNoSendRecords = new();
         public ConcurrentQueue<Guid> HostedCatalogCredentialRequests { get; } = new();
+        public int PodObservationReads => Volatile.Read(ref _podObservationReads);
+        public Action<int>? AfterPodObservationRead { get; set; }
+        public string? PodObservationJsonOverride { get; set; }
+        public RuntimeNumericLimitDenialReceipt? NumericLimitDenialReceipt { get; set; }
         public Guid PlatformDefaultConnectionId { get; set; } = Guid.NewGuid();
         public long PlatformDefaultsRevision { get; set; } = 1;
         public HostFixture(
@@ -2646,7 +2823,8 @@ public sealed class RuntimeAgentHostTests
             long executionFence = 1,
             bool hostedCatalogIdentityAvailable = true,
             bool coordinatorRoot = false,
-            RuntimeRegistration? registrationOverride = null)
+            RuntimeRegistration? registrationOverride = null,
+            string? hostPodUid = null)
         {
             Time = new() { Now = DateTimeOffset.UtcNow };
             Token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
@@ -2738,7 +2916,17 @@ public sealed class RuntimeAgentHostTests
                 new(placement.Resource, SandboxObservedState.Pending, placement.ProviderFencingGeneration, true, true, 1,
                     [new(SandboxStartupPhase.Scheduled, 1, Time.Now.AddSeconds(-3)),
                      new(SandboxStartupPhase.ImageReady, 1, Time.Now.AddSeconds(-2), Image.Digest, Image.CompressedPullBytes),
-                     new(SandboxStartupPhase.Started, 1, Time.Now.AddSeconds(-1))]),
+                     new(SandboxStartupPhase.Started, 1, Time.Now.AddSeconds(-1))])
+                {
+                    PodObservation = new(
+                        1, Time.Now.AddSeconds(-1),
+                        new(new(b.TenantId, b.ProjectId, b.RunId, b.EnvironmentId), b.EnvironmentLifecycleGeneration),
+                        placement.Resource, b.EnvironmentProviderFencingGeneration, Guid.NewGuid(),
+                        new string('a', 64), "sandbox-namespace", b.PlacementUid, "sandbox-uid",
+                        "agenthost-pod", "pod-uid", "1", 1, "Running",
+                        new("sandbox-namespace", "workspace-pvc", "pvc-uid", factory.WorkingDirectory, false),
+                        true)
+                },
                 new(120, 120, 120, 120, 120, 600), factory.WorkingDirectory);
             _http = new(new Handler(SendOwnerAsync));
             Host = new(new(b.ConfigureEndpoint, new("https://broker.test/"), new("https://orchestrator.test/"),
@@ -2751,7 +2939,9 @@ public sealed class RuntimeAgentHostTests
                     : null,
                 hostedCatalogCredentialAddress: hostedCatalogIdentityAvailable
                     ? new Uri("https://identity-broker.test:9444/")
-                    : null);
+                    : null,
+                workspaceMountObserver: new ControlledWorkspaceMountObserver(),
+                hostPodUid: hostPodUid);
             Configure = new(1, Registration, Guid.NewGuid(), Guid.NewGuid(), JsonSerializer.SerializeToElement(new { }));
         }
         public TestClock Time { get; }
@@ -2977,6 +3167,20 @@ public sealed class RuntimeAgentHostTests
         }
         public RuntimeHostSessionProof Proof(RuntimeHostReadinessReceipt ready) =>
             new(1, Configure.Registration, ready.SourceGrant.GrantId, ready.SourceGrant.Revision, RuntimeCredentialPurpose.Observe);
+        public RuntimeNumericLimitDenialReceipt CreateNumericLimitDenialReceipt(
+            Guid attemptId, RuntimeHostSessionProof proof)
+        {
+            var sourceHash = RuntimeUsageSourceReceiptContract.HashSource(Registration, _facts!);
+            var sendStateHash = RuntimeContractValidation.Hash("unchanged-send-state"u8);
+            return RuntimeNumericLimitDenialReceipt.Seal(new(
+                1, Guid.NewGuid(), Registration.Binding.ProjectId, Registration.Binding.RunId,
+                "root-session", Registration.Binding.SessionId, Registration.RuntimeInstanceId,
+                Registration.Revision, Registration.Revision, proof.SourceGrantId, sourceHash,
+                attemptId, "1", Registration.Binding.ExecutionFence, Registration.Binding.AcceptedSelectionHash,
+                1, RuntimeNumericLimitKind.ModelTurns, 1, 1, attemptId,
+                RuntimeContractValidation.Hash("request"u8), null, null, null, null, null, null, null,
+                sendStateHash, sendStateHash, Time.GetUtcNow(), string.Empty));
+        }
         public RuntimeHostSuspendRequest SuspendRequest(RuntimeHostSessionProof proof, long phaseVersion = 1)
         {
             var binding = proof.Registration.Binding;
@@ -3165,6 +3369,25 @@ public sealed class RuntimeAgentHostTests
             }
             if (path.EndsWith("/readiness", StringComparison.Ordinal))
                 return Response(request, Readiness);
+            if (path.EndsWith("/pod-observation", StringComparison.Ordinal))
+            {
+                var count = Interlocked.Increment(ref _podObservationReads);
+                var response = PodObservationJsonOverride is { } json
+                    ? JsonResponse(request, json)
+                    : Response(request, Readiness.Observation.PodObservation);
+                AfterPodObservationRead?.Invoke(count);
+                return response;
+            }
+            if (path == "/internal/runtime/actions/numeric-denials/read")
+            {
+                var read = await ReadAsync<RuntimeNumericLimitDenialReadRequest>(request, token);
+                RuntimeNumericLimitDenialReadContract.ValidateRequest(read);
+                Assert.Equal(Registration.RuntimeInstanceId, read.RuntimeInstanceId);
+                Assert.Equal(Registration.Revision, read.RegistrationRevision);
+                Assert.Equal(Registration.Binding.ExecutionFence, read.ExecutionFence);
+                Assert.Equal(NumericLimitDenialReceipt?.AttemptId ?? read.AttemptId, read.AttemptId);
+                return Response(request, new RuntimeNumericLimitDenialReadResult(NumericLimitDenialReceipt));
+            }
             if (path == "/internal/runtime/suspend/require-current")
             {
                 Assert.Equal("orchestrator.test", request.RequestUri.Host);
@@ -3677,6 +3900,13 @@ public sealed class RuntimeAgentHostTests
                 RequestMessage = request, Content = JsonContent.Create(body, options: Json),
                 Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
             };
+        private static HttpResponseMessage JsonResponse(HttpRequestMessage request, string json) =>
+            new(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+                Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
+            };
         private static byte[] CorruptFirstByte(byte[] bytes)
         {
             var corrupted = bytes.ToArray();
@@ -3723,6 +3953,14 @@ public sealed class RuntimeAgentHostTests
         public DateTimeOffset Now { get; set; }
         public override DateTimeOffset GetUtcNow() => Now;
     }
+    private sealed class ControlledWorkspaceMountObserver : IRuntimeWorkspaceMountObserver
+    {
+        public RuntimeHostWorkspaceMountEvidence Observe(
+            string mountPath, bool expectedReadOnly, string podUid, DateTimeOffset observedAt) =>
+            new(1, observedAt, podUid, mountPath, 42, 0, 48, 1234,
+                "controlled-test-filesystem", expectedReadOnly, new string('b', 64));
+    }
+
     private sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) => send(request, token);

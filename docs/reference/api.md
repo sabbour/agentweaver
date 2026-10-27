@@ -1603,7 +1603,9 @@ audience and matching request scheme/authority, then exact runtime proof checks.
 | GET | `/runtime/v1/projects/{projectId}/hosted-model-reasoning-catalog` | Authenticated project caller | Read live hosted levels by model reference with project and binding revisions; `no-store`. |
 | POST | `/runtime/v1/turns/fixed-credit-denials/read` | Runtime | Read fixed-credit guard evidence. |
 | POST | `/runtime/v1/turns/denials/read` | Runtime | Read native denial evidence. |
+| POST | `/runtime/v1/turns/numeric-limit-denials/read` | Runtime | Read one persisted Orchestrator numeric-limit denial for the current registration and attempt; missing receipt is not success. |
 | GET | `/runtime/v1/readiness` | Runtime | Read current authenticated readiness. |
+| GET | `/runtime/v1/readiness/evidence` | Runtime | Read current Host/Environment Pod identity and read-only Linux workspace mount evidence. Does not bind invocation ownership or prove storage isolation. |
 | POST | `/runtime/v1/a2a/message:send` | Runtime | Admit native turn/message send. |
 | POST | `/runtime/v1/suspend` | Runtime | Suspend with trusted Workspace handling. |
 | POST | `/runtime/v1/workspace/resume` | Runtime | Verify retained Workspace resume. |

@@ -126,7 +126,8 @@ builder.Services.AddSingleton(services =>
         hostedCatalogCredentialAddress: hostedCatalogTls?.PeerOwnerAddress,
         hostedCatalogPublicationHttp: hostedCatalogTls is null
             ? null
-            : services.GetRequiredService<IHttpClientFactory>().CreateClient("hosted-model-catalog-publication"));
+            : services.GetRequiredService<IHttpClientFactory>().CreateClient("hosted-model-catalog-publication"),
+        hostPodUid: Environment.GetEnvironmentVariable("AGENTWEAVER_HOST_POD_UID"));
 });
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>

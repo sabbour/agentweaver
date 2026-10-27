@@ -91,6 +91,28 @@ public sealed class RuntimeUsageSourceHttpClient(
         return response;
     }
 
+    /// <summary>Reads one persisted run-wide numeric-limit denial for the exact current registration.</summary>
+    internal async Task<RuntimeNumericLimitDenialReceipt?> ReadNumericLimitDenialAsync(
+        AuthorizedRuntimeSession session, Guid attemptId, CancellationToken cancellationToken)
+    {
+        RequireAudience(session);
+        var registration = session.Registration;
+        var request = new RuntimeNumericLimitDenialReadRequest(
+            registration.RuntimeInstanceId, registration.Revision,
+            registration.Binding.ExecutionFence, attemptId);
+        RuntimeNumericLimitDenialReadContract.ValidateRequest(request);
+        var result = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNumericLimitDenialReadResult>(
+            client, _address, "/internal/runtime/actions/numeric-denials/read", actor,
+            request, cancellationToken).ConfigureAwait(false);
+        RuntimeNumericLimitDenialReadContract.ValidateResult(result, registration, request);
+        if (result.Receipt is { } receipt &&
+            (receipt.SourceRegistrationRevision != registration.Revision ||
+             receipt.SourceGrantId != session.SourceGrant.GrantId ||
+             receipt.SourceHash != RuntimeUsageSourceReceiptContract.HashSource(registration, session.Facts)))
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_conflict");
+        return result.Receipt;
+    }
+
     /// <summary>Records evidence that an admitted native turn was denied without sending it.</summary>
     internal async Task<RuntimeNativeTurnNoSendReceipt> RecordNativeTurnNoSendAsync(
         AuthorizedRuntimeSession session, RuntimeNativeCreditDenialReceipt denial,
