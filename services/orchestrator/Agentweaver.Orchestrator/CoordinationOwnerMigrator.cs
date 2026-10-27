@@ -475,7 +475,7 @@ public static class CoordinationOwnerMigrator
                           AND tgname = 'maf_runtime_evidence_receipts_no_truncate'
                           AND tgfoid = to_regprocedure(@runtimeEvidenceMutationFunction)
                           AND tgtype = 34 AND tgenabled = 'O' AND NOT tgisinternal
-                          AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0))))
+                          AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0)))
             """, connection);
         command.Parameters.AddWithValue(
             "runListIndex", NpgsqlDbType.Text, $"{schema}.ix_accepted_runs_project_created");

@@ -156,7 +156,8 @@ internal static class InitializerChecks
         var lockTables = protectedTables.Where(item => item.Table.LockColumn is not null).ToArray();
         // The plan protects twelve row-lock columns plus the append-only runtime evidence ledger.
         if (services.Length != 5 || protectedTables.Length != 13 || lockTables.Length != 12)
-            throw new InvalidOperationException("The exact twelve row-lock columns and append-only ledger guard are required.");
+            throw new InvalidOperationException(
+                "The exact twelve row-lock columns and append-only ledger mutation guards are required.");
 
         foreach (var (service, table) in protectedTables)
         {
@@ -164,6 +165,7 @@ internal static class InitializerChecks
             if (!table.MutationDenialRequired || guards.Length == 0 ||
                 table.Privileges.Contains("UPDATE") ||
                 (table.LockColumn is not null && guards.Length != 1) ||
+                (table.LockColumn is null && guards.Length != 2) ||
                 (table.LockColumn is null && table.UpdateColumns is { Length: > 0 }) ||
                 guards.Any(guard =>
                 {

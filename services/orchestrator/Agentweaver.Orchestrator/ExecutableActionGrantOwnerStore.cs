@@ -466,6 +466,27 @@ internal sealed class ExecutableActionGrantOwnerStore(
             await acquire.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        // Cancellation locks accepted_runs before changing session rows. Take that lock explicitly
+        // before the session/decision locks below to preserve the same order and avoid a deadlock.
+        await using (var run = new NpgsqlCommand($"""
+            SELECT tenant_id, accepted_selection_hash, execution_fence, execution_state
+            FROM {_schema}.accepted_runs
+            WHERE project_id = @project AND run_id = @run
+            FOR SHARE
+            """, connection, transaction))
+        {
+            run.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
+            run.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, binding.RunId);
+            await using var reader = await run.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken) ||
+                reader.GetString(0) != binding.TenantId ||
+                !string.Equals(reader.GetString(1).Trim(), binding.AcceptedSelectionHash,
+                    StringComparison.OrdinalIgnoreCase) ||
+                reader.GetInt64(2) != binding.ExecutionFence ||
+                reader.GetString(3) is "completed" or "failed" or "indeterminate" or "cancelled")
+                throw new RuntimeAuthorizationException("runtime_action_owner_unavailable");
+        }
+
         await using (var current = new NpgsqlCommand($"""
             SELECT h.current_revision, r.state, r.expires_at, r.binding_hash
             FROM {_schema}.runtime_registration_heads h
@@ -501,7 +522,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
               AND r.tenant_id = @tenant AND r.accepted_selection_hash = @selectionHash
               AND d.decision_state = 'accepted'
             ORDER BY d.state_version DESC LIMIT 1
-            FOR SHARE OF s, r, d
+              FOR SHARE OF s, d
             """, connection, transaction))
         {
             BindRuntime(owner, binding);
@@ -650,6 +671,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
             string.Empty));
         var stored = await _executionEvidence.AppendNumericLimitDenialAsync(
             connection, transaction, receipt, cancellationToken).ConfigureAwait(false);
+        if (registration.ExpiresAt <= timeProvider.GetUtcNow())
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_incomplete");
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return stored;
     }

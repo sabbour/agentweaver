@@ -358,6 +358,8 @@ internal sealed class RuntimeUsageSourceOwner(
                                 connection, transaction, root, checkpoint, intent, registration, message,
                                 denial, currentToken).ConfigureAwait(false);
                             await requireCurrentOwner(connection, transaction, currentToken).ConfigureAwait(false);
+                            if (!bearer.IsUsable() || registration.ExpiresAt <= timeProvider.GetUtcNow())
+                                throw new RuntimeAuthorizationException("runtime_actor_expired");
                             await transaction.CommitAsync(currentToken).ConfigureAwait(false);
                             return receipt;
                         }, token), cancellationToken).ConfigureAwait(false);
