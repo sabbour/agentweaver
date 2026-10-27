@@ -195,7 +195,7 @@ const FUNCTIONS = {
     'issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
     'read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
   ],
-  environment: [],
+  environment: ['enforce_p1_creation_link_immutability()'],
   knowledge: [
     'reject_knowledge_revision_mutation()',
     'reject_memory_binding_mutation()',
