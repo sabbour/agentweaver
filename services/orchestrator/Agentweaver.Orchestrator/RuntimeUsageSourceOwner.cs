@@ -339,6 +339,32 @@ internal sealed class RuntimeUsageSourceOwner(
                     return admitted;
                 }, token), cancellationToken).ConfigureAwait(false);
         }
+        catch (RuntimeNumericLimitDeniedException denial)
+        {
+            // The failed admission transaction has unwound before this fresh transaction starts.
+            // Recheck the same owner, checkpoint, count, source and send-state fingerprint before
+            // appending denial evidence; a changed state leaves no receipt behind.
+            if (denial.SendStateEmpty)
+                _ = await store.ExecuteLockedAsync(expected.RuntimeInstanceId,
+                    (connection, transaction, token) => registrations.ExecuteCurrentAsync(
+                        context, expected.RuntimeInstanceId, async (registration, currentToken) =>
+                        {
+                            if (registration != expected)
+                                throw new RuntimeAuthorizationException("runtime_registration_stale");
+                            await requireCurrentOwner(connection, transaction, currentToken).ConfigureAwait(false);
+                            if (!bearer.IsUsable() || registration.ExpiresAt <= timeProvider.GetUtcNow())
+                                throw new RuntimeAuthorizationException("runtime_actor_expired");
+                            var receipt = await store.RecordNativeNumericLimitDenialWithinTransactionAsync(
+                                connection, transaction, root, checkpoint, intent, registration, message,
+                                denial, currentToken).ConfigureAwait(false);
+                            await requireCurrentOwner(connection, transaction, currentToken).ConfigureAwait(false);
+                            if (!bearer.IsUsable() || registration.ExpiresAt <= timeProvider.GetUtcNow())
+                                throw new RuntimeAuthorizationException("runtime_actor_expired");
+                            await transaction.CommitAsync(currentToken).ConfigureAwait(false);
+                            return receipt;
+                        }, token), cancellationToken).ConfigureAwait(false);
+            throw new RuntimeAuthorizationException(denial.Code);
+        }
         finally
         {
             // Never keep the forwarded token after the call, on success or failure.

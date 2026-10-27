@@ -1214,6 +1214,8 @@ and the exact current registration, proof, action, turn, or receipt binding.
 | POST | `/actions/authorize-content` | Authorize a model turn with its exact UTF-8 text so the ordered Guardrails checks can run. The text is never stored. |
 | POST | `/actions/verify` | Revalidate action proof. |
 | POST | `/actions/credit-denials/read` | Read action credit denial. |
+| POST | `/actions/numeric-denials/read` | Read an immutable numeric-limit denial by attempt. |
+| POST | `/execution/replacements/compare` | Return an explicit blocked replacement comparison until required Environment and Host/Events evidence is available. |
 | POST | `/remote-tool-results/verify` | Verify reviewed remote result proof. |
 | GET | `/sources/{runtimeInstanceId:guid}` | Read current native usage source. |
 | POST | `/sources/{runtimeInstanceId:guid}` | Save source facts. |
@@ -1226,6 +1228,10 @@ and the exact current registration, proof, action, turn, or receipt binding.
 | POST | `/turns/fixed-credit-denials/no-send` | Record fixed-credit no-send evidence. |
 | POST | `/turns/no-send` | Record no-send evidence. |
 | POST | `/turns/observations` | Save turn observation. |
+
+Numeric-denial writes and reads require migration 039. During an accepted
+pre-migration rollout, these routes fail with `database_update_pending` (503);
+they do not return or persist a denial receipt without the append-only ledger.
 | POST | `/turns/accounting` | Record accounting acknowledgment. |
 | POST | `/turns/recorded` | Record durable turn completion evidence. |
 | POST | `/suspend/require-current` | Validate current suspend operation. |

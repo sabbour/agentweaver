@@ -1,3 +1,4 @@
+using System.Text;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
@@ -52,7 +53,7 @@ internal sealed class RuntimeActionOwner(
         // Decide before the grant is issued whether Guardrails checks apply. If content is required but missing,
         // this throws now, so a rejected request leaves no grant behind.
         var guardrails = RuntimeGuardrailsGate.Prepare(services, request, accepted, content);
-        var grant = await grants.IssueRuntimeActionGrantAsync(
+        var grant = await IssueOrRecordNumericLimitDenialAsync(
             context, registration, request, cancellationToken).ConfigureAwait(false);
         await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
         // Guardrails checks run before the guarded callback, so withheld content never gets a policy receipt.
@@ -75,7 +76,7 @@ internal sealed class RuntimeActionOwner(
             {
                 await RequireCurrentAsync(context, registration, token).ConfigureAwait(false);
                 if (request.IsToolInvocation)
-                    await grants.IssueRuntimeActionGrantAsync(
+                    await IssueOrRecordNumericLimitDenialAsync(
                         context, registration, request, token, reserveToolInvocation: true).ConfigureAwait(false);
                 await RequireCurrentAsync(context, registration, token).ConfigureAwait(false);
                 return true;
@@ -106,7 +107,7 @@ internal sealed class RuntimeActionOwner(
         RequireRequest(registration, admission.Request);
         await RequireCostTurnEnabledAsync(context, registration, admission.Request,
             RuntimeFixedCreditGuardStage.ActionVerify, cancellationToken).ConfigureAwait(false);
-        var reference = await grants.IssueRuntimeActionGrantAsync(
+        var reference = await IssueOrRecordNumericLimitDenialAsync(
             context, registration, admission.Request, cancellationToken).ConfigureAwait(false);
         if (reference.GrantId != admission.GrantId || reference.Revision != admission.GrantRevision)
             throw new RuntimeAuthorizationException("runtime_action_admission_invalid");
@@ -163,6 +164,27 @@ internal sealed class RuntimeActionOwner(
             throw new RuntimeAuthorizationException("runtime_action_registration_changed");
     }
 
+    private async Task<ExecutableActionGrantReference> IssueOrRecordNumericLimitDenialAsync(
+        HttpContext context,
+        RuntimeRegistration registration,
+        RuntimeActionRequest request,
+        CancellationToken cancellationToken,
+        bool reserveToolInvocation = false)
+    {
+        try
+        {
+            return await grants.IssueRuntimeActionGrantAsync(
+                context, registration, request, cancellationToken, reserveToolInvocation).ConfigureAwait(false);
+        }
+        catch (RuntimeNumericLimitDeniedException denial)
+        {
+            if (denial.SendStateEmpty)
+                await grants.RecordNumericLimitDenialAsync(
+                    context, registration, request, denial, cancellationToken).ConfigureAwait(false);
+            throw new RuntimeAuthorizationException(denial.Code);
+        }
+    }
+
     /// <summary>
     /// Requires the request revision and execution fence to match the current registration.
     /// </summary>
@@ -205,6 +227,72 @@ internal sealed class RuntimeActionOwner(
                     await transaction.CommitAsync(currentToken).ConfigureAwait(false);
                     return result;
                 }, token), cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<RuntimeNumericLimitDenialReadResult> ReadNumericLimitDenialAsync(
+        HttpContext context,
+        RuntimeNumericLimitDenialReadRequest request,
+        CancellationToken cancellationToken)
+    {
+        RuntimeNumericLimitDenialReadContract.ValidateRequest(request);
+        var registration = await registrations.ReadCurrentAsync(
+            context, request.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
+        var binding = registration.Binding;
+        if (registration.Revision != request.RegistrationRevision ||
+            binding.ExecutionFence != request.ExecutionFence)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_conflict");
+        var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        var accepted = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+            context, binding.ProjectId, binding.RunId, cancellationToken).ConfigureAwait(false);
+        if (actor.Issuer != binding.ActorIssuer || actor.Subject != binding.ActorId ||
+            accepted.Authorization.ActorId != binding.ActorId ||
+            accepted.Authorization.Issuer != binding.ActorIssuer ||
+            accepted.Authorization.TenantId != binding.TenantId ||
+            accepted.Selection.ProjectId != binding.ProjectId ||
+            accepted.Selection.RunId != binding.RunId ||
+            accepted.Selection.ProjectRevision != binding.ProjectRevision ||
+            accepted.Selection.ProjectConfigurationRevision != binding.ProjectConfigurationRevision ||
+            accepted.Selection.PlatformRuntimeRevision != binding.PlatformRuntimeRevision ||
+            accepted.Selection.ContextRevision != binding.ContextRevision ||
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
+                accepted.Selection.Snapshot.GetRawText())) != binding.AcceptedSelectionHash)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_conflict");
+        await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
+        return await grants.ReadNumericLimitDenialAsync(
+            registration, request, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<RuntimeReplacementComparisonBlocker> CompareReplacementAsync(
+        HttpContext context,
+        RuntimeReplacementComparisonRequest request,
+        CancellationToken cancellationToken)
+    {
+        RuntimeReplacementComparisonContract.ValidateRequest(request);
+        var registration = await registrations.ReadCurrentAsync(
+            context, request.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
+        var binding = registration.Binding;
+        if (registration.Revision != request.RegistrationRevision ||
+            binding.ExecutionFence != request.ExecutionFence)
+            throw new RuntimeAuthorizationException("runtime_replacement_comparison_conflict");
+        var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        var accepted = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+            context, binding.ProjectId, binding.RunId, cancellationToken).ConfigureAwait(false);
+        if (actor.Issuer != binding.ActorIssuer || actor.Subject != binding.ActorId ||
+            accepted.Authorization.ActorId != binding.ActorId ||
+            accepted.Authorization.Issuer != binding.ActorIssuer ||
+            accepted.Authorization.TenantId != binding.TenantId ||
+            accepted.Selection.ProjectId != binding.ProjectId ||
+            accepted.Selection.RunId != binding.RunId ||
+            accepted.Selection.ProjectRevision != binding.ProjectRevision ||
+            accepted.Selection.ProjectConfigurationRevision != binding.ProjectConfigurationRevision ||
+            accepted.Selection.PlatformRuntimeRevision != binding.PlatformRuntimeRevision ||
+            accepted.Selection.ContextRevision != binding.ContextRevision ||
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
+                accepted.Selection.Snapshot.GetRawText())) != binding.AcceptedSelectionHash)
+            throw new RuntimeAuthorizationException("runtime_replacement_comparison_conflict");
+        await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
+        return await grants.ReadReplacementComparisonBlockerAsync(
+            registration, request, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -255,7 +343,7 @@ internal sealed class RuntimeActionOwner(
 }
 
 /// <summary>
-/// Maps authenticated endpoints for runtime action admission, verification, and fixed-credit denial reads.
+/// Maps authenticated endpoints for runtime action admission, verification, and denial reads.
 /// </summary>
 public static class RuntimeActionEndpoints
 {
@@ -292,6 +380,16 @@ public static class RuntimeActionEndpoints
             (HttpContext context, RuntimeFixedCreditGuardReadRequest request,
                 [FromServices] RuntimeActionOwner owner, CancellationToken token) =>
                 ExecuteAsync(context, () => owner.ReadFixedCreditGuardAsync(context, request, token)))
+            .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/actions/numeric-denials/read",
+            (HttpContext context, RuntimeNumericLimitDenialReadRequest request,
+                [FromServices] RuntimeActionOwner owner, CancellationToken token) =>
+                ExecuteAsync(context, () => owner.ReadNumericLimitDenialAsync(context, request, token)))
+            .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/execution/replacements/compare",
+            (HttpContext context, RuntimeReplacementComparisonRequest request,
+                [FromServices] RuntimeActionOwner owner, CancellationToken token) =>
+                ExecuteAsync(context, () => owner.CompareReplacementAsync(context, request, token)))
             .RequireAuthorization();
     }
 

@@ -154,6 +154,45 @@ the highest observed Events accounting cursor, not spend amounts. The runtime ro
 `SELECT`, `INSERT`, and `UPDATE` on both tables. See
 [Scoped spend budgets and dispatch exposure](./provider-seams.md#scoped-spend-budgets-and-dispatch-exposure).
 
+Migration `039_runtime_execution_evidence.sql` adds the separate append-only
+`maf_runtime_evidence_receipts` ledger. The runtime role receives only `SELECT`
+and `INSERT`; row `UPDATE`, `DELETE`, and table `TRUNCATE` are rejected by
+source-owned triggers. This is intentionally separate from `outbox_events`,
+whose lease and delivery state remains mutable.
+
+Orchestrator numeric-capacity denials bind the attempted request/hash, accepted
+limit and run-wide count, current registration/source/action-grant/fence/owner
+revisions, and dispatch/checkpoint identity where present. The admission
+transaction must first roll back. A fresh owner-locked transaction then
+revalidates the accepted limit/count and requires both the persisted dispatch
+and outbox send state to be absent and its before/after fingerprint unchanged;
+otherwise it returns the denial without storing a receipt. A receipt can be
+read by attempt through `/internal/runtime/actions/numeric-denials/read`.
+Hard-credit denial and no-send receipts retain their existing contract.
+
+`/internal/runtime/execution/replacements/compare` currently returns an explicit
+blocked result and writes no success receipt. The dispatch table does not bind a
+Projects `invocationId`, and current Orchestrator code cannot prove invocation
+to checkpoint/result identity across host replacement. A successful comparison
+must wait for authenticated Environment replacement lineage (including the old
+and new Pod UIDs and its observation receipt), plus a Host/Events receipt bound
+to the same invocation, runtime registration/source/grant, dispatch, checkpoint
+revision/hash, work plan, association, result hash, and unchanged Core execution
+fence. The Host/Events receipt must include a complete before/after cursor range,
+event count/digest, and effect/send sequence revision/count/digest; cursor
+equality alone is insufficient. Orchestrator must persist the exact source
+receipt IDs/hashes and joined comparison before acknowledging the durable
+receipt ID/hash to Host. Exact retries receive the same acknowledgment; changed
+content conflicts. Until these upstream receipts and the invocation join exist,
+the comparison reports every missing provenance item and does not store success.
+The Host producer must capture under execution serialization using the current
+RuntimeOwnerContext and Observe proof plus the Environment-validated Pod
+observation, include actual mount evidence and observation time, then revalidate
+authority after waits. It must return explicit unavailable when it cannot supply
+a durable no-send/effect-sequence receipt. The Host-owned Pod identity injection
+(`AGENTWEAVER_HOST_POD_UID`) and Environment Pod observation are upstream
+dependencies, not values Orchestrator may infer.
+
 Accepted WorkPlan revisions increment a persisted attempt count.
 The owner enforces the accepted `maxRevisionAttempts` limit before accepting another revision.
 A zero limit permits no revisions.

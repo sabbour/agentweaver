@@ -88,7 +88,7 @@ public sealed class P1PostgresInitializerTests
     }
 
     [Fact]
-    public void MutationDenialPlanRequiresAllTwelveOneColumnGrantsToNameNonExecutableGuards()
+    public void MutationDenialPlanRequiresExactRowLockGrantsAndLedgerGuards()
     {
         var services = MutationServices();
         InitializerChecks.AssertMutationDenialPlan(services);
@@ -106,6 +106,16 @@ public sealed class P1PostgresInitializerTests
         };
         Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(missingGuard));
 
+        var missingLedgerGuard = MutationServices();
+        var orchestrator = missingLedgerGuard[4];
+        var ledgerIndex = Array.FindIndex(orchestrator.Tables,
+            table => table.Table == "maf_runtime_evidence_receipts");
+        orchestrator.Tables[ledgerIndex] = orchestrator.Tables[ledgerIndex] with
+        {
+            MutationDenialGuards = [orchestrator.Tables[ledgerIndex].MutationDenialGuards![0]],
+        };
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(missingLedgerGuard));
+
         var broadUpdate = MutationServices();
         broadUpdate[3] = broadUpdate[3] with
         {
@@ -121,6 +131,17 @@ public sealed class P1PostgresInitializerTests
                 .. executableGuard[3].Functions.Skip(1)],
         };
         Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(executableGuard));
+
+        var executableLedgerGuard = MutationServices();
+        orchestrator = executableLedgerGuard[4];
+        var ledgerFunctionIndex = Array.FindIndex(orchestrator.Functions,
+            function => function.Signature == "reject_maf_runtime_evidence_mutation()");
+        orchestrator.Functions[ledgerFunctionIndex] = orchestrator.Functions[ledgerFunctionIndex] with
+        {
+            Execute = true,
+        };
+        Assert.Throws<InvalidOperationException>(() =>
+            InitializerChecks.AssertMutationDenialPlan(executableLedgerGuard));
     }
 
     [Fact]
@@ -200,26 +221,35 @@ public sealed class P1PostgresInitializerTests
     {
         foreach (var service in MutationServices().Skip(3))
         {
-            var guards = service.Tables.Select(table => MutationGuardReadback(service, table)).ToArray();
+            var guards = service.Tables.SelectMany(table => MutationGuardReadbacks(service, table)).ToArray();
             InitializerChecks.AssertMutationDenialGuards(service, guards, Owner, Runtime);
-            MutationGuardState[][] changedCases =
+            for (var index = 0; index < guards.Length; index++)
             {
-                guards.Skip(1).ToArray(),
-                [guards[0] with { TriggerName = "foreign_trigger" }, .. guards.Skip(1)],
-                [guards[0] with { FunctionName = "allow_mutation()" }, .. guards.Skip(1)],
-                [guards[0] with { TriggerType = 27 }, .. guards.Skip(1)],
-                [guards[0] with { Enabled = "D" }, .. guards.Skip(1)],
-                [guards[0] with { IsInternal = true }, .. guards.Skip(1)],
-                [guards[0] with { NoColumnFilter = false }, .. guards.Skip(1)],
-                [guards[0] with { NoCondition = false }, .. guards.Skip(1)],
-                [guards[0] with { ArgumentCount = 1 }, .. guards.Skip(1)],
-                [guards[0] with { FunctionOwnerOid = Owner + 1 }, .. guards.Skip(1)],
-                [guards[0] with { RuntimeCanExecute = true }, .. guards.Skip(1)],
-                [guards[0] with { FunctionSource = "BEGIN RETURN NEW; END" }, .. guards.Skip(1)],
-            };
-            foreach (var changed in changedCases)
-                Assert.Throws<InvalidOperationException>(() =>
-                    InitializerChecks.AssertMutationDenialGuards(service, changed, Owner, Runtime));
+                Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialGuards(
+                    service, guards.Where((_, guardIndex) => guardIndex != index).ToArray(), Owner, Runtime));
+                var guard = guards[index];
+                MutationGuardState[] invalidGuards =
+                {
+                    guard with { TriggerName = "foreign_trigger" },
+                    guard with { FunctionName = "allow_mutation()" },
+                    guard with { TriggerType = guard.TriggerType == 27 ? 19 : 27 },
+                    guard with { Enabled = "D" },
+                    guard with { IsInternal = true },
+                    guard with { NoColumnFilter = false },
+                    guard with { NoCondition = false },
+                    guard with { ArgumentCount = 1 },
+                    guard with { FunctionOwnerOid = Owner + 1 },
+                    guard with { RuntimeCanExecute = true },
+                    guard with { FunctionSource = "BEGIN RETURN NEW; END" },
+                };
+                foreach (var invalidGuard in invalidGuards)
+                {
+                    var invalid = guards.ToArray();
+                    invalid[index] = invalidGuard;
+                    Assert.Throws<InvalidOperationException>(() =>
+                        InitializerChecks.AssertMutationDenialGuards(service, invalid, Owner, Runtime));
+                }
+            }
         }
     }
 
@@ -782,11 +812,21 @@ public sealed class P1PostgresInitializerTests
                 LockTable("maf_child_spawn_authorization_consumptions", "spawn_intent_id",
                     "maf_child_spawn_consumptions_no_update", "reject_row_lock_record_update()", 27,
                     "Coordinator decision and MAF checkpoint records cannot be updated.", "55000"),
+                new("maf_runtime_evidence_receipts", ["SELECT", "INSERT"], null, true, null,
+                [
+                    new("maf_runtime_evidence_receipts_immutable",
+                        "reject_maf_runtime_evidence_mutation()", 27,
+                        "MAF runtime evidence receipts are append-only", null),
+                    new("maf_runtime_evidence_receipts_no_truncate",
+                        "reject_maf_runtime_evidence_mutation()", 34,
+                        "MAF runtime evidence receipts are append-only", null),
+                ]),
             ],
             Functions =
             [
                 new("reject_row_lock_record_update()", false),
                 new("reject_session_consistency_manifest_mutation()", false),
+                new("reject_maf_runtime_evidence_mutation()", false),
             ],
         };
         return services;
@@ -796,14 +836,16 @@ public sealed class P1PostgresInitializerTests
         int triggerType, string message, string? sqlState) => new(table, ["SELECT", "INSERT"], column, true,
         new(trigger, function, triggerType, message, sqlState));
 
-    private static MutationGuardState MutationGuardReadback(ServicePlan service, TablePlan table)
+    private static MutationGuardState[] MutationGuardReadbacks(ServicePlan service, TablePlan table)
     {
-        var guard = table.MutationDenialGuard!;
-        var source = $"BEGIN RAISE EXCEPTION '{guard.Message}'" +
-            (guard.SqlState is null ? string.Empty : $" USING ERRCODE = '{guard.SqlState}'") +
-            "; END";
-        return new MutationGuardState(table.Table, guard.Trigger, service.Schema, guard.Function,
-            guard.TriggerType, "O", false, true, true, 0, Owner, false, source);
+        return InitializerChecks.GetMutationDenialGuards(table).Select(guard =>
+        {
+            var source = $"BEGIN RAISE EXCEPTION '{guard.Message}'" +
+                (guard.SqlState is null ? string.Empty : $" USING ERRCODE = '{guard.SqlState}'") +
+                "; END";
+            return new MutationGuardState(table.Table, guard.Trigger, service.Schema, guard.Function,
+                guard.TriggerType, "O", false, true, true, 0, Owner, false, source);
+        }).ToArray();
     }
 
     private static RuntimePrincipal[] Principals(ServicePlan[] services) => services.Select((service, index) =>

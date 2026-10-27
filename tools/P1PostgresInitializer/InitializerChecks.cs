@@ -153,26 +153,41 @@ internal static class InitializerChecks
             service.Tables.Where(table => table.LockColumn is not null ||
                 table.MutationDenialRequired || table.MutationDenialGuard is not null)
                 .Select(table => (Service: service, Table: table))).ToArray();
-        // The reviewed plan protects twelve tables: six Events tables and six Core tables. A different count
-        // means the plan changed without this check being reviewed with it.
-        if (services.Length != 5 || protectedTables.Length != 12)
-            throw new InvalidOperationException("The exact twelve protected row-lock columns are required.");
+        var lockTables = protectedTables.Where(item => item.Table.LockColumn is not null).ToArray();
+        // The plan protects twelve row-lock columns plus the append-only runtime evidence ledger.
+        if (services.Length != 5 || protectedTables.Length != 13 || lockTables.Length != 12)
+            throw new InvalidOperationException(
+                "The exact twelve row-lock columns and append-only ledger mutation guards are required.");
 
         foreach (var (service, table) in protectedTables)
         {
-            var guard = table.MutationDenialGuard;
-            var matchingFunctions = guard is null
-                ? []
-                : service.Functions.Where(function => function.Signature == guard.Function).ToArray();
-            if (!table.MutationDenialRequired || string.IsNullOrWhiteSpace(table.LockColumn) ||
-                table.Privileges.Contains("UPDATE") || guard is null ||
-                string.IsNullOrWhiteSpace(guard.Trigger) || string.IsNullOrWhiteSpace(guard.Function) ||
-                guard.TriggerType is not (19 or 27) || string.IsNullOrWhiteSpace(guard.Message) ||
-                (guard.SqlState is not null && !System.Text.RegularExpressions.Regex.IsMatch(guard.SqlState, "^[0-9A-Z]{5}$")) ||
-                matchingFunctions.Length != 1 || matchingFunctions[0].Execute)
+            var guards = GetMutationDenialGuards(table);
+            if (!table.MutationDenialRequired || guards.Length == 0 ||
+                table.Privileges.Contains("UPDATE") ||
+                (table.LockColumn is not null && guards.Length != 1) ||
+                (table.LockColumn is null && guards.Length != 2) ||
+                (table.LockColumn is null && table.UpdateColumns is { Length: > 0 }) ||
+                guards.Any(guard =>
+                {
+                    var matchingFunctions = service.Functions
+                        .Where(function => function.Signature == guard.Function).ToArray();
+                    return string.IsNullOrWhiteSpace(guard.Trigger) ||
+                        string.IsNullOrWhiteSpace(guard.Function) ||
+                        guard.TriggerType is not (19 or 27 or 34) ||
+                        string.IsNullOrWhiteSpace(guard.Message) ||
+                        (guard.SqlState is not null &&
+                         !System.Text.RegularExpressions.Regex.IsMatch(guard.SqlState, "^[0-9A-Z]{5}$")) ||
+                        matchingFunctions.Length != 1 || matchingFunctions[0].Execute;
+                }))
                 throw new InvalidOperationException(
-                    $"The {service.Service} {table.Table} one-column lock grant has no exact non-executable mutation guard.");
+                    $"The {service.Service} {table.Table} has no exact non-executable mutation guard.");
         }
+    }
+
+    internal static MutationDenialGuardPlan[] GetMutationDenialGuards(TablePlan table)
+    {
+        var additional = table.MutationDenialGuards ?? [];
+        return table.MutationDenialGuard is { } single ? [single, .. additional] : additional;
     }
 
     /// <summary>
@@ -196,7 +211,8 @@ internal static class InitializerChecks
         // meaningless, and mixing them with a row lock would weaken the lock's single-column guarantee.
         var table = planned[0].Table;
         if (table.Privileges.Contains("UPDATE") || table.LockColumn is not null ||
-            table.MutationDenialRequired || table.MutationDenialGuard is not null)
+            table.MutationDenialRequired || table.MutationDenialGuard is not null ||
+            table.MutationDenialGuards is { Length: > 0 })
             throw new InvalidOperationException(
                 "Column-scoped UPDATE tables must have no table-level UPDATE and no row-lock guard.");
     }
@@ -502,16 +518,18 @@ internal static class InitializerChecks
     internal static void AssertMutationDenialGuards(ServicePlan service, MutationGuardState[] guards,
         uint ownerOid, uint runtimeOid)
     {
-        var protectedTables = service.Tables.Where(table => table.MutationDenialRequired).ToArray();
-        if (guards.Length != protectedTables.Length)
+        var expectedGuards = service.Tables.Where(table => table.MutationDenialRequired)
+            .SelectMany(table => GetMutationDenialGuards(table)
+                .Select(expected => (Table: table.Table, Guard: expected))).ToArray();
+        if (guards.Length != expectedGuards.Length)
             throw new InvalidOperationException($"The {service.Service} row-lock mutation guards are incomplete.");
 
-        foreach (var table in protectedTables)
+        foreach (var (table, expected) in expectedGuards)
         {
-            var matches = guards.Where(guard => guard.Table == table.Table).ToArray();
-            var expected = table.MutationDenialGuard;
-            if (matches.Length != 1 || expected is null)
-                throw new InvalidOperationException($"The {service.Service} {table.Table} row-lock mutation guard is missing or duplicated.");
+            var matches = guards.Where(guard =>
+                guard.Table == table && guard.TriggerName == expected.Trigger).ToArray();
+            if (matches.Length != 1)
+                throw new InvalidOperationException($"The {service.Service} {table} mutation guard is missing or duplicated.");
             var actual = matches[0];
             var expectedBody = NormalizeGuardSource(
                 $"BEGIN RAISE EXCEPTION '{expected.Message}'" +
@@ -525,7 +543,7 @@ internal static class InitializerChecks
                 actual.FunctionSource is null || NormalizeGuardSource(actual.FunctionSource) != expectedBody ||
                 ownerOid == 0 || runtimeOid == 0)
                 throw new InvalidOperationException(
-                    $"The {service.Service} {table.Table} mutation-denial trigger or function changed. The grants are not committed.");
+                    $"The {service.Service} {table} mutation-denial trigger or function changed. The grants are not committed.");
         }
     }
 
@@ -762,7 +780,7 @@ internal sealed record ServicePlan(string Service, string Schema, string Role, s
 internal sealed record ColumnGrant(string Relation, string Column, string Privilege, bool Public);
 /// <summary>Runtime table privileges, any one-column lock update, and any planned column-scoped updates.</summary>
 internal sealed record TablePlan(string Table, string[] Privileges, string? LockColumn, bool MutationDenialRequired,
-    MutationDenialGuardPlan? MutationDenialGuard)
+    MutationDenialGuardPlan? MutationDenialGuard, MutationDenialGuardPlan[]? MutationDenialGuards = null)
 {
     /// <summary>Columns the runtime role may UPDATE on a table that has no table-level UPDATE; empty when none.</summary>
     public string[] UpdateColumns { get; init; } = [];

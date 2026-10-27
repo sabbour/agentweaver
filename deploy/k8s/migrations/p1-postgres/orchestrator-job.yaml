@@ -54,7 +54,7 @@ spec:
             - name: Orchestrator__Migration__RuntimeRole
               value: "agentweaver-id-orchestrator"
             - name: Orchestrator__Migration__PlanSha256
-              value: "3e33e6b4f4f9eb981a12e937133d6b0cf25328ed56039cc077ee3470c6fb61d2"
+              value: "c1283c2ab1071d4757aa5ece7fb8347bc80b11b2806d6229b1ad371d05a129f2"
           volumeMounts:
             - name: tmp
               mountPath: /tmp

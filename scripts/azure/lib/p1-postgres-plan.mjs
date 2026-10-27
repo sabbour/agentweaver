@@ -70,10 +70,11 @@ const GROUPS = {
     // Migration 036 grants root model-turn admissions insert-only; their rows are immutable.
     // Migration 037 grants child-spawn authorization and consumption receipts insert-only.
     // Migration 038 records the result of an idempotent Source Control pull-request operation.
+    // Migration 039 adds an immutable Orchestrator-owned runtime evidence ledger.
     'SELECT,INSERT,UPDATE': 'accepted_runs coordination_sessions coordination_messages coordination_requests parent_notifications coordinator_gates executable_action_grants coordination_tree_commands coordination_idle_subscriptions coordination_execution_operations runtime_registration_heads source_control_merge_intents source_control_output_captures maf_execution_run_guards maf_execution_dispatches outbox_streams outbox_events backlog_projects project_run_requests chief_of_staff_priority_lists chief_of_staff_priorities issue_sync_projects issue_sync_receipts source_control_pull_requests source_control_pull_request_operations spend_budget_reservations spend_budget_accounting_cursors',
     'SELECT,INSERT,UPDATE,DELETE': 'backlog_tasks',
     'SELECT,INSERT,DELETE': 'backlog_dependencies chief_of_staff_priority_links',
-    'SELECT,INSERT': 'coordinator_decision_outbox policy_evaluation_receipts coordinator_run_selection_contexts coordinator_run_selection_context_versions coordination_idle_notifications runtime_registration_revisions runtime_sdk_sources runtime_usage_observations source_control_repository_pins source_control_webhook_deliveries maf_execution_output_witnesses consumer_inbox_receipts coordinator_decisions maf_workflow_checkpoints session_consistency_manifests reviewed_remote_tool_snapshots project_run_cancellations chief_of_staff_conversations user_notification_dismissals guardrails_evaluations backlog_plan_promotions backlog_task_origins user_notification_promotion_dismissals maf_root_model_turn_admissions maf_child_spawn_authorization_receipts maf_child_spawn_authorization_consumptions',
+    'SELECT,INSERT': 'coordinator_decision_outbox policy_evaluation_receipts coordinator_run_selection_contexts coordinator_run_selection_context_versions coordination_idle_notifications runtime_registration_revisions runtime_sdk_sources runtime_usage_observations source_control_repository_pins source_control_webhook_deliveries maf_execution_output_witnesses consumer_inbox_receipts coordinator_decisions maf_workflow_checkpoints session_consistency_manifests reviewed_remote_tool_snapshots project_run_cancellations chief_of_staff_conversations user_notification_dismissals guardrails_evaluations backlog_plan_promotions backlog_task_origins user_notification_promotion_dismissals maf_root_model_turn_admissions maf_child_spawn_authorization_receipts maf_child_spawn_authorization_consumptions maf_runtime_evidence_receipts',
   },
 };
 
@@ -143,6 +144,23 @@ const LOCK_GUARDS = {
   },
 };
 
+const APPEND_ONLY_GUARDS = {
+  orchestrator: {
+    maf_runtime_evidence_receipts: [
+      {
+        trigger: 'maf_runtime_evidence_receipts_immutable',
+        function: 'reject_maf_runtime_evidence_mutation()', triggerType: 27,
+        message: 'MAF runtime evidence receipts are append-only', sqlState: null,
+      },
+      {
+        trigger: 'maf_runtime_evidence_receipts_no_truncate',
+        function: 'reject_maf_runtime_evidence_mutation()', triggerType: 34,
+        message: 'MAF runtime evidence receipts are append-only', sqlState: null,
+      },
+    ],
+  },
+};
+
 const FUNCTIONS = {
   projects_config: [
     'reject_immutable_record_mutation()',
@@ -183,6 +201,7 @@ const FUNCTIONS = {
     'reject_row_lock_record_update()',
     // Trigger function that keeps Guardrails evidence rows immutable.
     'reject_guardrails_evaluation_mutation()',
+    'reject_maf_runtime_evidence_mutation()',
     // Spend budget trigger functions: reservations only move from outstanding to retired, cursors only
     // move forward, rows cannot be deleted, and both tables reject TRUNCATE.
     'guard_spend_budget_reservation_mutation()',
@@ -218,23 +237,31 @@ export function buildP1PostgresPlan() {
     ownerOnlyTables: OWNER_ONLY_OBJECTS[schema]?.tables ?? [],
     ownerOnlySequences: OWNER_ONLY_OBJECTS[schema]?.sequences ?? [],
     tables: Object.entries(GROUPS[schema]).flatMap(([privileges, names]) =>
-      names.split(' ').map(table => ({
-        table,
-        privileges: privileges.split(','),
-        // Only tables with planned column updates carry this key, so every other table's plan entry is unchanged.
-        ...(UPDATE_COLUMNS[schema]?.[table] ? { updateColumns: [...UPDATE_COLUMNS[schema][table]] } : {}),
-        ...(LOCK_GUARDS[schema]?.[table] ? {
-          lockColumn: LOCK_GUARDS[schema][table].column,
-          mutationDenialRequired: true,
-          mutationDenialGuard: {
-            trigger: LOCK_GUARDS[schema][table].trigger,
-            function: LOCK_GUARDS[schema][table].function,
-            triggerType: LOCK_GUARDS[schema][table].triggerType,
-            message: LOCK_GUARDS[schema][table].message,
-            sqlState: LOCK_GUARDS[schema][table].sqlState,
-          },
-        } : {}),
-      }))),
+      names.split(' ').map(table => {
+        const appendOnlyGuards = APPEND_ONLY_GUARDS[schema]?.[table];
+        const lockGuard = LOCK_GUARDS[schema]?.[table];
+        return {
+          table,
+          privileges: privileges.split(','),
+          // Only tables with planned column updates carry this key, so every other table's plan entry is unchanged.
+          ...(UPDATE_COLUMNS[schema]?.[table] ? { updateColumns: [...UPDATE_COLUMNS[schema][table]] } : {}),
+          ...(lockGuard ? {
+            lockColumn: lockGuard.column,
+            mutationDenialRequired: true,
+            mutationDenialGuard: {
+              trigger: lockGuard.trigger,
+              function: lockGuard.function,
+              triggerType: lockGuard.triggerType,
+              message: lockGuard.message,
+              sqlState: lockGuard.sqlState,
+            },
+          } : {}),
+          ...(appendOnlyGuards ? {
+            mutationDenialRequired: true,
+            mutationDenialGuards: appendOnlyGuards,
+          } : {}),
+        };
+      })),
     functions: FUNCTIONS[schema].map(signature => ({
       signature,
       execute: signature.startsWith('lock_casting_authority('),
@@ -252,8 +279,8 @@ export function buildP1PostgresPlan() {
     // 031 adds caller dismissals of promotion notices with SELECT,INSERT grants.
     // 032 adds pull-request records; 033 extends Priority links; 036 and 037 reuse the trigger from 021.
     // 035 adds a position column to backlog_tasks and requires its runtime DELETE grant.
-    // 038 adds the retry-safe Source Control pull-request operation ledger.
-    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38],
+    // 038 adds the retry-safe Source Control pull-request operation ledger; 039 adds runtime evidence receipts.
+    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39],
     // Bind each owner migration catalog into the reviewed plan hash.
     environmentVersions: Array.from({ length: 11 }, (_, index) => index + 1),
     eventsVersions: Array.from({ length: 11 }, (_, index) => index + 1),
