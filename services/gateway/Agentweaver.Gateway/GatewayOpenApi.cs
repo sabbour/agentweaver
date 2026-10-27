@@ -26,6 +26,7 @@ internal static partial class GatewayOpenApi
             ["listUserNotifications"] = C(null, "UserNotificationPage", "200"),
             ["dismissUserNotification"] = C(null, null, "204"),
             ["createProject"] = C("CreateProjectRequest", "ProjectSummary", "201"),
+            ["createP1InvocationSetup"] = C(null, "P1ProjectSetupReceipt", "200"),
             ["getProject"] = C(null, "ProjectSummary", "200"),
             ["updateProject"] = C("UpdateProjectRequest", "ProjectSummary", "200"),
             ["listProjectRoleAssignments"] = C(null, "ProjectRoleAssignmentList", "200"),
@@ -354,7 +355,7 @@ internal static partial class GatewayOpenApi
                             : "Owner response; returned by the owning service.",
                         (route.OperationId is "readRuntimeObservationV1" or "getProjectConfigurationChoices" or
                         "getHostedModelReasoningCatalog" or "getProjectAgentHistory" or
-                        "readProjectSetupAuthorityAudit" or
+                        "readProjectSetupAuthorityAudit" or "createP1InvocationSetup" or
                         "readProjectTeamSync" or "commitProjectTeamSync") && status == "200"
                             ? new Dictionary<string, object>(StringComparer.Ordinal)
                             {
@@ -370,6 +371,8 @@ internal static partial class GatewayOpenApi
                                             "Hosted reasoning catalog responses are not cacheable.",
                                         "readProjectSetupAuthorityAudit" =>
                                             "Authority audit responses are not cacheable.",
+                                        "createP1InvocationSetup" =>
+                                            "Privileged setup receipts are not cacheable.",
                                         "readProjectTeamSync" or "commitProjectTeamSync" =>
                                             "Private repository team-sync responses are not cacheable.",
                                         _ => "Runtime evidence responses are not cacheable.",
@@ -576,6 +579,14 @@ else if (route.OperationId is
             responses["403"] = ProblemResponse(
                 "The caller is not a current tenant admin or Owner of every linked project, or the token lacks api.read or is resource-bound.");
         }
+        else if (route.OperationId == "createP1InvocationSetup")
+        {
+            responses["400"] = ProblemResponse("The invocation ID or setup-only request is invalid.");
+            responses["403"] = ProblemResponse(
+                "The unbound caller lacks the required scopes or current TenantAdmin authority, the selected tenant does not match, or the setup receipt is no longer current.");
+            responses["409"] = ProblemResponse("The invocation has already been used with conflicting intent.");
+            responses["503"] = ProblemResponse("The Projects owner is unavailable.");
+        }
         else if (route.OperationId is "assignProjectRole" or "revokeProjectRoleAssignment")
         {
             responses["400"] = ProblemResponse(
@@ -607,6 +618,18 @@ else if (route.OperationId is
                 " Requires an unbound api.read token and current TenantAdmin authority, or current Owner authority " +
                 "for every linked project in the selected tenant. The result contains no tokens or secret fields. " +
                 "Responses are no-store. When the bounded result exceeds 32 records, complete is false and truncated is true.";
+        }
+        else if (route.OperationId == "createP1InvocationSetup")
+        {
+            description +=
+                " Requires the existing unbound api.read, projects.admin and projects.orchestrator bearer, " +
+                "the selected tenant and current TenantAdmin authority. The Projects owner calls its " +
+                "SECURITY DEFINER issue function, which atomically creates the project, initial configuration, " +
+                "Owner and Orchestrator assignments, audit events and immutable setup receipt; the runtime " +
+                "principal receives only EXECUTE on the issue/read functions, not direct setup-ledger access. " +
+                "Exact replays recheck current authority. No body, existing project ID or resource ID is accepted. " +
+                "Returns only the genuine setup receipt with no-store. This is not run, Environment, Sandbox or " +
+                "runtime creation authorization.";
         }
         else if (route.OperationId == "sendProjectRunMessage")
         {
@@ -1112,6 +1135,17 @@ else if (route.OperationId is
             ("resourceType", Enum("tenant", "project")), ("resourceId", Str()),
             ("role", Enum("tenantAdmin", "owner", "contributor", "viewer", "orchestrator"))),
         ["CreateProjectRequest"] = Obj(["name"], ("name", Str())),
+        ["P1ProjectSetupReceipt"] = StrictObj(
+            ["invocationId", "issuer", "subject", "tenantId", "membershipId", "membershipRevision",
+                "projectId", "createdByActorId", "projectRevision", "projectConfigurationRevision",
+                "assignmentId", "assignmentRevision", "authorityAuditEventId", "createdAt",
+                "ownerAssignmentId", "ownerAssignmentRevision", "ownerAuthorityAuditEventId"],
+            ("invocationId", Uuid()), ("issuer", Str()), ("subject", Str()), ("tenantId", Str()),
+            ("membershipId", Uuid()), ("membershipRevision", Int()), ("projectId", Str()),
+            ("createdByActorId", Str()), ("projectRevision", Int()), ("projectConfigurationRevision", Int()),
+            ("assignmentId", Uuid()), ("assignmentRevision", Int()), ("authorityAuditEventId", Uuid()),
+            ("createdAt", Date()), ("ownerAssignmentId", Uuid()), ("ownerAssignmentRevision", Int()),
+            ("ownerAuthorityAuditEventId", Uuid())),
         ["UpdateProjectRequest"] = Obj(["expectedRevision", "name", "state"],
             ("expectedRevision", Int()), ("name", Str()), ("state", Enum("active", "archived"))),
         ["AssignProjectRoleRequest"] = StrictObj(["principalId", "role"],

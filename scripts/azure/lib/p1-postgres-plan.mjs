@@ -167,6 +167,8 @@ const FUNCTIONS = {
     'reject_authority_audit_mutation()',
     'reject_project_setup_operation_mutation()',
     'lock_casting_authority(uuid, text, text, text, bigint, text, boolean)',
+    'issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
+    'read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
   ],
   environment: [],
   knowledge: [
@@ -264,7 +266,9 @@ export function buildP1PostgresPlan() {
       })),
     functions: FUNCTIONS[schema].map(signature => ({
       signature,
-      execute: signature.startsWith('lock_casting_authority('),
+      execute: signature.startsWith('lock_casting_authority(') ||
+        signature.startsWith('issue_p1_project(') ||
+        signature.startsWith('read_p1_project('),
     })),
   }));
   return {

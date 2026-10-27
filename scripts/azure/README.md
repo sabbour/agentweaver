@@ -22,7 +22,7 @@ runtime role receives exactly `SELECT, INSERT, UPDATE` on
 `casting_generation_requests`; this grant is included in the same reviewed plan.
 Source validation does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`c1283c2ab1071d4757aa5ece7fb8347bc80b11b2806d6229b1ad371d05a129f2`.
+`425f7d673ccfe7c4b311bc5696fa7cdeb0bc76feefc72d4680a795ab8335c88d`.
 It is not an approval receipt. The runner uses its explicit registered
 version list, not contiguous numbering; the absent 017 does not require a
 placeholder. The Core list is 1-16, 18-33, and 35-39; 034 is not in the

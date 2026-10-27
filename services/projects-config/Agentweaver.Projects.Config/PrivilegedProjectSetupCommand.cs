@@ -36,29 +36,8 @@ internal static class PrivilegedProjectSetupCommand
         if (string.IsNullOrWhiteSpace(input.AccessToken))
             throw ProjectConfigException.Forbidden();
 
-        var authentication = configuration.GetSection("ProjectsConfig:Authentication");
-        var authority = RequireHttpsUri(
-            authentication["Authority"],
-            "ProjectsConfig:Authentication:Authority");
-        var audience = authentication["Audience"];
-        if (string.IsNullOrWhiteSpace(audience))
-            throw new InvalidOperationException(
-                "Missing required configuration 'ProjectsConfig:Authentication:Audience'.");
-
-        var setup = configuration.GetSection("ProjectsConfig:PrivilegedSetup");
-        var approvedIssuer = RequireHttpsUri(
-            setup["ApprovedIssuer"],
-            "ProjectsConfig:PrivilegedSetup:ApprovedIssuer");
-        var approvedSubject = RequireIdentifier(
-            setup["ApprovedSubject"],
-            "ProjectsConfig:PrivilegedSetup:ApprovedSubject");
-        var approvedTenantId = RequireIdentifier(
-            setup["ApprovedTenantId"],
-            "ProjectsConfig:PrivilegedSetup:ApprovedTenantId");
-        if (!string.Equals(authority.AbsoluteUri, approvedIssuer.AbsoluteUri, StringComparison.Ordinal))
-            throw new InvalidOperationException(
-                "The privileged setup issuer must match the configured Projects & Config authentication authority.");
-        if (!string.Equals(input.TenantId, approvedTenantId, StringComparison.Ordinal))
+        var approval = PrivilegedProjectSetupApproval.Read(configuration);
+        if (!string.Equals(input.TenantId, approval.ApprovedTenantId, StringComparison.Ordinal))
             throw ProjectConfigException.Forbidden();
 
         var connectionString = configuration.GetConnectionString("ProjectsConfigAuthority")
@@ -78,14 +57,14 @@ internal static class PrivilegedProjectSetupCommand
                 npgsql => npgsql.MigrationsHistoryTable(
                     "__ef_migrations_history", ProjectsConfigDbContext.Schema));
         });
-        services.AddSingleton(new ProjectsConfigIdentityOptions(authority.AbsoluteUri));
+        services.AddSingleton(new ProjectsConfigIdentityOptions(approval.Authority.AbsoluteUri));
         services.AddScoped<ProjectAuthorizationOwner>();
         services
             .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(options =>
             {
-                options.Authority = authority.AbsoluteUri;
-                options.Audience = audience;
+                options.Authority = approval.Authority.AbsoluteUri;
+                options.Audience = approval.Audience;
                 options.RequireHttpsMetadata = true;
                 options.MapInboundClaims = false;
             });
@@ -108,13 +87,10 @@ internal static class PrivilegedProjectSetupCommand
         await using var db = new ProjectsConfigDbContext(
             provider.GetRequiredService<DbContextOptions<ProjectsConfigDbContext>>());
         var caller = await new ProjectAuthorizationOwner(
-                db, new ProjectsConfigIdentityOptions(authority.AbsoluteUri))
+                db, new ProjectsConfigIdentityOptions(approval.Authority.AbsoluteUri))
             .ResolveAsync(principal, [input.TenantId], cancellationToken)
             .ConfigureAwait(false);
-        if (!string.Equals(caller.Issuer, approvedIssuer.AbsoluteUri, StringComparison.Ordinal) ||
-            !string.Equals(caller.ActorId, approvedSubject, StringComparison.Ordinal) ||
-            !string.Equals(caller.TenantId, approvedTenantId, StringComparison.Ordinal))
-            throw ProjectConfigException.Forbidden();
+        approval.RequireApprovedCaller(caller);
 
         var request = new ProjectSetupOperationRequest(
             input.Version,
@@ -162,30 +138,6 @@ internal static class PrivilegedProjectSetupCommand
                 "invalid_project_setup_request",
                 "The privileged project setup input is not valid JSON.");
         }
-    }
-
-    /// <summary>Parses an absolute HTTPS authority URI without credentials, query parameters, or fragments.</summary>
-    private static Uri RequireHttpsUri(string? value, string setting)
-    {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
-            uri.Scheme != Uri.UriSchemeHttps ||
-            !string.IsNullOrEmpty(uri.UserInfo) ||
-            !string.IsNullOrEmpty(uri.Query) ||
-            !string.IsNullOrEmpty(uri.Fragment))
-            throw new InvalidOperationException(
-                $"'{setting}' requires an absolute HTTPS URI without user information, query, or fragment.");
-        return uri;
-    }
-
-    /// <summary>Validates an opaque identifier used to pin the approved setup caller.</summary>
-    private static string RequireIdentifier(string? value, string setting)
-    {
-        if (string.IsNullOrWhiteSpace(value) || value.Length > 256 ||
-            !value.All(character => char.IsAsciiLetterOrDigit(character) ||
-                character is '.' or '_' or '-' or ':'))
-            throw new InvalidOperationException(
-                $"'{setting}' requires a nonempty opaque identifier.");
-        return value;
     }
 
     /// <summary>Creates strict command JSON settings with camel-case enum values.</summary>

@@ -95,6 +95,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 
 | Route | Operation |
 | --- | --- |
+| `POST /api/p1/invocations/{invocationId}/setup` | Create or exactly replay the P1 invocation's immutable Projects setup receipt using the authenticated approved TenantAdmin. Accepts no body or query and cannot select a project ID or perform cleanup. |
 | `POST /api/projects` | Create an active project and its initial configuration revision. |
 | `GET /api/projects` | List projects visible through current project roles; a tenant administrator sees all projects in that tenant. |
 | `GET /api/projects/{projectId}` | Read an authorized project summary. |
@@ -142,6 +143,52 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import` | Import selected bytes with the expected content digest and idempotency key into the existing Skills content store. |
 
 Revision conflicts and a reused run ID with a different request return conflict responses. Invalid configuration and run-selection context return client errors; missing projects and inaccessible tenant-owned projects do not disclose their existence.
+
+### P1 setup receipt endpoint
+
+`POST /api/p1/invocations/{invocationId}/setup` is a purpose-limited source
+endpoint for the upstream P1 fixture producer. It requires the existing
+authenticated bearer token, exactly one `X-Agentweaver-Tenant` header, and the
+existing `api.read`, `projects.admin`, and `projects.orchestrator` scopes. The
+service resolves that principal against current Projects authority and requires
+exactly one active TenantAdmin assignment for the selected tenant.
+
+The route accepts no body or query parameters. It creates or exactly replays
+`projects_config.issue_p1_project`, a `SECURITY DEFINER` function that creates
+the project, initial configuration, Owner and Orchestrator assignments, audit
+events, and immutable `project_setup_operations` receipt in one Projects
+database transaction. The function serializes on invocation ID and permits
+only an exact-owner retry. It calls `projects_config.read_p1_project`, which
+revalidates the current membership and exact active TenantAdmin assignment,
+then verifies the immutable receipt, active project, initial configuration,
+assignments, and audit links before returning the bounded receipt and readback.
+Changed ownership, revoked authority, cleanup, stale revisions, or mismatched
+records fail closed. The HTTP response contains only the receipt.
+
+The endpoint uses the existing Projects runtime connection. Its runtime
+principal receives `EXECUTE` on the two functions through the grant catalog,
+but no direct access to `project_setup_operations` or other setup-ledger
+tables:
+
+| Object | Minimum privilege | Purpose |
+| --- | --- | --- |
+| `projects_config.issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)` | `EXECUTE` | Create or exactly replay the invocation's setup transaction. |
+| `projects_config.read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)` | `EXECUTE` | Recheck current authority and return bounded receipt/readback. |
+| `projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)` | `EXECUTE` | Existing current membership/role lock used by Projects authorization and the setup functions. |
+
+Both new functions pin `search_path`, revoke execution from `PUBLIC`, and are
+available to the runtime only through the explicit function entries in the
+P1 PostgreSQL grant catalog. Projects migration
+`20261027142501_AddP1ProjectSetupFunctions` creates them. The service startup
+guard verifies the exact function execution rights, the PUBLIC revocation, and
+the continued absence of direct runtime access to `project_setup_operations`.
+No separate HTTP-host database identity, general table grant, cleanup
+privilege, or live grant change is part of this source change.
+
+This receipt proves only the Projects setup transaction. It does not authorize
+or prove Environment/Sandbox resource creation, establish a cross-database
+transaction, or by itself bind a native runtime observation to the invocation.
+The P1 fixture runner is not wired to this endpoint by this change.
 
 The hosted reasoning publication contains only supported effort names and the
 binding reference, connection, revision, and verification time. AgentHost does

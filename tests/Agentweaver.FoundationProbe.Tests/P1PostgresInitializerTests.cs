@@ -347,19 +347,38 @@ public sealed class P1PostgresInitializerTests
     }
 
     [Fact]
-    public void FunctionOwnersAclAndEffectiveExecuteMatchOnlyTheCastingPlan()
+    public void FunctionOwnersAclAndEffectiveExecuteMatchOnlyTheApprovedProjectsFunctions()
     {
         var service = Services()[0] with
         {
             Schema = "projects_config",
-            Functions = [new("helper()", false),
-                new("lock_casting_authority(uuid, text, text, text, bigint, text, boolean)", true)],
+            Functions =
+            [
+                new("helper()", false),
+                new("lock_casting_authority(uuid, text, text, text, bigint, text, boolean)", true),
+                new("issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)", true),
+                new("read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)", true),
+            ],
         };
         FunctionState helper = new(1, "helper()", Owner, [new(Owner, Owner, "EXECUTE", false)], false);
         FunctionState casting = new(2, service.Functions[1].Signature, Owner,
             [new(Owner, Runtime, "EXECUTE", false), new(Owner, Owner, "EXECUTE", false)], true);
-        InitializerChecks.AssertFunctions(service, [casting, helper], Owner, Runtime);
+        FunctionState issue = new(3, service.Functions[2].Signature, Owner,
+            [new(Owner, Runtime, "EXECUTE", false), new(Owner, Owner, "EXECUTE", false)], true);
+        FunctionState read = new(4, service.Functions[3].Signature, Owner,
+            [new(Owner, Runtime, "EXECUTE", false), new(Owner, Owner, "EXECUTE", false)], true);
+        InitializerChecks.AssertFunctions(service, [casting, helper, issue, read], Owner, Runtime);
         var castingBeforeGrant = casting with
+        {
+            Grants = [new(Owner, Owner, "EXECUTE", false)],
+            RuntimeCanExecute = false,
+        };
+        var issueBeforeGrant = issue with
+        {
+            Grants = [new(Owner, Owner, "EXECUTE", false)],
+            RuntimeCanExecute = false,
+        };
+        var readBeforeGrant = read with
         {
             Grants = [new(Owner, Owner, "EXECUTE", false)],
             RuntimeCanExecute = false,
@@ -370,18 +389,20 @@ public sealed class P1PostgresInitializerTests
             RuntimeCanExecute = true,
         };
         InitializerChecks.AssertFunctions(
-            service, [castingBeforeGrant, defaultPublicHelper], Owner, Runtime, beforeRuntimeGrants: true);
+            service, [castingBeforeGrant, defaultPublicHelper, issueBeforeGrant, readBeforeGrant],
+            Owner, Runtime, beforeRuntimeGrants: true);
         Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertFunctions(
             service, [castingBeforeGrant, defaultPublicHelper with
             {
                 Grants = [.. defaultPublicHelper.Grants, new(Owner, Runtime, "EXECUTE", false)],
-            }], Owner, Runtime, beforeRuntimeGrants: true));
+            }, issueBeforeGrant, readBeforeGrant], Owner, Runtime, beforeRuntimeGrants: true));
         Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertFunctions(
             service, [castingBeforeGrant with
             {
                 Grants = [.. castingBeforeGrant.Grants, new(Owner, 0, "EXECUTE", false)],
                 RuntimeCanExecute = true,
-            }, helper], Owner, Runtime, beforeRuntimeGrants: true));
+            }, defaultPublicHelper, issueBeforeGrant, readBeforeGrant],
+            Owner, Runtime, beforeRuntimeGrants: true));
         foreach (var wrong in new[]
         {
             helper with { OwnerOid = Owner + 1 },
@@ -395,14 +416,16 @@ public sealed class P1PostgresInitializerTests
             helper with { Grants = [new(Owner + 1, Owner, "EXECUTE", false)] },
             helper with { Grants = [new(Owner, Owner, "EXECUTE", true)] },
         })
-            Assert.Throws<InvalidOperationException>(() =>
-                InitializerChecks.AssertFunctions(service, [casting, wrong], Owner, Runtime));
+            Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertFunctions(
+                service, [casting, wrong, issue, read], Owner, Runtime));
         Assert.Throws<InvalidOperationException>(() =>
-            InitializerChecks.AssertFunctions(service, [helper], Owner, Runtime));
+            InitializerChecks.AssertFunctions(service, [helper, issue, read], Owner, Runtime));
         Assert.Throws<InvalidOperationException>(() =>
-            InitializerChecks.AssertFunctions(service, [helper, casting with { Grants = helper.Grants }], Owner, Runtime));
+            InitializerChecks.AssertFunctions(service,
+                [helper, casting with { Grants = helper.Grants }, issue, read], Owner, Runtime));
         Assert.Throws<InvalidOperationException>(() =>
-            InitializerChecks.AssertFunctions(service, [helper, casting with { RuntimeCanExecute = false }], Owner, Runtime));
+            InitializerChecks.AssertFunctions(service,
+                [helper, casting with { RuntimeCanExecute = false }, issue, read], Owner, Runtime));
         Assert.Throws<InvalidOperationException>(() =>
             InitializerChecks.AssertFunctions(service with { Functions = [new("helper()", true)] },
                 [helper with { RuntimeCanExecute = true }], Owner, Runtime));
@@ -731,6 +754,8 @@ public sealed class P1PostgresInitializerTests
             [
                 new("reject_project_setup_operation_mutation()", false),
                 new("lock_casting_authority(uuid, text, text, text, bigint, text, boolean)", false),
+                new("issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)", false),
+                new("read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)", false),
             ],
         };
         return services;

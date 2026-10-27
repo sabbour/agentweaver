@@ -11,6 +11,7 @@ using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using OpenIddict.Abstractions;
 
 namespace Agentweaver.Gateway;
@@ -32,6 +33,16 @@ public sealed partial class GatewayOwnerClient(
     GatewayOptions options)
 {
     private const long MaximumProxyResponseBytes = 8 * 1024 * 1024;
+
+    private static async Task<bool> HasP1SetupBodyAsync(
+        HttpRequest request, CancellationToken cancellationToken)
+    {
+        if (request.HttpContext.Features.Get<IHttpRequestBodyDetectionFeature>()?.CanHaveBody != true)
+            return false;
+
+        var probe = new byte[1];
+        return await request.Body.ReadAsync(probe, cancellationToken).ConfigureAwait(false) > 0;
+    }
     private const long MaximumOwnerErrorBytes = 64 * 1024;
     private const long MaximumRunEventPageBytes = 1024 * 1024;
     private const int MaximumSseCursorLength = 8192;
@@ -57,8 +68,20 @@ public sealed partial class GatewayOwnerClient(
     {
         try
         {
+            if (route.OperationId == "createP1InvocationSetup")
+                context.Response.Headers.CacheControl = "no-store";
             var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
             using var timeout = CreateOwnerTimeout(cancellationToken);
+            if (route.OperationId == "createP1InvocationSetup" &&
+                (context.Request.ContentLength is > 0 ||
+                 context.Request.Headers.ContainsKey("Transfer-Encoding") ||
+                 context.Request.QueryString.HasValue ||
+                 await HasP1SetupBodyAsync(context.Request, timeout.Token).ConfigureAwait(false)))
+            {
+                await WriteProblemAsync(context, "invalid_project_setup_request", StatusCodes.Status400BadRequest)
+                    .ConfigureAwait(false);
+                return;
+            }
             using var boundedBody = await BufferBoundedRequestAsync(context, route, timeout.Token).ConfigureAwait(false);
             using var request = CreateOwnerRequest(context, route, bearer, boundedBody);
             using var response = await SendAsync(route.Owner, request, timeout.Token).ConfigureAwait(false);

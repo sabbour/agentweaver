@@ -24,6 +24,31 @@ The Web client uses these values to label project tiles and headers. The role
 labels do not authorize actions or replace permission checks. Every protected
 operation continues to check current owner authority.
 
+## P1 invocation setup receipt
+
+The source-only `POST /api/v1/p1/invocations/{invocationId}/setup`
+(`POST /api/p1/invocations/{invocationId}/setup` on Projects & Config)
+accepts no JSON body or existing project/resource IDs. It uses the current
+unbound actor token with the existing `api.read`, `projects.admin`, and
+`projects.orchestrator` scopes, explicit tenant selection, and current
+TenantAdmin authority. It is excluded from MCP.
+
+The runtime invokes the purpose-limited `SECURITY DEFINER`
+`issue_p1_project` function, which atomically creates the project, initial
+configuration, Owner and Orchestrator assignments, audit events, and immutable
+`ProjectSetupReceipt` in the Projects database. Exact retries are bound to the
+same actor, membership, and TenantAdmin assignment revision and recheck current
+authority plus setup state. Stale, revoked, reassigned, or cleaned receipts
+cannot establish new authority. The `200` response contains the receipt only;
+responses are `no-store`. Runtime has function `EXECUTE` rights, not direct
+access to `project_setup_operations`.
+
+The endpoint does not issue run, Environment, Sandbox, Pod, or AgentHost
+creation authorization and does not establish cross-database atomicity. P1
+tooling is not switched to this operation by this source change. See [P1
+project setup receipt](./runtime-configuration.md#p1-project-setup-receipt)
+for the migration, grant-catalog, and operator-command boundaries.
+
 ## Caller attention
 
 The Orchestrator's `UserNotification` projects persisted pending coordinator

@@ -459,6 +459,31 @@ Owner.
 > `GET /projects/{projectId}/access` route that doesn't exist. The web client
 > must use the contract on this page.
 
+### P1 invocation setup
+
+`POST /api/v1/p1/invocations/{invocationId}/setup` is a REST-only Gateway
+route backed by `POST /api/p1/invocations/{invocationId:guid}/setup` in Projects.
+It requires the existing unbound bearer with `api.read`, `projects.admin`, and
+`projects.orchestrator`, plus exactly one `X-Agentweaver-Tenant` header naming
+the selected tenant. The Projects owner resolves the actor, membership, and
+current TenantAdmin assignment from that authenticated request. The route
+accepts no body or query parameters and returns the immutable Projects setup
+receipt with `Cache-Control: no-store`; it accepts no existing project or
+resource IDs.
+
+The Projects runtime principal can execute only the dedicated issue/read
+functions for this operation. The issue function creates the project, initial
+configuration, Owner and Orchestrator assignments, audit events, and setup
+receipt atomically in the Projects database. Same-invocation retries recheck
+current authority and the exact readback. This receipt is not authorization or
+proof for run, Environment, Sandbox, or runtime creation.
+
+| Status | Problem code | Meaning |
+| --- | --- | --- |
+| `400` | `invalid_project_setup_request` | The invocation ID, tenant header, body, or query is invalid. |
+| `403` | `forbidden` | The bearer lacks the required scope/current TenantAdmin authority, or the selected tenant does not match. |
+| `409` | `project_setup_invocation_conflict`, `project_setup_receipt_stale` | The invocation conflicts with an existing receipt or its current readback is stale. |
+
 ### P1 setup authority audit
 
 `GET /api/project-setup-invocations/{invocationId:guid}/authority-audit` is

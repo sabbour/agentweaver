@@ -510,38 +510,48 @@ step. At startup, the service accepts either no authority write grants or
 exactly this set. It fails closed on a partial set or any other write
 privilege on authority tables, including `DELETE`.
 
-### Privileged project setup
+### P1 project setup receipt
 
-The privileged project-setup command has a separate authority database
-contract. The runtime connection and identity are not substitutes. The
-runtime principal must not read setup-operation receipts.
+`POST /api/p1/invocations/{invocationId:guid}/setup` uses the existing
+authenticated P1 actor, tenant header, OAuth scopes, and current TenantAdmin
+authorization. It accepts no body or query parameters. The Projects service
+resolves actor, membership, and assignment revisions from its normal
+authorization owner; request data cannot supply a project ID or authority
+revision.
 
-| Setting | Contract |
-| --- | --- |
-| `ConnectionStrings__ProjectsConfigAuthority` | Required by `--privileged-project-setup`. Use a password-free connection to the same Projects & Config database, with a separately approved authority principal and `SSL Mode=VerifyFull`. |
-| `ProjectsConfig__AuthorityDatabase__WorkloadIdentity__TenantId`, `ClientId`, `TokenFilePath` | Required explicit workload identity for that authority principal. Use GUID tenant/client IDs and an absolute projected-token path. The approved identity must have the database grants needed for setup and cleanup. |
+The endpoint calls the Projects runtime database's
+`projects_config.issue_p1_project` `SECURITY DEFINER` function. That function
+creates the project, initial configuration, Owner and Orchestrator assignments,
+audit events, and immutable setup receipt in one Projects transaction, then
+returns the bounded result from `read_p1_project`. A same-owner retry is
+idempotent only while current membership/TenantAdmin authority and the exact
+receipt, project, configuration, assignments, and audit links remain valid.
+Replayed requests with changed identity, revoked authority, cleanup, or stale
+state fail closed.
 
-These authority settings are not supplied by the standard runtime ConfigMap.
-To validate them, supply the optional, all-or-none
-`privilegedSetupConfiguration` object to
-`deploy\k8s\profiles\projects-config\render.mjs`. The example input includes
-empty values that you must replace with approved values, or remove the
-whole object for runtime-only validation. The validator returns the
-combined `data` map; it does not generate or apply Kubernetes resources.
-It rejects the runtime role or client ID, migration-role names, foreign
-database targets, and password-bearing connections. The authority client
-must be separately approved and federated to the ServiceAccount; validation
-does not establish that its federation or database grants exist.
+The migration `20261027142501_AddP1ProjectSetupFunctions` creates the two
+functions, restricts their `search_path`, and revokes execution from `PUBLIC`.
+The runtime grant catalog adds only `EXECUTE` on those functions; it does not
+grant the Projects runtime principal direct access to
+`projects_config.project_setup_operations` or a second HTTP-host database
+identity. The startup guard verifies the two function grants and PUBLIC
+revocation. The source change does not install grants or change a deployed
+identity.
 
-The P1 runner no longer runs `--privileged-project-setup`. It creates the
-fixture project and its Owner and Orchestrator assignments through the
-public API with the signed-in setup token. The command remains available for
-operators. Don't reuse migration credentials or change Broker trust as a
-workaround for a missing authority configuration. Missing authority
-configuration fails before the command opens a database connection; it
-does not establish the historical state of an invocation. See
+The standalone `--privileged-project-setup` operator command remains a
+separate path and is not used by this endpoint or by the P1 fixture runner.
+Its operator-specific configuration is not part of the standard Projects
+runtime profile. Don't reuse migration credentials or change Broker trust as a
+workaround for an unavailable operator-only path. See
 [Diagnose an indeterminate P1 project setup](../guide/troubleshooting.md#diagnose-an-indeterminate-p1-project-setup)
-for the reconciliation steps.
+for reconciliation guidance.
+
+The path invocation ID is a Projects setup correlation key; this endpoint does
+not validate it against Orchestrator invocation/checkpoint authority. The setup
+receipt proves only the local Projects transaction. It is not
+Environment/Sandbox creation authorization or proof, and does not establish
+cross-database atomicity. The P1 fixture runner is not wired to this endpoint
+by this source change.
 
 The provider catalog is supplied separately with the
 `ProjectsConfig__ProviderCatalog__` prefix. See

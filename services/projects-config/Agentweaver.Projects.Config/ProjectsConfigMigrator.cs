@@ -104,11 +104,31 @@ public static class ProjectsConfigMigrator
                    current_user,
                    'projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)',
                    'EXECUTE')
+               AND has_function_privilege(
+                   current_user,
+                   'projects_config.issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
+                   'EXECUTE')
+               AND has_function_privilege(
+                   current_user,
+                   'projects_config.read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
+                   'EXECUTE')
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM pg_catalog.pg_proc AS routine
+                   CROSS JOIN LATERAL pg_catalog.aclexplode(
+                       COALESCE(routine.proacl, pg_catalog.acldefault('f', routine.proowner))) AS acl
+                   WHERE routine.oid IN (
+                       pg_catalog.to_regprocedure(
+                           'projects_config.issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)'),
+                       pg_catalog.to_regprocedure(
+                           'projects_config.read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)'))
+                     AND acl.grantee = 0
+                     AND acl.privilege_type = 'EXECUTE')
             """,
             connection);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
             throw new InvalidOperationException(
-                "The Projects & Config runtime database principal must have SELECT on authority tables, no membership writes, no DELETE or TRUNCATE on authority tables, SELECT/INSERT/UPDATE but no DELETE/TRUNCATE on hosted_model_reasoning_catalog, no access to project_setup_operations, EXECUTE on projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean), and no schema CREATE privilege. Role-assignment writes are optional, but when present they must be exactly INSERT on project_role_assignments and authority_audit plus UPDATE on project_role_assignments (state, revision, revoked_by, revoked_at).");
+                "The Projects & Config runtime database principal must have SELECT on authority tables, no membership writes, no DELETE or TRUNCATE on authority tables, SELECT/INSERT/UPDATE but no DELETE/TRUNCATE on hosted_model_reasoning_catalog, no access to project_setup_operations, EXECUTE on projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean), issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint), and read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint), and no schema CREATE privilege. Role-assignment writes are optional, but when present they must be exactly INSERT on project_role_assignments and authority_audit plus UPDATE on project_role_assignments (state, revision, revoked_by, revoked_at).");
     }
 
     /// <summary>

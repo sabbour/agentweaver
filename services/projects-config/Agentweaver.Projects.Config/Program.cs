@@ -323,6 +323,7 @@ app.MapGet("/health/ready", async (ProjectsConfigDbContext db, CancellationToken
         ? Results.Ok(new { status = "ready" })
         : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
 app.MapProjectConfigEndpoints(enableBrokerRunBinding: brokerRunBindingAudienceUri is not null);
+app.MapP1ProjectSetupEndpoint();
 app.MapIssueSyncAuthority(issueSyncIdentity);
 app.MapSkillMarketplaceEndpoints();
 app.MapSkillContentEndpoints();

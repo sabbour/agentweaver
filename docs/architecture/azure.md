@@ -183,7 +183,7 @@ through 33, and 35-39), with version 17 excluded and reserved version 34
 skipped, 11 Events versions, and 11 Environment versions. The initializer
 compares that catalog with each migrator's compiled version list. The reviewed
 offline plan hash is
-`c1283c2ab1071d4757aa5ece7fb8347bc80b11b2806d6229b1ad371d05a129f2`.
+`425f7d673ccfe7c4b311bc5696fa7cdeb0bc76feefc72d4680a795ab8335c88d`.
 It contains 119 tables, 12 row-lock columns, and 34 exact function signatures.
 Events migration 010 adds `session_object_inventory` with exactly
 `SELECT, INSERT, UPDATE` runtime access.

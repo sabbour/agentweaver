@@ -16,14 +16,5 @@
     "AgentHost__ModelBindings__gpt-6.1-sol__Enabled": "true",
     "AgentHost__ModelBindings__gpt-6-luna__SourceMode": "HostedCopilot",
     "AgentHost__ModelBindings__gpt-6-luna__Enabled": "true"
-  },
-  "privilegedSetupConfiguration": {
-    "ConnectionStrings__ProjectsConfigAuthority": null,
-    "ProjectsConfig__AuthorityDatabase__WorkloadIdentity__TenantId": null,
-    "ProjectsConfig__AuthorityDatabase__WorkloadIdentity__ClientId": null,
-    "ProjectsConfig__AuthorityDatabase__WorkloadIdentity__TokenFilePath": null,
-    "ProjectsConfig__PrivilegedSetup__ApprovedIssuer": null,
-    "ProjectsConfig__PrivilegedSetup__ApprovedSubject": null,
-    "ProjectsConfig__PrivilegedSetup__ApprovedTenantId": null
   }
 }

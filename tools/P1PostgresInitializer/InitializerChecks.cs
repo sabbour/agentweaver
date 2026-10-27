@@ -655,8 +655,11 @@ internal static class InitializerChecks
         foreach (var planned in service.Functions)
         {
             if (planned.Execute && (service.Schema != "projects_config" ||
-                planned.Signature != "lock_casting_authority(uuid, text, text, text, bigint, text, boolean)"))
-                throw new InvalidOperationException("Only the existing casting authority function may receive runtime EXECUTE.");
+                planned.Signature is not
+                    ("lock_casting_authority(uuid, text, text, text, bigint, text, boolean)" or
+                     "issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)" or
+                     "read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)")))
+                throw new InvalidOperationException("Only approved Projects owner functions may receive runtime EXECUTE.");
             var matches = functions.Where(item => item.Signature == planned.Signature).ToArray();
             if (matches.Length != 1)
                 throw new InvalidOperationException("A planned function is missing or duplicated.");

@@ -335,6 +335,8 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             $"GRANT SELECT ON projects_config.authority_audit TO \"{runtimeRole}\"",
             $"GRANT SELECT, INSERT, UPDATE ON projects_config.hosted_model_reasoning_catalog TO \"{runtimeRole}\"",
             $"GRANT EXECUTE ON FUNCTION projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean) TO \"{runtimeRole}\"",
+            $"GRANT EXECUTE ON FUNCTION projects_config.issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint) TO \"{runtimeRole}\"",
+            $"GRANT EXECUTE ON FUNCTION projects_config.read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint) TO \"{runtimeRole}\"",
         };
         if (grantRoleAssignmentWrites)
             statements =
