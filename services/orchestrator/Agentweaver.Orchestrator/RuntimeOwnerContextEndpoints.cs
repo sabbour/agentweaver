@@ -310,6 +310,7 @@ public static partial class CoordinationEndpoints
         await RequireUnchangedAuthorizedSelectionAsync(
             context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
 
+        // Reuse admission's immutable model pin only for the same model reference and reasoning effort.
         var modelBindingPin = runAdmission is { } admission &&
             admission.ModelBindingPin.ModelSelectionReference == modelSelection.Reference &&
             admission.ModelBindingPin.ReasoningEffort == modelSelection.ReasoningEffort

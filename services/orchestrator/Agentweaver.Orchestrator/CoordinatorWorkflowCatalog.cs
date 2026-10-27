@@ -421,6 +421,7 @@ internal static class CoordinatorWorkflowCatalog
         var acceptedIdentities = identities.ToImmutableHashSet();
         if (!selection.TryGetProperty("modelTaskSelections", out var routes))
         {
+            // Without explicit routes, use the primary selection or the sole accepted model.
             if (primarySelection is null && acceptedIdentities.Count == 1)
                 primarySelection = acceptedIdentities.Single();
             var legacyRoutes = primarySelection is null

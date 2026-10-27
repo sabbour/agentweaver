@@ -99,6 +99,7 @@ internal static class MafRubberduckReviewContract
         var lines = output.Split('\n');
         var verdictLineIndex = Array.FindIndex(lines, line => !string.IsNullOrWhiteSpace(line));
         var verdict = verdictLineIndex < 0 ? string.Empty : lines[verdictLineIndex].Trim();
+        // Multiple standalone verdicts fail the review, even if they agree.
         if (verdict is not ("PASS" or "REQUEST_CHANGES") ||
             lines.Where((_, index) => index != verdictLineIndex)
                 .Any(line => line.Trim() is "PASS" or "REQUEST_CHANGES"))
@@ -203,6 +204,7 @@ internal static class MafRubberduckReviewContract
         MafExecutionCheckpoint state)
     {
         var ancestors = MafIndependentReviewContract.Ancestors(workflow, step);
+        // Review only completed ancestors, not unrelated work or evidence from later workflow steps.
         var work = new List<object>();
         var platform = new List<object>();
         foreach (var ancestor in workflow.Steps

@@ -363,6 +363,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
                 }
                 catch (CoordinationException exception) when (IsUnavailableBinding(exception))
                 {
+                    // Missing authority is unverified evidence, never permission to satisfy a prerequisite.
                     snapshots[index] = CreateUnverifiedSnapshot(claim, 0);
                 }
                 catch (CoordinationException exception) when (IsStaleBinding(exception))
@@ -494,6 +495,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
                 }
                 var ownerProofs = await ReadCurrentOwnerProofsInTransactionAsync(
                     connection, transaction, evidence, cancellationToken).ConfigureAwait(false);
+                // Prepared evidence is usable only if the entire owner snapshot still matches under claim locks.
                 if (!SameCheckpoint(preparedItem.Root.Checkpoint, evidence.Checkpoint) ||
                 !preparedItem.Root.ChildBindings.SequenceEqual(evidence.ChildBindings) ||
                 !SameOutputEvidence(preparedItem.Root, evidence) ||

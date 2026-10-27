@@ -150,6 +150,7 @@ public sealed class SourceControlMergeIntentRequest
             throw new InvalidOperationException(
                 "Merge intent approval must be the exact current typed receipt for this intent.");
 
+        // Revalidate gate legality after approval rather than trusting the saved assembly.
         var assembly = CoordinatorDecisionFlow.RequestAssembly(
             currentDecisionState,
             new CoordinatorAssemblyRequest(

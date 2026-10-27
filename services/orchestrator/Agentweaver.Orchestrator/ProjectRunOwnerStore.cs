@@ -131,6 +131,7 @@ internal sealed partial class CoordinationOwnerStore
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             if (row.State != "started")
             {
+                // Root provenance must be durable before external delivery; failed delivery can retry safely.
                 await deliverFirstMessage(row, cancellationToken).ConfigureAwait(false);
                 await MarkProjectRunStartedAsync(
                     actor, tenantId, projectId, runId, row, revalidateAuthority, cancellationToken)
@@ -236,6 +237,7 @@ internal sealed partial class CoordinationOwnerStore
             alreadyTerminal ? null : cancelledAt, alreadyTerminal);
         var operationId = Guid.NewGuid();
         var nextFence = run is null ? 1 : alreadyTerminal ? run.Fence : checked(run.Fence + 1);
+        // Terminal retries retain the existing outcome; only a new cancellation fences running work.
         if (!alreadyTerminal)
         {
             if (run is not null)

@@ -1568,6 +1568,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
             connection, transaction, actor, identity, evidence, cancellationToken).ConfigureAwait(false);
         if (!grantValid && !requireCurrentGrant)
         {
+            // Denial evidence may outlive a grant; it cannot authorize execution under that old grant.
             grantValid = await IsIssuedGrantForReceiptAsync(
                 connection, transaction, actor, identity, evidence, cancellationToken).ConfigureAwait(false);
         }
@@ -1591,6 +1592,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
             inserted = await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        // A receipt ID is reusable only for identical evidence, not merely an existing row.
         var saved = await ReadReceiptRowAsync(
             connection, transaction, identity, receiptId, cancellationToken).ConfigureAwait(false);
         if (saved is null || saved.ActorId != evidence.ActorId ||

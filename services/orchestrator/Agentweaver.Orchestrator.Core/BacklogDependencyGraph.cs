@@ -54,6 +54,7 @@ public sealed class BacklogDependencyGraph
         if (!added.IsSuccess)
             return added;
         var graph = added.Value!.Graph;
+        // Content belongs to the same addition, not a second graph or task revision.
         var task = ApplyContent(graph._tasks[taskReference!.TaskId], content);
         return BacklogCoreResult<BacklogTaskEdit>.Success(new BacklogTaskEdit(
             new BacklogDependencyGraph(ProjectId, graph.Revision,
@@ -76,6 +77,7 @@ public sealed class BacklogDependencyGraph
         var updated = ApplyContent(task!, content);
         if (updated.State != task!.State)
         {
+            // Closing a Ready task appends it to Backlog; claimed tasks keep their state.
             if (!TryGetNextPosition(updated.State, out var position))
                 return TaskFailure(BacklogIssueCode.TaskPositionExhausted, "task.position",
                     "The task position cannot be incremented.");
@@ -779,6 +781,7 @@ public sealed class BacklogDependencyGraph
 
     private bool CanReach(string start, string target)
     {
+        // If a prerequisite can reach the task, adding this dependency would create a cycle.
         var visited = new HashSet<string>(StringComparer.Ordinal);
         var pending = new Stack<string>();
         pending.Push(start);
@@ -812,6 +815,7 @@ public sealed class BacklogDependencyGraph
         IEnumerable<string> taskIds,
         IEnumerable<BacklogDependencyEdge> dependencies)
     {
+        // Remove dependency-free tasks in order; any tasks left over belong to or depend on a cycle.
         var remainingDependencies = taskIds.ToDictionary(
             taskId => taskId, _ => 0, StringComparer.Ordinal);
         var dependentsByPrerequisite = taskIds.ToDictionary(

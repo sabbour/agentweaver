@@ -76,6 +76,7 @@ internal sealed class IssueSyncStore
         IssueSyncGrantReceipt proof, long expectedRevision, Func<CancellationToken, Task> revalidate, CancellationToken ct)
     {
         settings.Validate();
+        // Configuration uses the cycle lock so an active cycle cannot continue under replaced settings.
         var connection = await TryLockAsync(projectId, ct)
             ?? throw new CoordinationException("issue_sync_cycle_in_progress", 409);
         try
@@ -166,6 +167,7 @@ internal sealed class IssueSyncStore
 
     internal async Task WriteReceiptAsync(string project, IssueSyncReceipt receipt, CancellationToken ct)
     {
+        // Once attached, a task cannot silently switch repository or issue during reconciliation.
         await using var connection = await _data.OpenConnectionAsync(ct);
         await using var command = new NpgsqlCommand($"""
             INSERT INTO {_schema}.issue_sync_receipts(project_id,task_id,repository,issue_number,baseline,create_pending)

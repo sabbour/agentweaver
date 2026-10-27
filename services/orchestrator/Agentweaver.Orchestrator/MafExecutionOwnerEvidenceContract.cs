@@ -86,6 +86,7 @@ internal static class MafExecutionOwnerEvidenceContract
 
         if (outputSet.Obligations.IsEmpty)
         {
+            // No-output evidence cannot stand in for a merge or another required platform operation.
             foreach (var emptyCapture in captures)
             {
                 ValidateCapture(emptyCapture, root, tenantId);
@@ -151,6 +152,7 @@ internal static class MafExecutionOwnerEvidenceContract
                 MergeIntentId: null));
         }
 
+        // A witness must cover the exact obligation set, not just a valid subset of captured files.
         if (seenOutputs.Count != outputSet.Obligations.Length ||
             outputSet.Obligations.Any(obligation =>
                 !seenOutputs.Contains((obligation.WorkItemId, obligation.OutputPath))))

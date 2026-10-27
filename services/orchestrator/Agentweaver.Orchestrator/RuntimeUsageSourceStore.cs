@@ -1485,6 +1485,7 @@ internal sealed class RuntimeUsageSourceStore(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeNativeTurnAdmissionReceipt admission,
         RuntimeNativeTurnObservation observation, CancellationToken cancellationToken)
     {
+        // One SDK usage event cannot account for two dispatches in the same runtime session.
         if (observation.UsageEventIds.IsEmpty)
             return;
         await using var command = new NpgsqlCommand($"""
@@ -1547,6 +1548,7 @@ internal sealed class RuntimeUsageSourceStore(
                 return replay;
             }
         }
+        // Persist accounting only after Events proves coverage of the exact recorded turn and receipt set.
         var accounted = new RuntimeNativeTurnAccountingReceipt(
             request.Recorded, snapshot, checked(dispatch.OwnerRevision + 1));
         RuntimeNativeTurnContract.ValidateAccounted(accounted, request.Recorded, references);

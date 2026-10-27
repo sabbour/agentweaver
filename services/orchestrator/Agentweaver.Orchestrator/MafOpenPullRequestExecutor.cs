@@ -65,6 +65,7 @@ internal sealed class MafOpenPullRequestExecutor(
         await requireCurrentAsync(intent, cancellationToken).ConfigureAwait(false);
         var receipt = MafOpenPullRequestContract.CreateReceipt(intent, pullRequest);
 
+        // The remote call is outside this transaction; revalidate the decision before retaining its receipt.
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);

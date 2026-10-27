@@ -794,6 +794,7 @@ internal static partial class SourceControlEndpoints
         {
             var ownerRequest = request with
             {
+                // Retries without a retained result may discover an existing PR, but cannot create another.
                 ExecutionBinding = binding with { OwnerMayCreate = operation.IsNew }
             };
             pullRequest = await redemption.WithCredentialAsync(
@@ -2035,6 +2036,7 @@ internal static partial class SourceControlEndpoints
                 cancellationToken).ConfigureAwait(false);
             if (lockedIntent.State == "merge_started")
             {
+                // A previous process may have merged remotely; never repeat that effect from a started marker.
                 await sourceControlOwner.MarkInterruptedMergeUncertainAsync(
                     identity, lockedIntent.IntentId, cancellationToken).ConfigureAwait(false);
                 return new SourceControlMergeExecutionResult(
@@ -2205,6 +2207,7 @@ internal static partial class SourceControlEndpoints
                         }
                     }
 
+                    // A completed remote merge stays merged even if caller cancellation or authority changed.
                     using var durableSettlement = new CancellationTokenSource(MergeSettlementTimeout);
                     await sourceControlOwner.RecordMergeOutcomeAsync(
                         identity,

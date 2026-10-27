@@ -216,11 +216,13 @@ internal sealed class MafExecutionCheckpointStore
             connection, transaction, _binding, cancellationToken).ConfigureAwait(false);
         await AcquireExecutionLockInTransactionAsync(
             connection, transaction, cancellationToken).ConfigureAwait(false);
+        // A competing append may have committed while this transaction waited for the lock.
         latest = await _checkpoints.ReadLatestCheckpointInTransactionAsync(
             connection, transaction, _binding, cancellationToken).ConfigureAwait(false);
         if (latest is { } current &&
             string.Equals(current.Info.CheckpointId, checkpointId, StringComparison.Ordinal))
         {
+            // Let the durable owner compare payloads; matching checkpoint IDs alone do not prove a replay.
             var replayPayload = MafExecutionCheckpointContract.Serialize(state);
             var replay = await _checkpoints.AppendInTransactionAsync(
                 connection,

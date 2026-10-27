@@ -110,6 +110,7 @@ public static class BacklogReadinessEvaluator
             .ToHashSet(StringComparer.Ordinal);
         var blockers = ImmutableArray.CreateBuilder<BacklogIssue>();
 
+        // Malformed or stale inputs fail evaluation; valid current evidence can still block a claim.
         if (task.Lifecycle == BacklogTaskLifecycle.Closed || task.IsArchived || task.IsAutomationInvocationPending ||
             task.State == BacklogTaskState.Claimed)
             Add(blockers, BacklogIssueCode.TaskNotEligible, "task",
@@ -175,6 +176,7 @@ public static class BacklogReadinessEvaluator
 
             switch (prerequisite.OutputProofState)
             {
+                // Completion can omit output proof, but a merge always needs a verified witness.
                 case BacklogOutputProofState.NotRequired
                     when prerequisite.State == BacklogPrerequisiteExecutionState.Completed:
                 case BacklogOutputProofState.Verified:

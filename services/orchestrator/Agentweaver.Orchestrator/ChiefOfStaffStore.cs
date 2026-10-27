@@ -297,6 +297,7 @@ public sealed class ChiefOfStaffStore
             .ConfigureAwait(false);
         if (revision != request.ExpectedOrderRevision)
             throw new CoordinationException("priority_order_conflict", StatusCodes.Status409Conflict);
+        // Require a permutation of the whole owned list; partial orders must not drop or import priorities.
         await using (var update = new NpgsqlCommand($"""
             WITH ordered AS (
                 SELECT id, ordinality - 1 AS position FROM unnest(@ids::varchar[]) WITH ORDINALITY AS t(id, ordinality)

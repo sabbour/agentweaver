@@ -232,6 +232,7 @@ internal sealed class RuntimeRegistrationOwner(
             }
             catch (RuntimeAuthorizationException exception) when (IsStaleCandidate(exception))
             {
+                // Historical registrations are expected; other authorization failures must still surface.
             }
         }
 
@@ -247,6 +248,7 @@ internal sealed class RuntimeRegistrationOwner(
 
         try
         {
+            // Revalidate the sole match after scanning; another registration may have replaced it.
             var selected = await ExecuteCurrentAsync(
                 context,
                 currentMatches[0].RuntimeInstanceId,
@@ -354,6 +356,7 @@ internal sealed class RuntimeRegistrationOwner(
                 EnvironmentProviderFencingGeneration = placement.ProviderFencingGeneration,
                 Image = placement.Image
             };
+            // PostgreSQL timestamps have microsecond precision; compare using the stored precision.
             var expiry = new DateTimeOffset(
                 placement.LeaseExpiresAt.UtcTicks - placement.LeaseExpiresAt.UtcTicks % 10, TimeSpan.Zero);
             return new(binding, expiry);

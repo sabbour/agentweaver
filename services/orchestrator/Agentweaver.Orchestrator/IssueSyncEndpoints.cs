@@ -30,6 +30,7 @@ internal static class IssueSyncEndpoints
             var proof = await ReadOwnerAsync(projectId, context, client, options);
             var existing = await store.ReadAsync(projectId, context.RequestAborted);
             IssueSyncGrantReceipt grant;
+            // Disabling sync can reuse the saved grant proof without contacting the grant owner.
             if (!request.Settings.Enabled && existing is not null &&
                 request.Settings.GrantId == existing.Settings.GrantId && existing.TenantId == proof.TenantId)
                 grant = existing.GrantProof;
@@ -68,6 +69,7 @@ internal static class IssueSyncEndpoints
         HttpClient client, OrchestratorOptions options)
     {
         _ = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        // Sync configuration requires project-owner authority, not a run-bound or purpose-bound token.
         if (context.User.HasClaim(claim => claim.Type is "run_id" or "purpose"))
             throw new CoordinationException("issue_sync_owner_token_required", 403);
         using var request = new HttpRequestMessage(HttpMethod.Get,
