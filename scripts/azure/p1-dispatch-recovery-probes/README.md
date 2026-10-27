@@ -18,9 +18,10 @@ node scripts\azure\p1-dispatch-recovery-probes\run.mjs --input <run-bound-manife
 
 The provider module exports `createP1DispatchRecoveryDependencies({ input })`.
 It returns optional `observationClient`, `creditDenialDependencies` with a
-`hostCaller.postJson(path, body)`, and `runtimeReadinessProvider.readCurrent`
-clients. The manifest may contain `observationContext`, `creditDenialInput`,
-and `recoveryContext`; it must not contain bearer tokens or other credentials.
+`hostCaller.postJson(path, body)`, `numericDenialDependencies` with an
+`ownerCaller.postJson(path, body)`, and `runtimeReadinessProvider.readCurrent`
+clients. The manifest may contain only `observationContext`, `creditDenialInput`,
+`numericDenialInput`, and `recoveryContext`; it must not contain bearer tokens or other credentials.
 The provider supplies the already-authorized Host caller and must use the
 source-owned fixed routes. The runner validates returned Host denial/no-send
 receipts and the current replacement Host recovery receipt; it does not accept
@@ -38,7 +39,7 @@ source.
 Run its controlled tests with:
 
 ```powershell
-node --test scripts\azure\p1-dispatch-recovery-probes\tests\run.test.mjs
+node --test scripts\azure\p1-dispatch-recovery-probes\tests\*.test.mjs scripts\harness-shared\test\p1-numeric-denial-evidence.test.mjs
 ```
 
 The result is a `p1-dispatch-recovery-acceptance` envelope with a canonical
@@ -57,6 +58,71 @@ resources. The full P1 aggregator preserves these two probe statuses alongside
 the four native probes.
 
 ## Missing numeric-dispatch evidence
+
+### Persisted numeric-denial readback
+
+`numericDenialInput` accepts optional `modelTurns` and `toolCalls` cases (at
+least one). Each case has exactly `expected`, `recordedAfter`, and
+`recordedBefore`. The timestamps bound the expected attempt's observation
+interval; an older, later, future, or malformed record is rejected, preserving
+all seven .NET fractional digits. Each `expected` object contains these exact
+lookup/identity fields from the accepted owner context, not a caller receipt:
+
+| Scope | Required fields |
+| --- | --- |
+| Owner | `projectId`, `runId`, `rootSessionId`, `sessionId`, `ownerRevision`, `executionFence`, `acceptedSelectionHash` |
+| Registration and source | `runtimeInstanceId`, `registrationRevision`, `sourceRegistrationRevision`, `sourceGrantId`, `sourceHash` |
+| Action and attempt | `grantId`, `grantRevision`, `attemptId`, `requestHash` |
+| Accepted limit | `limitKind` (`ModelTurns` or `ToolCalls`, matching the case), `acceptedLimit` |
+| Dispatch/checkpoint | `dispatchId`, `checkpointId`, `checkpointRevision`, `checkpointHash`, `checkpointDecisionStateVersion`, `workPlanId`, `associationId` |
+
+Use explicit `null` values for absent dispatch/checkpoint fields, as in the
+producer contract. The six checkpoint fields must be all present or all null.
+Identifiers and hashes follow `RuntimeContractValidation`; GUIDs use canonical
+lowercase `D` format. Unknown fields, caller status/results, embedded receipts,
+and unsafe JavaScript integer values are rejected before the first read.
+
+The provider must supply a reviewed, already-authenticated **Orchestrator**
+owner client, not the Host caller and not a configurable URL in the manifest.
+The runner calls only:
+
+```text
+POST /internal/runtime/actions/numeric-denials/read
+{ runtimeInstanceId, registrationRevision, executionFence, attemptId }
+```
+
+The existing endpoint checks the actor, current accepted selection and
+registration, root owner revision, source grant and source hash. The runner
+then checks every expected identity field, `observedCount >= acceptedLimit`,
+the unchanged persisted send-state hashes, the observation interval, and
+`canonicalPayloadHash`. That checksum is **not authentication**: authenticity
+comes from the authorized fixed owner route. HTTP clients must return the
+actual `{ receipt }` result; `null` means missing evidence, not success.
+
+Hashing matches the C# producer's default `JsonSerializer` bytes: PascalCase
+declaration order, explicit nulls, default string escaping, string enum names,
+and `DateTimeOffset` formatting with its retained offset and fractional ticks.
+It is not a sorted-key or camelCase JavaScript JSON hash. The controlled vectors
+in `tests/producer-vectors.json` were emitted by the actual
+`RuntimeNumericLimitDenialReceipt.Seal` and HTTP serializer. Regenerate them
+from the repository root with .NET 10:
+
+```powershell
+dotnet run --file scripts\azure\p1-dispatch-recovery-probes\tests\producer-vectors.cs --verbosity quiet | Set-Content -Encoding utf8 scripts\azure\p1-dispatch-recovery-probes\tests\producer-vectors.json
+```
+
+`liveObservations.numericDenials` reports each validated case as `observed`,
+with `persistedSendStateUnchanged: true`, `nativeNoSendProven: false`, and
+`acceptanceEvidence: false`. Its status is only `partial`, even when both cases
+validate. Missing or rejected cases stay `blocked`, and a valid sibling is
+retained. A stored owner denial proves only the persisted owner/send state.
+It does not prove a native cursor/no-send interval, admitted-turn completion,
+soft-credit warning/floor advance, or replacement no-duplicate behavior.
+Both required probe slots and full P1 acceptance remain blocked until all
+those independent receipts are genuine. This command never creates denial
+records, sends a model turn/tool call, changes grants, or reruns P1.
+
+### Remaining acceptance prerequisites
 
 `RuntimeAgentHost.ConfigureAsync` supports `MaxModelTurns` and `MaxToolCalls`
 only for workflow-bound registrations, whose native sends use owner-prepared
@@ -84,7 +150,8 @@ not native journal positions, and a missing event alone is not proof of no send.
 With run-bound credit-reader pins and an authorized Host caller, the command
 reads the existing fixed-zero and positive hard-credit denial routes. Those
 owner responses can prove the stored denial and its complete empty native-event
-range. They do not execute numeric `MaxModelTurns` or `MaxToolCalls` boundaries,
+range. The separate Orchestrator reader can now validate persisted numeric denials,
+but those owner records alone do not prove native no-send. Neither reader executes numeric `MaxModelTurns` or `MaxToolCalls` boundaries,
 observe the whole-run soft-warning/floor advance, or supply admitted-turn
 completion and usage receipts. The numeric probe therefore stays blocked until
 those receipts have source-owned producers. Keep unbound and legacy dispatches
