@@ -201,6 +201,9 @@ test('Core plan includes migration 038 and its exact owner-operation grants', ()
 test('Plans and hashes are deterministic and independent copies', () => {
   const original = buildP1PostgresPlan();
   const hash = p1PostgresPlanHash(original);
+  const committed = JSON.parse(readFileSync(new URL('../lib/p1-postgres-plan.json', import.meta.url), 'utf8'));
+  assert.deepEqual(committed, original, 'the embedded plan must match its source builder');
+  assert.equal(p1PostgresPlanHash(committed), hash);
   const other = buildP1PostgresPlan();
   other.services[0].tables[0].privileges.push('INSERT');
   other.target.database = 'foreign';

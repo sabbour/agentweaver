@@ -178,13 +178,13 @@ type, function source/owner, and runtime EXECUTE restriction. Its role stage
 checks all five mappings before commit. Its grant checks preserve existing
 ownership and permit only exact runtime grants. The source checks functions by
 owner and effective EXECUTE privileges, not counts alone.
-Its source catalog includes 36 Core migration versions (1 through 16, 18
-through 33, and 35-38), with version 17 excluded and reserved version 34
+Its source catalog includes 37 Core migration versions (1 through 16, 18
+through 33, and 35-39), with version 17 excluded and reserved version 34
 skipped, 11 Events versions, and 11 Environment versions. The initializer
 compares that catalog with each migrator's compiled version list. The reviewed
 offline plan hash is
-`3e33e6b4f4f9eb981a12e937133d6b0cf25328ed56039cc077ee3470c6fb61d2`.
-It retains 118 tables, 12 row-lock columns, and 33 exact function signatures.
+`c1283c2ab1071d4757aa5ece7fb8347bc80b11b2806d6229b1ad371d05a129f2`.
+It contains 119 tables, 12 row-lock columns, and 34 exact function signatures.
 Events migration 010 adds `session_object_inventory` with exactly
 `SELECT, INSERT, UPDATE` runtime access.
 Migration 011 protects the immutable `messaging_provider_bindings` row lock
@@ -200,6 +200,13 @@ Orchestrator migration 038 adds the Source Control pull-request operation
 ledger. The runtime plan grants exactly `SELECT, INSERT, UPDATE` on this table.
 The migration is optional during readiness until its table and ledger entry
 are applied.
+Orchestrator migration 039 adds the dedicated append-only runtime evidence
+ledger with exactly `SELECT, INSERT` runtime rights and no column-scoped
+UPDATE. Its owner-only trigger function rejects row UPDATE/DELETE and
+statement TRUNCATE; initializer readback verifies both guards. Readiness
+accepts a complete pre-039 schema, but evidence reads and writes return
+`database_update_pending` until the migration is applied. This source plan
+does not authorize live migration, grants, or deployment.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
 Its planned access is exactly `SELECT, INSERT`; it adds no `UPDATE`, `DELETE`,
