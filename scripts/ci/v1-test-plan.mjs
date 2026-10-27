@@ -18,7 +18,8 @@ export const environmentP1RequiredMethods = [
   'P1ConcurrentRegistrationRetriesRetainOneExactBinding',
   'P1WorkspaceVolumeCompletionLinksTheRealProviderIdentityAndRetainsUncertainResults',
   'P1SandboxCompletionLinksTheActualProviderResourceAndLeaseFence',
-].map((name) => `Agentweaver.Environment.Tests.EnvironmentP1CreationLinkPostgresTests.${name}`);
+].map((name) => `Agentweaver.Environment.Tests.EnvironmentP1CreationLinkPostgresTests.${name}`)
+  .concat('Agentweaver.Environment.Tests.EnvironmentP1CreationReadPostgresTests.ReadsActualOwnerCommittedRecordsWithoutWritesAndRejectsForeignOrStaleJoins');
 
 export function loadBrokerWeights(path = brokerWeightsPath) {
   return JSON.parse(readFileSync(path, 'utf8'));

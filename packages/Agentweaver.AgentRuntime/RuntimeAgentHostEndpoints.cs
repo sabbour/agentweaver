@@ -75,6 +75,10 @@ public static class RuntimeAgentHostEndpoints
             (HttpContext context, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,
                     actor => host.ReadReadinessEvidenceAsync(actor, token))).RequireAuthorization();
+        endpoints.MapGet("/runtime/v1/readiness/p1-evidence",
+            (HttpContext context, CancellationToken token) =>
+                ExecuteAsync(context, configure, timeProvider,
+                    actor => host.ReadP1EvidenceAsync(actor, token))).RequireAuthorization();
         endpoints.MapPost("/runtime/v1/a2a/message:send",
             (HttpContext context, RuntimeA2ASendRequest request, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,

@@ -124,6 +124,7 @@ var remoteMcpNativeCallDispatchEnabled = builder.ConfigureRemoteMcpNativeCallDis
 builder.Services.AddScoped<IEnvironmentLifecycleProducer, EnvironmentLifecycleProducer>();
 builder.Services.AddScoped<EnvironmentLifecycleManager>();
 builder.Services.AddScoped<EnvironmentRuntimePlacementReader>();
+builder.Services.AddScoped<EnvironmentP1CreationReader>();
 builder.Services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(
     builder.Configuration.GetSection("Environment:RuntimeBootstrap:Profiles")
         .Get<EnvironmentRuntimeBootstrapProfileRegistration[]>() ?? []));

@@ -19,6 +19,26 @@ construction and execution.
 Each numbered section is an independent test procedure. Run only the sections
 that match the behavior you changed or need to verify.
 
+The [P1 creation evidence contract](../reference/p1-creation-evidence.md) has
+separate read-only join selections:
+
+```powershell
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj `
+  --filter "FullyQualifiedName~EnvironmentP1CreationRead" --configuration Release --verbosity quiet
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj `
+  --filter "FullyQualifiedName~RuntimeP1CreationBindingHttpClientTests|FullyQualifiedName~P1Evidence" `
+  --configuration Release --verbosity quiet
+```
+
+The PostgreSQL case creates records through real owner transactions, exercises
+the full current-resource read under the owner lock in a read-only transaction,
+and compares retained rows before and after the read. Planned Sandbox names
+and provider-returned claim UIDs are deliberately distinct. CI requires its
+passing execution in the Environment suite. Controlled
+Host tests exercise the actual HTTP consumer and reject missing, foreign,
+stale, replaced or child-root joins. These are source contract tests, not live
+provider or native CLI acceptance.
+
 ## 1. Test suspend and flush contracts
 
 Run the focused suspend and flush tests without PostgreSQL or native mounted
