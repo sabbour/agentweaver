@@ -3564,7 +3564,7 @@ test('runtime manifest requires nine shared workloads and pins AgentHost through
   wrongHostMeasurement.items.find(({ kind, metadata }) =>
     kind === 'Deployment' && metadata.name === 'environment').spec.template.spec.containers[0].env
     .find(({ name }) => name === 'Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes').value = '1';
-  assert.throws(() => validateRuntimeManifest(wrongHostMeasurement, images, target.namespace), /exact measured AgentHost/);
+  assert.throws(() => validateRuntimeManifest(wrongHostMeasurement, images, target.namespace), /exact selected AgentHost/);
   const missingTls = structuredClone(rendered);
   const gateway = missingTls.items.find(({ kind, metadata }) =>
     kind === 'Deployment' && metadata.name === 'gateway');
@@ -4472,6 +4472,8 @@ test('v1.0.14 run-binding reconfiguration accepts only the source-bound draft an
   const sourceKustomizeRoot = path.join(deploymentRoot, 'deploy', 'k8s');
   const sourceAgentHostRuntimePath = path.join(
     deploymentRoot, 'deploy', 'k8s', 'profiles', 'agenthost', 'runtime-config.example.yaml');
+  const sourceEnvironmentPath = path.join(
+    deploymentRoot, 'deploy', 'k8s', 'base', 'workloads', 'environment-deployment.json');
   const sourceSnapshots = new Map();
   const collectSourceFiles = directory => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -4486,8 +4488,19 @@ test('v1.0.14 run-binding reconfiguration accepts only the source-bound draft an
     /Kustomization image pin .* must match the publication receipt exactly/);
   const sourceAgentHostImage = JSON.parse(parseYaml(sourceSnapshots.get(sourceAgentHostRuntimePath).toString('utf8'))
     .data['appsettings.json']).AgentHost.Image;
+  const sourceAgentHostRuntime = parseYaml(sourceSnapshots.get(sourceAgentHostRuntimePath).toString('utf8'));
+  const sourceEnvironment = JSON.parse(sourceSnapshots.get(sourceEnvironmentPath).toString('utf8'));
+  const sourceEnvironmentValues = new Map(sourceEnvironment.spec.template.spec.containers[0].env
+    .map(({ name, value }) => [name, value]));
+  const sourceAgentHostPin = checkedInKustomization.images.find(({ name }) =>
+    name === 'ghcr.io/sabbour/agentweaver-agenthost');
   assert.equal(sourceAgentHostImage.Digest, v107ImageDigests['Agentweaver.AgentHost']);
   assert.equal(sourceAgentHostImage.CompressedPullBytes, v107AgentHostCompressedPullBytes);
+  assert.equal(sourceAgentHostImage.Digest, sourceAgentHostPin.digest);
+  assert.equal(sourceAgentHostImage.Platform, sourceEnvironmentValues.get(
+    'Environment__Sandbox__AgentSandbox__ContainerImagePlatform'));
+  assert.equal(String(sourceAgentHostImage.CompressedPullBytes), sourceEnvironmentValues.get(
+    'Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes'));
   assert.notEqual(sourceAgentHostImage.Digest, v1014ImageDigests['Agentweaver.AgentHost']);
   assert.notEqual(sourceAgentHostImage.CompressedPullBytes, v1014AgentHostCompressedPullBytes);
   const binding = {
@@ -4571,26 +4584,47 @@ test('v1.0.14 run-binding reconfiguration accepts only the source-bound draft an
     new Map(receiptImages.filter(({ id }) => id !== 'Agentweaver.AgentHost')
       .map(({ id, image }) => [id, image])));
   assert.equal(result.perSandboxAgentHost,
-    receiptImages.find(({ id }) => id === 'Agentweaver.AgentHost').sandboxImage);
+    `ghcr.io/sabbour/agentweaver-agenthost@${sourceAgentHostPin.digest}`);
   assert.equal(renderedBundles.length, 1);
   const renderedResources = parseKustomizeResources(renderedBundles[0]).items;
+  const renderedServiceImages = new Map(renderedResources
+    .filter(resource => resource.kind === 'Deployment')
+    .map(({ metadata, spec }) => [metadata.name, spec.template.spec.containers[0].image]));
+  assert.deepEqual(renderedServiceImages,
+    new Map(receiptImages.filter(({ id }) => id !== 'Agentweaver.AgentHost')
+      .map(({ name, image }) => [name, image])));
   const environment = renderedResources.find(resource =>
     resource.kind === 'Deployment' && resource.metadata.name === 'environment');
   assert.ok(environment);
   const environmentValues = new Map(environment.spec.template.spec.containers[0].env
     .map(({ name, value }) => [name, value]));
+  assert.equal(environmentValues.get('Environment__Sandbox__AgentSandbox__ContainerImage'),
+    `ghcr.io/sabbour/agentweaver-agenthost@${sourceAgentHostPin.digest}`);
+  assert.equal(environmentValues.get('Environment__Sandbox__AgentSandbox__ContainerImagePlatform'),
+    sourceEnvironmentValues.get('Environment__Sandbox__AgentSandbox__ContainerImagePlatform'));
   assert.equal(environmentValues.get('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes'),
-    String(v1014AgentHostCompressedPullBytes));
+    sourceEnvironmentValues.get('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes'));
   const renderedAgentHostConfig = renderedResources.find(resource =>
     resource.kind === 'ConfigMap' && resource.metadata.name === 'agenthost-runtime-v1');
   assert.ok(renderedAgentHostConfig);
-  assert.deepEqual(JSON.parse(renderedAgentHostConfig.data['appsettings.json']).AgentHost.Image, {
-    Digest: v1014ImageDigests['Agentweaver.AgentHost'],
-    Platform: 'linux/amd64',
-    CompressedPullBytes: v1014AgentHostCompressedPullBytes,
-  });
+  assert.equal(renderedAgentHostConfig.data['appsettings.json'],
+    sourceAgentHostRuntime.data['appsettings.json']);
+  assert.deepEqual(JSON.parse(renderedAgentHostConfig.data['appsettings.json']).AgentHost.Image,
+    sourceAgentHostImage);
   for (const [file, snapshot] of sourceSnapshots) {
     assert.deepEqual(readFileSync(file), snapshot, `${path.relative(deploymentRoot, file)} unchanged`);
+  }
+  const runtimeSnapshot = sourceSnapshots.get(sourceAgentHostRuntimePath);
+  const invalidRuntime = parseYaml(runtimeSnapshot.toString('utf8'));
+  const invalidSettings = JSON.parse(invalidRuntime.data['appsettings.json']);
+  invalidSettings.AgentHost.Image.Platform = 'linux/arm64';
+  invalidRuntime.data['appsettings.json'] = JSON.stringify(invalidSettings, null, 2);
+  writeFileSync(sourceAgentHostRuntimePath, stringifyYaml(invalidRuntime), 'utf8');
+  try {
+    await assert.rejects(deploy(manifest),
+      /checked-in AgentHost runtime image digest, platform, and compressed pull bytes must be complete and match its Kustomize pin/);
+  } finally {
+    writeFileSync(sourceAgentHostRuntimePath, runtimeSnapshot);
   }
   await assert.rejects(deploy(manifest, false),
     /manifest is still draft; an already-published release composition is required/);
@@ -4974,7 +5008,7 @@ test('live deployment verification checks source probes and the published Enviro
     .find(entry => entry.name === 'Environment__Sandbox__AgentSandbox__ContainerImage').value =
       'ghcr.io/sabbour/agentweaver-agenthost@sha256:' + 'f'.repeat(64);
   assert.throws(() => verifyLiveDeployment(images, target, accepted,
-    { root, run: makeRun(wrongAgentHostPin) }), /exact published AgentHost/);
+    { root, run: makeRun(wrongAgentHostPin) }), /exact selected AgentHost/);
 
   const wrongProbe = structuredClone(runtime);
   wrongProbe.items.find(item => item.kind === 'Deployment' && item.metadata.name === 'environment')

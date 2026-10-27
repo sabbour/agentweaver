@@ -1189,7 +1189,7 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
           getEnvValue('Environment__Sandbox__AgentSandbox__ContainerImagePlatform') !== 'linux/amd64' ||
           getEnvValue('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes') !==
             String(hostImage.compressedPullBytes)) {
-        fail('Environment must pin the exact measured AgentHost image, platform, and compressed pull bytes');
+        fail('Environment must pin the exact selected AgentHost image, platform, and compressed pull bytes');
       }
     } else if (environment.some((entry) =>
       entry.name.startsWith('Environment__Sandbox__AgentSandbox__ContainerImage'))) {
@@ -2442,6 +2442,62 @@ function readAgentHostRuntimeSettings(directory) {
   }
 }
 
+/** Preserves the already-deployed AgentHost sandbox pins for the v1.0.14 reconfiguration render. */
+function sourcePinnedAgentHostImages(images, sourceDirectory, sourceKustomization) {
+  const repository = `ghcr.io/sabbour/${componentImageRepository('Agentweaver.AgentHost')}`;
+  const sourcePins = sourceKustomization.images;
+  const hostPins = Array.isArray(sourcePins)
+    ? sourcePins.filter((entry) => entry?.name === repository)
+    : [];
+  const pin = hostPins[0];
+  if (hostPins.length !== 1 || !pin || pin.newName !== repository || pin.newTag !== undefined ||
+      !DIGEST.test(pin.digest ?? '') || /^sha256:0+$/.test(pin.digest)) {
+    fail('checked-in AgentHost Kustomize image pin must be one exact nonzero digest');
+  }
+
+  const host = images.find((image) => image.id === 'Agentweaver.AgentHost');
+  const settings = readAgentHostRuntimeSettings(sourceDirectory)?.AgentHost;
+  const image = settings?.Image;
+  if (!host || image?.Digest !== pin.digest || image.Platform !== 'linux/amd64' ||
+      !Number.isSafeInteger(image.CompressedPullBytes) || image.CompressedPullBytes <= 0) {
+    fail('checked-in AgentHost runtime image digest, platform, and compressed pull bytes must be complete and match its Kustomize pin');
+  }
+
+  const environment = readKustomizeJson(
+    path.join(sourceDirectory, 'base', 'workloads', 'environment-deployment.json'),
+    'Environment Kustomize source',
+  );
+  const containers = environment.spec?.template?.spec?.containers;
+  const entries = containers?.length === 1 ? containers[0].env : undefined;
+  if (environment.kind !== 'Deployment' || environment.metadata?.name !== 'environment' ||
+      !Array.isArray(entries)) {
+    fail('Environment Kustomize source must define one container with explicit AgentHost runtime fields');
+  }
+  const exactEnvironmentValue = (name) => {
+    const matches = entries.filter((entry) => entry?.name === name);
+    if (matches.length !== 1 || typeof matches[0].value !== 'string') {
+      fail(`Environment Kustomize source must define exactly one ${name}`);
+    }
+    return matches[0].value;
+  };
+  if (exactEnvironmentValue('Environment__Sandbox__AgentSandbox__ContainerImage') !==
+        `${repository}:receipt-pinned` ||
+      exactEnvironmentValue('Environment__Sandbox__AgentSandbox__ContainerImagePlatform') !== image.Platform ||
+      exactEnvironmentValue('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes') !==
+        String(image.CompressedPullBytes)) {
+    fail('checked-in Environment AgentHost image, platform, and compressed pull bytes must match its runtime ConfigMap');
+  }
+
+  return images.map((entry) => entry.id === 'Agentweaver.AgentHost'
+    ? {
+      ...entry,
+      sandboxImage: `${repository}@${image.Digest}`,
+      sandboxImageDigest: image.Digest,
+      compressedPullBytes: image.CompressedPullBytes,
+    }
+    : entry);
+}
+
 function setAgentHostRuntimeImage(directory, host) {
   const file = path.join(directory, 'profiles', 'agenthost', 'runtime-config.example.yaml');
   let configMap;
@@ -2617,7 +2673,7 @@ function addBrokerRunBindingKustomizeResources(directory, images, providerCatalo
   writeFileSync(kustomizationPath, stringifyYaml(kustomization), 'utf8');
 }
 
-/** Selects the checked-in release bundle or a temporary source-derived receipt-pinned render. */
+/** Selects the checked-in release bundle or a temporary source-derived verified render. */
 function prepareKustomizeSource(
   root, releaseTag, images, providerCatalog, brokerRunBinding, runBindingRedeployment = false,
 ) {
@@ -2648,7 +2704,7 @@ function prepareKustomizeSource(
     ? undefined
     : validateBrokerRunBinding(brokerRunBinding);
   if (sourcePinsMatch && sourceRuntimeMatches && !binding) {
-    return { path: KUSTOMIZE_INSTALL_PATH, cleanup: () => undefined };
+    return { path: KUSTOMIZE_INSTALL_PATH, images, cleanup: () => undefined };
   }
   const mayRenderReceiptPins = releaseTag === BOOTSTRAP_RELEASE_TAG ||
     (runBindingRedeployment && releaseTag === 'v1.0.14' && binding !== undefined);
@@ -2656,6 +2712,9 @@ function prepareKustomizeSource(
   if ((!sourcePinsMatch || !sourceRuntimeMatches) && !mayRenderReceiptPins) {
     fail('checked-in P0 Kustomize images and runtime pins must match the exact publication receipt');
   }
+  const renderImages = runBindingRedeployment
+    ? sourcePinnedAgentHostImages(images, sourceDirectory, sourceKustomization)
+    : images;
 
   const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), 'agentweaver-v1-kustomize-'));
   const temporaryDirectory = path.join(temporaryRoot, KUSTOMIZE_INSTALL_PATH);
@@ -2663,8 +2722,8 @@ function prepareKustomizeSource(
     cpSync(sourceDirectory, temporaryDirectory, { recursive: true });
     const kustomizationPath = path.join(temporaryDirectory, 'kustomization.yaml');
     const kustomization = parseYaml(readFileSync(kustomizationPath, 'utf8'));
-    kustomization.images = createKustomizeImageEntries(images);
-    validateKustomizeImagePins(kustomization, images);
+    kustomization.images = createKustomizeImageEntries(renderImages);
+    validateKustomizeImagePins(kustomization, renderImages);
     writeFileSync(kustomizationPath, stringifyYaml(kustomization), 'utf8');
 
     const host = images.find((image) => image.id === 'Agentweaver.AgentHost');
@@ -2683,12 +2742,14 @@ function prepareKustomizeSource(
       }
       matches[0].value = value;
     };
-    // Keep the image-transform target intact; only receipt-measured metadata is injected here.
-    setEnvironmentValue('Environment__Sandbox__AgentSandbox__ContainerImagePlatform', 'linux/amd64');
-    setEnvironmentValue('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes',
-      String(host.compressedPullBytes));
-    writeFileSync(environmentPath, `${JSON.stringify(environment, null, 2)}\n`, 'utf8');
-    setAgentHostRuntimeImage(temporaryDirectory, host);
+    if (!runBindingRedeployment) {
+      // Bootstrap renders take the measured image metadata; run-binding keeps the deployed sandbox pin.
+      setEnvironmentValue('Environment__Sandbox__AgentSandbox__ContainerImagePlatform', 'linux/amd64');
+      setEnvironmentValue('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes',
+        String(host.compressedPullBytes));
+      writeFileSync(environmentPath, `${JSON.stringify(environment, null, 2)}\n`, 'utf8');
+      setAgentHostRuntimeImage(temporaryDirectory, host);
+    }
 
     // Bind all provider-catalog consumers to the exact source commit used for this deployment.
     for (const name of ['knowledge', 'orchestrator', 'projects-config']) {
@@ -2705,11 +2766,12 @@ function prepareKustomizeSource(
       addBrokerRunBindingKustomizeResources(
         temporaryDirectory, images, providerCatalog, binding, TARGET.namespace);
     }
-    if (!matchesKustomizeRuntimeInputs(temporaryDirectory, images, providerCatalog)) {
-      fail('temporary source-derived P0 Kustomize bundle does not match its publication receipt');
+    if (!matchesKustomizeRuntimeInputs(temporaryDirectory, renderImages, providerCatalog)) {
+      fail('temporary source-derived P0 Kustomize bundle does not match the verified deployment inputs');
     }
     return {
       path: temporaryDirectory,
+      images: renderImages,
       cleanup: () => rmSync(temporaryRoot, { recursive: true, force: true }),
     };
   } catch (error) {
@@ -2773,7 +2835,7 @@ export function verifyLiveDeployment(images, target, acceptedDigests, { root, ru
       for (const [name, value] of expected) {
         const matches = env.filter((entry) => entry.name === name);
         if (matches.length !== 1 || matches[0].value !== value) {
-          fail(`Environment live Deployment does not pin the exact published AgentHost ${name}`);
+          fail(`Environment live Deployment does not pin the exact selected AgentHost ${name}`);
         }
       }
     }
@@ -2804,10 +2866,14 @@ The default is read-only dry-run. The exact P0 target is mandatory. A write requ
 --execute. Deployment uses only digest-pinned GHCR images, never Docker or Podman.
 The v1.0.14 --broker-run-binding exception reconfigures its already-published
 installation from the source-bound draft and does not perform native release acceptance.
+It updates the nine shared service Deployments but keeps the AgentHost sandbox
+image, platform, and compressed pull bytes on their checked-in P0 source pins.
 The checked-in deploy/k8s Kustomize source supplies the complete P0 installation.
-Its image pins must match the verified publication receipt exactly. Kustomize
-renders the workloads, ServiceAccounts, runtime ConfigMaps, and network policies;
-operator-owned credentials, certificates, and Gateway placement remain external.
+Ordinary deployment requires its image pins to match the verified publication
+receipt exactly; the bootstrap and v1.0.14 paths use their scoped temporary renders.
+Kustomize renders the workloads, ServiceAccounts, runtime ConfigMaps, and network
+policies. Operator-owned credentials, certificates, and Gateway placement remain
+external.
 The optional --broker-run-binding mode derives its runtime settings and policies
 from the validated descriptor; its default preflight remains read-only.
 The Projects provider catalog name and reviewed source commit are required.
@@ -2968,13 +3034,14 @@ export async function deployRelease(options = {}, dependencies = {}) {
   };
   const kustomizeSource = prepareKustomizeSource(
     root, parsed.releaseTag, images, providerCatalog, brokerRunBinding, runBindingRedeployment);
+  const kustomizeImages = kustomizeSource.images ?? images;
   try {
     const renderedText = run('kubectl', ['kustomize', kustomizeSource.path], { cwd: root });
     const installation = validateKustomizeInstall(
-      parseKustomizeResources(renderedText), images, parsed.target.namespace, providerCatalog,
+      parseKustomizeResources(renderedText), kustomizeImages, parsed.target.namespace, providerCatalog,
       brokerRunBinding);
     const { installationManifest, runtimeManifest, incompleteRuntimeConfigMaps } = installation;
-    verifyImageIds(runtimeManifest, images);
+    verifyImageIds(runtimeManifest, kustomizeImages);
     // Keep pre-provisioning source review possible, but never apply workloads with unsourced identities or hosts.
     if (parsed.execute && incompleteRuntimeConfigMaps.length > 0) {
       fail(`workload deployment is blocked until the incomplete runtime ConfigMaps are sourced: ${incompleteRuntimeConfigMaps.join(', ')}`);
@@ -3072,7 +3139,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
           : {}),
         services: images.filter((image) => image.id !== 'Agentweaver.AgentHost')
           .map(({ id, image }) => ({ id, image })),
-        perSandboxAgentHost: images.find((image) => image.id === 'Agentweaver.AgentHost').sandboxImage,
+        perSandboxAgentHost: kustomizeImages.find((image) => image.id === 'Agentweaver.AgentHost').sandboxImage,
         agentSandbox: {
           version: agentSandboxRelease.version,
           sourceCommit: agentSandboxRelease.sourceCommit,
@@ -3190,7 +3257,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
     const verifyLive = dependencies.verifyLive ?? ((refs, target, digests) =>
       verifyLiveDeployment(refs, target, digests, { root, run }));
     const deployedImages = images.filter((image) => image.id !== 'Agentweaver.AgentHost');
-    await verifyLive(images, parsed.target, acceptedDigests);
+    await verifyLive(kustomizeImages, parsed.target, acceptedDigests);
     let brokerRunBindingReadback;
     if (brokerRunBinding) {
       const appliedConfiguration = verifyRunBinding(
@@ -3201,7 +3268,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
           return integration.readbackResources(...args);
         });
       brokerRunBindingReadback = await readback(
-        runtimeManifest, images, acceptedDigests, parsed.target, root, run, brokerRunBinding);
+        runtimeManifest, kustomizeImages, acceptedDigests, parsed.target, root, run, brokerRunBinding);
       const finalConfiguration = verifyRunBinding(
         brokerRunBinding, parsed.target, { root, run, runRaw });
       if (!isDeepStrictEqual(appliedConfiguration, finalConfiguration)) {
@@ -3223,7 +3290,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
         ? { immutableRuntimeConfigMapReplacements: immutableRuntimeConfigMapReplacementNames }
         : {}),
       services: deployedImages.map(({ id }) => id),
-      perSandboxAgentHost: images.find((image) => image.id === 'Agentweaver.AgentHost').sandboxImage,
+      perSandboxAgentHost: kustomizeImages.find((image) => image.id === 'Agentweaver.AgentHost').sandboxImage,
       ...(brokerRunBinding ? {
         brokerRunBinding: { readbackSha256: brokerRunBindingReadback.sha256 },
       } : {}),
@@ -3255,6 +3322,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       }
       if (result.resultType === 'run-binding-reconfiguration') {
         console.log('This reconfigures the already-published v1.0.14 installation; it does not perform native release acceptance.');
+        console.log('The AgentHost sandbox image, platform, and compressed pull bytes remain on their checked-in P0 pins; this reconfiguration does not update them.');
       }
       if (result.immutableRuntimeConfigMapReplacements?.length > 0) {
         console.log(
