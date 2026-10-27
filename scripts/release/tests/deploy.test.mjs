@@ -3216,16 +3216,16 @@ test('v1.0.14 evidence verifies its exact lightweight tag, publication digest, a
     root, run, publicationSha256: v1014PublicationSha256,
   }), /must descend from the exact published source commit/);
   mergeBase = v1014SourceSha;
-  await assert.rejects(verifyBootstrapRelease('v1.0.14', fixture.publication, {
+  await assert.rejects(verifyRunBindingRelease('v1.0.14', fixture.publication, {
     root, run, publicationSha256: 'f'.repeat(64),
   }), /publication\.json does not match its pinned SHA-256/);
 
   tagRef = { object: { type: 'commit', sha: 'f'.repeat(40) } };
-  await assert.rejects(verifyBootstrapRelease('v1.0.14', fixture.publication, {
+  await assert.rejects(verifyRunBindingRelease('v1.0.14', fixture.publication, {
     root, run, publicationSha256: v1014PublicationSha256,
   }), /must resolve to the exact published source commit/);
   tagRef = { object: { type: 'commit', sha: v1014SourceSha } };
-  await assert.rejects(verifyBootstrapRelease('v1.0.14',
+  await assert.rejects(verifyRunBindingRelease('v1.0.14',
     normalBootstrapFixture(v107Manifest, v1011SourceSha).publication, {
       root, run, publicationSha256: v1014PublicationSha256,
     }));
@@ -4412,22 +4412,22 @@ test('release dry-run renders validated run-binding settings, policies, and work
   assert.equal(commands.length, 2);
 });
 
-test('v1.0.14 run-binding helper dry-run validates pinned projects and does not write', async (t) => {
+test('v1.0.14 run-binding reconfiguration accepts only the source-bound draft and does not write', async (t) => {
   const deploymentRoot = sourceFixtureRoot(
     v1014SourceSha, v1014Manifest, 'agentweaver-v1-0-14-run-binding-tests-');
   t.after(() => rmSync(deploymentRoot, { recursive: true, force: true }));
   const manifest = structuredClone(v1014Manifest);
-  manifest.stage = 'release';
-  for (const component of manifest.components) {
+  assert.throws(() => validatePublishedManifest(manifest, {
+    root: deploymentRoot,
+    sourceSha: v1014SourceSha,
+  }), /manifest is still draft/);
+  const imageManifest = structuredClone(manifest);
+  for (const component of imageManifest.components) {
     if (component.kind === 'service' && component.id !== 'Agentweaver.FoundationProbe') {
       component.imageDigest = v107ImageDigests[component.id];
     }
   }
-  manifest.evidence = releaseManifest().evidence;
-  manifest.evidence.sourceSha = v1014SourceSha;
-  manifest.evidence.deploymentSha = v1014SourceSha;
-  for (const run of manifest.evidence.personaRuns) run.sourceSha = v1014SourceSha;
-  const publication = publicationReceipt(manifest, v1014SourceSha, {
+  const publication = publicationReceipt(imageManifest, v1014SourceSha, {
     agentHostImageDigest: v107ImageDigests['Agentweaver.AgentHost'],
     agentHostImageConfigDigest: v107AgentHostImageConfigDigest,
     agentHostCompressedPullBytes: v107AgentHostCompressedPullBytes,
@@ -4441,17 +4441,7 @@ test('v1.0.14 run-binding helper dry-run validates pinned projects and does not 
   };
   const writes = [];
   let projectReads = 0;
-  const result = await deployRelease({
-    releaseTag: 'v1.0.14',
-    target,
-    manifest,
-    publication,
-    publicationSha256: v1014PublicationSha256,
-    providerCatalogConfigMapName: 'projects-config-provider-catalog',
-    providerCatalogSourceCommit: providerCatalogSourceSha,
-    brokerRunBinding: binding,
-    dryRun: true,
-  }, {
+  const dependencies = {
     ...agentSandboxTestDependencies(),
     root: deploymentRoot,
     verifyRunBindingRelease: async (tag, published, options) => {
@@ -4460,22 +4450,12 @@ test('v1.0.14 run-binding helper dry-run validates pinned projects and does not 
       assert.equal(options.publicationSha256, v1014PublicationSha256);
       return v1014SourceSha;
     },
-    readSourceProjectAtCommit: (file, options) => {
-      assert.equal(options.sourceSha, v1014SourceSha);
-      projectReads++;
-      const sourcePath = path.relative(deploymentRoot, file).split(path.sep).join('/');
-      return execFileSync('git', ['show', `${v1014SourceSha}:${sourcePath}`], {
-        cwd: root, encoding: 'utf8',
-      });
-    },
-    verifyImages: async () => verifiedImageDigests(manifest),
-    verifyTarget: async () => ({ exact: true }),
-    verifyPrerequisites: () => {},
-    verifyBrokerRunBindingConfiguration: (_descriptor, _target, options) => {
-      assert.equal(options.allowMissingSettings, true);
-      return { runBindingSettingsConfigured: false };
-    },
     run: (file, args) => {
+      if (file === 'git' && args[0] === 'ls-tree') return 'releases/foundation.json';
+      if (file === 'git' && args[0] === 'show' &&
+          args[1] === `${v1014SourceSha}:releases/foundation.json`) {
+        return JSON.stringify(v1014Manifest);
+      }
       if (file === 'kubectl' && args[0] === 'kustomize') {
         return execFileSync(file, args, { cwd: deploymentRoot, encoding: 'utf8' });
       }
@@ -4486,12 +4466,48 @@ test('v1.0.14 run-binding helper dry-run validates pinned projects and does not 
       assert.ok(args.includes('--dry-run=client'));
       return '';
     },
-  });
+    readSourceProjectAtCommit: (file, options) => {
+      assert.equal(options.sourceSha, v1014SourceSha);
+      projectReads++;
+      const sourcePath = path.relative(deploymentRoot, file).split(path.sep).join('/');
+      return execFileSync('git', ['show', `${v1014SourceSha}:${sourcePath}`], {
+        cwd: root, encoding: 'utf8',
+      });
+    },
+    verifyImages: async () => verifiedImageDigests(imageManifest),
+    verifyTarget: async () => ({ exact: true }),
+    verifyPrerequisites: () => {},
+    verifyBrokerRunBindingConfiguration: (_descriptor, _target, options) => {
+      assert.equal(options.allowMissingSettings, true);
+      return { runBindingSettingsConfigured: false };
+    },
+  };
+  const deploy = candidate => deployRelease({
+    releaseTag: 'v1.0.14',
+    target,
+    manifest: candidate,
+    manifestPath: 'releases/foundation.json',
+    publication,
+    publicationSha256: v1014PublicationSha256,
+    providerCatalogConfigMapName: 'projects-config-provider-catalog',
+    providerCatalogSourceCommit: providerCatalogSourceSha,
+    brokerRunBinding: binding,
+    dryRun: true,
+  }, dependencies);
+  const result = await deploy(manifest);
   assert.equal(result.dryRun, true);
+  assert.equal(result.resultType, 'run-binding-reconfiguration');
+  assert.equal(manifest.stage, 'draft');
+  assert.equal(manifest.evidence, undefined);
   assert.deepEqual(result.brokerRunBinding, { settingsConfigured: false, policiesRendered: 2 });
   assert.ok(projectReads > 0);
   assert.ok(writes.every(args => args.includes('--dry-run=client')));
   assert.equal(writes.length, 2);
+
+  const modifiedManifest = structuredClone(manifest);
+  modifiedManifest.components.find(component => component.id === 'Agentweaver.Gateway').version = '1.0.1';
+  await assert.rejects(deploy(modifiedManifest),
+    /differs from releases\/foundation\.json at the published source commit/);
 });
 
 test('dry-run refuses a GHCR receipt that omits the measured AgentHost platform manifest', async () => {

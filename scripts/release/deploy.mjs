@@ -629,58 +629,16 @@ export function validatePublishedManifest(manifest, { root, sourceSha, readProje
   return manifest;
 }
 
-/** Validates the source-versioned manifest used only for the v1.0.14 run-binding redeployment. */
-export function validateRunBindingPublishedManifest(manifest, {
-  root, sourceSha, releaseTag, readProject,
-}) {
-  const bootstrapRelease = BOOTSTRAP_RELEASES[releaseTag];
-  if (releaseTag !== 'v1.0.14' || sourceSha !== bootstrapRelease?.sourceSha) {
-    fail('run-binding redeployment requires the exact published v1.0.14 source');
-  }
-  const projectReader = readProject ? { readProject } : {};
-  // Validate the historical Probe against its source version, then apply release evidence rules to product components.
-  const sourceShapeManifest = structuredClone(manifest);
-  sourceShapeManifest.stage = 'draft';
-  delete sourceShapeManifest.evidence;
-  validateManifest(sourceShapeManifest, { root, ...projectReader });
-  const releaseValidationManifest = structuredClone(manifest);
-  releaseValidationManifest.components = releaseValidationManifest.components.filter(
-    (component) => component.id !== 'Agentweaver.FoundationProbe');
-  releaseValidationManifest.compatibility = releaseValidationManifest.compatibility.filter(
-    (entry) => entry.consumer !== 'Agentweaver.FoundationProbe' &&
-      entry.dependency !== 'Agentweaver.FoundationProbe');
-  validateManifest(releaseValidationManifest, { root, ...projectReader });
-  if (manifest.stage !== 'release' || manifest.evidence?.sourceSha !== sourceSha ||
-      manifest.evidence?.deploymentSha !== sourceSha) {
-    fail('v1.0.14 release manifest evidence must match the exact published source commit');
-  }
-  const product = manifest.components.filter((component) =>
-    component.id !== 'Agentweaver.FoundationProbe');
-  const ids = product.map((component) => component.id).sort();
-  const expected = [
-    ...PRODUCT_COMPONENTS,
-    ...(bootstrapRelease.additionalProductComponents ?? []),
-  ].sort();
-  if (ids.length !== expected.length || ids.some((id, index) => id !== expected[index])) {
-    fail(`v1.0.14 release manifest must contain exactly the ${expected.length} product components`);
-  }
-  return manifest;
-}
-
-/**
- * Validates the tracked bootstrap draft and adds only source-bound published image digests.
- * The draft itself remains unchanged and carries no deployment or persona acceptance claim.
- */
-export function validateBootstrapManifest(manifest, publication, {
-  root, sourceSha, releaseTag, manifestPath, run,
+function validateSourceBoundDraftManifest(manifest, publication, {
+  root, sourceSha, releaseTag, manifestPath, run, readProject, purpose,
 }) {
   const bootstrapRelease = BOOTSTRAP_RELEASES[releaseTag];
   if (!bootstrapRelease || sourceSha !== bootstrapRelease.sourceSha) {
-    fail(`pre-acceptance bootstrap is bound to the exact ${releaseTag} source commit`);
+    fail(`${purpose} requires the exact published ${releaseTag} source`);
   }
   const canonicalManifestPath = path.resolve(root, 'releases', 'foundation.json');
   if (path.resolve(root, manifestPath ?? '') !== canonicalManifestPath) {
-    fail('pre-acceptance bootstrap requires the tracked releases/foundation.json manifest');
+    fail(`${purpose} requires the tracked releases/foundation.json manifest`);
   }
   const trackedPath = run('git', [
     'ls-tree', '-r', '--full-tree', '--name-only', sourceSha, '--', 'releases/foundation.json',
@@ -694,37 +652,22 @@ export function validateBootstrapManifest(manifest, publication, {
   if (!isDeepStrictEqual(manifest, sourceManifest)) {
     fail('the supplied draft manifest differs from releases/foundation.json at the published source commit');
   }
-  const readSourceProject = (file) => {
-    const relativePath = path.relative(root, file);
-    if (relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
-      fail('a bootstrap manifest project path escapes the published source tree');
-    }
-    const sourcePath = relativePath.split(path.sep).join('/');
-    return run('git', ['show', `${sourceSha}:${sourcePath}`], { cwd: root });
-  };
-  validateManifest(manifest, { root, readProject: readSourceProject });
+  const sourceProject = readProject ??
+    (file => readSourceProjectAtCommit(file, { root, sourceSha, run }));
+  validateManifest(manifest, { root, readProject: sourceProject });
   if (manifest.stage !== 'draft' || manifest.evidence !== undefined) {
-    fail('pre-acceptance bootstrap requires the tracked draft without release evidence');
+    fail(`${purpose} requires the tracked draft without release evidence`);
   }
 
   const product = manifest.components.filter((component) =>
     component.id !== 'Agentweaver.FoundationProbe');
   const ids = product.map((component) => component.id).sort();
-  // v1.0.7 adds the Agent Sessions provider while earlier bootstrap manifests retain the 23-component inventory.
-  const expectedIds = [
+  const expected = [
     ...PRODUCT_COMPONENTS,
     ...(bootstrapRelease.additionalProductComponents ?? []),
   ].sort();
-  if (ids.length !== expectedIds.length ||
-      ids.some((id, index) => id !== expectedIds[index])) {
-    fail(`the tracked draft must contain exactly the ${expectedIds.length} ${releaseTag} product components`);
-  }
-  if (releaseTag === BOOTSTRAP_RELEASE_TAG) {
-    for (const component of product) {
-      if (component.version !== '1.0.0') {
-        fail(`${component.id} must remain pinned at the approved product version 1.0.0`);
-      }
-    }
+  if (ids.length !== expected.length || ids.some((id, index) => id !== expected[index])) {
+    fail(`v1.0.14 draft manifest must contain exactly the ${expected.length} product components`);
   }
 
   const deploymentManifest = structuredClone(manifest);
@@ -741,6 +684,28 @@ export function validateBootstrapManifest(manifest, publication, {
     component.imageDigest = digest;
   }
   return deploymentManifest;
+}
+
+/**
+ * Validates the tracked bootstrap draft and adds only source-bound published image digests.
+ * The draft itself remains unchanged and carries no deployment or persona acceptance claim.
+ */
+export function validateBootstrapManifest(manifest, publication, options) {
+  return validateSourceBoundDraftManifest(manifest, publication, {
+    ...options,
+    purpose: 'pre-acceptance bootstrap',
+  });
+}
+
+/** Validates the source-bound draft used to reconfigure the already-published v1.0.14 installation. */
+export function validateRunBindingDraftManifest(manifest, publication, options) {
+  if (options.releaseTag !== 'v1.0.14') {
+    fail('run-binding redeployment from a newer helper checkout is limited to v1.0.14');
+  }
+  return validateSourceBoundDraftManifest(manifest, publication, {
+    ...options,
+    purpose: 'v1.0.14 run-binding redeployment',
+  });
 }
 
 /** Rejects bootstrap receipts that do not match the exact release's publication mode and source. */
@@ -2832,6 +2797,8 @@ Usage:
 
 The default is read-only dry-run. The exact P0 target is mandatory. A write requires
 --execute. Deployment uses only digest-pinned GHCR images, never Docker or Podman.
+The v1.0.14 --broker-run-binding exception reconfigures its already-published
+installation from the source-bound draft and does not perform native release acceptance.
 The checked-in deploy/k8s Kustomize source supplies the complete P0 installation.
 Its image pins must match the verified publication receipt exactly. Kustomize
 renders the workloads, ServiceAccounts, runtime ConfigMaps, and network policies;
@@ -2928,18 +2895,18 @@ export async function deployRelease(options = {}, dependencies = {}) {
         'Broker run-binding descriptor')
       : undefined);
   if (brokerRunBinding !== undefined) validateBrokerRunBinding(brokerRunBinding);
+  const runBindingRedeployment = brokerRunBinding !== undefined &&
+    parsed.releaseTag === 'v1.0.14' && !parsed.preAcceptance;
   if (parsed.preAcceptance) validateBootstrapPublication(parsed.releaseTag, publication);
 
   const verifyCompletion = dependencies.verifyCompletion ??
     ((receipt, published, source) => verifyPartialPublicationCompletion(receipt, published, source,
       (file, args, input) => run(file, args, input === undefined ? {} : { input })));
   const verifySource = async () => {
-    const historicalRunBindingDeployment = brokerRunBinding !== undefined &&
-      parsed.releaseTag === 'v1.0.14' && !parsed.preAcceptance;
     const source = parsed.preAcceptance
       ? await (dependencies.verifyBootstrapRelease ?? verifyBootstrapRelease)(
         parsed.releaseTag, publication, { root, run })
-      : historicalRunBindingDeployment
+      : runBindingRedeployment
         ? await (dependencies.verifyRunBindingRelease ?? verifyRunBindingRelease)(
           parsed.releaseTag, publication, { root, run, publicationSha256 })
         : await (dependencies.verifyRelease ?? verifyRelease)(
@@ -2955,7 +2922,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
   };
   const sourceSha = await verifySource();
   const readPublishedProject = dependencies.readSourceProjectAtCommit ?? readSourceProjectAtCommit;
-  const readSourceProject = brokerRunBinding !== undefined && parsed.releaseTag === 'v1.0.14'
+  const readSourceProject = runBindingRedeployment
     ? file => readPublishedProject(file, { root, sourceSha, run })
     : undefined;
   const deploymentManifest = parsed.preAcceptance
@@ -2963,8 +2930,9 @@ export async function deployRelease(options = {}, dependencies = {}) {
       root, sourceSha, releaseTag: parsed.releaseTag, manifestPath: parsed.manifestPath, run,
     })
     : readSourceProject
-      ? validateRunBindingPublishedManifest(manifest, {
-        root, sourceSha, releaseTag: parsed.releaseTag, readProject: readSourceProject,
+      ? validateRunBindingDraftManifest(manifest, publication, {
+        root, sourceSha, releaseTag: parsed.releaseTag, manifestPath: parsed.manifestPath, run,
+        readProject: readSourceProject,
       })
       : validatePublishedManifest(manifest, { root, sourceSha });
   const images = validatePublicationReceipt(publication, deploymentManifest, sourceSha);
@@ -3087,7 +3055,11 @@ export async function deployRelease(options = {}, dependencies = {}) {
       return {
         ok: true,
         dryRun: true,
-        ...(parsed.preAcceptance ? { resultType: 'pre-acceptance' } : {}),
+        ...(parsed.preAcceptance
+          ? { resultType: 'pre-acceptance' }
+          : runBindingRedeployment
+            ? { resultType: 'run-binding-reconfiguration' }
+            : {}),
         sourceSha,
         target: parsed.target,
         ...(parsed.preAcceptance || brokerRunBinding
@@ -3115,6 +3087,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
 
     const identity = {
       ...(parsed.preAcceptance ? { resultType: 'pre-acceptance' } : {}),
+      ...(runBindingRedeployment ? { resultType: 'run-binding-reconfiguration' } : {}),
       releaseTag: parsed.releaseTag,
       sourceSha,
       target: parsed.target,
@@ -3235,7 +3208,11 @@ export async function deployRelease(options = {}, dependencies = {}) {
       ok: true,
       dryRun: false,
       resumed: parsed.resume && applied,
-      ...(parsed.preAcceptance ? { resultType: 'pre-acceptance' } : {}),
+      ...(parsed.preAcceptance
+        ? { resultType: 'pre-acceptance' }
+        : runBindingRedeployment
+          ? { resultType: 'run-binding-reconfiguration' }
+          : {}),
       sourceSha,
       ...(parsed.preAcceptance || brokerRunBinding
         ? { immutableRuntimeConfigMapReplacements: immutableRuntimeConfigMapReplacementNames }
@@ -3264,10 +3241,15 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     else if (result.dryRun) {
       const prefix = result.resultType === 'pre-acceptance'
         ? 'Read-only pre-acceptance dry-run'
-        : 'Read-only dry-run';
+        : result.resultType === 'run-binding-reconfiguration'
+          ? 'Read-only run-binding reconfiguration dry-run'
+          : 'Read-only dry-run';
       console.log(`${prefix} validated ${result.services.length} product images and ${result.renderedResources} runtime resources at ${result.sourceSha}.`);
       if (result.resultType === 'pre-acceptance') {
         console.log('No release acceptance evidence was recorded.');
+      }
+      if (result.resultType === 'run-binding-reconfiguration') {
+        console.log('This reconfigures the already-published v1.0.14 installation; it does not perform native release acceptance.');
       }
       if (result.immutableRuntimeConfigMapReplacements?.length > 0) {
         console.log(
@@ -3279,6 +3261,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       }
     } else if (result.resultType === 'pre-acceptance') {
       console.log(`Pre-acceptance bootstrap deployment and live verification completed for ${result.services.length} product services at ${result.sourceSha}. This is not a release acceptance result.`);
+    } else if (result.resultType === 'run-binding-reconfiguration') {
+      console.log(`Run-binding reconfiguration and live verification completed for the already-published v1.0.14 installation at ${result.sourceSha}. This is not a native release acceptance result.`);
+      if (result.brokerRunBinding) {
+        console.log(`Broker run-binding readback: ${result.brokerRunBinding.readbackSha256}.`);
+      }
     } else {
       console.log(`Deployment and live verification completed for ${result.services.length} product services at ${result.sourceSha}.`);
       if (result.brokerRunBinding) {
