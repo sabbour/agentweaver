@@ -47,8 +47,11 @@ export async function loadP1NativeProviders(input, modulePath) {
   }
   // The factory receives a copy so it cannot rewrite the runner's evidence pins.
   const providers = await module.createP1NativeProviders({ input: structuredClone(input) });
+  const names = Object.keys(providers ?? {});
   if (!providers || typeof providers !== 'object' || Array.isArray(providers)
-    || Object.keys(providers).length !== Object.keys(PROVIDERS).length
+    || names.some(name => !Object.hasOwn(PROVIDERS, name) && name !== 'nativeAuthorityProvider')
+    || (Object.hasOwn(providers, 'nativeAuthorityProvider') &&
+      typeof providers.nativeAuthorityProvider?.readCurrent !== 'function')
     || Object.entries(PROVIDERS).some(([name, method]) =>
       !Object.hasOwn(providers, name) || typeof providers[name]?.[method] !== 'function')) {
     throw new Error('exact_owner_providers_required');
@@ -71,8 +74,15 @@ export async function runP1NativeProbeCli(argv, { stdout = process.stdout, stder
     stage = 'output_reservation';
     output = await open(resolve(options['--output']), 'wx', 0o600);
     stage = 'provider_load';
-    await loadP1NativeProviders(input, options['--provider-module']);
+    const providers = await loadP1NativeProviders(input, options['--provider-module']);
     stage = 'native_authority_join';
+    if (providers.nativeAuthorityProvider) {
+      const authority = await providers.nativeAuthorityProvider.readCurrent();
+      if (authority?.status === 'blocked' &&
+        authority.code === 'environment_creation_binding_read_contract_missing') {
+        stderr.write('Missing contract: Environment has no stable authenticated creation-binding read; current Core/Pod/Host observations are partial evidence only.\n');
+      }
+    }
     // The current three-provider contract cannot establish invocation ownership or Pod self-identity.
     // Do not execute native effects until the owner contracts are joined and validated here.
     throw new Error('native_authority_join_unavailable');
