@@ -233,6 +233,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
+                // A timed-out capability read is unavailable; caller cancellation still propagates.
                 return AvailableCatalog(projectId, configuration.Revision,
                     UnavailableModels(references, "platform_defaults_unavailable"));
             }
@@ -274,6 +275,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            // A timed-out credential read does not fail the host's read-only catalog request.
             return AvailableCatalog(projectId, configuration.Revision,
                 UnavailableModels(references, "hosted_connection_unavailable"));
         }
@@ -298,6 +300,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         catch (Exception failure) when (failure is not OutOfMemoryException &&
             !cancellationToken.IsCancellationRequested)
         {
+            // The caller can still see the configured models, but no reasoning levels are trusted after an SDK failure.
             _logger.LogWarning(
                 "AgentHost could not read the live hosted reasoning catalog for project {ProjectId}; failure type {FailureType}.",
                 projectId, failure.GetType().Name);
@@ -305,9 +308,11 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         }
         finally
         {
+            // Invalidate the temporary token as soon as the live catalog read completes.
             hostedCredential.Invalidate();
         }
 
+        // Re-read configuration and choices so the published levels cannot outlive a project edit during the SDK call.
         var currentConfiguration = await ReadHostedCatalogProjectConfigurationAsync(
             projectId, actor, cancellationToken).ConfigureAwait(false);
         var currentChoices = await ReadHostedCatalogProjectChoicesAsync(
@@ -641,6 +646,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                 }
                 catch (Exception failure) when (failure is not OutOfMemoryException)
                 {
+                    // Do not leave a prepared but unaccounted session available after bootstrap work fails.
                     var prepared = _receiver;
                     _receiver = null;
                     _session = null;
@@ -786,6 +792,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             {
                 if (replay.Fingerprint != fingerprint)
                     throw new RuntimeAuthorizationException("runtime_a2a_message_conflict");
+                // An exact retry joins the original result instead of admitting a second native turn.
                 pending = replay;
             }
             else
@@ -875,6 +882,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             if (_suspendRequest is not null && _suspendRequest != request)
                 throw new RuntimeAuthorizationException("runtime_suspend_operation_conflict");
             _suspendRequest = request;
+            // Close admission under the same lock before taking the set of turns that suspend must drain.
             admitted = _turns.Values.Where(turn => !turn.Completion.Task.IsCompleted)
                 .Select(turn => (Task)turn.Completion.Task).ToArray();
         }
@@ -1075,6 +1083,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         var attachment = before.WorkspaceAttachment!;
         var mount = _workspaceMountObserver.Observe(
             _sessions.WorkingDirectory, attachment.ReadOnly, hostPodUid, _time.GetUtcNow());
+        // Reject a replacement or remount that happened while local mount evidence was collected.
         var after = await ReadEnvironmentPodObservationAsync(session.Registration, actor, token)
             .ConfigureAwait(false);
         RequireCurrentPodObservation(after, session.Registration, hostPodUid);
@@ -1110,6 +1119,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         var before = await reader.ReadRootAsync(session.Registration, token).ConfigureAwait(false);
         var host = await ReadReadinessEvidenceAsync(actor, token).ConfigureAwait(false);
         var after = await reader.ReadRootAsync(session.Registration, token).ConfigureAwait(false);
+        // Join both owner snapshots to the same Pod observation; neither read alone proves the whole chain.
         if (host.RegistrationHash != RuntimeContractValidation.RegistrationHash(session.Registration) ||
             before with { PodObservation = after.PodObservation } != after ||
             before.PodObservation with { ObservedAt = default } != after.PodObservation with { ObservedAt = default } ||
@@ -1301,6 +1311,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             context.WorkspaceMountPath != _sessions.WorkingDirectory)
             throw new RuntimeAuthorizationException("runtime_placement_not_ready");
         var owner = placement.RuntimeOwnerContext;
+        // Readiness must match the accepted execution context, not only the Sandbox lease and image.
         if (owner is null || owner.ContractVersion != 1 || owner.ActorIssuer != binding.ActorIssuer ||
             owner.ActorId != binding.ActorId || owner.TenantId != binding.TenantId ||
             owner.ProjectId != binding.ProjectId || owner.RunId != binding.RunId ||
@@ -1327,6 +1338,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             owner.CopilotHardCreditLimit != binding.CopilotHardCreditLimit)
             throw new RuntimeAuthorizationException("runtime_owner_context_stale");
         var phases = observation.StartupPhases;
+        // Environment supplies placement phases; Host adds its own Configured and Ready timestamps below.
         if (phases.IsDefault || phases.Length != 3 ||
             phases.Any(phase => phase is null) ||
             phases.Select(phase => phase.Phase).Distinct().Count() != phases.Length ||
@@ -1521,6 +1533,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                     if (Volatile.Read(ref _usageFailed) != 0)
                         pending.Completion.TrySetException(new RuntimeAuthorizationException("runtime_usage_persistence_failed"));
                     else
+                        // Preserve caller cancellation unless a failed owner write makes the turn unsafe to report.
                         pending.Completion.TrySetCanceled(turn.Token);
                 }
                 catch (Exception failure) when (failure is not OutOfMemoryException)
@@ -1561,6 +1574,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             return;
         await _stop.CancelAsync().ConfigureAwait(false);
         await _dispatcher.ConfigureAwait(false);
+        // Wait for bootstrap/configuration to leave its critical section before disposing its receiver or session.
         await _configure.WaitAsync().ConfigureAwait(false);
         try
         {
