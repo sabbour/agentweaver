@@ -104,7 +104,7 @@ public sealed partial class EventsAndSessionsMigrationTests
                 INSERT INTO "{_schema}".session_provider_bindings
                     (project_id, run_id, provider_id, adapter_version, options_schema_version,
                      options_revision, resource_id, resource_generation, negotiated_capabilities)
-                VALUES ('p', 'runtime', 'native', '1', 1, '1', 'runtime-resource', 1, '[]')
+                VALUES ('p', 'runtime-insert', 'native', '1', 1, '1', 'runtime-resource', 1, '[]')
                 """,
             "session_fork_lineage" => $"""
                 INSERT INTO "{_schema}".session_fork_lineage
