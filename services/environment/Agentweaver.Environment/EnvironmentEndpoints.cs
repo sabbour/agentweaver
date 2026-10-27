@@ -25,6 +25,8 @@ public static class EnvironmentEndpoints
         {
             if (!TryReadCaller(context, out var caller))
                 return Results.Unauthorized();
+            if (request.P1Binding is not null)
+                return Results.BadRequest(new { code = "p1_internal_route_required" });
             try
             {
                 var result = await manager.RegisterAsync(
@@ -38,6 +40,13 @@ public static class EnvironmentEndpoints
             catch (ProjectsConfigApiException exception)
             {
                 return ToProjectAuthorizationResult(exception);
+            }
+            catch (RuntimeAuthorizationException exception)
+            {
+                return Results.Json(
+                    new { code = exception.Code },
+                    statusCode: exception.Code == "runtime_owner_denied"
+                        ? StatusCodes.Status403Forbidden : StatusCodes.Status503ServiceUnavailable);
             }
             catch (EnvironmentLifecycleException exception)
             {
@@ -56,6 +65,70 @@ public static class EnvironmentEndpoints
                 return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
             }
         });
+        endpoints.MapPost(
+            "/internal/projects/{projectId}/runs/{runId}/environments",
+            async (
+                string projectId,
+                string runId,
+                EnvironmentRegistrationApiRequest request,
+                HttpContext context,
+                EnvironmentLifecycleManager manager,
+                [FromServices] TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                if (!TryReadCaller(context, out var caller))
+                    return Results.Unauthorized();
+                if (request.P1Binding is null)
+                    return Results.BadRequest(new { code = "p1_invocation_binding_expectation_required" });
+                SecretCredential? actorCredential = null;
+                try
+                {
+                    var p1Actor = await CreateP1ActorAsync(context, caller!, timeProvider)
+                        .ConfigureAwait(false);
+                    actorCredential = p1Actor.Credential;
+                    var result = await manager.RegisterAsync(
+                        caller!, projectId, runId, request, cancellationToken, p1Actor.Actor)
+                        .ConfigureAwait(false);
+                    return Results.Json(
+                        result,
+                        statusCode: result.Replayed
+                            ? StatusCodes.Status200OK
+                            : StatusCodes.Status201Created);
+                }
+                catch (ProjectsConfigApiException exception)
+                {
+                    return ToProjectAuthorizationResult(exception);
+                }
+                catch (RuntimeAuthorizationException exception)
+                {
+                    return Results.Json(
+                        new { code = exception.Code },
+                        statusCode: exception.Code == "runtime_owner_denied"
+                            ? StatusCodes.Status403Forbidden : StatusCodes.Status503ServiceUnavailable);
+                }
+                catch (EnvironmentLifecycleException exception)
+                {
+                    return Results.Json(
+                        new { code = exception.Code, message = exception.Message },
+                        statusCode: exception.Code == "environment_unknown"
+                            ? StatusCodes.Status404NotFound
+                            : StatusCodes.Status409Conflict);
+                }
+                catch (ArgumentException exception)
+                {
+                    return Results.BadRequest(
+                        new { code = "invalid_environment_request", message = exception.Message });
+                }
+                catch (HttpRequestException)
+                {
+                    return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+                }
+                finally
+                {
+                    actorCredential?.Invalidate();
+                }
+            }).RequireAuthorization();
         environments.MapPost("/{environmentId}/release", async (
             string projectId,
             string runId,
@@ -418,34 +491,107 @@ public static class EnvironmentEndpoints
         {
             if (!TryReadCaller(context, out var caller))
                 return Results.Unauthorized();
+            if (request.P1Binding is not null)
+                return Results.BadRequest(new { code = "p1_internal_route_required" });
             return await ExecuteWorkspaceVolumeApiAsync(async () =>
                 Results.Ok(await manager.CreateAsync(
                     caller!, projectId, runId, environmentId, volumeId, request, cancellationToken)
                     .ConfigureAwait(false)), cancellationToken).ConfigureAwait(false);
         });
+        var p1WorkspaceVolumes = endpoints.MapGroup(
+                "/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes")
+            .RequireAuthorization();
+        p1WorkspaceVolumes.MapPost("/{volumeId}", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            string volumeId,
+            CreateWorkspaceVolumeApiRequest request,
+            HttpContext context,
+            EnvironmentWorkspaceVolumeManager manager,
+            [FromServices] TimeProvider timeProvider,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            if (request.P1Binding is null)
+                return Results.BadRequest(new { code = "p1_invocation_binding_expectation_required" });
+            SecretCredential? actorCredential = null;
+            try
+            {
+                var p1Actor = await CreateP1ActorAsync(context, caller!, timeProvider)
+                    .ConfigureAwait(false);
+                actorCredential = p1Actor.Credential;
+                return await ExecuteWorkspaceVolumeApiAsync(async () =>
+                    Results.Ok(await manager.CreateP1Async(
+                        caller!, projectId, runId, environmentId, volumeId,
+                        request, p1Actor.Actor, cancellationToken).ConfigureAwait(false)),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                actorCredential?.Invalidate();
+            }
+        });
+        p1WorkspaceVolumes.MapPost("/{volumeId}/provision", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            string volumeId,
+            WorkspaceVolumeApiTransitionRequest request,
+            HttpContext context,
+            EnvironmentWorkspaceVolumeManager manager,
+            [FromServices] TimeProvider timeProvider,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            if (request.P1Binding is null)
+                return Results.BadRequest(new { code = "p1_invocation_binding_expectation_required" });
+            SecretCredential? actorCredential = null;
+            try
+            {
+                var p1Actor = await CreateP1ActorAsync(context, caller!, timeProvider)
+                    .ConfigureAwait(false);
+                actorCredential = p1Actor.Credential;
+                return await ExecuteWorkspaceVolumeApiAsync(async () =>
+                {
+                    var result = await manager.ProvisionAsync(
+                        caller!, projectId, runId, environmentId, volumeId,
+                        request, cancellationToken, p1Actor.Actor).ConfigureAwait(false);
+                    return ToWorkspaceVolumeTransitionResult(result);
+                }, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                actorCredential?.Invalidate();
+            }
+        });
         MapWorkspaceVolumeTransition(
             workspaceVolumes, "provision",
-            static (manager, caller, projectId, runId, environmentId, volumeId, request, token) =>
+            static (manager, caller, projectId, runId, environmentId, volumeId, request, actor, token) =>
                 manager.ProvisionAsync(
-                    caller, projectId, runId, environmentId, volumeId, request, token));
+                    caller, projectId, runId, environmentId, volumeId, request, token, actor));
         MapWorkspaceVolumeTransition(
             workspaceVolumes, "replace",
-            static (manager, caller, projectId, runId, environmentId, volumeId, request, token) =>
+            static (manager, caller, projectId, runId, environmentId, volumeId, request, _, token) =>
                 manager.ReplaceAsync(
                     caller, projectId, runId, environmentId, volumeId, request, token));
         MapWorkspaceVolumeTransition(
             workspaceVolumes, "bind",
-            static (manager, caller, projectId, runId, environmentId, volumeId, request, token) =>
+            static (manager, caller, projectId, runId, environmentId, volumeId, request, _, token) =>
                 manager.BindVolumeAsync(
                     caller, projectId, runId, environmentId, volumeId, request, token));
         MapWorkspaceVolumeTransition(
             workspaceVolumes, "unbind",
-            static (manager, caller, projectId, runId, environmentId, volumeId, request, token) =>
+            static (manager, caller, projectId, runId, environmentId, volumeId, request, _, token) =>
                 manager.UnbindAsync(
                     caller, projectId, runId, environmentId, volumeId, request, token));
         MapWorkspaceVolumeTransition(
             workspaceVolumes, "release",
-            static (manager, caller, projectId, runId, environmentId, volumeId, request, token) =>
+            static (manager, caller, projectId, runId, environmentId, volumeId, request, _, token) =>
                 manager.ReleaseAsync(
                     caller, projectId, runId, environmentId, volumeId, request, token));
         workspaceVolumes.MapPost("/{volumeId}/flush", async (
@@ -539,12 +685,51 @@ public static class EnvironmentEndpoints
         {
             if (!TryReadCaller(context, out var caller))
                 return Results.Unauthorized();
+            if (request.P1Binding is not null)
+                return Results.BadRequest(new { code = "p1_internal_route_required" });
             return await ExecuteSandboxApiAsync(async () =>
             {
                 var result = await manager.ProvisionAsync(
                     caller!, projectId, runId, environmentId, request, cancellationToken).ConfigureAwait(false);
                 return ToSandboxResult(result);
             }, cancellationToken).ConfigureAwait(false);
+        });
+        var p1Sandboxes = endpoints.MapGroup(
+                "/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox")
+            .RequireAuthorization();
+        p1Sandboxes.MapPost("/provision", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            SandboxProvisionApiRequest request,
+            HttpContext context,
+            EnvironmentSandboxManager manager,
+            [FromServices] TimeProvider timeProvider,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            if (request.P1Binding is null)
+                return Results.BadRequest(new { code = "p1_invocation_binding_expectation_required" });
+            SecretCredential? actorCredential = null;
+            try
+            {
+                var p1Actor = await CreateP1ActorAsync(context, caller!, timeProvider)
+                    .ConfigureAwait(false);
+                actorCredential = p1Actor.Credential;
+                return await ExecuteSandboxApiAsync(async () =>
+                {
+                    var result = await manager.ProvisionAsync(
+                        caller!, projectId, runId, environmentId,
+                        request, cancellationToken, p1Actor.Actor).ConfigureAwait(false);
+                    return ToSandboxResult(result);
+                }, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                actorCredential?.Invalidate();
+            }
         });
         sandboxes.MapGet("/", async (
             string projectId,
@@ -788,7 +973,8 @@ public static class EnvironmentEndpoints
         RouteGroupBuilder group,
         string route,
         Func<EnvironmentWorkspaceVolumeManager, CurrentCallerRequest, string, string, string, string,
-            WorkspaceVolumeApiTransitionRequest, CancellationToken, Task<WorkspaceVolumeLifecycleResult>> execute)
+            WorkspaceVolumeApiTransitionRequest, RuntimeActorAuthorization?, CancellationToken,
+            Task<WorkspaceVolumeLifecycleResult>> execute)
     {
         group.MapPost($"/{{volumeId}}/{route}", async (
             string projectId,
@@ -802,11 +988,13 @@ public static class EnvironmentEndpoints
         {
             if (!TryReadCaller(context, out var caller))
                 return Results.Unauthorized();
+            if (request.P1Binding is not null)
+                return Results.BadRequest(new { code = "p1_internal_route_required" });
             return await ExecuteWorkspaceVolumeApiAsync(async () =>
             {
                 var result = await execute(
-                    manager, caller!, projectId, runId, environmentId, volumeId, request, cancellationToken)
-                    .ConfigureAwait(false);
+                    manager, caller!, projectId, runId, environmentId, volumeId,
+                    request, null, cancellationToken).ConfigureAwait(false);
                 return ToWorkspaceVolumeTransitionResult(result);
             }, cancellationToken).ConfigureAwait(false);
         });
@@ -1025,6 +1213,20 @@ public static class EnvironmentEndpoints
         {
             return false;
         }
+    }
+
+    private static async Task<(RuntimeActorAuthorization Actor, SecretCredential Credential)> CreateP1ActorAsync(
+        HttpContext context,
+        CurrentCallerRequest caller,
+        TimeProvider timeProvider)
+    {
+        var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
+        if (!authentication.Succeeded ||
+            authentication.Properties?.ExpiresUtc is not { } expiresAt ||
+            expiresAt <= timeProvider.GetUtcNow())
+            throw new RuntimeAuthorizationException("p1_invocation_binding_actor_required");
+        var credential = new SecretCredential(caller.BearerToken, expiresAt, timeProvider);
+        return (new RuntimeActorAuthorization(credential, caller.TenantSelector), credential);
     }
 
     /// <summary>Maps a network policy operation result to a ready or not-ready API response.</summary>

@@ -62,6 +62,13 @@ harness; changing the sandbox does not change that harness.
 
 ### Selection and cardinality
 
+P1 Environment creation keeps invocation provenance separate from provider
+selection. A current Core binding admits an owner operation, not a provider
+resource. Environment records the real operation/result identities in its own
+transaction and retains provider identity only after an actual provider result.
+See [P1 invocation-bound creation](../environment-sandbox.md#p1-invocation-bound-creation).
+This does not change adapter selection, native mount evidence, or Host joining.
+
 Projects choose only from providers enabled in the platform catalog. Where an override is allowed,
 resolution applies **platform default → project override**; platform policy can narrow the result. A run
 cannot substitute another provider mid-flight because an endpoint is slow or unavailable.

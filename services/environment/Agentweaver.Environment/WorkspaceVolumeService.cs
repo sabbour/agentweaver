@@ -49,6 +49,30 @@ public sealed class WorkspaceVolumeService
             environmentFence, request, cancellationToken, authorizationAndFenceCheck);
     }
 
+    /// <summary>Creates P1 volume metadata only with a retained Environment binding.</summary>
+    public Task<EnvironmentWorkspaceVolumeSnapshot> CreateP1Async(
+        EnvironmentGenerationFence environmentFence,
+        WorkspaceVolumeTransitionRequest request,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? authorizationAndFenceCheck,
+        Func<CancellationToken, Task> p1BindingCheck)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        ArgumentNullException.ThrowIfNull(p1BindingCheck);
+        ArgumentNullException.ThrowIfNull(environmentFence);
+        ArgumentNullException.ThrowIfNull(request);
+        request.ValidateFor(WorkspaceVolumeTransitionKind.Create);
+        ValidateSpecificationScope(request.Specification!, environmentFence, request.VolumeId);
+        return CreateAndValidateAsync(
+            environmentFence,
+            request,
+            cancellationToken,
+            authorizationAndFenceCheck,
+            binding,
+            p1BindingCheck);
+    }
+
     /// <summary>Reads and validates the current volume snapshot without changing provider state.</summary>
     public async Task<EnvironmentWorkspaceVolumeSnapshot?> InspectAsync(
         EnvironmentGenerationFence environmentFence,
@@ -71,16 +95,37 @@ public sealed class WorkspaceVolumeService
         EnvironmentGenerationFence environmentFence,
         WorkspaceVolumeTransitionRequest request,
         CancellationToken cancellationToken,
-        Func<CancellationToken, Task>? authorizationAndFenceCheck)
+        Func<CancellationToken, Task>? authorizationAndFenceCheck,
+        P1InvocationBinding? p1Binding = null,
+        Func<CancellationToken, Task>? p1BindingCheck = null)
     {
-        await CheckAuthorizationAndFenceAsync(authorizationAndFenceCheck, cancellationToken)
-            .ConfigureAwait(false);
-        var snapshot = await _lifecycleStore.CreateWorkspaceVolumeAsync(
-            environmentFence,
-            request.VolumeId,
-            JsonSerializer.SerializeToElement(request.Specification, SpecificationJsonOptions),
-            request.IdempotencyKey,
-            cancellationToken).ConfigureAwait(false);
+        async Task CheckP1BeforeWriteAsync(CancellationToken token)
+        {
+            await CheckAuthorizationAndFenceAsync(authorizationAndFenceCheck, token).ConfigureAwait(false);
+            if (p1Binding is not null)
+                await (p1BindingCheck ??
+                    throw new InvalidOperationException("A P1 metadata creation requires current-binding revalidation."))(
+                    token).ConfigureAwait(false);
+        }
+
+        await CheckP1BeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+        var specification = JsonSerializer.SerializeToElement(
+            request.Specification, SpecificationJsonOptions);
+        var snapshot = p1Binding is null
+            ? await _lifecycleStore.CreateWorkspaceVolumeAsync(
+                environmentFence,
+                request.VolumeId,
+                specification,
+                request.IdempotencyKey,
+                cancellationToken).ConfigureAwait(false)
+            : await _lifecycleStore.CreateP1WorkspaceVolumeAsync(
+                environmentFence,
+                request.VolumeId,
+                specification,
+                request.IdempotencyKey,
+                p1Binding,
+                cancellationToken,
+                CheckP1BeforeWriteAsync).ConfigureAwait(false);
         ValidateSnapshotIdentity(snapshot, environmentFence, request.VolumeId);
         _ = ReadSpecification(snapshot, environmentFence, request.VolumeId);
         return snapshot;
@@ -93,6 +138,26 @@ public sealed class WorkspaceVolumeService
         CancellationToken cancellationToken = default,
         Func<CancellationToken, Task>? authorizationAndFenceCheck = null) =>
         ApplyProvisionAsync(environmentFence, request, cancellationToken, authorizationAndFenceCheck);
+
+    /// <summary>Provisions a volume tied to a current Core P1 binding and retains the actual provider result.</summary>
+    public Task<WorkspaceVolumeLifecycleResult> ProvisionP1Async(
+        EnvironmentGenerationFence environmentFence,
+        WorkspaceVolumeTransitionRequest request,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? authorizationAndFenceCheck,
+        Func<CancellationToken, Task> p1BindingCheck)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        ArgumentNullException.ThrowIfNull(p1BindingCheck);
+        return ApplyProvisionAsync(
+            environmentFence,
+            request,
+            cancellationToken,
+            authorizationAndFenceCheck,
+            binding,
+            p1BindingCheck);
+    }
 
     /// <summary>Replaces a storage resource and queues cleanup for the superseded resource.</summary>
     public Task<WorkspaceVolumeLifecycleResult> ReplaceAsync(
@@ -246,7 +311,9 @@ public sealed class WorkspaceVolumeService
         EnvironmentGenerationFence environmentFence,
         WorkspaceVolumeTransitionRequest request,
         CancellationToken cancellationToken,
-        Func<CancellationToken, Task>? authorizationAndFenceCheck)
+        Func<CancellationToken, Task>? authorizationAndFenceCheck,
+        P1InvocationBinding? p1Binding = null,
+        Func<CancellationToken, Task>? p1BindingCheck = null)
     {
         ArgumentNullException.ThrowIfNull(environmentFence);
         ArgumentNullException.ThrowIfNull(request);
@@ -256,14 +323,42 @@ public sealed class WorkspaceVolumeService
         var specification = ReadSpecification(snapshot, environmentFence, request.VolumeId);
         await CheckAuthorizationAndFenceAsync(authorizationAndFenceCheck, cancellationToken)
             .ConfigureAwait(false);
-        var reservation = await ReserveAsync(
-            environmentFence, request, snapshot, cancellationToken).ConfigureAwait(false);
+        var reservation = p1Binding is null
+            ? await ReserveAsync(environmentFence, request, snapshot, cancellationToken).ConfigureAwait(false)
+            : await _lifecycleStore.ReserveP1WorkspaceVolumeProvisionAsync(
+                environmentFence,
+                request.VolumeId,
+                request.ExpectedTransitionRevision,
+                request.ExpectedResourceGeneration,
+                request.ExpectedDataGeneration,
+                request.IdempotencyKey,
+                p1Binding,
+                cancellationToken,
+                p1BindingCheck ?? throw new RuntimeAuthorizationException(
+                    "p1_invocation_binding_unavailable")).ConfigureAwait(false);
         if (reservation.Replayed ||
             reservation.TransitionState != EnvironmentWorkspaceVolumeTransitionState.Reserved)
             return await ReplayedAsync(
                 environmentFence, request.VolumeId, reservation, cancellationToken).ConfigureAwait(false);
 
         WorkspaceVolumeResource? provisioned = null;
+        async Task BeforeProviderEffectAsync(CancellationToken token)
+        {
+            await CheckAuthorizationAndFenceAsync(authorizationAndFenceCheck, token).ConfigureAwait(false);
+            if (p1BindingCheck is not null)
+                await p1BindingCheck(token).ConfigureAwait(false);
+        }
+
+        Task<EnvironmentWorkspaceVolumeTransitionResult> Complete(bool mayHaveApplied, bool verified,
+            ProviderResourceRef? resource, WorkspaceVolumeProviderBindingSnapshot? providerBinding,
+            CancellationToken token, Func<CancellationToken, Task>? beforeCommitCheck = null) =>
+            p1Binding is null
+                ? CompleteProvisionAsync(
+                    reservation, environmentFence, resource, providerBinding, verified, token)
+                : CompleteP1ProvisionAsync(
+                    reservation, environmentFence, resource, providerBinding, mayHaveApplied,
+                    verified, p1Binding, token, beforeCommitCheck);
+
         var result = await RunEffectAsync(
             async token =>
             {
@@ -282,34 +377,54 @@ public sealed class WorkspaceVolumeService
                         "The Storage provider did not verify the requested resource generation and access mode.");
                 return provisioned;
             },
-            token => CompleteProvisionAsync(
-                reservation,
-                environmentFence,
+            token => Complete(
+                mayHaveApplied: true,
+                verified: false,
                 GetReconciliationResource(provisioned, reservation),
                 GetReconciliationBinding(provisioned, reservation),
-                false,
                 token),
             cancellationToken,
-            authorizationAndFenceCheck,
-            token => FailProvisionAsync(reservation, environmentFence, token)).ConfigureAwait(false);
+            BeforeProviderEffectAsync,
+            token => p1Binding is null
+                ? FailProvisionAsync(reservation, environmentFence, token)
+                : Complete(
+                    mayHaveApplied: false,
+                    verified: false,
+                    resource: null,
+                    providerBinding: null,
+                    token),
+            recordNoEffectBeforeStart: p1Binding is not null).ConfigureAwait(false);
 
         // Record a successful provider effect even if the caller cancels afterward.
         await CheckAuthorizationBeforeOwnerCommitAsync(
-            authorizationAndFenceCheck,
-            token => CompleteProvisionAsync(
-                reservation,
-                environmentFence,
+            BeforeProviderEffectAsync,
+            token => Complete(
+                mayHaveApplied: true,
+                verified: false,
                 result.Resource,
                 result.ProviderBinding,
-                false,
                 token)).ConfigureAwait(false);
-        var completion = await CompleteProvisionAsync(
-            reservation,
-            environmentFence,
-            result.Resource,
-            result.ProviderBinding,
-            true,
-            CancellationToken.None).ConfigureAwait(false);
+        EnvironmentWorkspaceVolumeTransitionResult completion;
+        try
+        {
+            completion = await Complete(
+                mayHaveApplied: true,
+                verified: true,
+                result.Resource,
+                result.ProviderBinding,
+                CancellationToken.None,
+                p1BindingCheck).ConfigureAwait(false);
+        }
+        catch (RuntimeAuthorizationException) when (p1Binding is not null)
+        {
+            _ = await Complete(
+                mayHaveApplied: true,
+                verified: false,
+                result.Resource,
+                result.ProviderBinding,
+                CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
         return new WorkspaceVolumeLifecycleResult(reservation, completion, null);
     }
 
@@ -886,6 +1001,27 @@ public sealed class WorkspaceVolumeService
         CancellationToken cancellationToken) =>
         _lifecycleStore.CompleteWorkspaceVolumeProvisionAsync(
             reservation.OperationId, fence, true, resource, providerBinding, verified, cancellationToken);
+
+    private Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteP1ProvisionAsync(
+        EnvironmentWorkspaceVolumeTransitionReservation reservation,
+        EnvironmentGenerationFence fence,
+        ProviderResourceRef? resource,
+        WorkspaceVolumeProviderBindingSnapshot? providerBinding,
+        bool effectMayHaveApplied,
+        bool verified,
+        P1InvocationBinding binding,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck) =>
+        _lifecycleStore.CompleteP1WorkspaceVolumeProvisionAsync(
+            reservation.OperationId,
+            fence,
+            effectMayHaveApplied,
+            resource,
+            providerBinding,
+            verified,
+            binding,
+            cancellationToken,
+            beforeCommitCheck);
 
     private Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteReplaceAsync(
         EnvironmentWorkspaceVolumeTransitionReservation reservation,

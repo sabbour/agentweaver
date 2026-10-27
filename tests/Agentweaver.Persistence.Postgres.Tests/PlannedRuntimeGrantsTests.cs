@@ -9,10 +9,10 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests for the plan gates. They need no database: every gate throws before a connection opens.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "df16526c756df42a3c0ba8534fea10bf5d019c6b5ca6e8e083b91963aa7e66ea";
+    private const string ReviewedPlanSha256 = "d818fac65615c9a21d045810a6edadea2fa1ef106d28ce4b9db5aacae06f7ff2";
     private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38, 39, 40];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 11)];
-    private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 11)];
+    private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 12)];
 
     [Fact]
     public void EmbeddedPlanIsTheReviewedPlan()
@@ -75,6 +75,8 @@ public sealed class PlannedRuntimeGrantsTests
         Assert.Equal(EnvironmentVersions, environment.Versions);
         Assert.Contains(environment.Tables, table => table.Table == "remote_mcp_connections");
         Assert.Contains(environment.Tables, table => table.Table == "remote_mcp_connection_configurations");
+        var creationLinks = Assert.Single(environment.Tables, table => table.Table == "p1_creation_links");
+        Assert.Equal(["SELECT", "INSERT", "UPDATE"], creationLinks.Privileges);
     }
 
     [Fact]
