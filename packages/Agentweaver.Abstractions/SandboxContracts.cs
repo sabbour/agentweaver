@@ -465,6 +465,11 @@ public sealed record SandboxObservation(
         Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public SandboxRuntimeHttpsEndpoint? RuntimeEndpoint { get; init; }
 
+    /// <summary>Optional current Pod observation; absence is incomplete evidence, never verified readiness.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxPodObservation? PodObservation { get; init; }
+
     /// <summary>Checks the observation against the exact describe request and ready-state evidence requirements.</summary>
     /// <exception cref="ArgumentException">The observed resource, fence, endpoint, or state evidence does not match.</exception>
     public SandboxObservation ValidateFor(SandboxDescribeRequest request)
@@ -491,6 +496,12 @@ public sealed record SandboxObservation(
                 (!VmIsolationVerified || !WorkspaceAttachmentVerified ||
                  State is not (SandboxObservedState.Pending or SandboxObservedState.Ready) ||
                  RuntimeEndpoint.Validate() != RuntimeEndpoint) ||
+            PodObservation is { } pod &&
+                (pod.ValidateFor(request) != pod ||
+                 pod.ProvisionOperationId != ProvisionOperationId ||
+                 pod.IsolationConfigurationVerified != VmIsolationVerified ||
+                 (pod.WorkspaceAttachment is not null) != WorkspaceAttachmentVerified ||
+                 RuntimeEndpoint is not null && RuntimeEndpoint.PodUid != pod.PodUid) ||
             State == SandboxObservedState.Ready &&
                 (!VmIsolationVerified ||
                  !WorkspaceAttachmentVerified ||

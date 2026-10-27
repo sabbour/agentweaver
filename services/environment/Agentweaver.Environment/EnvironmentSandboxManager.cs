@@ -131,7 +131,8 @@ public sealed class EnvironmentSandboxManager(
     KubernetesAgentSandboxClient kubernetesClient,
     CiliumEgressProviderOptions ciliumOptions,
     EnvironmentEgressManager egressManager,
-    EnvironmentRuntimeSuspendReleaseAuthority? suspendReleaseAuthority = null)
+    EnvironmentRuntimeSuspendReleaseAuthority? suspendReleaseAuthority = null,
+    TimeProvider? timeProvider = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
@@ -548,7 +549,7 @@ public sealed class EnvironmentSandboxManager(
                     authorization.Owner,
                     lifecycle.Fence,
                     currentLease,
-                    DateTimeOffset.UtcNow);
+                    (timeProvider ?? TimeProvider.System).GetUtcNow());
             if (projection is not null && includeRuntimeWorkspace)
                 projection = projection with
                 {
@@ -595,7 +596,20 @@ public sealed class EnvironmentSandboxManager(
                         pinnedOptions.StartupBudgets.ToContract(), provision.MountPath)
                 };
             }
-            return await project(projection, callbackCancellationToken).ConfigureAwait(false);
+            var result = await project(projection, callbackCancellationToken).ConfigureAwait(false);
+            if (runBoundRead)
+                await egressManager.EnsureRunEnvironmentPlacementReadAuthorizationUnchangedAsync(
+                    caller, authorization.Owner, authorization.Authorization, callbackCancellationToken)
+                    .ConfigureAwait(false);
+            else
+                await egressManager.EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
+                    caller, authorization.Owner, authorization.Authorization, callbackCancellationToken)
+                    .ConfigureAwait(false);
+            if (currentLease is not null)
+                _ = ProjectCurrentPlacement(
+                    authorization.Owner, lifecycle.Fence, currentLease,
+                    (timeProvider ?? TimeProvider.System).GetUtcNow());
+            return result;
         }
     }
 

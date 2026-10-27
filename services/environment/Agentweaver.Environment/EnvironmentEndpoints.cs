@@ -218,6 +218,7 @@ public static class EnvironmentEndpoints
 
         MapRuntimePlacement("");
         MapRuntimePlacement("/readiness");
+        MapRuntimePlacement("/pod-observation");
         MapRuntimePlacement("/workspace");
 
         void MapRuntimePlacement(string suffix) => endpoints.MapGet(
@@ -247,6 +248,10 @@ public static class EnvironmentEndpoints
                 try
                 {
                     var actor = new RuntimeActorAuthorization(bearer, caller.TenantSelector);
+                    if (suffix == "/pod-observation")
+                        return Results.Ok(await reader.GetPodObservationAsync(
+                            actor, projectId, runId, sessionId, environmentId, profileId, profiles,
+                            cancellationToken, profileReplacements).ConfigureAwait(false));
                     if (suffix == "/workspace")
                     {
                         var workspace = await reader.GetWorkspaceContextAsync(

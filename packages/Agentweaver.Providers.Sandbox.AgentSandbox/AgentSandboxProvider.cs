@@ -402,6 +402,38 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             ? await ReadRuntimeEndpointAsync(
                 sandbox.Value, pod, descriptor.Namespace, options, cancellationToken).ConfigureAwait(false)
             : null;
+        var metadata = RequiredObject(pod, "metadata");
+        if (ReadOptionalString(metadata, "namespace") != descriptor.Namespace ||
+            metadata.TryGetProperty("deletionTimestamp", out var deletion) &&
+                deletion.ValueKind != JsonValueKind.Null)
+            throw ProviderResourceMismatch("The backing Pod has a different namespace or is deleting.");
+        SandboxPodObservation? podObservation = null;
+        // Older Kubernetes versions may omit Pod generation. Never invent it or break legacy startup reads.
+        if (TryGetInt64(metadata, "generation", out var podGeneration) && podGeneration > 0 &&
+            ReadOptionalString(metadata, "resourceVersion") is { Length: > 0 } resourceVersion &&
+            ReadOptionalString(pod, "status", "phase") is
+                "Pending" or "Running" or "Succeeded" or "Failed" or "Unknown")
+        {
+            podObservation = new SandboxPodObservation(
+                1, _timeProvider.GetUtcNow(), request.Fence, request.Resource, request.FencingGeneration,
+                operationId, clusterIdentity, descriptor.Namespace, claimUid,
+                RequiredString(RequiredObject(sandbox.Value, "metadata"), "uid"),
+                RequiredString(metadata, "name"), RequiredString(metadata, "uid"),
+                resourceVersion, podGeneration, RequiredString(RequiredObject(pod, "status"), "phase"),
+                workspaceVerified ? new SandboxPodWorkspaceAttachment(
+                    descriptor.WorkspaceNamespace, descriptor.WorkspaceClaimName, descriptor.WorkspaceClaimUid,
+                    descriptor.WorkspaceMountPath, descriptor.WorkspaceReadOnly) : null,
+                isolationVerified).ValidateFor(request);
+            // Async PVC, RuntimeClass, event and endpoint reads must not attest a replaced or changed Pod.
+            var currentPod = await _client.GetAsync(
+                string.Empty, "pods", descriptor.Namespace, podObservation.PodName, cancellationToken)
+                .ConfigureAwait(false);
+            if (currentPod is null ||
+                RequiredString(RequiredObject(currentPod.Value, "metadata"), "uid") != podObservation.PodUid ||
+                RequiredString(RequiredObject(currentPod.Value, "metadata"), "resourceVersion") !=
+                    podObservation.PodResourceVersion)
+                throw ProviderResourceMismatch("The backing Pod changed while its configuration was observed.");
+        }
         return new SandboxObservation(
             request.Resource,
             state,
@@ -414,7 +446,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             ProvisionedResource: BuildProvisionedResource(request, descriptor, phases),
             StartupFailure: startupFailure)
         {
-            RuntimeEndpoint = runtimeEndpoint
+            RuntimeEndpoint = runtimeEndpoint,
+            PodObservation = podObservation
         }.ValidateFor(request);
     }
 
@@ -1132,6 +1165,11 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             new { name = "ASPNETCORE_Kestrel__Certificates__Default__Path", value = "/run/agenthost-tls/tls.crt" },
             new { name = "ASPNETCORE_Kestrel__Certificates__Default__KeyPath", value = "/run/agenthost-tls/tls.key" }
         });
+        container["env"]!.AsArray().Add(JsonSerializer.SerializeToNode(new
+        {
+            name = "AGENTWEAVER_HOST_POD_UID",
+            valueFrom = new { fieldRef = new { apiVersion = "v1", fieldPath = "metadata.uid" } }
+        }));
         container["ports"] = JsonSerializer.SerializeToNode(new[] { new { name = "https", containerPort = 8443 } });
         container["livenessProbe"] = JsonSerializer.SerializeToNode(new
         {
@@ -1492,6 +1530,17 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             })
         };
         ApplyAgentHostProfile(expected, options, mountPath);
+        var expectedEnvironment = expected["containers"]![0]!["env"]!.AsArray();
+        var podIdentity = RequiredArray(container, "env").EnumerateArray()
+            .Where(item => ReadOptionalString(item, "name") == "AGENTWEAVER_HOST_POD_UID").ToArray();
+        if (podIdentity.Length == 0)
+        {
+            // Legacy profiles predate Pod self-identity; Host evidence remains unavailable without the injected UID.
+            expectedEnvironment.RemoveAt(expectedEnvironment.Count - 1);
+        }
+        else if (podIdentity.Length != 1 ||
+            !JsonNode.DeepEquals(JsonNode.Parse(podIdentity[0].GetRawText()), expectedEnvironment[^1]))
+            throw ProviderResourceMismatch("The AgentHost Pod UID must come only from the Kubernetes Downward API.");
         if (!ContainsLaunchConfiguration(actual, expected))
             throw ProviderResourceMismatch("The owned AgentHost launch configuration differs from its pinned profile.");
     }

@@ -1435,8 +1435,16 @@ All routes use Runtime authority and current Environment placement/profile check
 | --- | --- | --- |
 | GET | Empty | Read bootstrap placement context. |
 | GET | `/readiness` | Read measured readiness context. |
+| GET | `/pod-observation` | Read exact current Pod identity and configuration only; incomplete or mismatched observations return `409`. Not invocation ownership or mounted-storage proof. |
 | GET | `/workspace` | Read exact Workspace context. |
 | POST | `/resolve` | Resolve current registered bootstrap profile. |
+
+The Pod observation route uses the same current run-bound Projects authority,
+Core session context, profile checks, and owner-locked lease as readiness.
+It returns only `SandboxPodObservation`, not provider options, recovery
+descriptors, credentials, or the full readiness context, with
+`Cache-Control: no-store`. See [Pod configuration observations](../architecture/environment-sandbox.md#pod-configuration-observations)
+for identity fields and the actual-versus-configured evidence boundary.
 
 Native-only prefix: `/internal/runtime`. All routes use Runtime authority.
 
