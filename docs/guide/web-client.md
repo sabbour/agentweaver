@@ -83,7 +83,7 @@ The client uses these routes:
 | `/projects/:projectId/skills` | Manage Skill sources, imported revisions, and agent assignments. |
 | `/projects/:projectId/memories` | Search and manage Knowledge records and transfer bundles for a run and an agent. `/knowledge` opens the same page. |
 | `/projects/:projectId/flow` | Read project notifications, pending gates, Board counts, and runs grouped as Open, Working and Done. |
-| `/projects/:projectId/workflows` | Read the saved project default and blueprint workflow cards, clear a saved default, refresh, or open Project settings. Workflow-definition features still need Gateway routes; see the [UI parity reference](../reference/web-ui-parity.md#workflows-page-inventory). |
+| `/projects/:projectId/workflows` | Read **Active workflow** and grouped **Referenced workflows** cards, expand **View blueprints** to inspect assignments, clear a saved default, refresh, or open Project settings. Workflow-definition features still need Gateway routes; see the [UI parity reference](../reference/web-ui-parity.md#workflows-page-inventory). |
 | `/projects/:projectId/workspace` | Read the configured repository, pull requests that runs opened, and synced issues. |
 | `/projects/:projectId/observability` | Read project metrics, usage, and recent runs. |
 | `/projects/:projectId/diagnostics` | Read platform areas that are not ready and failed runs. |
@@ -308,9 +308,11 @@ names what is still missing:
 - **Flow:** project notifications, **Needs input** including dismissed gates,
   **Task stages** with Board counts, and **Open**, **Working**, and **Done** run groups.
   Failed, cancelled and unknown outcomes retain separate state labels.
-- **Workflows:** rich-list cards for the saved project default and blueprint
-  workflow references. **Use platform default** clears the saved default;
-  **Refresh** and **Open Project settings** remain available. The workflow
+- **Workflows:** the saved project default appears under **Active workflow**.
+  **Referenced workflows** groups other saved choices by workflow ID;
+  **View blueprints** expands their assignments inline. These are references,
+  not a catalog of validated definitions. **Use platform default** clears the
+  saved default; **Refresh** and **Open Project settings** remain available. The workflow
   catalog, editors, graph, triggers, runs, generation, and sync need Gateway
   routes; see the [UI parity reference](../reference/web-ui-parity.md#workflows-page-inventory).
 - **Workspace:** the configured repository, pull requests that runs opened or

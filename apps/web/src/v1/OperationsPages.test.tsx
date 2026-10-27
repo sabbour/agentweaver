@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { ReactElement, ReactNode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -292,14 +293,66 @@ describe('WorkflowsPage', () => {
       blueprintWorkflowReferences: [{ blueprintId: 'bp-review', workflowId: 'wf-review' }],
     }, 7));
     renderPage('workflows', <WorkflowsPage />);
-    const defaultWorkflow = await screen.findByRole('list', { name: 'Default workflow' });
+    const defaultWorkflow = await screen.findByRole('list', { name: 'Active workflow' });
     expect(within(defaultWorkflow).getByText('wf-default')).toBeTruthy();
     expect(within(defaultWorkflow).getByText('Project default')).toBeTruthy();
-    const blueprintWorkflows = screen.getByRole('list', { name: 'Blueprint workflows' });
-    expect(within(blueprintWorkflows).getByText('bp-review')).toBeTruthy();
+    const blueprintWorkflows = screen.getByRole('list', { name: 'Referenced workflows' });
     expect(within(blueprintWorkflows).getByText('wf-review')).toBeTruthy();
+    fireEvent.click(within(blueprintWorkflows).getByRole('button', { name: 'View blueprints for wf-review' }));
+    expect(within(blueprintWorkflows).getByText('bp-review')).toBeTruthy();
     expect(screen.getByText('Configuration revision 7')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Project settings' }).getAttribute('href')).toBe('/projects/p1/settings');
+  });
+
+  it('groups references by workflow, keeps the default first, and expands assignments with the keyboard', async () => {
+    const user = userEvent.setup();
+    mocks.getProjectConfiguration.mockResolvedValue(configuration({
+      defaultWorkflowId: 'wf-default',
+      blueprintWorkflowReferences: [
+        { blueprintId: 'bp-build', workflowId: 'wf-default' },
+        { blueprintId: 'bp-review', workflowId: 'wf-review' },
+        { blueprintId: 'bp-verify', workflowId: 'wf-review' },
+      ],
+    }));
+    renderPage('workflows', <WorkflowsPage />);
+    const active = await screen.findByRole('list', { name: 'Active workflow' });
+    expect(within(active).getByText('1 blueprint uses this workflow.')).toBeTruthy();
+    const referenced = screen.getByRole('list', { name: 'Referenced workflows' });
+    expect(within(referenced).getAllByRole('listitem')).toHaveLength(1);
+    expect(within(referenced).getByText('2 blueprints use this workflow.')).toBeTruthy();
+    const toggle = within(referenced).getByRole('button', { name: 'View blueprints for wf-review' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('list', { name: 'Blueprints using wf-review' })).toBeNull();
+    toggle.focus();
+    await user.keyboard('{Enter}');
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    const assignments = screen.getByRole('list', { name: 'Blueprints using wf-review' });
+    expect(assignments.parentElement?.id).toBe(toggle.getAttribute('aria-controls'));
+    expect(within(assignments).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['bp-review', 'bp-verify']);
+    await user.keyboard(' ');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(toggle);
+    expect(screen.queryByRole('button', { name: /Run now|View graph|Edit|Sync|Set as default/ })).toBeNull();
+  });
+
+  it('does not duplicate the active workflow when all blueprints use it', async () => {
+    mocks.getProjectConfiguration.mockResolvedValue(configuration({
+      defaultWorkflowId: 'wf-default',
+      blueprintWorkflowReferences: [{ blueprintId: 'bp-build', workflowId: 'wf-default' }],
+    }));
+    renderPage('workflows', <WorkflowsPage />);
+    await screen.findByRole('list', { name: 'Active workflow' });
+    expect(screen.getAllByText('wf-default')).toHaveLength(1);
+    expect(screen.getByText('All blueprint workflow references use the project default shown above.')).toBeTruthy();
+    expect(screen.queryByRole('list', { name: 'Referenced workflows' })).toBeNull();
+  });
+
+  it('uses the incumbent loading cards without reporting an empty catalog', async () => {
+    mocks.getProjectConfiguration.mockReturnValue(new Promise(() => {}));
+    renderPage('workflows', <WorkflowsPage />);
+    expect(screen.getByRole('status', { name: 'Loading workflow references' }).getAttribute('aria-busy')).toBe('true');
+    expect(screen.queryByText('No other workflow references')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Refresh' }).hasAttribute('disabled')).toBe(true);
   });
 
   it('resets the saved default without changing other project settings', async () => {
@@ -381,10 +434,28 @@ describe('WorkflowsPage', () => {
     expect(await screen.findByText('HTTP 500: Configuration is down')).toBeTruthy();
   });
 
+  it('hides saved choices and open details when a refresh loses permission', async () => {
+    mocks.getProjectConfiguration
+      .mockResolvedValueOnce(configuration({
+        defaultWorkflowId: 'wf-default',
+        blueprintWorkflowReferences: [{ blueprintId: 'bp-secret', workflowId: 'wf-default' }],
+      }))
+      .mockRejectedValueOnce(forbidden());
+    renderPage('workflows', <WorkflowsPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'View blueprints for wf-default' }));
+    expect(screen.getByRole('list', { name: 'Blueprints using wf-default' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await screen.findByText('You do not have permission to read the configuration in this project.');
+    expect(screen.queryByText('wf-default')).toBeNull();
+    expect(screen.queryByText('bp-secret')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Use platform default' })).toBeNull();
+    expect(screen.queryByText('No other workflow references')).toBeNull();
+  });
+
   it('names the missing workflow features in plain copy', async () => {
     renderPage('workflows', <WorkflowsPage />);
     await screen.findByText('No blueprint uses a specific workflow.');
-    expectPlainNote('Workflow details, editing, triggers, runs, generation, sync, and graphs are not available yet.');
+    expectPlainNote('The workflow catalog, definitions, validation results, editing, triggers, runs, generation, sync, and graphs are not available yet.');
   });
 });
 
