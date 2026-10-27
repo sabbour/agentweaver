@@ -29,7 +29,7 @@
     "platform:runtime-defaults": "node scripts/azure/platform-runtime-defaults.mjs",
     "db:maintenance:setup": "node scripts/azure/db-maintenance-setup.mjs",
     "test:azure": "node --test scripts/azure/tests/*.test.mjs",
-    "test:harness": "node --test scripts/harness-shared/test/*.test.mjs scripts/api-harness/test/*.test.mjs scripts/ui-harness/test/*.test.mjs scripts/mcp-harness/test/*.test.mjs",
+    "test:harness": "node --test scripts/harness-shared/test/*.test.mjs scripts/api-harness/test/*.test.mjs scripts/ui-harness/test/*.test.mjs scripts/mcp-harness/test/*.test.mjs scripts/azure/p1-native-probes/*.test.mjs",
     "test:harness:signin-browser": "node --test scripts/harness-shared/browser-test/*.test.mjs",
     "test:harness:api": "node --test scripts/harness-shared/test/*.test.mjs scripts/api-harness/test/*.test.mjs",
     "test:harness:ui": "node --test scripts/harness-shared/test/*.test.mjs scripts/ui-harness/test/*.test.mjs",

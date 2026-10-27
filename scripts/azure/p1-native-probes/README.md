@@ -180,8 +180,8 @@ with `X-Agentweaver-Tenant`. It must never be placed in `input`, evidence,
 logs, or result objects. `authorize` returns `{ allowed: true, journey }`,
 where `journey` must exactly match a supplied opaque fixture value.
 
-The CLI currently accepts no Environment Pod-observation or invocation-authority
-provider. The `runtimeReadinessProvider` returns
+Legacy three-provider modules have no Environment Pod-observation or invocation-authority
+provider. Their `runtimeReadinessProvider` returns
 `{ registration, readinessReceipt, acceptedOptions }`, independently read from
 the current RuntimeHost. The runner compares registration `binding.placementUid`
 with Environment's `placement.resource.resourceId` (the SandboxClaim UID), not
@@ -193,9 +193,81 @@ These reads are not a substitute for invocation ownership or native mount eviden
 
 **Native execution is blocked.** After validating the module shape, the CLI
 exits 2 at `native_authority_join` with a precise missing-contract diagnostic.
-It never invokes provider methods or the native runner, and leaves its exclusively
+Legacy modules never invoke provider methods. Modules with the optional
+`nativeAuthorityProvider.readCurrent()` perform bounded, read-only owner
+observations; they still never invoke the native runner and leave the exclusively
 reserved output empty; that file is not an acceptance envelope. The controlled
 runner tests below are not evidence that the CLI has this authority join.
+
+### Source-owned partial owner reader
+
+`owner-providers.mjs` exports `createP1NativeProviders({ input }, trusted)`.
+A reviewed local provider module binds the second argument from existing
+authorized clients in memory, then exports the CLI's one-argument factory:
+
+```js
+import { createP1NativeProviders as create } from './owner-providers.mjs';
+// `trusted` is supplied by the existing authorized owner-client composition,
+// never loaded from the probe input JSON.
+export const createP1NativeProviders = ({ input }) => create({ input }, trusted);
+```
+
+`trusted` contains `actor: { issuer, subject, tenantId }`, the existing
+`authProvider`, and `core`, `environment`, `host` clients. Each owner has a
+source-reviewed fixed HTTPS `origin`, `tenantId`, and
+`getAuthorization(origin)` returning an already-authorized in-memory bearer
+header for that exact origin. The reader does not acquire credentials, change
+scopes, follow registration endpoints, or accept origins/clients from manifests.
+Do not serialize this trusted composition. The wrapper example illustrates
+composition, not a standalone sign-in implementation.
+
+The only new input is `nativeOwner: { runtimeInstanceId }`, an exact registration
+lookup locator, plus the existing `pins.context.clusterIdentity.sha256`. Caller
+receipt, status and endpoint fields are not authority. Reads use these real routes:
+
+| Owner | Read |
+| --- | --- |
+| Core | `/internal/runtime/registrations/{runtimeInstanceId}` |
+| Core | `/internal/projects/{projectId}/runs/{runId}/p1-invocation-binding` |
+| Environment | `/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}/pod-observation` |
+| Host | `/runtime/v1/readiness/evidence` |
+
+Each GET rejects redirects, uses no-store, a 10-second transport/body deadline,
+and a streamed 64-KiB response limit. The current registration supplies the route
+identities and must match the trusted actor. Core must identify the same root
+session, accepted selection and execution fence. Environment's resource/claim ID
+must match registration placement; Host's mount Pod UID must separately match
+Environment's actual Pod UID. Provider resource, lifecycle/provider fences,
+workspace attachment and Host registration revision must agree. Pod observation,
+Core binding and complete registration are read again after the Host observation;
+changes reject. Owner bodies, credentials, registration endpoints and model
+credential references are never returned or printed. Host hash fields are checked
+for shape only, not rehashed as independent cryptographic proof.
+
+The result is always `status: "blocked"` with
+`code: "environment_creation_binding_read_contract_missing"` and a small partial
+observation identifying the Core invocation, runtime revision, claim and Pod.
+As inspected at proposed #2425 head
+`9b943bcad4e74217cedb65910e00ea9982b49ecf`, Environment retains creation links but
+does not expose a stable authenticated creation-binding read/response contract.
+This reader intentionally contains no guessed route or schema for that dependency.
+Its journey authorizer always denies and its runner readiness adapter refuses use.
+Even an injected authority provider returning `passed` cannot unblock the CLI.
+Root provenance and Host mount observations do not prove Environment creation,
+child execution, native no-send/cursor effects, network isolation, storage byte
+isolation, or generic replacement. All existing required acceptance slots remain.
+
+Run the fixture-free source-route/type contract test and controlled transport
+regressions with:
+
+```powershell
+node --test scripts\azure\p1-native-probes\*.test.mjs scripts\harness-shared\test\p1-acceptance-result.test.mjs
+```
+
+The owner response regressions are synthetic; no database, cluster fixtures or
+live P1 run is performed. The complete subtree suite is also selected by
+`npm run test:harness` in the existing v1 CI harness job. The CI contract test
+guards that selector against accidentally dropping the native suite.
 
 The CLI is a thin execution seam, not a fixture or authority producer. Importing
 `cli.mjs` is inert. `--execute` expresses execution intent, not an authorization
@@ -221,9 +293,10 @@ export async function createP1NativeProviders({ input }) {
 
 `input` is a structured clone of the exact JSON input described above. The
 factory may not rewrite the runner's pins. The returned object must contain
-exactly these three keys, implementing the methods and return contracts in
-[Injected dependencies](#injected-dependencies). Missing methods or extra keys
-block. In particular, it cannot supply `fetch`, `processProvider`, or `now`.
+these three keys, implementing the methods and return contracts in
+[Injected dependencies](#injected-dependencies), and may additionally contain
+`nativeAuthorityProvider: { readCurrent() }`. Missing methods or any other extra
+keys block. In particular, it cannot supply `fetch`, `processProvider`, or `now`.
 The CLI uses Node's HTTP transport, the real clock, and
 `createP1NativeProcessProvider(input.pins.context)` without process overrides.
 It cannot execute the runner until the missing owner contracts are integrated;
@@ -234,7 +307,7 @@ pin its source separately. Its import and factory must be side-effect-free:
 they may construct adapters but must not sign in, acquire credentials, create
 fixtures, contact services, start processes, or mutate resources. The factory
 is loaded before the runner validates all receipt pins; do not put setup or
-live work in it. The CLI supplies no real owner implementation. A module that
+live work in it. The CLI supplies no sign-in/client configuration. A module that
 returns scripted observations cannot produce genuine acceptance evidence.
 
 An Environment owner may expose a read-only Pod observation with exactly these
@@ -252,8 +325,8 @@ fields:
 }
 ```
 
-Such an observation is not currently an accepted CLI provider or runner
-receipt. If a future owner adapter supplies it, it must be derived only from
+The partial owner reader consumes this observation directly from Environment;
+it is not a runner ownership receipt. It must be derived only from
 validated actual Pod, Sandbox, and PVC reads, then reread the exact Pod UID and
 `resourceVersion` before returning; when present, `RuntimeEndpoint.PodUid`
 must match. Its environment fence and provision operation do not establish an
