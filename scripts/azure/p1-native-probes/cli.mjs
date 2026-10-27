@@ -2,7 +2,6 @@ import { open, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createP1NativeProcessProvider } from './process-provider.mjs';
-import { runP1NativeProbes } from './run.mjs';
 
 const USAGE = 'node scripts\\azure\\p1-native-probes\\cli.mjs --execute --input <native-input.json> --provider-module <owner-providers.mjs> --output <new-native-envelope.json>';
 const PROVIDERS = Object.freeze({
@@ -57,10 +56,9 @@ export async function loadP1NativeProviders(input, modulePath) {
   return { ...providers, fetch: globalThis.fetch, processProvider };
 }
 
-/** Execute once and preserve the runner's sealed, redacted envelope without rewriting its evidence. */
+/** Keep native execution blocked until the owner authority and Pod identity contracts are joined. */
 export async function runP1NativeProbeCli(argv, { stdout = process.stdout, stderr = process.stderr } = {}) {
   let output;
-  let serialized;
   let stage = 'arguments';
   try {
     const options = parseArguments(argv);
@@ -73,27 +71,18 @@ export async function runP1NativeProbeCli(argv, { stdout = process.stdout, stder
     stage = 'output_reservation';
     output = await open(resolve(options['--output']), 'wx', 0o600);
     stage = 'provider_load';
-    const dependencies = await loadP1NativeProviders(input, options['--provider-module']);
-    stage = 'native_runner';
-    const result = await runP1NativeProbes(input, dependencies);
-    serialized = `${JSON.stringify(result, null, 2)}\n`;
-    stage = 'output_write';
-    await output.writeFile(serialized, 'utf8');
-    await output.sync();
-    await output.close();
-    output = undefined;
-    stdout.write(`P1 native probes: ${result.overallStatus}.\n`);
-    return { passed: 0, failed: 1, blocked: 2 }[result.overallStatus];
+    await loadP1NativeProviders(input, options['--provider-module']);
+    stage = 'native_authority_join';
+    // The current three-provider contract cannot establish invocation ownership or Pod self-identity.
+    // Do not execute native effects until the owner contracts are joined and validated here.
+    throw new Error('native_authority_join_unavailable');
   } catch {
     // Provider and filesystem errors can contain credentials or raw owner responses.
     stderr.write(`P1 native CLI blocked at ${stage}; no acceptance pass is claimed.\n`);
-    if (stage === 'arguments') stderr.write(`${USAGE}\n`);
-    if (serialized) {
-      stderr.write('Envelope persistence is uncertain; preserve the envelope below and do not rerun mutations.\n');
-      stdout.write(serialized);
-    } else if (stage === 'native_runner') {
-      stderr.write('The runner did not return an envelope; owner effects and cleanup require review before any retry.\n');
+    if (stage === 'native_authority_join') {
+      stderr.write('Missing contract: authenticated invocation-bound Environment authority joined to current PodObservation and Host downward-API Pod UID. authorizationId alone is lookup-only, not authority.\n');
     }
+    if (stage === 'arguments') stderr.write(`${USAGE}\n`);
     return 2;
   } finally {
     if (output) {

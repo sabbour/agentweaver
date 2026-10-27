@@ -616,7 +616,7 @@ function validateInput(input, dependencies) {
       registrationBinding.sessionId !== activationOwner.storage.sessionId ||
       registrationBinding.environmentId !== activationOwner.storage.environmentId ||
       registrationBinding.executionFence !== activationOwner.storage.executionFence ||
-      registrationBinding.placementUid !== activationOwner.runtime.sandboxUid ||
+      registrationBinding.placementUid !== activationOwner.runtime.sandboxResourceId ||
       registrationBinding.placementGeneration !== activationOwner.runtime.sandboxResourceGeneration ||
       registrationBinding.environmentCurrentFencingGeneration !== activationOwner.fence.lifecycleFence.currentFencingGeneration ||
       registrationBinding.environmentProviderFencingGeneration !== Number(
@@ -1034,9 +1034,9 @@ async function runP1NativeProbesCore(input, dependencies) {
         !readiness ||
         !sameJson(readiness, projectSafeReadinessReceipt(activation)) ||
         !sameJson(currentReadback?.acceptedOptions, input.pins.sourceReceipt.acceptedOptions) ||
-        registration.binding.placementUid !== state.sandboxObservation.pod.uid ||
+        registration.binding.placementUid !== placementResourceId(state.placement) ||
         registration.binding.placementGeneration !== placementResourceGeneration(state.placement)) {
-      block('agenthost_current_readback_mismatch', 'The independent current registration, Host readiness receipt, accepted options, and exact Pod placement must match the sanitized pins.', {
+      block('agenthost_current_readback_mismatch', 'The independent current registration, Host readiness receipt, accepted options, and exact Sandbox claim placement must match the sanitized pins.', {
         ownerId: owner.storage.ownerId,
       });
     }
@@ -2437,7 +2437,7 @@ async function runP1NativeProbesCore(input, dependencies) {
       });
     const pinnedReadiness = projectSafeReadinessReceipt(activation);
     const binding = registration.binding;
-    const placementUid = observed?.pod?.uid;
+    const podUid = observed?.pod?.uid;
     verifySandboxOwnership(owner, observed, placement.body, sandboxReceipt.operationId);
     if (registration.runtimeInstanceId !== activation.runtimeInstanceId ||
         registration.revision !== activation.registrationRevision ||
@@ -2450,13 +2450,13 @@ async function runP1NativeProbesCore(input, dependencies) {
         binding.runId !== owner.storage.runId ||
         binding.sessionId !== owner.storage.sessionId ||
         binding.environmentId !== owner.storage.environmentId ||
-        binding.placementUid !== placementUid ||
+        binding.placementUid !== placementResourceIdValue ||
         binding.placementGeneration !== placementGeneration ||
         binding.environmentCurrentFencingGeneration !== placement.body.currentFencingGeneration ||
         binding.environmentProviderFencingGeneration !== placement.body.providerFencingGeneration) {
       block('activation_registration_fence_mismatch', 'The current registration binding, owner, execution fence, and placement must match the actual Environment projection.', {
         ownerId: owner.storage.ownerId,
-        placementUid,
+        placementUid: placementResourceIdValue,
         placementGeneration,
       });
     }
@@ -2502,7 +2502,8 @@ async function runP1NativeProbesCore(input, dependencies) {
     return {
       evidence: {
         ownerId: owner.storage.ownerId,
-        podUid: placementUid,
+        podUid,
+        placementUid: placementResourceIdValue,
         placementGeneration,
         image: input.pins.imageReceipt.reference,
         imageDigest: input.pins.imageReceipt.digest,
