@@ -3319,6 +3319,11 @@ test('v1.0.9 evidence verifies its exact annotated tag, source commit, and publi
 const v1011SourceSha = 'e2929bca622b5397804cdb05abed49befc86aa3d';
 const v1014SourceSha = '4105e2f2520659e7c9c636cf34972661fa26342f';
 const v1014PublicationSha256 = '21dc5b63e3bab229e8e8df07cc083ce94d48c031c045af3f7ba438a93fbe5538';
+const v1015SourceSha = 'd35c4851f591aca0f623559e1a03e3bed722f20f';
+const v1015PublicationSha256 = '3be9dfd2a28616f0208a052e58c72069c102eafdef0961dc69765466e1d198f0';
+const v1015Manifest = JSON.parse(execFileSync('git', [
+  'show', `${v1015SourceSha}:releases/foundation.json`,
+], { cwd: root, encoding: 'utf8' }));
 const v1014AgentHostBuildSourceSha = '616b628885ae73fca1413c6ad7a28c30448b20ba';
 const v1014SourceTreeSha = 'dc9b7e5691e5d8b76e9c477f73c3a7b1455d8ef9';
 const v1014AgentHostImageConfigDigest =
@@ -3359,6 +3364,17 @@ test('v1.0.14 is pinned for P1 evidence but refused by the pre-acceptance bootst
   await assert.rejects(deployRelease({
     preAcceptance: true,
     releaseTag: 'v1.0.14',
+    target,
+  }), /--pre-acceptance is limited to the exact /);
+});
+
+test('v1.0.15 is pinned for P1 evidence but refused by the pre-acceptance bootstrap deployment', async () => {
+  assert.throws(() => parseArgs(normalBootstrapArgsFor({}, 'v1.0.15')), (error) =>
+    /--pre-acceptance is limited to the exact /.test(error.message)
+      && !error.message.includes('v1.0.15'));
+  await assert.rejects(deployRelease({
+    preAcceptance: true,
+    releaseTag: 'v1.0.15',
     target,
   }), /--pre-acceptance is limited to the exact /);
 });
@@ -3476,6 +3492,54 @@ test('v1.0.14 evidence verifies its exact lightweight tag, publication digest, a
     provenanceSha256: 'f'.repeat(64),
   }, { root, run, publicationSha256: v1014PublicationSha256 }),
     /differs from the immutable GitHub publication result/);
+});
+
+test('v1.0.15 evidence verifies its exact lightweight tag, publication digest, and result', async () => {
+  const fixture = normalBootstrapFixture(v1015Manifest, v1015SourceSha);
+  const resultObjectSha = '9'.repeat(40);
+  const resultRefName = `agentweaver-publication/${v1015SourceSha}/result`;
+  let tagRef = { object: { type: 'commit', sha: v1015SourceSha } };
+  const run = (file, args) => {
+    if (file === 'git' && args[0] === 'rev-parse') return 'e'.repeat(40);
+    if (file === 'git' && args[0] === 'status') return '';
+    if (file === 'gh' && args[0] === 'api') {
+      const endpoint = args[1];
+      if (endpoint.endsWith('/releases/tags/v1.0.15')) {
+        return JSON.stringify({ tag_name: 'v1.0.15', draft: false, prerelease: false });
+      }
+      if (endpoint.endsWith(`/git/ref/tags/${encodeURIComponent('v1.0.15')}`)) {
+        return JSON.stringify(tagRef);
+      }
+      if (endpoint.endsWith(`/git/ref/tags/${encodeURIComponent(resultRefName)}`)) {
+        return JSON.stringify({ object: { type: 'tag', sha: resultObjectSha } });
+      }
+      if (endpoint.endsWith(`/git/tags/${resultObjectSha}`)) {
+        return JSON.stringify({
+          tag: resultRefName,
+          object: { type: 'commit', sha: v1015SourceSha },
+          message: JSON.stringify(fixture.publication),
+        });
+      }
+    }
+    assert.fail(`unexpected command: ${file} ${args.join(' ')}`);
+  };
+  assert.equal(await verifyBootstrapRelease('v1.0.15', fixture.publication, {
+    root, run, publicationSha256: v1015PublicationSha256,
+  }), v1015SourceSha);
+  await assert.rejects(verifyBootstrapRelease('v1.0.15', fixture.publication, {
+    root, run, publicationSha256: 'f'.repeat(64),
+  }), /publication\.json does not match its pinned SHA-256/);
+
+  tagRef = { object: { type: 'commit', sha: 'f'.repeat(40) } };
+  await assert.rejects(verifyBootstrapRelease('v1.0.15', fixture.publication, {
+    root, run, publicationSha256: v1015PublicationSha256,
+  }), /must resolve to the exact published source commit/);
+  tagRef = { object: { type: 'commit', sha: v1015SourceSha } };
+  await assert.rejects(verifyBootstrapRelease('v1.0.15', {
+    ...fixture.publication,
+    provenanceSha256: 'f'.repeat(64),
+  }, { root, run, publicationSha256: v1015PublicationSha256 }),
+  /differs from the immutable GitHub publication result/);
 });
 
 test('strict release deployment still rejects a lightweight release tag', async () => {
