@@ -21,6 +21,118 @@ namespace Agentweaver.Projects.Config.Tests;
 public sealed partial class ProjectsConfigPostgresTests
 {
     [Fact]
+    public async Task P1RunBoundVerifierRequiresExactCurrentAuthorityAndNeverCreatesReceipts()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var service = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "p1-bound-tenant-" + suffix;
+        var admin = await SeedCallerAsync(
+            db, authorityStore, "p1-bound-platform-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+        var defaults = await service.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None);
+        await service.UpdatePlatformRuntimeDefaultsAsync(
+            admin, defaults.Revision, PlatformDefaults(), CancellationToken.None);
+        var caller = await SeedCallerAsync(
+            db, authorityStore, "p1-bound-admin-" + suffix, tenantId,
+            ["api.read", "projects.admin", "projects.orchestrator"],
+            ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        var grant = Assert.Single(caller.Grants);
+        var invocationId = Guid.NewGuid();
+        var issued = await P1ProjectSetupEndpoints.IssueAsync(
+            fixture.DataSource, caller, invocationId, grant, CancellationToken.None);
+        caller = await ResolveCallerAsync(
+            db, caller.ActorId, tenantId, ["api.read", "projects.admin", "projects.orchestrator"]);
+        var projectId = issued.Receipt.ProjectId;
+        var runId = "p1-bound-run-" + suffix;
+        await service.AcceptInteractiveRunSelectionAsync(
+            caller, projectId, runId,
+            new InteractiveRunSelectionRequest(issued.Receipt.ProjectConfigurationRevision),
+            CancellationToken.None);
+        await using var app = await StartP1SetupServerAsync(fixture.DataSource);
+        using var client = app.GetTestClient();
+        var before = await CountsAsync();
+
+        using (var request = BoundRequest(invocationId))
+        {
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.True(response.Headers.CacheControl?.NoStore);
+            Assert.Equal(issued.Receipt, await response.Content.ReadFromJsonAsync<ProjectSetupReceipt>());
+        }
+        using (var missing = BoundRequest(Guid.NewGuid()))
+            Assert.Equal(HttpStatusCode.Forbidden, await SendStatusAsync(client, missing));
+        using (var wrongRun = BoundRequest(invocationId))
+        {
+            wrongRun.Headers.Remove("X-Test-Bound-Run");
+            wrongRun.Headers.Add("X-Test-Bound-Run", "another-run");
+            Assert.Equal(HttpStatusCode.Forbidden, await SendStatusAsync(client, wrongRun));
+        }
+        using (var unbound = BoundRequest(invocationId))
+        {
+            unbound.Headers.Remove("X-Test-Bound-Run");
+            Assert.Equal(HttpStatusCode.Forbidden, await SendStatusAsync(client, unbound));
+        }
+        using (var wrongScope = BoundRequest(invocationId))
+        {
+            wrongScope.Headers.Remove("X-Test-Scope");
+            wrongScope.Headers.Add("X-Test-Scope", "api.read projects.admin");
+            Assert.Equal(HttpStatusCode.Forbidden, await SendStatusAsync(client, wrongScope));
+        }
+        using (var wrongActor = BoundRequest(invocationId))
+        {
+            wrongActor.Headers.Remove("X-Test-Subject");
+            wrongActor.Headers.Add("X-Test-Subject", admin.ActorId);
+            Assert.Equal(HttpStatusCode.Forbidden, await SendStatusAsync(client, wrongActor));
+        }
+        using (var wrongTenant = BoundRequest(invocationId))
+        {
+            wrongTenant.Headers.Remove(ProjectAuthorizationOwner.TenantSelectorHeader);
+            wrongTenant.Headers.Add(ProjectAuthorizationOwner.TenantSelectorHeader, "foreign-tenant");
+            Assert.Equal(HttpStatusCode.Forbidden, await SendStatusAsync(client, wrongTenant));
+        }
+        using (var query = BoundRequest(invocationId))
+        {
+            query.RequestUri = new Uri(query.RequestUri!.OriginalString + "?unexpected=1", UriKind.Relative);
+            Assert.Equal(HttpStatusCode.BadRequest, await SendStatusAsync(client, query));
+        }
+        using (var body = BoundRequest(invocationId))
+        {
+            body.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+            Assert.Equal(HttpStatusCode.BadRequest, await SendStatusAsync(client, body));
+        }
+        Assert.Equal(before, await CountsAsync());
+        await service.UpdateProjectConfigurationAsync(
+            caller, projectId, issued.Receipt.ProjectConfigurationRevision, ProjectSettings(),
+            CancellationToken.None);
+        var afterConfigChange = await CountsAsync();
+        using (var stale = BoundRequest(invocationId))
+            Assert.Equal(HttpStatusCode.Conflict, await SendStatusAsync(client, stale));
+        Assert.Equal(afterConfigChange, await CountsAsync());
+        await authorityStore.RevokeRoleAssignmentAsync(grant.AssignmentId, grant.Revision, caller.ActorId);
+        using (var revoked = BoundRequest(invocationId))
+            Assert.Equal(HttpStatusCode.Forbidden, await SendStatusAsync(client, revoked));
+
+        HttpRequestMessage BoundRequest(Guid id)
+        {
+            var request = SetupRequest(
+                id, caller.ActorId, tenantId, scope: "api.read projects.orchestrator",
+                boundProjectId: projectId, method: HttpMethod.Get);
+            request.RequestUri = new Uri(
+                $"/internal/projects/{projectId}/runs/{runId}/p1-setup/{id:D}", UriKind.Relative);
+            request.Headers.Add("X-Test-Bound-Run", runId);
+            return request;
+        }
+
+        async Task<(int Projects, int Roles, int Audits, int Operations)> CountsAsync() => (
+            await db.Projects.CountAsync(), await db.RoleAssignments.CountAsync(),
+            await db.AuthorityAudit.CountAsync(), await db.ProjectSetupOperations.CountAsync());
+    }
+
+    [Fact]
     public async Task P1SetupReadEndpointRechecksAuthorityAndNeverIssuesMissingReceipts()
     {
         await using var db = CreateDbContext();
@@ -488,12 +600,20 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.NotNull(issued.Receipt.OwnerAssignmentId);
     }
 
-    [Fact]
-    public async Task P1SetupEndpointBoundsIncompleteBodyProbe()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task P1SetupEndpointBoundsIncompleteBodyProbe(bool runBound)
     {
         await using var app = await StartP1SetupServerAsync(fixture.DataSource);
         using var client = app.GetTestClient();
         using var request = SetupRequest(Guid.NewGuid(), "p1-body-probe-actor", "p1-body-probe-tenant");
+        if (runBound)
+        {
+            request.Method = HttpMethod.Get;
+            request.RequestUri = new Uri(
+                $"/internal/projects/project-a/runs/run-a/p1-setup/{Guid.NewGuid():D}", UriKind.Relative);
+        }
         request.Content = new StalledContent();
         request.Version = HttpVersion.Version20;
         request.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
@@ -520,6 +640,9 @@ public sealed partial class ProjectsConfigPostgresTests
             options.UseNpgsql(dataSource, npgsql => npgsql.MigrationsHistoryTable(
                 "__ef_migrations_history", ProjectsConfigDbContext.Schema)));
         builder.Services.AddScoped<ProjectAuthorizationOwner>();
+        builder.Services.AddSingleton(CreateProviderCatalog());
+        builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddScoped<ProjectsConfigService>();
         var app = builder.Build();
         app.UseAuthentication();
         app.UseAuthorization();
@@ -593,6 +716,8 @@ public sealed partial class ProjectsConfigPostgresTests
             };
             if (Request.Headers.TryGetValue("X-Test-Bound-Project", out var projectId))
                 claims.Add(new Claim("project_id", projectId.ToString()));
+            if (Request.Headers.TryGetValue("X-Test-Bound-Run", out var runId))
+                claims.Add(new Claim("run_id", runId.ToString()));
             if (Request.Headers.TryGetValue("X-Test-Tenant-Assertion", out var tenantId))
                 claims.Add(new Claim("tenant_id", tenantId.ToString()));
 

@@ -19,6 +19,15 @@ internal sealed class ProjectsRunSelectionClient(
     OrchestratorOptions options,
     IReviewedRemoteToolSnapshotResolver snapshotStore)
 {
+    private const int MaxP1SetupReceiptBytes = 16 * 1024;
+    private static readonly string[] P1SetupReceiptPropertyNames =
+    [
+        "invocationId", "issuer", "subject", "tenantId", "membershipId", "membershipRevision",
+        "projectId", "createdByActorId", "projectRevision", "projectConfigurationRevision",
+        "assignmentId", "assignmentRevision", "authorityAuditEventId", "createdAt",
+        "ownerAssignmentId", "ownerAssignmentRevision", "ownerAuthorityAuditEventId"
+    ];
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow
@@ -257,6 +266,175 @@ internal sealed class ProjectsRunSelectionClient(
             !root.TryGetProperty("runId", out var run) || run.GetString() != runId)
             throw new CoordinationException("projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
     }
+
+    /// <summary>Reads an existing setup receipt with the same unbound caller bearer before persisting a run request.</summary>
+    internal async Task<P1ProjectSetupReceiptSnapshot> ReadP1SetupReceiptForCreationAsync(
+        HttpContext context,
+        string projectId,
+        Guid invocationId,
+        ProjectsAuthorizationContext authorization,
+        long expectedProjectConfigurationRevision,
+        CancellationToken cancellationToken)
+    {
+        var caller = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        RequireP1SetupAuthorization(
+            caller, authorization, projectId, expectedRunId: null, options, context);
+        var owner = RequireOwnerUri(options.ProjectsOwnerBaseAddress);
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(owner,
+            $"/api/p1/invocations/{invocationId:D}/setup"));
+        request.Headers.Authorization = CoordinationIdentity.RequireBearer(context);
+        request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", authorization.TenantId);
+        var receipt = await ReadP1SetupReceiptAsync(request, invocationId, cancellationToken).ConfigureAwait(false);
+        RequireP1SetupReceiptMatches(receipt, caller, authorization, projectId,
+            expectedRunId: null, expectedProjectConfigurationRevision, expectedProjectRevision: null);
+        return receipt;
+    }
+
+    /// <summary>Revalidates the original receipt through Projects' run-bound authority verifier.</summary>
+    internal async Task<P1ProjectSetupReceiptSnapshot> ReadP1SetupReceiptForAcceptedRunAsync(
+        HttpContext context,
+        AuthorizedRunSelection selection,
+        Guid invocationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        var projectId = selection.Selection.ProjectId;
+        var runId = selection.Selection.RunId;
+        var caller = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        RequireP1SetupAuthorization(
+            caller, selection.Authorization, projectId, runId, options, context);
+        var owner = RequireOwnerUri(options.ProjectsOwnerBaseAddress);
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(owner,
+            $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}/" +
+            $"p1-setup/{invocationId:D}"));
+        request.Headers.Authorization = CoordinationIdentity.RequireBearer(context);
+        request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", selection.Authorization.TenantId);
+        var receipt = await ReadP1SetupReceiptAsync(request, invocationId, cancellationToken).ConfigureAwait(false);
+        RequireP1SetupReceiptMatches(receipt, caller, selection.Authorization, projectId, runId,
+            selection.Selection.ProjectConfigurationRevision, selection.Selection.ProjectRevision);
+        return receipt;
+    }
+
+    private async Task<P1ProjectSetupReceiptSnapshot> ReadP1SetupReceiptAsync(
+        HttpRequestMessage request,
+        Guid invocationId,
+        CancellationToken cancellationToken)
+    {
+        if (invocationId == Guid.Empty)
+            throw new CoordinationException("p1_setup_receipt_invalid", StatusCodes.Status400BadRequest);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            throw new CoordinationException("p1_setup_receipt_permission_denied", StatusCodes.Status403Forbidden);
+        if (response.StatusCode == HttpStatusCode.NotFound || response.StatusCode == HttpStatusCode.Conflict)
+            throw new CoordinationException("p1_setup_receipt_stale", StatusCodes.Status409Conflict);
+        if (response.StatusCode != HttpStatusCode.OK || response.Headers.CacheControl?.NoStore != true)
+            throw new CoordinationException("p1_setup_receipt_unavailable", StatusCodes.Status502BadGateway);
+        if (response.Content.Headers.ContentLength is > MaxP1SetupReceiptBytes)
+            throw new CoordinationException("p1_setup_receipt_contract_invalid", StatusCodes.Status502BadGateway);
+        try
+        {
+            await response.Content.LoadIntoBufferAsync(MaxP1SetupReceiptBytes, cancellationToken)
+                .ConfigureAwait(false);
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken)
+                .ConfigureAwait(false);
+            using var document = await JsonDocument.ParseAsync(
+                stream, new JsonDocumentOptions { MaxDepth = 8 }, cancellationToken).ConfigureAwait(false);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                throw InvalidP1SetupReceipt();
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in root.EnumerateObject())
+                if (!names.Add(property.Name))
+                    throw InvalidP1SetupReceipt();
+            if (names.Count != P1SetupReceiptPropertyNames.Length ||
+                P1SetupReceiptPropertyNames.Any(name => !names.Contains(name)))
+                throw InvalidP1SetupReceipt();
+            var receipt = root.Deserialize<P1ProjectSetupReceiptSnapshot>(JsonOptions);
+            if (receipt is null || receipt.InvocationId != invocationId ||
+                receipt.MembershipId == Guid.Empty || receipt.AssignmentId == Guid.Empty ||
+                receipt.AuthorityAuditEventId == Guid.Empty ||
+                receipt.OwnerAssignmentId == Guid.Empty ||
+                receipt.OwnerAuthorityAuditEventId == Guid.Empty ||
+                receipt.MembershipRevision < 1 || receipt.ProjectRevision < 1 ||
+                receipt.ProjectConfigurationRevision < 1 || receipt.AssignmentRevision < 1 ||
+                (receipt.OwnerAssignmentId is null) != (receipt.OwnerAssignmentRevision is null) ||
+                receipt.OwnerAssignmentRevision is <= 0 ||
+                !HasBoundedText(receipt.Issuer, 2048) || !HasBoundedText(receipt.Subject, 512) ||
+                !HasBoundedText(receipt.TenantId, 256) || !HasBoundedText(receipt.ProjectId, 256) ||
+                !HasBoundedText(receipt.CreatedByActorId, 256) || receipt.CreatedAt == default)
+                throw InvalidP1SetupReceipt();
+            return receipt;
+        }
+        catch (JsonException exception)
+        {
+            throw new CoordinationException(
+                "p1_setup_receipt_contract_invalid", StatusCodes.Status502BadGateway, exception);
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new CoordinationException(
+                "p1_setup_receipt_contract_invalid", StatusCodes.Status502BadGateway, exception);
+        }
+    }
+
+    private static void RequireP1SetupAuthorization(
+        CoordinationActor caller,
+        ProjectsAuthorizationContext authorization,
+        string projectId,
+        string? expectedRunId,
+        OrchestratorOptions options,
+        HttpContext context)
+    {
+        var boundProjectIds = context.User.FindAll("project_id").Take(2).ToArray();
+        var boundRunIds = context.User.FindAll("run_id").Take(2).ToArray();
+        if (authorization.ContractVersion != 1 || authorization.Issuer != caller.Issuer ||
+            authorization.ActorId != caller.Subject || string.IsNullOrWhiteSpace(authorization.TenantId) ||
+            authorization.MembershipRevision < 1 || authorization.BoundProjectId !=
+                (expectedRunId is null ? null : projectId) ||
+            authorization.BoundRunId != expectedRunId ||
+            !CoordinationIdentity.HasAudience(context.User, options.Audience) ||
+            !CoordinationIdentity.HasAudience(context.User, options.ProjectsAudience) ||
+            boundProjectIds.Length != (expectedRunId is null ? 0 : 1) ||
+            boundProjectIds.Length == 1 && boundProjectIds[0].Value != projectId ||
+            boundRunIds.Length != (expectedRunId is null ? 0 : 1) ||
+            boundRunIds.Length == 1 && boundRunIds[0].Value != expectedRunId ||
+            !HasScope(context.User, "api.read") ||
+            expectedRunId is null && context.User.HasClaim(claim => claim.Type == "run_id") ||
+            !HasScope(context.User, "projects.orchestrator") ||
+            expectedRunId is null && !HasScope(context.User, "projects.admin"))
+            throw new CoordinationException("p1_setup_receipt_permission_denied", StatusCodes.Status403Forbidden);
+    }
+
+    private static bool HasScope(System.Security.Claims.ClaimsPrincipal principal, string scope) =>
+        principal.FindAll("scope").Concat(principal.FindAll("scp"))
+            .SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .Contains(scope, StringComparer.Ordinal);
+
+    private static bool HasBoundedText(string? value, int maximumLength) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= maximumLength;
+
+    private static void RequireP1SetupReceiptMatches(
+        P1ProjectSetupReceiptSnapshot receipt,
+        CoordinationActor caller,
+        ProjectsAuthorizationContext authorization,
+        string projectId,
+        string? expectedRunId,
+        long expectedProjectConfigurationRevision,
+        long? expectedProjectRevision)
+    {
+        if (receipt.Issuer != caller.Issuer || receipt.Subject != caller.Subject ||
+            receipt.TenantId != authorization.TenantId ||
+            receipt.MembershipRevision != authorization.MembershipRevision ||
+            receipt.ProjectId != projectId || receipt.CreatedByActorId != caller.Subject ||
+            receipt.ProjectConfigurationRevision != expectedProjectConfigurationRevision ||
+            expectedProjectRevision is { } revision && receipt.ProjectRevision != revision ||
+            expectedRunId is not null &&
+                (authorization.BoundProjectId != projectId || authorization.BoundRunId != expectedRunId))
+            throw new CoordinationException("p1_setup_receipt_stale", StatusCodes.Status409Conflict);
+    }
+
+    private static CoordinationException InvalidP1SetupReceipt() =>
+        new("p1_setup_receipt_contract_invalid", StatusCodes.Status502BadGateway);
 
     /// <summary>
     /// Reads fresh caller-wide authority for cross-run attention. Only unbound tokens are accepted;

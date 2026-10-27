@@ -22,10 +22,10 @@ runtime role receives exactly `SELECT, INSERT, UPDATE` on
 `casting_generation_requests`; this grant is included in the same reviewed plan.
 Source validation does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`425f7d673ccfe7c4b311bc5696fa7cdeb0bc76feefc72d4680a795ab8335c88d`.
+`df16526c756df42a3c0ba8534fea10bf5d019c6b5ca6e8e083b91963aa7e66ea`.
 It is not an approval receipt. The runner uses its explicit registered
 version list, not contiguous numbering; the absent 017 does not require a
-placeholder. The Core list is 1-16, 18-33, and 35-39; 034 is not in the
+placeholder. The Core list is 1-16, 18-33, and 35-40; 034 is not in the
 catalog. Readiness ordering checks exact supported versions, not only range
 endpoints. Version 027 requires 026 only.
 Version 028 adds the append-only `guardrails_evaluations` table. It requires
@@ -98,7 +98,18 @@ both and the owner-only trigger function. Migration 039 is optional during
 readiness, but evidence reads and writes return `database_update_pending` until
 it is applied. These are source contracts, not approval to apply grants or deploy.
 
-The Core catalog and plan include 032, 033, and 035-039; the maintenance Job
+Migration `040_p1_run_request_provenance.sql` links an existing Projects setup
+receipt to a new run request and an atomically accepted Core root, decision and
+invocation binding. It requires 023 and adds two immutable tables with
+`SELECT, INSERT` runtime rights. Only `UPDATE (provenance_id)` on
+`p1_run_request_provenance` and `UPDATE (core_invocation_id)` on
+`p1_invocation_bindings` are granted for row locks. Their triggers reject
+every row UPDATE/DELETE and statement TRUNCATE; initializer readback verifies
+the guards. Readiness accepts the complete pre-040 shape for ordinary runs.
+Projects locks end with the remote receipt read, so revocation can race with
+the later Core commit. No live migration, grants or deployment are performed.
+
+The Core catalog and plan include 032, 033, and 035-040; the maintenance Job
 applies the included versions in order.
 Existing grants on the Priority link table cover the added columns.
 
@@ -250,9 +261,9 @@ connections. The CLI arguments are technical guards, not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source plan lists 33 Core versions: 1 through 16, 18 through 33, and 35.
+The source plan lists 38 Core versions: 1 through 16, 18 through 33, and 35 through 40.
 The current image requires 1 through 16 and 18 through 31. Versions 32, 33,
-and 35 are optional during rollout; version 17 remains intentionally absent.
+and 35 through 40 are optional during rollout; versions 17 and 34 remain intentionally absent.
 Version 22 adds the run completion time. It needs no new grant because the
 runtime role already has table-level UPDATE on `accepted_runs`.
 Version 23 adds durable interactive requests, cancellation receipts,
@@ -288,7 +299,7 @@ The foreign key takes a `SHARE ROW EXCLUSIVE` lock on
 Events requires versions 1 through 10 and preserves the earlier version-2 layout.
 The initializer compares each plan catalog with the migrator's compiled
 `SupportedVersions` list instead of matching migrator source text.
-The plan lists 118 tables and eleven exact row-lock columns.
+The plan lists 121 tables and fourteen exact row-lock columns.
 Applying migrations or grants, or running initialization with the new plan hash,
 requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.

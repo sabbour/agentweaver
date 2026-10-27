@@ -15,21 +15,25 @@ internal sealed partial class CoordinationOwnerStore
     /// <summary>Creates one durable run identity per actor, tenant, project, and idempotency key.</summary>
     internal async Task<ProjectRunRequestRow> CreateProjectRunAsync(
         CoordinationActor actor, string tenantId, string projectId, string key,
-        CreateProjectRunRequest request, CancellationToken cancellationToken)
+        CreateProjectRunRequest request, CancellationToken cancellationToken,
+        P1ProjectSetupReceiptSnapshot? setupReceipt = null)
     {
         ValidateProjectRunRequest(request);
         CoordinationIdentity.ValidateIdentity(projectId, "project_id");
+        ValidateP1SetupReceiptForRequest(actor, tenantId, projectId, request, setupReceipt);
         var hash = HashProjectRunInput(key);
         var fingerprint = HashProjectRunInput(JsonSerializer.Serialize(request, JsonOptions));
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var p1LocatorColumn = request.P1SetupInvocationId is null ? string.Empty : ", p1_setup_invocation_id";
+        var p1LocatorValue = request.P1SetupInvocationId is null ? string.Empty : ", @p1_invocation";
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_schema}.project_run_requests
                 (tenant_id, project_id, run_id, root_session_id, title, first_message, workflow_id,
                  expected_project_config_revision, started_by_issuer, started_by_subject,
-                 idempotency_key_hash, request_fingerprint)
+                 idempotency_key_hash, request_fingerprint{p1LocatorColumn})
             VALUES (@tenant, @project, @run, @root, @title, @message, @workflow,
-                    @revision, @issuer, @subject, @key, @fingerprint)
+                    @revision, @issuer, @subject, @key, @fingerprint{p1LocatorValue})
             ON CONFLICT (tenant_id, project_id, started_by_issuer, started_by_subject, idempotency_key_hash)
                 DO NOTHING
             """, connection, transaction))
@@ -43,12 +47,16 @@ internal sealed partial class CoordinationOwnerStore
             insert.Parameters.AddWithValue("revision", request.ExpectedProjectConfigRevision);
             insert.Parameters.AddWithValue("key", hash);
             insert.Parameters.AddWithValue("fingerprint", fingerprint);
+            if (request.P1SetupInvocationId is { } p1InvocationId)
+                insert.Parameters.AddWithValue("p1_invocation", NpgsqlDbType.Uuid, p1InvocationId);
             await insert.ExecuteNonQueryAsync(cancellationToken);
         }
         await using var query = new NpgsqlCommand($"""
             SELECT run_id, root_session_id, first_message, workflow_id,
-                   expected_project_config_revision, state, request_fingerprint
-            FROM {_schema}.project_run_requests
+                   expected_project_config_revision, state,
+                   NULLIF(to_jsonb(project_run_requests)->>'p1_setup_invocation_id', '')::uuid,
+                   request_fingerprint
+            FROM {_schema}.project_run_requests AS project_run_requests
             WHERE tenant_id = @tenant AND project_id = @project
               AND started_by_issuer = @issuer AND started_by_subject = @subject
               AND idempotency_key_hash = @key
@@ -59,10 +67,14 @@ internal sealed partial class CoordinationOwnerStore
         ProjectRunRequestRow row;
         await using (var reader = await query.ExecuteReaderAsync(cancellationToken))
         {
-            if (!await reader.ReadAsync(cancellationToken) || reader.GetString(6) != fingerprint)
+            if (!await reader.ReadAsync(cancellationToken) || reader.GetString(7) != fingerprint)
                 throw new CoordinationException("idempotency_conflict", StatusCodes.Status409Conflict);
             row = ReadProjectRunRequest(reader);
         }
+        if (row.P1SetupInvocationId is { } invocationId && setupReceipt is not null)
+            await PersistP1RunRequestProvenanceAsync(
+                connection, transaction, actor, tenantId, projectId, row, setupReceipt, cancellationToken)
+                .ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken);
         return row;
     }
@@ -72,14 +84,16 @@ internal sealed partial class CoordinationOwnerStore
         CoordinationActor actor, string tenantId, string projectId, string runId,
         Func<ProjectRunRequestRow, CancellationToken, Task> deliverFirstMessage,
         Func<CancellationToken, Task> revalidateAuthority, CancellationToken cancellationToken,
-        Action<ProjectRunRequestRow>? validateRequest = null)
+        Action<ProjectRunRequestRow>? validateRequest = null,
+        Func<NpgsqlConnection, NpgsqlTransaction, ProjectRunRequestRow, CancellationToken, Task>?
+            acceptRootInTransaction = null)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
         try
         {
             return await StartProjectRunWithinDeadlineAsync(actor, tenantId, projectId, runId,
-                deliverFirstMessage, revalidateAuthority, validateRequest, deadline.Token);
+                deliverFirstMessage, revalidateAuthority, validateRequest, acceptRootInTransaction, deadline.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && deadline.IsCancellationRequested)
         {
@@ -93,6 +107,8 @@ internal sealed partial class CoordinationOwnerStore
         Func<ProjectRunRequestRow, CancellationToken, Task> deliverFirstMessage,
         Func<CancellationToken, Task> revalidateAuthority,
         Action<ProjectRunRequestRow>? validateRequest,
+        Func<NpgsqlConnection, NpgsqlTransaction, ProjectRunRequestRow, CancellationToken, Task>?
+            acceptRootInTransaction,
         CancellationToken cancellationToken)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
@@ -104,6 +120,24 @@ internal sealed partial class CoordinationOwnerStore
             throw new CoordinationException("run_terminal", StatusCodes.Status409Conflict);
         // Replays skip first-message delivery, but must still match the durable request.
         validateRequest?.Invoke(row);
+        if (row.P1SetupInvocationId is not null)
+        {
+            if (acceptRootInTransaction is null)
+                throw new CoordinationException(
+                    "p1_invocation_binding_unavailable", StatusCodes.Status503ServiceUnavailable);
+            await acceptRootInTransaction(connection, transaction, row, cancellationToken)
+                .ConfigureAwait(false);
+            await revalidateAuthority(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            if (row.State != "started")
+            {
+                await deliverFirstMessage(row, cancellationToken).ConfigureAwait(false);
+                await MarkProjectRunStartedAsync(
+                    actor, tenantId, projectId, runId, row, revalidateAuthority, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            return new StartProjectRunResponse(runId, row.RootSessionId, "started");
+        }
         if (row.State != "started")
         {
             await deliverFirstMessage(row, cancellationToken);
@@ -112,6 +146,33 @@ internal sealed partial class CoordinationOwnerStore
         await revalidateAuthority(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new StartProjectRunResponse(runId, row.RootSessionId, "started");
+    }
+
+    /// <summary>Marks an atomically accepted P1 request started only after retry-safe external delivery succeeds.</summary>
+    private async Task MarkProjectRunStartedAsync(
+        CoordinationActor actor,
+        string tenantId,
+        string projectId,
+        string runId,
+        ProjectRunRequestRow expected,
+        Func<CancellationToken, Task> revalidateAuthority,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var current = await LockProjectRunRequestAsync(
+            connection, transaction, actor, tenantId, projectId, runId, cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new CoordinationException("run_request_not_found", StatusCodes.Status404NotFound);
+        if (current.State == "cancelled" ||
+            current.P1SetupInvocationId != expected.P1SetupInvocationId ||
+            current.RootSessionId != expected.RootSessionId)
+            throw new CoordinationException("run_terminal", StatusCodes.Status409Conflict);
+        if (current.State != "started")
+            await SetProjectRunRequestStateAsync(
+                connection, transaction, projectId, runId, "started", cancellationToken).ConfigureAwait(false);
+        await revalidateAuthority(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Cancels project runs atomically; unstarted requests need no root admission or first-message delivery.</summary>
@@ -237,8 +298,10 @@ internal sealed partial class CoordinationOwnerStore
     {
         await using var query = new NpgsqlCommand($"""
             SELECT run_id, root_session_id, first_message, workflow_id,
-                   expected_project_config_revision, state, started_by_issuer, started_by_subject
-            FROM {_schema}.project_run_requests
+                   expected_project_config_revision, state,
+                   NULLIF(to_jsonb(project_run_requests)->>'p1_setup_invocation_id', '')::uuid,
+                   started_by_issuer, started_by_subject
+            FROM {_schema}.project_run_requests AS project_run_requests
             WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
             FOR UPDATE
             """, connection, transaction);
@@ -247,7 +310,7 @@ internal sealed partial class CoordinationOwnerStore
         await using var reader = await query.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
             return null;
-        if (requireCreator && (reader.GetString(6) != actor.Issuer || reader.GetString(7) != actor.Subject))
+        if (requireCreator && (reader.GetString(7) != actor.Issuer || reader.GetString(8) != actor.Subject))
             throw new CoordinationException("run_request_permission_denied", StatusCodes.Status403Forbidden);
         return ReadProjectRunRequest(reader);
     }
@@ -290,6 +353,7 @@ internal sealed partial class CoordinationOwnerStore
         if (string.IsNullOrWhiteSpace(request.FirstMessage) ||
             Encoding.UTF8.GetByteCount(request.FirstMessage) > 32768 ||
             request.ExpectedProjectConfigRevision < 1 ||
+            request.P1SetupInvocationId == Guid.Empty ||
             request.Title is not null && (string.IsNullOrWhiteSpace(request.Title) || request.Title.Length > 256))
             throw new CoordinationException("run_request_invalid", StatusCodes.Status400BadRequest);
         if (request.WorkflowId is not null)
@@ -360,10 +424,11 @@ internal sealed partial class CoordinationOwnerStore
     /// <summary>Reads the persisted input used by both start and cancellation.</summary>
     private static ProjectRunRequestRow ReadProjectRunRequest(NpgsqlDataReader reader) => new(
         reader.GetString(0), reader.GetString(1), reader.GetString(2),
-        reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt64(4), reader.GetString(5));
+        reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt64(4), reader.GetString(5),
+        reader.IsDBNull(6) ? null : reader.GetGuid(6));
 
     /// <summary>Internal durable input; the first message is never returned by create or start.</summary>
     internal sealed record ProjectRunRequestRow(
         string RunId, string RootSessionId, string FirstMessage, string? WorkflowId,
-        long ExpectedProjectConfigRevision, string State);
+        long ExpectedProjectConfigRevision, string State, Guid? P1SetupInvocationId = null);
 }

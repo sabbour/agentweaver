@@ -154,19 +154,22 @@ internal static class InitializerChecks
                 table.MutationDenialRequired || table.MutationDenialGuard is not null)
                 .Select(table => (Service: service, Table: table))).ToArray();
         var lockTables = protectedTables.Where(item => item.Table.LockColumn is not null).ToArray();
-        // The plan protects twelve row-lock columns plus the append-only runtime evidence ledger.
-        if (services.Length != 5 || protectedTables.Length != 13 || lockTables.Length != 12)
+        // The plan protects fourteen row-lock columns plus three append-only ledgers.
+        if (services.Length != 5 || protectedTables.Length != 15 || lockTables.Length != 14)
             throw new InvalidOperationException(
-                "The exact twelve row-lock columns and append-only ledger mutation guards are required.");
+                "The exact fourteen row-lock columns and three append-only ledger mutation guards are required.");
 
         foreach (var (service, table) in protectedTables)
         {
             var guards = GetMutationDenialGuards(table);
             if (!table.MutationDenialRequired || guards.Length == 0 ||
                 table.Privileges.Contains("UPDATE") ||
-                (table.LockColumn is not null && guards.Length != 1) ||
+                (table.LockColumn is not null &&
+                 guards.Length != (table.MutationDenialGuards is { Length: > 0 } ? 2 : 1)) ||
                 (table.LockColumn is null && guards.Length != 2) ||
                 (table.LockColumn is null && table.UpdateColumns is { Length: > 0 }) ||
+                (table.LockColumn is not null && table.MutationDenialGuards is { Length: > 0 } &&
+                 (table.MutationDenialGuards.Length != 1 || table.MutationDenialGuards[0].TriggerType != 34)) ||
                 guards.Any(guard =>
                 {
                     var matchingFunctions = service.Functions

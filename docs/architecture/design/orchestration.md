@@ -160,6 +160,23 @@ and `INSERT`; row `UPDATE`, `DELETE`, and table `TRUNCATE` are rejected by
 source-owned triggers. This is intentionally separate from `outbox_events`,
 whose lease and delivery state remains mutable.
 
+Migration `040_p1_run_request_provenance.sql` links one existing authenticated
+Projects setup receipt to an owner-created interactive run request. Core saves
+the complete receipt, a versioned hash and the actor/tenant/project/run/root
+identity in the request transaction. With the later exact run-bound bearer,
+Core checks current Projects selection and setup evidence again, locks the
+saved request and provenance on the same connection, then commits the root,
+initial decision and immutable invocation binding together. A root inserted by
+another acceptance path cannot be enrolled afterward. Events registration and
+message delivery happen after this local commit and can be retried.
+
+The current-binding read compares the saved binding with the actual current
+root, execution fence and fresh Projects authority. It is not Environment
+resource consumption or Host observation. Projects locks finish with its
+remote read, so revocation can race with the later Core commit; no distributed
+lock or current-at-commit revocation guarantee is claimed. See the
+[current binding contract](../../reference/api.md#current-p1-invocation-binding).
+
 Orchestrator numeric-capacity denials bind the attempted request/hash, accepted
 limit and run-wide count, current registration/source/action-grant/fence/owner
 revisions, and dispatch/checkpoint identity where present. The admission

@@ -196,6 +196,45 @@ write. Repeated reads do not hold Projects authority locks across a later
 consumer transaction: revocation after a read is not guaranteed to precede a
 Core commit.
 
+`GET /internal/projects/{projectId}/runs/{runId}/p1-setup/{invocationId}`
+is the narrow verifier used when Core accepts a P1 root. It requires `api.read`
+and `projects.orchestrator`, a token bound to the exact project and run, the
+selected tenant, a current membership, the current Orchestrator assignment and
+selection, and the original actor's current TenantAdmin grant. It calls the
+same `read_p1_project` function and validates the receipt against current
+project, configuration, Owner and Orchestrator assignments and audit records.
+It accepts no body or query and never issues a receipt. It does not relax the
+public GET's unbound-token or `projects.admin` requirements and needs no new
+setup-ledger table access.
+
+The two reads serve different stages: the public unbound read saves the full
+receipt with a new run request; the internal bound read checks it again during
+root acceptance. Core commits its root, initial decision and invocation binding
+in one local transaction. Projects does not participate in that transaction.
+Its locks end when its read finishes, so a revocation can occur before Core
+commits. This accepted race is not a distributed-lock or current-at-commit
+revocation guarantee. No bearer token is saved with the receipt.
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Core
+    participant Projects
+    participant Events
+    Caller->>Core: Create request, unbound bearer, receipt locator
+    Core->>Projects: Read existing receipt with same bearer
+    Projects-->>Core: Verified receipt, locks released
+    Core->>Core: Commit request and immutable receipt snapshot
+    Core->>Projects: Create run selection
+    Core-->>Caller: Run and root IDs for existing Broker flow
+    Caller->>Core: Start with exact run-bound bearer
+    Core->>Projects: Read current selection and verify saved receipt
+    Projects-->>Core: Current evidence, locks released
+    Note over Core,Projects: Revocation can race with the later Core commit
+    Core->>Core: Lock saved request; commit root, decision and binding
+    Core->>Events: Register session and deliver first message, retryably
+```
+
 This receipt proves only the Projects setup transaction. It does not authorize
 or prove Environment/Sandbox resource creation, establish a cross-database
 transaction, or by itself bind a native runtime observation to the invocation.
