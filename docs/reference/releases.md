@@ -33,7 +33,7 @@ digests or release evidence, so it is not an accepted platform release.
 | `Agentweaver.Telemetry.AzureMonitor` | Library | `1.0.2` |
 | `Agentweaver.ObjectStore.AzureBlob` | Library | `1.0.2` |
 | `Agentweaver.Identity.Broker` | Service | `1.3.0` |
-| `Agentweaver.EventsAndSessions` | Service | `1.5.0` |
+| `Agentweaver.EventsAndSessions` | Service | `1.5.1` |
 | `Agentweaver.Gateway` | Service | `1.7.1` |
 | `Agentweaver.Mcp` | Service | `1.0.5` |
 | `Agentweaver.Web` | Service | `1.7.0` |
@@ -54,6 +54,12 @@ from product preparation and publication.
 Identity Broker `1.2.0` includes the EF migration
 `20261021000100_AddIssueSyncGrants`. Publishing the image does not run the
 migration or update the database.
+
+Draft Events & Sessions `1.5.1` includes migration
+`011_messaging_binding_row_lock.sql`. Publishing the image does not apply the
+migration or update the database. Apply it separately with the
+[P1 PostgreSQL maintenance process](../guide/database-maintenance.md) before
+deploying source that requires schema version 11.
 
 ## Validate and apply a version plan
 
