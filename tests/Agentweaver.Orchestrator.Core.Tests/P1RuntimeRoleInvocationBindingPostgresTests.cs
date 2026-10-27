@@ -129,7 +129,17 @@ public sealed class P1RuntimeRoleInvocationBindingPostgresTests(CoordinationPost
     private static AuthorizedRunSelection CreateSelection(CoordinationActor actor, string runId)
     {
         using var snapshot = JsonDocument.Parse(
-            """{"source":"projects-config","modelSelection":{"reference":"model:provider/alpha"}}""");
+            """
+            {
+              "source": "projects-config",
+              "modelSelection": {"reference": "model:provider/alpha"},
+              "projectConfiguration": {
+                "blueprintWorkflowReferences": [],
+                "agentCharters": [],
+                "casting": []
+              }
+            }
+            """);
         var selection = new EffectiveRunSelection(
             Project, runId, 1, 1, 1, "context-v1", snapshot.RootElement.Clone());
         return new AuthorizedRunSelection(selection, new ProjectsAuthorizationContext(

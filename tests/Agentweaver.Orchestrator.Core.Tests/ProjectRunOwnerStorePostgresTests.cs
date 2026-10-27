@@ -793,7 +793,17 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
     private AuthorizedRunSelection Selection(string runId)
     {
         using var snapshot = JsonDocument.Parse(
-            """{"source":"projects-config","modelSelection":{"reference":"model:provider/alpha"}}""");
+            """
+            {
+              "source": "projects-config",
+              "modelSelection": {"reference": "model:provider/alpha"},
+              "projectConfiguration": {
+                "blueprintWorkflowReferences": [],
+                "agentCharters": [],
+                "casting": []
+              }
+            }
+            """);
         var selection = new EffectiveRunSelection(Project, runId, 1, 1, 1, "context-v1", snapshot.RootElement.Clone());
         return new AuthorizedRunSelection(selection, new ProjectsAuthorizationContext(
             1, _actor.Issuer, _actor.Subject, Tenant, 1, Project, runId,

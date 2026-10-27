@@ -362,8 +362,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.Equal(1L, reader.GetInt64(0));
         Assert.Equal(1L, reader.GetInt64(1));
         Assert.Equal(1L, reader.GetInt64(2));
-        // Old owner images reject the six later versions: 033 and 035-039; deploy before applying them.
-        Assert.Equal(6L, reader.GetInt64(3));
+        // Old owner images reject the seven later versions: 033 and 035-040; deploy before applying them.
+        Assert.Equal(7L, reader.GetInt64(3));
         Assert.True(reader.GetBoolean(4));
     }
 
