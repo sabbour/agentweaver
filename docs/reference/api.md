@@ -1214,6 +1214,8 @@ and the exact current registration, proof, action, turn, or receipt binding.
 | POST | `/actions/authorize-content` | Authorize a model turn with its exact UTF-8 text so the ordered Guardrails checks can run. The text is never stored. |
 | POST | `/actions/verify` | Revalidate action proof. |
 | POST | `/actions/credit-denials/read` | Read action credit denial. |
+| POST | `/actions/numeric-denials/read` | Read an immutable numeric-limit denial by attempt. |
+| POST | `/execution/replacements/compare` | Return an explicit blocked replacement comparison until required Environment and Host/Events evidence is available. |
 | POST | `/remote-tool-results/verify` | Verify reviewed remote result proof. |
 | GET | `/sources/{runtimeInstanceId:guid}` | Read current native usage source. |
 | POST | `/sources/{runtimeInstanceId:guid}` | Save source facts. |

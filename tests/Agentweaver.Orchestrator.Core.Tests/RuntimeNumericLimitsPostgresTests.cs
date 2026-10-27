@@ -325,15 +325,28 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         Assert.Equal("runtime_model_turn_limit_exhausted",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 IssueAsync(0, nextModelRequest))).Code);
+        var modelDenial = Assert.IsType<RuntimeNumericLimitDenialReceipt>(
+            await ReadNumericLimitDenialAsync(nextModelEventId));
+        Assert.Equal(RuntimeNumericLimitKind.ModelTurns, modelDenial.LimitKind);
+        Assert.Equal(1, modelDenial.AcceptedLimit);
+        Assert.Equal(1, modelDenial.ObservedCount);
+        Assert.Equal(modelDenial.SendStateBeforeHash, modelDenial.SendStateAfterHash);
 
         var toolRequest = Action(0, toolInvocation: true);
         var toolGrant = await IssueAsync(0, toolRequest);
         await rootGrantStore.RequireToolInvocationReservationAsync(_registrations[0], toolRequest, default);
         Assert.Equal(ExecutableActionGrantLookupStatus.Current,
             (await rootGrantStore.GetCurrentAsync(toolGrant)).Status);
+        var deniedToolRequest = Action(0, toolInvocation: true);
         Assert.Equal("runtime_tool_call_limit_exhausted",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
-                IssueAsync(0, Action(0, toolInvocation: true)))).Code);
+                IssueAsync(0, deniedToolRequest))).Code);
+        var toolDenial = Assert.IsType<RuntimeNumericLimitDenialReceipt>(
+            await ReadNumericLimitDenialAsync(deniedToolRequest.EventId));
+        Assert.Equal(RuntimeNumericLimitKind.ToolCalls, toolDenial.LimitKind);
+        Assert.Equal(1, toolDenial.AcceptedLimit);
+        Assert.Equal(1, toolDenial.ObservedCount);
+        Assert.Equal(toolDenial.SendStateBeforeHash, toolDenial.SendStateAfterHash);
 
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         await using (var drop = new NpgsqlCommand(
@@ -1458,9 +1471,31 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
     private ProjectsRunSelectionClient ProjectsClient() => new(
         _projectsHttp, _options, new ReviewedRemoteToolSnapshotStore(fixture.DataSource, _schema));
 
-    private Task<ExecutableActionGrantReference> IssueAsync(int index, RuntimeActionRequest request) =>
-        GrantStore().IssueRuntimeActionGrantAsync(
-            _context, _registrations[index], request, default, reserveToolInvocation: request.IsToolInvocation);
+    private async Task<RuntimeNumericLimitDenialReceipt?> ReadNumericLimitDenialAsync(Guid attemptId)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        return await new RuntimeExecutionEvidenceLedgerStore(_schema).ReadNumericLimitDenialAsync(
+            connection, transaction, _root.ProjectId, _root.RunId, attemptId, default);
+    }
+
+    private async Task<ExecutableActionGrantReference> IssueAsync(int index, RuntimeActionRequest request)
+    {
+        var store = GrantStore();
+        try
+        {
+            return await store.IssueRuntimeActionGrantAsync(
+                _context, _registrations[index], request, default,
+                reserveToolInvocation: request.IsToolInvocation);
+        }
+        catch (RuntimeNumericLimitDeniedException denial)
+        {
+            if (denial.SendStateEmpty)
+                await store.RecordNumericLimitDenialAsync(
+                    _context, _registrations[index], request, denial, default);
+            throw new RuntimeAuthorizationException(denial.Code);
+        }
+    }
 
     private RuntimeActionRequest Action(int index, bool toolInvocation) =>
         new(1, _registrations[index].RuntimeInstanceId, _registrations[index].Revision,

@@ -155,7 +155,7 @@ internal static class InitializerChecks
                 .Select(table => (Service: service, Table: table))).ToArray();
         // The reviewed plan protects twelve tables: six Events tables and six Core tables. A different count
         // means the plan changed without this check being reviewed with it.
-        if (services.Length != 5 || protectedTables.Length != 12)
+        if (services.Length != 5 || protectedTables.Length != 13)
             throw new InvalidOperationException("The exact twelve protected row-lock columns are required.");
 
         foreach (var (service, table) in protectedTables)

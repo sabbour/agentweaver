@@ -43,6 +43,7 @@ internal sealed class RuntimeUsageSourceStore(
     private readonly string _outboxEvents = $"\"{options.Schema}\".outbox_events";
     private readonly PostgresOutbox _outbox = new(dataSource, options.Schema);
     private readonly SpendBudgetExposureStore _spendBudgets = new(dataSource, options, timeProvider);
+    private readonly RuntimeExecutionEvidenceLedgerStore _executionEvidence = new(options.Schema);
 
     /// <summary>
     /// Reads credit-guard, dispatch, and tool-reservation evidence from one repeatable-read snapshot.
@@ -809,12 +810,22 @@ internal sealed class RuntimeUsageSourceStore(
         }
         if (registration.Binding.MaxModelTurns is { } maxModelTurns)
         {
-            RuntimeActionContract.RequireInvocationCapacity(maxModelTurns,
-                await RuntimeModelTurnReservationStore.CountRunWideAsync(
+            var observedCount = await RuntimeModelTurnReservationStore.CountRunWideAsync(
                     connection, transaction, _schema, registration.Binding.ProjectId,
                     registration.Binding.RunId, root.SessionId, intent.MessageId, cancellationToken)
-                    .ConfigureAwait(false),
-                "runtime_model_turn_limit_exhausted");
+                    .ConfigureAwait(false);
+            if (observedCount >= maxModelTurns)
+            {
+                if (marker is not null)
+                    throw new RuntimeAuthorizationException("runtime_model_turn_limit_exhausted");
+                var sendState = await RuntimeNumericLimitSendState.ReadAsync(
+                    connection, transaction, _schema, registration.Binding.ProjectId,
+                    registration.Binding.RunId, intent.MessageId, cancellationToken).ConfigureAwait(false);
+                throw new RuntimeNumericLimitDeniedException(
+                    "runtime_model_turn_limit_exhausted", RuntimeNumericLimitKind.ModelTurns,
+                    maxModelTurns, observedCount, checkpoint.State.DecisionStateVersion,
+                    sendState.Hash, sendState.IsEmpty);
+            }
         }
         if (RequiresCopilotCreditSnapshot(registration.Binding))
         {
@@ -902,6 +913,89 @@ internal sealed class RuntimeUsageSourceStore(
             throw new RuntimeAuthorizationException("runtime_native_turn_indeterminate");
         // No credit denial and no spend budget denial: the dispatch is admitted.
         return new(null, null);
+    }
+
+    internal async Task<RuntimeNumericLimitDenialReceipt> RecordNativeNumericLimitDenialWithinTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity root,
+        MafExecutionCheckpointSnapshot checkpoint,
+        MafExecutionDispatchIntent intent,
+        RuntimeRegistration registration,
+        RuntimeA2ASendRequest message,
+        RuntimeNumericLimitDeniedException denial,
+        CancellationToken cancellationToken)
+    {
+        if (denial.Kind != RuntimeNumericLimitKind.ModelTurns ||
+            registration.Binding.MaxModelTurns != denial.Limit)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_conflict");
+        var source = await ReadCurrentSourceAsync(connection, transaction, registration, cancellationToken)
+            .ConfigureAwait(false);
+        ValidateNativePreparation(root, checkpoint, intent, registration, source.Source, message);
+        if (source.SourceGrantId != message.Message.Metadata.Runtime.SourceGrantId ||
+            checkpoint.State.DecisionStateVersion != denial.OwnerRevision)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_conflict");
+
+        await using (var owner = new NpgsqlCommand($"""
+            SELECT session_id FROM {_sessions}
+            WHERE project_id = @project AND run_id = @run AND session_id = @root
+                AND lifecycle_state = 'active' AND execution_fence = @fence
+            FOR UPDATE
+            """, connection, transaction))
+        {
+            AddNativeScope(owner, registration, intent.MessageId);
+            owner.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, root.SessionId);
+            owner.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, registration.Binding.ExecutionFence);
+            if (await owner.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not string)
+                throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_conflict");
+        }
+        await AcquireNativeExecutionLockAsync(connection, transaction, root, cancellationToken).ConfigureAwait(false);
+        if (await ReadNativeDispatchMarkerAsync(
+                connection, transaction, registration, intent.MessageId, cancellationToken).ConfigureAwait(false)
+            is not null)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_conflict");
+        var count = await RuntimeModelTurnReservationStore.CountRunWideAsync(
+            connection, transaction, _schema, registration.Binding.ProjectId,
+            registration.Binding.RunId, root.SessionId, intent.MessageId, cancellationToken).ConfigureAwait(false);
+        if (count != denial.ObservedCount || count < denial.Limit)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_conflict");
+        var sendStateAfter = await RuntimeNumericLimitSendState.ReadAsync(
+            connection, transaction, _schema, registration.Binding.ProjectId,
+            registration.Binding.RunId, intent.MessageId, cancellationToken).ConfigureAwait(false);
+        if (!denial.SendStateEmpty || !sendStateAfter.IsEmpty ||
+            sendStateAfter.Hash != denial.SendStateHash)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_send_state_changed");
+
+        var admission = new RuntimeNativeTurnAdmissionReceipt(
+            registration, source.Source, intent.MessageId, intent.PromptHash,
+            RuntimeNativeTurnContract.RequestHash(message), 1);
+        var candidate = new NativeDispatch(root.SessionId, intent.ChildSessionId,
+            registration.RuntimeInstanceId, registration.Revision, registration.Binding.ExecutionFence,
+            RuntimeContractValidation.RegistrationHash(registration), source.CanonicalPayloadHash,
+            source.Source.ModelSelectionReference, source.Source.ModelId, intent.PromptHash,
+            admission.RequestHash, 1, "prepared", checkpoint.State.WorkPlanId,
+            intent.AssociationId, checkpoint.Info.CheckpointId, checkpoint.State.Revision,
+            checkpoint.State.DecisionStateVersion, null, null);
+        var checkpointHash = await RequireNativeCheckpointAsync(
+            connection, transaction, registration, admission, candidate, cancellationToken)
+            .ConfigureAwait(false);
+
+        var receipt = RuntimeNumericLimitDenialReceipt.Seal(new(
+            1, RuntimeNumericLimitDenialIdentity.ReceiptId(
+                registration.Binding.ProjectId, registration.Binding.RunId, intent.MessageId),
+            registration.Binding.ProjectId, registration.Binding.RunId, root.SessionId,
+            registration.Binding.SessionId, registration.RuntimeInstanceId, registration.Revision,
+            source.RegistrationRevision, source.SourceGrantId, source.CanonicalPayloadHash,
+            source.SourceGrantId, registration.Revision.ToString(
+                System.Globalization.CultureInfo.InvariantCulture),
+            registration.Binding.ExecutionFence, registration.Binding.AcceptedSelectionHash,
+            denial.OwnerRevision, denial.Kind, denial.Limit, count, intent.MessageId,
+            admission.RequestHash, intent.MessageId, checkpoint.Info.CheckpointId,
+            checkpoint.State.Revision, checkpointHash, checkpoint.State.DecisionStateVersion,
+            checkpoint.State.WorkPlanId, intent.AssociationId, denial.SendStateHash,
+            sendStateAfter.Hash, timeProvider.GetUtcNow(), string.Empty));
+        return await _executionEvidence.AppendNumericLimitDenialAsync(
+            connection, transaction, receipt, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

@@ -392,6 +392,58 @@ public sealed class RuntimeContractTests
             RuntimeContractValidation.VerifierMatches(Guid.NewGuid().ToString(), verifier));
     }
 
+    [Fact]
+    public void NumericLimitDenialReadBindsTheExactAttemptRegistrationAndFence()
+    {
+        var registration = CreateRegistration();
+        var attemptId = Guid.NewGuid();
+        var hash = new string('b', 64);
+        var receipt = RuntimeNumericLimitDenialReceipt.Seal(new(
+            1, Guid.NewGuid(), registration.Binding.ProjectId, registration.Binding.RunId,
+            registration.Binding.SessionId, registration.Binding.SessionId,
+            registration.RuntimeInstanceId, registration.Revision, registration.Revision,
+            Guid.NewGuid(), hash, attemptId, "1", registration.Binding.ExecutionFence,
+            registration.Binding.AcceptedSelectionHash, 1, RuntimeNumericLimitKind.ToolCalls,
+            2, 2, attemptId, hash, null, null, null, null, null, null, null,
+            hash, hash, DateTimeOffset.UtcNow, string.Empty));
+        var request = new RuntimeNumericLimitDenialReadRequest(
+            registration.RuntimeInstanceId, registration.Revision,
+            registration.Binding.ExecutionFence, attemptId);
+
+        Assert.Same(receipt, RuntimeNumericLimitDenialReadContract.ValidateResult(
+            new(receipt), registration, request).Receipt);
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeNumericLimitDenialReadContract.ValidateResult(
+                new(receipt), registration, request with { AttemptId = Guid.NewGuid() }));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeNumericLimitDenialReadContract.ValidateResult(
+                new(receipt), registration, request with { ExecutionFence = request.ExecutionFence + 1 }));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            (receipt with { ObservedCount = 1 }).Validate());
+    }
+
+    [Fact]
+    public void ReplacementComparisonNeverValidatesWithoutExplicitMissingProvenance()
+    {
+        var registration = CreateRegistration();
+        var request = new RuntimeReplacementComparisonRequest(
+            registration.RuntimeInstanceId, registration.Revision,
+            registration.Binding.ExecutionFence, Guid.NewGuid(), "invocation-1");
+        var blocker = new RuntimeReplacementComparisonBlocker(
+            "blocked", request.InvocationId, "checkpoint-1", 1, "plan-1", "association-1",
+            request.DispatchId, request.ExecutionFence,
+            ["environment.replacement-lineage", "host.events.cursor-interval"]);
+
+        Assert.Equal(blocker, RuntimeReplacementComparisonContract.ValidateResult(
+            blocker, registration, request));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeReplacementComparisonContract.ValidateResult(
+                blocker with { MissingProvenance = [] }, registration, request));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeReplacementComparisonContract.ValidateResult(
+                blocker, registration, request with { DispatchId = Guid.NewGuid() }));
+    }
+
     private static RuntimeRegistration CreateRegistration() => new(
         Guid.NewGuid(), 1,
         new RuntimeBinding(
