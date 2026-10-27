@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash, X509Certificate } from 'node:crypto';
 import {
-  cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync,
+  cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test, { after } from 'node:test';
 import {
   AGENT_SANDBOX_RELEASE,
@@ -448,6 +448,215 @@ function publicationReceipt(manifest = releaseManifest(), receiptSourceSha = sou
     }),
   };
 }
+
+function createCliCertificateFixtures(directory) {
+  const caKey = path.join(directory, 'cli-test-ca.key');
+  const caCertificate = path.join(directory, 'cli-test-ca.crt');
+  execFileSync('openssl', [
+    'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+    '-keyout', caKey, '-out', caCertificate, '-days', '3650',
+    '-subj', '/CN=Agentweaver CLI Test CA',
+    '-addext', 'basicConstraints=critical,CA:TRUE',
+    '-addext', 'keyUsage=critical,keyCertSign,cRLSign',
+  ], { cwd: directory, stdio: 'pipe' });
+
+  const issueLeaf = (name, commonName, subjectAlternativeName) => {
+    const key = path.join(directory, `${name}.key`);
+    const request = path.join(directory, `${name}.csr`);
+    const certificate = path.join(directory, `${name}.crt`);
+    const extensions = path.join(directory, `${name}.ext`);
+    execFileSync('openssl', [
+      'req', '-new', '-newkey', 'rsa:2048', '-nodes',
+      '-keyout', key, '-out', request, '-subj', `/CN=${commonName}`,
+    ], { cwd: directory, stdio: 'pipe' });
+    writeFileSync(extensions, [
+      'basicConstraints=critical,CA:FALSE',
+      'keyUsage=critical,digitalSignature,keyEncipherment',
+      'extendedKeyUsage=serverAuth',
+      `subjectAltName=${subjectAlternativeName}`,
+      '',
+    ].join('\n'));
+    execFileSync('openssl', [
+      'x509', '-req', '-in', request, '-CA', caCertificate, '-CAkey', caKey,
+      '-CAcreateserial', '-out', certificate, '-days', '3650', '-extfile', extensions,
+    ], { cwd: directory, stdio: 'pipe' });
+    return readFileSync(certificate, 'utf8');
+  };
+
+  return {
+    caPem: readFileSync(caCertificate, 'utf8'),
+    projectsPem: issueLeaf(
+      'projects-config',
+      'projects-config.agentweaver.svc.cluster.local',
+      'DNS:projects-config.agentweaver.svc.cluster.local',
+    ),
+    backendPem: issueLeaf(
+      'backend',
+      'gateway.agentweaver.svc.cluster.local',
+      'DNS:gateway.agentweaver.svc.cluster.local,DNS:mcp.agentweaver.svc.cluster.local',
+    ),
+  };
+}
+
+test('real deploy CLI completes run-binding readback and preserves failure behavior on resume', async (t) => {
+  const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'agentweaver-deploy-cli-'));
+  t.after(() => rmSync(fixtureRoot, { recursive: true, force: true }));
+
+  const assetResponse = await fetch(AGENT_SANDBOX_RELEASE.manifestUrl, {
+    signal: AbortSignal.timeout(30_000),
+  });
+  assert.equal(assetResponse.status, 200, 'the pinned public AgentSandbox manifest must be available');
+  const agentSandboxManifest = Buffer.from(await assetResponse.arrayBuffer());
+  assert.equal(createHash('sha256').update(agentSandboxManifest).digest('hex'),
+    AGENT_SANDBOX_RELEASE.manifestSha256);
+
+  const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: root, encoding: 'utf8',
+  }).trim();
+  const projectFiles = Object.fromEntries([...new Set([
+    ...p0Manifest.components.map(({ project }) => project),
+    'apps/web/package-lock.json',
+  ])].map(project => [
+    project,
+    Buffer.from(execFileSync('git', ['show', `${p0SourceSha}:${project}`], {
+      cwd: root,
+      encoding: 'utf8',
+    })).toString('base64'),
+  ]));
+  const sourceTree = 'f'.repeat(40);
+  const hostRepository = componentImageRepository('Agentweaver.AgentHost');
+  const hostConfig = {
+    os: 'linux',
+    architecture: 'amd64',
+    config: {
+      User: '1654:1654',
+      Entrypoint: ['dotnet', 'Agentweaver.AgentHost.dll'],
+      Labels: {
+        'org.opencontainers.image.revision': sourceSha,
+        'io.agentweaver.source-tree': sourceTree,
+        'org.opencontainers.image.version': '1.0.0',
+      },
+    },
+  };
+  const hostConfigText = JSON.stringify(hostConfig);
+  const hostConfigDigest = `sha256:${createHash('sha256').update(hostConfigText).digest('hex')}`;
+  const hostManifestText = JSON.stringify({
+    schemaVersion: 2,
+    mediaType: 'application/vnd.oci.image.manifest.v1+json',
+    config: {
+      mediaType: 'application/vnd.oci.image.config.v1+json',
+      digest: hostConfigDigest,
+      size: Buffer.byteLength(hostConfigText),
+    },
+    layers: [{
+      mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
+      digest: `sha256:${'a'.repeat(64)}`,
+      size: 1,
+    }],
+  });
+  const hostImageDigest = `sha256:${createHash('sha256').update(hostManifestText).digest('hex')}`;
+  const compressedPullBytes =
+    Buffer.byteLength(hostManifestText) + Buffer.byteLength(hostConfigText) + 1;
+
+  const manifest = releaseManifest();
+  manifest.evidence.sourceSha = sourceSha;
+  manifest.evidence.deploymentSha = sourceSha;
+  for (const run of manifest.evidence.personaRuns) run.sourceSha = sourceSha;
+  manifest.components.find(({ id }) => id === 'Agentweaver.AgentHost').imageDigest = hostImageDigest;
+  const publication = publicationReceipt(manifest, sourceSha, {
+    agentHostImageDigest: hostImageDigest,
+    agentHostImageConfigDigest: hostConfigDigest,
+    agentHostCompressedPullBytes: compressedPullBytes,
+    agentHostSourceTree: sourceTree,
+    agentHostBuildSourceSha: sourceSha,
+  });
+  const certificates = createCliCertificateFixtures(fixtureRoot);
+  const projectsPemBase64 = Buffer.from(certificates.projectsPem).toString('base64');
+  const binding = {
+    projectsOwnerAddress: 'https://projects-config.agentweaver.svc.cluster.local:8443/',
+    projectsAudience: 'https://projects.agentweaver.io/run-binding',
+    projectsServerCertificateSha256: createHash('sha256')
+      .update(new X509Certificate(certificates.projectsPem).raw).digest('hex'),
+    projectsTrustBundleSha256: createHash('sha256').update(certificates.caPem).digest('hex'),
+  };
+  const markerPath = path.join(fixtureRoot, 'readback-started');
+  const fixturePath = path.join(fixtureRoot, 'cli-fixture.json');
+  writeFileSync(fixturePath, JSON.stringify({
+    repoRoot: root,
+    projectFiles,
+    sourceSha,
+    releaseTag: 'v1.0.0',
+    publicationJson: JSON.stringify(publication),
+    agentSandboxManifestBase64: agentSandboxManifest.toString('base64'),
+    hostRepository,
+    hostImageDigest,
+    hostConfigDigest,
+    hostManifestText,
+    hostConfigText,
+    agentSandboxControllerImage: AGENT_SANDBOX_RELEASE.controllerImage,
+    caPem: certificates.caPem,
+    projectsPemBase64,
+    backendPemBase64: Buffer.from(certificates.backendPem).toString('base64'),
+    markerPath,
+    target,
+  }));
+  const manifestPath = path.join(fixtureRoot, 'manifest.json');
+  const publicationPath = path.join(fixtureRoot, 'publication.json');
+  const bindingPath = path.join(fixtureRoot, 'binding.json');
+  writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
+  writeFileSync(publicationPath, `${JSON.stringify(publication)}\n`);
+  writeFileSync(bindingPath, `${JSON.stringify(binding)}\n`);
+
+  const deployScript = path.join(root, 'scripts', 'release', 'deploy.mjs');
+  const preloadScript = path.join(root, 'scripts', 'release', 'tests', 'fixtures',
+    'deploy-cli-preload.mjs');
+  const args = [
+    '--import', pathToFileURL(preloadScript).href,
+    deployScript,
+    'v1.0.0',
+    '--manifest', manifestPath,
+    '--publication', publicationPath,
+    '--subscription-id', target.subscriptionId,
+    '--tenant-id', target.tenantId,
+    '--resource-group', target.resourceGroup,
+    '--cluster', target.clusterName,
+    '--namespace', target.namespace,
+    '--node-min', String(target.nodeMin),
+    '--node-max', String(target.nodeMax),
+    '--provider-catalog-configmap', 'projects-config-provider-catalog',
+    '--provider-catalog-source-commit', providerCatalogSourceSha,
+    '--broker-run-binding', bindingPath,
+    '--execute',
+  ];
+  const env = {
+    ...process.env,
+    AGENTWEAVER_DEPLOY_CLI_FIXTURE: fixturePath,
+    HOME: fixtureRoot,
+    USERPROFILE: fixtureRoot,
+  };
+  const runCli = (resume = false) => spawnSync(process.execPath, [
+    ...args,
+    ...(resume ? ['--resume'] : []),
+  ], {
+    cwd: root,
+    env,
+    encoding: 'utf8',
+    timeout: 90_000,
+    maxBuffer: 8 * 1024 * 1024,
+    windowsHide: true,
+  });
+
+  for (const resume of [false, true]) {
+    if (resume) rmSync(markerPath, { force: true });
+    const result = runCli(resume);
+    assert.equal(result.error, undefined, result.error?.message);
+    assert.notEqual(result.status, 0, 'the fake readback failure must be surfaced as a CLI error');
+    assert.notEqual(result.status, 13, 'the CLI must not exit for an unsettled top-level await');
+    assert.match(result.stderr, /Release deployment failed:.*intentional readback failure/s);
+    assert.doesNotMatch(result.stderr, /unsettled top-level await/i);
+    assert.equal(existsSync(markerPath), true, 'the real readback module must start before the fake failure');
+  }
+});
 
 function bootstrapFixture() {
   const manifest = structuredClone(p0Manifest);
