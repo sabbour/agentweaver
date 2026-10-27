@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   createP1Fixture, p1FixtureProjectName, summarizeP1FixtureCleanup,
 } from '../p1-fixture-setup.mjs';
+import { validateP1RunnerPlanInput } from '../p1-journey-input.mjs';
 import { runP1SurfaceJourney } from '../p1-surface-runner.mjs';
 
 const SOURCE_SHA = 'a'.repeat(40);
@@ -411,7 +412,7 @@ function journeySourceEvidence(input) {
 }
 
 async function createJourneyFixture(journey) {
-  const input = plan(journey);
+  const input = validateP1RunnerPlanInput(plan(journey));
   const fixture = await createP1Fixture(input, {
     api: apiFor({ journey }),
     invocationId: INVOCATION_ID,
@@ -810,6 +811,7 @@ test('same-invocation fixtures reach the selected API, MCP, and UI gate and mess
       const mcp = surface === 'mcp' ? mcpFor(journey, events, fixture.api.resolveGate) : undefined;
       const ui = surface === 'ui' ? uiFor(events, journey, fixture.api.resolveGate) : undefined;
       try {
+        assert.equal(fixture.input.executionIntent, 'execute');
         const result = await runP1SurfaceJourney(surface, fixture.input, {
           api: fixture.api,
           deniedApi: fixture.deniedApi,

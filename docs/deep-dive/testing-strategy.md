@@ -145,7 +145,9 @@ For one-account P1 API or MCP checks, `npm run harness:p1:signin-run -- ...`
 uses the existing `agentweaver-web` client with one interactive sign-in in a
 fresh empty disposable Chrome profile. It removes the profile in a `finally`
 path and does not read or copy an existing profile or credential cache. Tokens
-remain in memory only. The launcher does not sign in a denied actor. If
+remain in memory only. The launcher does not sign in a denied actor. The input
+manifest must explicitly set `executionIntent` to `"execute"`; a missing or
+different value is rejected before the harness contacts the target. If
 `fixturePlan.deniedActor` is omitted, `valid-denied-actor-403` remains blocked
 with the missing-account reason, the other surface checks continue, and the
 surface cannot pass. Distinct-actor coverage is unavailable to this one-account
