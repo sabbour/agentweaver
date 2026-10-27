@@ -747,6 +747,9 @@ root without a binding cannot be enrolled afterward. Environment's separate
 consumes this read before its own creation effects and retains operation/result
 links in Environment owner transactions. The Core response alone is not a
 provider-resource receipt or a Host/native observation join.
+The separate [P1 creation-evidence contract](./p1-creation-evidence.md) documents
+Environment's authenticated retained-record read and Host's invocation-specific
+`GET /runtime/v1/readiness/p1-evidence` consumer.
 
 ### Run messages
 

@@ -15,8 +15,9 @@ operation and result in its own transaction; a saved Core binding or a planned
 provider name alone cannot prove a resource was created. Resources created
 without that retained binding cannot be enrolled later. See
 [P1 invocation-bound creation](../architecture/environment-sandbox.md#p1-invocation-bound-creation)
-for the remote-read race and the boundary before a future Host/native
-observation join.
+for the remote-read race, and [P1 creation evidence](../reference/p1-creation-evidence.md)
+for the authenticated retained-record read and bounded Host observation join.
+Native CLI consumption remains separate.
 
 ## Find the implementation
 
