@@ -40,8 +40,10 @@ namespace Agentweaver.Projects.Config.Migrations
                 BEGIN
                     IF p_invocation_id IS NULL OR p_invocation_id = '00000000-0000-0000-0000-000000000000'::uuid
                        OR p_issuer IS NULL OR length(p_issuer) > 512
-                       OR p_subject IS NULL OR p_subject !~ '^[A-Za-z0-9._:-]{1,256}$'
-                       OR p_tenant_id IS NULL OR p_tenant_id !~ '^[A-Za-z0-9._:-]{1,256}$'
+                       OR p_subject IS NULL OR length(p_subject) NOT BETWEEN 1 AND 256
+                       OR p_subject !~ '^[A-Za-z0-9._:-]+$'
+                       OR p_tenant_id IS NULL OR length(p_tenant_id) NOT BETWEEN 1 AND 256
+                       OR p_tenant_id !~ '^[A-Za-z0-9._:-]+$'
                        OR p_membership_id IS NULL
                        OR p_expected_membership_revision IS NULL OR p_expected_membership_revision <= 0
                        OR p_tenant_admin_assignment_id IS NULL
@@ -297,8 +299,10 @@ namespace Agentweaver.Projects.Config.Migrations
                 BEGIN
                     IF p_invocation_id IS NULL OR p_invocation_id = '00000000-0000-0000-0000-000000000000'::uuid
                        OR p_issuer IS NULL OR length(p_issuer) > 512
-                       OR p_subject IS NULL OR p_subject !~ '^[A-Za-z0-9._:-]{1,256}$'
-                       OR p_tenant_id IS NULL OR p_tenant_id !~ '^[A-Za-z0-9._:-]{1,256}$'
+                       OR p_subject IS NULL OR length(p_subject) NOT BETWEEN 1 AND 256
+                       OR p_subject !~ '^[A-Za-z0-9._:-]+$'
+                       OR p_tenant_id IS NULL OR length(p_tenant_id) NOT BETWEEN 1 AND 256
+                       OR p_tenant_id !~ '^[A-Za-z0-9._:-]+$'
                        OR p_membership_id IS NULL
                        OR p_expected_membership_revision IS NULL OR p_expected_membership_revision <= 0
                        OR p_tenant_admin_assignment_id IS NULL
