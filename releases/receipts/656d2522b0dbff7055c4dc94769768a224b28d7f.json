@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "656d2522b0dbff7055c4dc94769768a224b28d7f",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "1f2bc80647c9e1be0626613c7cdef08cfccbd5c3f96520184023d514bd40a17d",
+  "appliedAt": "2026-10-27T07:33:28.471Z",
+  "components": [
+    {
+      "id": "Agentweaver.EventsAndSessions",
+      "fromVersion": "1.5.0",
+      "toVersion": "1.5.1",
+      "bump": "patch"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/messaging-provider-binding-row-lock.md",
+      "archivedPath": ".changeset/archive/messaging-provider-binding-row-lock.md",
+      "sha256": "0cb7946bd9d2c5f9d9a06c98ad4b7b2c7474252b645d71764120043a99dd6ca8"
+    }
+  ]
+}

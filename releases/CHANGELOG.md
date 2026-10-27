@@ -2,6 +2,10 @@
 
 Applied component version changes, newest first.
 
+## 2026-10-27T07:33:28.471Z — source `656d2522b0dbff7055c4dc94769768a224b28d7f`
+
+- `Agentweaver.EventsAndSessions`: 1.5.0 -> 1.5.1 (patch) — .changeset/messaging-provider-binding-row-lock.md
+
 ## 2026-10-26T19:52:05.901Z — source `59d49fb43db169284739392d2925efde121a1ed3`
 
 - `Agentweaver.Gateway`: 1.7.0 -> 1.7.1 (patch) — .changeset/quiet-mice-reconcile.md
