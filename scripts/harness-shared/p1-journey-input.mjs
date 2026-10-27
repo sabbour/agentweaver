@@ -130,7 +130,7 @@ function validateP1StaticInput(input) {
     throw new Error('The AgentHost image receipt must pin its immutable registry, archive, OCI, config, and byte identities.');
   }
 
-  return { environment, pins, deploymentEvidence };
+  return { executionIntent: input.executionIntent, environment, pins, deploymentEvidence };
 }
 
 /** Check owner fences and invocation receipts for a live, unexpired runner-owned fixture. */

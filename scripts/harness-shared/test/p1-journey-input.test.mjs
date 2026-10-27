@@ -103,10 +103,19 @@ test('accepts an execute input with actual invocation-owned resource receipts an
   assert.equal(result.fences.executionFence, 3);
 });
 
-test('rejects non-execute intent and secret-bearing input', () => {
+test('requires explicit execute intent and rejects secret-bearing input', () => {
   const rehearsal = input();
   rehearsal.executionIntent = 'preview';
   assert.throws(() => validateP1JourneyInput(rehearsal, { now }), /executionIntent/);
+
+  const missingIntent = planInput();
+  delete missingIntent.executionIntent;
+  assert.throws(() => validateP1RunnerPlanInput(missingIntent, { now }), /executionIntent/);
+
+  const nonExecutePlan = planInput();
+  nonExecutePlan.executionIntent = 'preview';
+  assert.throws(() => validateP1RunnerPlanInput(nonExecutePlan, { now }), /executionIntent/);
+
   const secret = input();
   secret.pins.runtimeReceipt.accessToken = 'do-not-include';
   assert.throws(() => validateP1JourneyInput(secret, { now }), /Credentials/);

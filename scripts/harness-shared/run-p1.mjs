@@ -45,9 +45,12 @@ function pathIdentity(path) {
 
 /** Bind a persisted invocation to its plan, surface, and exact native probe envelopes. */
 function invocationBinding(validated, surface, nativeProbeResults) {
+  // Execute is the only admitted intent; omit it so existing invocation hashes remain resumable.
+  const boundInput = { ...validated };
+  delete boundInput.executionIntent;
   return {
     executionPlanSha256: createHash('sha256')
-      .update(stableJson({ validated, nativeProbeResults })).digest('hex'),
+      .update(stableJson({ validated: boundInput, nativeProbeResults })).digest('hex'),
     surface,
   };
 }
