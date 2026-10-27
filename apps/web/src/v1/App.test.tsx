@@ -667,7 +667,7 @@ describe('v1 web project scoping', () => {
   it.each([
     ['flow', 'Open'],
     ['workspace', 'Pull requests'],
-    ['workflows', 'Default workflow'],
+    ['workflows', 'Active workflow'],
     ['observability/traces', 'Recent runs'],
     ['diagnostics', 'Areas that are not ready'],
     ['heartbeat', 'Active and blocked runs'],
