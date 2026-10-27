@@ -83,24 +83,96 @@ public sealed class EnvironmentRuntimePlacementReader(
         RuntimeActorAuthorization actor, string projectId, string runId, string sessionId, string environmentId,
         string profileId, EnvironmentRuntimeBootstrapProfileRegistry profiles,
         CancellationToken cancellationToken,
-        IEnvironmentRuntimeBootstrapProfileReplacementStore? profileReplacements = null)
+        IEnvironmentRuntimeBootstrapProfileReplacementStore? profileReplacements = null) =>
+        GetReadinessContextCoreAsync(
+            actor, projectId, runId, sessionId, environmentId, profileId, profiles,
+            (context, _) => Task.FromResult(context), cancellationToken, profileReplacements);
+
+    private Task<TResult> GetReadinessContextCoreAsync<TResult>(
+        RuntimeActorAuthorization actor, string projectId, string runId, string sessionId, string environmentId,
+        string profileId, EnvironmentRuntimeBootstrapProfileRegistry profiles,
+        Func<EnvironmentRuntimeReadinessContext?, CancellationToken, Task<TResult>> project,
+        CancellationToken cancellationToken,
+        IEnvironmentRuntimeBootstrapProfileReplacementStore? profileReplacements)
     {
         RuntimeContractValidation.ValidateIdentifier(sessionId);
-        return placements.GetCurrentPlacementCoreAsync<EnvironmentRuntimeReadinessContext?>(
+        return placements.GetCurrentPlacementCoreAsync(
             new(actor.Bearer.GetValue(), actor.TenantSelector), projectId, runId, environmentId,
             runBoundRead: true, async (placement, token) =>
             {
                 if (placement is null)
-                    return null;
+                    return await project(null, token).ConfigureAwait(false);
                 var evidence = placement.RuntimeReadiness
                     ?? throw new RuntimeAuthorizationException("runtime_readiness_unavailable");
                 var bootstrap = await ProjectBootstrapAsync(
                     actor, placement, sessionId, profileId, profiles, profileReplacements, token).ConfigureAwait(false)
                     ?? throw new RuntimeAuthorizationException("runtime_placement_unavailable");
-                return new(1, bootstrap, evidence.LeaseCreatedAt, evidence.Observation,
+                var context = new EnvironmentRuntimeReadinessContext(
+                    1, bootstrap, evidence.LeaseCreatedAt, evidence.Observation,
                     evidence.StartupBudgets, evidence.WorkspaceMountPath);
+                return await project(context, token).ConfigureAwait(false);
             }, cancellationToken, includeRuntimeReadiness: true,
             requireEndpointWhen: projection => RequiresReplacementEndpoint(projection, profileId, profiles));
+    }
+
+    /// <summary>
+    /// Requires a complete current Pod configuration observation through the same owner-locked,
+    /// run-bound authorization path as readiness. It does not attest invocation ownership or Host mounts.
+    /// </summary>
+    public Task<SandboxPodObservation> GetPodObservationAsync(
+        RuntimeActorAuthorization actor, string projectId, string runId, string sessionId, string environmentId,
+        string profileId, EnvironmentRuntimeBootstrapProfileRegistry profiles,
+        CancellationToken cancellationToken,
+        IEnvironmentRuntimeBootstrapProfileReplacementStore? profileReplacements = null) =>
+        GetPodObservationAsync(
+            actor, projectId, runId, sessionId, environmentId, profileId, profiles,
+            (_, pod, _) => Task.FromResult(pod), cancellationToken, profileReplacements);
+
+    /// <summary>
+    /// Runs a bounded owner-receipt verifier under the placement's owner lock and current authorization.
+    /// The callback must not perform effects, recurse through placement APIs, or reacquire the owner lock.
+    /// </summary>
+    public Task<TResult> GetPodObservationAsync<TResult>(
+        RuntimeActorAuthorization actor, string projectId, string runId, string sessionId, string environmentId,
+        string profileId, EnvironmentRuntimeBootstrapProfileRegistry profiles,
+        Func<EnvironmentRuntimeReadinessContext, SandboxPodObservation, CancellationToken, Task<TResult>> verifyAndProject,
+        CancellationToken cancellationToken,
+        IEnvironmentRuntimeBootstrapProfileReplacementStore? profileReplacements = null)
+    {
+        ArgumentNullException.ThrowIfNull(verifyAndProject);
+        return GetReadinessContextCoreAsync(
+            actor, projectId, runId, sessionId, environmentId, profileId, profiles,
+            async (context, token) =>
+            {
+                var pod = RequirePodObservation(context, timeProvider.GetUtcNow());
+                var result = await verifyAndProject(context!, pod, token).ConfigureAwait(false);
+                var expected = context!.Placement.RuntimeOwnerContext
+                    ?? throw new RuntimeAuthorizationException("runtime_owner_context_stale");
+                await RequireSameOwnerContextAsync(
+                    actor, expected, pod.EnvironmentFence.Owner, projectId, runId, sessionId, token)
+                    .ConfigureAwait(false);
+                _ = RequirePodObservation(context, timeProvider.GetUtcNow());
+                return result;
+            }, cancellationToken, profileReplacements);
+    }
+
+    internal static SandboxPodObservation RequirePodObservation(
+        EnvironmentRuntimeReadinessContext? context, DateTimeOffset now)
+    {
+        if (context?.Observation.PodObservation is not { WorkspaceAttachment: not null } pod ||
+            !pod.IsolationConfigurationVerified ||
+            pod.EnvironmentFence != new EnvironmentGenerationFence(
+                new(context.Placement.TenantId, context.Placement.ProjectId, context.Placement.RunId,
+                    context.Placement.EnvironmentId), context.Placement.LifecycleGeneration) ||
+            pod.Resource != context.Placement.Resource ||
+            pod.FencingGeneration != context.Placement.ProviderFencingGeneration ||
+            context.Placement.CurrentFencingGeneration != context.Placement.ProviderFencingGeneration ||
+            context.Placement.LeaseExpiresAt <= now ||
+            pod.ObservedAt < context.LeaseCreatedAt || pod.ObservedAt > now ||
+            pod.WorkspaceAttachment.MountPath != context.WorkspaceMountPath ||
+            context.Observation.RuntimeEndpoint is { } endpoint && endpoint.PodUid != pod.PodUid)
+            throw new RuntimeAuthorizationException("runtime_pod_observation_unavailable");
+        return pod;
     }
 
     /// <summary>Combines current host placement with the persisted workspace binding for one session.</summary>
