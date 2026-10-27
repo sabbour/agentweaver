@@ -290,18 +290,24 @@ public sealed partial class ProjectsConfigPostgresTests
             await dbTransaction.CommitAsync();
         }
 
-        var failure = await Assert.ThrowsAsync<PostgresException>(() =>
-            P1ProjectSetupEndpoints.IssueAsync(
-                fixture.DataSource, caller, invocationId, adminGrant, CancellationToken.None));
-        Assert.Equal("P0001", failure.SqlState);
-        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
-        await using (var removeTrigger = new NpgsqlCommand(
+        try
+        {
+            var failure = await Assert.ThrowsAsync<PostgresException>(() =>
+                P1ProjectSetupEndpoints.IssueAsync(
+                    fixture.DataSource, caller, invocationId, adminGrant, CancellationToken.None));
+            Assert.Equal("P0001", failure.SqlState);
+        }
+        finally
+        {
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using var removeTrigger = new NpgsqlCommand(
                 """
-                DROP TRIGGER tests_fail_p1_setup_audit ON projects_config.authority_audit;
-                DROP FUNCTION projects_config.tests_fail_p1_setup_audit();
+                DROP TRIGGER IF EXISTS tests_fail_p1_setup_audit ON projects_config.authority_audit;
+                DROP FUNCTION IF EXISTS projects_config.tests_fail_p1_setup_audit();
                 """,
-                connection))
+                connection);
             await removeTrigger.ExecuteNonQueryAsync();
+        }
 
         Assert.Equal(0, await db.ProjectSetupOperations.CountAsync(
             operation => operation.InvocationId == invocationId));

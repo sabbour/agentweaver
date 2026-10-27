@@ -93,6 +93,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var migrator = db.GetService<IMigrator>();
         const string beforeInvocationAudit = "20261023201615_AddHostedModelReasoningCatalogAfterCasting";
         const string invocationAudit = "20261026183946_039_LinkProjectSetupAuthorityAuditInvocation";
+        var latestMigration = db.Database.GetMigrations().Last();
         Migration039AuditFixture? legacy = null;
         try
         {
@@ -160,7 +161,7 @@ public sealed partial class ProjectsConfigPostgresTests
         }
         finally
         {
-            await migrator.MigrateAsync(invocationAudit);
+            await migrator.MigrateAsync(latestMigration);
         }
     }
 
@@ -179,6 +180,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var migrator = db.GetService<IMigrator>();
         const string beforeInvocationAudit = "20261023201615_AddHostedModelReasoningCatalogAfterCasting";
         const string invocationAudit = "20261026183946_039_LinkProjectSetupAuthorityAuditInvocation";
+        var latestMigration = db.Database.GetMigrations().Last();
         await migrator.MigrateAsync(beforeInvocationAudit);
         Migration039AuditFixture? legacy = null;
         try
@@ -204,7 +206,7 @@ public sealed partial class ProjectsConfigPostgresTests
             await migrator.MigrateAsync(beforeInvocationAudit);
             if (legacy is not null)
                 await RepairMigration039LegacyRowsAsync(legacy, scenario);
-            await migrator.MigrateAsync(invocationAudit);
+            await migrator.MigrateAsync(latestMigration);
         }
     }
 
