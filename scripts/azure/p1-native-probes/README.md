@@ -180,6 +180,11 @@ with `X-Agentweaver-Tenant`. It must never be placed in `input`, evidence,
 logs, or result objects. `authorize` returns `{ allowed: true, journey }`,
 where `journey` must exactly match a supplied opaque fixture value.
 
+The CLI currently accepts no Environment Pod-observation provider. The
+`runtimeReadinessProvider` is only the independent current RuntimeHost
+registration/readiness read checked against the exact placement and Pod UID;
+it is not a substitute for invocation ownership or native mount evidence.
+
 ## Explicit native CLI and provider module
 
 The CLI is a thin execution seam, not a fixture or authority producer. Importing
@@ -223,6 +228,39 @@ is loaded before the runner validates all receipt pins; do not put setup or
 live work in it. The CLI supplies no real owner implementation. A module that
 returns scripted observations cannot produce genuine acceptance evidence.
 
+An Environment owner may expose a read-only Pod observation with exactly these
+fields:
+
+```js
+{
+  contractVersion, observedAt, environmentFence, resource, fencingGeneration,
+  provisionOperationId, clusterIdentity, namespace, claimUid, sandboxUid,
+  podName, podUid, podResourceVersion, podGeneration, podPhase,
+  workspaceAttachment: {
+    namespace, claimName, claimUid, mountPath, readOnly
+  },
+  isolationConfigurationVerified
+}
+```
+
+Such an observation is not currently an accepted CLI provider or runner
+receipt. If a future owner adapter supplies it, it must be derived only from
+validated actual Pod, Sandbox, and PVC reads, then reread the exact Pod UID and
+`resourceVersion` before returning; when present, `RuntimeEndpoint.PodUid`
+must match. Its environment fence and provision operation do not establish an
+invocation binding. Core/Projects must separately supply authoritative,
+revocation-checked invocation-to-exact-owner/resource creation authority.
+Until that contract exists and the runner validates it, invocation binding is
+missing and the probe must remain blocked; matching an owner, Pod, or provision
+operation alone is insufficient.
+
+`workspaceAttachment` and `isolationConfigurationVerified` describe
+configuration only. They do not prove that the Host process sees the actual
+mounted filesystem or that owner isolation works. Those behaviors require the
+runner's separate native `mount-file` reads/writes against the exact Pod UID
+and owner, with exact marker cleanup. Do not map the Environment observation
+or those two configuration fields to a mounted-proof result.
+
 Before genuine use, the fixture/Environment/RuntimeHost owners must supply:
 
 - Both actual disposable owner scopes with current creation and observed
@@ -236,6 +274,10 @@ Before genuine use, the fixture/Environment/RuntimeHost owners must supply:
   an owner-backed mapping of actions to allowed journeys, and an independent
   current RuntimeHost registration/readiness reader bound to the exact placement
   and Pod UID. Readiness must not echo the input receipt as a fresh observation.
+- Invocation-to-exact-resource creation authority from Core/Projects with
+  revocation checks; the Environment Pod observation and its provision
+  operation are not a substitute. Its configuration-only workspace attachment
+  fields do not substitute for native Host filesystem mount evidence.
 - The pinned kubeconfig context with normal HTTPS/TLS validation and approved
   native access, fixed `kubectl` and `hubble` executables, and an independently
   authenticated, owner-verified Hubble Relay for that cluster at

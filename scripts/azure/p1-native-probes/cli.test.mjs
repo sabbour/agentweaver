@@ -93,7 +93,7 @@ test('provider factory cannot rewrite pins or replace fixed transports or the cl
   await assert.rejects(() => dependencies.processProvider.run({
     recipeId: 'arbitrary-command', args: {},
   }));
-  for (const extra of ['processProvider', 'fetch', 'now']) {
+  for (const extra of ['processProvider', 'fetch', 'now', 'environmentPodProvider']) {
     const path = join(f.directory, `${extra}.mjs`);
     await writeFile(path, factory.replace('authProvider:', `${extra}: {}, authProvider:`));
     await assert.rejects(() => loadP1NativeProviders(input, path), /exact_owner_providers_required/);
