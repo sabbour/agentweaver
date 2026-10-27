@@ -695,9 +695,55 @@ a timeout returns `504 run_start_timeout`. Start after cancellation returns
 `409 run_terminal`.
 
 The create request body has `firstMessage` (1–32,768 UTF-8 bytes),
-`expectedProjectConfigRevision`, and optional `title` and `workflowId`. The
+`expectedProjectConfigRevision`, and optional `title`, `workflowId` and
+`p1SetupInvocationId`. The latter is only an existing Projects setup receipt
+locator, not a caller-supplied receipt, hash, run ID or Core invocation ID. The
 Gateway accepts create bodies up to 256 KiB. Responses never include the first
 message.
+
+When a P1 locator is present, Core uses the same unbound caller bearer to read
+the existing public Projects receipt before saving the request. Missing,
+foreign, revoked or stale receipts leave no request or provenance rows.
+Core saves the full verified receipt and its versioned deterministic hash
+with its own run and root IDs in the request transaction. Retries read Projects
+again and must match that immutable receipt. Projects selection is created
+after the request commits; selection failure leaves a resumable request, not
+an accepted P1 invocation.
+
+At bound start, Core checks current Projects selection and authority and calls
+the narrow internal Projects verifier. Core locks the saved request and commits
+the root, initial decision and immutable invocation binding in one transaction. Events
+registration and first-message delivery remain outside that transaction and
+are retryable. Projects locks do not span the Core commit: revocation after
+the remote check can race with that commit. There is no distributed-lock or
+current-at-commit revocation guarantee.
+
+### Current P1 invocation binding
+
+Native internal path:
+`GET /internal/projects/{projectId}/runs/{runId}/p1-invocation-binding`.
+There is no public Gateway or MCP route for this owner-to-owner read.
+The caller must be the accepted actor with an exact run-bound token and current
+`api.read` and `projects.orchestrator` authority. The request accepts no query
+or body and returns `Cache-Control: no-store`.
+
+The version 1 `P1InvocationBinding` response contains `contractVersion`,
+`coreInvocationId`, `setupInvocationId`, `setupReceiptHash`, `tenantId`,
+`projectId`, `runId`, `rootSessionId`, `actorIssuer`, `actorSubject`,
+`membershipId`, `membershipRevision`, `acceptedSelectionHash`,
+`executionFence`, `rootStateVersion`, and `acceptedAt`. IDs and acceptance
+evidence come from Core's immutable binding, not caller JSON. The receipt hash
+uses SHA-256 over UTF-8 bytes of the versioned prefix
+`agentweaver.p1.setup-receipt.v1\n` and the complete typed receipt serialized
+with camel-case property names, including nullable Owner fields. The saved
+provenance records hash version 1.
+
+The read joins the actual accepted run and active root session, compares the
+current execution fence and selection hash, and checks fresh Projects
+selection and actor authority. A missing binding returns `404`; stale evidence
+returns `409`. Historical acceptance is not current authority, and an existing
+root without a binding cannot be enrolled afterward. This contract does not
+implement Environment resource consumption or Host runtime observation.
 
 ### Run messages
 

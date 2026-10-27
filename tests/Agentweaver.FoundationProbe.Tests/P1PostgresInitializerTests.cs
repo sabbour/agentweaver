@@ -94,9 +94,9 @@ public sealed class P1PostgresInitializerTests
         InitializerChecks.AssertMutationDenialPlan(services);
 
         // Dropping any one protected table changes the reviewed count, so the plan is rejected.
-        var elevenTables = MutationServices();
-        elevenTables[4] = elevenTables[4] with { Tables = elevenTables[4].Tables[..^1] };
-        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(elevenTables));
+        var missingTable = MutationServices();
+        missingTable[4] = missingTable[4] with { Tables = missingTable[4].Tables[..^1] };
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(missingTable));
 
         var missingGuard = MutationServices();
         missingGuard[3] = missingGuard[3] with
@@ -846,12 +846,35 @@ public sealed class P1PostgresInitializerTests
                         "reject_maf_runtime_evidence_mutation()", 34,
                         "MAF runtime evidence receipts are append-only", null),
                 ]),
+                LockTable("p1_run_request_provenance", "provenance_id",
+                   "p1_run_request_provenance_immutable", "reject_p1_invocation_provenance_mutation()",
+                   27, "P1 invocation provenance is append-only", null) with
+                {
+                   MutationDenialGuards =
+                   [
+                       new("p1_run_request_provenance_no_truncate",
+                           "reject_p1_invocation_provenance_mutation()", 34,
+                           "P1 invocation provenance is append-only", null),
+                   ],
+                },
+                LockTable("p1_invocation_bindings", "core_invocation_id",
+                   "p1_invocation_bindings_immutable", "reject_p1_invocation_provenance_mutation()",
+                   27, "P1 invocation provenance is append-only", null) with
+                {
+                   MutationDenialGuards =
+                   [
+                       new("p1_invocation_bindings_no_truncate",
+                           "reject_p1_invocation_provenance_mutation()", 34,
+                           "P1 invocation provenance is append-only", null),
+                   ],
+                },
             ],
             Functions =
             [
                 new("reject_row_lock_record_update()", false),
                 new("reject_session_consistency_manifest_mutation()", false),
                 new("reject_maf_runtime_evidence_mutation()", false),
+                new("reject_p1_invocation_provenance_mutation()", false),
             ],
         };
         return services;

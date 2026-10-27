@@ -101,7 +101,8 @@ internal sealed partial class CoordinationOwnerStore
         string sessionId,
         CancellationToken cancellationToken,
         Func<CancellationToken, Task<RuntimeRunAdmissionReceipt>>? readRunAdmission = null,
-        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null,
+        bool requireNewRoot = false)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
@@ -130,7 +131,10 @@ internal sealed partial class CoordinationOwnerStore
             insert.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, actor.Issuer);
             insert.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, actor.Subject);
             insert.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, selection.Authorization.TenantId);
-            await insert.ExecuteNonQueryAsync(cancellationToken);
+            var inserted = await insert.ExecuteNonQueryAsync(cancellationToken);
+            if (requireNewRoot && inserted != 1)
+                throw new CoordinationException(
+                    "p1_invocation_binding_missing", StatusCodes.Status409Conflict);
         }
 
         await using (var bindTenant = new NpgsqlCommand($"""

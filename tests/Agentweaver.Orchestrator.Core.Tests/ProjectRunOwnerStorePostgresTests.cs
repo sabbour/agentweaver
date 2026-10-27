@@ -75,6 +75,424 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task P1RequestPersistsFullReceiptAndRejectsChangedOrReusedSetupProvenance()
+    {
+        var receipt = P1Receipt();
+        var request = new CreateProjectRunRequest(
+            "Start from P1 setup", 1, P1SetupInvocationId: receipt.InvocationId);
+        var first = await CreateP1("p1-create", request, receipt);
+        var replay = await CreateP1("p1-create", request, receipt);
+
+        Assert.Equal(first, replay);
+        Assert.Equal(receipt.InvocationId, first.P1SetupInvocationId);
+        Assert.Equal(1L, await CountAsync("project_run_requests"));
+        Assert.Equal(1L, await CountAsync("p1_run_request_provenance"));
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var query = new NpgsqlCommand($"""
+            SELECT setup_receipt_hash, receipt_snapshot::text,
+                   receipt_snapshot->>'ownerAssignmentId',
+                   receipt_snapshot->>'ownerAssignmentRevision',
+                   receipt_snapshot->>'ownerAuthorityAuditEventId'
+            FROM "{_schema}".p1_run_request_provenance
+            WHERE project_id = @project AND run_id = @run
+            """, connection))
+        {
+            query.Parameters.AddWithValue("project", Project);
+            query.Parameters.AddWithValue("run", first.RunId);
+            await using var reader = await query.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(CoordinationOwnerStore.HashP1SetupReceipt(receipt), reader.GetString(0).TrimEnd());
+            Assert.Equal(receipt.InvocationId.ToString(), JsonDocument.Parse(reader.GetString(1))
+                .RootElement.GetProperty("invocationId").GetString());
+            Assert.True(reader.IsDBNull(2));
+            Assert.True(reader.IsDBNull(3));
+            Assert.True(reader.IsDBNull(4));
+        }
+
+        var changed = receipt with { OwnerAuthorityAuditEventId = Guid.NewGuid() };
+        var changedError = await Assert.ThrowsAsync<CoordinationException>(
+            () => CreateP1("p1-create", request, changed));
+        Assert.Equal("p1_setup_receipt_changed", changedError.Code);
+
+        var reused = await Assert.ThrowsAsync<CoordinationException>(
+            () => CreateP1("p1-reuse", request, receipt));
+        Assert.Equal("p1_setup_invocation_conflict", reused.Code);
+        Assert.Equal(1L, await CountAsync("project_run_requests"));
+        Assert.Equal(1L, await CountAsync("p1_run_request_provenance"));
+
+        await using var guardConnection = await _fixture.DataSource.OpenConnectionAsync();
+        foreach (var statement in new[]
+        {
+            $"""UPDATE "{_schema}".p1_run_request_provenance SET setup_receipt_hash = repeat('0', 64)""",
+            $"""DELETE FROM "{_schema}".p1_run_request_provenance""",
+            $"""TRUNCATE "{_schema}".p1_run_request_provenance CASCADE"""
+        })
+            await using (var guarded = new NpgsqlCommand(statement, guardConnection))
+            {
+                var denied = await Assert.ThrowsAsync<PostgresException>(() => guarded.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.RaiseException, denied.SqlState);
+                Assert.Equal("P1 invocation provenance is append-only", denied.MessageText);
+            }
+    }
+
+    [Fact]
+    public async Task P1RequestRejectsMissingForeignAndStaleReceiptBeforeAnyWrite()
+    {
+        var receipt = P1Receipt();
+        var request = new CreateProjectRunRequest(
+            "Start from P1 setup", 1, P1SetupInvocationId: receipt.InvocationId);
+
+        var missing = await Assert.ThrowsAsync<CoordinationException>(() =>
+            CreateP1("p1-missing", request, null));
+        Assert.Equal("p1_setup_receipt_stale", missing.Code);
+        Assert.Equal(0L, await CountAsync("project_run_requests"));
+
+        var foreign = await Assert.ThrowsAsync<CoordinationException>(() =>
+            CreateP1("p1-foreign", request, receipt with { Subject = "foreign-actor" }));
+        Assert.Equal("p1_setup_receipt_stale", foreign.Code);
+        Assert.Equal(0L, await CountAsync("project_run_requests"));
+
+        var stale = await Assert.ThrowsAsync<CoordinationException>(() =>
+            CreateP1("p1-stale", request, receipt with { ProjectConfigurationRevision = 2 }));
+        Assert.Equal("p1_setup_receipt_stale", stale.Code);
+        Assert.Equal(0L, await CountAsync("project_run_requests"));
+
+        var foreignTenant = await Assert.ThrowsAsync<CoordinationException>(() =>
+            CreateP1("p1-foreign-tenant", request, receipt with { TenantId = "foreign-tenant" }));
+        Assert.Equal("p1_setup_receipt_stale", foreignTenant.Code);
+        Assert.Equal(0L, await CountAsync("project_run_requests"));
+
+        var revokedMembership = await Assert.ThrowsAsync<CoordinationException>(() =>
+            CreateP1("p1-revoked", request, receipt with { MembershipRevision = 0 }));
+        Assert.Equal("p1_setup_receipt_stale", revokedMembership.Code);
+        Assert.Equal(0L, await CountAsync("project_run_requests"));
+    }
+
+    [Fact]
+    public async Task P1RootDecisionAndBindingCommitTogetherAndDeliveryRetriesAfterCommit()
+    {
+        var receipt = P1Receipt() with
+        {
+            OwnerAssignmentId = Guid.NewGuid(),
+            OwnerAssignmentRevision = 2,
+            OwnerAuthorityAuditEventId = Guid.NewGuid()
+        };
+        var request = new CreateProjectRunRequest(
+            "Start from P1 setup", 1, P1SetupInvocationId: receipt.InvocationId);
+        var row = await CreateP1("p1-accept", request, receipt);
+        var selection = Selection(row.RunId);
+        var sends = 0;
+        Task Bind(
+            Npgsql.NpgsqlConnection connection,
+            Npgsql.NpgsqlTransaction transaction,
+            CoordinationOwnerStore.ProjectRunRequestRow pending,
+            CancellationToken token) =>
+            _store.AcceptP1InteractiveRootInTransactionAsync(
+                connection, transaction, _actor, selection, pending, receipt, token);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => _store.StartProjectRunAsync(
+            _actor, Tenant, Project, row.RunId,
+            (_, _) =>
+            {
+                sends++;
+                throw new HttpRequestException("Events did not confirm delivery.");
+            },
+            NoCheck, CancellationToken.None, acceptRootInTransaction: Bind));
+        Assert.Equal(1, sends);
+        Assert.Equal(1L, await CountAsync("accepted_runs"));
+        Assert.Equal(1L, await CountAsync("coordination_sessions"));
+        Assert.Equal(1L, await CountAsync("coordinator_decisions"));
+        Assert.Equal(1L, await CountAsync("p1_invocation_bindings"));
+        Assert.Equal("awaiting_binding", await ReadRequestStateAsync(row.RunId));
+
+        var started = await _store.StartProjectRunAsync(
+            _actor, Tenant, Project, row.RunId,
+            (_, _) =>
+            {
+                sends++;
+                return Task.CompletedTask;
+            },
+            NoCheck, CancellationToken.None, acceptRootInTransaction: Bind);
+        Assert.Equal("started", started.State);
+        Assert.Equal(2, sends);
+        Assert.Equal("started", await ReadRequestStateAsync(row.RunId));
+
+        var binding = await _store.ReadCurrentP1InvocationBindingAsync(_actor, selection, CancellationToken.None);
+        Assert.Equal(receipt.InvocationId, binding.SetupInvocationId);
+        Assert.Equal(CoordinationOwnerStore.HashP1SetupReceipt(receipt), binding.SetupReceiptHash);
+        Assert.Equal(row.RunId, binding.RunId);
+        Assert.Equal(row.RootSessionId, binding.RootSessionId);
+        Assert.Equal(_actor.Issuer, binding.ActorIssuer);
+        Assert.Equal(_actor.Subject, binding.ActorSubject);
+        Assert.Equal(1L, await CountAsync("p1_invocation_bindings"));
+
+        await using var guardConnection = await _fixture.DataSource.OpenConnectionAsync();
+        foreach (var statement in new[]
+        {
+            $"""UPDATE "{_schema}".p1_invocation_bindings SET execution_fence = 2""",
+            $"""DELETE FROM "{_schema}".p1_invocation_bindings""",
+            $"""TRUNCATE "{_schema}".p1_invocation_bindings"""
+        })
+            await using (var guarded = new NpgsqlCommand(statement, guardConnection))
+            {
+                var denied = await Assert.ThrowsAsync<PostgresException>(() => guarded.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.RaiseException, denied.SqlState);
+                Assert.Equal("P1 invocation provenance is append-only", denied.MessageText);
+            }
+    }
+
+    [Fact]
+    public async Task P1RootAcceptanceRejectsChangedSelectionActorAndTenantBeforeAnyRootWrite()
+    {
+        var cases = new[]
+        {
+            (Key: "p1-changed-selection", Change: (Func<AuthorizedRunSelection, AuthorizedRunSelection>)(selection =>
+                selection with
+                {
+                    Selection = selection.Selection with { ProjectConfigurationRevision = 2 }
+                })),
+            (Key: "p1-changed-actor", Change: (Func<AuthorizedRunSelection, AuthorizedRunSelection>)(selection =>
+                selection with
+                {
+                    Authorization = selection.Authorization with { ActorId = "foreign-actor" }
+                })),
+            (Key: "p1-changed-tenant", Change: (Func<AuthorizedRunSelection, AuthorizedRunSelection>)(selection =>
+                selection with
+                {
+                    Authorization = selection.Authorization with { TenantId = "foreign-tenant" }
+                }))
+        };
+        foreach (var testCase in cases)
+        {
+            var receipt = P1Receipt();
+            var request = new CreateProjectRunRequest(
+                "Start from P1 setup", 1, P1SetupInvocationId: receipt.InvocationId);
+            var row = await CreateP1(testCase.Key, request, receipt);
+            var selection = testCase.Change(Selection(row.RunId));
+            Task Bind(
+                Npgsql.NpgsqlConnection connection,
+                Npgsql.NpgsqlTransaction transaction,
+                CoordinationOwnerStore.ProjectRunRequestRow pending,
+                CancellationToken token) =>
+                _store.AcceptP1InteractiveRootInTransactionAsync(
+                    connection, transaction, _actor, selection, pending, receipt, token);
+
+            var error = await Assert.ThrowsAsync<CoordinationException>(() => _store.StartProjectRunAsync(
+                _actor, Tenant, Project, row.RunId, NoDelivery, NoCheck, CancellationToken.None,
+                acceptRootInTransaction: Bind));
+            Assert.Equal(testCase.Key == "p1-changed-tenant"
+                ? "p1_setup_provenance_unavailable" : "p1_setup_receipt_stale", error.Code);
+        }
+
+        Assert.Equal(0L, await CountAsync("accepted_runs"));
+        Assert.Equal(0L, await CountAsync("coordination_sessions"));
+        Assert.Equal(0L, await CountAsync("coordinator_decisions"));
+        Assert.Equal(0L, await CountAsync("p1_invocation_bindings"));
+        Assert.Equal(3L, await CountAsync("project_run_requests"));
+        Assert.Equal(3L, await CountAsync("p1_run_request_provenance"));
+    }
+
+    [Fact]
+    public async Task ConcurrentP1StartsReuseOneAtomicBindingWithoutRequestLockDeadlock()
+    {
+        var receipt = P1Receipt();
+        var row = await CreateP1("p1-concurrent",
+            new CreateProjectRunRequest("Concurrent start", 1, P1SetupInvocationId: receipt.InvocationId),
+            receipt);
+        var selection = Selection(row.RunId);
+        Task Bind(NpgsqlConnection connection, NpgsqlTransaction transaction,
+            CoordinationOwnerStore.ProjectRunRequestRow pending, CancellationToken token) =>
+            _store.AcceptP1InteractiveRootInTransactionAsync(
+                connection, transaction, _actor, selection, pending, receipt, token);
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 3).Select(_ =>
+            _store.StartProjectRunAsync(
+                _actor, Tenant, Project, row.RunId, (_, _) => Task.CompletedTask,
+                NoCheck, CancellationToken.None, acceptRootInTransaction: Bind)))
+            .WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.All(results, result => Assert.Equal("started", result.State));
+        Assert.Equal(1L, await CountAsync("accepted_runs"));
+        Assert.Equal(1L, await CountAsync("coordinator_decisions"));
+        Assert.Equal(1L, await CountAsync("p1_invocation_bindings"));
+    }
+
+    [Fact]
+    public async Task CurrentP1BindingRejectsChangedAuthoritySelectionAndExecutionFence()
+    {
+        var receipt = P1Receipt();
+        var row = await CreateP1("p1-current",
+            new CreateProjectRunRequest("Read current binding", 1, P1SetupInvocationId: receipt.InvocationId),
+            receipt);
+        var selection = Selection(row.RunId);
+        Task Bind(NpgsqlConnection connection, NpgsqlTransaction transaction,
+            CoordinationOwnerStore.ProjectRunRequestRow pending, CancellationToken token) =>
+            _store.AcceptP1InteractiveRootInTransactionAsync(
+                connection, transaction, _actor, selection, pending, receipt, token);
+        await _store.StartProjectRunAsync(
+            _actor, Tenant, Project, row.RunId, (_, _) => Task.CompletedTask,
+            NoCheck, CancellationToken.None, acceptRootInTransaction: Bind);
+        var original = await _store.ReadCurrentP1InvocationBindingAsync(_actor, selection, CancellationToken.None);
+        foreach (var changed in new[]
+        {
+            selection with { Authorization = selection.Authorization with { MembershipRevision = 2 } },
+            selection with { Authorization = selection.Authorization with { ActorId = "another-actor" } },
+            selection with { Authorization = selection.Authorization with { TenantId = "another-tenant" } },
+            selection with { Selection = selection.Selection with { ProjectConfigurationRevision = 2 } },
+        })
+        {
+            var error = await Assert.ThrowsAsync<CoordinationException>(() =>
+                _store.ReadCurrentP1InvocationBindingAsync(_actor, changed, CancellationToken.None));
+            Assert.Equal("p1_invocation_binding_stale", error.Code);
+        }
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var update = new NpgsqlCommand($"""
+            UPDATE "{_schema}".accepted_runs SET execution_fence = execution_fence + 1
+            WHERE project_id = @project AND run_id = @run
+            """, connection);
+        update.Parameters.AddWithValue("project", Project);
+        update.Parameters.AddWithValue("run", row.RunId);
+        await update.ExecuteNonQueryAsync();
+        var stale = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.ReadCurrentP1InvocationBindingAsync(_actor, selection, CancellationToken.None));
+        Assert.Equal("p1_invocation_binding_stale", stale.Code);
+        Assert.NotEqual(Guid.Empty, original.CoreInvocationId);
+    }
+
+    [Fact]
+    public async Task P1AcceptanceDoesNotEnrollAnAlreadyAcceptedRootWithoutItsBinding()
+    {
+        var receipt = P1Receipt();
+        var request = new CreateProjectRunRequest(
+            "Start from P1 setup", 1, P1SetupInvocationId: receipt.InvocationId);
+        var row = await CreateP1("p1-no-posthoc", request, receipt);
+        var selection = Selection(row.RunId);
+        await _store.AcceptRootAsync(_actor, selection, row.RootSessionId, CancellationToken.None);
+        Task Bind(
+            Npgsql.NpgsqlConnection connection,
+            Npgsql.NpgsqlTransaction transaction,
+            CoordinationOwnerStore.ProjectRunRequestRow pending,
+            CancellationToken token) =>
+            _store.AcceptP1InteractiveRootInTransactionAsync(
+                connection, transaction, _actor, selection, pending, receipt, token);
+
+        var error = await Assert.ThrowsAsync<CoordinationException>(() => _store.StartProjectRunAsync(
+            _actor, Tenant, Project, row.RunId, NoDelivery, NoCheck, CancellationToken.None,
+            acceptRootInTransaction: Bind));
+
+        Assert.Equal("p1_invocation_binding_missing", error.Code);
+        Assert.Equal(1L, await CountAsync("accepted_runs"));
+        Assert.Equal(1L, await CountAsync("coordination_sessions"));
+        Assert.Equal(0L, await CountAsync("p1_invocation_bindings"));
+        Assert.Equal("awaiting_binding", await ReadRequestStateAsync(row.RunId));
+    }
+
+    [Fact]
+    public async Task ConcurrentLegacyAcceptanceCannotEnrollAP1BindingAfterTheRootCommits()
+    {
+        var receipt = P1Receipt();
+        var row = await CreateP1("p1-legacy-race",
+            new CreateProjectRunRequest("Race acceptance", 1, P1SetupInvocationId: receipt.InvocationId),
+            receipt);
+        var selection = Selection(row.RunId);
+        var application = "p1-race-" + Guid.NewGuid().ToString("N");
+        var lockId = Guid.NewGuid().GetHashCode();
+        await using var control = await _fixture.DataSource.OpenConnectionAsync();
+        await using (var install = new NpgsqlCommand($"""
+            CREATE FUNCTION "{_schema}".pause_p1_acceptance() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF current_setting('application_name') = '{application}' THEN
+                    PERFORM pg_advisory_xact_lock({lockId});
+                END IF;
+                RETURN NEW;
+            END
+            $$;
+            CREATE TRIGGER pause_p1_acceptance BEFORE INSERT ON "{_schema}".accepted_runs
+                FOR EACH ROW EXECUTE FUNCTION "{_schema}".pause_p1_acceptance();
+            SELECT pg_advisory_lock({lockId});
+            """, control))
+            await install.ExecuteNonQueryAsync();
+        async Task Bind(NpgsqlConnection connection, NpgsqlTransaction transaction,
+            CoordinationOwnerStore.ProjectRunRequestRow pending, CancellationToken token)
+        {
+            await using var set = new NpgsqlCommand(
+                $"SET LOCAL application_name = '{application}'", connection, transaction);
+            await set.ExecuteNonQueryAsync(token);
+            await _store.AcceptP1InteractiveRootInTransactionAsync(
+                connection, transaction, _actor, selection, pending, receipt, token);
+        }
+        var accepting = _store.StartProjectRunAsync(
+            _actor, Tenant, Project, row.RunId, NoDelivery, NoCheck, CancellationToken.None,
+            acceptRootInTransaction: Bind);
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            while (true)
+            {
+                await using var waiting = new NpgsqlCommand("""
+                    SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+                        WHERE application_name = @application AND wait_event = 'advisory')
+                    """, control);
+                waiting.Parameters.AddWithValue("application", application);
+                if ((bool)(await waiting.ExecuteScalarAsync(timeout.Token))!)
+                    break;
+                await Task.Delay(20, timeout.Token);
+            }
+            await _store.AcceptRootAsync(_actor, selection, row.RootSessionId, timeout.Token);
+        }
+        finally
+        {
+            await using var release = new NpgsqlCommand($"SELECT pg_advisory_unlock({lockId})", control);
+            await release.ExecuteNonQueryAsync();
+        }
+        var error = await Assert.ThrowsAsync<CoordinationException>(() => accepting);
+        Assert.Equal("p1_invocation_binding_missing", error.Code);
+        Assert.Equal(1L, await CountAsync("accepted_runs"));
+        Assert.Equal(0L, await CountAsync("coordinator_decisions"));
+        Assert.Equal(0L, await CountAsync("p1_invocation_bindings"));
+    }
+
+    [Theory]
+    [InlineData("coordinator_decisions")]
+    [InlineData("p1_invocation_bindings")]
+    public async Task P1RootAcceptanceRollsBackRootDecisionAndBindingOnOwnerWriteFailure(string table)
+    {
+        var receipt = P1Receipt();
+        var request = new CreateProjectRunRequest(
+            "Start from P1 setup", 1, P1SetupInvocationId: receipt.InvocationId);
+        var row = await CreateP1("p1-rollback", request, receipt);
+        var selection = Selection(row.RunId);
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var install = new NpgsqlCommand($"""
+            CREATE FUNCTION "{_schema}".reject_test_decision() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                RAISE EXCEPTION 'decision fixture failure';
+            END
+            $$;
+            CREATE TRIGGER reject_test_decision BEFORE INSERT ON "{_schema}"."{table}"
+                FOR EACH ROW EXECUTE FUNCTION "{_schema}".reject_test_decision()
+            """, connection))
+            await install.ExecuteNonQueryAsync();
+        Task Bind(
+            Npgsql.NpgsqlConnection connection,
+            Npgsql.NpgsqlTransaction transaction,
+            CoordinationOwnerStore.ProjectRunRequestRow pending,
+            CancellationToken token) =>
+            _store.AcceptP1InteractiveRootInTransactionAsync(
+                connection, transaction, _actor, selection, pending, receipt, token);
+
+        await Assert.ThrowsAsync<PostgresException>(() => _store.StartProjectRunAsync(
+            _actor, Tenant, Project, row.RunId, NoDelivery, NoCheck, CancellationToken.None,
+            acceptRootInTransaction: Bind));
+        Assert.Equal(0L, await CountAsync("accepted_runs"));
+        Assert.Equal(0L, await CountAsync("coordination_sessions"));
+        Assert.Equal(0L, await CountAsync("coordinator_decisions"));
+        Assert.Equal(0L, await CountAsync("p1_invocation_bindings"));
+        Assert.Equal(1L, await CountAsync("project_run_requests"));
+        Assert.Equal(1L, await CountAsync("p1_run_request_provenance"));
+    }
+
+    [Fact]
     public async Task StartDeliversTheFirstMessageOnceAndReplays()
     {
         var row = await Create("start", new CreateProjectRunRequest("Hello root", 1, WorkflowId: "wf-1"));
@@ -323,6 +741,12 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
     private Task<CoordinationOwnerStore.ProjectRunRequestRow> Create(string key, CreateProjectRunRequest request) =>
         _store.CreateProjectRunAsync(_actor, Tenant, Project, key, request, CancellationToken.None);
 
+    private Task<CoordinationOwnerStore.ProjectRunRequestRow> CreateP1(
+        string key,
+        CreateProjectRunRequest request,
+        P1ProjectSetupReceiptSnapshot? receipt) =>
+        _store.CreateProjectRunAsync(_actor, Tenant, Project, key, request, CancellationToken.None, receipt);
+
     private Task<StartProjectRunResponse> Start(
         string runId,
         Func<CoordinationOwnerStore.ProjectRunRequestRow, CancellationToken, Task> deliver,
@@ -349,11 +773,37 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
         return (long)(await command.ExecuteScalarAsync())!;
     }
 
+    private async Task<string> ReadRequestStateAsync(string runId)
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT state FROM "{_schema}".project_run_requests
+            WHERE project_id = @project AND run_id = @run
+            """, connection);
+        command.Parameters.AddWithValue("project", Project);
+        command.Parameters.AddWithValue("run", runId);
+        return (string)(await command.ExecuteScalarAsync())!;
+    }
+
+    private P1ProjectSetupReceiptSnapshot P1Receipt() =>
+        new(Guid.NewGuid(), _actor.Issuer, _actor.Subject, Tenant, Guid.NewGuid(), 1,
+            Project, _actor.Subject, 1, 1, Guid.NewGuid(), 1, Guid.NewGuid(), DateTimeOffset.UtcNow);
+
     /// <summary>Creates the Projects-authorized selection that the interactive selection helper would return.</summary>
     private AuthorizedRunSelection Selection(string runId)
     {
         using var snapshot = JsonDocument.Parse(
-            """{"source":"projects-config","modelSelection":{"reference":"model:provider/alpha"}}""");
+            """
+            {
+              "source": "projects-config",
+              "modelSelection": {"reference": "model:provider/alpha"},
+              "projectConfiguration": {
+                "blueprintWorkflowReferences": [],
+                "agentCharters": [],
+                "casting": []
+              }
+            }
+            """);
         var selection = new EffectiveRunSelection(Project, runId, 1, 1, 1, "context-v1", snapshot.RootElement.Clone());
         return new AuthorizedRunSelection(selection, new ProjectsAuthorizationContext(
             1, _actor.Issuer, _actor.Subject, Tenant, 1, Project, runId,

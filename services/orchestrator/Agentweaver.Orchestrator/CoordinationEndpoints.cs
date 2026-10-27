@@ -1945,7 +1945,7 @@ public static partial class CoordinationEndpoints
     /// <summary>
     /// Builds the authenticated owner actor after validating the bearer, audience, scope, and project-run claims.
     /// </summary>
-    private static CoordinationActor RequireOwnerActor(
+    internal static CoordinationActor RequireOwnerActor(
         HttpContext context,
         OrchestratorOptions options,
         string projectId,

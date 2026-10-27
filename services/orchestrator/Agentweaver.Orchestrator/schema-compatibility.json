@@ -7,10 +7,12 @@
   "childSpawnAuthorizationPrerequisiteVersion": 21,
   "sourceControlPullRequestOperationsVersion": 38,
   "runtimeExecutionEvidenceVersion": 39,
+  "p1RunRequestProvenanceVersion": 40,
+  "p1RunRequestProvenancePrerequisiteVersion": 23,
   "sourceControlPullRequestOperationsPrerequisiteVersion": 12,
   "currentImage": {
     "requiredCoreVersions": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
-    "optionalCoreVersions": [32, 33, 35, 36, 37, 38, 39],
+    "optionalCoreVersions": [32, 33, 35, 36, 37, 38, 39, 40],
     "repositoryIdentityWriteVersion": 33,
     "rootModelTurnAdmissionsVersion": 36,
     "beforeRepositoryIdentityUpdateError": "database_update_pending"
@@ -19,7 +21,7 @@
     "maximumKnownCoreVersion": 32,
     "acceptsCore033": false
   },
-  "rolloutOrder": ["deployCurrentImages", "applyCore032And033And035And036And037And038And039"],
-  "applyByDefault": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39],
+  "rolloutOrder": ["deployCurrentImages", "applyCore032And033And035And036And037And038And039And040"],
+  "applyByDefault": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40],
   "separateApprovalRequired": []
 }

@@ -178,13 +178,13 @@ type, function source/owner, and runtime EXECUTE restriction. Its role stage
 checks all five mappings before commit. Its grant checks preserve existing
 ownership and permit only exact runtime grants. The source checks functions by
 owner and effective EXECUTE privileges, not counts alone.
-Its source catalog includes 37 Core migration versions (1 through 16, 18
-through 33, and 35-39), with version 17 excluded and reserved version 34
+Its source catalog includes 38 Core migration versions (1 through 16, 18
+through 33, and 35-40), with version 17 excluded and reserved version 34
 skipped, 11 Events versions, and 11 Environment versions. The initializer
 compares that catalog with each migrator's compiled version list. The reviewed
 offline plan hash is
-`425f7d673ccfe7c4b311bc5696fa7cdeb0bc76feefc72d4680a795ab8335c88d`.
-It contains 119 tables, 12 row-lock columns, and 34 exact function signatures.
+`df16526c756df42a3c0ba8534fea10bf5d019c6b5ca6e8e083b91963aa7e66ea`.
+It contains 121 tables, 14 row-lock columns, and 37 exact function signatures.
 Events migration 010 adds `session_object_inventory` with exactly
 `SELECT, INSERT, UPDATE` runtime access.
 Migration 011 protects the immutable `messaging_provider_bindings` row lock
@@ -207,6 +207,15 @@ statement TRUNCATE; initializer readback verifies both guards. Readiness
 accepts a complete pre-039 schema, but evidence reads and writes return
 `database_update_pending` until the migration is applied. This source plan
 does not authorize live migration, grants, or deployment.
+Orchestrator migration 040 adds `p1_run_request_provenance` and
+`p1_invocation_bindings`. Their runtime access is `SELECT, INSERT`, plus only
+`UPDATE (provenance_id)` and `UPDATE (core_invocation_id)` respectively so
+PostgreSQL permits row locks. Their triggers still reject every row update,
+delete and table truncate. The reviewed grant plan and initializer verify
+these guards; no setup-ledger table access is added to Projects.
+Readiness accepts the complete schema before 040 for ordinary interactive
+runs. P1 request provenance and binding require 040. This source change does
+not apply the migration or grants to a live database.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
 Its planned access is exactly `SELECT, INSERT`; it adds no `UPDATE`, `DELETE`,

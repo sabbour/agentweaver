@@ -26,7 +26,90 @@ internal static class P1ProjectSetupEndpoints
             .WithName("CreateP1InvocationSetup");
         invocations.MapGet("/{invocationId:guid}/setup", HandleSetupAsync)
             .WithName("ReadP1InvocationSetup");
+        app.MapGet(
+                "/internal/projects/{projectId}/runs/{runId}/p1-setup/{invocationId:guid}",
+                ReadSetupForRunAsync)
+            .RequireAuthorization();
         return app;
+    }
+
+    private static async Task<IResult> ReadSetupForRunAsync(
+        string projectId,
+        string runId,
+        Guid invocationId,
+        HttpContext context,
+        ProjectAuthorizationOwner authorizationOwner,
+        ProjectsConfigService projects,
+        NpgsqlDataSource dataSource,
+        CancellationToken cancellationToken)
+    {
+        context.Response.Headers.CacheControl = "no-store";
+        using var bodyProbeTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bodyProbeTimeout.CancelAfter(BodyProbeTimeout);
+        try
+        {
+            if (invocationId == Guid.Empty ||
+                context.Request.QueryString.HasValue ||
+                await HasNonemptyBodyAsync(context.Request, bodyProbeTimeout.Token).ConfigureAwait(false))
+                throw ProjectConfigException.Invalid(
+                    "invalid_p1_setup_verification_request",
+                    "The run-bound P1 setup verification accepts only its route identifiers and tenant header.");
+
+            var tenantValues = context.Request.Headers[ProjectAuthorizationOwner.TenantSelectorHeader];
+            if (tenantValues.Count != 1 || string.IsNullOrWhiteSpace(tenantValues[0]))
+                throw ProjectConfigException.Invalid(
+                    "invalid_p1_setup_verification_request",
+                    $"Exactly one {ProjectAuthorizationOwner.TenantSelectorHeader} header is required.");
+
+            var caller = await authorizationOwner.ResolveAsync(
+                context.User, [tenantValues[0]], cancellationToken).ConfigureAwait(false);
+            caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+            caller.RequireScope(ProjectAuthorizationOwner.OrchestratorScope);
+            caller.RequireExactRunBinding(projectId, runId);
+
+            var selection = await projects.GetBrokerRunBindingProofAsync(
+                caller, projectId, runId, cancellationToken).ConfigureAwait(false);
+            if (!caller.IsTenantAdmin ||
+                selection.ProjectId != projectId ||
+                selection.RunId != runId ||
+                selection.TenantId != caller.TenantId)
+                throw ProjectConfigException.Forbidden();
+
+            var tenantAdminGrants = caller.Grants.Where(grant =>
+                grant.ResourceType == ProjectAuthorityResourceType.Tenant &&
+                string.Equals(grant.ResourceId, caller.TenantId, StringComparison.Ordinal) &&
+                grant.Role == ProjectAuthorityRole.TenantAdmin).ToArray();
+            if (tenantAdminGrants.Length != 1)
+                throw ProjectConfigException.Forbidden();
+
+            // Projects locks end with this read; Core's later commit is not a distributed lock.
+            var result = await ReadAsync(
+                dataSource, caller, invocationId, tenantAdminGrants[0], cancellationToken)
+                .ConfigureAwait(false);
+            ValidateResult(result, caller, invocationId);
+            if (result.Receipt.ProjectId != projectId ||
+                result.Receipt.ProjectConfigurationRevision != selection.ProjectConfigurationRevision)
+                throw ProjectConfigException.Conflict(
+                    "project_setup_receipt_stale",
+                    "The P1 setup receipt does not match the current run selection.");
+            return Results.Ok(result.Receipt);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Results.Problem(
+                title: "request_body_timeout",
+                detail: "The P1 setup request body did not complete within the allowed time.",
+                statusCode: StatusCodes.Status408RequestTimeout,
+                extensions: new Dictionary<string, object?> { ["code"] = "request_body_timeout" });
+        }
+        catch (ProjectConfigException exception)
+        {
+            return Results.Problem(
+                title: exception.Code,
+                detail: exception.Message,
+                statusCode: exception.StatusCode,
+                extensions: new Dictionary<string, object?> { ["code"] = exception.Code });
+        }
     }
 
     private static async Task<IResult> HandleSetupAsync(

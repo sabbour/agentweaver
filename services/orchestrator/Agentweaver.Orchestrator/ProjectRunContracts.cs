@@ -8,7 +8,32 @@ public sealed record CreateProjectRunRequest(
     string FirstMessage,
     long ExpectedProjectConfigRevision,
     string? Title = null,
-    string? WorkflowId = null);
+    string? WorkflowId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    Guid? P1SetupInvocationId = null);
+
+/// <summary>Authenticated Projects setup receipt captured before an interactive run request is persisted.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record P1ProjectSetupReceiptSnapshot(
+    Guid InvocationId,
+    string Issuer,
+    string Subject,
+    string TenantId,
+    Guid MembershipId,
+    long MembershipRevision,
+    string ProjectId,
+    string CreatedByActorId,
+    long ProjectRevision,
+    long ProjectConfigurationRevision,
+    Guid AssignmentId,
+    long AssignmentRevision,
+    Guid AuthorityAuditEventId,
+    DateTimeOffset CreatedAt)
+{
+    public Guid? OwnerAssignmentId { get; init; }
+    public long? OwnerAssignmentRevision { get; init; }
+    public Guid? OwnerAuthorityAuditEventId { get; init; }
+}
 
 /// <summary>Selectors for the existing Broker authorization-code flow.</summary>
 public sealed record ProjectRunBinding(string ProjectId, string RunId);

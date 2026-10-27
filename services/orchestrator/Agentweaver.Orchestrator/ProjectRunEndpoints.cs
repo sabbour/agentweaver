@@ -19,7 +19,14 @@ public static partial class CoordinationEndpoints
         CoordinationOwnerStore.ValidateProjectRunRequest(request);
         var authority = await projects.ReadProjectRunAuthorityAsync(context, projectId, cancellationToken);
         var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
-        var row = await store.CreateProjectRunAsync(actor, authority.TenantId, projectId, key, request, cancellationToken);
+        var setupReceipt = request.P1SetupInvocationId is { } invocationId
+            ? await projects.ReadP1SetupReceiptForCreationAsync(context, projectId, invocationId,
+                authority, request.ExpectedProjectConfigRevision, cancellationToken)
+                .ConfigureAwait(false)
+            : null;
+        var row = await store.CreateProjectRunAsync(
+            actor, authority.TenantId, projectId, key, request, cancellationToken, setupReceipt)
+            .ConfigureAwait(false);
         await projects.CreateInteractiveSelectionAsync(
             context, projectId, row.RunId, row.ExpectedProjectConfigRevision, cancellationToken);
         var refreshed = await projects.ReadProjectRunAuthorityAsync(context, projectId, cancellationToken);
@@ -41,13 +48,39 @@ public static partial class CoordinationEndpoints
         context.Response.Headers.CacheControl = "no-store";
         var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
         var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(context, projectId, runId, cancellationToken);
+        async Task AcceptP1RootInTransaction(
+            Npgsql.NpgsqlConnection connection,
+            Npgsql.NpgsqlTransaction transaction,
+            CoordinationOwnerStore.ProjectRunRequestRow row,
+            CancellationToken token)
+        {
+            if (row.P1SetupInvocationId is not { } invocationId)
+                return;
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, token).ConfigureAwait(false);
+            var currentSelection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, token).ConfigureAwait(false);
+            var receipt = await projects.ReadP1SetupReceiptForAcceptedRunAsync(
+                context, currentSelection, invocationId, token).ConfigureAwait(false);
+            var admission = context.RequestServices.GetService<RuntimeRunAdmissionClient>();
+            await store.AcceptP1InteractiveRootInTransactionAsync(
+                connection, transaction, actor, currentSelection, row, receipt, token,
+                admission is null ? null : innerToken => admission.ReadAsync(context, currentSelection, innerToken),
+                innerToken => RequireUnchangedAuthorizedSelectionAsync(
+                    context, projectId, runId, currentSelection, projects, innerToken))
+                .ConfigureAwait(false);
+        }
         var result = await store.StartProjectRunAsync(actor, selection.Authorization.TenantId, projectId, runId,
             async (row, token) =>
             {
-                await AcceptInteractiveRootAsync(projectId, runId, row.RootSessionId,
-                    context, options, projects, events, store, decisions, token);
+                var identity = new SessionIdentity(projectId, runId, row.RootSessionId);
+                if (row.P1SetupInvocationId is null)
+                    await AcceptInteractiveRootAsync(projectId, runId, row.RootSessionId,
+                        context, options, projects, events, store, decisions, token).ConfigureAwait(false);
+                else
+                    await events.EnsureSessionAsync(context, identity, token).ConfigureAwait(false);
                 var message = await store.SendMessageAsync(actor,
-                    new SessionIdentity(projectId, runId, row.RootSessionId),
+                    identity,
                     new CoordinationMessageRequest(row.RootSessionId, $"{runId}:first",
                         AddressedMessageDeliveryMode.Immediate, AddressedMessagePurpose.Steering,
                         AddressedMessageKind.Text,
@@ -65,7 +98,8 @@ public static partial class CoordinationEndpoints
                 _ = await store.AcknowledgeOutboundAsync(delivery, token);
             },
             token => RequireUnchangedAuthorizedSelectionAsync(context, projectId, runId, selection, projects, token),
-            cancellationToken);
+            cancellationToken,
+            acceptRootInTransaction: AcceptP1RootInTransaction);
         return Results.Ok(result);
     }, cancellationToken);
 
@@ -151,8 +185,36 @@ public static class ProjectRunEndpoints
         app.MapGet(
             "/api/projects/{projectId}/runs/{runId}/history/sessions",
             ReadProjectRunSessionTreeAsync).RequireAuthorization();
+        app.MapGet(
+            "/internal/projects/{projectId}/runs/{runId}/p1-invocation-binding",
+            ReadP1InvocationBindingAsync).RequireAuthorization();
         return app;
     }
+
+    /// <summary>Returns a live P1 binding only while its accepted root and Projects selection remain current.</summary>
+    private static Task<IResult> ReadP1InvocationBindingAsync(
+        string projectId,
+        string runId,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        CancellationToken cancellationToken) =>
+        CoordinationEndpoints.ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (context.Request.Query.Count != 0 ||
+                context.Request.ContentLength is > 0 ||
+                context.Request.Headers.TransferEncoding.Count != 0)
+                throw new CoordinationException("p1_invocation_binding_request_invalid", 400);
+            var actor = CoordinationEndpoints.RequireOwnerActor(
+                context, options, projectId, runId, options.Audience);
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var binding = await store.ReadCurrentP1InvocationBindingAsync(
+                actor, selection, cancellationToken).ConfigureAwait(false);
+            return Results.Ok(binding);
+        }, cancellationToken);
 
     /// <summary>Reads a run's session tree for a caller with current project read authority.</summary>
     internal static Task<IResult> ReadProjectRunSessionTreeAsync(

@@ -56,6 +56,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(37)]
     [InlineData(38)]
     [InlineData(39)]
+    [InlineData(40)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         // A partial history must fail verification until every registered resource is installed.
@@ -166,6 +167,55 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.True(await reader.ReadAsync());
         Assert.Equal(0L, reader.GetInt64(0));
         Assert.False(reader.GetBoolean(1));
+    }
+
+    [Fact]
+    public async Task P1InvocationProvenanceMigrationIsOptionalBeforeItIsApplied()
+    {
+        await ApplyMigrationsThroughAsync(39);
+
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 40),
+                to_regclass(@provenance) IS NOT NULL,
+                to_regclass(@bindings) IS NOT NULL,
+                EXISTS (SELECT 1 FROM pg_attribute
+                    WHERE attrelid = to_regclass(@requests) AND attname = 'p1_setup_invocation_id'
+                      AND attnum > 0 AND NOT attisdropped)
+            """, connection);
+        command.Parameters.AddWithValue("provenance", $"{_schema}.p1_run_request_provenance");
+        command.Parameters.AddWithValue("bindings", $"{_schema}.p1_invocation_bindings");
+        command.Parameters.AddWithValue("requests", $"{_schema}.project_run_requests");
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(0L, reader.GetInt64(0));
+        Assert.False(reader.GetBoolean(1));
+        Assert.False(reader.GetBoolean(2));
+        Assert.False(reader.GetBoolean(3));
+    }
+
+    [Fact]
+    public async Task NonP1InteractiveRequestsRemainUsableBeforeP1ProvenanceMigration()
+    {
+        await ApplyMigrationsThroughAsync(39);
+        var store = new CoordinationOwnerStore(fixture.DataSource, _schema, TimeProvider.System);
+        var actor = new CoordinationActor("https://identity.example/", "legacy-actor");
+        var request = new CreateProjectRunRequest("Continue with the existing flow", 1);
+        var created = await store.CreateProjectRunAsync(
+            actor, "tenant-1", "project-1", "legacy-request", request, CancellationToken.None);
+        var replay = await store.CreateProjectRunAsync(
+            actor, "tenant-1", "project-1", "legacy-request", request, CancellationToken.None);
+
+        Assert.Equal(created, replay);
+        Assert.Null(created.P1SetupInvocationId);
+        var started = await store.StartProjectRunAsync(
+            actor, "tenant-1", "project-1", created.RunId,
+            (_, _) => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            CancellationToken.None);
+        Assert.Equal("started", started.State);
     }
 
     [Fact]
@@ -312,8 +362,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.Equal(1L, reader.GetInt64(0));
         Assert.Equal(1L, reader.GetInt64(1));
         Assert.Equal(1L, reader.GetInt64(2));
-        // Old owner images reject the six later versions: 033 and 035-039; deploy before applying them.
-        Assert.Equal(6L, reader.GetInt64(3));
+        // Old owner images reject the seven later versions: 033 and 035-040; deploy before applying them.
+        Assert.Equal(7L, reader.GetInt64(3));
         Assert.True(reader.GetBoolean(4));
     }
 
@@ -624,7 +674,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (36, "036_maf_root_model_turn_admissions.sql"),
             (37, "037_maf_child_spawn_authorization.sql"),
             (38, "038_source_control_pull_request_operations.sql"),
-            (39, "039_runtime_execution_evidence.sql")
+            (39, "039_runtime_execution_evidence.sql"),
+            (40, "040_p1_run_request_provenance.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""
@@ -732,7 +783,21 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                  WHERE tgrelid = to_regclass(@runtimeEvidenceReceipts)
                    AND tgname = 'maf_runtime_evidence_receipts_no_truncate'
                    AND tgtype = 34
-                   AND tgenabled = 'O' AND NOT tgisinternal)
+                   AND tgenabled = 'O' AND NOT tgisinternal),
+                to_regclass(@p1RunRequestProvenance) IS NOT NULL,
+                to_regclass(@p1InvocationBindings) IS NOT NULL,
+                (SELECT count(*) FROM pg_trigger
+                 WHERE tgrelid IN (to_regclass(@p1RunRequestProvenance), to_regclass(@p1InvocationBindings))
+                   AND tgname IN ('p1_run_request_provenance_immutable', 'p1_invocation_bindings_immutable')
+                   AND tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal),
+                (SELECT count(*) FROM pg_trigger
+                 WHERE tgrelid IN (to_regclass(@p1RunRequestProvenance), to_regclass(@p1InvocationBindings))
+                   AND tgname IN ('p1_run_request_provenance_no_truncate', 'p1_invocation_bindings_no_truncate')
+                   AND tgtype = 34 AND tgenabled = 'O' AND NOT tgisinternal),
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 40),
+                EXISTS (SELECT 1 FROM pg_attribute
+                    WHERE attrelid = to_regclass(@projectRunRequests) AND attname = 'p1_setup_invocation_id'
+                      AND atttypid = 'uuid'::regtype AND attnum > 0 AND NOT attisdropped)
             """, connection);
         command.Parameters.AddWithValue("projectRunRequests", $"{_schema}.project_run_requests");
         command.Parameters.AddWithValue("projectRunCancellations", $"{_schema}.project_run_cancellations");
@@ -760,6 +825,10 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             $"{_schema}.maf_child_spawn_authorization_consumptions");
         command.Parameters.AddWithValue("runtimeEvidenceReceipts",
             $"{_schema}.maf_runtime_evidence_receipts");
+        command.Parameters.AddWithValue("p1RunRequestProvenance",
+            $"{_schema}.p1_run_request_provenance");
+        command.Parameters.AddWithValue("p1InvocationBindings",
+            $"{_schema}.p1_invocation_bindings");
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(1L, reader.GetInt64(0));
@@ -783,7 +852,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
         // The default history skips reserved versions 017 and 034.
         Assert.Equal(
-            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39]),
+            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40]),
             reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
@@ -810,6 +879,12 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.True(reader.GetBoolean(31));
         Assert.Equal(1L, reader.GetInt64(32));
         Assert.Equal(1L, reader.GetInt64(33));
+        Assert.True(reader.GetBoolean(34));
+        Assert.True(reader.GetBoolean(35));
+        Assert.Equal(2L, reader.GetInt64(36));
+        Assert.Equal(2L, reader.GetInt64(37));
+        Assert.Equal(1L, reader.GetInt64(38));
+        Assert.True(reader.GetBoolean(39));
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version, bool includePreviouslyUnregistered = true)

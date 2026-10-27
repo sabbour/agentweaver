@@ -1,5 +1,9 @@
+using System.IdentityModel.Tokens.Jwt;
 using System.Net;
+using System.Net.Http.Headers;
+using System.Security.Claims;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Routing;
@@ -11,6 +15,76 @@ namespace Agentweaver.Identity.Broker.Tests;
 /// <summary>Guards the Gateway catalog, OpenAPI, CORS, and body-limit contract for interactive runs.</summary>
 public sealed class GatewayProjectRunRegressionTests
 {
+    [Fact]
+    public async Task RunCreateForwardsP1LocatorAndSameUnboundBearer()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = new RsaSecurityKey(rsa);
+        var bearer = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
+            new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri, "https://api.test",
+            [new Claim("sub", "setup-actor"),
+                new Claim("scope", "api.read projects.admin projects.orchestrator")],
+            DateTime.UtcNow.AddMinutes(-1), DateTime.UtcNow.AddMinutes(5),
+            new SigningCredentials(key, SecurityAlgorithms.RsaSha256)));
+        var locator = Guid.NewGuid();
+        var body = JsonSerializer.Serialize(new
+        {
+            firstMessage = "Start the bounded project run",
+            expectedProjectConfigRevision = 1,
+            p1SetupInvocationId = locator,
+        });
+        var calls = 0;
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            key, () => new HttpClientHandler(),
+            async (owner, request, _) =>
+            {
+                calls++;
+                Assert.Equal("Orchestrator", owner.ToString());
+                Assert.Equal(HttpMethod.Post, request.Method);
+                Assert.Equal("/api/projects/project-a/runs", request.RequestUri!.AbsolutePath);
+                Assert.Equal(bearer, request.Headers.Authorization?.Parameter);
+                Assert.Equal("tenant-a", request.Headers.GetValues("X-Agentweaver-Tenant").Single());
+                Assert.Equal("p1-request", request.Headers.GetValues("Idempotency-Key").Single());
+                using var forwarded = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+                Assert.Equal(locator, forwarded.RootElement.GetProperty("p1SetupInvocationId").GetGuid());
+                Assert.Equal(3, forwarded.RootElement.EnumerateObject().Count());
+                return new HttpResponseMessage(HttpStatusCode.Created)
+                {
+                    Content = new StringContent(
+                        """{"runId":"run-a","rootSessionId":"root-a","state":"awaiting_binding","binding":{"projectId":"project-a","runId":"run-a"}}""",
+                        Encoding.UTF8, "application/json"),
+                };
+            });
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/projects/project-a/runs")
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+        request.Headers.Add("X-Agentweaver-Tenant", "tenant-a");
+        request.Headers.Add("Idempotency-Key", "p1-request");
+        using var response = await gateway.Client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task RunCreateDescribesOnlyAnOptionalP1ReceiptLocator()
+    {
+        await using var gateway = await StartAsync();
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var schema = document.RootElement.GetProperty("components").GetProperty("schemas")
+            .GetProperty("CreateProjectRunRequest");
+        var locator = schema.GetProperty("properties").GetProperty("p1SetupInvocationId");
+        Assert.Equal("string", locator.GetProperty("type").GetString());
+        Assert.Equal("uuid", locator.GetProperty("format").GetString());
+        Assert.DoesNotContain(schema.GetProperty("required").EnumerateArray(),
+            item => item.GetString() == "p1SetupInvocationId");
+        Assert.False(schema.GetProperty("properties").TryGetProperty("setupReceiptHash", out _));
+        Assert.False(schema.GetProperty("properties").TryGetProperty("coreInvocationId", out _));
+    }
+
     [Fact]
     public async Task ProjectRunListOpenApiDescribesCallerFilterAndSummaryFields()
     {
@@ -150,4 +224,5 @@ public sealed class GatewayProjectRunRegressionTests
             () => new HttpClientHandler(),
             (_, _, _) => throw new InvalidOperationException("Contract checks must not call an owner."));
     }
+
 }

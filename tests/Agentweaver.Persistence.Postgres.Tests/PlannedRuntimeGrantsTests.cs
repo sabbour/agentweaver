@@ -9,8 +9,8 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests for the plan gates. They need no database: every gate throws before a connection opens.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "425f7d673ccfe7c4b311bc5696fa7cdeb0bc76feefc72d4680a795ab8335c88d";
-    private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38, 39];
+    private const string ReviewedPlanSha256 = "df16526c756df42a3c0ba8534fea10bf5d019c6b5ca6e8e083b91963aa7e66ea";
+    private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38, 39, 40];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 11)];
     private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 11)];
 
@@ -34,6 +34,7 @@ public sealed class PlannedRuntimeGrantsTests
         Assert.Contains(37, core.Versions);
         Assert.Contains(38, core.Versions);
         Assert.Contains(39, core.Versions);
+        Assert.Contains(40, core.Versions);
         Assert.DoesNotContain(34, core.Versions);
         Assert.Contains(35, core.Versions);
         Assert.NotEmpty(core.Tables);
@@ -50,6 +51,16 @@ public sealed class PlannedRuntimeGrantsTests
         {
             var evidence = Assert.Single(core.Tables, table => table.Table == tableName);
             Assert.Equal(["SELECT", "INSERT"], evidence.Privileges);
+        }
+        foreach (var (tableName, lockColumn) in new[]
+        {
+            ("p1_run_request_provenance", "provenance_id"),
+            ("p1_invocation_bindings", "core_invocation_id")
+        })
+        {
+            var evidence = Assert.Single(core.Tables, table => table.Table == tableName);
+            Assert.Equal(["SELECT", "INSERT"], evidence.Privileges);
+            Assert.Equal(lockColumn, evidence.LockColumn);
         }
 
         var events = PlannedRuntimeGrants.Load(
