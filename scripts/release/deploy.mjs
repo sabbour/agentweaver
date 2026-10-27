@@ -3307,7 +3307,8 @@ export async function deployRelease(options = {}, dependencies = {}) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try {
+  async function main() {
+    // Finish module evaluation before readback imports deploy-integration.mjs, which imports this file.
     const result = await deployRelease({ argv: process.argv.slice(2) });
     if (result.help) console.log(result.text);
     else if (result.dryRun) {
@@ -3345,8 +3346,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         console.log(`Broker run-binding readback: ${result.brokerRunBinding.readbackSha256}.`);
       }
     }
-  } catch (error) {
+  }
+  main().catch((error) => {
     console.error(`Release deployment failed: ${error.message}`);
     process.exitCode = 1;
-  }
+  });
 }

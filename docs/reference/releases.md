@@ -360,6 +360,9 @@ execution may replace only changed immutable Broker and Projects Config
 runtime ConfigMaps after the guarded preflight.
 For recovery, preflight accepts one absent map when the other already matches,
 but rejects incomplete values in either map; after apply both maps must match.
+With `--execute`, the command checks live Deployments and completes the
+run-binding readback before printing a success result. A failed check prints a
+deployment error and exits non-zero.
 
 The only historical-release exception is a v1.0.14 redeployment with this
 descriptor. It verifies the pinned lightweight tag and publication asset,
