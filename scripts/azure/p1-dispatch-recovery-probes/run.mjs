@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runP1NativeCreditDenialReaders } from '../p1-native-probes/run.mjs';
 import { sealP1NativeProbeEnvelope } from '../../harness-shared/p1-acceptance-result.mjs';
 import { redact } from '../../harness-shared/redaction.mjs';
+import { readNumericDenials, validateNumericDenialInput } from './numeric-denials.mjs';
 
 const sourceOnlyEvidence = (requiredReceipts, sourceGates = []) => ({
   kind: 'source-prerequisite-blocker',
@@ -49,6 +50,13 @@ function isRecord(value) {
 
 function positive(value) {
   return Number.isSafeInteger(value) && value > 0;
+}
+
+function containsCredentials(value) {
+  if (Array.isArray(value)) return value.some(containsCredentials);
+  return isRecord(value) && Object.entries(value).some(([key, item]) =>
+    /^(?:(?:bearer|access|refresh|id)[_-]?token|token|authorization|password|client[_-]?secret|secret)$/i.test(key) ||
+    containsCredentials(item));
 }
 
 /** Require a non-zero GUID for runtime and grant identities. */
@@ -279,6 +287,8 @@ export async function runP1DispatchRecoveryProbes({
   observationContext,
   creditDenialInput,
   creditDenialDependencies,
+  numericDenialInput,
+  numericDenialDependencies,
   runtimeReadinessProvider,
   recoveryContext,
 } = {}) {
@@ -323,6 +333,18 @@ export async function runP1DispatchRecoveryProbes({
   }
 
   let recoveryObservation = { status: 'not-requested' };
+  let numericDenialObservation = { status: 'not-requested' };
+  if (numericDenialInput !== undefined || numericDenialDependencies !== undefined) {
+    try {
+      numericDenialObservation = await readNumericDenials(numericDenialInput, numericDenialDependencies);
+    } catch {
+      numericDenialObservation = {
+        status: 'blocked',
+        code: 'numeric_denial_input_invalid',
+        reason: 'Complete numeric denial lookup pins and an authorized Orchestrator reader are required.',
+      };
+    }
+  }
   if (runtimeReadinessProvider !== undefined || recoveryContext !== undefined) {
     try {
       if (typeof runtimeReadinessProvider?.readCurrent !== 'function' || !recoveryContext) {
@@ -347,6 +369,12 @@ export async function runP1DispatchRecoveryProbes({
   }
 
   const numericObservations = [];
+  if (numericDenialObservation.status === 'partial') {
+    numericObservations.push({
+      kind: 'partial-orchestrator-numeric-denial-read-results',
+      cases: numericDenialObservation.cases,
+    });
+  }
   if (ownerObservation.status === 'observed') {
     numericObservations.push({ kind: 'read-only-owner-observation', value: ownerObservation.value });
   }
@@ -364,7 +392,7 @@ export async function runP1DispatchRecoveryProbes({
   const probes = [
     blockedProbe(
       'numeric-copilot-dispatch-boundaries',
-      'The existing Host reader can verify persisted zero-limit and hard-credit no-send receipts, but it does not execute supported MaxModelTurns or MaxToolCalls boundaries or produce whole-run soft-warning/floor-advance receipts. MaxPromptTokens is rejected before SDK setup. Missing numeric-boundary, warning, and cursor-linked dispatch receipts keep this check blocked.',
+      'The existing Host reader can verify persisted zero-limit and hard-credit no-send receipts. The Orchestrator reader can verify persisted MaxModelTurns and MaxToolCalls denial and unchanged owner send-state receipts, but these do not prove native cursor/no-send, admitted-turn completion, or whole-run soft-warning/floor advance. MaxPromptTokens is rejected before SDK setup. Missing native-boundary, warning, and cursor-linked dispatch receipts keep this check blocked.',
       liveObservationEvidence(
         numericObservations,
         [
@@ -517,6 +545,7 @@ export async function runP1DispatchRecoveryProbes({
     ownerObservation,
     liveObservations: {
       creditDenials: creditDenialObservation,
+      numericDenials: numericDenialObservation,
       replacementRecovery: recoveryObservation,
     },
     probes,
@@ -575,6 +604,16 @@ export async function runP1DispatchRecoveryCli(argv = process.argv.slice(2), io 
     io.error('The dispatch-recovery input manifest must be a JSON object.');
     return 2;
   }
+  try {
+    if (Object.keys(input).some(key => ![
+      'observationContext', 'creditDenialInput', 'numericDenialInput', 'recoveryContext',
+    ].includes(key))) throw new Error('The dispatch-recovery manifest contains unknown fields.');
+    if (containsCredentials(input)) throw new Error('Credentials must not be stored in the dispatch-recovery manifest.');
+    if (input.numericDenialInput !== undefined) validateNumericDenialInput(input.numericDenialInput);
+  } catch (error) {
+    io.error(error.message);
+    return 2;
+  }
   let dependencies;
   try {
     const provider = await import(pathToFileURL(resolve(options.providerModule)).href);
@@ -595,6 +634,8 @@ export async function runP1DispatchRecoveryCli(argv = process.argv.slice(2), io 
     observationContext: input.observationContext,
     creditDenialInput: input.creditDenialInput,
     creditDenialDependencies: dependencies.creditDenialDependencies,
+    numericDenialInput: input.numericDenialInput,
+    numericDenialDependencies: dependencies.numericDenialDependencies,
     runtimeReadinessProvider: dependencies.runtimeReadinessProvider,
     recoveryContext: input.recoveryContext,
   });
