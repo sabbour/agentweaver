@@ -96,6 +96,7 @@ they are not live acceptance evidence and do not claim pixel parity.
 | --- | --- | --- | --- | --- |
 | Overview | **Operations**, **Recent projects**, **AI usage & performance**, then **Activity feed** beside **Needs attention**. Recent projects shows one current-focus panel and up to four compact project rows. | One Operations card has a health badge and four counters. The project area is a split focus/list card. Five small usage cards follow. Activity and attention use bordered panels; there is no detail drawer or data table. | **Refresh**, automatic refresh every 10 seconds while mounted, a 7-, 30-, or 90-day range, **View all projects**, project links, and attention actions. The project list becomes one column below 900px; the lower panels stack below 980px. The approved v1-only **Chief of Staff** group appears before these sections. | Project card **Issues** counts only non-archived tasks linked to repository issues; other card stats use configuration and metrics. Operations keeps the four 0.x counters; only **Active projects** is measurable. `GET /api/v1/overview` is missing for the other totals, global health, aggregate usage, and full activity. v1 selects one project for metrics and shows recent run summaries. |
 | Dashboard | Status and four summary tiles lead; **Setup checks** and **Team** follow; **Recent runs** link to run details; **Activity** range controls and charts come next; model and agent panels finish the page. | The status card pairs project state and next actions with four metric tiles. Setup checks link to saved model, repository, team, and skills settings. Team and recent runs use compact lists. Activity uses a bordered chart and run-total panel. Model and per-agent usage use tables; unavailable agent scores and response percentiles stay explicit. There is no detail drawer. | **Refresh** and automatic refresh; 7-, 30-, and 90-day range selector; setup links, Team navigation, direct run links, and status-based links to Board, Flow, Orchestrations, or settings for archived projects. The header shows the current project role when the owner returns it. The activity columns stack below 980px. | Project summary, configuration, run-list, metrics, and usage routes supply the supported panels. A failed separate weekly-count request leaves only that tile unavailable. Live health needs `GET /api/v1/projects/{projectId}/health`; task completions need `GET /api/v1/projects/{projectId}/task-metrics`; the leaderboard needs `GET /api/v1/projects/{projectId}/agent-metrics`; response percentiles need the `responseDuration` and `timeToFirstToken` fields on `GET /api/v1/projects/{projectId}/metrics`. |
+| Workflows | **Active workflow**, **Available workflows**, then **Invalid workflows** in 0.x, with only nonempty groups shown. v1 keeps the active section first, followed by **Referenced workflows**, not an invented available/invalid catalog. | Both use the incumbent stacked `ListRow` inside `RichList`, flow icon bubbles, badges, a source/action row, and inline details. v1 groups saved blueprint references by workflow ID, puts references to the default on its active card, and expands blueprint assignments. It does not substitute assignments for a graph. | 0.x has New, Generate, Set as default, Sync, View graph, Run now, Duplicate, Edit, visual edit, schedule, and event controls; there is no global filter. v1 keeps **Refresh**, **Open Project settings**, and **Use platform default**, and adds **View blueprints** with Enter/Space support. Controls and long identifiers wrap at narrow widths. | Configuration supplies only default and blueprint workflow IDs. Names, file sources, validity, built-in status, catalog choices, definitions, and execution controls remain unavailable, as stated on the page and in the inventory below. |
 
 ## Matched screenshots
 
@@ -115,6 +116,38 @@ The restored setup, Team, and recent-run panels are also shown in a v1
 supporting capture:
 
 ![v1 Dashboard setup checks, Team, and recent runs](./images/parity/dashboard-v1-support.png)
+
+### Workflows screenshot provenance
+
+The Workflows v1 **before** capture is the mounted page at
+`2177004d0bc72f6ab02841c8d019383ffcd63ce7`; **after** is the restored page.
+Both use a 1440 by 1000 viewport, expanded navigation, project **Payments**,
+default `issue-to-merge`, and three saved blueprint references: `engineer`
+uses the default; `reviewer` and `release-manager` use `review-and-verify`.
+The after capture has that second workflow's blueprint details expanded.
+All responses are local Playwright fixtures, not a live sign-in or deployment.
+
+| Before, mounted v1 configuration fixture | After, same fixture and viewport |
+| --- | --- |
+| <img src="./images/parity/workflows-v1-before.png" alt="Workflows before restoration, with one row per blueprint" width="400"> | <img src="./images/parity/workflows-v1-after.png" alt="Restored Workflows, with active and grouped referenced workflow cards and expanded blueprint details" width="400"> |
+
+The historical reference below renders the real retained
+`src/pages/WorkflowsPage.tsx` in an **isolated page harness**, without the
+historical shell, at the same 1440 by 1000 viewport. Its functional source
+matches `fb24c71c4d912354998ccaf775af12be4a049798` (later differences are
+comments). It uses the two equivalent workflow IDs in a local **0.x catalog
+fixture**, including example names, descriptions, source filenames and valid
+status. Those extra fields are **not** present in the v1 configuration response
+and are deliberately absent from the restored v1 cards. This is source
+comparison, not a recovered historical screenshot or pixel-parity claim.
+
+![Historical 0.x Workflows page source with a local catalog fixture, without its shell](./images/parity/workflows-0x-source-fixture.png)
+
+The supporting v1 capture uses 390 by 844 with navigation collapsed. The browser
+test also expands long unbroken workflow and blueprint IDs and checks both
+document and card overflow.
+
+<img src="./images/parity/workflows-v1-after-narrow.png" alt="Restored Workflows at 390 pixels with collapsed navigation and wrapping cards" width="240">
 
 ## Surfaces
 
@@ -153,7 +186,7 @@ Each row says what works and what is still missing. The missing parts link to
 | Platform settings | The web app version and build commit, and all 16 platform component areas with owner, readiness, and the active and available implementations with their versions. | BYOK providers, platform-default Copilot status, account AI access. |
 | Board | **Backlog**, **Ready**, **Active**, and **Done** columns with counts, summary strip, zoom, Intake, title and description edits, queue state, queue order, send all to Ready, archive, and prerequisite controls. | A task delete control, backlog settings, decompose, and the Human Review and Problems columns. |
 | Flow | Project task notifications, **Needs input** including dismissed gates, **Task stages**, and **Open**, **Working**, and **Done** run groups. | The live agent graph for the project and current provider-side PR state per run. |
-| Workflows | The saved project default and blueprint workflow references, shown as rich-list cards. **Use platform default** clears a saved default; **Refresh** and **Open Project settings** work. | Workflow catalog and definitions, graph, edit, run, generate, sync, schedule and event triggers, and choosing a different workflow as the default. |
+| Workflows | **Active workflow** and grouped **Referenced workflows** rich-list cards, with **View blueprints** inline assignments. **Use platform default** clears a saved default; **Refresh** and **Open Project settings** work. | Workflow catalog and definitions, validity, graph, edit, run, generate, sync, schedule and event triggers, and choosing a different workflow as the default. |
 | Workspace | **Repository** from configuration, **Pull requests** that runs opened or reused, and **Issues** synced into the backlog. | Branches: `GET /api/v1/projects/{projectId}/source-control/refs`; file tree: `GET /api/v1/projects/{projectId}/source-control/tree?ref=`; file content: `GET /api/v1/projects/{projectId}/source-control/files/{path}?ref=`. |
 | Observability | Metric tiles, **Activity** chart, run totals, model and agent usage, and **Recent runs**. | Per-run traces and response-duration percentiles. |
 | Diagnostics | **Areas that are not ready** from the platform component report, and **Failed runs**. | Service self-checks and project diagnostic reports. |
@@ -165,16 +198,21 @@ Each row says what works and what is still missing. The missing parts link to
 
 The v1 route keeps the project breadcrumb and uses the shared 0.x
 `PageSection`, `RichList`, and `ListRow` components for the settings-backed
-cards. Workflow definitions are not inferred from saved identifiers.
+cards and their inline-detail layout. References to the default appear on its
+active card; other references appear once per workflow, in saved order.
+**View blueprints** expands the saved assignments with an accessible disclosure;
+its actions remain visible on touch and keyboard layouts. This is a
+configuration-backed adaptation, not a restored definition viewer. Workflow
+definitions and validity are not inferred from saved identifiers.
 
 | 0.x section, card, control, or path | v1 equivalent or exact gap |
 | --- | --- |
 | `/projects/:projectId/workflows`, `Projects / project / Workflows` breadcrumb | The route and project breadcrumb work. **Open Project settings** links to that project's settings; **Refresh** reloads the saved configuration. |
-| Active workflow card, default badge, and workflow ID | A **Default workflow** rich-list card shows the configured ID. **Use platform default** clears it through `PUT /api/v1/projects/{projectId}/configuration`, preserving other settings and using the loaded revision. |
+| Active workflow card, default badge, and workflow ID | **Active workflow** shows the saved default ID and **Project default** badge, source **Project configuration**, and explicit blueprint-use count. No validity or built-in badge is inferred. **Use platform default** clears it through `PUT /api/v1/projects/{projectId}/configuration`, preserving other settings and using the loaded revision. |
 | Available workflow cards, built-in/project badges, descriptions, source, trigger badges, and valid status | Missing catalog reads: `GET /api/v1/projects/{projectId}/workflows` and `GET /api/v1/projects/{projectId}/workflows/{workflowId}`. The v1 page does not invent these details. |
 | Invalid workflow cards and validation errors | Missing `GET /api/v1/projects/{projectId}/workflows`, which must return validation status and error text with the catalog. |
 | Global workflow search or filter | The 0.x page has no global catalog search or filter. Event-trigger conditions are the only filter controls; their missing routes are listed below. |
-| Blueprint workflow references | A **Blueprint workflows** rich-list card shows the saved blueprint and workflow IDs from project configuration. |
+| Blueprint workflow references | **Referenced workflows** groups the saved IDs into one card per non-default workflow. **View blueprints** opens inline assignments; the default card has the same disclosure when blueprints use it. Empty copy distinguishes no explicit references from all references using the default. These cards are not the missing **Available workflows** catalog. |
 | Set-as-default menu, project/built-in groups, and reset action | **Use platform default** works through the configuration update. Choosing a listed workflow needs the missing catalog read `GET /api/v1/projects/{projectId}/workflows`; the existing configuration update route can save the selected ID once the catalog is available. |
 | **View graph** inline detail panel | Missing `GET /api/v1/projects/{projectId}/workflows/{workflowId}/graph`. |
 | **New workflow**, YAML **Edit**, **Edit visually**, and editor save/validate/undo/redo/revert/discard controls | Missing workflow YAML read `GET /api/v1/projects/{projectId}/workflows/{workflowId}/yaml` and save `PUT /api/v1/projects/{projectId}/workflows/{workflowId}`. The same save route must accept a new workflow ID. |
@@ -184,7 +222,17 @@ cards. Workflow definitions are not inferred from saved identifiers.
 | Event dialog: event, issue action, condition type/value, match-any, add/remove condition/value, save, remove, cancel | Missing YAML read `GET /api/v1/projects/{projectId}/workflows/{workflowId}/yaml` and save `PUT /api/v1/projects/{projectId}/workflows/{workflowId}`. |
 | **Generate workflow** dialog and **Check status** for a pending job | Missing `POST /api/v1/projects/{projectId}/workflows/generate`, `GET /api/v1/projects/{projectId}/workflows/generation-jobs/{jobId}`, and `GET /api/v1/projects/{projectId}/workflows/generation-jobs/{jobId}/result`. |
 | **Sync** and the empty-state sync action | Missing `POST /api/v1/projects/{projectId}/workflows/sync`. |
-| Loading, empty, error, and denied states | The page shows these states from `GET /api/v1/projects/{projectId}/configuration`; a denied read is reported as a permission message. The reset action reports write errors, including denied writes. |
+| Loading, empty, error, and denied states | The page uses the incumbent loading skeletons and empty-state component. Failed or denied reads show the error instead of cached references, including open details; **Refresh** retries. The reset action reports write errors, including denied writes. |
+
+`src/v1/OperationsPages.test.tsx` covers grouping, default reset and revision
+preservation, stale-refresh fencing, loading, empty, read/write denial, and read
+failure. `e2e/workflows.e2e.test.mjs` exercises the mounted route through the
+local Gateway harness, Tab/Enter/Space disclosure navigation, 390-pixel layout
+with long identifiers, all five read states, recovery, and a revision-fenced
+reset that preserves blueprint choices. No test calls a workflow catalog
+route or runs a workflow. The 0.x editor, graph, generation, and trigger controls
+remain blocked by the exact missing routes below; this slice does not close
+the whole page-parity issue.
 
 ### Re-role comparison
 
