@@ -209,58 +209,97 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task AddressedMessageIsIdempotentAndCommitsWithJournalAndOutbox()
+    public async Task RestrictedRuntimeRoleAddressedMessageIsIdempotentAndCommitsWithJournalAndOutbox()
     {
         await _journal.CreateSessionAsync(_owner, "session-2", _binding);
-        var draft = Message("first-message", AddressedMessageDeliveryMode.Immediate) with
+        var role = $"messaging_runtime_{Guid.NewGuid():N}";
+        var password = Guid.NewGuid().ToString("N");
+        await using (var adminConnection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var createRole = new NpgsqlCommand($"""
+            CREATE ROLE "{role}" LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE
+                NOREPLICATION NOINHERIT;
+            GRANT USAGE ON SCHEMA "{_schema}" TO "{role}";
+            GRANT SELECT ON "{_schema}".sessions_schema_migrations, "{_schema}".outbox_schema_migrations TO "{role}";
+            GRANT SELECT, INSERT ON "{_schema}".sessions, "{_schema}".session_provider_bindings,
+                "{_schema}".messaging_provider_bindings, "{_schema}".session_events,
+                "{_schema}".consumer_inbox_receipts TO "{role}";
+            GRANT SELECT, INSERT, UPDATE ON "{_schema}".session_run_streams,
+                "{_schema}".addressed_messages, "{_schema}".outbox_streams, "{_schema}".outbox_events TO "{role}";
+            GRANT SELECT, INSERT, UPDATE, DELETE ON "{_schema}".addressed_message_threads TO "{role}";
+            GRANT UPDATE ("run_id") ON "{_schema}".messaging_provider_bindings TO "{role}";
+            """, adminConnection))
+            await createRole.ExecuteNonQueryAsync();
+        var runtimeConnection = new NpgsqlConnectionStringBuilder(_fixture.ConnectionString)
         {
-            Purpose = AddressedMessagePurpose.Handoff,
-            UserQuote = "Please verify the exact output.",
-            CoordinatorInstructions = "Report evidence without changing scope."
+            Username = role,
+            Password = password
         };
+        var runtimeDataSource = NpgsqlDataSource.Create(runtimeConnection.ConnectionString);
+        try
+        {
+            var messages = NewMessageStore(runtimeDataSource);
+            var draft = Message("first-message", AddressedMessageDeliveryMode.Immediate) with
+            {
+                Purpose = AddressedMessagePurpose.Handoff,
+                UserQuote = "Please verify the exact output.",
+                CoordinatorInstructions = "Report evidence without changing scope."
+            };
 
-        var sent = await _messages.SendAsync(_owner, draft);
-        var replay = await NewMessageStore().SendAsync(_owner, draft);
-        Assert.False(sent.IsDuplicate);
-        Assert.True(replay.IsDuplicate);
-        Assert.Equal(sent.Message.MessageId, replay.Message.MessageId);
-        Assert.Equal(1, sent.Message.ThreadSequence);
-        Assert.Equal("Please verify the exact output.", replay.Message.UserQuote);
-        Assert.Equal("Report evidence without changing scope.", replay.Message.CoordinatorInstructions);
-        Assert.Equal(24, sent.Message.Provider.ResourceIdHash.Length);
-        Assert.DoesNotContain(_options.ResourceId, JsonSerializer.Serialize(sent.Message), StringComparison.Ordinal);
+            var sent = await messages.SendAsync(_owner, draft);
+            var replay = await NewMessageStore(runtimeDataSource).SendAsync(_owner, draft);
+            Assert.False(sent.IsDuplicate);
+            Assert.True(replay.IsDuplicate);
+            Assert.Equal(sent.Message.MessageId, replay.Message.MessageId);
+            Assert.Equal(1, sent.Message.ThreadSequence);
+            Assert.Equal("Please verify the exact output.", replay.Message.UserQuote);
+            Assert.Equal("Report evidence without changing scope.", replay.Message.CoordinatorInstructions);
+            Assert.Equal(24, sent.Message.Provider.ResourceIdHash.Length);
+            Assert.DoesNotContain(_options.ResourceId, JsonSerializer.Serialize(sent.Message), StringComparison.Ordinal);
 
-        var history = await _journal.ReplayAsync(_owner, new SessionEventPageRequest("session-1"));
-        var messageReference = Assert.IsType<AddressedMessageSessionPayload>(
-            Assert.Single(history.Events).Payload);
-        Assert.Equal(sent.Message.MessageId, messageReference.MessageId);
-        Assert.Equal(AddressedMessagePurpose.Handoff, messageReference.Purpose);
+            var history = await _journal.ReplayAsync(_owner, new SessionEventPageRequest("session-1"));
+            var messageReference = Assert.IsType<AddressedMessageSessionPayload>(
+                Assert.Single(history.Events).Payload);
+            Assert.Equal(sent.Message.MessageId, messageReference.MessageId);
+            Assert.Equal(AddressedMessagePurpose.Handoff, messageReference.Purpose);
 
-        await Assert.ThrowsAsync<AddressedMessageException>(() =>
-            _messages.SendAsync(_owner, draft with { Payload = Payload("""{"text":"changed"}""") }));
-        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
-        await using var verify = new NpgsqlCommand($"""
-            SELECT
-                (SELECT count(*) FROM "{_schema}".addressed_messages),
-                (SELECT count(*) FROM "{_schema}".addressed_message_threads),
-                (SELECT count(*) FROM "{_schema}".session_events),
-                (SELECT count(*) FROM "{_schema}".consumer_inbox_receipts),
-                (SELECT count(*) FROM "{_schema}".outbox_events
-                    WHERE event_type = 'sessions.addressed_message'),
-                (SELECT payload ->> 'purpose' FROM "{_schema}".outbox_events
-                    WHERE event_type = 'sessions.addressed_message'),
-                (SELECT payload ->> 'deliveryMode' FROM "{_schema}".outbox_events
-                    WHERE event_type = 'sessions.addressed_message')
-            """, connection);
-        await using var reader = await verify.ExecuteReaderAsync();
-        Assert.True(await reader.ReadAsync());
-        Assert.Equal(1, reader.GetInt64(0));
-        Assert.Equal(1, reader.GetInt64(1));
-        Assert.Equal(1, reader.GetInt64(2));
-        Assert.Equal(1, reader.GetInt64(3));
-        Assert.Equal(1, reader.GetInt64(4));
-        Assert.Equal("handoff", reader.GetString(5));
-        Assert.Equal("immediate", reader.GetString(6));
+            await Assert.ThrowsAsync<AddressedMessageException>(() =>
+                messages.SendAsync(_owner, draft with { Payload = Payload("""{"text":"changed"}""") }));
+            await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+            await using var verify = new NpgsqlCommand($"""
+                SELECT
+                    (SELECT count(*) FROM "{_schema}".addressed_messages),
+                    (SELECT count(*) FROM "{_schema}".addressed_message_threads),
+                    (SELECT count(*) FROM "{_schema}".session_events),
+                    (SELECT count(*) FROM "{_schema}".consumer_inbox_receipts),
+                    (SELECT count(*) FROM "{_schema}".outbox_events
+                        WHERE event_type = 'sessions.addressed_message'),
+                    (SELECT payload ->> 'purpose' FROM "{_schema}".outbox_events
+                        WHERE event_type = 'sessions.addressed_message'),
+                    (SELECT payload ->> 'deliveryMode' FROM "{_schema}".outbox_events
+                        WHERE event_type = 'sessions.addressed_message'),
+                    (SELECT count(*) FROM "{_schema}".messaging_provider_bindings)
+                """, connection);
+            await using var reader = await verify.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(1, reader.GetInt64(0));
+            Assert.Equal(1, reader.GetInt64(1));
+            Assert.Equal(1, reader.GetInt64(2));
+            Assert.Equal(1, reader.GetInt64(3));
+            Assert.Equal(1, reader.GetInt64(4));
+            Assert.Equal("handoff", reader.GetString(5));
+            Assert.Equal("immediate", reader.GetString(6));
+            Assert.Equal(1, reader.GetInt64(7));
+        }
+        finally
+        {
+            await runtimeDataSource.DisposeAsync();
+            await using var cleanupConnection = await _fixture.DataSource.OpenConnectionAsync();
+            await using var cleanupRole = new NpgsqlCommand($"""
+                DROP OWNED BY "{role}";
+                DROP ROLE "{role}";
+                """, cleanupConnection);
+            await cleanupRole.ExecuteNonQueryAsync();
+        }
     }
 
     [Fact]
@@ -1683,15 +1722,16 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
         Assert.Equal(Agentweaver.Providers.ProviderErrorCode.ResourceMismatch, mismatch.Error!.Code);
     }
 
-    private PostgresSessionsJournal NewJournal() => new(_fixture.DataSource, _options);
+    private PostgresSessionsJournal NewJournal(NpgsqlDataSource? dataSource = null) =>
+        new(dataSource ?? _fixture.DataSource, _options);
 
-    private PostgresAddressedMessageStore NewMessageStore() => new(
-        _fixture.DataSource,
+    private PostgresAddressedMessageStore NewMessageStore(NpgsqlDataSource? dataSource = null) => new(
+        dataSource ?? _fixture.DataSource,
         _options,
         _messagingOptions,
         _messagingProvider,
         _resolver,
-        NewJournal(),
+        NewJournal(dataSource),
         "https://identity.example");
 
     private static AddressedMessageDraft Message(

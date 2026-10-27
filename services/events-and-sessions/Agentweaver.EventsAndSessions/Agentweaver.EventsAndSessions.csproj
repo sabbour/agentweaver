@@ -32,5 +32,6 @@
     <!-- Project reporting index, applied only by the explicit migration path. -->
     <EmbeddedResource Include="Migrations\009_project_usage_index.sql" />
     <EmbeddedResource Include="Migrations\010_session_object_inventory.sql" />
+    <EmbeddedResource Include="Migrations\011_messaging_binding_row_lock.sql" />
   </ItemGroup>
 </Project>

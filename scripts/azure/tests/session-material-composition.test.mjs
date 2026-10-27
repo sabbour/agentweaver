@@ -297,16 +297,17 @@ function assertSourceComposition(input) {
     ports.ports?.some(port => port.port === '5432' && port.protocol === 'TCP')));
 
   // Migration 010, its inventory grant, and the maintenance Job share one hashed plan; runtime keeps its separate identity.
-  assert.match(input.eventsMigrator, /CurrentSchemaVersion\s*=\s*10/);
+  assert.match(input.eventsMigrator, /CurrentSchemaVersion\s*=\s*11/);
   assert.match(input.eventsMigrator,
     /SupportedVersions[\s\S]*Enumerable\.Range\(1,\s*CurrentSchemaVersion\)/,
-    'the migrator version catalog must include migration 010');
+    'the migrator version catalog must include migration 011');
   assert.match(input.eventsMigrator,
     /10 => "Agentweaver\.EventsAndSessions\.Migrations\.010_session_object_inventory\.sql"/);
   assert.match(input.eventsMigration, /CREATE TABLE \{schema\}\.session_object_inventory/);
   assert.deepEqual(input.generatedPostgresPlan, input.committedPostgresPlan,
     'the checked-in PostgreSQL plan must match its source builder');
   assert.ok(input.generatedPostgresPlan.eventsVersions.includes(10));
+  assert.ok(input.generatedPostgresPlan.eventsVersions.includes(11));
   const eventsPlan = input.generatedPostgresPlan.services.find(service =>
     service.service === 'events-and-sessions');
   assert.ok(eventsPlan);
@@ -511,7 +512,11 @@ test('Events session material source composition rejects broken links', async co
     }],
     ['Events migrator catalog excludes migration 010', input => {
       input.eventsMigrator = input.eventsMigrator.replace(
-        'CurrentSchemaVersion = 10', 'CurrentSchemaVersion = 9');
+        'CurrentSchemaVersion = 11', 'CurrentSchemaVersion = 9');
+    }],
+    ['Events migrator catalog excludes migration 011', input => {
+      input.eventsMigrator = input.eventsMigrator.replace(
+        'CurrentSchemaVersion = 11', 'CurrentSchemaVersion = 10');
     }],
     ['Events migration 010 does not create its inventory', input => {
       input.eventsMigration = input.eventsMigration.replace(
@@ -520,6 +525,11 @@ test('Events session material source composition rejects broken links', async co
     ['runtime grant plan omits migration 010', input => {
       for (const plan of [input.committedPostgresPlan, input.generatedPostgresPlan]) {
         plan.eventsVersions = plan.eventsVersions.filter(version => version !== 10);
+      }
+    }],
+    ['runtime grant plan omits migration 011', input => {
+      for (const plan of [input.committedPostgresPlan, input.generatedPostgresPlan]) {
+        plan.eventsVersions = plan.eventsVersions.filter(version => version !== 11);
       }
     }],
     ['runtime grant plan omits inventory permissions', input => {

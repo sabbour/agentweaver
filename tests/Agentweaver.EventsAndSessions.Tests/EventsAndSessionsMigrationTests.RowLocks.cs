@@ -12,7 +12,8 @@ public sealed partial class EventsAndSessionsMigrationTests
         {
             ("sessions", "session_id"),
             ("session_provider_bindings", "run_id"),
-            ("session_fork_lineage", "target_session_id")
+            ("session_fork_lineage", "target_session_id"),
+            ("messaging_provider_bindings", "run_id")
         })
         foreach (var change in new[] { "missing", "disabled", "wrong_function", "column_filtered", "conditional" })
             yield return new object[] { table, column, change };
@@ -58,6 +59,7 @@ public sealed partial class EventsAndSessionsMigrationTests
     [InlineData("sessions", "session_id")]
     [InlineData("session_provider_bindings", "run_id")]
     [InlineData("session_fork_lineage", "target_session_id")]
+    [InlineData("messaging_provider_bindings", "run_id")]
     public async Task RestrictedRoleCanInsertAndLockButCannotUpdateOrDisableTheGuard(string table, string column)
     {
         await EventsAndSessionsMigrator.MigrateAsync(_fixture.DataSource, _schema);
@@ -73,13 +75,19 @@ public sealed partial class EventsAndSessionsMigrationTests
             CREATE ROLE "{role}" NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
             GRANT USAGE ON SCHEMA "{_schema}" TO "{role}";
             GRANT SELECT, INSERT ON "{_schema}".sessions, "{_schema}".session_provider_bindings,
-                "{_schema}".session_fork_lineage TO "{role}";
+                "{_schema}".session_fork_lineage, "{_schema}".messaging_provider_bindings TO "{role}";
             GRANT UPDATE ("{column}") ON "{_schema}"."{table}" TO "{role}";
             INSERT INTO "{_schema}".session_provider_bindings
                 (project_id, run_id, provider_id, adapter_version, options_schema_version,
                  options_revision, resource_id, resource_generation, negotiated_capabilities)
+            VALUES ('p', 'r', 'native', '1', 1, '1', 'resource', 1, '[]'),
+                   ('p', 'runtime', 'native', '1', 1, '1', 'runtime-resource', 1, '[]');
+            INSERT INTO "{_schema}".session_run_streams (project_id, run_id)
+            VALUES ('p', 'r'), ('p', 'runtime');
+            INSERT INTO "{_schema}".messaging_provider_bindings
+                (project_id, run_id, provider_id, adapter_version, options_schema_version,
+                 options_revision, resource_id, resource_generation, negotiated_capabilities)
             VALUES ('p', 'r', 'native', '1', 1, '1', 'resource', 1, '[]');
-            INSERT INTO "{_schema}".session_run_streams (project_id, run_id) VALUES ('p', 'r');
             INSERT INTO "{_schema}".sessions (project_id, run_id, session_id)
             VALUES ('p', 'r', 'source'), ('p', 'r', 'target');
             INSERT INTO "{_schema}".session_events
@@ -96,7 +104,7 @@ public sealed partial class EventsAndSessionsMigrationTests
                 INSERT INTO "{_schema}".session_provider_bindings
                     (project_id, run_id, provider_id, adapter_version, options_schema_version,
                      options_revision, resource_id, resource_generation, negotiated_capabilities)
-                VALUES ('p', 'runtime', 'native', '1', 1, '1', 'runtime-resource', 1, '[]')
+                VALUES ('p', 'runtime-insert', 'native', '1', 1, '1', 'runtime-resource', 1, '[]')
                 """,
             "session_fork_lineage" => $"""
                 INSERT INTO "{_schema}".session_fork_lineage
@@ -105,6 +113,12 @@ public sealed partial class EventsAndSessionsMigrationTests
                      provider_binding_hash, source_cursor, actor_subject, idempotency_key, command_hash)
                 VALUES ('p', 'r', 'target', 'source', '00000000-0000-0000-0000-000000000001',
                         1, 1, 1, 1, repeat('a', 64), 'cursor', 'actor', 'key', repeat('b', 64))
+                """,
+            "messaging_provider_bindings" => $"""
+                INSERT INTO "{_schema}".messaging_provider_bindings
+                    (project_id, run_id, provider_id, adapter_version, options_schema_version,
+                     options_revision, resource_id, resource_generation, negotiated_capabilities)
+                VALUES ('p', 'runtime', 'native', '1', 1, '1', 'runtime-resource', 1, '[]')
                 """,
             _ => throw new ArgumentException("Unsupported row-lock fixture table.")
         };
@@ -121,6 +135,17 @@ public sealed partial class EventsAndSessionsMigrationTests
             ExecuteAsync($"""UPDATE "{_schema}"."{table}" SET "{column}" = "{column}" """));
         Assert.Equal(PostgresErrorCodes.ObjectNotInPrerequisiteState, update.SqlState);
         await transaction.RollbackAsync("before_update");
+        if (table == "messaging_provider_bindings")
+        {
+            await transaction.SaveAsync("before_ungranted_update");
+            var denied = await Assert.ThrowsAsync<PostgresException>(() =>
+                ExecuteAsync($"""
+                    UPDATE "{_schema}".messaging_provider_bindings
+                    SET provider_id = 'changed' WHERE run_id = 'runtime'
+                    """));
+            Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, denied.SqlState);
+            await transaction.RollbackAsync("before_ungranted_update");
+        }
         await transaction.SaveAsync("before_disable");
         var disable = await Assert.ThrowsAsync<PostgresException>(() =>
             ExecuteAsync($"""ALTER TABLE "{_schema}"."{table}" DISABLE TRIGGER "{table}_no_update" """));

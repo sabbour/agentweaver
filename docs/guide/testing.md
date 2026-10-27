@@ -69,6 +69,7 @@ dotnet test tests\Agentweaver.Knowledge.Tests\Agentweaver.Knowledge.Tests.csproj
 dotnet test tests\Agentweaver.Mcp.Tests\Agentweaver.Mcp.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Providers.Sessions.AgentSessions.Tests\Agentweaver.Providers.Sessions.AgentSessions.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~SessionsProviderAbsenceTests
+dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --configuration Release --filter "FullyQualifiedName~RestrictedRoleCanInsertAndLockButCannotUpdateOrDisableTheGuard|FullyQualifiedName~RestrictedRuntimeRoleAddressedMessageIsIdempotentAndCommitsWithJournalAndOutbox"
 ```
 
 For the RubberDuck contract, binder, checkpoint, and recovery tests without

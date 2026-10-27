@@ -9,9 +9,9 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests for the plan gates. They need no database: every gate throws before a connection opens.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "a6cb4eab724248f09c749ba97e660a0a818d574ffda18073585f5fe6844e5c04";
+    private const string ReviewedPlanSha256 = "3e33e6b4f4f9eb981a12e937133d6b0cf25328ed56039cc077ee3470c6fb61d2";
     private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38];
-    private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 10)];
+    private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 11)];
     private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 11)];
 
     [Fact]

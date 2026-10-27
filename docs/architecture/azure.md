@@ -180,13 +180,16 @@ ownership and permit only exact runtime grants. The source checks functions by
 owner and effective EXECUTE privileges, not counts alone.
 Its source catalog includes 36 Core migration versions (1 through 16, 18
 through 33, and 35-38), with version 17 excluded and reserved version 34
-skipped, ten Events versions, and 11 Environment versions. The initializer
+skipped, 11 Events versions, and 11 Environment versions. The initializer
 compares that catalog with each migrator's compiled version list. The reviewed
 offline plan hash is
-`a6cb4eab724248f09c749ba97e660a0a818d574ffda18073585f5fe6844e5c04`.
-It retains 118 tables, 11 row-lock columns, and 33 exact function signatures.
+`3e33e6b4f4f9eb981a12e937133d6b0cf25328ed56039cc077ee3470c6fb61d2`.
+It retains 118 tables, 12 row-lock columns, and 33 exact function signatures.
 Events migration 010 adds `session_object_inventory` with exactly
 `SELECT, INSERT, UPDATE` runtime access.
+Migration 011 protects the immutable `messaging_provider_bindings` row lock
+with only a column-scoped `UPDATE (run_id)` grant; its trigger rejects every
+update.
 Orchestrator migration 037 adds immutable child-spawn authorization receipts
 and consumption records. They bind a policy allow to the exact intent, actor,
 current root fence, confirmed plan step, accepted selection revision, and
