@@ -599,7 +599,8 @@ public static partial class CoordinationEndpoints
                         registration.Binding.ProjectId != projectId || registration.Binding.RunId != runId ||
                         registration.Binding.SessionId != intent.ChildSessionId ||
                         registration.Binding.ExecutionFence != decision.State.Fence ||
-                        registration.Binding.AcceptedSelectionHash != decision.SelectionHash ||
+                        !string.Equals(registration.Binding.AcceptedSelectionHash, decision.SelectionHash,
+                            StringComparison.OrdinalIgnoreCase) ||
                         registration.ExpiresAt <= timeProvider.GetUtcNow())
                         throw new CoordinationException(
                             "maf_execution_child_registration_stale", StatusCodes.Status409Conflict);
