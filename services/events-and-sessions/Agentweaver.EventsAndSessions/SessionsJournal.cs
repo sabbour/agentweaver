@@ -585,6 +585,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         IEnumerable<SessionObjectReference> references,
         CancellationToken cancellationToken)
     {
+        // Lock multiple keys in a stable order so concurrent writes cannot deadlock on opposite key orders.
         foreach (var reference in references
                      .DistinctBy(reference => reference.Key)
                      .OrderBy(reference => reference.Key.Value, StringComparer.Ordinal))
