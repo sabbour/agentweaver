@@ -334,7 +334,8 @@ packages and images.
   Record the test evidence in the PR.
   Add that exact version to the source manifest's `compatibility[].versions`.
   Commit that declaration before planning.
-  A successful package build alone does not prove compatibility.
+  Verify the affected consumer projects and feature tests against the changed contract;
+  a successful package build alone does not prove compatibility.
 
   Caught write failures restore prior bytes and remove only newly created empty owned directories.
   Existing empty changelogs and directories survive rollback.
