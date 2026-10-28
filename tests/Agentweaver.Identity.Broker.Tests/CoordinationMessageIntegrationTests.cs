@@ -13,6 +13,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Runtime.ExceptionServices;
+using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -33,6 +34,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
@@ -6991,7 +6993,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Func<HttpMessageHandler> projectsHandler,
         Func<HttpMessageHandler> orchestratorHandler,
         Func<HttpMessageHandler>? nativeUsageHandler = null,
-        IObjectStore? sessionMaterialObjects = null)
+        IObjectStore? sessionMaterialObjects = null,
+        bool simulateDirectTls = false)
         : WebApplicationFactory<EventsHost::Program>
     {
         public string Schema { get; } = schema;
@@ -7052,8 +7055,43 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     services.AddSingleton(sessionMaterialObjects);
                     ConfigureTestHttpClient(services, "SessionMaterialRuntimeClient", orchestratorHandler);
                 }
+                if (simulateDirectTls)
+                    services.AddSingleton<IStartupFilter, SessionMaterialTlsStartupFilter>();
             });
         }
+    }
+
+    private sealed class SessionMaterialTlsStartupFilter : IStartupFilter
+    {
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
+        {
+            app.Use(async (context, continuation) =>
+            {
+                if (context.Request.Path.Value?.EndsWith(
+                        "/runtime-configuration", StringComparison.Ordinal) == true)
+                {
+                    context.Request.Scheme = Uri.UriSchemeHttps;
+                    context.Features.Set<ITlsHandshakeFeature>(new SessionMaterialTlsHandshake());
+                }
+                await continuation(context);
+            });
+            next(app);
+        };
+    }
+
+    private sealed class SessionMaterialTlsHandshake : ITlsHandshakeFeature
+    {
+        public SslProtocols Protocol => SslProtocols.Tls13;
+        public string HostName => string.Empty;
+#pragma warning disable SYSLIB0058
+        public CipherAlgorithmType CipherAlgorithm => default;
+        public int CipherStrength => 0;
+        public HashAlgorithmType HashAlgorithm => default;
+        public int HashStrength => 0;
+        public ExchangeAlgorithmType KeyExchangeAlgorithm => default;
+#pragma warning restore SYSLIB0058
+        public int KeyExchangeStrength => 0;
+        public System.Net.Security.TlsCipherSuite? NegotiatedCipherSuite => null;
     }
 
 }

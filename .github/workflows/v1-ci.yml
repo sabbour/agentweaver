@@ -615,10 +615,24 @@ jobs:
       - name: Install Chromium and system dependencies
         if: matrix.shard > 0
         run: pwsh tests/Agentweaver.Identity.Broker.Tests/bin/Release/net10.0/playwright.ps1 install --with-deps chromium
+      - name: Mount isolated native join workspaces
+        if: matrix.shard > 0
+        run: |
+          for workspace in /workspace/agentweaver/native-join-workspace-1 /workspace/agentweaver/native-join-workspace-2; do
+            sudo mkdir -p "$workspace"
+            sudo mount -t tmpfs -o "size=64m,uid=$(id -u),gid=$(id -g),mode=0700" tmpfs "$workspace"
+          done
       - name: Run tests and verify shard receipt
         env:
           TEST_SUITE: ${{ matrix.name }}
         run: node scripts/ci/v1-test-plan.mjs run "$TEST_SUITE"
+      - name: Unmount native join workspaces
+        if: ${{ always() && matrix.shard > 0 }}
+        run: |
+          for workspace in /workspace/agentweaver/native-join-workspace-1 /workspace/agentweaver/native-join-workspace-2; do
+            if mountpoint -q "$workspace"; then sudo umount "$workspace"; fi
+            if [ -d "$workspace" ]; then sudo rmdir "$workspace"; fi
+          done
       - name: Record test attempt
         if: ${{ !cancelled() }}
         env:

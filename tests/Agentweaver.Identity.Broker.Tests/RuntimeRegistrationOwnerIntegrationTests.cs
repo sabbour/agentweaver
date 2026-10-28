@@ -1687,7 +1687,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             if (elapsed.Elapsed > TimeSpan.FromMilliseconds(500))
                 failures.Enqueue($"{endpoint.Host}{endpoint.AbsolutePath}: took {elapsed.Elapsed}");
             if (!response.IsSuccessStatusCode)
-                failures.Enqueue($"{endpoint.Host}{endpoint.AbsolutePath}: {(int)response.StatusCode} " +
+                TraceNativeStage(failures,
+                    $"{endpoint.Host}{endpoint.AbsolutePath}: {(int)response.StatusCode} " +
                     await response.Content.ReadAsStringAsync(cancellationToken));
             if (afterResponse is not null)
                 await afterResponse(request, response, cancellationToken);
@@ -2014,11 +2015,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         public static async Task<RuntimePlacementTestServer> StartAsync(
             string connectionString, SecurityKey signingKey, Func<HttpMessageHandler> projectsHandler,
             EnvironmentOwnerIdentity owner, EffectiveProviderCandidate candidate, JsonElement selection,
-            Func<HttpMessageHandler> outgoing)
+            Func<HttpMessageHandler> outgoing,
+            string configureEndpoint = RuntimeReceiverConfigureEndpoint,
+            string mountPath = "/workspace/agentweaver/project",
+            DateTimeOffset? leaseClockStart = null,
+            AgentSandboxStartupBudgets? startupBudgets = null)
         {
             var dataSource = NpgsqlDataSource.Create(connectionString);
             // This cross-service integration can exceed the sandbox's short production lease.
-            var leaseTimeProvider = new RuntimeLeaseTestTimeProvider();
+            var leaseTimeProvider = new RuntimeLeaseTestTimeProvider(leaseClockStart);
             var readTimeProvider = new RuntimePlacementReadTimeProvider();
             HttpClient? sandboxHttpClient = null;
             IHost? host = null;
@@ -2033,6 +2038,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     .RegisterAsync(owner, "runtime-register", default);
                 var leaseStore = new EnvironmentSandboxLeaseStore(dataSource, leaseTimeProvider);
                 var sandboxOptions = CreateRuntimePlacementSandboxOptions(candidate);
+                if (startupBudgets is not null)
+                    sandboxOptions = sandboxOptions with { StartupBudgets = startupBudgets };
                 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
                 jsonOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
                 var runSelection = selection.Deserialize<EffectiveNetworkPolicySelection>(jsonOptions)
@@ -2080,8 +2087,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     candidate.RequiredCapabilities.OrderBy(capability => capability, StringComparer.Ordinal),
                     sandboxCandidate.RequiredCapabilities.OrderBy(capability => capability, StringComparer.Ordinal));
                 var provisionRequest = new SandboxProvisionApiRequest(
-                    "runtime-workspace", 1, 0, "/workspace/agentweaver/project",
+                    "runtime-workspace", 1, 0, mountPath,
                     false, networkPolicyGeneration, "runtime-provision");
+                if (leaseClockStart is not null)
+                    leaseTimeProvider.AdvanceTo(DateTimeOffset.UtcNow);
                 var optionsSnapshot = JsonSerializer.SerializeToElement(sandboxOptions, jsonOptions);
                 var intent = new SandboxLeaseProvisionIntent(
                     candidate.ProviderId, candidate.AdapterVersion, candidate.OptionsSchemaVersion,
@@ -2166,7 +2175,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 var provisionAttempt = await leaseStore.BeginProviderAttemptAsync(
                     SandboxProviderAttemptRequest.ForProvision(lease), default);
                 var kubernetesTransport = new RuntimePlacementKubernetesTransport(
-                    sandboxOptions, owner, provisionRequest);
+                    sandboxOptions, owner, provisionRequest, configureEndpoint);
                 sandboxHttpClient = new HttpClient(kubernetesTransport)
                 {
                     BaseAddress = new Uri("https://kubernetes.test/")
@@ -2185,7 +2194,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     provisionAttempt.Attempt.AttemptId);
                 leaseTimeProvider.AdvanceTo(leaseCreatedAt.AddSeconds(2));
                 var profile = new EnvironmentRuntimeBootstrapProfile(
-                    "runtime-profile", new(RuntimeReceiverConfigureEndpoint),
+                    "runtime-profile", new(configureEndpoint),
                     new("https://orchestrator.test/internal/runtime/observations"));
                 host = await new HostBuilder().ConfigureWebHost(web =>
                 {
@@ -2271,9 +2280,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         public override DateTimeOffset GetUtcNow() => _current ?? TimeProvider.System.GetUtcNow();
     }
 
-    private sealed class RuntimeLeaseTestTimeProvider : TimeProvider
+    private sealed class RuntimeLeaseTestTimeProvider(DateTimeOffset? initial = null) : TimeProvider
     {
-        private DateTimeOffset? _current;
+        private DateTimeOffset? _current = initial;
 
         public void AdvanceTo(DateTimeOffset utcNow)
         {
@@ -2354,14 +2363,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     private sealed class RuntimePlacementKubernetesTransport : HttpMessageHandler
     {
         private readonly AgentSandboxOptions _options;
+        private readonly string _configureEndpoint;
         private readonly Dictionary<string, JsonNode> _resources = new(StringComparer.Ordinal);
         private JsonNode? _pods;
         private JsonNode? _events;
 
         public RuntimePlacementKubernetesTransport(
-            AgentSandboxOptions options, EnvironmentOwnerIdentity owner, SandboxProvisionApiRequest provisionRequest)
+            AgentSandboxOptions options, EnvironmentOwnerIdentity owner, SandboxProvisionApiRequest provisionRequest,
+            string configureEndpoint = RuntimeReceiverConfigureEndpoint)
         {
             _options = options;
+            _configureEndpoint = configureEndpoint;
             _resources["api/v1/namespaces/agentweaver/persistentvolumeclaims/workspace-claim"] =
                 JsonSerializer.SerializeToNode(new
                 {
@@ -2521,7 +2533,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         }
                     }
                 })!;
-            var configureEndpoint = RuntimeReceiverConfigureEndpoint;
+            var configureEndpoint = _configureEndpoint;
             _resources[$"api/v1/namespaces/{kubernetesNamespace}/configmaps/{_options.AgentHost!.ConfigurationMapName}"] =
                 JsonSerializer.SerializeToNode(new
                 {

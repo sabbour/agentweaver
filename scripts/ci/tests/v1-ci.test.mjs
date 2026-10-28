@@ -150,6 +150,13 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   assert.equal(parsed.env.COLLECT_COVERAGE, '${{ inputs.collect_coverage == true }}');
   assert.equal(parsed.on.workflow_call.inputs.collect_coverage.default, false);
   assert.equal(parsed.on.workflow_dispatch, null);
+  const mountWorkspaces = jobs.dotnet.steps.find((step) => step.name === 'Mount isolated native join workspaces');
+  const unmountWorkspaces = jobs.dotnet.steps.find((step) => step.name === 'Unmount native join workspaces');
+  assert.equal(mountWorkspaces.if, 'matrix.shard > 0');
+  assert.match(mountWorkspaces.run, /\/workspace\/agentweaver\/native-join-workspace-1 \/workspace\/agentweaver\/native-join-workspace-2/);
+  assert.match(mountWorkspaces.run, /sudo mount -t tmpfs/);
+  assert.equal(unmountWorkspaces.if, '${{ always() && matrix.shard > 0 }}');
+  assert.match(unmountWorkspaces.run, /sudo umount/);
   assert.ok(jobs.images.steps.some((step) => step.name === 'Run pinned native prompt-capacity tests in an isolated AMD64 container'));
   assert.ok(jobs.node.steps.some((step) => step.name === 'Validate release composition'));
   assert.match(jobs.node.steps.find((step) => step.name === 'Validate release composition').run,

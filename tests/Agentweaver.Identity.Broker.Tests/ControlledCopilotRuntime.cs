@@ -36,6 +36,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
 
     public ConcurrentQueue<(string Method, JsonElement Parameters)> Requests { get; } = [];
     public Action<string>? RequestObserved { get; set; }
+    public Action<string, TimeSpan>? RequestCompleted { get; set; }
     public string ModelId { get; set; } = "controlled-model";
     public string RuntimeVersion { get; set; } = "controlled-runtime-v1";
     public string SdkCredential { get; set; } = "ghu_external-sdk-credential";
@@ -284,6 +285,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                         continue;
                     }
                     var method = methodName.GetString()!;
+                    var requestElapsed = System.Diagnostics.Stopwatch.StartNew();
                     var parameters = root.TryGetProperty("params", out var supplied)
                         ? supplied : JsonSerializer.SerializeToElement(new { });
                     if (parameters.ValueKind == JsonValueKind.Array && parameters.GetArrayLength() > 0)
@@ -439,6 +441,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                                 $"Unexpected actual SDK method: {method}; params: {parameters.GetRawText()}");
                     }
                     await WriteAsync(new { jsonrpc = "2.0", id = id.Clone(), result });
+                    RequestCompleted?.Invoke(method, requestElapsed.Elapsed);
                     Console.WriteLine($"Controlled native SDK {DateTimeOffset.UtcNow:O}: {method} response completed.");
                     if (method == "session.permissions.handlePendingPermissionRequest")
                         PermissionDecisionHandled.TrySetResult();
