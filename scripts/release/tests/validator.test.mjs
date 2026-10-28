@@ -176,10 +176,10 @@ test('the Orchestrator host is registered as a prepared service with all project
   assert.deepEqual(fixture.compatibility
     .filter(({ consumer }) => consumer === host.id)
     .map(({ dependency, versions }) => [dependency, versions]), [
-    ['Agentweaver.Identity', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0', '1.5.0', '1.6.0']],
-    ['Agentweaver.Orchestrator.Core', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.1.1', '1.2.0', '1.3.0', '1.4.0']],
-    ['Agentweaver.Abstractions', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.1.1', '1.2.0', '1.3.0', '1.4.0', '1.5.0', '1.6.0']],
-    ['Agentweaver.Persistence.Postgres', ['0.0.0', '0.1.0', '1.0.0', '1.0.1', '1.0.2', '1.1.0', '1.1.1', '1.2.0', '1.2.1', '1.2.2']],
+    ['Agentweaver.Identity', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0', '1.5.0', '1.6.0', '1.7.0']],
+    ['Agentweaver.Orchestrator.Core', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.1.1', '1.2.0', '1.3.0', '1.4.0', '1.4.1']],
+    ['Agentweaver.Abstractions', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.1.1', '1.2.0', '1.3.0', '1.4.0', '1.5.0', '1.6.0', '1.7.0']],
+    ['Agentweaver.Persistence.Postgres', ['0.0.0', '0.1.0', '1.0.0', '1.0.1', '1.0.2', '1.1.0', '1.1.1', '1.2.0', '1.2.1', '1.2.2', '1.2.3']],
     ['Agentweaver.Providers', ['0.0.0', '0.1.0', '1.0.0', '1.0.1', '1.0.2', '1.1.0']],
     ['Agentweaver.SourceControl', ['0.0.0', '0.1.0', '1.0.0', '1.0.1', '1.0.2', '1.1.0', '1.2.0', '1.3.0']],
   ]);
