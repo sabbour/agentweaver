@@ -883,6 +883,21 @@ public sealed class MafExecutionDispatchTests
 
         CoordinationEndpoints.ValidateHostReadiness(receipt, registration, TimeProvider.System);
 
+        foreach (var audience in new[]
+        {
+            registration.Binding.ConfigureEndpoint, new Uri("https://foreign.example/observation")
+        })
+        {
+            var invalidAudience = receipt with
+            {
+                SourceGrant = receipt.SourceGrant with { Audience = audience }
+            };
+            Assert.Equal("maf_execution_host_readiness_invalid",
+                Assert.Throws<CoordinationException>(() =>
+                    CoordinationEndpoints.ValidateHostReadiness(
+                        invalidAudience, registration, TimeProvider.System)).Code);
+        }
+
         var staleGrant = receipt with
         {
             SourceGrant = receipt.SourceGrant with
@@ -1294,7 +1309,7 @@ public sealed class MafExecutionDispatchTests
                 1,
                 "https://identity.example/",
                 RuntimeCredentialPurpose.Observe,
-                registration.Binding.ConfigureEndpoint,
+                registration.Binding.ObservationEndpoint,
                 RuntimeCredentialState.Active,
                 new string('b', 64),
                 now.AddMinutes(30),

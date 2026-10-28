@@ -397,6 +397,10 @@ rules. This adds no personal-provider precedence or blanket credential sharing.
 Each ModelSession receipt and redemption pins the current connection revision, exact
 secret version, grant revision, and credential kind. Normal token rotation advances
 those owner-controlled revisions without changing the accepted selection or its hash.
+After verifying that receipt, runtime model redemption checks only its exact grant
+ID and revision, so two current runtimes can use the same authorized connection.
+It rechecks current authority before and after secret acquisition; generic secret
+redemption still denies ambiguous grants.
 Fresh proof is required after remote waits and before SDK consumption. Stale receipts
 deny or require legitimate current refresh; caches cannot supply authority. A change
 of owner, kind, scope, or GitHub identity requires an authorized new binding or selection.

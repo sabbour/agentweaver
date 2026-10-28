@@ -3449,7 +3449,7 @@ public static partial class CoordinationEndpoints
             grant.State != RuntimeCredentialState.Active ||
             grant.RuntimeInstanceId != registration.RuntimeInstanceId ||
             grant.RegistrationRevision != registration.Revision ||
-            grant.Audience != registration.Binding.ConfigureEndpoint ||
+            grant.Audience != registration.Binding.ObservationEndpoint ||
             grant.ExpiresAt <= timeProvider.GetUtcNow() ||
             grant.ExpiresAt > registration.ExpiresAt)
             throw new CoordinationException(

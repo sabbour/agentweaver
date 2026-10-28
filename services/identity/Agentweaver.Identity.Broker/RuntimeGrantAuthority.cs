@@ -231,9 +231,11 @@ public sealed class RuntimeGrantAuthority(
         await VerifyModelCredentialAsync(receipt, cancellationToken);
         var registration = await RequireCurrentAsync(receipt.RuntimeInstanceId, cancellationToken);
         var binding = registration.Binding;
+        // The verified receipt identifies this runtime's grant when several share one secret.
         var redemption = new AuthorizedSecretRedemption(
             new TrustedActorContext(binding.ActorId, binding.ProjectId, binding.RunId),
-            new IdentityGrantAuthority(db, timeProvider), backend, timeProvider);
+            new ReceiptScopedGrantAuthority(new IdentityGrantAuthority(db, timeProvider), receipt.GrantId),
+            backend, timeProvider);
         var credential = await redemption.RedeemAsync(new SecretRedemptionRequest(
             receipt.CredentialReference, RuntimeSecretPurposes.ModelSession, binding.RunId), cancellationToken);
         try
@@ -959,6 +961,15 @@ public sealed class RuntimeGrantAuthority(
         public RuntimeCredentialPurpose Purpose { get; } = purpose;
         public string VerifierHash { get; } = verifierHash;
         public RuntimeGrantRevision? Original { get; set; }
+    }
+
+    private sealed class ReceiptScopedGrantAuthority(IGrantAuthority inner, string grantId) : IGrantAuthority
+    {
+        public async Task<IReadOnlyList<SecretRedemptionGrant>> FindGrantsAsync(
+            TrustedActorContext actor, SecretRedemptionRequest request, CancellationToken cancellationToken) =>
+            (await inner.FindGrantsAsync(actor, request, cancellationToken).ConfigureAwait(false))
+            .Where(grant => string.Equals(grant.GrantId, grantId, StringComparison.Ordinal))
+            .ToArray();
     }
 
     private static bool IsAuthorityLoss(string code) => code is
