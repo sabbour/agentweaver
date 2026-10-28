@@ -602,6 +602,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var refreshedSourceGrantRuntimeIds = new HashSet<Guid>();
         var configureHosts = new List<Task>();
         var dispatchTasks = new List<Task<HttpResponseMessage>>();
+        var secondHostCatalogRequested = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondHostCatalogRelease = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var checkpointStore = new MafExecutionCheckpointStore(
             orchestrator.Services.GetRequiredService<PostgresMafCheckpointStore>(), binding);
         var rootPath = $"/api/projects/{projectId}/runs/{RunId}/coordination/sessions/root";
@@ -910,6 +914,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     ExpectedPrompt = plan.Items.Single(x => x.Id == intent.AssociationId).Task,
                     AssistantResponse = $"Completed {intent.AssociationId} with genuine native accounting."
                 };
+                if (mount == workspaceMounts[1])
+                    sdk.BeforeModelCatalogResponse = async cancellationToken =>
+                    {
+                        secondHostCatalogRequested.TrySetResult();
+                        await secondHostCatalogRelease.Task.WaitAsync(cancellationToken);
+                    };
                 sdk.RequestObserved = method => TraceNativeStage(failures,
                     $"Host {environmentId} SDK method {method} observed; hostElapsed={hostElapsed.Elapsed}.");
                 sdk.RequestCompleted = (method, elapsed) => TraceNativeStage(failures,
@@ -1011,11 +1021,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             var secondStepId = plan.Items.Single(item => item.Id == secondIntent.AssociationId).WorkflowStepId;
 
             await configureHosts[0];
-            Assert.False(configureHosts[1].IsCompleted,
-                "The second genuine Host must still be configuring after the first reaches Ready.");
+            await secondHostCatalogRequested.Task.WaitAsync(token);
             await RefreshHostSourceGrantAsync(0);
-            Assert.False(configureHosts[1].IsCompleted,
-                "The second genuine Host must still be configuring when public dispatch starts.");
             TraceNativeStage(failures,
                 $"Starting public dispatch with the first Host Ready and the second ConfigureAsync in flight; " +
                 $"first={firstIntent.AssociationId}, second={secondIntent.AssociationId}.");
@@ -1033,6 +1040,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 Assert.Empty(earlyResponse.CompletedResults);
                 TraceNativeStage(failures,
                     $"Public dispatch deferred first step {firstStepId} through the existing unavailable response.");
+                secondHostCatalogRelease.TrySetResult();
                 await Task.WhenAll(configureHosts);
                 await RefreshHostSourceGrantAsync(1);
                 dispatchTask = StartPublicDispatch();
@@ -1049,6 +1057,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             }
 
             await firstTurnReceived.WaitAsync(token);
+            secondHostCatalogRelease.TrySetResult();
             await Task.WhenAll(configureHosts);
             Assert.All(configureHosts, task => Assert.True(task.IsCompletedSuccessfully));
             await RefreshHostSourceGrantAsync(1);
@@ -1240,6 +1249,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 "Cancellation of in-flight native proof work failed.", cancellationFailure));
         foreach (var release in releases)
             release.TrySetResult();
+        secondHostCatalogRelease.TrySetResult();
         foreach (var configureTask in configureHosts)
         {
             if (await Record.ExceptionAsync(async () => await configureTask) is { } configureFailure &&
@@ -1274,15 +1284,27 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 }
                 catch (RuntimeAuthorizationException error) when (error.Code == "runtime_owner_denied")
                 {
-                    var receipt = sourceGrantReceipts[registrations[hostIndex].RuntimeInstanceId];
-                    var revoked = await ReadSourceGrantHeadAsync(receipt.GrantId, CancellationToken.None);
-                    Assert.NotNull(revoked);
-                    Assert.Equal(RuntimeCredentialState.Revoked, revoked.Value.State);
-                    Assert.Equal(receipt.Revision + 1, revoked.Value.Revision);
                     TraceNativeStage(failures,
-                        $"Host {hostIndex} terminal owner denial revoked source grant " +
-                        $"{receipt.GrantId:D} at revision {revoked.Value.Revision}.");
+                        $"Host {hostIndex} source revoke was denied after terminal owner context.");
                 }
+                var runtimeInstanceId = registrations[hostIndex].RuntimeInstanceId;
+                if (!sourceGrantReceipts.TryGetValue(runtimeInstanceId, out var receipt))
+                {
+                    var configureCompletedSuccessfully = hostIndex < configureHosts.Count &&
+                        configureHosts[hostIndex].IsCompletedSuccessfully;
+                    Assert.False(configureCompletedSuccessfully,
+                        $"Host {hostIndex} completed configuration without returning a source-grant receipt.");
+                    TraceNativeStage(failures,
+                        $"Host {hostIndex} had no source-grant receipt because configuration did not complete.");
+                    return;
+                }
+                var revoked = await ReadSourceGrantHeadAsync(receipt.GrantId, CancellationToken.None);
+                Assert.NotNull(revoked);
+                Assert.Equal(RuntimeCredentialState.Revoked, revoked.Value.State);
+                Assert.Equal(receipt.Revision + 1, revoked.Value.Revision);
+                TraceNativeStage(failures,
+                    $"Host {hostIndex} source grant {receipt.GrantId:D} is revoked at revision " +
+                    $"{revoked.Value.Revision}.");
             });
         }
         foreach (var server in servers)
