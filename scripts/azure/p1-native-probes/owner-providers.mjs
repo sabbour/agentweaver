@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import { createHash } from 'node:crypto';
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HASH = /^[a-f0-9]{64}$/;
@@ -30,6 +31,33 @@ const hostFields = [
   'nativeSessionHash',
 ];
 const hostEnvelopeFields = ['contractVersion', 'observedAt', 'creation', 'host'];
+const sourceReceiptFields = [
+  'runtimeInstanceId', 'registrationRevision', 'sourceGrantId', 'source',
+  'canonicalPayloadHash', 'recordedAt',
+];
+const sourceFields = [
+  'runtimeInstanceId', 'sdkSessionId', 'sdkVersion', 'runtimeVersion',
+  'modelSelectionReference', 'modelId', 'catalogHash', 'modelMultiplier',
+  'sourceMode', 'meterSource', 'acceptedSelectionHash', 'registrationRevision',
+  'reasoningEffort',
+];
+const sourceOptionalFields = ['maxPromptTokens', 'modelBindingPin', 'resolvedModelBindingPin', 'byokProvider'];
+const grantFields = [
+  'grantId', 'runtimeInstanceId', 'registrationRevision', 'revision', 'issuer',
+  'purpose', 'audience', 'state', 'configurationHash', 'expiresAt', 'recordedAt',
+];
+const fixedReceiptFields = [
+  'contractVersion', 'stage', 'code', 'registration', 'registrationHash',
+  'requestId', 'requestHash', 'sourceHash', 'sourceGrantId', 'sourceGrantRevision',
+  'recordedAt', 'canonicalPayloadHash',
+];
+const fixedEvidenceFields = [
+  'contractVersion', 'runtimeInstanceId', 'registrationRevision', 'executionFence',
+  'requestId', 'stage', 'guardReceiptHash', 'registrationHash', 'sourceHash',
+  'sourceGrantId', 'sourceGrantRevision', 'nativeSessionHash', 'beforeCursorHash',
+  'afterCursorHash', 'observedEventCount', 'rangeComplete', 'verifiedAt',
+  'canonicalPayloadHash',
+];
 const workspaceMountFields = [
   'contractVersion', 'observedAt', 'podUid', 'mountPath', 'mountId', 'deviceMajor',
   'deviceMinor', 'directoryInode', 'fileSystemType', 'readOnly', 'mountInfoSha256',
@@ -37,6 +65,8 @@ const workspaceMountFields = [
 const positive = value => Number.isSafeInteger(value) && value > 0;
 const text = value => typeof value === 'string' && value.length > 0 &&
   value.length <= 256 && !/[\u0000-\u0020]/.test(value);
+const identifier = value => typeof value === 'string' && value.length > 0 &&
+  value.length <= 256 && /^[A-Za-z0-9._:-]+$/.test(value);
 const guid = value => typeof value === 'string' && GUID.test(value) &&
   value !== '00000000-0000-0000-0000-000000000000';
 const hash = value => typeof value === 'string' && HASH.test(value);
@@ -66,14 +96,15 @@ function requireEnvironmentFence(fence, binding) {
   'native_environment_fence_mismatch');
 }
 
-function createOwnerReader(owner) {
+function createOwnerReader(owner, method = 'GET') {
   requireValue(record(owner) && typeof owner.getAuthorization === 'function' &&
     text(owner.tenantId), 'native_owner_client_required');
+  requireValue(method === 'GET' || method === 'POST', 'native_owner_method_invalid');
   const origin = new URL(owner.origin);
   requireValue(origin.protocol === 'https:' && origin.pathname === '/' &&
     !origin.username && !origin.password && !origin.search && !origin.hash,
   'native_owner_origin_invalid');
-  return async path => {
+  return async (path, body) => {
     const signal = AbortSignal.timeout(10_000);
     let response;
     try {
@@ -82,13 +113,15 @@ function createOwnerReader(owner) {
         /^Bearer [^\s]+$/.test(authorization), 'native_owner_authorization_invalid');
       signal.throwIfAborted();
       response = await globalThis.fetch(new URL(path, origin), {
-        method: 'GET', redirect: 'error', cache: 'no-store', signal,
+        method, redirect: 'error', cache: 'no-store', signal,
         headers: {
           Authorization: authorization,
           'X-Agentweaver-Tenant': owner.tenantId,
           Accept: 'application/json',
           'Cache-Control': 'no-store',
+          ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
         },
+        ...(method === 'POST' ? { body: JSON.stringify(body) } : {}),
       });
       try {
         requireValue(response.status === 200 && !response.redirected &&
@@ -133,6 +166,7 @@ function requireRegistration(registration, runtimeInstanceId, actor) {
   'native_registration_invalid');
   requireValue(binding.actorIssuer === actor.issuer && binding.actorId === actor.subject &&
     binding.tenantId === actor.tenantId &&
+    binding.modelSourceMode === 'hostedCopilot' && binding.copilotHardCreditLimit === 0 &&
     ['projectId', 'runId', 'sessionId', 'environmentId', 'profileId', 'placementUid',
       'placementProviderId'].every(key => text(binding[key])) &&
     ['executionFence', 'placementGeneration', 'environmentLifecycleGeneration',
@@ -283,6 +317,24 @@ function requireHost(host, pod, registration) {
     readiness.runtimeInstanceId === registration.runtimeInstanceId &&
     readiness.registrationRevision === registration.revision &&
     readiness.executionFence === registration.binding.executionFence &&
+    exactRecord(readiness.sourceGrant, grantFields) &&
+    readiness.sourceGrant.runtimeInstanceId === registration.runtimeInstanceId &&
+    readiness.sourceGrant.registrationRevision === registration.revision &&
+    positive(readiness.sourceGrant.revision) && guid(readiness.sourceGrant.grantId) &&
+    readiness.sourceGrant.purpose === 'observe' && readiness.sourceGrant.state === 'active' &&
+    Date.parse(readiness.sourceGrant.expiresAt) > Date.now() &&
+    hash(readiness.sourceGrant.configurationHash) &&
+    text(readiness.sourceGrant.issuer) &&
+    (() => {
+      try {
+        const audience = new URL(readiness.sourceGrant.audience);
+        return audience.protocol === 'https:' &&
+          audience.pathname === '/internal/runtime/observations' &&
+          !audience.username && !audience.password && !audience.search && !audience.hash;
+      } catch {
+        return false;
+      }
+    })() &&
     record(host.environmentPodObservation) &&
     currentTime(host.environmentPodObservation.observedAt) &&
     timestampTicks(host.environmentPodObservation.observedAt) !== null &&
@@ -299,6 +351,125 @@ function requireHost(host, pod, registration) {
     Number.isSafeInteger(mount.deviceMinor) && mount.deviceMinor >= 0 &&
     text(mount.fileSystemType) && hash(mount.mountInfoSha256),
   'native_host_observation_mismatch');
+}
+
+function requireCurrentSource(sourceReceipt, registration, host) {
+  const source = sourceReceipt?.source;
+  const grant = host.readiness.sourceGrant;
+  const binding = registration.binding;
+  const optional = sourceOptionalFields.filter(key => Object.hasOwn(source ?? {}, key));
+  const modelPinFields = [
+    'contractVersion', 'modelSelectionReference', 'modelId', 'sourceMode',
+    'configurationRevision', 'configurationHash', 'reasoningEffort',
+  ];
+  const validModelPin = pin => pin === null || exactRecord(pin, modelPinFields.concat(
+    Object.hasOwn(pin ?? {}, 'providerType') ? ['providerType'] : [])) &&
+    pin.contractVersion === 1 && identifier(pin.modelSelectionReference) && identifier(pin.modelId) &&
+    ['hostedCopilot', 'byok'].includes(pin.sourceMode) && identifier(pin.configurationRevision) &&
+    hash(pin.configurationHash) && ['low', 'medium', 'high', 'xhigh'].includes(pin.reasoningEffort) &&
+    (pin.sourceMode === 'hostedCopilot'
+      ? pin.providerType == null
+      : ['azure', 'openai', 'anthropic'].includes(pin.providerType));
+  const sameModelPin = (left, right) => left == null && right == null ||
+    left != null && right != null && modelPinFields.every(key => left[key] === right[key]) &&
+    (left.providerType ?? null) === (right.providerType ?? null);
+  const acceptedPin = binding.modelBindingPin ?? null;
+  const sourcePin = source?.modelBindingPin ?? null;
+  const resolvedPin = source?.resolvedModelBindingPin ?? null;
+  const promptLimit = binding.maxPromptTokens;
+  requireValue(exactRecord(sourceReceipt, sourceReceiptFields) &&
+    sourceReceipt.runtimeInstanceId === registration.runtimeInstanceId &&
+    sourceReceipt.registrationRevision === registration.revision &&
+    sourceReceipt.sourceGrantId === grant.grantId &&
+    hash(sourceReceipt.canonicalPayloadHash) &&
+    sourceReceipt.canonicalPayloadHash === host.sourceHash &&
+    timestampTicks(sourceReceipt.recordedAt) !== null &&
+    exactRecord(source, sourceFields.concat(optional)) &&
+    source.runtimeInstanceId === registration.runtimeInstanceId &&
+    source.registrationRevision === registration.revision &&
+    text(source.sdkSessionId) && text(source.sdkVersion) && text(source.runtimeVersion) &&
+    text(source.modelSelectionReference) &&
+    source.modelSelectionReference === binding.modelSelectionReference &&
+    text(source.modelId) && hash(source.catalogHash) &&
+    source.sourceMode === 'hosted-copilot' && source.meterSource === 'copilot.nano_aiu' &&
+    source.acceptedSelectionHash === registration.binding.acceptedSelectionHash &&
+    source.reasoningEffort === binding.reasoningEffort &&
+    validModelPin(acceptedPin) && validModelPin(sourcePin) &&
+    sameModelPin(sourcePin, acceptedPin) &&
+    (acceptedPin === null ||
+      acceptedPin.modelSelectionReference === binding.modelSelectionReference &&
+      acceptedPin.modelId === source.modelId &&
+      acceptedPin.sourceMode === binding.modelSourceMode &&
+      acceptedPin.reasoningEffort === binding.reasoningEffort) &&
+    validModelPin(resolvedPin) &&
+    (resolvedPin === null
+      ? acceptedPin === null && binding.reasoningEffort === 'high'
+      : resolvedPin.modelSelectionReference === binding.modelSelectionReference &&
+        resolvedPin.modelId === source.modelId &&
+        resolvedPin.sourceMode === binding.modelSourceMode &&
+        resolvedPin.reasoningEffort === binding.reasoningEffort &&
+        (acceptedPin === null || sameModelPin(resolvedPin, acceptedPin))) &&
+    (source.modelMultiplier === null ||
+      typeof source.modelMultiplier === 'number' && Number.isFinite(source.modelMultiplier) &&
+      source.modelMultiplier >= 0) &&
+    (promptLimit == null
+      ? source.maxPromptTokens == null
+      : Number.isSafeInteger(source.maxPromptTokens) &&
+        source.maxPromptTokens > 0 && source.maxPromptTokens <= promptLimit) &&
+    source.byokProvider == null &&
+    createHash('sha256').update(source.sdkSessionId, 'utf8').digest('hex') === host.nativeSessionHash &&
+    grant.expiresAt && Date.parse(grant.expiresAt) > Date.now(),
+  'native_fixed_credit_source_mismatch');
+}
+
+function requireFixedCreditSelection(selection, registration, host, sourceReceipt) {
+  requireValue(exactRecord(selection, ['receipt', 'evidence']),
+    'native_fixed_credit_selection_invalid');
+  if (selection.receipt === null && selection.evidence === null)
+    return null;
+  const receipt = selection.receipt;
+  const evidence = selection.evidence;
+  const grant = host.readiness.sourceGrant;
+  requireValue(exactRecord(receipt, fixedReceiptFields) &&
+    exactRecord(evidence, fixedEvidenceFields) &&
+    receipt.contractVersion === 1 && receipt.stage === 'hostPreQueue' &&
+    receipt.code === 'hardLimitZero' && isDeepStrictEqual(receipt.registration, registration) &&
+    receipt.registrationHash === host.registrationHash &&
+    guid(receipt.requestId) && hash(receipt.requestHash) &&
+    receipt.sourceHash === sourceReceipt.canonicalPayloadHash &&
+    receipt.sourceGrantId === grant.grantId &&
+    receipt.sourceGrantRevision === grant.revision &&
+    currentTime(receipt.recordedAt) && hash(receipt.canonicalPayloadHash) &&
+    evidence.contractVersion === 1 &&
+    evidence.runtimeInstanceId === registration.runtimeInstanceId &&
+    evidence.registrationRevision === registration.revision &&
+    evidence.executionFence === registration.binding.executionFence &&
+    evidence.requestId === receipt.requestId && evidence.stage === receipt.stage &&
+    evidence.guardReceiptHash === receipt.canonicalPayloadHash &&
+    evidence.registrationHash === receipt.registrationHash &&
+    evidence.sourceHash === sourceReceipt.canonicalPayloadHash &&
+    evidence.sourceGrantId === grant.grantId &&
+    evidence.sourceGrantRevision === grant.revision &&
+    evidence.nativeSessionHash === host.nativeSessionHash &&
+    hash(evidence.beforeCursorHash) && evidence.beforeCursorHash === evidence.afterCursorHash &&
+    evidence.observedEventCount === 0 && evidence.rangeComplete === true &&
+    currentTime(evidence.verifiedAt) && hash(evidence.canonicalPayloadHash),
+  'native_fixed_credit_selection_mismatch');
+  requireValue(timestampTicks(evidence.verifiedAt) >= timestampTicks(receipt.recordedAt),
+    'native_fixed_credit_selection_time_mismatch');
+  return {
+    requestId: receipt.requestId,
+    requestHash: receipt.requestHash,
+    registrationRevision: evidence.registrationRevision,
+    executionFence: evidence.executionFence,
+    sourceGrantId: evidence.sourceGrantId,
+    sourceGrantRevision: evidence.sourceGrantRevision,
+    beforeCursorHash: evidence.beforeCursorHash,
+    afterCursorHash: evidence.afterCursorHash,
+    observedEventCount: evidence.observedEventCount,
+    rangeComplete: evidence.rangeComplete,
+    verifiedAt: evidence.verifiedAt,
+  };
 }
 
 /**
@@ -322,6 +493,7 @@ export function createP1NativeProviders({ input }, trusted) {
   const core = createOwnerReader(trusted.core);
   const environment = createOwnerReader(trusted.environment);
   const host = createOwnerReader(trusted.host);
+  const hostPost = createOwnerReader(trusted.host, 'POST');
 
   async function readCurrent() {
     const registrationPath = `/internal/runtime/registrations/${runtimeInstanceId}`;
@@ -334,6 +506,8 @@ export function createP1NativeProviders({ input }, trusted) {
     const creationPath = `${prefix}/environments/${encodeURIComponent(binding.environmentId)}/coordination/sessions/${encodeURIComponent(binding.sessionId)}/runtime-bootstrap/profiles/${encodeURIComponent(binding.profileId)}/p1-creation-binding`;
     const creation = await environment(creationPath);
     requireEnvironmentCreation(creation, provenance, binding, clusterIdentity);
+    const selection = await hostPost(
+      '/runtime/v1/turns/fixed-credit-denials/select-current', { runtimeInstanceId });
     const evidence = await host('/runtime/v1/readiness/p1-evidence');
     requireValue(exactRecord(evidence, hostEnvelopeFields) && evidence.contractVersion === 1 &&
       currentTime(evidence.observedAt) && timestampTicks(evidence.observedAt) !== null,
@@ -346,6 +520,11 @@ export function createP1NativeProviders({ input }, trusted) {
       withoutObservedAt(evidence.creation.podObservation),
       withoutObservedAt(evidence.host.environmentPodObservation)),
     'native_host_pod_observation_mismatch');
+    const sourcePath = `/internal/runtime/sources/${runtimeInstanceId}`;
+    const sourceReceipt = await core(sourcePath);
+    requireCurrentSource(sourceReceipt, before, evidence.host);
+    const fixedCreditPair = requireFixedCreditSelection(
+      selection, before, evidence.host, sourceReceipt);
     const afterCreation = await environment(creationPath);
     requireEnvironmentCreation(afterCreation, provenance, binding, clusterIdentity);
     requireValue(isDeepStrictEqual(withoutPodObservedAt(creation), withoutPodObservedAt(afterCreation)),
@@ -353,9 +532,37 @@ export function createP1NativeProviders({ input }, trusted) {
     const afterProvenance = await core(bindingPath);
     requireCore(afterProvenance, binding);
     requireValue(isDeepStrictEqual(provenance, afterProvenance), 'native_core_binding_changed');
+    const afterSource = await core(sourcePath);
+    requireValue(isDeepStrictEqual(sourceReceipt, afterSource), 'native_fixed_credit_source_changed');
     const after = await core(registrationPath);
     requireRegistration(after, runtimeInstanceId, actor);
     requireValue(isDeepStrictEqual(before, after), 'native_registration_changed');
+    const closingSelection = await hostPost(
+      '/runtime/v1/turns/fixed-credit-denials/select-current', { runtimeInstanceId });
+    const closingEvidence = await host('/runtime/v1/readiness/p1-evidence');
+    requireValue(exactRecord(closingEvidence, hostEnvelopeFields) &&
+      closingEvidence.contractVersion === 1 &&
+      currentTime(closingEvidence.observedAt) &&
+      timestampTicks(closingEvidence.observedAt) !== null,
+    'native_host_p1_envelope_invalid');
+    requireEnvironmentCreation(closingEvidence.creation, provenance, binding, clusterIdentity);
+    requireValue(isDeepStrictEqual(
+      withoutPodObservedAt(creation), withoutPodObservedAt(closingEvidence.creation)),
+    'native_environment_creation_changed');
+    requireHost(closingEvidence.host, creation.podObservation, after);
+    const initialGrant = evidence.host.readiness.sourceGrant;
+    const closingGrant = closingEvidence.host.readiness.sourceGrant;
+    requireValue(closingGrant.grantId === initialGrant.grantId &&
+      closingGrant.revision === initialGrant.revision,
+    'native_fixed_credit_authority_changed');
+    requireCurrentSource(afterSource, after, closingEvidence.host);
+    const closingPair = requireFixedCreditSelection(
+      closingSelection, after, closingEvidence.host, afterSource);
+    requireValue(isDeepStrictEqual(selection, closingSelection) &&
+      isDeepStrictEqual(fixedCreditPair, closingPair),
+    'native_fixed_credit_selection_changed');
+    requireValue(Date.parse(closingGrant.expiresAt) > Date.now(),
+      'native_fixed_credit_source_mismatch');
 
     return {
       status: 'blocked', code: creationGap,
@@ -370,6 +577,7 @@ export function createP1NativeProviders({ input }, trusted) {
         sandboxProvisionOperationId: creation.sandboxProvision.operationId,
         sandboxClaimUid: creation.sandboxProvision.providerResource.resourceId,
         podUid: creation.podObservation.podUid,
+        fixedCreditNoSendPair: fixedCreditPair,
       },
     };
   }

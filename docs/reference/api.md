@@ -1311,6 +1311,7 @@ and the exact current registration, proof, action, turn, or receipt binding.
 | POST | `/turns/denials/read` | Read native credit denial. |
 | POST | `/turns/fixed-credit-denials/record` | Record fixed-credit denial. |
 | POST | `/turns/fixed-credit-denials/read` | Read fixed-credit denial. |
+| POST | `/turns/fixed-credit-denials/select-current` | Select only the unique complete fixed-credit pair for the authenticated current registration and source grant; no request ID or hash selector. |
 | POST | `/credit-guards/read` | Read current credit guard. |
 | POST | `/turns/fixed-credit-denials/no-send` | Record fixed-credit no-send evidence. |
 | POST | `/turns/no-send` | Record no-send evidence. |
@@ -1673,6 +1674,7 @@ audience and matching request scheme/authority, then exact runtime proof checks.
 | POST | `/runtime/v1/refresh` | Runtime | Refresh host session proof. |
 | GET | `/runtime/v1/projects/{projectId}/hosted-model-reasoning-catalog` | Authenticated project caller | Read live hosted levels by model reference with project and binding revisions; `no-store`. |
 | POST | `/runtime/v1/turns/fixed-credit-denials/read` | Runtime | Read fixed-credit guard evidence. |
+| POST | `/runtime/v1/turns/fixed-credit-denials/select-current` | Runtime | Select the unique complete current fixed-credit guard/no-send pair from the runtime-instance locator; zero or multiple matches return no pair. |
 | POST | `/runtime/v1/turns/denials/read` | Runtime | Read native denial evidence. |
 | POST | `/runtime/v1/turns/numeric-limit-denials/read` | Runtime | Read one persisted Orchestrator numeric-limit denial for the current registration and attempt; missing receipt is not success. |
 | GET | `/runtime/v1/readiness` | Runtime | Read current authenticated readiness. |

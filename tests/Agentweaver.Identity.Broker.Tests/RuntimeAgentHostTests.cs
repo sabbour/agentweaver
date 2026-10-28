@@ -1782,8 +1782,42 @@ public sealed class RuntimeAgentHostTests
             ?? throw new InvalidOperationException("The stored fixed-credit denial was not returned.");
         Assert.Equal(Assert.Single(fixture.FixedCreditGuards), stored.Receipt);
         Assert.Equal(Assert.Single(fixture.FixedCreditNoSendEvidence), stored.Evidence);
+        Assert.Equal(0, stored.Evidence!.ObservedEventCount);
+        Assert.True(stored.Evidence.RangeComplete);
+        Assert.Equal(stored.Evidence.BeforeCursorHash, stored.Evidence.AfterCursorHash);
         Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
         Assert.DoesNotContain(fixture.Material, material => material.Kind == SessionMaterialKind.TurnContent);
+
+        var noSendCount = fixture.FixedCreditNoSendEvidence.Count;
+        var sdkRequestCount = fixture.Sdk.Requests.Count;
+        using var selected = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/fixed-credit-denials/select-current",
+            new { runtimeInstanceId = fixture.Registration.RuntimeInstanceId },
+            HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.OK, selected.StatusCode);
+        Assert.True(selected.Headers.CacheControl?.NoStore);
+        var selectedPair = await selected.Content.ReadFromJsonAsync<RuntimeFixedCreditGuardSelectionResult>(
+            HostFixture.Json, timeout.Token);
+        Assert.Equal(new RuntimeFixedCreditGuardSelectionResult(stored.Receipt, stored.Evidence), selectedPair);
+        Assert.Single(fixture.FixedCreditSelectionCalls);
+        Assert.Equal(noSendCount, fixture.FixedCreditNoSendEvidence.Count);
+        Assert.Equal(sdkRequestCount, fixture.Sdk.Requests.Count);
+        using var foreignLocator = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/fixed-credit-denials/select-current",
+            new { runtimeInstanceId = Guid.NewGuid() }, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.Forbidden, foreignLocator.StatusCode);
+        Assert.Single(fixture.FixedCreditSelectionCalls);
+        using var callerSelector = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/fixed-credit-denials/select-current",
+            new
+            {
+                runtimeInstanceId = fixture.Registration.RuntimeInstanceId,
+                requestId = Guid.NewGuid(),
+                requestHash = new string('f', 64)
+            },
+            HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.BadRequest, callerSelector.StatusCode);
+        Assert.Single(fixture.FixedCreditSelectionCalls);
     }
 
     [Theory]
@@ -1839,6 +1873,22 @@ public sealed class RuntimeAgentHostTests
         Assert.Equal(evidenceIsStored ? Assert.Single(fixture.FixedCreditNoSendEvidence) : null, result.Evidence);
         Assert.Equal(fixedCreditWriteCount, fixture.FixedCreditPathEvents.Count);
         Assert.Equal(fixedCreditGuardCount, fixture.FixedCreditGuards.Count);
+        Assert.Equal(fixedCreditNoSendCount, fixture.FixedCreditNoSendEvidence.Count);
+        Assert.Equal(sdkRequestCount, fixture.Sdk.Requests.Count);
+
+        using var selected = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/fixed-credit-denials/select-current",
+            new { runtimeInstanceId = fixture.Registration.RuntimeInstanceId },
+            HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.OK, selected.StatusCode);
+        var selectedPair = await selected.Content.ReadFromJsonAsync<RuntimeFixedCreditGuardSelectionResult>(
+            HostFixture.Json, timeout.Token);
+        Assert.Equal(evidenceIsStored
+                ? new RuntimeFixedCreditGuardSelectionResult(
+                    Assert.Single(fixture.FixedCreditGuards), Assert.Single(fixture.FixedCreditNoSendEvidence))
+                : new RuntimeFixedCreditGuardSelectionResult(null, null),
+            selectedPair);
+        Assert.Single(fixture.FixedCreditSelectionCalls);
         Assert.Equal(fixedCreditNoSendCount, fixture.FixedCreditNoSendEvidence.Count);
         Assert.Equal(sdkRequestCount, fixture.Sdk.Requests.Count);
     }
@@ -2070,6 +2120,104 @@ public sealed class RuntimeAgentHostTests
         Assert.Contains("runtime_session_proof_invalid", body);
         Assert.DoesNotContain("\"receipt\"", body);
         Assert.Equal(1, fixture.Rotations);
+    }
+
+    [Fact]
+    public async Task FixedCreditSelectionWithholdsResultWhenSourceGrantRotatesDuringRead()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 0m);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var message = fixture.Message(proof);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+        fixture.AfterFixedCreditSelection = async token =>
+        {
+            await fixture.Host.RefreshAsync(new(proof, Guid.NewGuid()), fixture.Actor, token);
+        };
+
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        using var response = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/fixed-credit-denials/select-current",
+            new { runtimeInstanceId = fixture.Registration.RuntimeInstanceId },
+            HostFixture.Json, timeout.Token);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync(timeout.Token);
+        Assert.Contains("runtime_session_proof_invalid", body);
+        Assert.DoesNotContain("\"receipt\"", body);
+        Assert.Equal(1, fixture.Rotations);
+    }
+
+    [Fact]
+    public async Task FixedCreditSelectionWithholdsResultWhenSourceGrantRotatesDuringFinalRegistrationReread()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 0m);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var message = fixture.Message(proof);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+        fixture.AfterFixedCreditSelection = _ =>
+        {
+            fixture.BeforeNextRegistrationRead = async token =>
+                await fixture.Host.RefreshAsync(new(proof, Guid.NewGuid()), fixture.Actor, token);
+            return Task.CompletedTask;
+        };
+
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        using var response = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/fixed-credit-denials/select-current",
+            new { runtimeInstanceId = fixture.Registration.RuntimeInstanceId },
+            HostFixture.Json, timeout.Token);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync(timeout.Token);
+        Assert.Contains("runtime_session_proof_invalid", body);
+        Assert.DoesNotContain("\"receipt\"", body);
+        Assert.Equal(1, fixture.Rotations);
+    }
+
+    [Fact]
+    public async Task FixedCreditSelectionWithholdsResultWhenRegistrationChangesDuringRead()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 0m);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var message = fixture.Message(proof);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+        fixture.AfterFixedCreditSelection = _ =>
+        {
+            fixture.Registration = fixture.Registration with
+            {
+                Revision = fixture.Registration.Revision + 1
+            };
+            return Task.CompletedTask;
+        };
+
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        using var response = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/fixed-credit-denials/select-current",
+            new { runtimeInstanceId = fixture.Registration.RuntimeInstanceId },
+            HostFixture.Json, timeout.Token);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync(timeout.Token);
+        Assert.Contains("runtime_registration_stale", body);
+        Assert.DoesNotContain("\"receipt\"", body);
     }
 
     [Fact]
@@ -2865,6 +3013,7 @@ public sealed class RuntimeAgentHostTests
         private readonly ConcurrentDictionary<
             (Guid DispatchId, RuntimeCreditLimitDenialStage Stage), RuntimeNativeTurnNoSendReceipt>
             _nativeNoSendRecords = new();
+        private Func<CancellationToken, Task>? _beforeNextRegistrationRead;
         public ConcurrentQueue<Guid> HostedCatalogCredentialRequests { get; } = new();
         public int PodObservationReads => Volatile.Read(ref _podObservationReads);
         public Action<int>? AfterPodObservationRead { get; set; }
@@ -3051,6 +3200,7 @@ public sealed class RuntimeAgentHostTests
         public ConcurrentQueue<RuntimeFixedCreditNoSendReceipt> FixedCreditNoSendEvidence { get; } = new();
         public ConcurrentQueue<string> FixedCreditPathEvents { get; } = new();
         public ConcurrentQueue<string> FixedCreditReadCalls { get; } = new();
+        public ConcurrentQueue<string> FixedCreditSelectionCalls { get; } = new();
         public ConcurrentQueue<string> DenialReadWire { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnObservationRequest> NativeObservations { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnAccountingRequest> NativeAccounting { get; } = new();
@@ -3074,8 +3224,14 @@ public sealed class RuntimeAgentHostTests
         public Action<SessionMaterialWriteRequest>? AfterMaterialWrite { get; set; }
         public Action<SessionMaterialReadResult>? AfterMaterialRead { get; set; }
         public Func<CancellationToken, Task>? AfterFixedCreditRead { get; set; }
+        public Func<CancellationToken, Task>? AfterFixedCreditSelection { get; set; }
+        public Func<CancellationToken, Task>? BeforeNextRegistrationRead
+        {
+            set => Volatile.Write(ref _beforeNextRegistrationRead, value);
+        }
         public Func<CancellationToken, Task>? AfterNativeDenialRead { get; set; }
         public HttpStatusCode? FixedCreditReadStatus { get; set; }
+        public HttpStatusCode? FixedCreditSelectionStatus { get; set; }
         public HttpStatusCode? NativeDenialReadStatus { get; set; }
         public Guid? MissingMaterialId { get; set; }
         public int Accounted { get; private set; }
@@ -3440,6 +3596,8 @@ public sealed class RuntimeAgentHostTests
             }
             if (path.StartsWith("/internal/runtime/registrations/", StringComparison.Ordinal))
             {
+                if (Interlocked.Exchange(ref _beforeNextRegistrationRead, null) is { } beforeRead)
+                    await beforeRead(token);
                 if (path.EndsWith("/skills", StringComparison.Ordinal))
                     return Response(request, RuntimeSkillContentTests.EmptyProjection(Registration));
                 return Response(request, Registration);
@@ -3644,6 +3802,43 @@ public sealed class RuntimeAgentHostTests
                     await afterRead(token);
                 if (FixedCreditReadStatus is { } status)
                     return Response(request, new { }, status);
+                return Response(request, result);
+            }
+            if (path == "/internal/runtime/turns/fixed-credit-denials/select-current")
+            {
+                var selection = await ReadAsync<RuntimeFixedCreditGuardSelectionRequest>(request, token);
+                FixedCreditSelectionCalls.Enqueue(path);
+                RuntimeFixedCreditGuardContract.ValidateSelectionRequest(selection);
+                Assert.Equal(_sourceRevision, selection.Authorization?.Revision);
+                Assert.Equal(Registration.RuntimeInstanceId, selection.RuntimeInstanceId);
+                Assert.Equal(Registration.Revision, selection.RegistrationRevision);
+                Assert.Equal(Registration.Binding.ExecutionFence, selection.ExecutionFence);
+                var grant = Grant(_source, RuntimeCredentialPurpose.Observe, revision: _sourceRevision);
+                var sourceReceipt = new RuntimeSdkSourceReceipt(
+                    Registration.RuntimeInstanceId, Registration.Revision, grant.GrantId, _facts!,
+                    RuntimeUsageSourceReceiptContract.HashSource(Registration, _facts!), Time.GetUtcNow());
+                var pairs = _fixedCreditGuardRecords.Values
+                    .Where(receipt => receipt.Registration == Registration &&
+                        receipt.Stage == RuntimeFixedCreditGuardStage.HostPreQueue &&
+                        receipt.SourceHash == sourceReceipt.CanonicalPayloadHash &&
+                        receipt.SourceGrantId == grant.GrantId &&
+                        receipt.SourceGrantRevision == grant.Revision)
+                    .Select(receipt =>
+                    {
+                        _fixedCreditNoSendRecords.TryGetValue(receipt.CanonicalPayloadHash, out var evidence);
+                        return (Receipt: receipt, Evidence: evidence);
+                    })
+                    .Where(pair => pair.Evidence is not null)
+                    .ToArray();
+                var result = pairs.Length == 1
+                    ? new RuntimeFixedCreditGuardSelectionResult(pairs[0].Receipt, pairs[0].Evidence)
+                    : new RuntimeFixedCreditGuardSelectionResult(null, null);
+                RuntimeFixedCreditGuardContract.ValidateSelectionResult(
+                    result, Registration, selection, grant, sourceReceipt);
+                if (AfterFixedCreditSelection is { } afterSelection)
+                    await afterSelection(token);
+                if (FixedCreditSelectionStatus is { } selectionStatus)
+                    return Response(request, new { }, selectionStatus);
                 return Response(request, result);
             }
             if (path == "/internal/runtime/turns/fixed-credit-denials/no-send")
