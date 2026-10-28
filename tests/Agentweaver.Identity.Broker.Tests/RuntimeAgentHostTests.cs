@@ -1473,6 +1473,66 @@ public sealed class RuntimeAgentHostTests
             Assert.Equal(CostDisposition.Unpriced, reference.Accounting.Disposition));
     }
 
+    [Fact]
+    public async Task WorkflowNativeTurnContinuesJournalAcrossCursorsBeforeRecordingObservation()
+    {
+        await using var fixture = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        const int checkpointCount = 130;
+        var lastCheckpointId = Guid.Empty;
+        fixture.Sdk.AfterNativeCompletionReceipt = async _ =>
+        {
+            for (var sequence = 1; sequence <= checkpointCount; sequence++)
+            {
+                lastCheckpointId = Guid.NewGuid();
+                await fixture.Sdk.EmitUsageCheckpointAsync(lastCheckpointId, sequence);
+            }
+        };
+        var message = fixture.Message(fixture.Proof(await fixture.ConfigureAsync(timeout.Token)));
+
+        var response = await fixture.Host.SendAsync(message, fixture.Actor, timeout.Token);
+
+        Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single(response.Parts).Text);
+        var observation = Assert.Single(fixture.NativeObservations).Observation;
+        Assert.Equal(lastCheckpointId, observation.AccountingCheckpoint!.NativeEventId);
+        Assert.Equal(fixture.Sdk.CurrentNativeEventCursor, observation.DurableCursor);
+        Assert.Equal(
+            ["controlled-cursor-0", "controlled-cursor-128"],
+            fixture.Sdk.Requests
+                .Where(request => request.Method == "session.eventLog.read")
+                .Select(request => request.Parameters.GetProperty("cursor").GetString()));
+    }
+
+    [Fact]
+    public async Task WorkflowNativeTurnRejectsDuplicateEventIdsAcrossCursorPages()
+    {
+        await using var fixture = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var duplicateEventId = Guid.NewGuid();
+        fixture.Sdk.AfterNativeCompletionReceipt = async _ =>
+        {
+            for (var sequence = 1; sequence <= 124; sequence++)
+            {
+                var eventId = sequence >= 123 ? duplicateEventId : Guid.NewGuid();
+                await fixture.Sdk.EmitUsageCheckpointAsync(eventId, sequence);
+            }
+        };
+        var message = fixture.Message(fixture.Proof(await fixture.ConfigureAsync(timeout.Token)));
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+
+        Assert.Equal("runtime_native_turn_receipt_unavailable", failure.Code);
+        Assert.Empty(fixture.NativeObservations);
+        Assert.DoesNotContain(fixture.Material, item => item.Role == "assistant");
+        Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.Equal(
+            ["controlled-cursor-0", "controlled-cursor-128"],
+            fixture.Sdk.Requests
+                .Where(request => request.Method == "session.eventLog.read")
+                .Select(request => request.Parameters.GetProperty("cursor").GetString()));
+    }
+
     [Theory]
     [InlineData("unavailable", "runtime_owner_unavailable")]
     [InlineData("missing", "runtime_usage_cost_snapshot_invalid")]
