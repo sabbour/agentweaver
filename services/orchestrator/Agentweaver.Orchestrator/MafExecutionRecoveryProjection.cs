@@ -167,6 +167,10 @@ internal static class MafExecutionRecoveryProjector
         }
 
         return PlatformOperationsMatchPlan(
+            state.ScribeIntents.Keys,
+            WorkflowPlatformGate.Scribe,
+            steps) &&
+            PlatformOperationsMatchPlan(
             state.BuildTestIntents.Keys.Concat(state.BuildTestReceipts.Keys),
             WorkflowPlatformGate.BuildTest,
             steps) &&
@@ -308,6 +312,7 @@ internal static class MafExecutionRecoveryProjector
             state.OpenPullRequestIntents.ContainsKey(stepId) ||
             state.MergeIntents.ContainsKey(stepId) ||
             state.ReviewIntents.ContainsKey(stepId) ||
+            state.ScribeIntents.ContainsKey(stepId) ||
             state.RubberduckIntents.ContainsKey(stepId);
         if (hasIntent && !HasPlatformReceipt(stepId, state))
             return "mayRepeat";
@@ -321,6 +326,14 @@ internal static class MafExecutionRecoveryProjector
     {
         // A terminal receipt is exposed as recorded evidence, never as a claim of physical completion or safety.
         var operations = ImmutableArray.CreateBuilder<MafExecutionRecoveryPlatformOperationSnapshot>();
+        foreach (var (stepId, intent) in state.ScribeIntents.OrderBy(item => item.Key, StringComparer.Ordinal))
+        {
+            var hasReceipt = HasPlatformReceipt(stepId, state);
+            operations.Add(new MafExecutionRecoveryPlatformOperationSnapshot(
+                stepId, WorkflowPlatformGate.Scribe, MafScribeGateContract.OperationId(intent),
+                hasReceipt ? "terminalReceiptRecorded" : "intentOnly",
+                hasReceipt ? null : "mayRepeat"));
+        }
         foreach (var (stepId, intent) in state.BuildTestIntents.OrderBy(item => item.Key, StringComparer.Ordinal))
         {
             var hasReceipt = state.BuildTestReceipts.ContainsKey(stepId);
@@ -383,6 +396,9 @@ internal static class MafExecutionRecoveryProjector
     }
 
     private static bool HasPlatformReceipt(string stepId, MafExecutionCheckpoint state) =>
+        state.ScribeIntents.TryGetValue(stepId, out var scribe) &&
+            state.Progress.NonModelSteps.GetValueOrDefault(stepId) == MafExecutionTaskStatus.Succeeded &&
+            scribe.Outputs.All(output => state.ScribeReceipts.ContainsKey(output.AssociationId)) ||
         state.BuildTestReceipts.ContainsKey(stepId) ||
         state.OpenPullRequestReceipts.ContainsKey(stepId) ||
         state.MergeReceipts.ContainsKey(stepId) ||

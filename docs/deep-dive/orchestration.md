@@ -134,6 +134,14 @@ the work:
 The gate enum describes domain vocabulary, not a promise that an executor is
 available. Dispatch reports steps that have no available executor.
 
+Scribe is available when its Knowledge owner is configured. The selected gate
+snapshots successful accepted child results into actor- and producer-bound
+checkpoint intents before Knowledge I/O. It records compact Memory revision
+receipts under the same execution fence and only succeeds after all receipts
+are durable. Restart replay rechecks current authority and exact persisted
+content; it does not classify results, create Decisions, or auto-approve context.
+See [Scribe workflow-output](../architecture/knowledge-memory.md#scribe-workflow-output-source-contract).
+
 `WorkPlanValidator` checks the exact workflow revision, step identity,
 cardinality, role, selected agent and model, isolation, capabilities, output
 paths, and dependency graph. Model-proposed items belong only to open steps.

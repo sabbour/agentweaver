@@ -59,6 +59,10 @@ internal static class MafExecutionOwnerEvidenceContract
             root.OutputSet,
             root.CurrentDecision);
         ValidateRootBinding(root);
+        foreach (var intent in root.Checkpoint.State.ScribeIntents.Values)
+            MafScribeGateContract.RequireReplay(
+                intent, root.Identity, root.WorkPlan, root.Checkpoint.State,
+                root.ExecutionFence, root.AcceptedSelectionHash, root.Actor);
         _ = MafExecutionOutputWitness.SerializeCanonicalOutputSet(root.OutputSet);
 
         if (captures.IsDefault || mergeIntents.IsDefault)
@@ -363,6 +367,7 @@ internal static class MafExecutionOwnerEvidenceContract
         plan.Workflow.Definition.Steps.Any(step =>
             step.Mode == WorkflowStepMode.Platform &&
             !IsVerifiedBuildTest(step, checkpoint) &&
+            !IsVerifiedScribe(step, checkpoint) &&
             (step.Cardinality.Minimum > 0 ||
              checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(step.Id) != MafExecutionTaskStatus.Pending));
 
@@ -377,6 +382,7 @@ internal static class MafExecutionOwnerEvidenceContract
             step.Mode == WorkflowStepMode.Platform &&
             step.Id != selectedMerge?.Id &&
             !IsVerifiedBuildTest(step, checkpoint) &&
+            !IsVerifiedScribe(step, checkpoint) &&
             (step.Cardinality.Minimum > 0 ||
              checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(step.Id) != MafExecutionTaskStatus.Pending));
 
@@ -389,6 +395,13 @@ internal static class MafExecutionOwnerEvidenceContract
         checkpoint.State.BuildTestIntents.TryGetValue(step.Id, out var intent) &&
         checkpoint.State.BuildTestReceipts.TryGetValue(step.Id, out var receipt) &&
         receipt.ValidateFor(intent) == MafExecutionTaskStatus.Succeeded;
+
+    private static bool IsVerifiedScribe(
+        WorkflowStepDefinition step, MafExecutionCheckpointSnapshot checkpoint) =>
+        step.PlatformGate == WorkflowPlatformGate.Scribe &&
+        checkpoint.State.ScribeIntents.TryGetValue(step.Id, out var intent) &&
+        checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(step.Id) == MafExecutionTaskStatus.Succeeded &&
+        intent.Outputs.All(output => checkpoint.State.ScribeReceipts.ContainsKey(output.AssociationId));
 
     /// <summary>
     /// Creates the conflict response used when the owner evidence contract cannot be satisfied.

@@ -23,11 +23,12 @@ Versioned transfers preserve Memory/Decision history. Imports are exact project/
 
 ## Scribe workflow-output source contract
 
-The Orchestrator's isolated Scribe contract and client submit one Memory for each
-completed child association through the existing run-scoped records API. This
-source slice does not register a selectable Scribe executor or wire the shared
-dispatcher/checkpoint store; those remain the execution owner's integration
-boundary. It introduces no Knowledge API, schema, grant, or provider change.
+The Orchestrator's selected Scribe platform executor submits one Memory for each
+successfully completed accepted child association through the existing run-scoped
+records API. The binder requires a configured Knowledge owner; an unavailable
+executor cannot pass the gate or become model work. Execution uses the shared
+dispatcher and fenced PostgreSQL checkpoint store. It introduces no Knowledge
+API, schema, grant, or provider change.
 
 The owner is the producing accepted work item's `AgentId`, or the persisted
 fixed-work association's `AgentId`, never Scribe or the coordinator. Content is
@@ -40,34 +41,45 @@ The existing provider creates lifecycle `Active` with trust `Pending`: pending
 review does not mean lifecycle `Pending`. There is no model classification,
 automatic approved SessionContext, or direct Decision creation.
 
-Before calling Knowledge, the execution owner must durably retain the exact
-actor issuer/subject and serialized content intent. The stable key binds project,
+Before calling Knowledge, the execution owner durably retains the exact
+actor issuer/subject and serialized content intent in `ScribeIntents`, together
+with the selected gate, origin revision, decision version, selection hash and
+execution fence. Historical checkpoints default these maps to empty.
+The stable key binds project,
 run, plan, and association. Because provider idempotency is actor-scoped, replay
 must reject a changed actor as well as a changed payload rather than silently
 creating another record. Each HTTP attempt still forwards current credentials
 and rechecks current Projects authority; saved actor metadata is not a grant.
 The client parses `KnowledgeRecordWriteResult.Record`, validates the returned
 pending-trust Memory, and returns only association, record ID, revision, and
-revision ID for the owner's compact checkpoint receipt.
+revision ID for the owner's compact `ScribeReceipts` entry. Each receipt is
+appended under the owner decision and execution locks. The gate succeeds only
+when every snapshotted completed association has a receipt. Intents, completed
+results and receipts cannot be rewritten or removed by a later checkpoint.
 
 ```mermaid
 flowchart LR
-    Result["Completed child result"] --> Intent["Persist exact producer, actor and payload"]
+    Result["Accepted completed child result"] --> Gate["Selected Scribe gate and binder"]
+    Gate --> Intent["Fenced checkpoint: actor and full payload"]
     Intent --> API["Existing Knowledge records API"]
     API --> Authority["Current Projects authority and run selection"]
     Authority --> Memory["Native Memory commit and idempotency receipt"]
-    Memory --> Reference["Compact record revision reference"]
-    Intent --> Replay["Restart with same actor and intent"]
+    Memory --> Reference["Fenced checkpoint: compact revision receipt"]
+    Reference --> Complete["Gate succeeds after all receipts"]
+    Intent --> Replay["Restart with same actor, fence and intent"]
     Replay --> API
 ```
 
-The real PostgreSQL composition test covers Knowledge commit followed by a lost
-HTTP acknowledgment, server restart, and replay returning the same record and
-revision identifiers. Changed payloads conflict; changed actors, wrong project/run
-bindings, and revoked membership fail without another write. Existing mismatched
-authority responses fail closed as HTTP 502; revoked authority returns HTTP 403.
-This proof is not selected-gate/checkpoint integration, deployment, or live
-acceptance evidence. See [the testing guide](../guide/testing.md#test-scribe-knowledge-output).
+The selected-gate PostgreSQL composition test enters through the native dispatch
+route with an accepted workflow and completed child fixture. It covers durable
+intent, Knowledge commit followed by a lost HTTP acknowledgment, restart of both
+servers, replay returning the same record/revision identifiers, and the durable
+compact checkpoint receipt. Changed payload, actor and scope fail replay, and
+revoked membership denies dispatch without another write. Counts remain one
+record, one immutable revision and one idempotency row. This source proof does
+not claim deployment, child model execution or live acceptance; the earlier
+isolated-client test does not substitute for it.
+See [the testing guide](../guide/testing.md#test-scribe-knowledge-output).
 
 ## Authority and ownership
 

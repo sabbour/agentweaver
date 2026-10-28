@@ -201,6 +201,10 @@ internal sealed class MafExecutionCheckpointStore
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
         MafExecutionCheckpointContract.ValidateState(state);
+        if (state.ScribeIntents.Values.Any(intent =>
+                intent.Identity != _binding.Identity || intent.Actor != _binding.Actor ||
+                intent.ExecutionFence != _binding.ExecutionFence))
+            throw new ArgumentException("Scribe intent does not match the checkpoint owner binding.", nameof(state));
         MafExecutionCheckpointContract.ValidateBuildTestBinding(
             state, _binding.Identity, _binding.ExecutionFence, checkpointId);
         MafExecutionCheckpointContract.ValidateReviewBinding(

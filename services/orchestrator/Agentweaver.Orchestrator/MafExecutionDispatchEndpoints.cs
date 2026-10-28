@@ -106,6 +106,7 @@ public static partial class CoordinationEndpoints
 
             var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
             var buildTestClient = context.RequestServices.GetService<MafBuildTestEnvironmentClient>();
+            var scribeClient = context.RequestServices.GetService<MafScribeKnowledgeClient>();
             var sourceControlClient = context.RequestServices.GetService<MafSourceControlOwnerClient>();
             var registrationOwner = context.RequestServices.GetService<RuntimeRegistrationOwner>();
             var actionGrants = context.RequestServices.GetService<ExecutableActionGrantOwnerStore>();
@@ -173,7 +174,8 @@ public static partial class CoordinationEndpoints
                 sourceControlClient is not null,
                 sourceControlClient is not null,
                 hasIndependentReviewOwner: true,
-                hasRubberduckOwner: hasRubberduckOwner);
+                hasRubberduckOwner: hasRubberduckOwner,
+                hasScribeOwner: scribeClient is not null);
             if (request.BuildTestWorkspaces is { } workspaces)
             {
                 if (workspaces.Count > plan.Workflow.Definition.Steps.Length ||
@@ -269,6 +271,11 @@ public static partial class CoordinationEndpoints
                         decision.StateVersion, decision.State, decision.State.Fence,
                         decision.SelectionHash, currentPin);
                 }
+            if (checkpoint is not null)
+                foreach (var intent in checkpoint.State.ScribeIntents.Values)
+                    MafScribeGateContract.RequireReplay(
+                        intent, identity, plan, checkpoint.State,
+                        decision.State.Fence, decision.SelectionHash, actor);
             if (checkpoint is not null)
                 foreach (var intent in checkpoint.State.BuildTestIntents.Values)
                 {
@@ -373,6 +380,7 @@ public static partial class CoordinationEndpoints
                 (sourceControlClient is not null &&
                     step.PlatformGate is WorkflowPlatformGate.OpenPullRequest or WorkflowPlatformGate.Merge) ||
                 step.PlatformGate == WorkflowPlatformGate.IndependentReview ||
+                step.PlatformGate == WorkflowPlatformGate.Scribe && scribeClient is not null ||
                 step.PlatformGate == WorkflowPlatformGate.RubberDuck && hasRubberduckOwner ||
                 HasBuildTestExecutor(step);
             var hostClient = context.RequestServices.GetRequiredService<IHttpClientFactory>()
@@ -2115,6 +2123,65 @@ public static partial class CoordinationEndpoints
                 return intent;
             }
 
+            async Task RequireCurrentScribeAsync(
+                MafExecutionScribeGateIntent intent, MafExecutionCheckpoint state, CancellationToken token)
+            {
+                await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                MafScribeGateContract.RequireReplay(intent, identity, plan, state,
+                    decision.State.Fence, decision.SelectionHash, actor);
+            }
+
+            async Task RequireScribeDecisionAsync(
+                NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken token)
+            {
+                await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                await decisions.RequireCurrentDispatchStateInTransactionAsync(
+                    connection, transaction, actor, identity, selection, selectionContext,
+                    decision.StateVersion, decision.State.Fence, plan.Plan.Id, token).ConfigureAwait(false);
+            }
+
+            MafScribeExecutor? scribeExecutor = scribeClient is null ? null : new(
+                execution, scribeClient, dataSource, CreateRuntimeActorAsync,
+                RequireCurrentScribeAsync, RequireScribeDecisionAsync, saved => checkpoint = saved);
+
+            async Task<MafExecutionScribeGateIntent> PrepareScribeAsync(
+                WorkflowStepDefinition step, CancellationToken token)
+            {
+                await using var connection = await dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
+                await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+                await RequireScribeDecisionAsync(connection, transaction, token).ConfigureAwait(false);
+                await execution.AcquireExecutionLockInTransactionAsync(connection, transaction, token)
+                    .ConfigureAwait(false);
+                var latest = await execution.ReadLatestInTransactionAsync(connection, transaction, token)
+                    .ConfigureAwait(false) ?? throw new CoordinationException(
+                        "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
+                if (latest.State.ScribeIntents.TryGetValue(step.Id, out var retained))
+                {
+                    await RequireCurrentScribeAsync(retained, latest.State, token).ConfigureAwait(false);
+                    checkpoint = latest;
+                    await transaction.CommitAsync(token).ConfigureAwait(false);
+                    return retained;
+                }
+                var intent = MafScribeGateContract.CreateIntent(identity, plan, latest.State, step.Id,
+                    decision.State.Fence, decision.SelectionHash, actor);
+                var next = MafScribeGateContract.Prepare(latest, intent);
+                checkpoint = await execution.AppendInTransactionAsync(
+                    connection, transaction, Guid.NewGuid().ToString("N"), latest.Info, next, token)
+                    .ConfigureAwait(false);
+                await transaction.CommitAsync(token).ConfigureAwait(false);
+                return intent;
+            }
+
+            foreach (var intent in checkpoint.State.ScribeIntents.Values
+                         .Where(intent => checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
+                             MafExecutionTaskStatus.Running)
+                         .OrderBy(intent => intent.StepId, StringComparer.Ordinal).ToArray())
+            {
+                if (scribeExecutor is null)
+                    throw new CoordinationException(
+                        "maf_execution_executor_unavailable", StatusCodes.Status503ServiceUnavailable);
+                _ = await scribeExecutor.ExecuteAsync(intent, cancellationToken).ConfigureAwait(false);
+            }
             foreach (var intent in checkpoint.State.BuildTestIntents.Values
                          .Where(intent => checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
                              MafExecutionTaskStatus.Running)
@@ -2234,6 +2301,16 @@ public static partial class CoordinationEndpoints
                             action.Step, cancellationToken).ConfigureAwait(false);
                         platformAdvanced |= await ExecuteOpenPullRequestAsync(
                             pullRequestIntent, cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
+                    if (action.Step.PlatformGate == WorkflowPlatformGate.Scribe)
+                    {
+                        if (scribeExecutor is null)
+                            throw new CoordinationException(
+                                "maf_execution_executor_unavailable", StatusCodes.Status503ServiceUnavailable);
+                        var scribeIntent = await PrepareScribeAsync(action.Step, cancellationToken).ConfigureAwait(false);
+                        platformAdvanced |= await scribeExecutor.ExecuteAsync(scribeIntent, cancellationToken)
+                            .ConfigureAwait(false);
                         continue;
                     }
                     if (MafBuildTestCommandContract.IsExecutable(action.Step))

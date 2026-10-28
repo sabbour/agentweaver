@@ -332,6 +332,10 @@ internal sealed record MafExecutionCheckpoint(
         ImmutableDictionary<string, MafExecutionDispatchIntent>.Empty.WithComparers(StringComparer.Ordinal);
     public ImmutableDictionary<string, string> Results { get; init; } =
         ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
+    public ImmutableDictionary<string, MafExecutionScribeGateIntent> ScribeIntents { get; init; } =
+        ImmutableDictionary<string, MafExecutionScribeGateIntent>.Empty.WithComparers(StringComparer.Ordinal);
+    public ImmutableDictionary<string, MafScribeTerminalReceipt> ScribeReceipts { get; init; } =
+        ImmutableDictionary<string, MafScribeTerminalReceipt>.Empty.WithComparers(StringComparer.Ordinal);
     public ImmutableDictionary<string, MafExecutionBuildTestIntent> BuildTestIntents { get; init; } =
         ImmutableDictionary<string, MafExecutionBuildTestIntent>.Empty.WithComparers(StringComparer.Ordinal);
     public ImmutableDictionary<string, MafBuildTestTerminalReceipt> BuildTestReceipts { get; init; } =
@@ -491,6 +495,7 @@ internal static class MafExecutionCheckpointContract
     {
         ValidateState(previous);
         ValidateState(next);
+        MafScribeGateContract.ValidateTransition(previous, next);
         foreach (var (associationId, intent) in previous.PendingDispatches)
         {
             // Once recorded, an intent can only remain identical or be replaced by its terminal result.
@@ -710,6 +715,7 @@ internal static class MafExecutionCheckpointContract
             state.RubberduckIntents is null || state.RubberduckReceipts is null ||
             state.RubberduckFailureCodes is null)
             throw new ArgumentException("MAF execution dispatch state is required.", nameof(state));
+        MafScribeGateContract.ValidateState(state);
         if (state.Progress.WorkItems.Any(item =>
                 string.IsNullOrWhiteSpace(item.Key) || item.Key.Length > 128 ||
                 item.Key.Any(char.IsControl) || !Enum.IsDefined(item.Value)) ||

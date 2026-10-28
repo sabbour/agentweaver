@@ -120,6 +120,17 @@ var issueSyncEnabled = IssueSyncServiceTransport.AddChannel(builder, IssueSyncAu
     "Orchestrator:IssueSync:IdentityTls", "Orchestrator", "IdentityBroker", false);
 builder.Services.AddHttpClient(string.Empty)
     .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
+var knowledgeOwnerAddressValue = builder.Configuration["Orchestrator:KnowledgeOwner:OwnerBaseAddress"];
+if (knowledgeOwnerAddressValue is not null)
+{
+    if (!Uri.TryCreate(knowledgeOwnerAddressValue, UriKind.Absolute, out var knowledgeOwnerAddress))
+        throw new InvalidOperationException("The Knowledge owner address must be an absolute HTTPS URI.");
+    var knowledgeOwner = RuntimeOwnerHttpTransport.RequireOwnerAddress(knowledgeOwnerAddress);
+    builder.Services.AddHttpClient("maf-scribe-knowledge", client => client.Timeout = TimeSpan.FromSeconds(30))
+        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
+    builder.Services.AddTransient(services => new MafScribeKnowledgeClient(
+        services.GetRequiredService<IHttpClientFactory>().CreateClient("maf-scribe-knowledge"), knowledgeOwner));
+}
 if (sourceControlOwnerOptions is not null)
 {
     builder.Services.AddSingleton(sourceControlOwnerOptions);
