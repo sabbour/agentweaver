@@ -101,6 +101,26 @@ npm --prefix apps/web test
 These tests use test-owned stores and owner responses. They do not prove that
 Knowledge or the Gateway is deployed.
 
+## Test Scribe Knowledge output
+
+Run the producer, immutable-intent, and exact serialized-size tests, followed by
+the real Broker/Projects/Knowledge PostgreSQL composition test:
+
+```powershell
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --configuration Release --filter FullyQualifiedName~MafScribeTests
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~ScribeKnowledgeCommitLostAcknowledgmentReplaysSamePendingMemoryAfterRestart
+```
+
+The composition test requires the existing Testcontainers PostgreSQL fixture.
+It commits through the real Knowledge API/native PostgreSQL provider, discards
+the acknowledgment after that commit, restarts the server, and replays the
+persisted intent. It requires one pending-trust Memory and one immutable revision,
+stable record/revision identifiers, payload conflict, and no extra writes after
+actor/scope/authority rejection. Fixture authority uses current database-backed
+project Owner/Orchestrator assignments; the test does not grant live access.
+The test does not claim shared selected-gate/checkpoint integration, deployment,
+or model execution.
+
 The coverage runner used in CI saves TRX results, Cobertura coverage, and
 source identity alongside the test output. Match a result to the exact source
 SHA, pull request head, workflow run, and attempt. A compiled test or a green

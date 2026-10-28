@@ -21,6 +21,54 @@ Edits, archive, supersession, restore, and approval append immutable revisions. 
 
 Versioned transfers preserve Memory/Decision history. Imports are exact project/agent scoped, bounded, non-merging, and Active+Pending.
 
+## Scribe workflow-output source contract
+
+The Orchestrator's isolated Scribe contract and client submit one Memory for each
+completed child association through the existing run-scoped records API. This
+source slice does not register a selectable Scribe executor or wire the shared
+dispatcher/checkpoint store; those remain the execution owner's integration
+boundary. It introduces no Knowledge API, schema, grant, or provider change.
+
+The owner is the producing accepted work item's `AgentId`, or the persisted
+fixed-work association's `AgentId`, never Scribe or the coordinator. Content is
+the full canonical joined result with project, run, root session, plan,
+association, producer, and child-session provenance. The serialized content must
+fit the existing 40,000-character limit, including JSON escaping and provenance;
+overflow is rejected, never truncated. The request always uses Memory kind,
+`workflow-output` type, `low` importance, empty tags, and null title/rationale.
+The existing provider creates lifecycle `Active` with trust `Pending`: pending
+review does not mean lifecycle `Pending`. There is no model classification,
+automatic approved SessionContext, or direct Decision creation.
+
+Before calling Knowledge, the execution owner must durably retain the exact
+actor issuer/subject and serialized content intent. The stable key binds project,
+run, plan, and association. Because provider idempotency is actor-scoped, replay
+must reject a changed actor as well as a changed payload rather than silently
+creating another record. Each HTTP attempt still forwards current credentials
+and rechecks current Projects authority; saved actor metadata is not a grant.
+The client parses `KnowledgeRecordWriteResult.Record`, validates the returned
+pending-trust Memory, and returns only association, record ID, revision, and
+revision ID for the owner's compact checkpoint receipt.
+
+```mermaid
+flowchart LR
+    Result["Completed child result"] --> Intent["Persist exact producer, actor and payload"]
+    Intent --> API["Existing Knowledge records API"]
+    API --> Authority["Current Projects authority and run selection"]
+    Authority --> Memory["Native Memory commit and idempotency receipt"]
+    Memory --> Reference["Compact record revision reference"]
+    Intent --> Replay["Restart with same actor and intent"]
+    Replay --> API
+```
+
+The real PostgreSQL composition test covers Knowledge commit followed by a lost
+HTTP acknowledgment, server restart, and replay returning the same record and
+revision identifiers. Changed payloads conflict; changed actors, wrong project/run
+bindings, and revoked membership fail without another write. Existing mismatched
+authority responses fail closed as HTTP 502; revoked authority returns HTTP 403.
+This proof is not selected-gate/checkpoint integration, deployment, or live
+acceptance evidence. See [the testing guide](../guide/testing.md#test-scribe-knowledge-output).
+
 ## Authority and ownership
 
 Projects & Config remains the sole owner of caller memberships and project roles.
