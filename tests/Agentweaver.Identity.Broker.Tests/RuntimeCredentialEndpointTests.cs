@@ -120,11 +120,19 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
         await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
             runtime.ConsumeBootstrapAsync(wrongNonce, Guid.NewGuid(), default));
         var consumed = await runtime.ConsumeBootstrapAsync(bootstrap, Guid.NewGuid(), default);
+        var exchangeStartedAt = DateTimeOffset.UtcNow;
         var exchange = await runtime.ExchangeBootstrapAsync(
             new RuntimeCredentialProof(bootstrap.GrantId, bootstrap.RuntimeInstanceId, consumed.Revision,
                 bootstrap.Purpose, bootstrap.Audience, bootstrap.ConfigurationHash, bootstrap.Credential),
             Guid.NewGuid(), default);
+        var exchangeCompletedAt = DateTimeOffset.UtcNow;
         Assert.NotNull(exchange.Credential);
+        Assert.InRange(
+            exchange.Credential.ExpiresAt,
+            exchangeStartedAt.AddMinutes(2),
+            exchangeCompletedAt.AddMinutes(2));
+        Assert.True(exchange.Credential.ExpiresAt <= owner.Registration.ExpiresAt);
+        Assert.True(exchange.Credential.ExpiresAt <= new DateTimeOffset(tokenExpiry, TimeSpan.Zero));
         var source = new RuntimeCredentialProof(
             exchange.Receipt.GrantId, exchange.Receipt.RuntimeInstanceId, exchange.Receipt.Revision,
             RuntimeCredentialPurpose.Observe, exchange.Receipt.Audience,

@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using NpgsqlTypes;
 
 namespace Agentweaver.Environment.Tests;
 
@@ -40,24 +41,56 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
             store, first.Lease.OperationId, lifecycle.Fence, resource, true, default);
         Assert.Equal(3, completed.LeaseRevision);
         Assert.Equal(SandboxLeaseState.Active, completed.State);
-        var restarted = new EnvironmentSandboxLeaseStore(fixture.DataSource, TimeProvider.System);
+        Assert.Equal(completed.UpdatedAt.AddSeconds(600), completed.LeaseExpiresAt);
+        var persistedExpiry = completed.LeaseExpiresAt
+            ?? throw new InvalidOperationException("The Active Sandbox lease has no persisted expiry.");
+        var legacyExpiry = completed.UpdatedAt.AddSeconds(60);
+        // Model an Active row persisted before the fixed lifetime changed to 600 seconds.
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var updateLegacyExpiry = new NpgsqlCommand("""
+            UPDATE "environment"."sandbox_leases"
+            SET lease_expires_at = @legacy_expiry
+            WHERE tenant_id = @tenant_id AND project_id = @project_id
+              AND run_id = @run_id AND environment_id = @environment_id
+              AND resource_generation = @resource_generation
+              AND operation_id = @operation_id
+              AND lease_revision = @lease_revision
+              AND lease_state = 'Active'
+              AND lease_expires_at = @persisted_expiry
+            """, connection))
+        {
+            updateLegacyExpiry.Parameters.AddWithValue("legacy_expiry", NpgsqlDbType.TimestampTz, legacyExpiry);
+            updateLegacyExpiry.Parameters.AddWithValue("tenant_id", NpgsqlDbType.Text, owner.TenantId);
+            updateLegacyExpiry.Parameters.AddWithValue("project_id", NpgsqlDbType.Text, owner.ProjectId);
+            updateLegacyExpiry.Parameters.AddWithValue("run_id", NpgsqlDbType.Text, owner.RunId);
+            updateLegacyExpiry.Parameters.AddWithValue("environment_id", NpgsqlDbType.Text, owner.EnvironmentId);
+            updateLegacyExpiry.Parameters.AddWithValue(
+                "resource_generation", NpgsqlDbType.Bigint, completed.ResourceGeneration);
+            updateLegacyExpiry.Parameters.AddWithValue("operation_id", NpgsqlDbType.Uuid, completed.OperationId);
+            updateLegacyExpiry.Parameters.AddWithValue("lease_revision", NpgsqlDbType.Bigint, completed.LeaseRevision);
+            updateLegacyExpiry.Parameters.AddWithValue("persisted_expiry", NpgsqlDbType.TimestampTz, persistedExpiry);
+            Assert.Equal(1, await updateLegacyExpiry.ExecuteNonQueryAsync());
+        }
+        var clock = new PlacementClock(legacyExpiry.AddSeconds(-1));
+        var restarted = new EnvironmentSandboxLeaseStore(fixture.DataSource, clock);
         var current = await restarted.GetCurrentAsync(lifecycle.Fence, default);
         Assert.Equal(completed.LeaseRevision, current!.LeaseRevision);
         Assert.Equal(first.Lease.CreatedAt, current.CreatedAt);
+        Assert.Equal(legacyExpiry, current.LeaseExpiresAt);
         Assert.Equal(resource.Resource, current.ProvisionedResource!.Resource);
         var completeReplay = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
             restarted, first.Lease.OperationId, lifecycle.Fence, resource, true, default);
-        Assert.Equal(completed.LeaseExpiresAt, completeReplay.LeaseExpiresAt);
+        Assert.Equal(legacyExpiry, completeReplay.LeaseExpiresAt);
         Assert.Equal(completed.LeaseRevision, completeReplay.LeaseRevision);
 
         var projects = new ControlledAuthority(owner);
-        var projection = await Reader(projects, restarted).GetCurrentPlacementAsync(
+        var projection = await Reader(projects, restarted, clock).GetCurrentPlacementAsync(
             Caller(owner), owner.ProjectId, owner.RunId, owner.EnvironmentId, default);
         Assert.Equal(resource.Resource, projection!.Resource);
         Assert.Equal(resource.Endpoint, projection.Endpoint);
         Assert.Equal(resource.Placement, projection.Placement);
         Assert.Equal(completed.LeaseRevision, projection.LeaseRevision);
-        Assert.Equal(completed.LeaseExpiresAt, projection.LeaseExpiresAt);
+        Assert.Equal(legacyExpiry, projection.LeaseExpiresAt);
         Assert.Equal(resource.ProviderBinding.ProviderId, projection.ProviderPin!.ProviderId);
         Assert.Equal(resource.ProviderBinding.OptionsRevision, projection.ProviderPin.OptionsRevision);
         Assert.Equal(resource.Resource, projection.ProviderPin.Resource);

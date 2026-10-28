@@ -19,6 +19,7 @@ public sealed class EnvironmentSandboxLeaseStore(
     TimeProvider timeProvider) : ISandboxLeaseStore
 {
     private static readonly TimeSpan LeaseDuration = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan ActiveRuntimeLifetime = TimeSpan.FromSeconds(600);
     private static readonly TimeSpan LateCleanupClaimDuration = TimeSpan.FromMinutes(2);
     private const string Leases = "\"environment\".\"sandbox_leases\"";
     private const string LateResourceCleanups = "\"environment\".\"sandbox_late_resource_cleanups\"";
@@ -1272,7 +1273,9 @@ public sealed class EnvironmentSandboxLeaseStore(
                 NpgsqlDbType.TimestampTz,
                 nextState is SandboxLeaseState.Released or SandboxLeaseState.Failed
                     ? DBNull.Value
-                    : updatedAt + LeaseDuration);
+                    : updatedAt + (nextState == SandboxLeaseState.Active
+                        ? ActiveRuntimeLifetime
+                        : LeaseDuration));
             update.Parameters.AddWithValue("updated_at", NpgsqlDbType.TimestampTz, updatedAt);
             if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
                 throw new EnvironmentLifecycleException(
