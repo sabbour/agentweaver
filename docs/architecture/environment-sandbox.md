@@ -50,6 +50,15 @@ cluster-wide CPU or memory quota. An unresolved or ambiguous provider effect rem
 blocks Environment lifecycle advancement. Old resource generations remain
 stored after release.
 
+Reservation and provider-operation leases, including retirement, have a fixed
+60-second expiry. A valid transition into `Active`, including reconciliation
+recovery, assigns a fixed 600-second lifetime from that transition. Replaying
+the same active resource, reading the lease, or restarting the store preserves
+the persisted expiry and does not renew it. `Released` and `Failed` leases have
+no expiry. Runtime registrations copy the exact persisted active expiry; this
+does not extend credential grants, which remain bounded by their configured
+lifetime and existing registration and bearer checks.
+
 A different valid provider resource returned after a lease is terminal is
 stored in a separate cleanup record. The original terminal state, resource, and
 partial-release receipt remain unchanged. Reconciliation can discover pending

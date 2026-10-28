@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Environment Sandbox lease, provider attempts, readiness, and cleanup",
-  "alt": "Environment rechecks trusted Projects authority and selection around owner-fenced lifecycle changes. It records each provider attempt before an external effect and saves its exact outcome under the owner lock. Unknown or unresolved calls block release and generation advance. Late cleanup uses the active owner fence for authorization and keeps the saved source fence for provider identity; older-generation cleanup does not read or change the current Workspace. Claim expiry permits recovery but does not prove that a provider call stopped.",
+  "alt": "Environment rechecks trusted Projects authority and selection around owner-fenced lifecycle changes. Reservation and provider-operation leases, including retirement, expire after 60 seconds; a valid transition into Active assigns a fixed 600-second lifetime without replay renewal. Runtime registrations copy the persisted active expiry, while credential grants retain independent caps. The store records each provider attempt before an external effect and saves its exact outcome under the owner lock. Unknown or unresolved calls block release and generation advance. Late cleanup uses the active owner fence for authorization and keeps the saved source fence for provider identity; older-generation cleanup does not read or change the current Workspace. Claim expiry permits recovery but does not prove that a provider call stopped.",
   "autonumber": true,
   "participants": [
     {
@@ -72,7 +72,7 @@
       "type": "message",
       "from": "environment",
       "to": "environment",
-      "label": "Reserve idempotent write-once lease; persist selection, options, request snapshot, and positive fences",
+      "label": "Reserve idempotent write-once 60s operation lease; persist selection, options, request snapshot, and positive fences",
       "line": "dashed",
       "arrow": "open"
     },
@@ -112,7 +112,7 @@
       "type": "message",
       "from": "provider-api",
       "to": "environment",
-      "label": "Record exact provider result under the owner lock before resolving its attempt",
+      "label": "Record exact result under owner lock before resolving attempt; valid Active transition sets 600s, replay does not renew",
       "line": "solid",
       "arrow": "filled"
     },

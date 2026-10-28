@@ -63,7 +63,20 @@ public sealed class EnvironmentSandboxLeasePostgresTests(EnvironmentPostgresFixt
             effectMayHaveApplied: true,
             CancellationToken.None);
         Assert.Equal(3, active.LeaseRevision);
-        Assert.Equal(time.GetUtcNow().AddSeconds(60), active.LeaseExpiresAt);
+        Assert.Equal(time.GetUtcNow().AddSeconds(600), active.LeaseExpiresAt);
+
+        var activeRevision = active.LeaseRevision;
+        var activeExpiry = active.LeaseExpiresAt;
+        time.Advance(TimeSpan.FromMinutes(5));
+        var activeReplay = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            store,
+            reservation.Lease.OperationId,
+            fence,
+            resource,
+            effectMayHaveApplied: true,
+            CancellationToken.None);
+        Assert.Equal(activeRevision, activeReplay.LeaseRevision);
+        Assert.Equal(activeExpiry, activeReplay.LeaseExpiresAt);
 
         var retiring = await store.BeginRetirementAsync(
             fence,
@@ -87,6 +100,39 @@ public sealed class EnvironmentSandboxLeasePostgresTests(EnvironmentPostgresFixt
             CancellationToken.None);
         Assert.Equal(5, released.LeaseRevision);
         Assert.Null(released.LeaseExpiresAt);
+    }
+
+    [Fact]
+    public async Task ReconciliationRecoveryGetsActiveLifetime()
+    {
+        var time = new MutableTimeProvider(new DateTimeOffset(2026, 10, 6, 12, 0, 0, TimeSpan.Zero));
+        var owner = NewOwner();
+        var lifecycle = new EnvironmentLifecycleStore(fixture.DataSource, time);
+        var fence = await RegisterAsync(lifecycle, owner);
+        var store = new EnvironmentSandboxLeaseStore(fixture.DataSource, time);
+        var reservation = await store.ReserveProvisionAsync(fence, "provision-1", Intent(), CancellationToken.None);
+
+        var uncertain = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            store,
+            reservation.Lease.OperationId,
+            fence,
+            provisionedResource: null,
+            effectMayHaveApplied: true,
+            CancellationToken.None,
+            providerErrorCode: "provider_result_unknown");
+        Assert.Equal(SandboxLeaseState.ReconciliationRequired, uncertain.State);
+        Assert.Equal(time.GetUtcNow().AddSeconds(60), uncertain.LeaseExpiresAt);
+
+        time.Advance(TimeSpan.FromSeconds(15));
+        var recovered = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            store,
+            reservation.Lease.OperationId,
+            fence,
+            Provisioned(reservation.Lease.ResourceGeneration),
+            effectMayHaveApplied: true,
+            CancellationToken.None);
+        Assert.Equal(SandboxLeaseState.Active, recovered.State);
+        Assert.Equal(time.GetUtcNow().AddSeconds(600), recovered.LeaseExpiresAt);
     }
 
     [Fact]
@@ -120,6 +166,7 @@ public sealed class EnvironmentSandboxLeasePostgresTests(EnvironmentPostgresFixt
             CancellationToken.None);
         Assert.Equal(SandboxLeaseState.Active, duplicateActive.State);
         Assert.Equal(active.UpdatedAt, duplicateActive.UpdatedAt);
+        Assert.Equal(active.LeaseExpiresAt, duplicateActive.LeaseExpiresAt);
         Assert.Equal(provisioned.Resource, duplicateActive.ProvisionedResource!.Resource);
 
         var transition = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
