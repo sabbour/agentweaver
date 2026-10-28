@@ -324,6 +324,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var routes = new ConcurrentDictionary<string, Func<HttpMessageHandler>>(StringComparer.Ordinal);
         routes["projects.test"] = projects.CreateHandler;
         var failures = new ConcurrentQueue<string>();
+        var secondHostEndpointHost = new TaskCompletionSource<string>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondHostNotReadyObserved = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         await using var environment = await RuntimePlacementTestServer.StartAsync(
             _connectionString, signingKey, projects.CreateHandler,
             new(TenantId, project.ProjectId, RunId, "root-environment"),
@@ -369,7 +373,25 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 ConfigureTestHttpClient(services, nameof(MafBuildTestEnvironmentClient),
                     () => new RuntimeServiceRouter(routes, failures));
                 ConfigureTestHttpClient(services, "maf-execution-host",
-                    () => new RuntimeServiceRouter(routes, failures));
+                    () => new RuntimeServiceRouter(routes, failures,
+                        async (request, response, cancellationToken) =>
+                        {
+                            if (request.RequestUri is not
+                                    { AbsolutePath: "/runtime/v1/readiness" } endpoint ||
+                                response.StatusCode != HttpStatusCode.Forbidden ||
+                                !secondHostEndpointHost.Task.IsCompletedSuccessfully ||
+                                endpoint.Host != secondHostEndpointHost.Task.Result)
+                                return;
+                            using var body = JsonDocument.Parse(
+                                await response.Content.ReadAsStringAsync(cancellationToken));
+                            if (body.RootElement.TryGetProperty("code", out var code) &&
+                                code.GetString() is "runtime_host_not_ready" or "runtime_placement_not_ready")
+                            {
+                                TraceNativeStage(failures,
+                                    "Second Host readiness explicitly returned not-ready.");
+                                secondHostNotReadyObserved.TrySetResult();
+                            }
+                        }));
             });
         });
         using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
@@ -541,7 +563,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await VerifyNativeChildrenJoinAsync(
             project.ProjectId, runToken, version, plan, checkpoint,
             snapshot, selectionDocument.RootElement.Clone(), signingKey, projects, connection, eventsSchema,
-            routes, failures, environments, runtimeEnvironments, factory, client, binding, dataSource, ownerSchema);
+            routes, failures, environments, runtimeEnvironments, factory, client, binding, dataSource, ownerSchema,
+            secondHostEndpointHost, secondHostNotReadyObserved);
     }
 
     private async Task VerifyNativeChildrenJoinAsync(
@@ -553,7 +576,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         ConcurrentDictionary<string, RuntimePlacementTestServer> environments,
         ConcurrentDictionary<Guid, string> runtimeEnvironments,
         WebApplicationFactory<OrchestratorHost::Program> orchestrator, HttpClient client,
-        MafCheckpointBinding binding, NpgsqlDataSource dataSource, string ownerSchema)
+        MafCheckpointBinding binding, NpgsqlDataSource dataSource, string ownerSchema,
+        TaskCompletionSource<string> secondHostEndpointHost,
+        TaskCompletionSource secondHostNotReadyObserved)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(4));
         var token = timeout.Token;
@@ -851,6 +876,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 Assert.True(Directory.Exists(mount), $"Expected an actual Linux workspace mount at {mount}.");
                 var endpoint = $"https://native-{intent.AssociationId}.test:8443/runtime/v1/configure";
                 var endpointHost = new Uri(endpoint).Host;
+                if (mount == workspaceMounts[1])
+                    secondHostEndpointHost.TrySetResult(endpointHost);
                 var environmentId = $"native-{intent.AssociationId}";
                 var hostElapsed = System.Diagnostics.Stopwatch.StartNew();
                 var phaseElapsed = System.Diagnostics.Stopwatch.StartNew();
@@ -1028,6 +1055,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 $"first={firstIntent.AssociationId}, second={secondIntent.AssociationId}.");
 
             var dispatchTask = StartPublicDispatch();
+            if (await Task.WhenAny(secondHostNotReadyObserved.Task, dispatchTask).WaitAsync(token) ==
+                secondHostNotReadyObserved.Task)
+                secondHostCatalogRelease.TrySetResult();
             var firstTurnReceived = sdks[0].TurnReceived.Task;
             var firstDispatchReturnedBeforeTurn =
                 await Task.WhenAny(dispatchTask, firstTurnReceived) == dispatchTask;
@@ -1041,7 +1071,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 TraceNativeStage(failures,
                     $"Public dispatch deferred first step {firstStepId} through the existing unavailable response.");
                 secondHostCatalogRelease.TrySetResult();
-                await Task.WhenAll(configureHosts);
+                await Task.WhenAll(configureHosts).WaitAsync(token);
                 await RefreshHostSourceGrantAsync(1);
                 dispatchTask = StartPublicDispatch();
                 TraceNativeStage(failures,
@@ -1057,16 +1087,24 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             }
 
             await firstTurnReceived.WaitAsync(token);
-            secondHostCatalogRelease.TrySetResult();
-            await Task.WhenAll(configureHosts);
+            await Task.WhenAll(configureHosts).WaitAsync(token);
             Assert.All(configureHosts, task => Assert.True(task.IsCompletedSuccessfully));
-            await RefreshHostSourceGrantAsync(1);
             if (firstDispatchReturnedBeforeTurn)
+            {
                 await Task.WhenAll(sdks.Select(sdk => sdk.TurnReceived.Task)).WaitAsync(token);
-            TraceNativeStage(failures,
-                $"Both genuine Hosts reached Ready; elapsed={proofElapsed.Elapsed}, " +
-                $"firstTurnReceived={sdks[0].TurnReceived.Task.IsCompletedSuccessfully}, " +
-                $"secondTurnReceived={sdks[1].TurnReceived.Task.IsCompletedSuccessfully}.");
+                TraceNativeStage(failures,
+                    $"Both genuine Hosts reached Ready; elapsed={proofElapsed.Elapsed}, " +
+                    $"firstTurnReceived={sdks[0].TurnReceived.Task.IsCompletedSuccessfully}, " +
+                    $"secondTurnReceived={sdks[1].TurnReceived.Task.IsCompletedSuccessfully}.");
+            }
+            else
+            {
+                TraceNativeStage(failures,
+                    $"Both genuine Hosts reached Ready after public dispatch observed second Host not-ready; " +
+                    $"firstTurnReceived={sdks[0].TurnReceived.Task.IsCompletedSuccessfully}, " +
+                    $"secondTurnReceived={sdks[1].TurnReceived.Task.IsCompletedSuccessfully}, " +
+                    $"elapsed={proofElapsed.Elapsed}.");
+            }
             var held = await checkpointStore.ReadLatestAsync(token);
             Assert.NotNull(held);
             Assert.Empty(held.State.Results);
@@ -1111,6 +1149,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 TraceNativeStage(failures,
                     $"Public dispatch left second step {secondStepId} pending after its not-ready response; " +
                     $"one result joined, elapsed={proofElapsed.Elapsed}.");
+                try
+                {
+                    await hosts[0].DisposeAsync();
+                }
+                catch (RuntimeAuthorizationException error) when (error.Code == "runtime_owner_denied")
+                {
+                    TraceNativeStage(failures,
+                        "Host 0 teardown revoked its source grant after the completed child became terminal.");
+                }
+                if (!firstDispatchReturnedBeforeTurn)
+                    await RefreshHostSourceGrantAsync(1);
                 dispatchTask = StartPublicDispatch();
                 TraceNativeStage(failures,
                     $"Public dispatch retry began for pending second step {secondStepId}; " +
