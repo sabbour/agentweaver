@@ -1955,7 +1955,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         ProjectsConfigResourceServer projects,
         KnowledgeTestDatabase database,
         ProjectSummary project,
-        string tenantAdminToken)
+        string tenantAdminToken,
+        bool includeScribeChild = false)
     {
         const string modelReference = "knowledge-auth-model";
         using var updateProject = new HttpRequestMessage(
@@ -1967,6 +1968,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                 Configuration = new ProjectConfiguration
                 {
                     ModelSelection = new ModelSelectionSettings(modelReference),
+                    AgentCharters = includeScribeChild
+                        ? [new ProjectAgentCharter("actual-producer", "Producer", "engineer", "Return the accepted output.")]
+                        : [],
+                    Casting = includeScribeChild
+                        ? [new ProjectAgentCast("actual-producer", "engineer", 0)]
+                        : [],
                 },
             }),
         };
@@ -2065,6 +2072,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                         RequiredOptionsSchemaVersion = database.Options.OptionsSchemaVersion,
                         RequiredCapabilities = MemoryProviderCapabilities.All,
                     },
+                    .. (includeScribeChild ? new[]
+                    {
+                        new ProviderRequirement
+                        {
+                            Seam = ProviderSeam.Sandbox,
+                            RequiredAdapterVersion = "1.0.0",
+                            RequiredOptionsSchemaVersion = 1,
+                            RequiredCapabilities = ImmutableHashSet.Create(StringComparer.Ordinal, "container.create")
+                        }
+                    } : [])
                 ],
             },
         };

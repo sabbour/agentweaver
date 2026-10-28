@@ -272,6 +272,43 @@ public sealed class MafExecutionOutputWitnessTests
     }
 
     [Fact]
+    public void ReceiptedScribeAllowsTextOnlyCompletionButNotUnexpectedFileCaptures()
+    {
+        var identity = new SessionIdentity("project-1", "run-1", "root");
+        var plan = WorkPlanValidator.ValidateAndSnapshot(
+            WorkflowTestData.Snapshot(WorkflowTestData.Definition(
+                WorkflowDefinitionOrigin.BuiltIn,
+                WorkflowTestData.Open("implement", 0, []),
+                WorkflowTestData.Platform("scribe", 1, ["implement"], WorkflowPlatformGate.Scribe))),
+            WorkflowTestData.Plan(WorkflowTestData.Item("first", outputs: [])),
+            WorkflowTestData.SelectionContext()).Value!;
+        var state = new MafExecutionCheckpoint(1, plan.Plan.Id, 3, MafExecutionProgress.Empty with
+        {
+            WorkItems = MafExecutionProgress.Empty.WorkItems.Add("first", MafExecutionTaskStatus.Succeeded)
+        })
+        {
+            Results = ImmutableDictionary<string, string>.Empty.Add("first", "Text-only completed result.")
+        };
+        var checkpoint = new MafExecutionCheckpointSnapshot(new("root", "completed"), state);
+        var root = CreateRoot(identity, plan, checkpoint,
+            MafExecutionOutputWitness.CreateCompletePlanOutputSet(plan, checkpoint, identity).OutputSet);
+        var intent = MafScribeGateContract.CreateIntent(
+            identity, plan, state, "scribe", root.ExecutionFence, root.AcceptedSelectionHash, root.Actor);
+        var prepared = MafScribeGateContract.Prepare(checkpoint, intent);
+        var completed = MafScribeGateContract.Complete(checkpoint with { State = prepared }, intent,
+            new("first", Guid.NewGuid(), 1, Guid.NewGuid()))!;
+        checkpoint = checkpoint with { State = completed };
+        root = CreateRoot(identity, plan, checkpoint,
+            MafExecutionOutputWitness.CreateCompletePlanOutputSet(plan, checkpoint, identity).OutputSet);
+
+        var evidence = MafExecutionOwnerEvidenceContract.Serialize(root, "tenant-1", [], []);
+        Assert.Equal("no-output", Assert.Single(evidence.EnumerateArray()).GetProperty("kind").GetString());
+        var capture = CreateCapture(root, ["src/unexpected.cs"]);
+        Assert.Throws<CoordinationException>(() =>
+            MafExecutionOwnerEvidenceContract.Serialize(root, "tenant-1", [capture], []));
+    }
+
+    [Fact]
     public void OwnerEvidenceSerializerRejectsNonemptyAdmittedCaptureForNoOutputPlan()
     {
         var (_, _, root) = CreateEmptyOutputFixture();

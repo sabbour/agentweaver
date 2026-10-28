@@ -13,6 +13,15 @@ an OpenPullRequest gate. The address must be an HTTPS owner origin trusted by
 the Orchestrator's existing owner transport. Without it, workflows that need
 this executor fail binding instead of treating the gate as successful.
 
+## Scribe workflow executor
+
+`Orchestrator:KnowledgeOwner:OwnerBaseAddress` enables the selected Scribe
+platform executor. It must be an absolute HTTPS owner origin accepted by the
+existing trusted-owner transport. Calls forward the current authenticated
+actor and tenant selector; configuration does not grant Knowledge access.
+Without an owner address, a workflow containing Scribe fails executor binding.
+No checked-in deployment is enabled by this source-only configuration.
+
 ## Optional periodic issue-sync service channels
 
 Issue sync is disabled as a host capability unless its explicit TLS profiles

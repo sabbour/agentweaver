@@ -104,22 +104,30 @@ Knowledge or the Gateway is deployed.
 ## Test Scribe Knowledge output
 
 Run the producer, immutable-intent, and exact serialized-size tests, followed by
-the real Broker/Projects/Knowledge PostgreSQL composition test:
+the selected-gate Orchestrator/Broker/Projects/Knowledge PostgreSQL composition test:
 
 ```powershell
 dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --configuration Release --filter FullyQualifiedName~MafScribeTests
-dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~ScribeKnowledgeCommitLostAcknowledgmentReplaysSamePendingMemoryAfterRestart
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~SelectedScribeGateCheckpointsKnowledgeReceiptAndReplaysAfterServerRestart
 ```
 
 The composition test requires the existing Testcontainers PostgreSQL fixture.
-It commits through the real Knowledge API/native PostgreSQL provider, discards
-the acknowledgment after that commit, restarts the server, and replays the
-persisted intent. It requires one pending-trust Memory and one immutable revision,
+It selects and confirms the workflow and plan through native owner routes, seeds
+the preceding accepted child's completed result, and dispatches the real Scribe
+gate. The test persists the intent in the real checkpoint store, commits through
+the Knowledge API/native PostgreSQL provider, discards the acknowledgment after
+that commit, restarts both servers, and replays the checkpointed intent. It
+requires a compact durable receipt, one pending-trust Memory and one immutable revision,
 stable record/revision identifiers, payload conflict, and no extra writes after
 actor/scope/authority rejection. Fixture authority uses current database-backed
 project Owner/Orchestrator assignments; the test does not grant live access.
-The test does not claim shared selected-gate/checkpoint integration, deployment,
-or model execution.
+The test does not claim deployment or model execution. The retained
+`ScribeKnowledgeCommitLostAcknowledgmentReplaysSamePendingMemoryAfterRestart`
+test covers the isolated Knowledge client only, not selected-gate integration.
+The completed-child fixture includes a Source Control capture admitted through
+the existing PostgreSQL owner path. The successful replay must retain both
+Scribe's compact receipt and the plan's independent source-output witness.
+Scribe's Memory receipt cannot substitute for that source evidence.
 
 The coverage runner used in CI saves TRX results, Cobertura coverage, and
 source identity alongside the test output. Match a result to the exact source
