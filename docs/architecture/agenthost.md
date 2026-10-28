@@ -587,6 +587,14 @@ Its timestamp is actual availability evidence; compressed pull bytes describe th
 AgentHost records `configured` after authenticated native session creation and `ready` after current prerequisite checks.
 The readiness receipt combines all five observations with the exact image and current source grant.
 Readiness does not infer completion from a Kubernetes Ready condition.
+Before spawning or delivering child work, Orchestrator verifies placement egress separately
+from Host execution readiness. The AgentSandbox placement can still be `Pending`, but must
+carry all three placement phases, the exact pinned image digest and compressed size, verified
+isolation and workspace attachment, a verified network generation, and no startup failure.
+Environment then rereads the exact lifecycle fence, accepted selection, and Cilium generation.
+Only AgentHost supplies `configured` and `ready`; child execution still requires its genuine
+readiness receipt. A confirmed dispatchable plan keeps the existing root registration current,
+but does not grant arbitrary root model or tool operations.
 Ordinary configuration also reports whether the SDK used a fresh session, a restored native cache,
 or journal-rebuilt context. Native-cache evidence carries the Events acknowledgment for the source
 cache and is bound to the replacement Host instance, registration revision, fence, and returned SDK

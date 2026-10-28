@@ -345,9 +345,10 @@ public static partial class CoordinationEndpoints
     {
         if (decision.State.Fence != owner.ExecutionFence ||
             decision.SelectionHash != owner.AcceptedSelectionHash ||
-            decision.State.ConfirmedWorkPlan is not null ||
-            decision.State.CandidateWorkPlan is not null ||
-            decision.State.PendingGate is not null)
+            !(decision.State.CanDispatch ||
+              (decision.State.ConfirmedWorkPlan is null &&
+               decision.State.CandidateWorkPlan is null &&
+               decision.State.PendingGate is null)))
             throw new CoordinationException(
                 "runtime_owner_context_unavailable", StatusCodes.Status409Conflict);
     }

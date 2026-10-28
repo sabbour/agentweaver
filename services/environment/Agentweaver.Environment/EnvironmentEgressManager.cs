@@ -340,7 +340,7 @@ public sealed class EnvironmentEgressManager(
             request.Validate();
             // Check the complete owner fence before reading authorization or provider state.
             await lifecycleStore.RequireActiveAsync(request.Fence, cancellationToken).ConfigureAwait(false);
-            var selection = await GetAuthorizedSelectionAsync(
+            var selection = await GetAuthorizedRunEnvironmentSelectionAsync(
                 caller, request.Fence.Owner, cancellationToken).ConfigureAwait(false);
             if (!string.Equals(
                     selection.RunSelection.ContextRevision, request.ContextRevision, StringComparison.Ordinal))
@@ -375,7 +375,7 @@ public sealed class EnvironmentEgressManager(
 
             // Refresh both authority and selection after provider I/O so an intervening change cannot produce a receipt.
             await lifecycleStore.RequireActiveAsync(request.Fence, cancellationToken).ConfigureAwait(false);
-            var current = await GetAuthorizedSelectionAsync(
+            var current = await GetAuthorizedRunEnvironmentSelectionAsync(
                 caller, request.Fence.Owner, cancellationToken).ConfigureAwait(false);
             if (!SameAuthorizationContext(selection.Authorization, current.Authorization))
                 return VerificationFailure(
