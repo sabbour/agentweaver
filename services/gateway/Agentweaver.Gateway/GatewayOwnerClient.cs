@@ -299,6 +299,7 @@ public sealed partial class GatewayOwnerClient(
                 generation.Mode != mode)
                 throw OwnerContractFailure("casting_generation_owner_contract_invalid");
 
+            // Replaying a completed generation returns its stored proposal instead of running the model again.
             if (generation.State == "completed")
             {
                 await WriteCastingProposalAsync(

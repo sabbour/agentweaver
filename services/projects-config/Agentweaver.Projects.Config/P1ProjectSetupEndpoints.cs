@@ -202,6 +202,7 @@ internal static class P1ProjectSetupEndpoints
         {
             await using var connection = await dataSource.OpenConnectionAsync(cancellationToken)
                 .ConfigureAwait(false);
+            // Keep the invocation lock, live grant checks, and project/audit writes in one database function.
             await using var command = new NpgsqlCommand(
                 """
                 SELECT projects_config.issue_p1_project(
