@@ -1,4 +1,5 @@
 using Agentweaver.Abstractions;
+using Agentweaver.AgentRuntime;
 using Agentweaver.Identity;
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
@@ -159,6 +160,101 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
                 WHERE grant_id = {sourceReceipt.GrantId}
                 """));
         Assert.Contains("advance by one", skippedRevision.MessageText);
+    }
+
+    [Fact]
+    public async Task ModelCredentialReceiptsScopeRedemptionWhenRuntimeGrantsShareOneSecret()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        var options = CreateOptions(dataSource);
+        await IdentityBrokerMigrator.MigrateAsync(dataSource, options);
+        var now = TimeProvider.System.GetUtcNow();
+        var secret = new SecretRef("model-api", "model-v1");
+        var resolver = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.Byok,
+                    new RuntimeByokProvider("openai", new Uri("https://byok.test/v1"), "responses"))
+                {
+                    SupportedReasoningEfforts = ["low", "medium", "high", "xhigh"]
+                }
+            });
+        var modelPin = resolver.Pin("accepted-model-reference", ModelSourceMode.Byok);
+        var registration = new StorageOwner().Registration;
+        RuntimeRegistration ForRuntime(string sessionId) => registration with
+        {
+            RuntimeInstanceId = Guid.NewGuid(),
+            Binding = registration.Binding with
+            {
+                SessionId = sessionId,
+                ModelSelectionReference = "accepted-model-reference",
+                ModelSourceMode = ModelSourceMode.Byok,
+                ModelBindingPin = modelPin,
+                ModelCredentialReference = secret
+            },
+            ExpiresAt = now.AddMinutes(4)
+        };
+        var firstRegistration = ForRuntime("model-session-one");
+        var secondRegistration = ForRuntime("model-session-two");
+        var owner = new MultipleStorageOwner(firstRegistration, secondRegistration);
+        var actor = CreateActor();
+        var backend = new TrackingSecretRedemption(now.AddMinutes(3));
+        await using var db = new IdentityBrokerDbContext(options);
+        var authority = new RuntimeGrantAuthority(
+            db, owner, new StorageDelivery(), CreatePolicy(), actor, TimeProvider.System);
+        var first = await authority.IssueModelCredentialGrantAsync(
+            firstRegistration.RuntimeInstanceId, Guid.NewGuid());
+        var second = await authority.IssueModelCredentialGrantAsync(
+            secondRegistration.RuntimeInstanceId, Guid.NewGuid());
+
+        var identityAuthority = new IdentityGrantAuthority(db, TimeProvider.System);
+        var request = new SecretRedemptionRequest(secret, RuntimeSecretPurposes.ModelSession, "run");
+        var trustedActor = new TrustedActorContext(
+            firstRegistration.Binding.ActorId, firstRegistration.Binding.ProjectId, firstRegistration.Binding.RunId);
+        var matchingGrants = await identityAuthority.FindGrantsAsync(
+            trustedActor, request, CancellationToken.None);
+        Assert.Equal(2, matchingGrants.Count);
+        var ambiguous = await Assert.ThrowsAsync<SecretAuthorizationDeniedException>(() =>
+            new AuthorizedSecretRedemption(trustedActor, identityAuthority, backend, TimeProvider.System)
+                .RedeemAsync(request, CancellationToken.None));
+        Assert.Equal(SecretAuthorizationDenialReason.Ambiguous, ambiguous.Reason);
+        Assert.Equal(0, backend.Calls);
+
+        var firstCredential = await authority.RedeemModelCredentialAsync(first, backend, CancellationToken.None);
+        var secondCredential = await authority.RedeemModelCredentialAsync(second, backend, CancellationToken.None);
+        Assert.Equal(2, backend.Calls);
+        firstCredential.Credential.Invalidate();
+        secondCredential.Credential.Invalidate();
+
+        var crossRuntime = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            authority.RedeemModelCredentialAsync(
+                first with { RuntimeInstanceId = secondRegistration.RuntimeInstanceId },
+                backend, CancellationToken.None));
+        Assert.Equal("runtime_model_grant_receipt_invalid", crossRuntime.Code);
+
+        var changing = await authority.IssueModelCredentialGrantAsync(
+            firstRegistration.RuntimeInstanceId, Guid.NewGuid());
+        backend.BeforeReturn = () => identityAuthority.RevokeAsync(
+            changing.GrantId, changing.Revision, Guid.NewGuid().ToString("N"));
+        var changed = await Assert.ThrowsAsync<SecretAuthorizationDeniedException>(() =>
+            authority.RedeemModelCredentialAsync(changing, backend, CancellationToken.None));
+        Assert.Equal(SecretAuthorizationDenialReason.Revoked, changed.Reason);
+        Assert.NotNull(backend.LastIssued);
+        Assert.False(backend.LastIssued.IsUsable());
+        backend.BeforeReturn = null;
+
+        var replacement = await authority.IssueModelCredentialGrantAsync(
+            secondRegistration.RuntimeInstanceId, Guid.NewGuid());
+        var stale = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            authority.RedeemModelCredentialAsync(second, backend, CancellationToken.None));
+        Assert.Equal("runtime_model_grant_stale", stale.Code);
+        await identityAuthority.RevokeAsync(
+            replacement.GrantId, replacement.Revision, Guid.NewGuid().ToString("N"));
+        var revoked = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            authority.RedeemModelCredentialAsync(replacement, backend, CancellationToken.None));
+        Assert.Equal("runtime_model_grant_stale", revoked.Code);
+        Assert.Equal(3, backend.Calls);
     }
 
     [Fact]
@@ -421,6 +517,23 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
         }
     }
 
+    private sealed class MultipleStorageOwner(params RuntimeRegistration[] registrations)
+        : IRuntimeRegistrationOwner
+    {
+        private readonly Dictionary<Guid, RuntimeRegistration> _registrations =
+            registrations.ToDictionary(registration => registration.RuntimeInstanceId);
+
+        public Task<RuntimeRegistration> ReadCurrentAsync(
+            Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _ = actor.Bearer.GetValue();
+            return _registrations.TryGetValue(runtimeInstanceId, out var registration)
+                ? Task.FromResult(registration)
+                : throw new RuntimeAuthorizationException("runtime_registration_unknown");
+        }
+    }
+
     private sealed class StorageDelivery : IRuntimeBootstrapDelivery
     {
         public SecretCredential? Credential { get; private set; }
@@ -452,6 +565,28 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
             };
         }
 
+    }
+
+    private sealed class TrackingSecretRedemption(DateTimeOffset expiresAt) : ISecretRedemption
+    {
+        public int Calls { get; private set; }
+        public SecretCredential? LastIssued { get; private set; }
+        public Func<Task>? BeforeReturn { get; set; }
+
+        public async Task<SecretCredential> RedeemAsync(
+            SecretRedemptionRequest request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Equal("model-api", request.Secret.Id);
+            Assert.Equal("model-v1", request.Secret.Version);
+            Assert.Equal(RuntimeSecretPurposes.ModelSession, request.Purpose);
+            Assert.Equal("run", request.RunId);
+            Calls++;
+            LastIssued = new SecretCredential("controlled-model-secret", expiresAt);
+            if (BeforeReturn is { } beforeReturn)
+                await beforeReturn();
+            return LastIssued;
+        }
     }
 
     private sealed class StorageClock : TimeProvider

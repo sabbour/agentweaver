@@ -586,6 +586,9 @@ An exact Pod UID and image digest `Pulled` event also proves availability when t
 Its timestamp is actual availability evidence; compressed pull bytes describe the pinned image, not new network traffic.
 AgentHost records `configured` after authenticated native session creation and `ready` after current prerequisite checks.
 The readiness receipt combines all five observations with the exact image and current source grant.
+That Observe grant targets the registration's observation endpoint, not its configure endpoint.
+Orchestrator requires that exact audience for workflow dispatch, casting generation, and resume;
+configure-endpoint and foreign audiences remain invalid.
 Readiness does not infer completion from a Kubernetes Ready condition.
 Before spawning or delivering child work, Orchestrator verifies placement egress separately
 from Host execution readiness. The AgentSandbox placement can still be `Pending`, but must
