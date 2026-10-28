@@ -66,6 +66,14 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
     public Guid NativeMessageId { get; private set; }
     public Guid NativeTurnEndEventId { get; private set; }
     public Guid NativeCompletionReceiptEventId { get; private set; }
+    public string CurrentNativeEventCursor
+    {
+        get
+        {
+            lock (_eventsLock)
+                return $"controlled-cursor-{_durableEvents.Count}";
+        }
+    }
     public Func<Task>? BeforeNativeFileResponse { get; set; }
     public Action? NativeFileResponseHandled { get; set; }
     public TaskCompletionSource TurnReceived { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -132,6 +140,16 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
             }
         });
     }
+
+    public Task EmitUsageCheckpointAsync(Guid eventId, int sequence) =>
+        EmitNativeEventAsync("session.usage_checkpoint", eventId, new
+        {
+            totalNanoAiu = (double)sequence,
+            usageAccountingWatermarks = new Dictionary<string, int>
+            {
+                ["controlled-native-session"] = sequence
+            }
+        });
 
     public async Task<JsonElement> RequestReadPermissionAsync(CancellationToken cancellationToken)
     {

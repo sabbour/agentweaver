@@ -385,11 +385,15 @@ Recovery does not replay model turns, tools, or external effects.
 Cancellation waits for the native abort idle event; a failed abort prevents another turn or cache capture.
 
 The private native-receipt bridge records the SDK's durable cursor before sending.
-After idle, it reads bounded, persisted events through the SDK event-log API.
-It binds the actual native send message ID to the user event, turn start, turn end,
-and completion receipt. The receipt's event range must match those native IDs.
-The captured assistant bytes must match the returned answer.
-An idle event alone cannot produce this proof.
+After idle, it reads bounded, persisted events through the SDK event-log API,
+continuing each page from the cursor returned by the preceding page. The collected
+range must have unique event IDs; a duplicate across pages fails closed rather than
+being counted twice. It binds the actual native send message ID to the user event,
+turn start, turn end, and completion receipt. The receipt's event range must match
+those native IDs. The captured assistant bytes must match the returned answer.
+Only the complete observation is recorded through the existing authenticated
+`POST /internal/runtime/turns/observations` route. An idle event alone cannot produce
+this proof.
 
 When present, a native usage checkpoint retains its reported nano-AIU and source
 sequence watermarks. This observed amount is not proof that all usage has settled.
