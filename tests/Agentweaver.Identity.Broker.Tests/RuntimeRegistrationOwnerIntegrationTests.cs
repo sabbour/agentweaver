@@ -70,7 +70,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         });
 
     [Fact]
-    public Task AzureByokNativeUsageUsesBrokerCoreAndEventsWithExactDispatchProvenance() =>
+    public Task AzureByokNativeAccountingLostReplyReplaysWithFreshTotalsAndRejectsStaleProof() =>
         RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
             false, null, false, OwnerRunFailureState.Indeterminate, azureByok: true,
             reserveObservedToolInvocation: true);
@@ -1195,7 +1195,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         if (accountNativeUsage is not null)
             await VerifyRecordedNativeOwnerReadAsync(
                 Assert.IsType<HttpClient>(ownerClient), actor, recorded, references, cancellationToken);
-        var accounted = await sourceClient.CompleteNativeTurnAsync(session, recorded, references, cancellationToken);
+        var accounted = reserveObservedToolInvocation
+            ? await VerifyNativeAccountingLostReplyAsync(session, actor, recorded, references,
+                previousSource, sourceCredentialValue, routes, failures, ownerSchema, cancellationToken)
+            : await sourceClient.CompleteNativeTurnAsync(session, recorded, references, cancellationToken);
         RuntimeNativeTurnContract.ValidateAccounted(accounted, recorded, references);
         Assert.Equal(intent.MessageId, accounted.Recorded.Admission.MessageId);
         Assert.Equal(intent.MessageId, accounted.Snapshot.DispatchId);
