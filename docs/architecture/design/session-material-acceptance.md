@@ -14,14 +14,29 @@ redacted JSONL result. It also records the authorized actor and tenant selectors
 the runner-owned project/run/session fence, invocation and fixture IDs, and
 available selection revisions. It never retains bearer credentials.
 
-The current authorized P1 client discovers and invokes Gateway operations.
-Session-material writes and reads are internal Events owner routes and require
-runtime authorization, while the supplied P1 identity provider issues a
-run-bound user token. The runner-owned fixture is scoped to its selected P1
-journey and has no approved session-material creation or cleanup boundary. The
-current authorized acceptance path also exposes neither native Host replacement
-and recovery nor fault hooks for owner revocation, stale registration, retry
-conflicts, or missing required turn material.
+The existing Host producer path is supported: accepted workflow-bound dispatch
+reaches `RuntimeAgentHost.DispatchAsync`, which calls
+`AuthorizedRuntimeSession.SendNativeTurnAsync` and commits user/assistant
+turns and SDK cache through the Events owner. The public native dispatch proof
+also observes the native sends and joined results.
+
+The P1 consumer still lacks a contract that binds its accepted invocation to
+that dispatch and correlates the resulting material acknowledgment/readback.
+`run-p1` does not invoke Orchestrator dispatch, the native CLI stops after its
+read-only authority join, and the Host readiness evidence is not a
+post-turn material receipt. Events material reads require the runtime
+authorization retained by Host and are not exposed through the P1 provider.
+Therefore the P1 flow cannot yet prove that its own accepted turn produced the
+observed acknowledgment, committed position, and cursor. This is a missing
+P1 accepted-invocation-to-authorized-readback consumer contract, not a missing
+production material producer.
+
+Compatible replacement/recovery, missing or expired material, and
+revocation/stale/retry fault hooks are separate unsupported acceptance
+boundaries; they remain blocked rather than inferred from the producer path or
+controlled tests. Existing journal-owned material remains under its current
+retention policy. The P1 fixture's own cleanup is recorded separately; this
+scenario does not require or imply a new material-deletion endpoint.
 
 These boundaries leave the deployed session-material scenario **blocked**.
 The result records the intended typed turn route as not sent, its result as not
@@ -52,9 +67,9 @@ run, session, invocation, and current execution fence:
    duplicate retry and changed-payload retry, and the required-material
    failure through supported owner boundaries. If an authorized fault or
    restart boundary is unavailable, preserve the exact gap as blocked.
-6. Clean up only invocation-owned disposable fixtures through their recorded
-   owner path. Keep every cleanup result visible; do not sweep containers or
-   remove historical objects.
+6. Record cleanup of the invocation-owned P1 fixture through its existing
+   owner path. Keep its result visible; retained journal material follows the
+   existing retention policy and is not deleted by this scenario.
 
 ## Controlled evidence
 
