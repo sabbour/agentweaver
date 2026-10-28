@@ -101,6 +101,57 @@ npm --prefix apps/web test
 These tests use test-owned stores and owner responses. They do not prove that
 Knowledge or the Gateway is deployed.
 
+## Test native two-host dispatch and joining
+
+On Linux with a Docker-compatible engine, provide two isolated mountpoints
+before running the focused composition test. The production Host rejects an
+ordinary directory in place of a workspace mount. CI mounts two disposable
+64 MiB tmpfs workspaces for Broker shards and unmounts them afterward.
+For a containerized SDK runner, pass
+`--tmpfs /workspace/agentweaver/native-join-workspace-1 --tmpfs /workspace/agentweaver/native-join-workspace-2` to the
+container engine. Run the following command inside that Linux environment:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~PublicNativeChildrenJoinBeforeIndependentReviewGate
+```
+
+This source test uses disposable Testcontainers PostgreSQL and enters through
+the public confirmed-plan dispatch route. Two distinct production
+`RuntimeAgentHost` instances execute the accepted child tasks. The SDK wire
+peer, Kubernetes responses, and external object storage are controlled fixtures;
+they are not live providers or paid model execution. Completed child results
+must come from the runtime path, not pre-seeded checkpoint results.
+
+The test holds child completion to check that the selected platform gate cannot
+run early, then joins real runtime accounting and results and verifies a public
+dispatch retry is rejected with 409 while the selected gate is pending. The
+fixture answers that gate through its public route afterward. Completed child
+sessions no longer expose runtime owner context; teardown verifies the Broker's
+authority-loss path revoked each source grant and that local Host/SDK resources
+were disposed.
+Readiness consumes Identity's Observe grant for the registered observation
+endpoint, not the Host configure endpoint; wrong audiences and expired grants
+remain invalid.
+Linux is required for the production workspace and native placement checks.
+The fixture records UTC wall-clock boundaries and monotonic elapsed time for
+each Host's Sandbox provisioning, registration, TestServer startup, bootstrap,
+and `RuntimeAgentHost.ConfigureAsync`, including SDK request arrivals and
+response durations. Host and Broker liveness checks use system time; the test does not freeze their clock to
+keep a lease or registration alive. Owner authority and credential expiry checks
+remain active. Reservation and provider-operation leases, including retirement,
+expire after 60 seconds; a valid transition into `Active` assigns a fixed
+600-second lifetime. Runtime registration uses the exact persisted active
+expiry, and credential grants retain their existing lifetime and authority caps.
+Only this isolated native test fixture uses a 60-second Configured phase budget
+and a 120-second total startup budget; production remains at 30/180 seconds.
+Passing this test does not prove production-budget or live AKS acceptance.
+A local expiry failure is not a passing native receipt. Each Host starts `ConfigureAsync` as
+soon as its Host bootstrap receiver accepts delivery, without waiting for the
+outer Broker request to return; this overlaps peer-fixture setup without
+changing production authority checks or startup budgets.
+This is a local source-composition check, not deployed native acceptance; the
+broader approved-source acceptance gap remains open.
+
 ## Test Scribe Knowledge output
 
 Run the producer, immutable-intent, and exact serialized-size tests, followed by
