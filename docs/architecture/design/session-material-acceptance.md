@@ -58,14 +58,29 @@ run, session, invocation, and current execution fence:
 
 ## Controlled evidence
 
-`RuntimeRegistrationOwnerIntegrationTests`,
-`RuntimeSessionRecoveryTests`, and `SessionMaterialPostgresTests` provide
-controlled owner, runtime-recovery, and material-store source evidence. They
-are not deployed acceptance. The P1 scenario records these source references
-as not executed; it does not convert their existence into a live result.
-The 0.x checkpoint-store and Host round-trip tests inform the fresh-instance
-recovery and controlled-turn pattern, but their APIs and outcomes are not
-v1 evidence.
+The scenario lists the precise existing controlled test cases for the owner
+turn/acknowledgment, replacement restore, cache rebuild, retry, and required
+material boundaries. These references are a coverage map, not test receipts:
+`controlledEvidence.status` stays `not-executed` in the P1 result because this
+runner does not execute or consume .NET test results.
+
+Run the controlled cases from the repository root:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~AzureByokNativeAccountingLostReplyReplaysWithFreshTotalsAndRejectsStaleProof
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-restore --configuration Release --filter "FullyQualifiedName~ActualSdkFilesystemCallbacksCaptureOpaqueFilesAndResumeTheSameLogicalSession|FullyQualifiedName~LostOrIncompatibleCacheRebuildsNativeContextWithoutReplayingATurn"
+dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --configuration Release --filter FullyQualifiedName~SessionMaterialEndpointRetentionTests
+dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --configuration Release --filter "FullyQualifiedName~ExactMaterialRetriesAndRestartReturnOriginalRecordedAcknowledgment|FullyQualifiedName~ExpiredRequiredTurnsFailAndOnlyExpiredOptionalCacheMapsToNotFound"
+```
+
+The Broker integration case and Events/Postgres cases use disposable
+Testcontainers PostgreSQL and fail when a Docker-compatible engine is
+unavailable. The two `RuntimeSessionRecoveryTests` cases and the endpoint
+retention tests are controlled local tests without that database fixture.
+None is deployed acceptance. Source tests do not attest a live actor,
+deployment, image, owner receipt, repeated external-effect behavior, or
+cleanup result, and their presence never changes the P1 session-material
+status.
 
 The JSONL scenario records non-attempted operations explicitly, distinguishes
 optional-cache recovery from required-turn failure, and preserves the precise
