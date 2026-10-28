@@ -46,7 +46,7 @@ internal static class MafExecutionEgressGuard
             registration.ExpiresAt <= now ||
             binding.ProjectId != projectId || binding.RunId != runId ||
             binding.SessionId != sessionId || binding.ExecutionFence != executionFence ||
-            binding.AcceptedSelectionHash != selectionHash ||
+            !string.Equals(binding.AcceptedSelectionHash, selectionHash, StringComparison.OrdinalIgnoreCase) ||
             binding.ContextRevision != contextRevision ||
             readiness.ContractVersion != 1 || placement.ContractVersion != 1 ||
             placement.TenantId != binding.TenantId ||
@@ -64,11 +64,29 @@ internal static class MafExecutionEgressGuard
             placement.Resource.Generation != binding.PlacementGeneration ||
             observation.Resource != placement.Resource ||
             observation.FencingGeneration != placement.CurrentFencingGeneration ||
-            observation.State != SandboxObservedState.Ready ||
+            observation.State is not (SandboxObservedState.Pending or SandboxObservedState.Ready) ||
+            !observation.VmIsolationVerified ||
+            !observation.WorkspaceAttachmentVerified ||
+            observation.StartupFailure is not null ||
+            observation.StartupPhases.IsDefault ||
+            observation.StartupPhases.Any(phase =>
+                phase is null || phase.ContractVersion != 1 || !Enum.IsDefined(phase.Phase)) ||
+            observation.StartupPhases.Select(phase => phase.Phase).Distinct().Count() !=
+                observation.StartupPhases.Length ||
+            !observation.StartupPhases.Any(phase => phase.Phase == SandboxStartupPhase.Scheduled) ||
+            !observation.StartupPhases.Any(phase => phase.Phase == SandboxStartupPhase.Started) ||
+            observation.State == SandboxObservedState.Ready &&
+                (!observation.StartupPhases.Any(phase => phase.Phase == SandboxStartupPhase.Configured) ||
+                 !observation.StartupPhases.Any(phase => phase.Phase == SandboxStartupPhase.Ready)) ||
+            observation.StartupPhases.SingleOrDefault(phase => phase.Phase == SandboxStartupPhase.ImageReady)
+                is not { } imageReady ||
+            placement.Image is null || placement.Image != binding.Image ||
+            imageReady.ImageDigest != placement.Image.Digest ||
+            imageReady.CompressedPullBytes != placement.Image.CompressedPullBytes ||
             observation.VerifiedNetworkGeneration is not > 0 ||
             placement.RuntimeOwnerContext is not { } owner ||
             owner.ContextRevision != contextRevision ||
-            owner.AcceptedSelectionHash != selectionHash ||
+            !string.Equals(owner.AcceptedSelectionHash, selectionHash, StringComparison.OrdinalIgnoreCase) ||
             owner.ExecutionFence != executionFence ||
             owner.SessionId != sessionId)
             throw new CoordinationException("maf_execution_egress_stale", StatusCodes.Status409Conflict);

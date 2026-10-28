@@ -3741,11 +3741,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                        fixedBoundary.StateVersion,
                        LogicalTurnCompletion.Completed)))
             await AssertStatusAsync(fixedCompletionResponse, HttpStatusCode.OK);
-        using (var unmappedOwner = await SendAsync(
+        using (var confirmedRootOwner = await SendAsync(
                    orchestrator, HttpMethod.Get,
                    $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/runtime-owner-context",
                    runToken, [TenantId]))
-            await AssertStatusAsync(unmappedOwner, HttpStatusCode.Conflict);
+        {
+            await AssertStatusAsync(confirmedRootOwner, HttpStatusCode.OK);
+            var rootOwner = await ReadJsonAsync<RuntimeOwnerContext>(confirmedRootOwner);
+            Assert.Equal(RuntimeActionContract.CoordinatorRootStepId, rootOwner.AgentId);
+            Assert.Null(rootOwner.WorkflowStepId);
+            Assert.Equal(fixedChild.Node.ExecutionFence, rootOwner.ExecutionFence);
+        }
         using var secondChildResponse = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,

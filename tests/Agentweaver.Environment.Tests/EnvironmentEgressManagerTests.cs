@@ -176,6 +176,9 @@ public sealed class EnvironmentEgressManagerTests
         string contextRevision = "signed-selection-revision-1") =>
         new(1, fence ?? ApplyRequest().Fence, policyGeneration, contextRevision);
 
+    private static ProjectAuthorizationContextResponse VerificationAuthorization() =>
+        AuthorizationContext(canWrite: false, boundProjectId: ProjectId, boundRunId: RunId);
+
     internal static EnvironmentEgressManager Manager(
         FakeProjectsConfigClient projects,
         FakeCiliumPolicyResourceStore store,
@@ -236,7 +239,9 @@ public sealed class EnvironmentEgressManagerTests
         var before = Assert.Single(store.Resources).Value;
         var ownerEffect = lifecycle.LastEffect;
 
-        var verified = await manager.VerifyCurrentAsync(
+        var readManager = Manager(
+            new FakeProjectsConfigClient(VerificationAuthorization(), Selection()), store, lifecycle);
+        var verified = await readManager.VerifyCurrentAsync(
             Caller(), VerificationRequest(), CancellationToken.None);
 
         var receipt = Assert.IsType<RuntimeEgressVerificationReceipt>(verified.Receipt);
@@ -267,7 +272,7 @@ public sealed class EnvironmentEgressManagerTests
     public async Task CurrentVerificationRejectsUntrackedPolicyGeneration()
     {
         var manager = Manager(
-            new FakeProjectsConfigClient(AuthorizationContext(), Selection()),
+            new FakeProjectsConfigClient(VerificationAuthorization(), Selection()),
             new FakeCiliumPolicyResourceStore());
 
         var response = await manager.VerifyCurrentAsync(
@@ -280,7 +285,7 @@ public sealed class EnvironmentEgressManagerTests
     public async Task CurrentVerificationRejectsDifferentAuthorizedSelectionRevision()
     {
         var manager = Manager(
-            new FakeProjectsConfigClient(AuthorizationContext(), Selection()),
+            new FakeProjectsConfigClient(VerificationAuthorization(), Selection()),
             new FakeCiliumPolicyResourceStore());
 
         var response = await manager.VerifyCurrentAsync(
@@ -297,9 +302,9 @@ public sealed class EnvironmentEgressManagerTests
         var initialProjects = new FakeProjectsConfigClient(AuthorizationContext(), Selection());
         Assert.True((await Manager(initialProjects, store, lifecycle)
             .ApplyAndVerifyAsync(Caller(), ApplyRequest(), CancellationToken.None)).ReadyForDispatch);
-        var changedAuthorization = AuthorizationContext() with { MembershipRevision = 7 };
+        var changedAuthorization = VerificationAuthorization() with { MembershipRevision = 7 };
         var verificationProjects = new FakeProjectsConfigClient(
-            [AuthorizationContext(), AuthorizationContext(), changedAuthorization, changedAuthorization],
+            [VerificationAuthorization(), VerificationAuthorization(), changedAuthorization, changedAuthorization],
             Selection());
         var manager = Manager(verificationProjects, store, lifecycle);
 
@@ -307,6 +312,33 @@ public sealed class EnvironmentEgressManagerTests
             Caller(), VerificationRequest(), CancellationToken.None);
 
         Assert.Equal(RuntimeEgressVerificationFailureCodes.AuthorizationChanged, response.FailureCode);
+    }
+
+    [Theory]
+    [InlineData("unbound")]
+    [InlineData("project")]
+    [InlineData("run")]
+    [InlineData("permission")]
+    public async Task CurrentVerificationRequiresExactRunReadAuthorityWithoutProviderEffects(string mismatch)
+    {
+        var authority = mismatch switch
+        {
+            "unbound" => AuthorizationContext(),
+            "project" => VerificationAuthorization() with { BoundProjectId = "other-project" },
+            "run" => VerificationAuthorization() with { BoundRunId = "other-run" },
+            _ => AuthorizationContext(canReadSelection: false, canWrite: false,
+                boundProjectId: ProjectId, boundRunId: RunId)
+        };
+        var projects = new FakeProjectsConfigClient(authority, Selection());
+        var store = new FakeCiliumPolicyResourceStore();
+        var lifecycle = new FakeEnvironmentLifecycleStore(ApplyRequest().Fence);
+        var response = await Manager(projects, store, lifecycle).VerifyCurrentAsync(
+            Caller(), VerificationRequest(), CancellationToken.None);
+
+        Assert.Equal(RuntimeEgressVerificationFailureCodes.AuthorizationChanged, response.FailureCode);
+        Assert.Equal(0, projects.SelectionReads);
+        Assert.Empty(store.Resources);
+        Assert.Null(lifecycle.LastEffect);
     }
 
     [Fact]
