@@ -231,11 +231,13 @@ receipt, status and endpoint fields are not authority. Reads use these real rout
 | --- | --- |
 | Core | `/internal/runtime/registrations/{runtimeInstanceId}` |
 | Core | `/internal/projects/{projectId}/runs/{runId}/p1-invocation-binding` |
+| Core | `/internal/runtime/sources/{runtimeInstanceId}` |
 | Environment | `/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}/p1-creation-binding` |
+| Host | `POST /runtime/v1/turns/fixed-credit-denials/select-current` with only `runtimeInstanceId` |
 | Host | `/runtime/v1/readiness/p1-evidence` |
 
-Each GET rejects redirects, uses no-store, a 10-second transport/body deadline,
-requires `Cache-Control: no-store`, and enforces a streamed 64-KiB response
+Each owner call rejects redirects, uses no-store, a 10-second transport/body
+deadline, requires `Cache-Control: no-store`, and enforces a streamed 64-KiB response
 limit. The current registration supplies the route identities and must match
 the trusted actor. Core must identify the same root session, accepted selection
 and execution fence. Environment's exact P1 binding, Environment fence, four
@@ -250,16 +252,37 @@ response fields reject. Owner bodies, credentials, registration endpoints and
 model credential references are never returned or printed. Host hash fields
 are checked for shape only, not rehashed as independent cryptographic proof.
 
+The trusted provider also sends a locator-only
+`POST /runtime/v1/turns/fixed-credit-denials/select-current` to Host with
+`{ runtimeInstanceId }`; caller input never contains a request ID, request hash,
+receipt, or endpoint. Host binds that locator to its authenticated current
+session and brackets the Orchestrator read with current-authority checks.
+Orchestrator derives the selector from its current registration, actor, Observe
+grant, and current SDK source, then checks the exact run/session, registration
+revision, execution fence, source hash, and grant against persisted outbox
+records. Only one complete guard/no-send pair is returned; no match or multiple
+matches yield a null pair, never a latest-record choice. The provider checks the
+exact pair shape and its registration, current readiness/source grant, source
+hash, native-session hash, and complete empty-range fields. Closing authenticated
+Host selection and readiness reads must retain the same pair and grant revision;
+the grant must remain unexpired. Current SDK model pins, reasoning effort and
+prompt bounds must match the registration's source contract. This is a fixed
+zero-credit guard pair only: it does not prove a live CLI turn, generic dispatch
+no-send, cursor continuation, completion acknowledgment, child effects, or
+external-effect deduplication.
+
 A valid join still returns `status: "blocked"` and
 `code: "native_no_send_effect_proof_missing"`, with
 `acceptanceEvidence: false` and `nativeNoSendProven: false`. Its partial
-observation contains only joined operation IDs and provider-returned claim/Pod
-identities. The journey authorizer always denies and the readiness adapter
-throws. Even a fake authority result of `passed` or `acceptanceEvidence: true`
-cannot unblock the CLI. This bounded consumer does not provide native no-send,
-cursor, effect, or dispatch acknowledgments, the other runner proof slots,
-child execution, network isolation, storage-byte isolation, or generic
-replacement. It makes no live acceptance claim.
+observation contains only joined operation IDs, provider-returned claim/Pod
+identities, and safe identifiers/hashes for the selected fixed-credit pair.
+The journey authorizer always denies and the readiness adapter throws. Even a
+fake authority result of `passed` or `acceptanceEvidence: true` cannot unblock
+the CLI. This bounded consumer does not provide live-turn, generic no-send,
+cursor-continuation, completion, child-effect, or external-effect-deduplication
+proof, the other runner proof slots, child execution, network isolation,
+storage-byte isolation, or generic replacement. It makes no live acceptance
+claim.
 
 Run the fixture-free source-route/type contract test and controlled transport
 regressions with:

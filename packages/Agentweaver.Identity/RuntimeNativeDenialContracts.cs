@@ -90,9 +90,26 @@ public sealed record RuntimeFixedCreditGuardReadRequest(
     public override string ToString() => nameof(RuntimeFixedCreditGuardReadRequest) + " [REDACTED]";
 }
 
+/// <summary>Owner-derived selector for the unique current fixed-credit guard/no-send pair.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeFixedCreditGuardSelectionRequest(
+    RuntimeCredentialHttpRequest? Authorization,
+    Guid RuntimeInstanceId,
+    long RegistrationRevision,
+    long ExecutionFence)
+{
+    public override string ToString() => nameof(RuntimeFixedCreditGuardSelectionRequest) + " [REDACTED]";
+}
+
 /// <summary>Stored fixed-credit receipt and optional proof that the native call was not sent.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeFixedCreditGuardReadResult(
+    RuntimeFixedCreditGuardReceipt? Receipt,
+    RuntimeFixedCreditNoSendReceipt? Evidence);
+
+/// <summary>The selected current pair, or null fields when no unique complete pair exists.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeFixedCreditGuardSelectionResult(
     RuntimeFixedCreditGuardReceipt? Receipt,
     RuntimeFixedCreditNoSendReceipt? Evidence);
 
@@ -508,6 +525,48 @@ public static class RuntimeFixedCreditGuardContract
             !Enum.IsDefined(request.Stage))
             throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_request_invalid");
         RuntimeContractValidation.ValidateHash(request.RequestHash);
+    }
+
+    /// <summary>Validates the current-registration fields supplied to the owner-side selector.</summary>
+    public static void ValidateSelectionRequest(RuntimeFixedCreditGuardSelectionRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.RuntimeInstanceId == Guid.Empty ||
+            request.RegistrationRevision <= 0 ||
+            request.ExecutionFence <= 0)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_request_invalid");
+    }
+
+    /// <summary>
+    /// Validates a selector result against current owner authority. A partial pair is always invalid;
+    /// null fields mean that no unique complete current pair was selected.
+    /// </summary>
+    public static void ValidateSelectionResult(
+        RuntimeFixedCreditGuardSelectionResult result,
+        RuntimeRegistration registration,
+        RuntimeFixedCreditGuardSelectionRequest request,
+        RuntimeGrantReceipt grant,
+        RuntimeSdkSourceReceipt sourceReceipt)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(registration);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(grant);
+        ArgumentNullException.ThrowIfNull(sourceReceipt);
+        ValidateSelectionRequest(request);
+        if (request.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            request.RegistrationRevision != registration.Revision ||
+            request.ExecutionFence != registration.Binding.ExecutionFence)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
+        if (result.Receipt is null && result.Evidence is null)
+            return;
+        if (result.Receipt is not { } receipt || result.Evidence is not { } evidence ||
+            receipt.Stage != RuntimeFixedCreditGuardStage.HostPreQueue ||
+            receipt.Registration != registration ||
+            receipt.RegistrationHash != RuntimeContractValidation.RegistrationHash(registration))
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_read_invalid");
+        ValidateSourceTuple(receipt, registration, grant, sourceReceipt);
+        ValidateEvidence(evidence, receipt, registration, grant, sourceReceipt);
     }
 
     /// <summary>Matches a returned receipt and optional evidence to the registration and read request.</summary>

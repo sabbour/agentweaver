@@ -867,6 +867,10 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
                 writeRig.Context, new(proof, receipt), CancellationToken.None));
             Assert.Equal("hostPreQueue",
                 await ReadFixedCreditGuardStageAsync(registration, receipt.RequestId));
+            Assert.Equal(new RuntimeFixedCreditGuardSelectionResult(null, null),
+                await SelectFixedCreditGuardRouteAsync(writeRig.Owner,
+                    new(proof, registration.RuntimeInstanceId, registration.Revision,
+                        registration.Binding.ExecutionFence)));
             var initialEvidenceRequest = new RuntimeFixedCreditNoSendEvidenceRequest(proof, receipt, evidence);
             Assert.Equal(evidence, await writeRig.Owner.RecordFixedCreditNoSendAsync(
                 writeRig.Context, initialEvidenceRequest, CancellationToken.None));
@@ -888,7 +892,27 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             new(proof, registration.RuntimeInstanceId, registration.Revision,
                 registration.Binding.ExecutionFence, receipt.Stage, receipt.RequestId, receipt.RequestHash));
         Assert.Equal(new RuntimeFixedCreditGuardReadResult(receipt, evidence), read);
+        var selectionRequest = new RuntimeFixedCreditGuardSelectionRequest(
+            proof, registration.RuntimeInstanceId, registration.Revision,
+            registration.Binding.ExecutionFence);
+        var selection = await SelectFixedCreditGuardRouteAsync(replayRig.Owner, selectionRequest);
+        Assert.Equal(new RuntimeFixedCreditGuardSelectionResult(receipt, evidence), selection);
         Assert.Equal(beforeRead, await ReadFixedCreditEventCountsAsync());
+
+        var rotatedGrant = grant with { Revision = grant.Revision + 1 };
+        using var rotatedGrantRig = CreateRuntimeUsageOwner(registration, rotatedGrant);
+        Assert.Equal(new RuntimeFixedCreditGuardSelectionResult(null, null),
+            await SelectFixedCreditGuardRouteAsync(rotatedGrantRig.Owner,
+                selectionRequest with { Authorization = SourceProof(rotatedGrant) }));
+
+        var (_, secondReceipt, secondEvidence) = FixedCreditEvidence(registration, grant, _sources[0]);
+        using var secondWriteRig = CreateRuntimeUsageOwner(registration, grant);
+        Assert.Equal(secondReceipt, await secondWriteRig.Owner.RecordFixedCreditGuardAsync(
+            secondWriteRig.Context, new(proof, secondReceipt), CancellationToken.None));
+        Assert.Equal(secondEvidence, await secondWriteRig.Owner.RecordFixedCreditNoSendAsync(
+            secondWriteRig.Context, new(proof, secondReceipt, secondEvidence), CancellationToken.None));
+        Assert.Equal(new RuntimeFixedCreditGuardSelectionResult(null, null),
+            await SelectFixedCreditGuardRouteAsync(secondWriteRig.Owner, selectionRequest));
     }
 
     [Fact]
@@ -927,6 +951,10 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
 
         using var currentRig = CreateRuntimeUsageOwner(rotated, _grants[0]);
         var currentProof = SourceProof(_grants[0]);
+        Assert.Equal(new RuntimeFixedCreditGuardSelectionResult(null, null),
+            await SelectFixedCreditGuardRouteAsync(currentRig.Owner,
+                new(currentProof, rotated.RuntimeInstanceId, rotated.Revision,
+                    rotated.Binding.ExecutionFence)));
         var missing = await Assert.ThrowsAsync<CoordinationException>(() =>
             currentRig.Owner.ReadFixedCreditGuardAsync(currentRig.Context,
                 new(currentProof, rotated.RuntimeInstanceId, rotated.Revision,
@@ -1896,6 +1924,50 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         return await JsonSerializer.DeserializeAsync<RuntimeFixedCreditGuardReadResult>(
                    context.Response.Body, OwnerJson)
                ?? throw new InvalidOperationException("The fixed-credit read route returned no result.");
+    }
+
+    private async Task<RuntimeFixedCreditGuardSelectionResult> SelectFixedCreditGuardRouteAsync(
+        RuntimeUsageSourceOwner owner, RuntimeFixedCreditGuardSelectionRequest request)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddAuthorization();
+        builder.Services.ConfigureHttpJsonOptions(options =>
+        {
+            options.SerializerOptions.UnmappedMemberHandling =
+                System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow;
+            options.SerializerOptions.MaxDepth = 16;
+            options.SerializerOptions.Converters.Add(
+                new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        });
+        builder.Services.AddSingleton<IAuthenticationService>(
+            new OwnerAuthentication(DateTimeOffset.UtcNow.AddMinutes(5)));
+        builder.Services.AddSingleton(owner);
+        await using var app = builder.Build();
+        app.MapRuntimeUsageSourceEndpoints();
+        var endpoint = Assert.Single(((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints).OfType<RouteEndpoint>(), candidate =>
+                candidate.RoutePattern.RawText ==
+                    "/internal/runtime/turns/fixed-credit-denials/select-current" &&
+                candidate.Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods.Contains("POST"));
+        Assert.NotEmpty(endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>());
+
+        var context = RuntimeHttpContext(app.Services);
+        context.Features.Set<IHttpRequestBodyDetectionFeature>(new RequestBodyDetectionFeature());
+        context.Request.Method = HttpMethods.Post;
+        context.Request.ContentType = "application/json";
+        var requestBytes = JsonSerializer.SerializeToUtf8Bytes(request, OwnerJson);
+        context.Request.ContentLength = requestBytes.Length;
+        context.Request.Body = new MemoryStream(requestBytes);
+        context.Response.Body = new MemoryStream();
+        await endpoint.RequestDelegate!(context);
+        context.Response.Body.Position = 0;
+        var responseBody = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        Assert.True(context.Response.StatusCode == StatusCodes.Status200OK,
+            $"The fixed-credit selector returned HTTP {context.Response.StatusCode}: {responseBody}");
+        context.Response.Body.Position = 0;
+        return await JsonSerializer.DeserializeAsync<RuntimeFixedCreditGuardSelectionResult>(
+                   context.Response.Body, OwnerJson)
+               ?? throw new InvalidOperationException("The fixed-credit selector returned no result.");
     }
 
     private async Task<(long GuardCount, long EvidenceCount)> ReadFixedCreditEventCountsAsync() =>

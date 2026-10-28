@@ -234,6 +234,31 @@ internal sealed class RuntimeUsageSourceOwner(
     }
 
     /// <summary>
+    /// Selects the unique complete fixed-credit denial pair for the authenticated current runtime authority.
+    /// </summary>
+    internal Task<RuntimeFixedCreditGuardSelectionResult> SelectCurrentFixedCreditGuardAsync(
+        HttpContext context, RuntimeFixedCreditGuardSelectionRequest request,
+        CancellationToken cancellationToken)
+    {
+        RuntimeFixedCreditGuardContract.ValidateSelectionRequest(request);
+        var proof = request.Authorization
+            ?? throw new RuntimeAuthorizationException("runtime_source_proof_invalid");
+        if (proof.RuntimeInstanceId != request.RuntimeInstanceId)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_request_invalid");
+        return ExecuteWriteAsync(context, proof,
+            async (connection, transaction, registration, grant, actor, token) =>
+            {
+                var source = await store.ReadCurrentSourceForGrantAsync(
+                    connection, transaction, registration, grant, token).ConfigureAwait(false);
+                var result = await store.SelectFixedCreditGuardWithinTransactionAsync(
+                    connection, transaction, registration, grant, source, request, token).ConfigureAwait(false);
+                RuntimeFixedCreditGuardContract.ValidateSelectionResult(
+                    result, registration, request, grant, source);
+                return result;
+            }, cancellationToken);
+    }
+
+    /// <summary>
     /// Reads the current persisted credit-guard snapshot for the specified dispatch intent.
     /// </summary>
     /// <exception cref="CoordinationException">Thrown when the requested guard snapshot is unknown.</exception>

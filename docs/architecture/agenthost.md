@@ -457,6 +457,21 @@ fixed-credit guard can have null evidence while its no-send write is incomplete;
 a native read with no stored denial returns a null receipt and null `noSend`.
 Source-owner unavailability returns `503`. Both routes use no-store
 responses.
+The separate
+`POST /runtime/v1/turns/fixed-credit-denials/select-current` accepts only a
+`runtimeInstanceId` locator. The Host binds it to its authenticated current
+session and rechecks that session before and after selection; callers cannot
+supply a request ID or hash. Orchestrator verifies the current registration,
+actor, Observe grant, and source receipt, then selects against the exact
+registration revision, run/session, execution fence, grant, and source hash in
+its existing outbox. It returns a pair only when exactly one complete stored
+guard/no-send pair matches; zero or multiple matches return a null pair.
+Selection is not a list and never chooses the latest record. The original
+explicit read route and its request-ID/hash semantics are unchanged.
+The pair proves only that the fixed-zero guard followed a complete empty native
+event range with an unchanged cursor. It does not prove a live CLI turn, generic
+dispatch no-send, cursor continuation, completion acknowledgment, child effects,
+or external-effect deduplication.
 `POST /internal/runtime/turns/observations` attaches the actual native range and output hash
 to that same dispatch. Exact retries retain the stored observation.
 The resulting state is `terminal_pending_accounting`, with a `partial` source report.

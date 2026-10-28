@@ -16,6 +16,10 @@ namespace Agentweaver.AgentRuntime;
 internal sealed record RuntimeHostFixedCreditGuardReadRequest(
     RuntimeHostSessionProof? Proof, Guid RequestId, string RequestHash);
 
+/// <summary>Strict locator-only request for the Host to select its current fixed-credit denial pair.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record RuntimeHostFixedCreditGuardSelectionRequest(Guid RuntimeInstanceId);
+
 /// <summary>Strict request body for the host's native credit denial read endpoint.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record RuntimeHostNativeCreditDenialReadRequest(
@@ -59,6 +63,10 @@ public static class RuntimeAgentHostEndpoints
             (HttpContext context, RuntimeHostFixedCreditGuardReadRequest request, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,
                     actor => host.ReadFixedCreditGuardAsync(request, actor, token))).RequireAuthorization();
+        endpoints.MapPost("/runtime/v1/turns/fixed-credit-denials/select-current",
+            (HttpContext context, RuntimeHostFixedCreditGuardSelectionRequest request, CancellationToken token) =>
+                ExecuteAsync(context, configure, timeProvider,
+                    actor => host.SelectCurrentFixedCreditGuardAsync(request, actor, token))).RequireAuthorization();
         endpoints.MapPost("/runtime/v1/turns/denials/read",
             (HttpContext context, RuntimeHostNativeCreditDenialReadRequest request, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,

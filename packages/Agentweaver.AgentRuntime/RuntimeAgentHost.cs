@@ -731,6 +731,44 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         return result;
     }
 
+    /// <summary>Selects the unique complete fixed-credit pair using only the current Host authority.</summary>
+    internal async Task<RuntimeFixedCreditGuardSelectionResult> SelectCurrentFixedCreditGuardAsync(
+        RuntimeHostFixedCreditGuardSelectionRequest request, RuntimeActorAuthorization actor,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(actor);
+        if (request.RuntimeInstanceId == Guid.Empty)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_request_invalid");
+        var session = _session
+            ?? throw new RuntimeAuthorizationException("runtime_session_proof_invalid");
+        var sessionProof = new RuntimeHostSessionProof(
+            1, session.Registration, session.SourceGrant.GrantId, session.SourceGrant.Revision,
+            RuntimeCredentialPurpose.Observe);
+        session = await RequireSessionAsync(sessionProof, actor, token).ConfigureAwait(false);
+        if (request.RuntimeInstanceId != session.Registration.RuntimeInstanceId ||
+            session.Registration.Binding.ModelSourceMode != ModelSourceMode.HostedCopilot ||
+            session.Registration.Binding.CopilotHardCreditLimit is not 0m)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_request_invalid");
+        var source = _usageSource
+            ?? throw new RuntimeAuthorizationException("runtime_usage_source_unavailable");
+        RuntimeFixedCreditGuardSelectionResult result;
+        try
+        {
+            result = await source.SelectCurrentFixedCreditGuardAsync(session, token).ConfigureAwait(false);
+        }
+        catch (RuntimeAuthorizationException failure) when (failure.Code == "runtime_owner_unavailable")
+        {
+            throw new RuntimeAuthorizationException("runtime_usage_source_unavailable");
+        }
+        var currentSession = await RequireSessionAsync(sessionProof, actor, token).ConfigureAwait(false);
+        var currentGrant = currentSession.SourceGrant;
+        if (currentGrant.GrantId != sessionProof.SourceGrantId ||
+            currentGrant.Revision != sessionProof.SourceGrantRevision)
+            throw new RuntimeAuthorizationException("runtime_session_proof_invalid");
+        return result;
+    }
+
     /// <summary>Reads native denial evidence for a dispatch and denial stage.</summary>
     internal async Task<RuntimeNativeCreditDenialReadResult> ReadNativeCreditDenialAsync(
         RuntimeHostNativeCreditDenialReadRequest request, RuntimeActorAuthorization actor, CancellationToken token)

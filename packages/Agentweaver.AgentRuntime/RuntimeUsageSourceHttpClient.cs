@@ -208,6 +208,28 @@ public sealed class RuntimeUsageSourceHttpClient(
         return result;
     }
 
+    /// <summary>Selects the unique complete fixed-credit pair under the current source grant.</summary>
+    internal async Task<RuntimeFixedCreditGuardSelectionResult> SelectCurrentFixedCreditGuardAsync(
+        AuthorizedRuntimeSession session, CancellationToken cancellationToken)
+    {
+        RequireAudience(session);
+        var proof = session.Proof();
+        var grant = session.SourceGrant;
+        if (grant.GrantId != proof.GrantId || grant.Revision != proof.Revision)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_source_invalid");
+        var sourceReceipt = CurrentSourceReceipt(session, proof);
+        var request = new RuntimeFixedCreditGuardSelectionRequest(
+            Request(proof), session.Registration.RuntimeInstanceId, session.Registration.Revision,
+            session.Registration.Binding.ExecutionFence);
+        RuntimeFixedCreditGuardContract.ValidateSelectionRequest(request);
+        var result = await RuntimeOwnerHttpTransport.SendAsync<RuntimeFixedCreditGuardSelectionResult>(
+            client, _address, "/internal/runtime/turns/fixed-credit-denials/select-current", actor,
+            request, cancellationToken).ConfigureAwait(false);
+        RuntimeFixedCreditGuardContract.ValidateSelectionResult(
+            result, session.Registration, request, grant, sourceReceipt);
+        return result;
+    }
+
     /// <summary>Stores the observed native turn and verifies its canonical observation hash.</summary>
     internal async Task<RuntimeNativeTurnRecordedReceipt> RecordNativeTurnAsync(
         AuthorizedRuntimeSession session, RuntimeNativeTurnAdmissionReceipt admission,
