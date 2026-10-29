@@ -14,14 +14,33 @@ redacted JSONL result. It also records the authorized actor and tenant selectors
 the runner-owned project/run/session fence, invocation and fixture IDs, and
 available selection revisions. It never retains bearer credentials.
 
-The current authorized P1 client discovers and invokes Gateway operations.
-Session-material writes and reads are internal Events owner routes and require
-runtime authorization, while the supplied P1 identity provider issues a
-run-bound user token. The runner-owned fixture is scoped to its selected P1
-journey and has no approved session-material creation or cleanup boundary. The
-current authorized acceptance path also exposes neither native Host replacement
-and recovery nor fault hooks for owner revocation, stale registration, retry
-conflicts, or missing required turn material.
+The existing Host producer path is supported: accepted workflow-bound dispatch
+reaches `RuntimeAgentHost.DispatchAsync`, which calls
+`AuthorizedRuntimeSession.SendNativeTurnAsync` and commits user/assistant
+turns and SDK cache through the Events owner. The public native dispatch proof
+also observes the native sends and joined results.
+
+The P1 consumer still lacks a contract that binds its accepted invocation to
+that dispatch and correlates the resulting material acknowledgment/readback.
+`run-p1` does not invoke Orchestrator dispatch, the native CLI stops after its
+read-only authority join, and the Host readiness evidence is not a
+post-turn material receipt. Events material reads use current Projects
+authorization, a provider-binding pin, and an authority recheck; TurnContent
+also requires the bound-project read entitlement, while SDK cache uses the
+stronger `NativeUsage.RequireReadAuthority` rule. These read paths are not
+exposed by the current P1 provider. Events writes separately validate the
+caller bearer against current runtime registration, source, and fence.
+Therefore the P1 flow cannot yet prove that its own accepted turn produced the
+observed acknowledgment, committed position, and cursor. This is a missing
+P1 accepted-invocation-to-authorized-readback consumer contract, not a missing
+production material producer.
+
+Compatible replacement/recovery, missing or expired material, and
+revocation/stale/retry fault hooks are separate unsupported acceptance
+boundaries; they remain blocked rather than inferred from the producer path or
+controlled tests. Existing journal-owned material remains under its current
+retention policy. The P1 fixture's own cleanup is recorded separately; this
+scenario does not require or imply a new material-deletion endpoint.
 
 These boundaries leave the deployed session-material scenario **blocked**.
 The result records the intended typed turn route as not sent, its result as not
@@ -52,20 +71,35 @@ run, session, invocation, and current execution fence:
    duplicate retry and changed-payload retry, and the required-material
    failure through supported owner boundaries. If an authorized fault or
    restart boundary is unavailable, preserve the exact gap as blocked.
-6. Clean up only invocation-owned disposable fixtures through their recorded
-   owner path. Keep every cleanup result visible; do not sweep containers or
-   remove historical objects.
+6. Record cleanup of the invocation-owned P1 fixture through its existing
+   owner path. Keep its result visible; retained journal material follows the
+   existing retention policy and is not deleted by this scenario.
 
 ## Controlled evidence
 
-`RuntimeRegistrationOwnerIntegrationTests`,
-`RuntimeSessionRecoveryTests`, and `SessionMaterialPostgresTests` provide
-controlled owner, runtime-recovery, and material-store source evidence. They
-are not deployed acceptance. The P1 scenario records these source references
-as not executed; it does not convert their existence into a live result.
-The 0.x checkpoint-store and Host round-trip tests inform the fresh-instance
-recovery and controlled-turn pattern, but their APIs and outcomes are not
-v1 evidence.
+The scenario lists the precise existing controlled test cases for the owner
+turn/acknowledgment, replacement restore, cache rebuild, retry, and required
+material boundaries. These references are a coverage map, not test receipts:
+`controlledEvidence.status` stays `not-executed` in the P1 result because this
+runner does not execute or consume .NET test results.
+
+Run the controlled cases from the repository root:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~AzureByokNativeAccountingLostReplyReplaysWithFreshTotalsAndRejectsStaleProof
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-restore --configuration Release --filter "FullyQualifiedName~ActualSdkFilesystemCallbacksCaptureOpaqueFilesAndResumeTheSameLogicalSession|FullyQualifiedName~LostOrIncompatibleCacheRebuildsNativeContextWithoutReplayingATurn"
+dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --configuration Release --filter FullyQualifiedName~SessionMaterialEndpointRetentionTests
+dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --configuration Release --filter "FullyQualifiedName~ExactMaterialRetriesAndRestartReturnOriginalRecordedAcknowledgment|FullyQualifiedName~ExpiredRequiredTurnsFailAndOnlyExpiredOptionalCacheMapsToNotFound"
+```
+
+The Broker integration case and Events/Postgres cases use disposable
+Testcontainers PostgreSQL and fail when a Docker-compatible engine is
+unavailable. The two `RuntimeSessionRecoveryTests` cases and the endpoint
+retention tests are controlled local tests without that database fixture.
+None is deployed acceptance. Source tests do not attest a live actor,
+deployment, image, owner receipt, repeated external-effect behavior, or
+cleanup result, and their presence never changes the P1 session-material
+status.
 
 The JSONL scenario records non-attempted operations explicitly, distinguishes
 optional-cache recovery from required-turn failure, and preserves the precise

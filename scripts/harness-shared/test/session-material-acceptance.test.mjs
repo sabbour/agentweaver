@@ -91,6 +91,16 @@ test('separates unattempted turn evidence, optional cache fallback, and required
   assert.equal(result.recovery.repeatedExternalEffects.status, 'not-observed');
   assert.ok(result.ownerBoundaryChecks.every(check => check.status === 'blocked'));
   assert.equal(result.controlledEvidence.status, 'not-executed');
+  assert.equal(result.controlledEvidence.evidenceClass, 'controlled-source');
+  assert.deepEqual(result.controlledEvidence.tests.map(({ test: name }) => name), [
+    'ProjectsConfigBrokerAuthorizationTests.AzureByokNativeAccountingLostReplyReplaysWithFreshTotalsAndRejectsStaleProof',
+    'RuntimeSessionRecoveryTests.ActualSdkFilesystemCallbacksCaptureOpaqueFilesAndResumeTheSameLogicalSession',
+    'RuntimeSessionRecoveryTests.LostOrIncompatibleCacheRebuildsNativeContextWithoutReplayingATurn',
+    'SessionMaterialPostgresTests.ExactMaterialRetriesAndRestartReturnOriginalRecordedAcknowledgment',
+    'SessionMaterialPostgresTests.ExpiredRequiredTurnsFailAndOnlyExpiredOptionalCacheMapsToNotFound',
+    'SessionMaterialEndpointRetentionTests.OnlyOptionalCacheAbsenceAndExpiryBecomeNotFound',
+  ]);
+  assert.ok(result.controlledEvidence.tests.every(entry => !('status' in entry)));
   assert.equal(result.cleanup.status, 'not-started');
   assert.ok(result.blockers.some(reason => reason.includes('runtime authorization')));
 });

@@ -1,9 +1,36 @@
 import { redact } from './redaction.mjs';
 
-const CONTROLLED_EVIDENCE = [
-  'tests/Agentweaver.Identity.Broker.Tests/RuntimeRegistrationOwnerIntegrationTests.cs',
-  'tests/Agentweaver.Identity.Broker.Tests/RuntimeSessionRecoveryTests.cs',
-  'tests/Agentweaver.EventsAndSessions.Tests/SessionMaterialPostgresTests.cs',
+const CONTROLLED_TESTS = [
+  {
+    source: 'tests/Agentweaver.Identity.Broker.Tests/RuntimeRegistrationOwnerIntegrationTests.cs',
+    test: 'ProjectsConfigBrokerAuthorizationTests.AzureByokNativeAccountingLostReplyReplaysWithFreshTotalsAndRejectsStaleProof',
+    covers: ['typed-turn-acknowledgment', 'material-readback', 'exact-retry', 'stale-fence', 'authority-revocation'],
+  },
+  {
+    source: 'tests/Agentweaver.Identity.Broker.Tests/RuntimeSessionRecoveryTests.cs',
+    test: 'RuntimeSessionRecoveryTests.ActualSdkFilesystemCallbacksCaptureOpaqueFilesAndResumeTheSameLogicalSession',
+    covers: ['compatible-replacement-cache-restore'],
+  },
+  {
+    source: 'tests/Agentweaver.Identity.Broker.Tests/RuntimeSessionRecoveryTests.cs',
+    test: 'RuntimeSessionRecoveryTests.LostOrIncompatibleCacheRebuildsNativeContextWithoutReplayingATurn',
+    covers: ['optional-cache-rebuild', 'no-model-turn-replay'],
+  },
+  {
+    source: 'tests/Agentweaver.EventsAndSessions.Tests/SessionMaterialPostgresTests.cs',
+    test: 'SessionMaterialPostgresTests.ExactMaterialRetriesAndRestartReturnOriginalRecordedAcknowledgment',
+    covers: ['exact-duplicate-retry', 'changed-payload-rejection', 'restart-acknowledgment'],
+  },
+  {
+    source: 'tests/Agentweaver.EventsAndSessions.Tests/SessionMaterialPostgresTests.cs',
+    test: 'SessionMaterialPostgresTests.ExpiredRequiredTurnsFailAndOnlyExpiredOptionalCacheMapsToNotFound',
+    covers: ['required-turn-expiry', 'optional-cache-expiry'],
+  },
+  {
+    source: 'tests/Agentweaver.EventsAndSessions.Tests/SessionMaterialFailureRecoveryTests.cs',
+    test: 'SessionMaterialEndpointRetentionTests.OnlyOptionalCacheAbsenceAndExpiryBecomeNotFound',
+    covers: ['optional-cache-absence', 'required-material-failure'],
+  },
 ];
 
 function sessionMaterialBlockers() {
@@ -97,7 +124,7 @@ export function createSessionMaterialAcceptance({ sourceEvidence, environment, f
     controlledEvidence: {
       status: 'not-executed',
       evidenceClass: 'controlled-source',
-      sources: CONTROLLED_EVIDENCE,
+      tests: CONTROLLED_TESTS,
     },
     cleanup: {
       status: 'not-started',
