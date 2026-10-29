@@ -1,0 +1,89 @@
+name: v1 CLI candidate packaging
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v1-cli-package-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package ${{ matrix.rid }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            runner: windows-2022
+          - rid: linux-x64
+            runner: ubuntu-24.04
+          - rid: osx-arm64
+            runner: macos-26
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Require native Apple Silicon for osx-arm64
+        if: matrix.rid == 'osx-arm64'
+        shell: bash
+        run: test "$(uname -m)" = arm64
+      - name: Test packaging helpers
+        run: python scripts/cli-dotnet/package.py test
+      - name: Build, archive, and smoke-test the native CLI
+        run: python scripts/cli-dotnet/package.py build --rid ${{ matrix.rid }} --smoke
+      - name: Verify the archive and source receipt
+        run: python scripts/cli-dotnet/package.py verify --rid ${{ matrix.rid }} --source-commit ${{ github.sha }} --require-smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v1-cli-${{ matrix.rid }}-${{ github.run_id }}
+          path: artifacts/cli/${{ matrix.rid }}/
+          if-no-files-found: error
+          retention-days: 30
+
+  verify-candidate-set:
+    name: Verify complete source-pinned candidate set
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: v1-cli-win-x64-${{ github.run_id }}
+          path: artifacts/cli/win-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: v1-cli-linux-x64-${{ github.run_id }}
+          path: artifacts/cli/linux-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: v1-cli-osx-arm64-${{ github.run_id }}
+          path: artifacts/cli/osx-arm64
+      - name: Verify all native archives and write the combined checksums
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: python scripts/cli-dotnet/package.py verify --all --source-commit "$SOURCE_COMMIT" --require-smoke --write-checksums
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v1-cli-candidates-${{ github.sha }}-${{ github.run_id }}
+          path: artifacts/cli/
+          if-no-files-found: error
+          retention-days: 30
