@@ -790,7 +790,7 @@ Registry configuration does not become a provider seam.
 ## Phased implementation and acceptance
 
 This is a planned post-core extension.
-It uses completed core contracts without widening their current issue acceptance.
+It reuses completed core contracts and leaves their accepted behavior unchanged.
 Tool/canvas content also waits for the applicable P2 gateway/surface enforcement.
 The phase labels do not change the existing P0-P3 ledger or cutover gate.
 The release backlog is `v1.0.0` P2, after applicable P1 foundations.
@@ -798,7 +798,7 @@ The [Canvas C1-C5 plan](applications-and-surfaces.md#canvas-provider-delivery-an
 defines the abstraction, concrete adapters, bundle integration, and exact-SHA acceptance.
 The bundle and Canvas plan belong to milestone `v1.0.0`.
 Separate implementation work and an execution schedule are not yet defined.
-The issue does not add another P1 or cutover prerequisite.
+It adds no P1 dependency or cutover prerequisite.
 
 | Slice | Existing owners and prerequisites | Acceptance |
 | --- | --- | --- |
