@@ -328,6 +328,7 @@ export function OverviewPage() {
             <div className={styles.cardHead}>
               <span className={styles.cardHeadIcon}><Pulse24Regular /></span>
               <Text as="h2" id="overview-operations" className={styles.cardHeadTitle}>Operations</Text>
+              <Badge appearance="tint" color="subtle">Health unavailable</Badge>
             </div>
             <Text className={styles.muted}>In-flight, queued-work, and done-today totals and service health need GET /api/v1/overview, which is not published.</Text>
             <div className={styles.glanceGrid}>
