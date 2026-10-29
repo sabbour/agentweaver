@@ -26,6 +26,7 @@ export const suites = [
   ['mcp', 'Agentweaver.Mcp.Tests'],
   ['azure-files', 'Agentweaver.Providers.Storage.AzureFiles.Tests'],
   ['agentsessions', 'Agentweaver.Providers.Sessions.AgentSessions.Tests'],
+  ['cli', 'Agentweaver.Cli.Tests'],
 ];
 const expectedAssemblies = [
   'Agentweaver.Abstractions',
@@ -51,6 +52,7 @@ const expectedAssemblies = [
   'Agentweaver.Knowledge',
   'Agentweaver.Providers.Storage.AzureFiles',
   'Agentweaver.Providers.Sessions.AgentSessions',
+  'agentweaver',
 ];
 const dotnet = process.env.DOTNET_HOST_PATH || 'dotnet';
 

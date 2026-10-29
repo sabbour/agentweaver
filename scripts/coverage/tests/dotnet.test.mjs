@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { reportsIn } from '../dotnet.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const cliProject = readFileSync(resolve(root, 'tools', 'Agentweaver.Cli', 'Agentweaver.Cli.csproj'), 'utf8');
+const cliTestProject = readFileSync(resolve(root, 'tests', 'Agentweaver.Cli.Tests', 'Agentweaver.Cli.Tests.csproj'), 'utf8');
+
 const runner = readFileSync(resolve(root, 'scripts/coverage/dotnet.mjs'), 'utf8');
 const runsettings = readFileSync(resolve(root, 'coverage.runsettings'), 'utf8');
 const solution = readFileSync(resolve(root, 'Agentweaver.slnx'), 'utf8');
@@ -146,4 +149,15 @@ test('the explicit .NET coverage runner registers the Source Control suite and a
   assert.match(solution,
     /tests\\Agentweaver\.SourceControl\.Tests\\Agentweaver\.SourceControl\.Tests\.csproj/);
   assert.match(sourceControlTestProject, /coverlet\.collector/);
+});
+
+
+test('the standalone CLI suite and lowercase production assembly are included in coverage', () => {
+  assert.match(runner, /\['cli', 'Agentweaver\.Cli\.Tests'\]/);
+  assert.match(runner, /'agentweaver',/);
+  assert.match(runsettings, /\[agentweaver\]\*/);
+  assert.match(solution, /tools\\Agentweaver\.Cli\\Agentweaver\.Cli\.csproj/);
+  assert.match(solution, /tests\\Agentweaver\.Cli\.Tests\\Agentweaver\.Cli\.Tests\.csproj/);
+  assert.match(cliProject, /<AssemblyName>agentweaver<\/AssemblyName>/);
+  assert.match(cliTestProject, /tools\\Agentweaver\.Cli\\Agentweaver\.Cli\.csproj/);
 });
