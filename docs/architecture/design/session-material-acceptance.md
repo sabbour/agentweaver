@@ -24,8 +24,12 @@ The P1 consumer still lacks a contract that binds its accepted invocation to
 that dispatch and correlates the resulting material acknowledgment/readback.
 `run-p1` does not invoke Orchestrator dispatch, the native CLI stops after its
 read-only authority join, and the Host readiness evidence is not a
-post-turn material receipt. Events material reads require the runtime
-authorization retained by Host and are not exposed through the P1 provider.
+post-turn material receipt. Events material reads use current Projects
+authorization, a provider-binding pin, and an authority recheck; TurnContent
+also requires the bound-project read entitlement, while SDK cache uses the
+stronger `NativeUsage.RequireReadAuthority` rule. These read paths are not
+exposed by the current P1 provider. Events writes separately validate the
+caller bearer against current runtime registration, source, and fence.
 Therefore the P1 flow cannot yet prove that its own accepted turn produced the
 observed acknowledgment, committed position, and cursor. This is a missing
 P1 accepted-invocation-to-authorized-readback consumer contract, not a missing

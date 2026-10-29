@@ -623,6 +623,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var sdksByAssociation = new Dictionary<string, ControlledCopilotRuntime>(StringComparer.Ordinal);
         var runtimeInstances = new HashSet<Guid>();
         var registrations = new List<RuntimeRegistration>();
+        var materialWrites = new ConcurrentQueue<(string SessionId, SessionMaterialWriteRequest Request,
+            SessionMaterialAcknowledgment Acknowledgment)>();
         var sourceGrantReceipts = new ConcurrentDictionary<Guid, RuntimeGrantReceipt>();
         var refreshedSourceGrantRuntimeIds = new HashSet<Guid>();
         var configureHosts = new List<Task>();
@@ -811,6 +813,41 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 await AssertStatusAsync(response, HttpStatusCode.OK, string.Join('\n', failures));
             }
 
+            using var eventsClient = new HttpClient(new RuntimeServiceRouter(routes, failures))
+            {
+                BaseAddress = new Uri("https://events.test/")
+            };
+            async Task<ImmutableArray<SessionEventEnvelope>> ReadSessionEventsAsync(string sessionId)
+            {
+                var events = ImmutableArray.CreateBuilder<SessionEventEnvelope>();
+                var cursors = new HashSet<string>(StringComparer.Ordinal);
+                string? cursor = null;
+                long lastPosition = 0;
+                while (true)
+                {
+                    var path = $"/internal/sessions/{Uri.EscapeDataString(sessionId)}/events?limit=100";
+                    if (cursor is not null)
+                        path += $"&cursor={Uri.EscapeDataString(cursor)}";
+                    using var response = await SendAsync(
+                        eventsClient, HttpMethod.Get, path, runToken, [TenantId], cancellationToken: token);
+                    await AssertStatusAsync(response, HttpStatusCode.OK, string.Join('\n', failures));
+                    var page = await ReadJsonAsync<SessionEventPage>(response);
+                    Assert.False(page.Events.IsDefault);
+                    foreach (var item in page.Events)
+                    {
+                        Assert.True(item.Position > lastPosition);
+                        lastPosition = item.Position;
+                    }
+                    events.AddRange(page.Events);
+                    if (!page.HasMore)
+                        return events.ToImmutable();
+                    Assert.True(page.Events.Length > 0);
+                    Assert.True(page.NextCursor is { Length: > 0 } next && cursors.Add(next),
+                        "The Events owner must return a unique continuation cursor.");
+                    cursor = page.NextCursor;
+                }
+            }
+
             async Task ConfigureHostAsync(
                 string environmentId,
                 RuntimeRegistration registration,
@@ -959,6 +996,24 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 var http = new HttpClient(new RuntimeServiceRouter(routes, failures,
                     afterResponse: async (request, response, cancellationToken) =>
                     {
+                        var materialPath = $"/internal/sessions/{Uri.EscapeDataString(registration.Binding.SessionId)}/material";
+                        if (request.Method == HttpMethod.Post &&
+                            request.RequestUri is { Host: "events.test", AbsolutePath: var path } &&
+                            path == materialPath)
+                        {
+                            Assert.True(request.Content is not null);
+                            var requestBytes = await request.Content.ReadAsByteArrayAsync(cancellationToken);
+                            var write = JsonSerializer.Deserialize<SessionMaterialWriteRequest>(
+                                requestBytes, CoordinationJsonOptions)
+                                ?? throw new InvalidOperationException("The Events material request was empty.");
+                            Assert.True(response.IsSuccessStatusCode,
+                                $"Events rejected a Host material write with HTTP {(int)response.StatusCode}.");
+                            var responseBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+                            var acknowledgment = JsonSerializer.Deserialize<SessionMaterialAcknowledgment>(
+                                responseBytes, CoordinationJsonOptions)
+                                ?? throw new InvalidOperationException("The Events material acknowledgment was empty.");
+                            materialWrites.Enqueue((registration.Binding.SessionId, write, acknowledgment));
+                        }
                         if (request.RequestUri is not
                             { Host: "broker.test", AbsolutePath: "/internal/runtime/source/verify" } ||
                             !sourceGrantReceipts.TryGetValue(registration.RuntimeInstanceId, out var receipt))
@@ -1050,6 +1105,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             await configureHosts[0];
             await secondHostCatalogRequested.Task.WaitAsync(token);
             await RefreshHostSourceGrantAsync(0);
+            var materialJournalBaseline = new Dictionary<string, long>(StringComparer.Ordinal);
+            foreach (var intent in orderedIntents)
+            {
+                var existingEvents = await ReadSessionEventsAsync(intent.ChildSessionId);
+                materialJournalBaseline[intent.ChildSessionId] =
+                    existingEvents.IsEmpty ? 0 : existingEvents.Max(item => item.Position);
+            }
             TraceNativeStage(failures,
                 $"Starting public dispatch with the first Host Ready and the second ConfigureAsync in flight; " +
                 $"first={firstIntent.AssociationId}, second={secondIntent.AssociationId}.");
@@ -1209,6 +1271,90 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 Assert.Single(sdk.Requests, request => request.Method == "session.send");
                 Assert.NotEqual(Guid.Empty, sdk.NativeUsageEventId);
                 Assert.NotEqual(Guid.Empty, sdk.NativeCompletionReceiptEventId);
+
+                var intent = Assert.Single(orderedIntents, item => item.AssociationId == associationId);
+                var registration = Assert.Single(registrations,
+                    item => item.Binding.SessionId == intent.ChildSessionId);
+                var writes = materialWrites.Where(item => item.SessionId == intent.ChildSessionId).ToArray();
+                Assert.Equal(3, writes.Length);
+                Assert.Equal(3, writes.Select(item => item.Request.EventId).Distinct().Count());
+                var userWrite = Assert.Single(writes,
+                    item => item.Request.Kind == SessionMaterialKind.TurnContent && item.Request.Role == "user");
+                var assistantWrite = Assert.Single(writes,
+                    item => item.Request.Kind == SessionMaterialKind.TurnContent && item.Request.Role == "assistant");
+                var cacheWrite = Assert.Single(writes, item => item.Request.Kind == SessionMaterialKind.SdkCache);
+                Assert.True(userWrite.Acknowledgment.Position < assistantWrite.Acknowledgment.Position);
+                Assert.True(assistantWrite.Acknowledgment.Position < cacheWrite.Acknowledgment.Position);
+                var journal = await ReadSessionEventsAsync(intent.ChildSessionId);
+                var planItem = Assert.Single(plan.Items, item => item.Id == associationId);
+                var baseline = materialJournalBaseline[intent.ChildSessionId];
+
+                foreach (var (sessionId, request, acknowledgment) in writes)
+                {
+                    Assert.Equal(intent.ChildSessionId, sessionId);
+                    Assert.Equal(registration.RuntimeInstanceId, request.RuntimeInstanceId);
+                    Assert.Equal(registration.Revision, request.RegistrationRevision);
+                    Assert.Equal(registration.Binding.ExecutionFence, request.ExecutionFence);
+                    Assert.True(request.Kind is SessionMaterialKind.TurnContent or SessionMaterialKind.SdkCache);
+                    if (request.Kind == SessionMaterialKind.TurnContent)
+                    {
+                        Assert.Equal(request.Role switch
+                        {
+                            "user" => planItem.Task,
+                            "assistant" => sdk.AssistantResponse,
+                            _ => throw new InvalidOperationException("The captured turn role was invalid.")
+                        }, System.Text.Encoding.UTF8.GetString(request.Bytes));
+                    }
+                    else
+                    {
+                        Assert.Equal(SessionMaterialKind.SdkCache, request.Kind);
+                    }
+
+                    Assert.Equal(1, acknowledgment.ContractVersion);
+                    Assert.Equal(new SessionIdentity(projectId, RunId, intent.ChildSessionId),
+                        acknowledgment.Identity);
+                    Assert.Equal(request.EventId, acknowledgment.EventId);
+                    Assert.True(acknowledgment.Position > baseline);
+                    var material = Assert.IsType<SessionMaterialBinding>(acknowledgment.Reference.Material);
+                    Assert.Equal(request.Kind, material.Kind);
+                    Assert.Equal(registration.Binding.TenantId, material.TenantId);
+                    Assert.Equal(registration.RuntimeInstanceId, material.RuntimeInstanceId);
+                    Assert.Equal(registration.Revision, material.RegistrationRevision);
+                    Assert.Equal(registration.Binding.ExecutionFence, material.ExecutionFence);
+                    Assert.Equal(registration.Binding.AcceptedSelectionHash, material.AcceptedSelectionHash);
+                    Assert.Equal(request.Bytes.Length, acknowledgment.Reference.ByteLength);
+                    var contentHash = Convert.ToHexString(SHA256.HashData(request.Bytes)).ToLowerInvariant();
+                    Assert.Equal(contentHash, material.Sha256);
+
+                    var journalEvent = Assert.Single(journal, item => item.EventId == acknowledgment.EventId);
+                    Assert.Equal(acknowledgment.Identity, journalEvent.Identity);
+                    Assert.Equal(acknowledgment.Position, journalEvent.Position);
+                    Assert.Equal(acknowledgment.Reference,
+                        Assert.Single(journalEvent.ObjectReferences).Reference);
+                    switch (journalEvent.Payload)
+                    {
+                        case TurnSessionPayload turn:
+                            Assert.Equal(request.Role, turn.Role);
+                            Assert.Equal(acknowledgment.Reference, turn.Content);
+                            break;
+                        case CacheReferenceSessionPayload cache:
+                            Assert.Equal(SessionMaterialKind.SdkCache, request.Kind);
+                            Assert.Equal(acknowledgment.Reference, cache.Cache);
+                            break;
+                        default:
+                            Assert.Fail("The captured material acknowledgment had no typed journal reference.");
+                            break;
+                    }
+
+                    var readPath = $"/internal/sessions/{Uri.EscapeDataString(intent.ChildSessionId)}" +
+                        $"/material/{acknowledgment.EventId:D}/{request.Kind}";
+                    using var readbackResponse = await SendAsync(
+                        eventsClient, HttpMethod.Get, readPath, runToken, [TenantId], cancellationToken: token);
+                    await AssertStatusAsync(readbackResponse, HttpStatusCode.OK, string.Join('\n', failures));
+                    var readback = await ReadJsonAsync<SessionMaterialReadResult>(readbackResponse);
+                    Assert.Equal(acknowledgment, readback.Material);
+                    Assert.Equal(request.Bytes, readback.Bytes);
+                }
             }
 
             using var pendingDecisionResponse = await SendAsync(
