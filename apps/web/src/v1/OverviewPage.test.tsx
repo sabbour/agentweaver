@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectSummary } from './contracts';
@@ -193,6 +193,20 @@ describe('OverviewPage metrics', () => {
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
     expect(screen.getAllByText(/GET \/api\/v1\/overview/).length).toBeGreaterThanOrEqual(3);
     expect(screen.getByText(/recentActivity/)).toBeTruthy();
+  });
+
+  it('marks health unavailable and counts only active projects in Operations', async () => {
+    renderPage();
+    await screen.findByText('Active projects');
+    const operations = screen.getByRole('region', { name: 'Operations' });
+
+    expect(within(operations).getByText('Health unavailable')).toBeTruthy();
+    expect(within(operations).queryByText(/Healthy|Needs review/)).toBeNull();
+    expect(within(operations).getByText(/GET \/api\/v1\/overview, which is not published/)).toBeTruthy();
+    for (const label of ['In flight', 'Queued work', 'Done today']) {
+      expect(within(operations).getByText(label).nextElementSibling?.textContent).toBe('—');
+    }
+    expect(within(operations).getByText('Active projects').nextElementSibling?.textContent).toBe('2');
   });
 
   it('shows metrics for the most recently updated active project and says they are per project', async () => {
