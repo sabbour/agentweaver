@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Version>1.0.0</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <AssemblyName>agentweaver</AssemblyName>
+    <RootNamespace>Agentweaver.Cli</RootNamespace>
+    <UseAppHost>true</UseAppHost>
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishAot>false</PublishAot>
+    <RuntimeIdentifiers>win-x64;linux-x64;osx-arm64</RuntimeIdentifiers>
+    <AgentweaverSourceSha Condition="'$(AgentweaverSourceSha)' == ''">unbound</AgentweaverSourceSha>
+    <AgentweaverSourceTree Condition="'$(AgentweaverSourceTree)' == ''">unbound</AgentweaverSourceTree>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Agentweaver.Cli.Tests" />
+    <AssemblyMetadata Include="Agentweaver.SourceSha" Value="$(AgentweaverSourceSha)" />
+    <AssemblyMetadata Include="Agentweaver.SourceTree" Value="$(AgentweaverSourceTree)" />
+  </ItemGroup>
+</Project>
