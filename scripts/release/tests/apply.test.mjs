@@ -874,8 +874,20 @@ for (const eventName of ['pull_request', 'push', 'workflow_dispatch']) {
   }
 }
 
-test('CI comparison preserves linear push coverage and rejects missing or mismatched event history', t => {
+test('PR comparison uses event base/head while push and manual comparisons retain their history checks', t => {
   const f = integratedPreparationFixture(t);
+  const stacked = commitTree(f.dir, git(f.dir, 'rev-parse', `${f.tested}^{tree}`),
+    [f.prior, f.authoredHead], 'stacked pull request merge');
+  git(f.dir, 'switch', '--detach', '-q', stacked);
+  const pullRequest = {
+    ...f.context('pull_request'),
+    testedSourceSha: f.authoredHead,
+  };
+  assert.equal(resolveCiComparisonBase(f.dir, pullRequest), f.planSource);
+  assert.equal(resolveCiComparisonBase(f.dir, {
+    ...pullRequest, sourceHeadSha: f.prior,
+  }), resolveMergeBase(f.dir, f.target, f.prior));
+
   git(f.dir, 'switch', '--detach', '-q', f.authoredHead);
   const linear = { eventName: 'push', testedSourceSha: f.authoredHead, baseSha: f.planSource, sourceHeadSha: '' };
   assert.equal(resolveCiComparisonBase(f.dir, linear), f.planSource);
@@ -885,9 +897,7 @@ test('CI comparison preserves linear push coverage and rejects missing or mismat
   git(f.dir, 'switch', '--detach', '-q', f.tested);
   for (const context of [
     { ...f.context('pull_request'), sourceHeadSha: '' },
-    { ...f.context('pull_request'), sourceHeadSha: f.prior },
-    { ...f.context('pull_request'), baseSha: f.prior },
-    { ...f.context('pull_request'), testedSourceSha: f.authoredHead },
+    { ...f.context('pull_request'), sourceHeadSha: 'not-a-sha' },
     { ...f.context('pull_request'), baseSha: 'e'.repeat(40) },
     { ...f.context('push'), baseSha: f.planSource },
     { ...f.context('push'), sourceHeadSha: f.authoredHead },
@@ -899,7 +909,7 @@ test('CI comparison preserves linear push coverage and rejects missing or mismat
   assert.throws(() => resolveCiComparisonBase(f.dir, { ...linear, baseSha: f.target }), /cannot establish/);
 });
 
-test('both CI workflows validate authored comparison against the integrated tested tree without changing checkout or coverage identity', () => {
+test('both CI workflows pass PR base/head SHAs without a GraphQL token or alternate checkout', () => {
   for (const name of ['v1-ci.yml', 'v1-docs-ci.yml']) {
     const workflow = readFileSync(path.join('.github', 'workflows', name), 'utf8').replaceAll('\r\n', '\n');
     const step = workflow.match(/- name: Validate release composition\n([\s\S]*?)(?=\n      - )/)?.[1];
@@ -907,6 +917,7 @@ test('both CI workflows validate authored comparison against the integrated test
     assert.match(step, /RELEASE_BASE_SHA: \$\{\{ github.event.pull_request.base.sha \|\| github.event.before \}\}/);
     assert.match(step, /RELEASE_HEAD_SHA: \$\{\{ github.event.pull_request.head.sha \|\| '' \}\}/);
     assert.match(step, /npm run release:validate -- --ci/);
+    assert.doesNotMatch(workflow, /GH_TOKEN:|pull-requests: read/);
     assert.doesNotMatch(workflow, /ref:.*pull_request.head|git checkout|git switch|receipt.*sourceSha/);
     assert.match(workflow, /uses: actions\/checkout@v4[\s\S]*?fetch-depth: 0/);
     if (name === 'v1-ci.yml') {
@@ -917,7 +928,7 @@ test('both CI workflows validate authored comparison against the integrated test
   }
 });
 
-test('CI validation CLI uses verified event history while retaining the integrated manifest and coverage diff', t => {
+test('CI validation CLI uses PR base/head comparison and preserves the integrated manifest and coverage diff', t => {
   for (const eventName of ['pull_request', 'push']) {
     const f = integratedPreparationFixture(t);
     mkdirSync(path.join(f.dir, 'scripts', 'release'), { recursive: true });
@@ -949,8 +960,12 @@ test('CI validation CLI uses verified event history while retaining the integrat
     assert.equal(git(f.dir, 'rev-parse', 'HEAD'), f.tested);
     options.env.GITHUB_SHA = f.authoredHead;
     const mismatched = run('--ci');
-    assert.equal(mismatched.status, 1);
-    assert.match(mismatched.stderr, /checkout HEAD does not match/);
+    if (eventName === 'pull_request') {
+      assert.equal(mismatched.status, 0, mismatched.stderr);
+    } else {
+      assert.equal(mismatched.status, 1);
+      assert.match(mismatched.stderr, /checkout HEAD does not match/);
+    }
   }
 });
 

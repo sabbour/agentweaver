@@ -207,7 +207,7 @@ export function resolveMergeBase(root, base, comparisonHead = 'HEAD') {
   }
 }
 
-/** Selects the comparison base from CI event metadata and validates that the tested source contains it. */
+/** Selects the changeset comparison base from the relevant CI event history. */
 export function resolveCiComparisonBase(root, {
   eventName = process.env.GITHUB_EVENT_NAME,
   testedSourceSha = process.env.GITHUB_SHA,
@@ -215,8 +215,21 @@ export function resolveCiComparisonBase(root, {
   sourceHeadSha = process.env.RELEASE_HEAD_SHA,
 } = {}) {
   if (!['pull_request', 'push', 'workflow_dispatch'].includes(eventName) ||
-      !sha.test(testedSourceSha ?? '') || !sha.test(baseSha ?? '')) {
-    fail('CI source', 'expected a pull_request, push, or workflow_dispatch event with full tested and base commit SHAs');
+      !sha.test(baseSha ?? '')) {
+    fail('CI source', 'expected a pull_request, push, or workflow_dispatch event with a full base commit SHA');
+  }
+  if (eventName === 'pull_request') {
+    if (!sha.test(sourceHeadSha ?? '')) {
+      fail('CI source', 'pull_request comparison requires a full authored head commit SHA');
+    }
+    try {
+      return resolveMergeBase(root, baseSha, sourceHeadSha);
+    } catch (error) {
+      fail('CI source', `cannot compare the pull-request event base and head: ${error.message}`);
+    }
+  }
+  if (!sha.test(testedSourceSha ?? '')) {
+    fail('CI source', 'push and workflow_dispatch comparisons require a full tested commit SHA');
   }
   const git = (...args) => execFileSync('git', args, {
     cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
@@ -226,24 +239,16 @@ export function resolveCiComparisonBase(root, {
       fail('CI source', 'checkout HEAD does not match the integrated tested source SHA');
     }
     const parents = git('rev-list', '--parents', '-n', '1', testedSourceSha).split(' ').slice(1);
+    if (sourceHeadSha) fail('CI source', 'push and manual comparisons must derive authored history from the tested commit parents');
+    // For a merge commit, compare its authored second parent with the event's first-parent base.
     let authoredHead;
-    if (eventName === 'pull_request') {
-      if (!sha.test(sourceHeadSha ?? '') || parents.length !== 2 ||
-          parents[0] !== baseSha || parents[1] !== sourceHeadSha) {
-        fail('CI source', 'tested PR merge parents do not match the event base and authored head');
-      }
-      authoredHead = sourceHeadSha;
+    if (parents.length === 2 && parents[0] === baseSha) {
+      authoredHead = parents[1];
+    } else if (parents.length === 1) {
+      git('merge-base', '--is-ancestor', baseSha, testedSourceSha);
+      authoredHead = testedSourceSha;
     } else {
-      if (sourceHeadSha) fail('CI source', 'push and manual comparisons must derive authored history from the tested commit parents');
-      // For a merge commit, compare its authored second parent with the event's first-parent base.
-      if (parents.length === 2 && parents[0] === baseSha) {
-        authoredHead = parents[1];
-      } else if (parents.length === 1) {
-        git('merge-base', '--is-ancestor', baseSha, testedSourceSha);
-        authoredHead = testedSourceSha;
-      } else {
-        fail('CI source', 'tested push or manual dispatch must have linear history or ordered merge parents [before, authored head]');
-      }
+      fail('CI source', 'tested push or manual dispatch must have linear history or ordered merge parents [before, authored head]');
     }
     return resolveMergeBase(root, baseSha, authoredHead);
   } catch (error) {
