@@ -1,9 +1,16 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { readFile, rm, writeFile } from 'node:fs/promises';
+import { dirname, relative, resolve } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { runP1DotnetCli } from '../p1-dotnet-cli.mjs';
 import { runP1CliEntrypoint } from '../run-p1.mjs';
 import { runP1SigninCli } from '../p1-signin-run.mjs';
+
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 test('API legacy entrypoint delegates explicit options to the configured apphost', async () => {
   let invocation;
@@ -49,6 +56,31 @@ test('malformed or implicit API entrypoints never fall back to Node execution', 
     assert.equal(apphostCalled, false);
     assert.equal(legacyCalled, false);
     assert.notEqual(errors.length, 0);
+  }
+});
+
+test('MCP selections are rejected explicitly without legacy or API delegation', async () => {
+  for (const surface of ['mcp', 'api,mcp', 'mcp,api']) {
+    let legacyCalled = false;
+    let apphostCalled = false;
+    const errors = [];
+    const code = await runP1CliEntrypoint([
+      '--surface', surface, '--input', 'plan.json', '--output', 'evidence.jsonl',
+    ], {}, { error: message => errors.push(message) }, {
+      runDotnetCli: async () => {
+        apphostCalled = true;
+        return 0;
+      },
+      runLegacy: async () => {
+        legacyCalled = true;
+        return 0;
+      },
+    });
+
+    assert.equal(code, 2);
+    assert.equal(apphostCalled, false);
+    assert.equal(legacyCalled, false);
+    assert.match(errors.join('\n'), /does not support an MCP surface/);
   }
 });
 
@@ -116,20 +148,62 @@ test('missing apphost is blocked without fallback', async () => {
   assert.match(errors.join('\n'), /AGENTWEAVER_CLI_PATH/);
 });
 
-test('mixed API and MCP sign-in runs are rejected instead of using the Node API runner', async () => {
-  let delegated = false;
-  const errors = [];
-  const code = await runP1SigninCli([
-    '--surface', 'api,mcp', '--input', 'plan.json', '--output', 'evidence.jsonl',
-  ], {}, { error: message => errors.push(message), log() {} }, {
-    runDotnetCli: async () => {
-      delegated = true;
-      return 0;
+test('legacy proof paths are root-resolved in a temporary CLI manifest without changing envelope paths or input', async () => {
+  const inputPath = resolve(repositoryRoot, 'releases', `.cli-input-${randomUUID()}.json`);
+  const original = JSON.stringify({
+    deploymentEvidence: {
+      publicationPath: 'releases/foundation.json',
+      manifestPath: 'releases/foundation.json',
+      agentHostArchivePath: 'releases/foundation.json',
+      integrationDeploymentReceiptPath: 'releases/foundation.json',
+      releaseTag: 'v1.0.0',
     },
-    signIn: () => assert.fail('A mixed API/MCP request must not fall through to Node sign-in.'),
   });
+  await writeFile(inputPath, original, 'utf8');
+  let temporaryPath;
+  try {
+    const code = await runP1DotnetCli({
+      input: relative(repositoryRoot, inputPath),
+      output: 'artifacts/evidence.jsonl',
+      nativeProbeEnvelope: 'scripts/harness-shared/test/p1-dotnet-cli.test.mjs',
+      dispatchRecoveryEnvelope: 'scripts/harness-shared/test/p1-dotnet-cli.test.mjs',
+    }, { AGENTWEAVER_CLI_PATH: process.execPath }, { error() {} }, (_file, args) => {
+      temporaryPath = resolve(args[args.indexOf('--input') + 1]);
+      assert.notEqual(temporaryPath, inputPath);
+      assert.deepEqual(JSON.parse(readFileSync(temporaryPath, 'utf8')).deploymentEvidence, {
+        publicationPath: resolve(repositoryRoot, 'releases/foundation.json'),
+        manifestPath: resolve(repositoryRoot, 'releases/foundation.json'),
+        agentHostArchivePath: resolve(repositoryRoot, 'releases/foundation.json'),
+        integrationDeploymentReceiptPath: resolve(repositoryRoot, 'releases/foundation.json'),
+        releaseTag: 'v1.0.0',
+      });
+      assert.deepEqual(args.slice(args.indexOf('--native-probe-envelope')), [
+        '--native-probe-envelope', 'scripts/harness-shared/test/p1-dotnet-cli.test.mjs',
+        '--dispatch-recovery-envelope', 'scripts/harness-shared/test/p1-dotnet-cli.test.mjs',
+      ]);
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit('exit', 0, null));
+      return child;
+    });
 
-  assert.equal(code, 2);
-  assert.equal(delegated, false);
-  assert.match(errors.join('\n'), /separately/);
+    assert.equal(code, 0);
+    assert.equal(await readFile(inputPath, 'utf8'), original);
+    await assert.rejects(readFile(temporaryPath, 'utf8'), { code: 'ENOENT' });
+    let unchangedInput;
+    const overwriteCode = await runP1DotnetCli({
+      input: relative(repositoryRoot, inputPath),
+      output: relative(repositoryRoot, inputPath),
+    }, { AGENTWEAVER_CLI_PATH: process.execPath }, { error() {} }, (_file, args) => {
+      unchangedInput = args[args.indexOf('--input') + 1];
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit('exit', 2, null));
+      return child;
+    });
+    assert.equal(overwriteCode, 2);
+    assert.equal(resolve(unchangedInput), inputPath);
+    assert.equal(await readFile(inputPath, 'utf8'), original);
+  } finally {
+    await rm(inputPath, { force: true });
+    if (temporaryPath) await rm(temporaryPath, { force: true });
+  }
 });

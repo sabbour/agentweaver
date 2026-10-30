@@ -98,6 +98,12 @@ export async function runP1CliEntrypoint(argv = process.argv.slice(2), env = pro
 } = {}) {
   const requestsApi = argv.some((argument, index) =>
     argument === '--surface' && argv[index + 1]?.split(',').includes('api'));
+  const requestsMcp = argv.some((argument, index) =>
+    argument === '--surface' && argv[index + 1]?.split(',').includes('mcp'));
+  if (requestsMcp) {
+    io.error?.('The Agentweaver 1.x P1 harness does not support an MCP surface; use --surface api for .NET CLI acceptance.');
+    return 2;
+  }
   let options;
   try {
     options = parseArguments(argv);
@@ -109,8 +115,8 @@ export async function runP1CliEntrypoint(argv = process.argv.slice(2), env = pro
     return runLegacy(argv, env, io);
   }
   if (options.surface !== 'api') {
-    if (!['mcp', 'ui'].includes(options.surface)) {
-      io.error?.('Specify --surface api, mcp, or ui; the API runner requires its configured .NET apphost.');
+    if (options.surface !== 'ui') {
+      io.error?.('Specify --surface api or ui; the API runner requires its configured .NET apphost.');
       return 2;
     }
     if (options.dryRun || options.interactive) {
@@ -270,9 +276,9 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
   const nativeProbeResults = [];
   if (argv.includes('--help')) {
     io.log('Usage: npm run harness:p1 -- --surface api --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>] [--dry-run] [--interactive]');
-    io.log('Usage: node scripts/harness-shared/run-p1.mjs --surface mcp|ui --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs> [--page-module <authorized-page-provider.mjs>] [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>]');
+    io.log('Legacy direct-runner usage: node scripts/harness-shared/run-p1.mjs --surface mcp|ui --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs> [--page-module <authorized-page-provider.mjs>] [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>]');
     io.log('The API surface delegates to the exact AGENTWEAVER_CLI_PATH apphost; authentication is non-interactive unless --interactive is explicit.');
-    io.log('Legacy MCP/UI adapters retain their explicit provider inputs; they do not execute API acceptance.');
+    io.log('The legacy direct runner is not a supported Agentweaver 1.x acceptance surface; use the .NET CLI API surface for 1.x acceptance.');
     io.log('Only exact output envelopes from the P1 probe runners are aggregated; missing probe envelopes remain blocked.');
     return 0;
   }

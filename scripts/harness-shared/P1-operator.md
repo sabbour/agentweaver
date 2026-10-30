@@ -150,15 +150,16 @@ Choose one command:
 
 ```powershell
 npm run harness:p1:signin-run -- --surface api --input <manifest.json> --output <evidence.jsonl>
-npm run harness:p1:signin-run -- --surface mcp --input <manifest.json> --output <evidence.jsonl>
-npm run harness:p1:signin-run -- --surface api,mcp --input <manifest.json> --output <evidence.jsonl>
 npm run harness:p1:signin-run -- --surface ui --input <manifest.json> --output <evidence.jsonl>
 ```
 
-Complete one interactive sign-in in the headed Chrome window with the approved
-account. Review the requested scopes and approve only the registered client
-request. The API, MCP, and UI flows reuse this browser session. Do not sign in
-again, use another account, or paste a token into a prompt.
+The Agentweaver 1.x acceptance launcher has no MCP surface; it rejects
+`--surface mcp` rather than falling back to the legacy runner. API acceptance
+uses the native .NET CLI. For UI, complete one interactive sign-in in the
+headed Chrome window with the approved account. Review the requested scopes
+and approve only the registered client request. The API flow does not share
+this browser session or its credentials. Do not use another account or paste
+a token into a prompt.
 Keep the shared browser window open between setup and run-bound token requests.
 The launcher closes each completed authorization page, not the shared browser.
 

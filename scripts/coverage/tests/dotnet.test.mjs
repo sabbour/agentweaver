@@ -170,4 +170,6 @@ test('the CLI acceptance suite is included in solution and coverage runs', () =>
     /tests\\Agentweaver\.Cli\.Acceptance\.Tests\\Agentweaver\.Cli\.Acceptance\.Tests\.csproj/);
   assert.match(project, /Agentweaver\.Cli\.Acceptance\.TestHost\\Agentweaver\.Cli\.Acceptance\.TestHost\.csproj/);
   assert.match(project, /services\\gateway\\Agentweaver\.Gateway\\Agentweaver\.Gateway\.csproj/);
+  assert.match(runner, /name === 'cli-acceptance'[\s\S]*AGENTWEAVER_CLI_PATH: join\(root,[\s\S]*agentweaver/);
+  assert.match(runner, /process\.platform === 'win32' \? '\.exe' : ''/);
 });

@@ -231,20 +231,10 @@ release evidence, safe dry run, one-account sign-in, and automatic fixture
 cleanup steps. This is the supported operator route; it does not require a
 token location or an identity-provider module.
 
-To run API and MCP journeys after one sign-in, use `--surface api,mcp`:
-
-```powershell
-npm run harness:p1:signin-run -- --surface api,mcp --input <manifest.json> --output <evidence.jsonl>
-```
-
-The launcher runs the surfaces sequentially in the requested order. Both use
-the same setup token and fresh browser session, but each creates its own
-fixture and obtains its own run-bound token. Each surface keeps a separate
-resumable invocation: `evidence.api.jsonl` and `evidence.mcp.jsonl`. The
-unsuffixed output path is not written in a multi-surface run. A single-surface
-run keeps the supplied output path unchanged. Both surfaces run even if the
-first returns a blocked or failed result; the command returns the highest exit
-code. Cancellation stops remaining work. UI cannot be combined with API or MCP.
+The Agentweaver 1.x acceptance CLI does not provide an MCP surface.
+`--surface mcp` and `--surface api,mcp` are rejected explicitly; use the API
+surface above for 1.x acceptance. The retained MCP adapter is legacy
+compatibility code and is not part of this API acceptance path.
 
 The launcher uses the registered public client and one interactive sign-in.
 It creates a fresh empty headed-Chrome profile and removes it on success,

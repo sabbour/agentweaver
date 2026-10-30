@@ -37,6 +37,25 @@ test('source, lockfile, Docker, browser and harness changes select all dependent
   assert.equal(classify(['scripts/release/validate.mjs']).web, true);
 });
 
+test('CLI archive validation follows only the CLI project and consumed SDK inputs', () => {
+  for (const path of [
+    'tools/Agentweaver.Cli/Agentweaver.Cli.csproj',
+    'tools/Agentweaver.Cli/packages.lock.json',
+    'Directory.Build.props',
+    'Directory.Build.targets',
+    'tools/Directory.Build.props',
+    'tools/Directory.Build.targets',
+    'Directory.Packages.props',
+    'tools/Directory.Packages.props',
+    'NuGet.Config',
+    'global.json',
+  ]) {
+    assert.equal(classify([path]).cli, true, path);
+  }
+  assert.equal(classify(['tests/Agentweaver.Cli.Tests/Agentweaver.Cli.Tests.csproj']).cli, false);
+  assert.equal(classify(['tests/Agentweaver.Cli.Acceptance.Tests/AcceptanceTests.cs']).cli, false);
+});
+
 test('matrix includes every suite and exactly four unique Broker shards', () => {
   assert.equal(new Set(testMatrix.map((entry) => entry.name)).size, testMatrix.length);
   assert.deepEqual(new Set(testMatrix.map((entry) => entry.project)), new Set(suites.map(([, project]) => project)));

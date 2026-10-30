@@ -83,7 +83,7 @@ before the Portal can consume the code, including an invalid state and
 redirected Broker consent. Shared
 contract tests check multi-surface execution and a callback that arrives while
 navigation is still pending. These tests do not use Entra or prove live SSO.
-See [Test retained API, UI, and MCP adapters](../guide/testing.md#test-retained-api-ui-and-mcp-adapters)
+See [Test API, UI, and retained MCP compatibility code](../guide/testing.md#test-api-ui-and-retained-mcp-compatibility-code)
 for the commands.
 
 Authentication helpers check supplied token metadata and expiry. Broker,
@@ -120,7 +120,7 @@ contract. The MCP suite includes a real SDK connection to a controlled
 loopback JSON-RPC HTTP server. Locked dependencies live under
 `scripts\mcp-harness`.
 
-## Understand API, UI, and MCP journeys
+## Understand API, UI, and retained MCP compatibility code
 
 The API client discovers `/openapi/v1.json` and invokes advertised `/api/v1`
 operations. It rejects unknown operation IDs, extra parameters, cross-origin
@@ -130,30 +130,29 @@ The UI adapter accepts an already-authorized page on the exact Web origin. It
 observes real Gateway request/response shapes and validates tenant, actor,
 gate, and owner receipt bindings. It does not sign in or seed browser storage.
 
-The MCP adapter uses Streamable HTTP at `/mcp`. It reads all tool-discovery
-pages, rejects duplicate or foreign tools and repeated cursors, and checks the
-structured owner result. It preserves `isError`; closing the client does not
-release Environments or archive projects.
+The retained MCP adapter uses Streamable HTTP at `/mcp`. It reads all
+tool-discovery pages, rejects duplicate or foreign tools and repeated cursors,
+and checks the structured owner result. It preserves `isError`; closing the
+client does not release Environments or archive projects. This adapter is
+legacy compatibility code, not an Agentweaver 1.x MCP product or acceptance
+surface.
 
-`npm run harness:p1` runs the shared surface entry point when you provide
-explicit target and authorized runtime inputs. Its result separates
-`surfaceStatus` from `fullP1Status`. Required deployment-source,
-image-measurement, and native probes remain blocked until evidence exists.
-The aggregate exits `0` for passed, `1` for failed, and `2` for blocked.
+The Agentweaver 1.x `npm run harness:p1` API entrypoint delegates acceptance
+to the native .NET CLI. It rejects `--surface mcp` and `--surface api,mcp`
+explicitly and never falls back to the legacy MCP runner. Required
+deployment-source, image-measurement, and native probes remain blocked until
+evidence exists.
 
-For one-account P1 API or MCP checks, `npm run harness:p1:signin-run -- ...`
-uses the existing `agentweaver-web` client with one interactive sign-in in a
-fresh empty disposable Chrome profile. It removes the profile in a `finally`
-path and does not read or copy an existing profile or credential cache. Tokens
-remain in memory only. The launcher does not sign in a denied actor. The input
-manifest must explicitly set `executionIntent` to `"execute"`; a missing or
-different value is rejected before the harness contacts the target. If
+For one-account P1 API checks, `npm run harness:p1:signin-run -- ...` delegates
+to the .NET CLI and does not use a browser unless `--interactive` is explicit.
+The wrapper does not read or copy an existing profile or credential cache.
+The launcher does not sign in a denied actor. The input manifest must
+explicitly set `executionIntent` to `"execute"`; a missing or different value
+is rejected before the harness contacts the target. If
 `fixturePlan.deniedActor` is omitted, `valid-denied-actor-403` remains blocked
-with the missing-account reason, the other surface checks continue, and the
-surface cannot pass. Distinct-actor coverage is unavailable to this one-account
-operator flow; no same-user substitute or role change is permitted. A
-lower-level identity provider can preserve it only when a separate actor
-credential is independently available. The Host-caller probe-provider gap is
+with the missing-account reason and the API surface cannot pass. Distinct-actor
+coverage is unavailable to this one-account operator flow; no same-user
+substitute or role change is permitted. The Host-caller probe-provider gap is
 still blocked; the launcher does not supply Host-caller probe adapters.
 
 The v1 UI surface remains blocked until the 0.x UI is restored onto v1. Do not target the current

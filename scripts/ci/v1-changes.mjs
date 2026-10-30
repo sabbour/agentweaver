@@ -15,6 +15,9 @@ export function classify(paths, full = false) {
                /(^|\/)([^/]+\.(csproj|props|targets|slnx)|packages\.lock\.json)$/.test(path) ||
                /^(global\.json|[Nn]u[Gg]et\.[Cc]onfig|coverage\.runsettings)$/.test(path)) {
       result.dotnet = result.images = true;
+      if (/^(?:tools\/Agentweaver\.Cli\/(?:Agentweaver\.Cli\.csproj|packages\.lock\.json)|(?:tools\/)?Directory\.Build\.(?:props|targets)|(?:tools\/)?Directory\.Packages\.props|NuGet\.Config|global\.json)$/.test(path)) {
+        result.cli = true;
+      }
       if (/^(deploy\/|services\/agenthost\/)/.test(path) ||
           /(^|\/)([^/]+\.(csproj|props|targets|slnx)|packages\.lock\.json)$/.test(path) ||
           /^(global\.json|[Nn]u[Gg]et\.[Cc]onfig)$/.test(path)) result.node = true;

@@ -541,7 +541,11 @@ npm run harness:p1 -- --surface api --input .\artifacts\acceptance-input.json --
 ```
 
 The wrapper invokes `agentweaver test` with the manifest, evidence path, and
-any supplied probe envelopes. It requires an executable `AGENTWEAVER_CLI_PATH`
+any supplied probe envelopes. The legacy wrapper resolves deployment proof
+paths from the repository root and passes the CLI an equivalent temporary
+manifest; direct `agentweaver test` invocations keep their manifest-relative
+proof-path behavior. Probe envelope paths retain the wrapper's working-directory
+resolution. It requires an executable `AGENTWEAVER_CLI_PATH`
 and fails for a missing or invalid path. The wrapper itself is Node-based, but
 it does not run the test in Node or fall back to `dotnet`. It removes
 `AGENTWEAVER_P1_SETUP_TOKEN` before launching the apphost, passes `--dry-run`
@@ -549,8 +553,9 @@ unchanged, and adds `--interactive` only when explicitly requested. A valid
 API invocation missing required input/output or Node module options returns
 `2`; malformed or unknown options are rejected before journey execution,
 without a legacy API fallback. The `test` command gets its target from the
-manifest, not target flags or environment fallback. Other surfaces remain on
-their existing JavaScript harnesses.
+manifest, not target flags or environment fallback. The Agentweaver 1.x P1
+entrypoints reject `--surface mcp` rather than falling back to the legacy
+JavaScript runner; API acceptance uses the .NET CLI.
 
 ```powershell
 npm run harness:p1 -- --surface api --input .\artifacts\acceptance-input.json --output .\artifacts\api-evidence.jsonl --native-probe-envelope .\artifacts\native.json --dispatch-recovery-envelope .\artifacts\recovery.json --dry-run --interactive
@@ -578,7 +583,7 @@ network. This one-account wrapper rejects manifests with
 entrypoint for journeys with a planned denied actor. Both wrappers remove
 `AGENTWEAVER_P1_SETUP_TOKEN` from the child process environment.
 
-## Test retained API, UI, and MCP adapters
+## Test API, UI, and retained MCP compatibility code
 
 Run the controlled local adapter tests with:
 
@@ -592,11 +597,13 @@ npm run test:harness:mcp
 `npm run test:harness:api` is a Node contract-test suite that mocks the
 wrapper/process contract; it does not launch the runtime acceptance apphost or
 retain a second Node API client. The runtime entrypoint is
-`npm run harness:p1 -- --surface api ...` described above. The MCP tests use a
-pinned SDK and loopback JSON-RPC server. The UI tests use injected page
-doubles, not a browser. These tests check fixture creation, selected surface
-calls, cleanup outcomes, and refusal of unverified ownership claims. They do
-not prove live owner behavior, native model execution, or deployment.
+`npm run harness:p1 -- --surface api ...` described above. The retained MCP
+adapter tests use a pinned SDK and loopback JSON-RPC server; they are legacy
+compatibility tests, not a supported Agentweaver 1.x MCP product or acceptance
+surface. The UI tests use injected page doubles, not a browser. These tests
+check fixture creation, selected surface calls, cleanup outcomes, and refusal
+of unverified ownership claims. They do not prove live owner behavior, native
+model execution, or deployment.
 
 The retained controlled P1 journal regression starts with an empty in-memory event
 journal. Fixture setup discovers and invokes the Gateway
@@ -629,10 +636,11 @@ attached until the page closes, including when sign-in fails or is cancelled.
 The shared contract tests delay the abort acknowledgement to check this
 ordering without depending on browser timing.
 It renders Broker consent when that response arrives through a redirect.
-The shared harness rejects a mixed `--surface api,mcp` invocation. API and
-MCP use separate execution paths; UI and MCP browser flows retain their
-Chrome-based tests. These tests do not sign in to Entra, use an existing
-profile or credential cache, or prove live SSO. Each token request closes
+The 1.x harness entrypoints reject `--surface mcp` and `--surface api,mcp`
+explicitly and never route those selections to the legacy runner. Use
+`--surface api` for 1.x P1 acceptance. Retained MCP adapter and UI browser
+tests remain local compatibility checks; they do not sign in to Entra, use an
+existing profile or credential cache, or prove live SSO. Each token request closes
 only its authorization page, keeping the shared browser alive until the
 launcher finishes.
 CI runs both the harness contract suite and this browser regression.
