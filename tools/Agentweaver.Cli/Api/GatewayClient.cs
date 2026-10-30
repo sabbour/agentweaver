@@ -299,18 +299,19 @@ public sealed partial class GatewayClient : IGatewayClient
             throw new InvalidOperationException("The REST URL cannot contain a backslash or fragment.");
 
         Uri target;
-        if (Uri.TryCreate(url, UriKind.Absolute, out var absolute))
+        if (url.StartsWith("/", StringComparison.Ordinal))
+        {
+            if (url.StartsWith("//", StringComparison.Ordinal))
+                throw new InvalidOperationException("The REST URL must be root-relative or an absolute URL on the configured Gateway origin.");
+            target = new Uri(_gateway, url);
+        }
+        else if (Uri.TryCreate(url, UriKind.Absolute, out var absolute))
         {
             target = absolute;
         }
         else
         {
-            if (!url.StartsWith("/", StringComparison.Ordinal) ||
-                url.StartsWith("//", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException("The REST URL must be root-relative or an absolute URL on the configured Gateway origin.");
-            }
-            target = new Uri(_gateway, url);
+            throw new InvalidOperationException("The REST URL must be root-relative or an absolute URL on the configured Gateway origin.");
         }
 
         if (!target.IsAbsoluteUri ||
