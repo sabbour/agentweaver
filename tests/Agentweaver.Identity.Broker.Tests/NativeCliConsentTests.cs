@@ -26,7 +26,8 @@ public sealed class NativeCliConsentTests : IAsyncLifetime
         _fakeIdp = await FakeIdentityProvider.StartAsync();
         _signingCertificate = TestSigningCertificate.Create();
         _factory = new IdentityBrokerWebApplicationFactory(
-            connectionString, _fakeIdp, signingCertificate: _signingCertificate, registerCliClient: true);
+            connectionString, _fakeIdp, signingCertificate: _signingCertificate, registerCliClient: true,
+            configure: settings => settings["IdentityBroker__Clients__1__Scopes__5"] = "<img>");
         _broker = CreateBrokerClient(_factory);
         _fakeIdpClient = new HttpClient(_fakeIdp.Server.CreateHandler())
         {
@@ -84,6 +85,32 @@ public sealed class NativeCliConsentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task NativeCliConsentMatchesAppAppearanceAndEscapesRequestedScopes()
+    {
+        var page = await StartCliConsentAsync("openid api.read <img>");
+        Assert.Equal(HttpStatusCode.OK, page.Response.StatusCode);
+
+        var csp = page.Response.Headers.GetValues("Content-Security-Policy").Single();
+        var styleNonce = Regex.Match(csp, "style-src 'nonce-([^']+)'").Groups[1].Value;
+        Assert.False(string.IsNullOrEmpty(styleNonce));
+
+        var html = await page.Response.Content.ReadAsStringAsync();
+        Assert.Contains($"<style nonce=\"{styleNonce}\">", html);
+        Assert.Contains("background: #efeae7", html);
+        Assert.Contains("background: #fdfbf8", html);
+        Assert.Contains("background: #272320", html);
+        Assert.Contains("width: min(100%, 520px)", html);
+        Assert.Contains("border-radius: 16px", html);
+        Assert.Contains("<li><code>&lt;img&gt;</code></li>", html);
+        Assert.DoesNotContain("<li><code><img></code></li>", html);
+        Assert.Contains("""<form method="post" action="/connect/consent/native">""", html);
+        Assert.Contains("""name="approve" value="true">Allow</button>""", html);
+        Assert.Contains("""name="approve" value="false">Deny</button>""", html);
+        Assert.Contains("""name="consent_handle" value=""", html);
+        Assert.Contains("""name="__RequestVerificationToken" value=""", html);
+    }
+
+    [Fact]
     public async Task NativeCliConsentEnforcesAntiforgeryCookieClientAndOneUseDenial()
     {
         var page = await StartCliConsentAsync();
@@ -130,9 +157,8 @@ public sealed class NativeCliConsentTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.BadRequest, replay.StatusCode);
     }
 
-    private async Task<NativeConsentPage> StartCliConsentAsync()
+    private async Task<NativeConsentPage> StartCliConsentAsync(string scope = "openid api.read offline_access")
     {
-        const string scope = "openid api.read offline_access";
         const string state = "native-cli-test-state";
         var (verifier, challenge) = Pkce.Create();
         var authorize = await BrokerFlowDriver.StartAuthorizeAsync(

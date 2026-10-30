@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Net;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -176,11 +177,12 @@ public static class IdentityBrokerEndpoints
         var antiforgeryToken = antiforgery.GetAndStoreTokens(context).RequestToken;
         if (string.Equals(request.ClientId, NativeCliClientId, StringComparison.Ordinal))
         {
+            var styleNonce = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(18));
             context.Response.Headers["Cache-Control"] = "no-store";
             context.Response.Headers["Content-Security-Policy"] =
-                "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+                $"default-src 'none'; style-src 'nonce-{styleNonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
             context.Response.Headers["X-Content-Type-Options"] = "nosniff";
-            return Results.Content(BuildNativeConsentPage(consentHandle, antiforgeryToken, requestedScopes),
+            return Results.Content(BuildNativeConsentPage(consentHandle, antiforgeryToken, styleNonce, requestedScopes),
                 "text/html; charset=utf-8");
         }
 
@@ -390,31 +392,191 @@ public static class IdentityBrokerEndpoints
     }
 
     private static string BuildNativeConsentPage(
-        string consentHandle, string? antiforgeryToken, IEnumerable<string> requestedScopes)
+        string consentHandle, string? antiforgeryToken, string styleNonce, IEnumerable<string> requestedScopes)
     {
         var scopes = string.Join(string.Empty, requestedScopes.Select(scope =>
-            $"<li>{WebUtility.HtmlEncode(scope)}</li>"));
+            $"<li><code>{WebUtility.HtmlEncode(scope)}</code></li>"));
         return $"""
             <!doctype html>
             <html lang="en">
             <head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+            <meta name="color-scheme" content="light">
+            <style nonce="{WebUtility.HtmlEncode(styleNonce)}">{NativeConsentStyles}</style>
             <title>Authorize Agentweaver CLI</title></head>
             <body>
-            <main>
-            <h1>Authorize Agentweaver CLI</h1>
-            <p>The CLI is requesting these permissions:</p>
-            <ul>{scopes}</ul>
+            <main class="v1-auth-page">
+            <section class="v1-auth-card" aria-labelledby="consent-title">
+            <div class="v1-brand">Agentweaver</div>
+            <div>
+            <h1 id="consent-title">Review access</h1>
+            <p>Agentweaver's sign-in service asks to use these permissions for this app.</p>
+            </div>
+            <dl class="v1-detail-list">
+            <div><dt>App</dt><dd>Agentweaver CLI</dd></div>
+            <div><dt>Requested permissions</dt><dd><ul class="v1-consent-scopes">{scopes}</ul></dd></div>
+            </dl>
             <form method="post" action="/connect/consent/native">
             <input type="hidden" name="consent_handle" value="{WebUtility.HtmlEncode(consentHandle)}">
             <input type="hidden" name="__RequestVerificationToken" value="{WebUtility.HtmlEncode(antiforgeryToken ?? string.Empty)}">
-            <button type="submit" name="approve" value="true">Allow</button>
-            <button type="submit" name="approve" value="false">Deny</button>
+            <div class="v1-actions">
+            <button type="submit" class="native-button native-button--primary" name="approve" value="true">Allow</button>
+            <button type="submit" class="native-button native-button--secondary" name="approve" value="false">Deny</button>
+            </div>
             </form>
+            </section>
             </main>
             </body>
             </html>
             """;
     }
+
+    private const string NativeConsentStyles = """
+        *,
+        *::before,
+        *::after {
+          box-sizing: border-box;
+        }
+
+        body {
+          margin: 0;
+          color: #272320;
+          background: #efeae7;
+          font-family: "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif;
+          font-size: 15px;
+          line-height: 1.5;
+          -webkit-font-smoothing: antialiased;
+        }
+
+        .v1-auth-page {
+          display: grid;
+          min-height: 100vh;
+          place-items: center;
+          padding: 24px;
+        }
+
+        .v1-auth-card {
+          display: flex;
+          width: min(100%, 520px);
+          flex-direction: column;
+          gap: 16px;
+          padding: 24px 32px;
+          border: 1px solid #ece7e3;
+          border-radius: 16px;
+          background: #fdfbf8;
+          box-shadow: 0 8px 16px rgba(0, 0, 0, 0.14), 0 0 2px rgba(0, 0, 0, 0.12);
+        }
+
+        .v1-auth-card h1 {
+          margin: 0;
+          font-size: 24px;
+          line-height: 32px;
+          font-weight: 600;
+          letter-spacing: -0.02em;
+        }
+
+        .v1-auth-card p {
+          margin: 0;
+          color: #3f3935;
+        }
+
+        .v1-brand {
+          font-weight: 600;
+        }
+
+        .v1-detail-list {
+          display: grid;
+          gap: 12px;
+          margin: 0;
+        }
+
+        .v1-detail-list > div {
+          display: grid;
+          grid-template-columns: minmax(120px, 0.4fr) minmax(0, 1fr);
+          gap: 16px;
+          padding-bottom: 4px;
+          border-bottom: 1px solid #ece7e3;
+        }
+
+        .v1-detail-list dt {
+          color: #635c57;
+        }
+
+        .v1-detail-list dd {
+          min-width: 0;
+          margin: 0;
+        }
+
+        .v1-consent-scopes {
+          display: grid;
+          margin: 0;
+          padding: 0;
+          list-style: none;
+        }
+
+        .v1-consent-scopes li {
+          padding: 8px 0;
+          border-top: 1px solid #ece7e3;
+        }
+
+        .v1-consent-scopes code {
+          overflow-wrap: anywhere;
+          font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+          font-size: 14px;
+          font-weight: 600;
+        }
+
+        .v1-actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .native-button {
+          min-height: 32px;
+          padding: 5px 12px;
+          border: 1px solid transparent;
+          border-radius: 8px;
+          font: inherit;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+
+        .native-button:focus-visible {
+          outline: 2px solid #8c837c;
+          outline-offset: 2px;
+        }
+
+        .native-button--primary {
+          color: #faf6f2;
+          background: #272320;
+        }
+
+        .native-button--primary:hover {
+          background: #3f3935;
+        }
+
+        .native-button--secondary {
+          color: #272320;
+          background: #fdfbf8;
+          border-color: #e2ddd9;
+        }
+
+        .native-button--secondary:hover {
+          background: #efeae7;
+        }
+
+        @media (max-width: 600px) {
+          .v1-auth-card {
+            padding: 24px;
+          }
+
+          .v1-detail-list > div {
+            grid-template-columns: 1fr;
+            gap: 2px;
+          }
+        }
+        """;
 
     /// <summary>
     /// Accepts only authorization-code and refresh-token exchanges. Before signing in the
