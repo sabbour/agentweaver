@@ -39,6 +39,10 @@ public sealed class IdentityBrokerWebApplicationFactory : WebApplicationFactory<
     public const string TestClientRedirectUri = "https://client.test/callback";
     public static readonly string[] TestClientScopes = ["openid", "profile", "email", "api.read", "offline_access"];
     public static readonly string[] TestClientResources = ["https://api.test"];
+    public const string CliClientId = "agentweaver-cli";
+    public const string CliClientRedirectUri = "http://127.0.0.1:49173/oauth/callback";
+    public static readonly string[] CliClientScopes =
+        ["openid", "api.read", "offline_access", "projects.admin", "projects.orchestrator"];
 
     private readonly string _connectionString;
     private readonly FakeIdentityProvider _fakeIdp;
@@ -71,7 +75,8 @@ public sealed class IdentityBrokerWebApplicationFactory : WebApplicationFactory<
         string redirectUri = TestClientRedirectUri, (string PfxPath, string Password)? signingCertificate = null,
         Action<Dictionary<string, string?>>? configure = null,
         Action<IServiceCollection>? configureServices = null,
-        string? externalProviderClientSecret = "fake-idp-client-secret")
+        string? externalProviderClientSecret = "fake-idp-client-secret",
+        bool registerCliClient = false)
     {
         _connectionString = connectionString;
         _fakeIdp = fakeIdp;
@@ -112,6 +117,17 @@ public sealed class IdentityBrokerWebApplicationFactory : WebApplicationFactory<
             settings[$"IdentityBroker__Clients__0__Scopes__{i}"] = TestClientScopes[i];
         for (var i = 0; i < TestClientResources.Length; i++)
             settings[$"IdentityBroker__Clients__0__Resources__{i}"] = TestClientResources[i];
+        if (registerCliClient)
+        {
+            settings["IdentityBroker__Clients__1__ClientId"] = CliClientId;
+            settings["IdentityBroker__Clients__1__DisplayName"] = "Agentweaver CLI";
+            settings["IdentityBroker__Clients__1__Type"] = nameof(BrokerClientType.Public);
+            settings["IdentityBroker__Clients__1__RedirectUris__0"] = CliClientRedirectUri;
+            for (var i = 0; i < CliClientScopes.Length; i++)
+                settings[$"IdentityBroker__Clients__1__Scopes__{i}"] = CliClientScopes[i];
+            for (var i = 0; i < TestClientResources.Length; i++)
+                settings[$"IdentityBroker__Clients__1__Resources__{i}"] = TestClientResources[i];
+        }
 
         configure?.Invoke(settings);
         foreach (var (key, value) in settings)
