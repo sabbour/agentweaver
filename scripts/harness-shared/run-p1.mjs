@@ -24,6 +24,7 @@ import {
 import { sanitizeP1Failure } from './p1-surface-common.mjs';
 import { redact } from './redaction.mjs';
 import { appendRedactedJsonLine, serializeRedactedJsonLine } from './safe-jsonl.mjs';
+import { runP1DotnetCli } from './p1-dotnet-cli.mjs';
 
 /** CLI orchestration for source-pinned P1 setup, surface journeys, cleanup, and JSONL evidence. */
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -73,15 +74,60 @@ function parseArguments(argv) {
       result.help = true;
       continue;
     }
+    if (name === '--dry-run' || name === '--interactive') {
+      const key = name === '--dry-run' ? 'dryRun' : 'interactive';
+      if (result[key]) throw new Error(`The ${name} option can only be used once.`);
+      result[key] = true;
+      continue;
+    }
     if (!optionKeys.has(name)
       || typeof argv[index + 1] !== 'string' || argv[index + 1].startsWith('--')) {
       throw new Error('Use --surface api|mcp|ui --input <manifest.json> --output <evidence.jsonl> --identity-module <module.mjs> [--page-module <module.mjs>] [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>].');
     }
+
     const key = optionKeys.get(name);
     if (result[key] !== undefined) throw new Error(`The ${name} option can only be used once.`);
     result[key] = argv[++index];
   }
   return result;
+}
+
+export async function runP1CliEntrypoint(argv = process.argv.slice(2), env = process.env, io = console, {
+  runDotnetCli = runP1DotnetCli,
+  runLegacy = runP1Cli,
+} = {}) {
+  const requestsApi = argv.some((argument, index) =>
+    argument === '--surface' && argv[index + 1]?.split(',').includes('api'));
+  let options;
+  try {
+    options = parseArguments(argv);
+  } catch (error) {
+    if (requestsApi) {
+      io.error?.(error.message);
+      return 2;
+    }
+    return runLegacy(argv, env, io);
+  }
+  if (options.surface !== 'api') {
+    if (!['mcp', 'ui'].includes(options.surface)) {
+      io.error?.('Specify --surface api, mcp, or ui; the API runner requires its configured .NET apphost.');
+      return 2;
+    }
+    if (options.dryRun || options.interactive) {
+      io.error?.('--dry-run and --interactive are supported only by the .NET API acceptance runner.');
+      return 2;
+    }
+    return runLegacy(argv, env, io);
+  }
+  if (!options.input || !options.output) {
+    io.error?.('The API surface requires --input <manifest.json> and --output <evidence.jsonl>.');
+    return 2;
+  }
+  if (options.identityModule || options.pageModule) {
+    io.error?.('The .NET API runner owns authentication and does not accept Node identity or page modules.');
+    return 2;
+  }
+  return runDotnetCli(options, env, io);
 }
 
 /** Read and validate one exact output envelope without accepting a partial or scripted shape. */
@@ -223,8 +269,10 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
   let sourceEvidence;
   const nativeProbeResults = [];
   if (argv.includes('--help')) {
-    io.log('Usage: node scripts/harness-shared/run-p1.mjs --surface api|mcp|ui --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs> [--page-module <authorized-page-provider.mjs>] [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>]');
-    io.log('The runner uses the supplied setup token only after source and deployment evidence pass; it never signs in or requests consent.');
+    io.log('Usage: npm run harness:p1 -- --surface api --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>] [--dry-run] [--interactive]');
+    io.log('Usage: node scripts/harness-shared/run-p1.mjs --surface mcp|ui --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs> [--page-module <authorized-page-provider.mjs>] [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>]');
+    io.log('The API surface delegates to the exact AGENTWEAVER_CLI_PATH apphost; authentication is non-interactive unless --interactive is explicit.');
+    io.log('Legacy MCP/UI adapters retain their explicit provider inputs; they do not execute API acceptance.');
     io.log('Only exact output envelopes from the P1 probe runners are aggregated; missing probe envelopes remain blocked.');
     return 0;
   }
@@ -437,6 +485,6 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const exitCode = await runP1Cli();
+  const exitCode = await runP1CliEntrypoint();
   process.exitCode = exitCode;
 }

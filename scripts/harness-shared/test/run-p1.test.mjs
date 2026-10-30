@@ -112,12 +112,13 @@ function invocationRecord(input, surface, invocationId, nativeProbeResults = [])
   };
 }
 
-test('P1 CLI help describes the explicit identity providers without exposing credential arguments', async () => {
+test('P1 CLI help describes .NET API delegation and legacy providers without credential arguments', async () => {
   const output = [];
   const code = await runP1Cli(['--help'], {}, { log: text => output.push(text), error() {} });
   assert.equal(code, 0);
-  assert.match(output.join('\n'), /--surface api\|mcp\|ui/);
-  assert.match(output.join('\n'), /supplied setup token only after source and deployment evidence pass/);
+  assert.match(output.join('\n'), /--surface api/);
+  assert.match(output.join('\n'), /AGENTWEAVER_CLI_PATH/);
+  assert.match(output.join('\n'), /--surface mcp\|ui/);
   assert.doesNotMatch(output.join('\n'), /--token/);
 });
 
