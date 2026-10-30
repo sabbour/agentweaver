@@ -41,6 +41,13 @@ public static class CliApplication
                     output,
                     error,
                     ct).ConfigureAwait(false);
+            if (args[0] == "rest")
+                return await RunRestAsync(
+                    args[1..],
+                    runtime ?? new CliRuntimeOptions(),
+                    output,
+                    error,
+                    ct).ConfigureAwait(false);
             if (args[0] == "auth")
                 return await RunAuthAsync(args[1..], runtime ?? new CliRuntimeOptions(), output, ct).ConfigureAwait(false);
             if (args[0] == "test")
@@ -182,6 +189,96 @@ public static class CliApplication
         return response.Status is >= 200 and < 300 ? 0 : 1;
     }
 
+    private static async Task<int> RunRestAsync(
+        string[] args,
+        CliRuntimeOptions runtime,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken ct)
+    {
+        var parsed = CliOptions.Parse(args, new HashSet<string>(StringComparer.Ordinal));
+        parsed.RequireOnly(
+            new[] { "method", "url", "scope", "body", "header", "output" }
+                .Concat(CliConfiguration.TargetOptionNames)
+                .ToArray());
+        var method = parsed.Single("method")?.ToUpperInvariant()
+            ?? throw new CliUsageException("`agentweaver rest` requires --method GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS.");
+        var url = parsed.Single("url")
+            ?? throw new CliUsageException("`agentweaver rest` requires --url <root-relative-or-same-Gateway-URL>.");
+        if (method is not ("GET" or "HEAD" or "POST" or "PUT" or "PATCH" or "DELETE" or "OPTIONS"))
+            throw new CliUsageException("--method must be GET, HEAD, POST, PUT, PATCH, DELETE, or OPTIONS.");
+
+        var identity = CliConfiguration.ReadIdentity(parsed.Many("scope"), options: parsed);
+        using var ownedClient = runtime.HttpClient is null ? CreateSafeHttpClient() : null;
+        var httpClient = runtime.HttpClient ?? ownedClient!;
+        var factory = runtime.GatewayClientFactory ?? new GatewayClientFactory(httpClient, runtime.Authentication);
+        var client = factory.Create(identity);
+        var headers = ParsePairs(parsed.Many("header"), "--header", StringComparer.OrdinalIgnoreCase);
+        var bodyOption = parsed.Single("body");
+        var bodySourcePath = bodyOption is { Length: > 1 } && bodyOption[0] == '@'
+            ? Path.GetFullPath(bodyOption[1..])
+            : null;
+        var body = ReadBodyBytes(bodyOption);
+        var outputPath = parsed.Single("output");
+        var fullOutputPath = outputPath is null ? null : Path.GetFullPath(outputPath);
+        if (fullOutputPath is not null &&
+            (File.Exists(fullOutputPath) || Directory.Exists(fullOutputPath)))
+            throw new IOException("Binary output must use a new file path; existing files are never overwritten.");
+        if (fullOutputPath is not null && bodySourcePath is not null &&
+            PathsEqual(fullOutputPath, bodySourcePath))
+            throw new IOException("Binary output cannot overwrite the request-body input file.");
+
+        var response = await client.InvokeRawAsync(
+            method,
+            url,
+            body,
+            headers,
+            fullOutputPath is not null,
+            fullOutputPath is null
+                ? async chunk =>
+                {
+                    await output.WriteAsync(chunk).ConfigureAwait(false);
+                    await output.FlushAsync(ct).ConfigureAwait(false);
+                }
+                : null,
+            ct).ConfigureAwait(false);
+        if (fullOutputPath is not null)
+        {
+            // Create a file only for a non-empty opaque payload; HEAD representation length is not a body.
+            if (response.BinaryBody is null)
+                throw new CliUsageException(response.HasBody
+                    ? "--output is only valid for a non-empty opaque binary response."
+                    : "--output cannot be used with an empty response.");
+            await WriteNewFileAsync(fullOutputPath, response.BinaryBody, ct).ConfigureAwait(false);
+        }
+        else if (response.BinaryBody is not null)
+        {
+            throw new CliUsageException("The response has opaque binary content; specify a new path with --output.");
+        }
+
+        var result = new JsonObject
+        {
+            ["status"] = response.Status,
+            ["headers"] = new JsonObject(response.Headers.ToDictionary(
+                item => item.Key,
+                item => (JsonNode?)JsonValue.Create(item.Value),
+                StringComparer.OrdinalIgnoreCase)),
+            ["evidence"] = response.Evidence,
+        };
+        if (response.BinaryBody is { } bytes)
+        {
+            result["output"] = fullOutputPath;
+            result["bytes"] = bytes.Length;
+        }
+        else if (response.Evidence["contentType"]?.GetValue<string>() != "text/event-stream")
+        {
+            result["body"] = response.Evidence["responseBody"]?.DeepClone();
+        }
+        var eventStream = response.Evidence["contentType"]?.GetValue<string>() == "text/event-stream";
+        await WriteJsonAsync(eventStream ? error : output, result).ConfigureAwait(false);
+        return response.Status is >= 200 and < 300 ? 0 : 1;
+    }
+
     private static async Task<int> RunAuthAsync(
         string[] args,
         CliRuntimeOptions runtime,
@@ -298,6 +395,45 @@ public static class CliApplication
         }
     }
 
+    private static byte[]? ReadBodyBytes(string? body)
+    {
+        // REST keeps its 1 MiB cap separate from cataloged API request limits.
+        // An omitted option means no content; the literal JSON `null` remains an explicit body.
+        if (body is null)
+            return null;
+        byte[] bytes;
+        if (body.StartsWith('@'))
+        {
+            if (body.Length == 1)
+                throw new CliUsageException("--body @file requires a non-empty file path.");
+            var path = Path.GetFullPath(body[1..]);
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (stream.Length > GatewayClient.DefaultRequestBytes)
+                throw new InvalidDataException("The JSON request-body input exceeds the maximum supported size.");
+            using var buffer = new MemoryStream((int)stream.Length);
+            stream.CopyTo(buffer);
+            bytes = buffer.ToArray();
+        }
+        else
+        {
+            bytes = Encoding.UTF8.GetBytes(body);
+            if (bytes.Length > GatewayClient.DefaultRequestBytes)
+                throw new InvalidDataException("The JSON request body exceeds the maximum supported size.");
+        }
+        // Validate JSON without reserializing so @file whitespace and exact UTF-8 bytes survive.
+        try
+        {
+            using var document = JsonDocument.Parse(
+                bytes,
+                new JsonDocumentOptions { MaxDepth = 32 });
+        }
+        catch (JsonException exception)
+        {
+            throw new CliUsageException($"The request body is not valid JSON: {exception.Message}");
+        }
+        return bytes;
+    }
+
     private static Dictionary<string, string> ParsePairs(
         IReadOnlyList<string> values,
         string option,
@@ -376,6 +512,8 @@ public static class CliApplication
           agentweaver api describe <operationId> [target options]
           agentweaver api invoke <operationId> [target options] [--path name=value] [--query name=value]
               [--body <JSON|@file>] [--header name=value] [--output <new-file>]
+          agentweaver rest --method GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS --url <root-relative-or-same-Gateway-URL>
+              [target options] [--scope <scope>] [--body <JSON|@file>] [--header name=value]... [--output <new-file>]
           target options: --gateway-url <url> --broker-issuer <url> --client-id <id>
               --api-audience <audience> --tenant-id <id> --project-id <id> --run-id <id>
           agentweaver test --input <manifest> --output <evidence.jsonl>

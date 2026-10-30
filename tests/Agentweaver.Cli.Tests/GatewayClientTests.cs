@@ -65,6 +65,50 @@ public sealed class GatewayClientTests
     }
 
     [Fact]
+    public async Task ApiInvocationAcceptsTwoMiBJsonBody()
+    {
+        var bodyPath = Path.GetFullPath($"api-large-body-{Guid.NewGuid():N}.json");
+        var bodyText = "{\"payload\":\"" + new string('x', 2 * 1024 * 1024) + "\"}";
+        await File.WriteAllTextAsync(bodyPath, bodyText, new UTF8Encoding(false));
+        try
+        {
+            var handler = new TestGatewayHandler();
+            using var http = new HttpClient(handler);
+            var error = new StringWriter();
+            var result = await CliApplication.RunAsync(
+            [
+                "api", "invoke", "formulateCastingProposal",
+                "--path", "projectId=project-1",
+                "--query", "runId=run-1",
+                "--header", "Idempotency-Key=large-body-test",
+                "--body", "@" + bodyPath,
+                "--scope", "projects.orchestrator",
+                "--gateway-url", "https://gateway.example/",
+                "--broker-issuer", "https://identity.example/",
+                "--client-id", "agentweaver-cli",
+                "--api-audience", "https://gateway.example/",
+                "--tenant-id", "tenant-1",
+                "--project-id", "project-1",
+                "--run-id", "run-1",
+            ],
+            new CliRuntimeOptions(
+                HttpClient: http,
+                Authentication: new TestAuthentication(),
+                Error: error));
+
+            Assert.True(result == 0, error.ToString());
+            var request = Assert.Single(handler.Requests, request =>
+                request.Path.Contains("/projects/project-1/casting/proposals", StringComparison.Ordinal));
+            Assert.Equal(bodyText, request.Body);
+            Assert.Empty(error.ToString());
+        }
+        finally
+        {
+            File.Delete(bodyPath);
+        }
+    }
+
+    [Fact]
     public async Task UnboundOrchestratorCanCreateRunWithProjectsOwnerAuthorityEvidence()
     {
         var handler = new TestGatewayHandler { OwnerPermission = "acceptRunSelection" };
@@ -303,6 +347,18 @@ public sealed class GatewayClientTests
                     },
                 },
                 cancellation.Token));
+    }
+
+    [Fact]
+    public void PlainTextRedactionProtectsAccessAndSubscriptionKeys()
+    {
+        var redacted = GatewayClient.RedactText(
+            "accessKey=plain-access-secret; subscriptionKey=plain-subscription-secret");
+
+        Assert.DoesNotContain("plain-access-secret", redacted, StringComparison.Ordinal);
+        Assert.DoesNotContain("plain-subscription-secret", redacted, StringComparison.Ordinal);
+        Assert.Contains("accessKey=[REDACTED]", redacted, StringComparison.Ordinal);
+        Assert.Contains("subscriptionKey=[REDACTED]", redacted, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -664,6 +720,7 @@ public sealed class GatewayClientTests
             "/api/v1/projects/{projectId}/casting/proposals":{
               "post":{
                 "operationId":"formulateCastingProposal",
+                "x-agentweaver-max-request-body-bytes":3145728,
                 "security":[{"Bearer":[]}],
                 "parameters":[
                   {"name":"projectId","in":"path","required":true,"schema":{"type":"string"}},

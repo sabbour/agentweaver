@@ -10,12 +10,15 @@ using System.Text.RegularExpressions;
 
 namespace Agentweaver.Cli.Api;
 
+/// <summary>
+/// Invokes supported operations in the selected Gateway's live OpenAPI contract or guarded same-origin direct requests.
+/// </summary>
 public sealed partial class GatewayClient : IGatewayClient
 {
     private const int MaximumOpenApiBytes = 2 * 1024 * 1024;
     private const int MaximumRequestBytes = 64 * 1024 * 1024;
     private const int MaximumResponseBytes = 64 * 1024 * 1024;
-    private const int DefaultRequestBytes = 1024 * 1024;
+    internal const int DefaultRequestBytes = 1024 * 1024;
     private const int DefaultResponseBytes = 8 * 1024 * 1024;
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
     private static readonly HashSet<string> TokenCountNames =
@@ -33,6 +36,17 @@ public sealed partial class GatewayClient : IGatewayClient
         {
             "authorization", "cookie", "x-agentweaver-tenant", "x-correlation-id",
             "x-agentweaver-project-authorization",
+        };
+    private static readonly HashSet<string> ReservedRawHeaders =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "authorization", "proxy-authorization", "cookie", "set-cookie",
+            "host", "content-length", "transfer-encoding", "connection", "keep-alive",
+            "proxy-connection", "te", "trailer", "upgrade", "expect", "content-type",
+            "x-agentweaver-tenant", "x-agentweaver-project-authorization",
+            "x-correlation-id", "request-id", "traceparent",
+            "forwarded", "x-http-method", "x-http-method-override", "x-method-override",
+            "x-original-url", "x-rewrite-url",
         };
     private static readonly string[] CorrelationHeaders =
         ["traceparent", "request-id", "x-request-id", "x-correlation-id"];
@@ -75,6 +89,8 @@ public sealed partial class GatewayClient : IGatewayClient
 
     public CliIdentity Identity { get; }
 
+    /// <summary>Returns sanitized diagnostic evidence for completed Gateway requests.</summary>
+    /// <remarks>Each read is a deep copy; this is not the raw response payload.</remarks>
     public IReadOnlyList<JsonObject> Calls
     {
         get
@@ -153,6 +169,7 @@ public sealed partial class GatewayClient : IGatewayClient
 
         var (path, query, requestHeaders, bodyBytes) = PrepareRequest(operation, invocation);
         var primaryBearer = await GetBearerAsync(Identity, ct).ConfigureAwait(false);
+        // A selected tenant or project/run is only a selector; confirm its current owner context before any operation.
         var callerContext = operationId == "getAuthorizationContext"
             ? null
             : await ReadAuthorizationContextAsync(Identity, primaryBearer, ct).ConfigureAwait(false);
@@ -164,6 +181,7 @@ public sealed partial class GatewayClient : IGatewayClient
         {
             if (callerContext is null)
                 throw new InvalidOperationException("Dual-authorization operations require a prior tenant authorization check.");
+            // Project-admin credentials are unbound; compare the Broker actors and tenant before combining them.
             var projectIdentity = CreateProjectAuthorizationIdentity();
             projectBearer = await GetBearerAsync(projectIdentity, ct).ConfigureAwait(false);
             var projectContext = await ReadAuthorizationContextAsync(
@@ -208,6 +226,154 @@ public sealed partial class GatewayClient : IGatewayClient
         }
         return response;
     }
+
+    /// <summary>
+    /// Sends a same-origin REST request after tenant-binding preflight, without OpenAPI discovery.
+    /// </summary>
+    /// <remarks>Uses only the primary tenant bearer and does not request project authority.</remarks>
+    public async Task<GatewayResponse> InvokeRawAsync(
+        string method,
+        string url,
+        byte[]? body,
+        IReadOnlyDictionary<string, string>? headers,
+        bool outputRequested,
+        Func<string, ValueTask>? onEventChunk,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(method);
+        ArgumentException.ThrowIfNullOrWhiteSpace(url);
+        var normalizedMethod = method.ToUpperInvariant();
+        if (normalizedMethod is not ("GET" or "HEAD" or "POST" or "PUT" or "PATCH" or "DELETE" or "OPTIONS"))
+            throw new InvalidOperationException("The REST method is not supported.");
+        if (body?.Length > DefaultRequestBytes)
+            throw new InvalidOperationException($"The JSON request body exceeds its {DefaultRequestBytes}-byte limit.");
+
+        var pathAndQuery = PrepareRawTarget(url);
+        var requestHeaders = ValidateRawHeaders(headers);
+        var bearer = await GetBearerAsync(Identity, ct).ConfigureAwait(false);
+        await ReadRawAuthorizationContextAsync(bearer, ct).ConfigureAwait(false);
+        return await SendAsync(
+            Identity,
+            normalizedMethod,
+            pathAndQuery,
+            body,
+            bearer,
+            authenticated: true,
+            maximumResponseBytes: DefaultResponseBytes,
+            acceptedMediaTypes: [],
+            responseHeaders: [],
+            onEventChunk: normalizedMethod == "HEAD" ? null : onEventChunk,
+            ct,
+            requestHeaders,
+            maximumRequestBytes: DefaultRequestBytes,
+            opaqueUnknownMediaTypes: true,
+            acceptAnyMediaType: true,
+            requireOpaqueResponse: outputRequested).ConfigureAwait(false);
+    }
+
+    /// <summary>Validates tenant binding for raw calls using the primary bearer, without OpenAPI discovery.</summary>
+    private async Task<JsonObject> ReadRawAuthorizationContextAsync(string bearer, CancellationToken ct)
+    {
+        var response = await SendAsync(
+            Identity,
+            "GET",
+            "/api/v1/authorization/context",
+            null,
+            bearer,
+            authenticated: true,
+            maximumResponseBytes: DefaultResponseBytes,
+            acceptedMediaTypes: ["application/json"],
+            responseHeaders: [],
+            onEventChunk: null,
+            ct).ConfigureAwait(false);
+        if (response.Status != (int)HttpStatusCode.OK || response.Body is not JsonObject context)
+            throw new UnauthorizedAccessException("The Gateway authorization-context request was denied or invalid.");
+        ValidateContext(context, Identity);
+        return context;
+    }
+
+    // Raw requests carry the primary bearer, so their target must remain on the configured Gateway origin.
+    private string PrepareRawTarget(string url)
+    {
+        if (url.Contains('\\') || url.Contains('#'))
+            throw new InvalidOperationException("The REST URL cannot contain a backslash or fragment.");
+
+        Uri target;
+        if (Uri.TryCreate(url, UriKind.Absolute, out var absolute))
+        {
+            target = absolute;
+        }
+        else
+        {
+            if (!url.StartsWith("/", StringComparison.Ordinal) ||
+                url.StartsWith("//", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("The REST URL must be root-relative or an absolute URL on the configured Gateway origin.");
+            }
+            target = new Uri(_gateway, url);
+        }
+
+        if (!target.IsAbsoluteUri ||
+            target.UserInfo.Length > 0 ||
+            target.Fragment.Length > 0 ||
+            !SameOrigin(_gateway, target) ||
+            HasCredentialQuery(target.Query))
+        {
+            throw new InvalidOperationException("The REST URL must use the configured Gateway origin without credentials or fragments.");
+        }
+        return target.PathAndQuery;
+    }
+
+    // Reject credential-like query names rather than forwarding credentials in a raw URL.
+    private static bool HasCredentialQuery(string query)
+    {
+        foreach (var pair in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var key = Uri.UnescapeDataString(pair.Split('=', 2)[0].Replace('+', ' '));
+            var normalizedKey = new string(key.Where(char.IsLetterOrDigit).ToArray());
+            if (IsSensitiveName(key) ||
+                key.Equals("code", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("state", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("auth", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("bearer", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("jwt", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("session", StringComparison.OrdinalIgnoreCase) ||
+                normalizedKey.EndsWith("sig", StringComparison.OrdinalIgnoreCase) ||
+                normalizedKey.EndsWith("signature", StringComparison.OrdinalIgnoreCase) ||
+                normalizedKey.Contains("accesskey", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    // Raw request headers must not override auth/forwarding identity or supply alternate credentials.
+    private static IReadOnlyDictionary<string, string> ValidateRawHeaders(
+        IReadOnlyDictionary<string, string>? headers)
+    {
+        if (headers is null)
+            return EmptyParameters;
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, value) in headers)
+        {
+            if (string.IsNullOrWhiteSpace(name) ||
+                name.Any(character => !IsHeaderNameCharacter(character)) ||
+                value is null ||
+                value.Any(character => character is '\r' or '\n' or '\0' || char.IsControl(character) && character != '\t') ||
+                ReservedRawHeaders.Contains(name) ||
+                name.StartsWith("proxy-", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("x-forwarded-", StringComparison.OrdinalIgnoreCase) ||
+                IsSensitiveName(name) ||
+                !result.TryAdd(name, value))
+            {
+                throw new InvalidOperationException("The REST request contains a reserved, sensitive, invalid, or duplicate header.");
+            }
+        }
+        return result;
+    }
+
+    private static bool IsHeaderNameCharacter(char character) =>
+        char.IsAsciiLetterOrDigit(character) ||
+        character is '!' or '#' or '$' or '%' or '&' or '\'' or '*' or '+' or '-' or '.' or '^' or '_' or '`' or '|' or '~';
 
     private async Task<GatewayResponse> InvokeCoreAsync(
         GatewayOperation operation,
@@ -302,6 +468,7 @@ public sealed partial class GatewayClient : IGatewayClient
 
     private CliIdentity CreateProjectAuthorizationIdentity()
     {
+        // Keep project administration separate from the caller's exact run binding; this changes scopes, not authority.
         var scopes = Identity.Scopes
             .Where(scope => scope is not "projects.admin" and not "projects.orchestrator")
             .Append("projects.admin")
@@ -312,6 +479,7 @@ public sealed partial class GatewayClient : IGatewayClient
 
     private static void ValidateContext(JsonObject context, CliIdentity identity)
     {
+        // The live context must match the configured issuer and exact selectors; its grants are never minted into a JWT.
         string[] requiredKeys =
         [
             "contractVersion", "issuer", "actorId", "tenantId", "membershipRevision",
@@ -605,7 +773,10 @@ public sealed partial class GatewayClient : IGatewayClient
         IReadOnlyDictionary<string, string>? additionalHeaders = null,
         string? projectBearer = null,
         int maximumRequestBytes = MaximumRequestBytes,
-        string? operationId = null)
+        string? operationId = null,
+        bool opaqueUnknownMediaTypes = false,
+        bool acceptAnyMediaType = false,
+        bool requireOpaqueResponse = false)
     {
         var requestId = Guid.NewGuid();
         var started = Stopwatch.GetTimestamp();
@@ -629,13 +800,21 @@ public sealed partial class GatewayClient : IGatewayClient
             if (body?.Length > maximumRequestBytes || body?.Length > MaximumRequestBytes)
                 throw new InvalidOperationException($"The JSON request body exceeds its {maximumRequestBytes}-byte limit.");
             var target = new Uri(_gateway, pathAndQuery);
+            // Do not forward the selected bearer to a path that escaped the configured Gateway origin.
             if (!SameOrigin(_gateway, target) || target.UserInfo.Length > 0)
                 throw new InvalidOperationException("Refusing to send a Gateway request outside the configured origin.");
 
             using var request = new HttpRequestMessage(new HttpMethod(method), target);
             request.Headers.Accept.Clear();
-            foreach (var mediaType in acceptedMediaTypes.Count == 0 ? ["application/json"] : acceptedMediaTypes)
-                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(mediaType));
+            if (acceptAnyMediaType)
+            {
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("*/*"));
+            }
+            else
+            {
+                foreach (var mediaType in acceptedMediaTypes.Count == 0 ? ["application/json"] : acceptedMediaTypes)
+                    request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(mediaType));
+            }
             request.Headers.TryAddWithoutValidation("X-Correlation-Id", requestId.ToString("D"));
             if (authenticated)
             {
@@ -678,30 +857,48 @@ public sealed partial class GatewayClient : IGatewayClient
             var capturedHeaders = CaptureHeaders(response, responseHeaders);
             evidence["responseHeaders"] = ToJsonObject(capturedHeaders);
 
-            if (response.Content.Headers.ContentLength is { } contentLength &&
+            if (requireOpaqueResponse &&
+                contentType is ("application/json" or "application/problem+json" or "text/plain" or "text/event-stream"))
+            {
+                // --output creates a binary file; recognized text responses stay in normal output.
+                throw new InvalidDataException("--output is only valid for a non-empty opaque binary response.");
+            }
+
+            // HEAD Content-Length describes the representation, not bytes returned by this response.
+            if (!method.Equals("HEAD", StringComparison.OrdinalIgnoreCase) &&
+                response.StatusCode != HttpStatusCode.NoContent &&
+                response.Content.Headers.ContentLength is { } contentLength &&
                 contentLength > maximumResponseBytes)
             {
                 throw new InvalidDataException($"The Gateway response exceeded its {maximumResponseBytes}-byte limit.");
             }
 
+            var streamingEventResponse = contentType == "text/event-stream" && onEventChunk is not null;
             var (bytes, textBody) = await ReadResponseAsync(
                 response,
                 maximumResponseBytes,
-                contentType == "text/event-stream" ? onEventChunk : null,
-                contentType == "text/event-stream" ? ct : timeout.Token).ConfigureAwait(false);
+                streamingEventResponse ? onEventChunk : null,
+                // SSE bodies can be long-lived; after headers, the caller controls their lifetime, not the finite-call timeout.
+                streamingEventResponse ? ct : timeout.Token).ConfigureAwait(false);
             JsonNode? responseBody = null;
             byte[]? binaryBody = null;
-            if (contentType == "application/octet-stream")
+            if (contentType == "application/octet-stream" ||
+                opaqueUnknownMediaTypes &&
+                contentType is not ("application/json" or "application/problem+json" or "text/plain" or "text/event-stream"))
             {
-                binaryBody = bytes;
-                evidence["responseBody"] = new JsonObject
+                if (bytes.Length > 0 || !opaqueUnknownMediaTypes)
                 {
-                    ["mediaType"] = contentType,
-                    ["bytes"] = bytes.Length,
-                };
+                    binaryBody = bytes;
+                    evidence["responseBody"] = new JsonObject
+                    {
+                        ["mediaType"] = contentType,
+                        ["bytes"] = bytes.Length,
+                    };
+                }
             }
             else if (bytes.Length > 0)
             {
+                // Keep the response usable by its caller; only the separate evidence copy is redacted.
                 if (contentType is "application/json" or "application/problem+json")
                 {
                     responseBody = ParseJson(bytes);
@@ -726,7 +923,11 @@ public sealed partial class GatewayClient : IGatewayClient
                 responseBody,
                 capturedHeaders,
                 evidence,
-                binaryBody);
+                binaryBody)
+            {
+                // A HEAD response has no body even when it advertises a nonzero representation length.
+                HasBody = bytes.Length > 0,
+            };
         }
         catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
         {
@@ -759,6 +960,7 @@ public sealed partial class GatewayClient : IGatewayClient
         var decoder = Encoding.UTF8.GetDecoder();
         var isEventStream = onEventChunk is not null;
         var eventRedactor = isEventStream ? new SseEventRedactor(onEventChunk!) : null;
+        // Socket reads may split UTF-8 characters and SSE events; decode incrementally before redacting complete frames.
         while (true)
         {
             var count = await stream.ReadAsync(bytes, ct).ConfigureAwait(false);
@@ -795,6 +997,7 @@ public sealed partial class GatewayClient : IGatewayClient
 
         public async ValueTask WriteAsync(string chunk)
         {
+            // Buffer through the SSE blank-line delimiter so a secret split across network reads is redacted as one event.
             foreach (var character in chunk)
             {
                 _event.Append(character);
@@ -1007,6 +1210,9 @@ public sealed partial class GatewayClient : IGatewayClient
                normalized.Contains("authorization", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("credential", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("apikey", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("accesskey", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("subscriptionkey", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("signature", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("executionkey", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("providerkey", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("privatekey", StringComparison.OrdinalIgnoreCase) ||
@@ -1060,13 +1266,13 @@ public sealed partial class GatewayClient : IGatewayClient
     [GeneratedRegex(@"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")]
     private static partial Regex JwtRegex();
 
-    [GeneratedRegex(@"(?i)([?&](?:access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|authorization|password|code|state|api[_-]?key|execution[_-]?key|provider[_-]?key)=)[^&\s]+")]
+    [GeneratedRegex(@"(?i)([?&](?:access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|authorization|password|code|state|api[_-]?key|access[_-]?key|subscription[_-]?key|execution[_-]?key|provider[_-]?key)=)[^&\s]+")]
     private static partial Regex QuerySecretRegex();
 
     [GeneratedRegex(@"https?://[^\s""'\\]+", RegexOptions.IgnoreCase)]
     private static partial Regex UrlRegex();
 
-    [GeneratedRegex(@"(?i)((?:\\?[""']?)(?:authorization|cookie|access[_-]?token|refresh[_-]?token|id[_-]?token|token|credentials?|api[_-]?key|execution[_-]?key|provider[_-]?key|client[_-]?secret|secret|password|kubeconfig|storage[_-]?state|signed[_-]?url)(?:\\?[""']?)\s*[:=]\s*(?:\\?[""']?))(?:bearer\s+)?[^""'`,;\s}\]]+")]
+    [GeneratedRegex(@"(?i)((?:\\?[""']?)(?:authorization|cookie|access[_-]?token|refresh[_-]?token|id[_-]?token|token|credentials?|api[_-]?key|access[_-]?key|subscription[_-]?key|execution[_-]?key|provider[_-]?key|client[_-]?secret|secret|password|kubeconfig|storage[_-]?state|signed[_-]?url)(?:\\?[""']?)\s*[:=]\s*(?:\\?[""']?))(?:bearer\s+)?[^""'`,;\s}\]]+")]
     private static partial Regex SecretAssignmentRegex();
 
     [GeneratedRegex(@"\bgh(?:p|o|u|s|r)_[A-Za-z0-9_]{20,}\b")]
