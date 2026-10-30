@@ -161,3 +161,13 @@ test('the standalone CLI suite and lowercase production assembly are included in
   assert.match(cliProject, /<AssemblyName>agentweaver<\/AssemblyName>/);
   assert.match(cliTestProject, /tools\\Agentweaver\.Cli\\Agentweaver\.Cli\.csproj/);
 });
+
+test('the CLI acceptance suite is included in solution and coverage runs', () => {
+  const project = readFileSync(resolve(
+    root, 'tests', 'Agentweaver.Cli.Acceptance.Tests', 'Agentweaver.Cli.Acceptance.Tests.csproj'), 'utf8');
+  assert.match(runner, /\['cli-acceptance', 'Agentweaver\.Cli\.Acceptance\.Tests'\]/);
+  assert.match(solution,
+    /tests\\Agentweaver\.Cli\.Acceptance\.Tests\\Agentweaver\.Cli\.Acceptance\.Tests\.csproj/);
+  assert.match(project, /Agentweaver\.Cli\.Acceptance\.TestHost\\Agentweaver\.Cli\.Acceptance\.TestHost\.csproj/);
+  assert.match(project, /services\\gateway\\Agentweaver\.Gateway\\Agentweaver\.Gateway\.csproj/);
+});

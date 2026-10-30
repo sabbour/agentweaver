@@ -27,6 +27,7 @@ export const suites = [
   ['azure-files', 'Agentweaver.Providers.Storage.AzureFiles.Tests'],
   ['agentsessions', 'Agentweaver.Providers.Sessions.AgentSessions.Tests'],
   ['cli', 'Agentweaver.Cli.Tests'],
+  ['cli-acceptance', 'Agentweaver.Cli.Acceptance.Tests'],
 ];
 const expectedAssemblies = [
   'Agentweaver.Abstractions',
