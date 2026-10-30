@@ -1,0 +1,170 @@
+name: Agentweaver v1 integration image publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact merged v1 source commit to build and publish
+        required: true
+        type: string
+permissions:
+  contents: read
+
+concurrency:
+  group: v1-integration-publication-${{ inputs.source_sha }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v1
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate source and wait for exact-source CI
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/v1" || {
+            echo "::error::Integration images must be dispatched from refs/heads/v1 (got $GITHUB_REF)." >&2
+            exit 1
+          }
+          if ! [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::source_sha must be a lowercase 40-character commit SHA." >&2
+            exit 1
+          fi
+          git cat-file -e "${SOURCE_SHA}^{commit}" || {
+            echo "::error::source_sha is not present in the v1 checkout." >&2
+            exit 1
+          }
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/v1 || {
+            echo "::error::source_sha is not reachable from origin/v1." >&2
+            exit 1
+          }
+          for workflow in v1-ci.yml v1-docs-ci.yml; do
+            run_id=""
+            for attempt in $(seq 1 120); do
+              run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" \
+                --commit "$SOURCE_SHA" --json databaseId --jq '.[0].databaseId // empty')
+              if [ -n "$run_id" ]; then
+                break
+              fi
+              sleep 15
+            done
+            if [ -z "$run_id" ]; then
+              echo "::error::No $workflow run found for $SOURCE_SHA." >&2
+              exit 1
+            fi
+            gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
+          done
+          git checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+        with:
+          version: 'v29.9.0'
+          set-host: true
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
+      - name: Prepare pinned product build inputs
+        env:
+          EXPECTED_SOURCE: ${{ inputs.source_sha }}
+          DOCKER_CONTEXT: default
+          npm_config_cache: ${{ runner.temp }}/agentweaver-integration-npm-cache
+          npm_config_update_notifier: 'false'
+        run: npm run release:prepare-build-inputs
+      - name: Build exact-source integration images
+        env:
+          INTEGRATION_SOURCE_SHA: ${{ inputs.source_sha }}
+          DOCKER_CONTEXT: default
+          BUILDX_BUILDER: default
+          npm_config_cache: ${{ runner.temp }}/agentweaver-integration-npm-cache
+        run: npm run release:integration-pack -- --integration-source-sha "$INTEGRATION_SOURCE_SHA" --out artifacts/release/integration
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v1-integration-images-${{ inputs.source_sha }}-${{ github.run_id }}
+          overwrite: true
+          path: artifacts/release/integration/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require the exact clean source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          name: v1-integration-images-${{ inputs.source_sha }}-${{ github.run_id }}
+          path: artifacts/release/integration/
+      - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+        with:
+          version: 'v29.9.0'
+          set-host: true
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
+      - name: Publish only the source-bound integration images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REGISTRY: ghcr.io/sabbour
+          RELEASE_REGISTRY_USER: ${{ github.repository_owner }}
+          RELEASE_REGISTRY_PASSWORD: ${{ github.token }}
+          DOCKER_CONFIG: ${{ runner.temp }}/agentweaver-integration-docker-config
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -m 700 -p "$DOCKER_CONFIG"
+          npm run release:integration-publish -- "$SOURCE_SHA" --integration-images-only --confirm-integration-publication
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: v1-integration-publication-${{ inputs.source_sha }}-${{ github.run_id }}
+          path: artifacts/release/integration/integration-publication.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Remove temporary GHCR credentials
+        if: ${{ always() }}
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/agentweaver-integration-docker-config
+        run: rm -rf -- "$DOCKER_CONFIG"
