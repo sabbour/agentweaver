@@ -66,6 +66,12 @@ test('rejects a tag index with multiple platforms', async () => {
     Buffer.from(JSON.stringify({ schemaVersion: 2, manifests: [f.descriptor, f.descriptor] })), f.read, f.source));
 });
 
+test('CI image identity compares Docker ID with the measured manifest and records its config digest', () => {
+  const workflow = readFileSync(new URL('../../../.github/workflows/v1-ci.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+  assert.match(workflow, /if \(receipt\.image\.digest !== process\.argv\[1\]\)/);
+  assert.doesNotMatch(workflow, /if \(receipt\.image\.configDigest !== process\.argv\[1\]\)/);
+  assert.match(workflow, /agenthost_image_config=.*receipt\.image\.configDigest/);
+});
 test('both exact-image native probes keep private mounts non-executable and verify the image-owned runtime', () => {
   const workflow = readFileSync(new URL('../../../.github/workflows/v1-ci.yml', import.meta.url), 'utf8');
   const dockerfile = readFileSync(new URL('../../../services/agenthost/Agentweaver.AgentHost/Dockerfile', import.meta.url), 'utf8');
