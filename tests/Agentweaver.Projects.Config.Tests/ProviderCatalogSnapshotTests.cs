@@ -164,7 +164,7 @@ public sealed class ProviderCatalogSnapshotTests
             StringComparison.Ordinal);
 
         Assert.Contains(
-            "configMapRef: {\n      name: identity ? 'identity-broker-runtime-config-v2' : `${name}-runtime-config`,\n      optional: false,",
+            "configMapRef: {\n      name: identity ? 'identity-broker-runtime-config-v3' : `${name}-runtime-config`,\n      optional: false,",
             runtimeList.Replace("\r\n", "\n", StringComparison.Ordinal),
             StringComparison.Ordinal);
         Assert.Contains("'environment'", runtimeList, StringComparison.Ordinal);

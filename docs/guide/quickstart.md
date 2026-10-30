@@ -37,10 +37,9 @@ do not require a cloud subscription.
    dotnet build Agentweaver.slnx --no-restore --configuration Release
    ```
 
-5. Run the release-manifest and Azure source checks:
+5. Run the workflow and Azure source checks:
 
    ```powershell
-   npm run release:validate
    npm run test:release
    npm run test:azure
    ```

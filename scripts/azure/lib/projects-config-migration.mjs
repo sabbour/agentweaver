@@ -5,37 +5,31 @@ import {
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { selectPublishedComponentImage } from '../../release/publication-image.mjs';
 import { verifyServiceRegistryImage } from '../../release/registry.mjs';
-import { bootstrapP1Postgres } from '../bootstrap-p1-postgres.mjs';
 import { DB_MAINTENANCE_TARGET, LOCK_NAME } from './db-maintenance.mjs';
-import { collectGrantStageReceipts, isOutsideCheckout } from './grant-stage-receipts.mjs';
+import { isOutsideCheckout } from './checkout-paths.mjs';
 import { run, redact } from './exec.mjs';
 import { withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 
 const NAMESPACE = DB_MAINTENANCE_TARGET.namespace;
-const COMPONENT = 'Agentweaver.Projects.Config';
 const DATABASE_NAME = 'agentweaver';
 const JOB_TEMPLATE = path.join('deploy', 'k8s', 'migrations', 'projects-config', 'job.yaml');
 const RUN_LABEL = 'agentweaver.io/db-maintenance-run';
 const SHA = /^[a-f0-9]{40}$/;
-const DIGEST = /^sha256:[a-f0-9]{64}$/;
-const PLAN_HASH = /^[a-f0-9]{64}$/;
 const JOB_TIMEOUT_SECONDS = 900;
 const RECEIPT_DIRECTORY = path.join(homedir(), '.agentweaver', 'db-maintenance');
 
-export { collectGrantStageReceipts };
 const TERMINAL_CONDITIONS = new Set(['Complete', 'Failed']);
 const FAILED_PULL_REASONS = new Set([
   'ErrImagePull', 'ImagePullBackOff', 'InvalidImageName', 'CreateContainerConfigError',
 ]);
 
-export const PROJECTS_CONFIG_MIGRATION_USAGE = `Usage: npm run db:maintenance:projects-config -- --publication <receipt.json> [options]
+export const PROJECTS_CONFIG_MIGRATION_USAGE = `Usage: npm run db:maintenance:projects-config -- --image <ghcr-image@sha256:digest> [options]
 
-Without --execute the runner checks the publication, target access, and migration lock, then writes a plan receipt.
+Without --execute the runner checks the image digest, target access, and migration lock, then writes a plan receipt.
 Run it from a clean checkout of the fetched origin/v1 tip.
 
-  --publication <file>       Published release receipt containing the Projects & Config image. Required.
+  --image <reference>        Immutable Projects & Config image reference. Required.
   --bootstrap-first-platform-admin
                              Run the approved one-shot PlatformAdmin bootstrap instead of migrations and grants.
   --inspect-first-platform-admin
@@ -71,12 +65,6 @@ function parseJson(text, name) {
   }
 }
 
-function git(exec, root, args, action) {
-  const result = exec('git', args, { cwd: root, check: false });
-  if (result.status !== 0) fail(`${action}: ${(result.stderr ?? '').trim()}`);
-  return result.stdout;
-}
-
 function requireAncestor(exec, root, sourceSha, description) {
   if (exec('git', ['merge-base', '--is-ancestor', sourceSha, 'origin/v1'],
     { cwd: root, check: false }).status !== 0) {
@@ -86,11 +74,11 @@ function requireAncestor(exec, root, sourceSha, description) {
 
 export function parseProjectsConfigMigrationArgs(argv = []) {
   const options = {
-    publicationPath: undefined, execute: false, bootstrapFirstPlatformAdmin: false,
+    image: undefined, execute: false, bootstrapFirstPlatformAdmin: false,
     inspectFirstPlatformAdmin: false,
     receiptDir: RECEIPT_DIRECTORY, help: false,
   };
-  const valued = new Map([['--publication', 'publicationPath'], ['--receipt-dir', 'receiptDir']]);
+  const valued = new Map([['--image', 'image'], ['--receipt-dir', 'receiptDir']]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') options.help = true;
@@ -107,9 +95,11 @@ export function parseProjectsConfigMigrationArgs(argv = []) {
     }
   }
   if (options.help) return options;
-  if (typeof options.publicationPath !== 'string' || !options.publicationPath.trim() ||
-      options.publicationPath.trim() !== options.publicationPath) {
-    fail('--publication is required and must not contain surrounding whitespace.');
+  if (typeof options.image !== 'string' || !options.image.trim() || options.image.trim() !== options.image) {
+    fail('--image is required and must not contain surrounding whitespace.');
+  }
+  if (!/^ghcr\.io\/sabbour\/agentweaver\.projects\.config@sha256:[a-f0-9]{64}$/.test(options.image)) {
+    fail('--image must be an immutable Projects & Config GHCR reference.');
   }
   if (options.bootstrapFirstPlatformAdmin && options.inspectFirstPlatformAdmin) {
     fail('--bootstrap-first-platform-admin and --inspect-first-platform-admin are mutually exclusive.');
@@ -120,43 +110,21 @@ export function parseProjectsConfigMigrationArgs(argv = []) {
   return options;
 }
 
-export async function resolveProjectsConfigPublicationImage(publication, {
-  root, exec, verifyImage = verifyServiceRegistryImage,
-}) {
-  if (!publication || publication.status !== 'published' || !SHA.test(publication.sourceSha ?? '')) {
-    fail('publication receipt is not a complete published receipt.');
-  }
-  requireAncestor(exec, root, publication.sourceSha, 'publication source');
-  const manifest = parseJson(git(exec, root, [
-    'show', `${publication.sourceSha}:releases/foundation.json`,
-  ], 'could not read the source-bound release manifest'), 'source-bound release manifest');
-  const selected = selectPublishedComponentImage(publication, manifest, COMPONENT, {
-    root,
-    label: 'projects-config',
-    exec,
-    git: (...args) => git(exec, root, args, `Git ${args.join(' ')}`),
-  });
-  requireAncestor(exec, root, selected.imageSourceSha, 'Projects & Config image source');
-  const verified = await verifyImage(selected.image);
-  if (!verified || !DIGEST.test(verified.digest ?? '') || verified.digest !== selected.digest ||
-      verified.sourceSha !== selected.imageSourceSha || verified.sourceTree !== selected.imageSourceTree ||
-      verified.version !== selected.version) {
-    fail('Projects & Config image digest or source metadata differs from the publication receipt.');
-  }
-  return {
-    publicationSourceSha: selected.sourceSha,
-    imageSourceSha: selected.imageSourceSha,
-    image: selected.image,
-    digest: selected.digest,
-    version: selected.version,
-  };
+export async function resolveProjectsConfigImage(image, {
+  verifyImage = verifyServiceRegistryImage,
+} = {}) {
+  const match = /^ghcr\.io\/sabbour\/agentweaver\.projects\.config@(sha256:[a-f0-9]{64})$/.exec(image ?? '');
+  if (!match) fail('image must be an immutable Projects & Config GHCR reference.');
+  const verified = await verifyImage(image);
+  if (!verified || verified.digest !== match[1]) fail('Projects & Config image digest could not be verified.');
+  return { image, digest: match[1] };
 }
 
 function readCredentials({ inspectFirstPlatformAdmin = false } = {}) {
   const connection = process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION?.trim();
   const accessToken = process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN?.trim();
   if (!connection || !accessToken) {
-    fail('execute requires the migration connection and access token in the documented environment variables.');
+    fail('no approved Projects & Config schema-owner migration identity is configured. The runtime identity cannot run DDL; configure an existing schema-owner migration identity before deployment.');
   }
   const allowedFields = new Set(['host', 'port', 'database', 'username', 'ssl mode']);
   const fields = new Map();
@@ -457,10 +425,6 @@ function defaultDependencies() {
     sleep: milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
     newRunId: () => randomUUID().replaceAll('-', '').slice(0, 12),
     verifyImage: image => verifyServiceRegistryImage(image),
-    applyRuntimeGrants: root => bootstrapP1Postgres({
-      repoRoot: root, execute: true, mode: 'projects-config-grants',
-    }),
-    collectGrantStageReceipts,
     log: message => console.log(message),
   };
 }
@@ -500,7 +464,6 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
       : inspectFirstPlatformAdmin ? 'inspect-first-platform-admin' : 'migration',
     result: 'running',
     sourceSha: null,
-    publicationSourceSha: null,
     image: null,
     target: {
       subscriptionId: DB_MAINTENANCE_TARGET.subscriptionId,
@@ -518,7 +481,6 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
   let lockHeld = false;
   let secretCreated = false;
   let jobCreated = false;
-  let grantStageStarted = false;
 
   const record = (name, detail = {}) => {
     // The step name goes last so a detail field can never replace it; the rollout reads step names.
@@ -543,27 +505,17 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
     if (!SHA.test(head)) fail('the source checkout HEAD is not a full Git commit SHA.');
     must(deps.exec('git', ['fetch', '--quiet', 'origin', 'v1'], { cwd: root }),
       'Could not refresh origin/v1');
-    // A later maintenance script can operate on an earlier publication only when both are on approved v1.
+    // Migration plans and grants come from the current approved v1 source.
     requireAncestor(deps.exec, root, head, 'deployment-tool source');
     // The runtime grant step runs only from the admitted v1 tip. Check that here, before any lock,
     // Secret, or Job exists, so a run never migrates and then stops short of applying the grants.
     const admitted = must(deps.exec('git', ['rev-parse', 'origin/v1'], { cwd: root }),
       'Could not read origin/v1').stdout.trim();
     if (head !== admitted) fail(`the source checkout must be the fetched origin/v1 tip ${admitted}, not ${head}.`);
-    const publication = parseJson(deps.readFile(path.resolve(root, options.publicationPath), 'utf8'),
-      'publication receipt');
-    const image = await resolveProjectsConfigPublicationImage(publication, {
-      root, exec: deps.exec, verifyImage: deps.verifyImage,
-    });
+    const image = await resolveProjectsConfigImage(options.image, { verifyImage: deps.verifyImage });
     receipt.sourceSha = head;
-    receipt.publicationSourceSha = image.publicationSourceSha;
-    receipt.imageSourceSha = image.imageSourceSha;
     receipt.image = image.image;
-    record('publication-image-verified', {
-      publicationSourceSha: image.publicationSourceSha,
-      imageSourceSha: image.imageSourceSha,
-      image: image.image,
-    });
+    record('image-verified', { image: image.image, digest: image.digest });
 
     const jobText = deps.readFile(path.resolve(root, JOB_TEMPLATE), 'utf8');
     const jobTemplate = parseYaml(jobText);
@@ -582,14 +534,14 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
             'create-platform-admin-bootstrap-job', 'verify-bootstrap-result',
             'delete-job-and-secret', 'release-lock', 'receipt']
           : ['lock', 'create-credential-secret', 'create-migration-job',
-            'verify-job-completion', 'apply-runtime-grants', 'delete-job-and-secret', 'release-lock', 'receipt'];
+            'verify-job-completion', 'delete-job-and-secret', 'release-lock', 'receipt'];
     } else {
       receipt.plannedSteps = bootstrapFirstPlatformAdmin
         ? ['verify-migration-lock', 'verify-approved-identity-config', 'create-credential-secret',
           'create-platform-admin-bootstrap-job', 'verify-bootstrap-result',
           'delete-job-and-secret', 'release-lock', 'receipt']
         : ['verify-migration-lock', 'create-credential-secret', 'create-migration-job',
-          'verify-job-completion', 'apply-runtime-grants', 'delete-job-and-secret', 'release-lock', 'receipt'];
+          'verify-job-completion', 'delete-job-and-secret', 'release-lock', 'receipt'];
     }
 
     await deps.withKubeconfig({
@@ -723,21 +675,7 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
           record('migration-job-completed', { job: name, image: image.image });
         }
 
-        if (!platformAdminOperation) {
-          // The runtime role needs these grants after migration; keep them under the same lock and read back exact evidence.
-          grantStageStarted = true;
-          const grants = await deps.applyRuntimeGrants(root);
-          const evidence = grants?.receipt?.p1Initializer;
-          // Accept only the exact grant mode, run from this same source, with a readback marker and plan hash.
-          if (grants?.executed !== true || grants.mode !== 'projects-config-grants' || grants.sourceSha !== head ||
-              evidence?.verification !== 'projects-config-grants-applied' ||
-              !PLAN_HASH.test(evidence.planSha256 ?? '') || evidence.planSha256 !== grants.planSha256) {
-            fail('the runtime grant step did not prove exact Projects & Config grants for this source.');
-          }
-          receipt.grants = { status: 'exact', sourceSha: head, planSha256: evidence.planSha256 };
-          record('runtime-grants-applied', { planSha256: evidence.planSha256 });
-          receipt.result = 'succeeded';
-        }
+        if (!platformAdminOperation) receipt.result = 'succeeded';
       } catch (error) {
         actionError = error;
       } finally {
@@ -770,21 +708,6 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
             ], { cwd: root, check: false }).status === 0;
           receipt.cleanup.lock = released;
           if (!released) cleanupErrors.push('database maintenance lock');
-        }
-        if (grantStageStarted) {
-          // The grant stage writes its receipt under the checkout's Temp directory, even when it fails.
-          // Move it next to this receipt, then prove the checkout is clean again. Otherwise a rerun or
-          // the whole-release rollout from this same checkout would refuse to start.
-          try {
-            receipt.grantStageReceipts = deps.collectGrantStageReceipts(root, receiptDirectory, runId);
-            receipt.cleanup.grantStageReceipts = true;
-          } catch (error) {
-            receipt.cleanup.grantStageReceipts = false;
-            cleanupErrors.push(`grant stage receipt (${safeDiagnostic(error, secrets)})`);
-          }
-          const status = deps.exec('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: root });
-          receipt.cleanup.sourceCheckout = status.status === 0 && !status.stdout.trim();
-          if (!receipt.cleanup.sourceCheckout) cleanupErrors.push('source checkout left dirty');
         }
         if (cleanupErrors.length) {
           receipt.cleanupErrors = cleanupErrors;

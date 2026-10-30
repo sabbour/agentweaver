@@ -490,235 +490,30 @@ then the platform manifest selects the final set. There is no cross-service migr
 all service schemas to switch in a single database transaction. A breaking internal contract needs a
 versioned rollout path before its old counterpart is retired.
 
-### Fresh release tooling
+### Build, package, and deployment
 
-The 1.0 line builds release planning, changesets, and publication against independent service
-versions. It starts with standard Helm/Kustomize image handling and CI caching; custom delivery
-logic is added only where measured delivery-simplification evidence warrants it. The release-plan equivalent
-checks the manifest and source alignment rather than copying the 0.x global-version workflow
-unchanged.
+Component versions remain in the tracked manifest and project files. Changesets
+and the version-plan commands update those versions; package versioning is
+separate from image deployment.
 
-The release tooling provides dependency-free source-bound plan, apply, and pack commands.
-Component records select independent semver intent without manual version edits.
-Apply preserves project mirrors and explicit compatibility declarations.
-Every new dependency version requires a declaration backed by consumer compatibility evidence.
-No patch, minor, or major version receives inferred compatibility.
+The v1 image workflow builds the ten existing service images and pushes them
+directly to GHCR with `sha-<commit>` tags. It does not transfer archives or
+require publication receipts, provenance claims, or deployment evidence. The
+separate package workflow packs and publishes versioned NuGet libraries and
+contracts. The standalone CLI retains its own package workflow.
 
-Draft services can omit image digests until actual publication.
-Preparation uses checked-in .NET lock files and immutable container base-image digests.
-Source-bound provenance describes prepared packages and local image archives.
-AgentHost preparation uses its existing pinned native Dockerfile and committed input files.
-One component record binds a Docker-save archive and measured OCI archive to the same image config.
-Publication rechecks both archives, actual OCI byte sizes, source/tree labels, and the pinned native runtime before registry login.
-The saved OCI digest remains separate from the actual published registry digest.
-Gateway and MCP use the existing digest-pinned SDK container pattern.
+The manual v1 deployment workflow resolves the selected image tags to registry
+digests, runs the existing Broker/P1 and Projects & Config migrations, renders
+the existing root Kustomize overlay, applies it to the selected context and
+namespace, and waits for each shared Deployment rollout. Any migration or
+apply error stops the sequence. Deployment success is the ordinary kubectl
+rollout result; no receipt or generated proof artifact is required.
 
-The automated v1 release workflow runs when a version-application receipt is
-committed to `v1`; `workflow_dispatch` provides a manual fallback that requires
-the same fresh receipt. It waits for `v1-ci.yml` and `v1-docs-ci.yml` to pass on that
-exact source commit, then validates the manifest and changeset coverage. It
-builds NuGet packages and product Docker images in separate jobs. The image
-job uses source-pinned build inputs and excludes the acceptance-only Probe. The
-publisher waits for both jobs, verifies their source SHA, manifest hash, and
-artifacts, then publishes receipt-bumped NuGet package versions and all ten
-product service images with version-plus-source-SHA tags. The full SHA prevents
-a later receipt from moving an existing version tag. The publisher queues
-receipt-triggered workflows in FIFO order, writes immutable publication claim/result
-records, and produces the receipt used by local deployment tooling. Only the
-publisher has
-`contents: write` and `packages: write`. The workflow has no approval
-environment and never deploys to Azure or AKS. The one-time partial-publication
-continuation remains a separate recovery path; its historical receipts do not
-prove completed publication. Preparation does not carry existing
-release/deployment evidence across version changes.
-See the [command contract](../../../releases/README.md#release-planning-and-package-preparation).
-
-The released-composition requirement still includes actual immutable images
-and exact-source API/UI/MCP deployment proof.
-
-The existing 0.x release guidance remains in force for 0.x releases while that line continues. The
-new release model does not imply that 0.x stops shipping or that 1.0 gains data migration tooling.
-Platform versioning describes the tested deployment set; provider compatibility and per-run pinning
-still control which environment and AgentHost implementation a run may use.
-
-### Local source-only integration images
-
-The separate `release:integration-pack` command prepares only the ten product
-service images at a clean, exact source SHA. Their tags use that SHA, and each
-image config must carry the source SHA, exact Git tree SHA, and component
-version. NuGet packages, FoundationProbe, final-release evidence, and GitHub
-Releases are outside this path.
-
-There is no separate GitHub workflow for these integration images. The local
-publisher has required image-only and confirmation flags and creates immutable
-claim and result records for the source-SHA tags.
-
-`release:deploy-integration` checks the tracked draft manifest, prepared
-provenance, immutable publication result, and actual anonymous GHCR image
-configs before rendering the P0 runtime List. It is read-only unless the
-operator supplies `--execute`; that mode applies only the nine shared services.
-It then checks registry provenance again, verifies ready pods and image IDs,
-and writes a local deployment result containing the exact input hashes and
-hashes of Deployment, Service, and pod readbacks. This path does not complete
-the product release gate below.
-
-The local command also has an optional, default-off Broker run-binding path.
-The operator supplies `--broker-run-binding <descriptor.json>` with exactly
-`projectsOwnerAddress`, `projectsAudience`,
-`projectsServerCertificateSha256`, and `projectsTrustBundleSha256`.
-`projectsAudience` must be an absolute HTTPS URI without user information, a
-query, or a fragment. The command checks these exact values against the
-existing Broker and Projects Config runtime ConfigMaps, the exact raw UTF-8
-bytes of the public backend CA ConfigMap, and the DER bytes of the Projects
-Config server certificate. The Broker settings are
-`IdentityBroker__RunBinding__ProjectsOwnerAddress`,
-`IdentityBroker__RunBinding__ProjectsAudience`,
-`IdentityBroker__RunBinding__ProjectsServerCertificateSha256`, and
-`IdentityBroker__RunBinding__ProjectsTrustBundleSha256`. The Projects Config
-settings are `ProjectsConfig__Tls__CertificatePath`,
-`ProjectsConfig__Tls__KeyPath`,
-`ProjectsConfig__Tls__ServerCertificateSha256`, and
-`ProjectsConfig__Authentication__BrokerRunBindingAudience`; the CA file path
-is fixed by the runtime and is not a configuration key. The binding audience
-must not be URI-equivalent to Projects Config's existing API audience or any
-Identity Broker client resource. The command compares the SecretRedemption
-audience string exactly against the binding URI's canonical HTTPS form. It
-checks the certificate chain with the .NET X.509 path builder, as well as the
-service name, validity dates, `serverAuth` purpose, and certificate
-fingerprint. This
-opt-in check requires PowerShell 7 (`pwsh`) on the operator's machine. It
-checks that the existing TLS Secret has its public certificate and private
-key, but does not print or save private-key data. Conflicting binding settings
-in the Broker client Secret are rejected.
-
-When the descriptor is supplied, the command accepts only its exact generated
-runtime List. It adds Broker egress and Projects Config ingress policies for
-TCP port 8443, mounts the public CA read-only in Broker, and fingerprints both
-Pod templates so a binding change rolls both workloads. Before apply, it checks
-the existing configuration and TLS inputs. After apply, it checks those inputs
-again, then verifies both template fingerprints, exactly those two live
-policies, and a Projects-owned EndpointSlice with one ready endpoint whose IP
-matches the ready Projects Config pod.
-
-The final-release `release:deploy` command accepts the same descriptor. The
-repository-owned `release:prepare-broker-run-binding` command can create it
-from the current P0 context by reading only the public CA ConfigMap and
-Projects Config `tls.crt`; it never reads `tls.key`. With the descriptor,
-`release:deploy` adds the same four Broker settings, four Projects Config
-settings, two narrow Cilium policies, and Pod-template fingerprints to a
-temporary Kustomize copy. It verifies the current certificates and settings,
-plans guarded replacement only for the two immutable Broker and Projects
-Config runtime ConfigMaps, and verifies the applied configuration and live
-readbacks. Both deploy commands remain opt-in; `release:deploy` is read-only
-without `--execute`. The image workflow does not enable run binding.
-During recovery, preflight accepts either runtime ConfigMap as absent or fully
-matching; a map with incomplete or conflicting binding values fails.
-Post-apply verification requires both maps to be fully configured.
-
-### Local published-image deployment
-
-The operator-hosted `release:deploy` command is a separate consumer of the
-existing source-bound publication receipt and release manifest. It accepts only
-an annotated v1 GitHub Release at the exact clean source commit, verifies all
-ten product image digests against the immutable publication result and GHCR,
-and never builds, pushes, or imports an image. For v1.0.14 run-binding
-redeployment only, a newer clean helper checkout is allowed when it descends
-from the pinned release source and its source-owned Kustomize and release
-inputs are unchanged; project files are validated at the pinned source.
-Nine services run as shared
-Deployments and private ClusterIP Services. AgentHost remains per-Sandbox:
-read-only GHCR verification resolves its exact published `linux/amd64` child
-digest, validates the config against prepared source labels, and measures the
-published manifest, config, and compressed layers before Environment pins it
-with the byte total for the Sandbox provider. The 13 NuGet packages
-are checked as part of the publication composition but are not deployed. The
-0.0.1 Foundation Probe remains acceptance-only and is excluded from product images.
-
-The command requires all P0 subscription, tenant, resource-group, cluster,
-namespace, and 2–3 node-bound inputs; it does not choose an Azure account or
-kubectl context. Its default is read-only and the explicit `--execute` path
-applies only the nine shared-service Deployments and private ClusterIP Services
-in the supplied runtime List. It does not create a shared AgentHost Deployment
-or Service; the Sandbox controller owns each per-run Host Service.
-Existing identities, TLS Secrets, runtime ConfigMaps, storage claims, SQL
-mappings/grants, Cilium policies, and routing are prerequisites owned elsewhere,
-not resources the release tool creates, except that an explicit
-`--broker-run-binding` descriptor adds its exact settings to the two existing
-Broker and Projects Config runtime ConfigMaps in the temporary render. If
-either immutable map must change, execution preflights and replaces only those
-two maps. Resume state is keyed to the exact tag, source, publication and
-runtime manifests, and target; live image, target, and health verification
-always runs again.
-
-No v1 release-stage manifest or successful product publication exists in the
-current source. The checked-in `scripts/release/runtime-list.mjs` source creates
-the nine-service runtime List from verified publication images and explicit
-Projects provider-catalog inputs; no live runtime list has been applied.
-The AgentHost Sandbox provider has a source-defined private HTTPS Service and
-label contract, but that does not prove production scheduling or a live
-controller result. The release preflight requires existing Cilium policy names
-for Identity Broker, Events & Sessions, Projects & Config, AgentHost,
-Environment, Gateway, MCP, Orchestrator, Knowledge, and Web. The optional
-routing overlay allows Web HTTP only from the explicitly selected `identity-broker`
-Gateway pods and node health probes. The routing source defines a Web root
-HTTPRoute, Gateway API HTTPRoute for `/api/v1` and exact `/openapi/v1.json`,
-and exact `/mcp` plus `/.well-known/oauth-protected-resource/mcp` HTTPRoutes to
-MCP, all on one wildcard-domain HTTPS listener with exact hostnames retained
-per route. This lets the Broker route remain available when HTTP/2 connection
-coalescing reuses a Portal TLS connection; other hostnames have no route.
-Gateway and MCP
-BackendTLSPolicies pin their service DNS hostnames and the existing public
-`service-backend-ca` ConfigMap. Every static workload that calls internal owner
-APIs mounts that ConfigMap read-only, and the Sandbox provider adds the same
-mount to each generated AgentHost Pod. `RuntimeOwnerHttpTransport` validates
-owner certificates against this custom root and the requested hostname.
-Environment's direct-Pod transport and pinned mTLS owner clients use the same
-custom-root validator without bypassing hostname checks. Public issuer discovery
-and external providers continue to use system trust. Release preflight checks
-the public CA and signed service certificates, and reads back
-the exact managed Gateway, routes, and backend TLS policies before apply; the
-release tool does not create or manage these routes or certificates. GHCR
-verification resolves the published AgentHost
-`linux/amd64` child manifest, checks its config against prepared source labels,
-and measures the published manifest, config, and compressed layers before
-pinning that child digest in Environment. Resume checks the live Environment
-pin and health probes again. Other source policies cover
-in-cluster owner edges, not unknown external destinations or routes. Runtime
-settings and database, access, TLS, provider-catalog, and routing prerequisites
-remain operator-owned.
-
-```mermaid
-flowchart LR
-  subgraph Integration["Source-only integration flow"]
-    Source["Clean exact source SHA and tree"] --> Prepare["Prepare 10 SHA-tagged images with source/tree/version config labels"]
-    Prepare --> Prepared["Local prepared images"]
-    Prepare -->|"explicit local publish command"| PublishImages["Publish images and immutable claim/result"]
-    PublishImages --> IntegrationCheck["Verify receipt and actual GHCR configs"]
-    IntegrationCheck --> IntegrationDryRun["Default read-only P0 preflight"]
-    IntegrationDryRun -->|"explicit --execute"| IntegrationApply["Apply only nine shared services"]
-    IntegrationApply --> IntegrationReadback["Verify live images and save local readback result"]
-    Binding["Optional local descriptor"] --> BindingCheck["Check settings, raw CA and Projects certificate chain"]
-    BindingCheck --> BindingRuntime["Add CA mount, two rollout fingerprints and scoped policies"]
-    BindingRuntime --> IntegrationDryRun
-    IntegrationApply --> BindingPostcheck["Recheck settings and TLS; verify both policies and Projects-owned ready endpoint"]
-    BindingPostcheck --> IntegrationReadback
-  end
-  Tag["Annotated v1 tag and published GitHub Release"] --> Exact["Verify exact source commit"]
-  Exact --> Receipt["Verify immutable publication receipt"]
-  Receipt --> GHCR["Verify 10 digest-pinned GHCR images"]
-  Manifest["Release-stage composition manifest"] --> GHCR
-  Target["Explicit v1 P0 target"] --> ReadOnly["Read-only Azure, kubectl, and prerequisite checks"]
-  Portal["Existing portal routes: / to Web; API and exact OpenAPI to Gateway; /mcp and MCP metadata to MCP"] --> ReadOnly
-  GHCR --> ReadOnly
-  Runtime["Checked-in List source + explicit provider catalog inputs"] --> ReadOnly
-  Receipt --> Host["Prepared AgentHost evidence"]
-  GHCR --> Host
-  Host --> Environment["Pin per-Sandbox AgentHost in Environment options"]
-  ReadOnly --> DryRun["Default dry-run"]
-  DryRun -->|explicit --execute| Apply["Apply only nine shared-service pairs"]
-  Apply --> Live["Repeat target, provenance, health, and image-ID checks"]
-  Live --> Clear["Clear exact release/target checkpoint"]
-```
+Projects & Config requires its existing approved schema-owner migration
+identity. Its runtime identity remains DDL-restricted. Until an approved
+automated identity is available, the migration runner fails before applying
+the root workload overlay. The workflow does not provision Azure resources,
+create credentials, or change database roles.
 
 ### Parity and cutover
 

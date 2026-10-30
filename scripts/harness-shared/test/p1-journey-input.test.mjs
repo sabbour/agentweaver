@@ -12,8 +12,6 @@ const fences = {
   sessionId: 'controlled-session',
   executionFence: 3,
 };
-const SOURCE_SHA = 'a'.repeat(40);
-const SOURCE_TREE = 'b'.repeat(40);
 const PROVIDER_SOURCE = 'c'.repeat(40);
 const now = () => Date.parse('2026-10-13T00:00:00.000Z');
 
@@ -22,12 +20,6 @@ function input() {
   return {
     executionIntent: 'execute',
     journey: 'journal',
-    deploymentEvidence: {
-      publicationPath: 'artifacts/p1/publication.json',
-      manifestPath: 'releases/foundation.json',
-      agentHostArchivePath: 'artifacts/p1/Agentweaver.AgentHost.oci.tar',
-      integrationDeploymentReceiptPath: 'artifacts/p1/integration-deployment.json',
-    },
     environment: {
       baseUrl: 'https://environment.controlled.test/',
       issuer: 'https://identity.controlled.test/',
@@ -46,15 +38,6 @@ function input() {
       },
       runtimeReceipt: { generation: 2 },
       storageReceipt: { pvUid: 'controlled-pv' },
-      sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
-      imageReceipt: {
-        registryImage: `ghcr.io/sabbour/agentweaver/agenthost@sha256:${'d'.repeat(64)}`,
-        registryDigest: `sha256:${'d'.repeat(64)}`,
-        archiveSha256: 'e'.repeat(64),
-        manifestDigest: `sha256:${'f'.repeat(64)}`,
-        configDigest: `sha256:${'1'.repeat(64)}`,
-        compressedPullBytes: 1024,
-      },
       ownerFences: fences,
       fixtureScope: {
         kind: 'p1-runner-owned',
@@ -136,31 +119,12 @@ test('rejects an invocation, resource, fence, expiry, or allowed-journey mismatc
   }
 });
 
-test('allows a live-readback release path but rejects malformed evidence paths or mismatched image pins', () => {
-  const missingPath = input();
-  delete missingPath.deploymentEvidence.publicationPath;
-  assert.throws(() => validateP1JourneyInput(missingPath, { now }), /deployment evidence input/);
-
-  const missingDeploymentReceipt = input();
-  delete missingDeploymentReceipt.deploymentEvidence.integrationDeploymentReceiptPath;
-  assert.doesNotThrow(() => validateP1JourneyInput(missingDeploymentReceipt, { now }));
-
-  const unknownReceipt = input();
-  unknownReceipt.deploymentEvidence.releaseDeploymentReceiptPath = 'artifacts/p1/fake-release.json';
-  assert.throws(() => validateP1JourneyInput(unknownReceipt, { now }), /deployment evidence input/);
-
-  const mutableImage = input();
-  mutableImage.pins.imageReceipt.registryImage = 'ghcr.io/sabbour/agentweaver/agenthost:latest';
-  assert.throws(() => validateP1JourneyInput(mutableImage, { now }), /immutable registry/);
-
-  const publishedRelease = input();
-  delete publishedRelease.deploymentEvidence.integrationDeploymentReceiptPath;
-  publishedRelease.deploymentEvidence.releaseTag = 'v1.0.3';
-  assert.doesNotThrow(() => validateP1JourneyInput(publishedRelease, { now }));
-
-  const invalidReleaseTag = structuredClone(publishedRelease);
-  invalidReleaseTag.deploymentEvidence.releaseTag = 'v1.0.3/other';
-  assert.throws(() => validateP1JourneyInput(invalidReleaseTag, { now }), /exact versioned release tag/);
+test('P1 product-test inputs do not require publication, source, image, or archive receipts', () => {
+  const value = input();
+  assert.doesNotThrow(() => validateP1JourneyInput(value, { now }));
+  assert.equal(Object.hasOwn(value, 'deploymentEvidence'), false);
+  assert.equal(Object.hasOwn(value.pins, 'sourceReceipt'), false);
+  assert.equal(Object.hasOwn(value.pins, 'imageReceipt'), false);
 });
 
 test('accepts an execution plan without caller-created owner receipts', () => {

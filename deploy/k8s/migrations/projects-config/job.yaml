@@ -19,7 +19,9 @@ spec:
         agentweaver.io/service: projects-config
         agentweaver.io/workload: projects-config
         agentweaver.io/migration: projects-config
+        azure.workload.identity/use: "true"
     spec:
+      serviceAccountName: projects-config-migration
       automountServiceAccountToken: false
       restartPolicy: Never
       terminationGracePeriodSeconds: 30
@@ -44,15 +46,13 @@ spec:
             - --migrate
           env:
             - name: ConnectionStrings__ProjectsConfigMigration
-              valueFrom:
-                secretKeyRef:
-                  name: projects-config-migration-credentials
-                  key: migration-connection
-            - name: ProjectsConfig__Migration__AccessToken
-              valueFrom:
-                secretKeyRef:
-                  name: projects-config-migration-credentials
-                  key: access-token
+              value: "Host=agentweaver-pg.postgres.database.azure.com;Database=agentweaver;Username=agentweaver-id-projects-config-migration;Port=5432;SSL Mode=VerifyFull"
+            - name: ProjectsConfig__Migration__WorkloadIdentity__TenantId
+              value: "72f988bf-86f1-41af-91ab-2d7cd011db47"
+            - name: ProjectsConfig__Migration__WorkloadIdentity__ClientId
+              value: "00000000-0000-0000-0000-000000000000"
+            - name: ProjectsConfig__Migration__WorkloadIdentity__TokenFilePath
+              value: "/var/run/secrets/azure/tokens/azure-identity-token"
           volumeMounts:
             - name: tmp
               mountPath: /tmp

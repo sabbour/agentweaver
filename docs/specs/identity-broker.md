@@ -213,17 +213,19 @@ Certificate rotation requires overlap with previous verification and decryption 
 Replacing the sole certificate immediately invalidates previous encrypted tokens and cookies.
 
 The Kubernetes base references the required
-`identity-broker-runtime-config-v2`
+`identity-broker-runtime-config-v3`
 ConfigMap, `identity-broker-signing` and `identity-broker-tls` Secrets, and the
 durable `identity-broker-key-ring` PVC. It also references
 `identity-broker-client-secrets` when a confidential upstream or OAuth client
 is configured. It does not create any of these objects. The runtime ConfigMap
 contains non-secret settings and must register the exact issuer, upstream OIDC
 authority/client, and every accepted client, redirect, scope, and resource
-audience. The P0 v2 snapshot keeps its run-owned acceptance client and adds the
-`agentweaver-web` public client with the Portal `/auth/callback` redirect and
-sets `IdentityBroker:WebOrigin` to that exact Portal origin for browser OAuth
-CORS.
+audience. The v3 snapshot preserves the existing acceptance and
+`agentweaver-web` clients and adds the public `agentweaver-cli` client with
+loopback redirect `http://127.0.0.1:49173/oauth/callback` and scopes `openid`,
+`api.read`, and `offline_access`. The Broker seeder requires PKCE for every
+client. The snapshot also sets `IdentityBroker:WebOrigin` to the exact Portal
+origin for browser OAuth CORS.
 Confidential client secrets use Secret keys, not ConfigMap values.
 
 The `identity-broker` runtime ServiceAccount is federated to its own UAMI.

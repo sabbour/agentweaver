@@ -1,170 +1,182 @@
-name: Agentweaver v1 integration image publication
+name: Agentweaver v1 container images
 
 on:
-  workflow_dispatch:
-    inputs:
-      source_sha:
-        description: Exact merged v1 source commit to build and publish
-        required: true
-        type: string
+  push:
+    branches:
+      - v1
+    paths:
+      - Directory.Build.*
+      - Directory.Packages.props
+      - global.json
+      - "**/*.csproj"
+      - "**/packages.lock.json"
+      - apps/web/**
+      - packages/**
+      - releases/foundation.json
+      - services/**
+
 permissions:
   contents: read
-
-concurrency:
-  group: v1-integration-publication-${{ inputs.source_sha }}
-  cancel-in-progress: false
-  queue: max
+  packages: write
 
 jobs:
-  build:
+  build-and-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    permissions:
-      actions: read
-      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: Agentweaver.AgentHost
+            repository: agentweaver-agenthost
+            mode: docker
+            context: .
+            dockerfile: services/agenthost/Agentweaver.AgentHost/Dockerfile
+          - id: Agentweaver.Identity.Broker
+            repository: agentweaver.identity.broker
+            mode: docker
+            context: .
+            dockerfile: services/identity/Agentweaver.Identity.Broker/Dockerfile
+          - id: Agentweaver.EventsAndSessions
+            repository: agentweaver.eventsandsessions
+            mode: dotnet
+            project: services/events-and-sessions/Agentweaver.EventsAndSessions/Agentweaver.EventsAndSessions.csproj
+          - id: Agentweaver.Gateway
+            repository: agentweaver.gateway
+            mode: dotnet
+            project: services/gateway/Agentweaver.Gateway/Agentweaver.Gateway.csproj
+          - id: Agentweaver.Mcp
+            repository: agentweaver.mcp
+            mode: dotnet
+            project: services/mcp/Agentweaver.Mcp/Agentweaver.Mcp.csproj
+          - id: Agentweaver.Web
+            repository: agentweaver-web
+            mode: web
+            project: apps/web/host/Agentweaver.Web.Host.csproj
+          - id: Agentweaver.Orchestrator
+            repository: agentweaver.orchestrator
+            mode: dotnet
+            project: services/orchestrator/Agentweaver.Orchestrator/Agentweaver.Orchestrator.csproj
+          - id: Agentweaver.Environment
+            repository: agentweaver.environment
+            mode: dotnet
+            project: services/environment/Agentweaver.Environment/Agentweaver.Environment.csproj
+          - id: Agentweaver.Knowledge
+            repository: agentweaver.knowledge
+            mode: dotnet
+            project: services/knowledge/Agentweaver.Knowledge/Agentweaver.Knowledge.csproj
+          - id: Agentweaver.Projects.Config
+            repository: agentweaver.projects.config
+            mode: dotnet
+            project: services/projects-config/Agentweaver.Projects.Config/Agentweaver.Projects.Config.csproj
+
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: v1
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Validate source and wait for exact-source CI
-        env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          test "$GITHUB_REF" = "refs/heads/v1" || {
-            echo "::error::Integration images must be dispatched from refs/heads/v1 (got $GITHUB_REF)." >&2
-            exit 1
-          }
-          if ! [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::source_sha must be a lowercase 40-character commit SHA." >&2
-            exit 1
-          fi
-          git cat-file -e "${SOURCE_SHA}^{commit}" || {
-            echo "::error::source_sha is not present in the v1 checkout." >&2
-            exit 1
-          }
-          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/v1 || {
-            echo "::error::source_sha is not reachable from origin/v1." >&2
-            exit 1
-          }
-          for workflow in v1-ci.yml v1-docs-ci.yml; do
-            run_id=""
-            for attempt in $(seq 1 120); do
-              run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" \
-                --commit "$SOURCE_SHA" --json databaseId --jq '.[0].databaseId // empty')
-              if [ -n "$run_id" ]; then
-                break
-              fi
-              sleep 15
-            done
-            if [ -z "$run_id" ]; then
-              echo "::error::No $workflow run found for $SOURCE_SHA." >&2
-              exit 1
-            fi
-            gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
-          done
-          git checkout --detach "$SOURCE_SHA"
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test -z "$(git status --porcelain)"
+
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
-        with:
-          version: 'v29.9.0'
-          set-host: true
-          daemon-config: |
-            {
-              "features": {
-                "containerd-snapshotter": true
-              }
-            }
-      - name: Prepare pinned product build inputs
-        env:
-          EXPECTED_SOURCE: ${{ inputs.source_sha }}
-          DOCKER_CONTEXT: default
-          npm_config_cache: ${{ runner.temp }}/agentweaver-integration-npm-cache
-          npm_config_update_notifier: 'false'
-        run: npm run release:prepare-build-inputs
-      - name: Build exact-source integration images
-        env:
-          INTEGRATION_SOURCE_SHA: ${{ inputs.source_sha }}
-          DOCKER_CONTEXT: default
-          BUILDX_BUILDER: default
-          npm_config_cache: ${{ runner.temp }}/agentweaver-integration-npm-cache
-        run: npm run release:integration-pack -- --integration-source-sha "$INTEGRATION_SOURCE_SHA" --out artifacts/release/integration
-      - uses: actions/upload-artifact@v4
-        with:
-          name: v1-integration-images-${{ inputs.source_sha }}-${{ github.run_id }}
-          overwrite: true
-          path: artifacts/release/integration/
-          if-no-files-found: error
-          retention-days: 30
 
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    permissions:
-      contents: write
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.source_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Require the exact clean source
-        env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test -z "$(git status --porcelain)"
       - uses: actions/setup-node@v4
+        if: matrix.mode == 'web'
         with:
-          node-version: '24'
-      - uses: actions/download-artifact@v4
+          node-version: 24
+
+      - name: Restore project
+        if: matrix.mode == 'dotnet' || matrix.mode == 'web'
+        run: dotnet restore "${{ matrix.project }}" --locked-mode
+
+      - name: Install web dependencies
+        if: matrix.mode == 'web'
+        working-directory: apps/web
+        run: npm ci --legacy-peer-deps
+
+      - name: Build web assets
+        if: matrix.mode == 'web'
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Publish web host
+        if: matrix.mode == 'web'
+        run: dotnet publish "${{ matrix.project }}" --configuration Release --no-restore --output apps/web/publish
+
+      - name: Read web package version
+        if: matrix.mode == 'web'
+        id: web-version
+        working-directory: apps/web
+        run: echo "version=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
         with:
-          name: v1-integration-images-${{ inputs.source_sha }}-${{ github.run_id }}
-          path: artifacts/release/integration/
-      - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push AgentHost
+        if: matrix.id == 'Agentweaver.AgentHost'
+        uses: docker/build-push-action@v6
         with:
-          version: 'v29.9.0'
-          set-host: true
-          daemon-config: |
-            {
-              "features": {
-                "containerd-snapshotter": true
-              }
-            }
-      - name: Publish only the source-bound integration images
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          provenance: false
+          tags: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build and push Identity Broker
+        if: matrix.id == 'Agentweaver.Identity.Broker'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          provenance: false
+          tags: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build and push Web
+        if: matrix.mode == 'web'
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/web
+          file: apps/web/Dockerfile
+          push: true
+          provenance: false
+          tags: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ github.sha }}
+          build-args: |
+            IMAGE_TAG=${{ steps.web-version.outputs.version }}
+            GIT_SHA=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build and push .NET service
+        if: matrix.mode == 'dotnet'
+        run: >-
+          dotnet publish "${{ matrix.project }}"
+          -t:PublishContainer
+          --configuration Release
+          --no-restore
+          -p:EnableSdkContainerSupport=true
+          -p:ContainerRegistry=ghcr.io
+          -p:ContainerRepository=sabbour/${{ matrix.repository }}
+          -p:ContainerImageTag=sha-${GITHUB_SHA}
+          -p:RepositoryCommit=${GITHUB_SHA}
+
+      - name: Report pushed image digest
         env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_REGISTRY: ghcr.io/sabbour
-          RELEASE_REGISTRY_USER: ${{ github.repository_owner }}
-          RELEASE_REGISTRY_PASSWORD: ${{ github.token }}
-          DOCKER_CONFIG: ${{ runner.temp }}/agentweaver-integration-docker-config
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          IMAGE: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ github.sha }}
         run: |
-          set -euo pipefail
-          mkdir -m 700 -p "$DOCKER_CONFIG"
-          npm run release:integration-publish -- "$SOURCE_SHA" --integration-images-only --confirm-integration-publication
-      - uses: actions/upload-artifact@v4
-        if: ${{ always() }}
-        with:
-          name: v1-integration-publication-${{ inputs.source_sha }}-${{ github.run_id }}
-          path: artifacts/release/integration/integration-publication.json
-          if-no-files-found: warn
-          retention-days: 30
-      - name: Remove temporary GHCR credentials
-        if: ${{ always() }}
-        env:
-          DOCKER_CONFIG: ${{ runner.temp }}/agentweaver-integration-docker-config
-        run: rm -rf -- "$DOCKER_CONFIG"
+          digest="$(docker buildx imagetools inspect "$IMAGE" --format '{{.Manifest.Digest}}')"
+          echo "- \`$IMAGE\` → \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ matrix.id }}" = "Agentweaver.AgentHost" ]; then
+            manifest="$(docker buildx imagetools inspect --raw "$IMAGE")"
+            manifest_bytes="$(printf '%s' "$manifest" | wc -c | tr -d ' ')"
+            blob_bytes="$(printf '%s' "$manifest" | jq -r '[.config, .layers[]] | unique_by(.digest) | map(.size) | add')"
+            echo "- AgentHost compressed image pull bytes: $((manifest_bytes + blob_bytes))" >> "$GITHUB_STEP_SUMMARY"
+          fi

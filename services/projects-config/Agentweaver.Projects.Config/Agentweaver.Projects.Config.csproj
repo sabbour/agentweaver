@@ -14,6 +14,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Resources\Blueprints\*.json" LogicalName="Agentweaver.Projects.Config.Resources.Blueprints.%(Filename)%(Extension)" />
     <EmbeddedResource Include="BlueprintPackages\Schemas\*.json" LogicalName="Agentweaver.Projects.Config.BlueprintPackages.Schemas.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\..\..\scripts\azure\lib\p1-postgres-plan.json" LogicalName="Agentweaver.Projects.Config.Resources.P1PostgresPlan.json" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Azure.Identity" Version="1.17.1" Aliases="AzureIdentity" />

@@ -48,7 +48,7 @@ as compatible between 033 and 035.
 | Cluster access | Checks the Azure account, gets a private kubeconfig for `agentweaver-aks`, and checks Kubernetes permissions. | Uses a temporary file that is always removed. |
 | Broker egress check | Compares the live Broker migration egress policy with the repository and reports any DNS name that differs. | Read-only. |
 | Setup check | Reads the migration identity, its federated credential, and the recorded handover. A workload identity that would need either one stops here and names the setup command. | Read-only. |
-| Service image check | Reads the running and target images' schema ranges and chooses deployment order. Checks target compatibility even when the digest is unchanged. | Read-only. |
+| Service image check | In normal maintenance mode, reads running and target schema ranges and chooses deployment order. Skipped by `--migrations-only`. | Read-only. |
 | Lock | Creates the Lease `p1-db-maintenance-lock`. A second run fails here. | Released at the end of every run. |
 | Migration identity | Uses the existing identity when it and its federated credential match. Otherwise a run signed in as the PostgreSQL Entra administrator deploys `infra/bicep/p1-postgres-migration-identity.bicep`. | The deployment is declarative. |
 | ServiceAccount and egress | Applies `p1-postgres-migration` and its egress policy with server-side apply. | Server-side apply. |
@@ -56,86 +56,41 @@ as compatible between 033 and 035.
 | Connectivity probes | A short Job under each migration egress policy resolves the PostgreSQL name, including its private link name, and opens port 5432. It requests at least 25m CPU and 32Mi memory to satisfy the P1 namespace minimum. | Uniquely named and removed. |
 | Migration Jobs | Runs the Broker, Environment, Orchestrator, and Events & Sessions Jobs on the pinned digests, one at a time. | Migrators skip applied versions. |
 | Grants check | Requires one grants marker per P1 Job whose versions equal the plan exactly. | Read-only. |
-| Services | Rolls mismatched Deployments to the same digests when asked, then waits for every service to be ready. | Matching images are not changed. |
+| Services | Normal maintenance mode can roll mismatched Deployments to the same digests when asked, then waits for readiness. `--migrations-only` never reads or changes application Deployments. | Matching images are not changed. |
 | Cleanup and receipt | Deletes the run's Jobs and pods, releases the lock, removes temporary files, and writes a receipt. | Runs on success and on failure. |
 
-Without `--execute`, the runner stops after the service image check. It prints
-the steps an execute run would take and changes nothing.
+Without `--execute`, the runner stops after its mode-specific preflight. It
+prints the steps an execute run would take and changes nothing.
 
-## Migrate Projects & Config before a whole-release rollout
+## Automatic migration before deployment
 
-Projects & Config migrations use a separate runner because the P1 database
-maintenance command covers Environment, Orchestrator, and Events & Sessions.
-The Projects & Config runner selects and verifies its image from a published
-release receipt. Run it from a clean checkout of the fetched `origin/v1` tip.
-That checkout may be newer than the publication source, as long as the
-publication source is also on `origin/v1`. Keep `--receipt-dir` outside the
-checkout so the checkout stays clean for the rollout.
-
-Start with a dry run:
+The supported v1 workload path runs database migrations before applying
+services:
 
 ```powershell
-npm run db:maintenance:projects-config -- `
-  --publication <publication.json>
+npm run deploy:kustomize -- --image-tag sha-<40-character-commit> --execute
 ```
 
-For an execute run, set
-`AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION` to the password-free
-connection for the role that owns the Projects & Config schema and migration
-history. It must target the approved PostgreSQL host and `agentweaver`
-database, and use `SSL Mode=VerifyFull`. Set
-`AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN` to a short-lived
-PostgreSQL access token through a protected environment-variable mechanism.
-The connection may contain only the canonical `Host`, `Port`, `Database`,
-`Username`, and `SSL Mode` fields; aliases and additional options are rejected.
-Neither value is written to command arguments, logs, or the receipt.
+The command resolves image digests, runs the existing Broker and P1 migration
+Jobs in migration-only mode, invokes the Projects & Config migration with its
+digest-pinned image, then renders and applies the root Kustomize overlay once
+and waits for all nine Deployment rollouts. The routine apply excludes Namespace
+objects, so it does not change namespace Pod Security policy. Any migration or
+apply error stops the sequence; no workload rollout starts after a failed migration.
 
-Then run:
+Projects & Config requires its existing approved schema-owner migration
+identity. Its runtime identity is DDL-restricted and must not be granted schema
+ownership. That approved automated identity is not yet configured, so the
+Projects & Config runner fails closed before Kustomize apply. Do not replace it
+with an LLM-supplied operator token or treat the migration receipt as a
+workload-deployment gate. The authorized Infra owner must verify the existing
+migration identity before a complete deployment can succeed.
 
-```powershell
-npm run db:maintenance:projects-config -- `
-  --publication <publication.json> `
-  --execute
-```
-
-The runner shares the database-maintenance Lease, creates a short-lived
-credential Secret and a single migration Job, and waits for completion. The
-migration Job grants the Projects & Config runtime role nothing on new tables
-or functions, so the runner then applies the planned runtime grants while it
-still holds the Lease. It commits the grants only when every grant reads back
-exactly as planned. The runner then removes the Job and Secret, releases the
-Lease, moves the grant step's receipt next to its own receipt, confirms the
-checkout is clean, and writes its receipt. The receipt records the publication,
-image, target, grant plan hash, and cleanup results without credentials.
-
-If the Job, the grant step, or cleanup fails, the runner writes a failed
-receipt and exits non-zero. Fix the cause and rerun the same command. Both
-steps are idempotent: the migration applies nothing new, and the grant step
-retries the grants.
-
-To inspect or repair the grants without a migration, run the grant step on its
-own from the same clean checkout. Its dry run reads the current grants and
-writes nothing:
-
-```powershell
-node scripts\azure\bootstrap-p1-postgres.mjs --apply-projects-config-grants --dry-run --execute
-node scripts\azure\bootstrap-p1-postgres.mjs --apply-projects-config-grants --execute
-```
-
-The step changes only the Projects & Config schema grants. It refuses
-unplanned column-level grants, and it saves its receipt in
-`~/.agentweaver/db-maintenance` (or the `--receipt-dir` you pass, which must be
-outside the checkout) and prints the receipt path. Without these
-grants, the restarted service can't read its tables and fails to start.
-
-Run the whole-release dry run after reviewing the migration result. Before an
-execute rollout, pass the successful migration receipt with
-`--projects-config-migration-receipt`. The rollout refuses a missing or
-mismatched receipt, and a receipt that doesn't prove exact runtime grants for
-the plan in the rollout's source. Receipts from runners that didn't apply
-grants are refused; rerun the migration runner to get a new receipt. This makes
-the Projects & Config migration and its grants complete before the dependent
-Deployment is restarted.
+A successful migration is not itself a successful deployment. The runtime
+checks its database privileges at startup, and a failed startup guard causes
+the Deployment rollout check to fail. The deploy command does not change
+database roles or grants; any privilege remediation requires separate
+approval.
 
 ## Before you begin
 
@@ -368,11 +323,9 @@ npm run db:maintenance -- --execute --apps-only `
 Only the container image changes. The runner never creates a Deployment, and it
 fails if one is missing.
 
-Apps-only maintenance is not a release completion check. Its receipt reports
-the installation as `partial` because Web, Gateway, Projects, and the other
-services may still be on older images. Use the whole-release rollout after
-maintenance. The installation counts as deployed only when that command writes
-a whole-release receipt with status `deployed`.
+Apps-only maintenance updates only the selected P1 Deployments. For the full
+v1 workload set, use `npm run deploy:kustomize`; it runs migrations first and
+then applies the root Kustomize overlay without a deployment receipt gate.
 
 ## Reconcile Broker egress drift
 
@@ -422,8 +375,9 @@ These changes need their own review.
 After the ownership handover, the operator no longer owns the P1 schemas. The
 `--inspect` and `--apply-pending-migrations` modes of
 `bootstrap-p1-postgres.mjs` expect operator ownership, so use this runner for
-later migrations instead. The `--apply-projects-config-grants` mode checks and
-changes only the Projects & Config schema, which the operator still owns.
+later P1 migrations instead. Projects & Config runtime grants are reconciled
+by its schema-owner migration Job after EF migrations; this P1 operator runner
+does not grant access in that schema.
 
 ## Related information
 

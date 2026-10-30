@@ -6,8 +6,8 @@ priority and current state. Neither a milestone nor a label proves that
 work is implemented, published, deployed or accepted.
 
 This is the same planning mechanism used for the 0.x product line. The v1
-component manifest, changesets and source-bound receipts remain the release
-mechanism; do not replace them with issue metadata.
+component manifest and changesets remain the versioning mechanism; issue
+metadata does not publish packages or deploy workloads.
 
 ## Choose a target release
 
@@ -96,7 +96,7 @@ Future capability milestones may be created earlier to make the sequence
 visible. Keep the descriptions focused on release outcomes; creating one
 does not authorize publication or deployment.
 
-After publication, compare the release tag, publication receipt and consumed
+After a package or CLI release, compare its published versions and consumed
 changesets with the merged pull requests. Assign each shipped PR to the
 first published version containing its changes, and assign the issues that
 PR actually completed to that version. Do not move an unfinished parent
@@ -109,8 +109,8 @@ git merge-base --is-ancestor <merge-commit> <release-tag>
 ```
 
 Exit code zero means the commit is an ancestor. It does not prove that the
-feature was enabled, deployed or accepted. Check the release's actual
-source and receipts as well. A PR merged after the latest release tag
+feature was enabled, deployed or accepted. Check the package or CLI release
+itself as well. A PR merged after the latest release tag
 belongs to the next planned milestone, not the last published one.
 
 Move work that missed the cut to the next suitable milestone. Do not leave
@@ -124,13 +124,14 @@ description.
 
 Follow the [component release reference](../reference/releases.md) and
 [release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md)
-for the existing release, publication and deployment commands. Planning
+for versioning, NuGet package publishing, direct GHCR image builds, and
+Kustomize deployment. Planning
 does not authorize credentials, cloud access, migrations or deployment.
 
 For separately approved deployed acceptance, run the representative
 integration project and focused API, UI or MCP scenarios for each new
-feature. Record the exact source, artifact identities, result and any
-blocked checks. A local test or successful rollout does not replace those
+feature. Record the result and any blocked checks. A local test or successful
+rollout does not replace those
 journeys.
 
 File each abnormal result as a narrow repair issue in the next patch

@@ -88,17 +88,10 @@ function jwt({
 }
 
 function validInput() {
-  const sourceSha = 'a'.repeat(40);
-  const registryDigest = `sha256:${'b'.repeat(64)}`;
   return {
     executionIntent: 'execute',
     journey: 'journal',
     environment: ENVIRONMENT,
-    deploymentEvidence: {
-      publicationPath: 'artifacts/p1/publication.json',
-      manifestPath: 'releases/foundation.json',
-      agentHostArchivePath: 'artifacts/p1/Agentweaver.AgentHost.oci.tar',
-    },
     pins: {
       context: 'p1-control',
       namespace: 'agentweaver',
@@ -110,15 +103,6 @@ function validInput() {
       },
       runtimeReceipt: { generation: 1 },
       storageReceipt: { pvUid: 'controlled-pv' },
-      sourceReceipt: { sourceSha, sourceTree: 'd'.repeat(40) },
-      imageReceipt: {
-        registryImage: `ghcr.io/sabbour/agentweaver/agenthost@${registryDigest}`,
-        registryDigest,
-        archiveSha256: 'e'.repeat(64),
-        manifestDigest: `sha256:${'f'.repeat(64)}`,
-        configDigest: `sha256:${'1'.repeat(64)}`,
-        compressedPullBytes: 1024,
-      },
     },
     fixturePlan: {
       expectedPlatformRuntimeRevision: 7,
@@ -971,10 +955,6 @@ test('UI launcher reuses one browser context and supplies its built-in authorize
   const output = [];
   let browserContexts = 0;
   let fixtureCleanups = 0;
-  const sourceEvidence = {
-    services: { status: 'passed' },
-    agentHostImageMeasurement: { status: 'passed' },
-  };
   try {
     const code = await runP1SigninCli([
       '--surface', 'ui',
@@ -997,7 +977,6 @@ test('UI launcher reuses one browser context and supplies its built-in authorize
       runP1: (argv, env, io, { identityProvider, pageProvider }) => runP1Cli(argv, env, io, {
         identityProvider,
         pageProvider,
-        async prepareDeploymentEvidence() { return sourceEvidence; },
         async createFixture(validated, { invocationId, acquireRunIdentity }) {
           const identity = await acquireRunIdentity({ projectId: PROJECT_ID, runId: RUN_ID });
           page.token = identity.token;
@@ -1024,7 +1003,7 @@ test('UI launcher reuses one browser context and supplies its built-in authorize
             },
           };
         },
-        async runSurfaceJourney(surface, _input, { ui, sourceEvidence: verifiedEvidence }) {
+        async runSurfaceJourney(surface, _input, { ui }) {
           assert.equal(surface, 'ui');
           await ui.openRun({ projectId: PROJECT_ID, runId: RUN_ID });
           await ui.selectView('Approvals');
@@ -1034,7 +1013,6 @@ test('UI launcher reuses one browser context and supplies its built-in authorize
             surface,
             surfaceStatus: 'blocked',
             steps: [{ id: 'ui-controls', status: 'passed' }],
-            sourceEvidence: verifiedEvidence,
             observations: { adapterCleanup: { mcp: 'not-required', ui: 'closed' } },
             failure: { message: 'The controlled run does not provide distinct-actor evidence.' },
           });

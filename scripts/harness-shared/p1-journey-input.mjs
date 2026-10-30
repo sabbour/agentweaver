@@ -5,14 +5,10 @@ const PIN_RECEIPTS = [
   'providerReceipt',
   'runtimeReceipt',
   'storageReceipt',
-  'sourceReceipt',
-  'imageReceipt',
 ];
 const SECRET_PROPERTY = /^(?:accessToken|authorization|connectionString|password|secret|setupToken|token)$/i;
 const SURFACE_JOURNEYS = new Set(['gate-answer', 'gate-approve', 'gate-reject', 'message', 'journal']);
 const SOURCE_SHA = /^[a-f0-9]{40}$/;
-const IMAGE_DIGEST = /^sha256:[a-f0-9]{64}$/;
-const SHA256 = /^[a-f0-9]{64}$/;
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -43,7 +39,7 @@ function rejectSecrets(value) {
   }
 }
 
-/** Require a saved integration receipt for images-only input and a release tag for published releases. */
+/** Validate the direct target and live environment inputs for a P1 product journey. */
 function validateP1StaticInput(input) {
   if (!isRecord(input) || input.executionIntent !== 'execute') {
     throw new Error('P1 runner input must explicitly set executionIntent to "execute".');
@@ -70,34 +66,6 @@ function validateP1StaticInput(input) {
       throw new Error(`A pinned ${name} is required.`);
     }
   }
-  const deploymentEvidence = input.deploymentEvidence;
-  const requiredEvidencePaths = ['publicationPath', 'manifestPath', 'agentHostArchivePath'];
-  const allowedEvidencePaths = [
-    ...requiredEvidencePaths,
-    'integrationDeploymentReceiptPath',
-    'releaseTag',
-  ];
-  if (!isRecord(deploymentEvidence)
-    || Object.keys(deploymentEvidence).some(key => !allowedEvidencePaths.includes(key))
-    || requiredEvidencePaths.some(key => !Object.hasOwn(deploymentEvidence, key))) {
-    throw new Error(`The deployment evidence input must contain: ${requiredEvidencePaths.join(', ')} and may include integrationDeploymentReceiptPath or releaseTag.`);
-  }
-  for (const name of [
-    'publicationPath',
-    'manifestPath',
-    'agentHostArchivePath',
-  ]) {
-    requireString(deploymentEvidence[name], `deployment evidence ${name}`);
-  }
-  if (Object.hasOwn(deploymentEvidence, 'integrationDeploymentReceiptPath')) {
-    requireString(deploymentEvidence.integrationDeploymentReceiptPath, 'deployment evidence integrationDeploymentReceiptPath');
-  }
-  if (Object.hasOwn(deploymentEvidence, 'releaseTag')) {
-    requireString(deploymentEvidence.releaseTag, 'deployment evidence releaseTag');
-    if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(deploymentEvidence.releaseTag)) {
-      throw new Error('The deployment evidence releaseTag must be an exact versioned release tag.');
-    }
-  }
   requireExactKeys(pins.providerReceipt,
     ['configMapName', 'sourceCommit', 'uid', 'resourceVersion'], 'provider catalog receipt pin');
   requireString(pins.providerReceipt.configMapName, 'provider catalog ConfigMap name');
@@ -106,31 +74,8 @@ function validateP1StaticInput(input) {
   if (!SOURCE_SHA.test(pins.providerReceipt.sourceCommit ?? '')) {
     throw new Error('A pinned provider catalog source commit is required.');
   }
-  requireExactKeys(pins.sourceReceipt, ['sourceSha', 'sourceTree'], 'source receipt pin');
-  if (!SOURCE_SHA.test(pins.sourceReceipt.sourceSha ?? '')
-    || !SOURCE_SHA.test(pins.sourceReceipt.sourceTree ?? '')) {
-    throw new Error('The source receipt must pin an exact Git commit and tree.');
-  }
-  requireExactKeys(pins.imageReceipt, [
-    'registryImage',
-    'registryDigest',
-    'archiveSha256',
-    'manifestDigest',
-    'configDigest',
-    'compressedPullBytes',
-  ], 'AgentHost image receipt pin');
-  const registryImage = /^ghcr\.io\/[a-z0-9._/-]+@(sha256:[a-f0-9]{64})$/.exec(pins.imageReceipt.registryImage ?? '');
-  if (!registryImage
-    || pins.imageReceipt.registryDigest !== registryImage[1]
-    || !SHA256.test(pins.imageReceipt.archiveSha256 ?? '')
-    || !IMAGE_DIGEST.test(pins.imageReceipt.manifestDigest ?? '')
-    || !IMAGE_DIGEST.test(pins.imageReceipt.configDigest ?? '')
-    || !Number.isSafeInteger(pins.imageReceipt.compressedPullBytes)
-    || pins.imageReceipt.compressedPullBytes < 1) {
-    throw new Error('The AgentHost image receipt must pin its immutable registry, archive, OCI, config, and byte identities.');
-  }
 
-  return { executionIntent: input.executionIntent, environment, pins, deploymentEvidence };
+  return { executionIntent: input.executionIntent, environment, pins };
 }
 
 /** Check owner fences and invocation receipts for a live, unexpired runner-owned fixture. */

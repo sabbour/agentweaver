@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { test } from 'node:test';
-import { isOutsideCheckout } from '../lib/grant-stage-receipts.mjs';
+import { isOutsideCheckout } from '../lib/checkout-paths.mjs';
 
 test('isOutsideCheckout treats only parent-relative and other-root paths as outside', () => {
   const root = path.resolve('checkout-root');

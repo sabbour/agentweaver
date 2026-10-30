@@ -318,11 +318,10 @@ infrastructure:
 
 - AKS workload-identity composition. See the
   [AKS workload identity specification](../../specs/aks-workload-identity.md).
-- Dependency-free `release:plan`, `release:apply`, and `release:pack` release tooling
-  (see [release composition](../../../releases/README.md#release-planning-and-package-preparation)).
-  It applies source-bound component intent and prepares locked packages and service images.
-  A separate manual workflow publishes verified artifacts and records receipts.
-  The release commands themselves never publish, push to a registry, or deploy.
+- Dependency-free `release:plan` and `release:apply` version tooling
+  (see [release composition](../../../releases/README.md#versioning-and-nuget-packages)).
+  NuGet packages use `dotnet pack`; container images build and push directly to GHCR.
+  The deployment command applies the existing Kustomize overlay after migrations.
 - Azure foundation tooling: Bicep modules, a guardrail-enforced plan, deploy, and
   verify-acceptance CLI, and the Kustomize service-account layout. See the
   [Azure P0 infrastructure specification](../../specs/azure-p0-infrastructure.md).

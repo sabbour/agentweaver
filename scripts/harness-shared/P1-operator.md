@@ -1,41 +1,19 @@
 # Run the P1 acceptance harness
 
-Use this guide after the repaired release is deployed to an approved target.
-The harness checks the supplied release evidence, signs in once, runs the
-selected journey, and records a redacted result.
+Use this guide to run a product journey against an approved target. The
+harness signs in once, runs the selected journey, and records a redacted
+result; it does not require image publication, source-provenance, or archive
+receipts.
 
 ## Before you run
 
 Prepare one manifest for the exact target. It must include:
 
-- The exact release and source revision.
-- The publication record and AgentHost image archive with their measurements.
+- The direct Environment URL, issuer, audience, actor, and tenant.
+- The Kubernetes context and namespace.
 - Current provider, runtime, and storage receipts.
 - The current platform selection revision.
 - Independently produced native and recovery evidence for checks that need it.
-
-For a draft-stage release manifest, the harness accepts only releases pinned in
-the release deployment script. It checks each release's tag, exact source
-commit, and immutable publication result before it records evidence. v1.0.9 is
-pinned with an annotated tag. It was deployed by the whole-release script, so it
-stays pinned for this check but can't be deployed with the pre-acceptance
-bootstrap. v1.0.11 is pinned the same way, except its release tag is a
-lightweight tag on the published source commit.
-v1.0.14 is also pinned for P1 evidence only. Its lightweight tag resolves to
-source commit `4105e2f2520659e7c9c636cf34972661fa26342f`, and its
-`publication.json` asset is pinned to SHA-256
-`21dc5b63e3bab229e8e8df07cc083ce94d48c031c045af3f7ba438a93fbe5538`.
-v1.0.15 is pinned for P1 evidence only. Its lightweight tag resolves to source
-commit `d35c4851f591aca0f623559e1a03e3bed722f20f`, and its `publication.json`
-asset is pinned to SHA-256
-`3be9dfd2a28616f0208a052e58c72069c102eafdef0961dc69765466e1d198f0`.
-
-Deployment and service evidence stay pinned to the release commit and source
-tree. Reused images keep their original build labels. The harness verifies
-that build source against the publication before measuring the AgentHost
-archive and carries that checked binding into each journey. Do not replace
-the release source pins with an older image build source. An older source
-supplied in JSON alone does not authorize reuse.
 
 The one-account launcher cannot produce a distinct denied identity. If the
 manifest requests one, the launcher stops before sign-in. Do not use the
@@ -141,8 +119,7 @@ npm run harness:p1:signin-run -- --surface api --input <manifest.json> --output 
 
 The dry run checks the manifest shape and prints the operator steps. It does
 not open a browser, contact the target, write evidence, create a project, or
-create role assignments. It does not prove that the release evidence is live
-or current.
+create role assignments. It does not verify deployment or runtime readiness.
 
 ## Run a journey
 
@@ -187,5 +164,4 @@ Do not retry the mutation or remove unrelated resources.
 
 A passed surface journey is not full P1 acceptance. Missing native or recovery
 evidence remains blocked. A one-account run also cannot pass a check that
-requires a distinct denied actor. Controlled tests do not prove a deployed
-service or a live journey.
+requires a distinct denied actor. Controlled tests do not prove a live journey.

@@ -1,5 +1,5 @@
 import { pathToFileURL } from 'node:url';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { mkdir, open, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
@@ -8,7 +8,6 @@ import {
   persistP1AcceptanceResult,
   validateP1NativeProbeResults,
 } from './p1-acceptance-result.mjs';
-import { prepareP1DeploymentEvidence } from './p1-deployment-evidence.mjs';
 import { validateP1RunnerPlanInput } from './p1-journey-input.mjs';
 import {
   createP1Fixture,
@@ -26,9 +25,7 @@ import { redact } from './redaction.mjs';
 import { appendRedactedJsonLine, serializeRedactedJsonLine } from './safe-jsonl.mjs';
 import { runP1DotnetCli } from './p1-dotnet-cli.mjs';
 
-/** CLI orchestration for source-pinned P1 setup, surface journeys, cleanup, and JSONL evidence. */
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-
+/** CLI orchestration for P1 setup, surface journeys, cleanup, and JSONL results. */
 /** Serialize an object with recursively sorted keys for a stable execution-plan fingerprint. */
 function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
@@ -152,11 +149,10 @@ async function readProbeEnvelope(path, expectedKind) {
 }
 
 /** Build a blocked acceptance result while retaining every valid supplied probe envelope. */
-function createFailureResult(surface, error, sourceEvidence, nativeProbeResults = []) {
+function createFailureResult(surface, error, nativeProbeResults = []) {
   return createP1AcceptanceResult({
     surface,
     surfaceStatus: 'blocked',
-    sourceEvidence,
     nativeProbeResults,
     observations: {
       cleanup: { intent: 'none', status: 'not-started' },
@@ -252,12 +248,11 @@ function addFixtureCleanup(result, state, cleanup, nativeFence, cleanupError) {
 }
 
 /**
- * Validate inputs and source evidence, create an owned fixture, run one surface journey, and clean up.
- * Release evidence carries its exact tag into the source verifier; output stays append-only and sign-in is external.
+ * Validate inputs, create an owned fixture, run one surface journey, and clean up.
+ * Product acceptance does not require image publication or source-provenance artifacts.
  * One invocation and evidence file belong to one surface; the sign-in launcher coordinates multiple surfaces.
  */
 export async function runP1Cli(argv = process.argv.slice(2), env = process.env, io = console, {
-  prepareDeploymentEvidence = prepareP1DeploymentEvidence,
   createSetupApi = createP1SetupApi,
   createFixture = createP1Fixture,
   acquireRunIdentity = acquireP1RunIdentity,
@@ -272,7 +267,6 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
   let outputPath;
   let inputPath;
   let result;
-  let sourceEvidence;
   const nativeProbeResults = [];
   if (argv.includes('--help')) {
     io.log('Usage: npm run harness:p1 -- --surface api --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>] [--dry-run] [--interactive]');
@@ -328,45 +322,16 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
     } catch (error) {
       throw new Error(`P1 preflight blocked before network activity: ${error.message}`);
     }
-    const { pins, deploymentEvidence } = validated;
-    const resolveRepositoryPath = file => resolve(isAbsolute(file) ? file : resolve(repositoryRoot, file));
-    const publicationPath = resolveRepositoryPath(deploymentEvidence.publicationPath);
-    const manifestPath = resolveRepositoryPath(deploymentEvidence.manifestPath);
-    const agentHostArchivePath = resolveRepositoryPath(deploymentEvidence.agentHostArchivePath);
-    const integrationDeploymentReceiptPath = deploymentEvidence.integrationDeploymentReceiptPath
-      ? resolveRepositoryPath(deploymentEvidence.integrationDeploymentReceiptPath)
-      : undefined;
-    if ([inputPath, publicationPath, manifestPath, agentHostArchivePath, integrationDeploymentReceiptPath]
-      .filter(Boolean)
-      .some(path => pathIdentity(path) === pathIdentity(requestedOutputPath))) {
-      outputPath = undefined;
-      throw new Error('The evidence output path must not replace a P1 input or deployment artifact.');
-    }
+    const { pins } = validated;
     // Refuse to create a live fixture if the UI has no authorized page source.
     if (surface === 'ui' && !options.pageModule && typeof pageProvider !== 'function') {
       throw new Error('The UI surface requires the built-in sign-in launcher or an authorized page provider.');
     }
-    sourceEvidence = await prepareDeploymentEvidence({
-      repoRoot: repositoryRoot,
-      expectedSourceSha: pins.sourceReceipt.sourceSha,
-      context: pins.context,
-      namespace: pins.namespace,
-      publicationPath,
-      manifestPath,
-      releaseTag: deploymentEvidence.releaseTag,
-      agentHostArchivePath,
-      integrationDeploymentReceiptPath,
-      providerCatalog: {
-        configMapName: pins.providerReceipt.configMapName,
-        sourceCommit: pins.providerReceipt.sourceCommit,
-      },
-    });
-
     const invocationId = await getOrCreateInvocationId(
       outputPath, invocationBinding(validated, surface, nativeProbeResults));
     const setupToken = env.AGENTWEAVER_P1_SETUP_TOKEN;
     if (typeof setupToken !== 'string' || !setupToken) {
-      throw new Error('The setup token is unavailable; set AGENTWEAVER_P1_SETUP_TOKEN after source evidence is ready.');
+      throw new Error('The setup token is unavailable; set AGENTWEAVER_P1_SETUP_TOKEN before execution.');
     }
     const setupApi = createSetupApi({ environment: validated.environment, setupToken });
     let fixture;
@@ -415,7 +380,6 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
         });
         result = await runSurfaceJourney(surface, fixture.input, {
           ...adapters,
-          sourceEvidence,
           nativeProbeResults,
           createIdempotencyKey: () => createP1IdempotencyKey(invocationId),
           beforeUiAction: async ({ journey }) => appendRedactedJsonLine(outputPath, {
@@ -427,7 +391,7 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
           }),
         });
       } catch (error) {
-        result = createFailureResult(surface, error, sourceEvidence, nativeProbeResults);
+        result = createFailureResult(surface, error, nativeProbeResults);
       }
       try {
         cleanup = await fixture.cleanup();
@@ -440,7 +404,6 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
         result = attachSessionMaterial(
           result,
           createSessionMaterialAcceptance({
-            sourceEvidence,
             environment: validated.environment,
             fixtureInput: fixture.input,
           }),
@@ -457,12 +420,12 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
       if (!result) {
         result = createFailureResult(surface,
           new Error('P1 fixture setup did not produce an acceptance result.'),
-          sourceEvidence, nativeProbeResults);
+          nativeProbeResults);
       }
     }
   } catch (error) {
     if (!['api', 'mcp', 'ui'].includes(surface)) surface = 'api';
-    result = createFailureResult(surface, error, sourceEvidence, nativeProbeResults);
+    result = createFailureResult(surface, error, nativeProbeResults);
     if (error.p1SetupState) {
       let cleanup;
       let cleanupError;

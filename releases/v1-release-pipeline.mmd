@@ -1,7 +1,9 @@
 flowchart LR
-  Bump["Merged version bump and receipt"] --> Validate["Wait for CI; validate composition and changesets"]
-  Validate --> Packages["Pack NuGet packages"]
-  Validate --> Images["Build product Docker images"]
-  Packages --> Artifacts["Upload source-bound artifacts"]
-  Images --> Artifacts
-  Artifacts --> Publish["Publish changed packages and images; save receipt"]
+  Service["Service changes on v1"] --> Build["Build ten existing images"]
+  Build --> Push["Push directly to GHCR with sha-commit tags"]
+  Version["Version manifest changes"] --> Packages["Pack and publish versioned NuGet packages"]
+  Tag["Selected image tag"] --> Resolve["Resolve ten registry digests"]
+  Resolve --> Migrate["Run Broker/P1 and Projects & Config migrations"]
+  Migrate --> Render["Render existing Kustomize overlay"]
+  Render --> Apply["kubectl apply to selected context"]
+  Apply --> Rollout["Wait for nine Deployment rollouts"]

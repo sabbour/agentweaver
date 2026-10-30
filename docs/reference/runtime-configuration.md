@@ -128,8 +128,7 @@ ConfigMap. A Deployment also does not restart automatically when a referenced
 ConfigMap changes.
 
 For a first installation, resolve and review all settings before applying the
-bundle. For an existing installation, use the owning deployment workflow when
-it supports the map. For a manual maintenance procedure:
+bundle. For an existing installation, use the manual maintenance procedure:
 
 1. Update the reviewed JSON source and render the complete bundle. Confirm the
    rendered ConfigMap has the expected name, namespace, data, and
@@ -164,61 +163,6 @@ node can still receive the old values. A `rollout restart` does not clear this
 cache. A short interval without the map is expected while workloads are
 stopped. Do not use a broad delete or remove the `immutable` setting to bypass
 the replacement process.
-
-### Guarded pre-acceptance ConfigMap patch upgrades
-
-The source-bound `release:deploy-bootstrap` flow has a narrowly scoped
-replacement path for `agenthost-runtime-v1`,
-`projects-config-runtime-config`, `gateway-runtime-config`, and
-`orchestrator-runtime-config`. AgentHost's immutable `appsettings.json` includes
-the receipt-verified image digest and measured image size. The Projects & Config
-map contains the approved privileged-setup identity values. The Gateway map
-contains its owner service addresses. The Orchestrator map contains internal
-owner service addresses; its values can change between releases when a release
-adds or updates an owner route, such as the Source Control endpoint used by the
-OpenPullRequest workflow gate.
-
-The command compares every rendered immutable ConfigMap with the same-named
-live map. When a changed map is eligible for guarded replacement,
-`--dry-run` reports its name. It fails with a maintenance-procedure link if
-any other immutable map differs, before server-side preflight can report an
-immutable-field error. With `--execute`, the command validates the rest of the
-rendered bundle, checks namespace-scoped ConfigMap create and name-scoped
-delete permissions for each eligible changed map, and replaces only those maps
-from the source-rendered objects with a UID- and resource-version-guarded
-delete followed by a create. The delete is a raw API request whose
-`DeleteOptions` preconditions carry the UID and resource version observed
-during planning, so the API server refuses it if the live map changed in the
-meantime. Unchanged data follows the normal apply path.
-
-This exception is limited to `agenthost-runtime-v1`,
-`projects-config-runtime-config`, `gateway-runtime-config`, and
-`orchestrator-runtime-config`. It never
-replaces `environment-cilium-config` or
-`projects-config-provider-catalog`. Other changed immutable maps require the
-reviewed maintenance procedure above. After replacement, the bootstrap
-restarts the `gateway` Deployment for its runtime map, the `projects-config`
-Deployment for its runtime map, and the `orchestrator` Deployment for its
-runtime map; live verification waits for the rollouts.
-Before cluster writes, it checkpoints required Deployment restarts. If an apply
-or restart fails, rerun the command with `--resume`; it retries unfinished
-rollouts even when the ConfigMap data now matches and no longer shows drift.
-AgentHost settings are used by Sandbox Pods rather than a long-lived
-Deployment. Recreating the ConfigMap does not restart existing Sandbox Pods;
-recreate an affected Sandbox through its owning Environment lifecycle before
-relying on changed AgentHost settings.
-
-The source-bound `release:deploy-whole` flow uses the same replacement
-allow-list and guarded delete/create. Before replacing the Projects & Config,
-Gateway, or Orchestrator runtime map, it checks create and exact-name delete
-permission, scales the owning Deployment to zero, waits for referencing Pods
-to terminate, and waits 70 seconds for kubelet's default immutable-map cache
-to expire. It then recreates and verifies the map before restoring the
-Deployment and waiting for its rollout. It refuses changed immutable maps
-outside the allow-list and refuses to replace a map while an active Pod outside
-its managed Deployment set still references it. AgentHost Sandbox Pods remain
-owned by the Environment lifecycle and are not stopped by a whole-release
-rollout.
 
 `events-and-sessions-runtime-config` is mutable in the checked-in profile.
 Apply its reviewed data with the bundle, then restart the Events & Sessions
@@ -485,10 +429,17 @@ TenantAdmin command. They are not part of the runtime ConfigMap:
 | `ProjectsConfig__Migration__AccessToken` | Optional short-lived PostgreSQL Entra access token. The explicit command supplies it as the connection password. Store it in a short-lived Secret or environment variable. Do not put it in arguments or logs. |
 | `ProjectsConfig__Migration__WorkloadIdentity__TenantId`, `ClientId`, `TokenFilePath` | Alternative explicit workload identity for migration. Configure these settings or `AccessToken`, not both. |
 
+The automated Kustomize migration Job uses the Workload Identity settings and
+the projected token from its pre-provisioned
+`projects-config-migration` ServiceAccount. It does not use
+`ProjectsConfig__Migration__AccessToken` or a Kubernetes credential Secret.
+The short-lived access-token option remains for explicit operator bootstrap
+commands only.
+
 The migration grants the runtime principal nothing. The migration runner
-applies the planned runtime grants right after the migration, before the
-service restarts, with `bootstrap-p1-postgres.mjs --apply-projects-config-grants`.
-Without them, the service can't read its tables and fails at startup. See
+requires the reviewed runtime-grant plan to be applied as a separate,
+explicitly approved step after migration. Without those grants, the service
+can't read its tables and fails at startup. See
 [Applying the Projects & Config runtime grants](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#applying-the-projects--config-runtime-grants).
 
 ### Runtime authority writes
@@ -755,9 +706,9 @@ are not stored in the two runtime ConfigMaps:
 | Configuration path | Contract and value source |
 | --- | --- |
 | `Environment:Sandbox:AgentSandbox:OptionsRevision` | Required 1-128 character token using ASCII letters, digits, `.`, `_`, `-`, or `:`. It must match the catalog registration. |
-| `Environment:Sandbox:AgentSandbox:ContainerImage` | Required OCI image pinned to a SHA-256 digest. Use the exact AgentHost image from the approved publication receipt. |
-| `Environment:Sandbox:AgentSandbox:ContainerImagePlatform` | Required value `linux/amd64`, matching the published image metadata. |
-| `Environment:Sandbox:AgentSandbox:ContainerImageCompressedPullBytes` | Required positive compressed image size. The reader supplies `0` when omitted, which fails validation; obtain the byte count from the approved image metadata. |
+| `Environment:Sandbox:AgentSandbox:ContainerImage` | Required OCI image pinned to a SHA-256 digest. Use the AgentHost digest reported by the v1 image workflow. |
+| `Environment:Sandbox:AgentSandbox:ContainerImagePlatform` | Required value `linux/amd64`, matching the image workflow platform. |
+| `Environment:Sandbox:AgentSandbox:ContainerImageCompressedPullBytes` | Required positive compressed image size. The reader supplies `0` when omitted, which fails validation; use the AgentHost compressed-pull byte count reported by the image workflow. |
 | `Environment:Sandbox:AgentSandbox:AgentHost:ConfigurationMapName`, `TlsSecretName` | Optional AgentHost profile. When present, both values are required Kubernetes DNS subdomains; use the reviewed ConfigMap and TLS Secret names. |
 | `Environment:NetworkPolicy:Cilium:AdapterVersion` | Required parseable version with no default. Match the adapter version in the provider registration. |
 | `Environment:NetworkPolicy:Cilium:OptionsRevision` | Required nonempty, non-whitespace revision with no default. Match the catalog registration. |

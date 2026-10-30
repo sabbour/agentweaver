@@ -195,7 +195,6 @@ export const P1_OWNERSHIP_HANDOVER_MARKER = 'P1_POSTGRES_OWNERSHIP_HANDOVER_VERI
 
 const P1_MODES = new Set([
   'initialize', 'inspect', 'apply-pending', 'apply-pending-dry-run',
-  'projects-config-grants', 'projects-config-grants-dry-run',
 ]);
 // Each initializer mode prints its own final marker line. The runner accepts success only when it sees the
 // marker for the mode it asked for, so a run that stopped early or ran a different mode cannot pass.
@@ -204,16 +203,12 @@ const P1_MARKERS = {
   inspect: 'P1_POSTGRES_INSPECTION_FINISHED writes=false',
   'apply-pending-dry-run': 'P1_POSTGRES_PENDING_MIGRATIONS_DRY_RUN writes=false',
   'apply-pending': 'P1_POSTGRES_PENDING_MIGRATIONS_APPLIED runtimeIdentityProof=false deploymentProof=false',
-  'projects-config-grants-dry-run': 'P1_POSTGRES_PROJECTS_CONFIG_GRANTS_DRY_RUN writes=false',
-  'projects-config-grants': 'P1_POSTGRES_PROJECTS_CONFIG_GRANTS_APPLIED runtimeIdentityProof=false deploymentProof=false',
 };
 const P1_VERIFICATION = {
   initialize: 'operator-initialization',
   inspect: 'read-only-inspection',
   'apply-pending-dry-run': 'read-only-pending-migration-dry-run',
   'apply-pending': 'pending-migrations-applied',
-  'projects-config-grants-dry-run': 'read-only-projects-config-grants-dry-run',
-  'projects-config-grants': 'projects-config-grants-applied',
 };
 
 // Explicit approved maxima are small positive integers; the initializer rejects any catalog that ends elsewhere.
@@ -226,13 +221,6 @@ export function p1InitializerArguments(mode, settings) {
   // Inspection needs only the source commit and plan hash. It takes no Core merge, maxima or receipt.
   const source = ['--source-sha', settings.sourceSha];
   if (mode === 'inspect') return ['--inspect', ...source, '--plan-sha256', settings.planSha256];
-  // The Projects & Config grant step is bound to the source and plan only. Its dry run gets no receipt.
-  if (mode.startsWith('projects-config-grants')) {
-    return [
-      '--apply-projects-config-grants', ...source, '--plan-sha256', settings.planSha256,
-      ...(mode === 'projects-config-grants-dry-run' ? ['--dry-run'] : ['--receipt', settings.receiptPath]),
-    ];
-  }
   const bound = [...source, '--core-merge-sha', settings.coreMergeSha, '--plan-sha256', settings.planSha256];
   // Fresh initialization keeps its original argument list.
   if (mode === 'initialize') return ['--initialize', ...bound, '--receipt', settings.receiptPath];
@@ -300,12 +288,11 @@ export async function bootstrapIdentityPostgres({
     // A missing mode means the original fresh-initialize call.
     const p1Mode = p1Initializer.mode ?? 'initialize';
     if (!P1_MODES.has(p1Mode))
-      throw new Error('The P1 initializer mode must be initialize, inspect, apply-pending, apply-pending-dry-run, projects-config-grants, or projects-config-grants-dry-run.');
+      throw new Error('The P1 initializer mode must be initialize, inspect, apply-pending, or apply-pending-dry-run.');
     // Only fresh initialization runs Identity bootstrap; inspection and incremental continuation target an
     // initialized database, so Identity Broker is verified read-only first and never re-bootstrapped.
-    const writesReceipt = ['initialize', 'apply-pending', 'projects-config-grants'].includes(p1Mode);
-    // Inspection and the Projects & Config grant step never touch Core, so they take no Core merge.
-    const needsCoreMerge = p1Mode !== 'inspect' && !p1Mode.startsWith('projects-config-grants');
+    const writesReceipt = ['initialize', 'apply-pending'].includes(p1Mode);
+    const needsCoreMerge = p1Mode !== 'inspect';
     const pendingMode = p1Mode.startsWith('apply-pending');
     const receiptPath = typeof p1Initializer.receiptPath === 'string'
       ? resolve(p1Initializer.receiptPath) : '';
@@ -313,7 +300,7 @@ export async function bootstrapIdentityPostgres({
     // Validate every setting before opening any tunnel:
     // - verifyOnly must be false only for initialize, so an initialized database is never re-bootstrapped;
     // - the source and plan hashes must be exact, and the plan hash must match this checkout;
-    // - the Core merge SHA is required except for inspection and the Projects & Config grant step;
+    // - the Core merge SHA is required except for inspection;
     // - maxima are required for the pending modes and forbidden for the others;
     // - writing modes need a new receipt path inside Temp; read-only modes must not pass one.
     if (verifyOnly !== (p1Mode !== 'initialize') || !GUID_PATTERN.test(runtimePrincipalObjectId ?? '') ||

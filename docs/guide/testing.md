@@ -379,7 +379,8 @@ dotnet test tests\Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~
 
 These source checks include the migration catalog maximum, live-history prefix,
 runtime CONNECT, relation, and schema ACL checks used by
-`--apply-pending-migrations` and `--apply-projects-config-grants`.
+`--apply-pending-migrations`. Projects & Config migration/grant reconciliation
+is covered by its service PostgreSQL migration tests.
 
 Run the production catalog SQL cases and continuation checks against the
 disposable PostgreSQL fixture:
@@ -645,15 +646,11 @@ only its authorization page, keeping the shared browser alive until the
 launcher finishes.
 CI runs both the harness contract suite and this browser regression.
 
-The deployment evidence tests also check reused service labels and AgentHost
-archive measurements against the publication's original build source.
-Downstream journeys accept that checked binding without changing the release
-source pins, and reject mismatched measurements or an older source supplied
-without preparation. These are controlled local checks, not live acceptance.
-Draft P1 manifests admit only releases explicitly pinned for evidence
-verification; an evidence-only pin never authorizes a deployment. See
-`scripts/harness-shared/P1-operator.md` for the reviewed source and publication
-pairs.
+The P1 product journey does not require publication receipts, source claims,
+image measurements, or local OCI archives. The harness still requires the
+selected environment, current provider/runtime/storage inputs, owned fixtures,
+and independently produced native/recovery evidence. See
+`scripts/harness-shared/P1-operator.md` for the operator steps.
 
 To check timing-sensitive changes, run the browser suite repeatedly, both
 normally and with `NODE_V8_COVERAGE` set to a local output directory. Keep
@@ -668,14 +665,11 @@ node --test scripts\api-harness\test\runtime-observation.test.mjs scripts\azure\
 ```
 
 This read-only probe requires an already authorized client and real Environment
-creation receipt. Stored rows alone do not prove dispatch, a late provider
-callback, or verified resource release. The full harness runner checks source
-and deployment evidence before it reads credentials or starts a surface
-client. It does not sign in, refresh tokens, or grant authority. When the
-publication receipt reuses an unchanged image, the deployment evidence checks
-that image's registry labels against the commit that originally built it, not
-the release commit. For setup
-requirements, see the
+creation evidence. Stored rows alone do not prove dispatch, a late provider
+callback, or verified resource release. The full harness runner validates its
+target and plan before it reads credentials or starts a surface client. It
+does not sign in, refresh tokens, or grant authority. For setup requirements,
+see the
 [API harness guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/api-harness/README.md),
 [UI harness guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/ui-harness/README.md),
 and [MCP harness guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/mcp-harness/README.md).

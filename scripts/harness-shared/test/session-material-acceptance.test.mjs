@@ -5,29 +5,8 @@ import {
   createSessionMaterialAcceptance,
 } from '../session-material-acceptance.mjs';
 
-const sourceSha = 'a'.repeat(40);
-const sourceTree = 'b'.repeat(40);
-
 function context() {
   return {
-    sourceEvidence: {
-      source: { sourceSha, sourceTree },
-      integrationDeployment: {
-        status: 'deployed',
-        sourceSha,
-        sourceTree,
-        readbackSha256: 'c'.repeat(64),
-      },
-      services: { status: 'passed', sourceSha, sourceTree },
-      providerCatalog: { sourceCommit: sourceSha, uid: 'catalog-uid' },
-      agentHostImageMeasurement: {
-        status: 'passed',
-        sourceSha,
-        sourceTree,
-        registryDigest: `sha256:${'d'.repeat(64)}`,
-        archiveSha256: 'e'.repeat(64),
-      },
-    },
     environment: {
       actorId: 'authorized-actor',
       tenantId: 'authorized-tenant',
@@ -58,14 +37,12 @@ function context() {
   };
 }
 
-test('records exact source and authorized fixture identity while keeping the unsupported deployed journey blocked', () => {
+test('records the authorized fixture identity while keeping the unsupported journey blocked', () => {
   const result = createSessionMaterialAcceptance(context());
 
   assert.equal(result.status, 'blocked');
   assert.equal(result.evidenceClass, 'deployed-runtime');
-  assert.deepEqual(result.sourceEvidence.source, { sourceSha, sourceTree });
-  assert.equal(result.sourceEvidence.deployment.readbackSha256, 'c'.repeat(64));
-  assert.equal(result.sourceEvidence.agentHostImageMeasurement.archiveSha256, 'e'.repeat(64));
+  assert.equal(Object.hasOwn(result, 'sourceEvidence'), false);
   assert.equal(result.identity.actorId, 'authorized-actor');
   assert.equal(result.identity.tenantId, 'authorized-tenant');
   assert.equal(result.identity.projectId, 'owned-project');

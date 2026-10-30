@@ -191,20 +191,18 @@ before retrying setup or cleanup. The same shared behavior applies to MCP.
 
 Supply an `executionIntent: "execute"` JSON manifest with the direct Environment
 identity metadata, pinned provider/runtime/storage/source/image receipts, and
-`deploymentEvidence` paths named `publicationPath`, `manifestPath`,
-`agentHostArchivePath`, and either `integrationDeploymentReceiptPath` (an
-images-only integration publication) or `releaseTag` (a published release).
-The integration deployment
-receipt must come from `release:deploy-integration` and match the source,
-manifest, publication, target namespace, image identities, and service
-readbacks. For a published release, `agentHostArchivePath` is the exact
-AgentHost OCI archive from that release's images artifact. The runner measures
-it against the original build commit recorded in the validated publication
-when the image is reused; otherwise it uses the published source commit.
-Deployment and service evidence remain bound to the release source. The
-in-process preparation step carries the checked image build source into each
-journey; an older source supplied in JSON is not enough. You can run acceptance
-from a newer reviewed checkout that still contains those commits. `fixturePlan` requires a
+`deploymentEvidence` containing a published `releaseTag`, `publicationPath`,
+`manifestPath`, and `agentHostArchivePath`. P1 acceptance is separate from the
+ordinary direct-GHCR and Kustomize deployment path; that path emits no deployment
+receipt. The P1 runner verifies the published release and live resource
+readbacks. `agentHostArchivePath` is the exact AgentHost OCI archive from the
+release's images artifact. The runner measures it against the original build
+commit recorded in the validated publication when the image is reused;
+otherwise it uses the published source commit. Deployment and service evidence
+remain bound to the release source. The in-process preparation step carries the
+checked image build source into each journey; an older source supplied in JSON
+is not enough. You can run acceptance from a newer reviewed checkout that still
+contains those commits. `fixturePlan` requires a
 positive `expectedPlatformRuntimeRevision` alongside the selection context and
 only the gate or message content needed by the selected journey. A distinct
 `fixturePlan.deniedActor` is optional. When supplied, it must remain a distinct

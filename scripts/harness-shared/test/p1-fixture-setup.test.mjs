@@ -7,8 +7,6 @@ import {
 import { validateP1RunnerPlanInput } from '../p1-journey-input.mjs';
 import { runP1SurfaceJourney } from '../p1-surface-runner.mjs';
 
-const SOURCE_SHA = 'a'.repeat(40);
-const SOURCE_TREE = 'b'.repeat(40);
 const OWNER_ASSIGNMENT_ID = '00000000-0000-4000-8000-000000000013';
 const ORCHESTRATOR_ASSIGNMENT_ID = '00000000-0000-4000-8000-000000000012';
 const INVOCATION_ID = '00000000-0000-4000-8000-000000000001';
@@ -375,12 +373,6 @@ function plan(journey) {
       actorId: ACTOR_ID,
       tenantId: TENANT_ID,
     },
-    deploymentEvidence: {
-      publicationPath: 'artifacts/p1/publication.json',
-      manifestPath: 'releases/foundation.json',
-      agentHostArchivePath: 'artifacts/p1/Agentweaver.AgentHost.oci.tar',
-      integrationDeploymentReceiptPath: 'artifacts/p1/integration-deployment.json',
-    },
     pins: {
       context: 'p1-control',
       namespace: 'agentweaver',
@@ -392,15 +384,6 @@ function plan(journey) {
       },
       runtimeReceipt: { generation: 1 },
       storageReceipt: { pvUid: 'storage-pv' },
-      sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
-      imageReceipt: {
-        registryImage: `ghcr.io/sabbour/agentweaver/agenthost@sha256:${'c'.repeat(64)}`,
-        registryDigest: `sha256:${'c'.repeat(64)}`,
-        archiveSha256: 'e'.repeat(64),
-        manifestDigest: `sha256:${'f'.repeat(64)}`,
-        configDigest: `sha256:${'1'.repeat(64)}`,
-        compressedPullBytes: 1024,
-      },
     },
     fixturePlan: {
       expectedPlatformRuntimeRevision: 7,
@@ -418,42 +401,6 @@ function plan(journey) {
         answer: journey === 'gate-answer' ? 'continue' : 'not-used',
       } : null,
       message: journey === 'message' ? { text: 'Controlled P1 message.' } : null,
-    },
-  };
-}
-
-function journeySourceEvidence(input) {
-  const { sourceReceipt, providerReceipt, imageReceipt } = input.pins;
-  return {
-    source: { sourceSha: sourceReceipt.sourceSha, sourceTree: sourceReceipt.sourceTree },
-    integrationDeployment: {
-      status: 'deployed',
-      sourceSha: sourceReceipt.sourceSha,
-      sourceTree: sourceReceipt.sourceTree,
-      manifestSha256: '2'.repeat(64),
-      publicationSha256: '3'.repeat(64),
-      readbackSha256: '4'.repeat(64),
-      target: { namespace: input.pins.namespace },
-    },
-    providerCatalog: {
-      name: providerReceipt.configMapName,
-      sourceCommit: providerReceipt.sourceCommit,
-      uid: providerReceipt.uid,
-      resourceVersion: providerReceipt.resourceVersion,
-    },
-    services: { status: 'passed', sourceSha: sourceReceipt.sourceSha, sourceTree: sourceReceipt.sourceTree },
-    agentHostImageMeasurement: {
-      status: 'passed',
-      sourceSha: sourceReceipt.sourceSha,
-      sourceTree: sourceReceipt.sourceTree,
-      registryImage: imageReceipt.registryImage,
-      registryDigest: imageReceipt.registryDigest,
-      archiveSha256: imageReceipt.archiveSha256,
-      image: {
-        digest: imageReceipt.manifestDigest,
-        configDigest: imageReceipt.configDigest,
-        compressedPullBytes: imageReceipt.compressedPullBytes,
-      },
     },
   };
 }
@@ -539,7 +486,6 @@ test('execute journal fixture seeds one owner event and the API runner replays t
     const result = await runP1SurfaceJourney('api', fixture.input, {
       api: fixture.api,
       deniedApi: fixture.deniedApi,
-      sourceEvidence: journeySourceEvidence(fixturePlan),
       clock: () => Date.parse('2026-10-13T00:00:00.000Z'),
     });
     assert.equal(result.surfaceStatus, 'passed', JSON.stringify(result));
@@ -601,7 +547,7 @@ async function createJourneyFixture(journey) {
       deniedApi: apiFor({ actorId: 'denied-actor' }),
     }),
   });
-  return { fixture, sourceEvidence: journeySourceEvidence(input) };
+  return fixture;
 }
 
 function mcpFor(journey, events, resolveGate) {
@@ -998,7 +944,7 @@ test('message setup registers and reads back a same-run child without invoking d
 test('same-invocation fixtures reach the selected API, MCP, and UI gate and message methods', async () => {
   for (const journey of ['gate-answer', 'message']) {
     for (const surface of ['api', 'mcp', 'ui']) {
-      const { fixture, sourceEvidence: evidence } = await createJourneyFixture(journey);
+      const fixture = await createJourneyFixture(journey);
       const events = [];
       const mcp = surface === 'mcp' ? mcpFor(journey, events, fixture.api.resolveGate) : undefined;
       const ui = surface === 'ui' ? uiFor(events, journey, fixture.api.resolveGate) : undefined;
@@ -1009,7 +955,6 @@ test('same-invocation fixtures reach the selected API, MCP, and UI gate and mess
           deniedApi: fixture.deniedApi,
           mcp,
           ui,
-          sourceEvidence: evidence,
           clock: () => Date.parse('2026-10-13T00:00:00.000Z'),
           sleep: async () => {},
           beforeUiAction: async ({ journey: selectedJourney }) => {
@@ -1247,7 +1192,7 @@ test('invalid accepted journal-message receipt is indeterminate and is never ret
 });
 
 test('a failed durable UI action marker prevents the UI write', async () => {
-  const { fixture, sourceEvidence: evidence } = await createJourneyFixture('message');
+  const fixture = await createJourneyFixture('message');
   const events = [];
   const ui = uiFor(events, 'message');
   try {
@@ -1255,7 +1200,6 @@ test('a failed durable UI action marker prevents the UI write', async () => {
       api: fixture.api,
       deniedApi: fixture.deniedApi,
       ui,
-      sourceEvidence: evidence,
       clock: () => Date.parse('2026-10-13T00:00:00.000Z'),
       beforeUiAction: async () => { throw new Error('controlled evidence append failure'); },
     });

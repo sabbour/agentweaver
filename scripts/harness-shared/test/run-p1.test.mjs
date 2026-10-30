@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,9 +8,6 @@ import { createP1AcceptanceResult, sealP1NativeProbeEnvelope } from '../p1-accep
 import { runP1Cli } from '../run-p1.mjs';
 
 function validInput() {
-  const sourceSha = 'a'.repeat(40);
-  const sourceTree = 'b'.repeat(40);
-  const registryDigest = `sha256:${'c'.repeat(64)}`;
   return {
     executionIntent: 'execute',
     journey: 'journal',
@@ -20,12 +17,6 @@ function validInput() {
       audience: 'agentweaver-controlled',
       actorId: 'controlled-actor',
       tenantId: 'controlled-tenant',
-    },
-    deploymentEvidence: {
-      publicationPath: 'artifacts/p1/publication.json',
-      manifestPath: 'releases/foundation.json',
-      agentHostArchivePath: 'artifacts/p1/Agentweaver.AgentHost.oci.tar',
-      integrationDeploymentReceiptPath: 'artifacts/p1/integration-deployment.json',
     },
     pins: {
       context: 'p1-control',
@@ -38,15 +29,6 @@ function validInput() {
       },
       runtimeReceipt: { generation: 1 },
       storageReceipt: { pvUid: 'controlled-pv' },
-      sourceReceipt: { sourceSha, sourceTree },
-      imageReceipt: {
-        registryImage: `ghcr.io/sabbour/agentweaver/agenthost@${registryDigest}`,
-        registryDigest,
-        archiveSha256: 'e'.repeat(64),
-        manifestDigest: `sha256:${'f'.repeat(64)}`,
-        configDigest: `sha256:${'1'.repeat(64)}`,
-        compressedPullBytes: 1024,
-      },
     },
     fixturePlan: {
       expectedPlatformRuntimeRevision: 7,
@@ -98,7 +80,6 @@ function invocationRecord(input, surface, invocationId, nativeProbeResults = [])
   const validated = {
     environment: input.environment,
     pins: input.pins,
-    deploymentEvidence: input.deploymentEvidence,
     fixturePlan: input.fixturePlan,
     journey: input.journey,
   };
@@ -122,7 +103,7 @@ test('P1 CLI help describes .NET API delegation and legacy providers without cre
   assert.doesNotMatch(output.join('\n'), /--token/);
 });
 
-test('P1 UI runner requires an authorized page provider before credentials or source checks', async () => {
+test('P1 UI runner requires an authorized page provider before credentials or network calls', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-ui-provider-'));
   const inputPath = path.join(directory, 'input.json');
   const outputPath = path.join(directory, 'evidence.jsonl');
@@ -141,10 +122,6 @@ test('P1 UI runner requires an authorized page provider before credentials or so
       '--input', inputPath,
       '--output', outputPath,
     ], env, { log: text => output.push(text), error: text => output.push(text) }, {
-      async prepareDeploymentEvidence() {
-        calls.push('deployment');
-        throw new Error('The UI runner prepared deployment evidence without a page provider.');
-      },
       async createSurfaceAdapters() { calls.push('adapters'); },
     });
 
@@ -158,48 +135,26 @@ test('P1 UI runner requires an authorized page provider before credentials or so
   }
 });
 
-test('P1 UI input collisions do not overwrite probe envelopes or deployment artifacts', async () => {
+test('P1 UI input collisions do not overwrite probe envelopes', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-ui-collision-'));
   const nativePath = path.join(directory, 'native.json');
   const nativeInputPath = path.join(directory, 'native-input.json');
-  const artifactPath = path.resolve(
-    'scripts/harness-shared/test',
-    `p1-ui-protected-artifact-${randomUUID()}.json`,
-  );
-  const artifactInputPath = path.join(directory, 'artifact-input.json');
   const sentinel = 'preserve this protected input';
   try {
     const nativeInput = validInput();
     await writeFile(nativeInputPath, JSON.stringify(nativeInput), 'utf8');
     await writeFile(nativePath, sentinel, 'utf8');
 
-    const artifactInput = validInput();
-    artifactInput.deploymentEvidence.publicationPath = path.relative(
-      process.cwd(), artifactPath,
-    ).split(path.sep).join('/');
-    await writeFile(artifactInputPath, JSON.stringify(artifactInput), 'utf8');
-    await writeFile(artifactPath, sentinel, 'utf8');
-
-    for (const [inputPath, outputPath, extraArgs] of [
-      [nativeInputPath, nativePath, ['--native-probe-envelope', nativePath]],
-      [artifactInputPath, artifactPath, []],
-    ]) {
-      const output = [];
-      const code = await runP1Cli([
-        '--surface', 'ui', '--input', inputPath, '--output', outputPath,
-        ...extraArgs,
-      ], {}, { log: text => output.push(text), error: text => output.push(text) }, {
-        async prepareDeploymentEvidence() {
-          throw new Error('The blocked UI runner prepared deployment evidence.');
-        },
-      });
-      assert.equal(code, 2);
-      assert.match(JSON.parse(output.at(-1)).failure.message, /must not replace or duplicate|must not replace a P1 input/);
-      assert.equal(await readFile(outputPath, 'utf8'), sentinel);
-    }
+    const output = [];
+    const code = await runP1Cli([
+      '--surface', 'ui', '--input', nativeInputPath, '--output', nativePath,
+      '--native-probe-envelope', nativePath,
+    ], {}, { log: text => output.push(text), error: text => output.push(text) });
+    assert.equal(code, 2);
+    assert.match(JSON.parse(output.at(-1)).failure.message, /must not replace or duplicate/);
+    assert.equal(await readFile(nativePath, 'utf8'), sentinel);
   } finally {
     await rm(directory, { recursive: true, force: true });
-    await rm(artifactPath, { force: true });
   }
 });
 
@@ -231,9 +186,15 @@ test('P1 CLI reads exact native envelopes and preserves every supplied probe on 
       '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
       '--native-probe-envelope', nativePath,
       '--dispatch-recovery-envelope', recoveryPath,
-    ], {}, { log: text => output.push(text), error: text => output.push(text) }, {
-      async prepareDeploymentEvidence() {
-        throw new Error('Controlled stop after exact probe envelopes were read.');
+    ], {
+      AGENTWEAVER_P1_SETUP_TOKEN: 'controlled-setup-token',
+    }, {
+      log: text => output.push(text),
+      error: text => output.push(text),
+    }, {
+      createSetupApi: () => ({}),
+      createFixture: async () => {
+        throw new Error('Controlled stop');
       },
     });
 
@@ -322,7 +283,6 @@ test('P1 CLI rejects non-execute input before credentials or network activity', 
       '--surface', 'api', '--input', inputPath, '--output', outputPath,
       '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
     ], {}, { log: text => output.push(text), error: text => output.push(text) }, {
-      async prepareDeploymentEvidence() { calls.push('deployment'); },
       createSetupApi() { calls.push('setup-api'); },
       async createFixture() { calls.push('fixture'); },
       async createSurfaceAdapters() { calls.push('adapters'); },
@@ -353,10 +313,6 @@ test('P1 CLI stops before setup when the setup token is missing', async () => {
       '--surface', 'api', '--input', inputPath, '--output', outputPath,
       '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
     ], {}, { log: text => output.push(text), error: text => output.push(text) }, {
-      async prepareDeploymentEvidence() {
-        calls.push('deployment');
-        return {};
-      },
       createSetupApi() {
         calls.push('setup-api');
         throw new Error('The setup API must not be created without a token.');
@@ -369,7 +325,7 @@ test('P1 CLI stops before setup when the setup token is missing', async () => {
       },
     });
     assert.equal(code, 2);
-    assert.deepEqual(calls, ['deployment']);
+    assert.deepEqual(calls, []);
     const result = JSON.parse(output.at(-1));
     assert.equal(result.surfaceStatus, 'blocked');
     assert.match(result.failure.message, /setup token is unavailable/);
@@ -408,7 +364,6 @@ test('P1 CLI fails closed when public API setup has no verified response', async
       '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
     ], { AGENTWEAVER_P1_SETUP_TOKEN: 'controlled-setup-token' },
     { log: text => output.push(text), error: text => output.push(text) }, {
-      async prepareDeploymentEvidence() { return {}; },
       createSetupApi() { return {}; },
       async createFixture() { throw setupError; },
       async createSurfaceAdapters() {
@@ -443,10 +398,6 @@ test('P1 CLI resumes the same invocation, runs the selected journey, and records
     const invocationId = '00000000-0000-4000-8000-000000000321';
     const output = [];
     const calls = [];
-    const sourceEvidence = {
-      services: { status: 'passed' },
-      agentHostImageMeasurement: { status: 'passed' },
-    };
     try {
       const input = validInput();
       input.journey = 'gate-answer';
@@ -464,10 +415,6 @@ test('P1 CLI resumes the same invocation, runs the selected journey, and records
         '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
       ], { AGENTWEAVER_P1_SETUP_TOKEN: 'controlled-setup-token' },
       { log: text => output.push(text), error: text => output.push(text) }, {
-        async prepareDeploymentEvidence() {
-          calls.push('deployment');
-          return sourceEvidence;
-        },
         createSetupApi({ setupToken }) {
           calls.push('setup-api');
           assert.equal(setupToken, 'controlled-setup-token');
@@ -522,17 +469,16 @@ test('P1 CLI resumes the same invocation, runs the selected journey, and records
           calls.push('journey');
           assert.equal(surface, 'api');
           assert.equal(journeyInput, fixtureInput);
-          assert.equal(dependencies.sourceEvidence, sourceEvidence);
+          assert.equal(Object.hasOwn(dependencies, 'sourceEvidence'), false);
           return createP1AcceptanceResult({
             surface,
             surfaceStatus: 'passed',
-            sourceEvidence,
           });
         },
       });
 
       assert.equal(code, 2);
-      assert.deepEqual(calls, ['deployment', 'setup-api', 'fixture', 'identity', 'adapters', 'journey', 'cleanup']);
+      assert.deepEqual(calls, ['setup-api', 'fixture', 'identity', 'adapters', 'journey', 'cleanup']);
       const records = (await readFile(outputPath, 'utf8')).trim().split(/\r?\n/).map(JSON.parse);
       assert.equal(records.filter(record => record.kind === 'p1-setup-invocation').length, 1);
       assert.equal(records[0].invocationId, invocationId);
@@ -585,16 +531,12 @@ test('P1 CLI rejects changed-plan, changed-surface, and unbound legacy invocatio
         credentials,
         { log: text => output.push(text), error: text => output.push(text) },
         {
-          async prepareDeploymentEvidence() {
-            calls.push('deployment');
-            return {};
-          },
           createSetupApi() { calls.push('setup-api'); },
           async createFixture() { calls.push('fixture'); },
         },
       );
       assert.equal(code, 2);
-      assert.deepEqual(calls, ['deployment']);
+      assert.deepEqual(calls, []);
       const result = JSON.parse(output.at(-1));
       assert.equal(result.surfaceStatus, 'blocked');
       if (mismatch === 'plan') {
@@ -625,7 +567,6 @@ test('P1 CLI still cleans up the owned fixture when surface adapter creation fai
       '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
     ], { AGENTWEAVER_P1_SETUP_TOKEN: 'controlled-setup-token' },
     { log: text => output.push(text), error: text => output.push(text) }, {
-      async prepareDeploymentEvidence() { return {}; },
       createSetupApi() { return {}; },
       async createFixture(validated, { invocationId: currentInvocationId }) {
         calls.push('fixture');
@@ -670,10 +611,6 @@ test('P1 CLI cleans up the owned fixture before a session-material attachment fa
   const output = [];
   const calls = [];
   const invocationId = '00000000-0000-4000-8000-000000000325';
-  const sourceEvidence = {
-    services: { status: 'passed' },
-    agentHostImageMeasurement: { status: 'passed' },
-  };
   try {
     await writeFile(inputPath, JSON.stringify(validInput()), { encoding: 'utf8' });
     await writeFile(outputPath, `${JSON.stringify(invocationRecord(validInput(), 'api', invocationId))}\n`, { encoding: 'utf8' });
@@ -682,7 +619,6 @@ test('P1 CLI cleans up the owned fixture before a session-material attachment fa
       '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
     ], { AGENTWEAVER_P1_SETUP_TOKEN: 'controlled-setup-token' },
     { log: text => output.push(text), error: text => output.push(text) }, {
-      async prepareDeploymentEvidence() { return sourceEvidence; },
       createSetupApi() { return {}; },
       async createFixture(validated, { invocationId: currentInvocationId }) {
         calls.push('fixture');
@@ -707,7 +643,7 @@ test('P1 CLI cleans up the owned fixture before a session-material attachment fa
       },
       async runSurfaceJourney(surface) {
         calls.push('journey');
-        return createP1AcceptanceResult({ surface, surfaceStatus: 'passed', sourceEvidence });
+        return createP1AcceptanceResult({ surface, surfaceStatus: 'passed' });
       },
       attachSessionMaterialAcceptance() {
         calls.push('attach');
@@ -727,16 +663,13 @@ test('P1 CLI cleans up the owned fixture before a session-material attachment fa
   }
 });
 
-test('P1 CLI does not persist a blocked result over an input, envelope, or deployment artifact', async () => {
-  for (const artifact of ['input', 'native-envelope', 'dispatch-envelope', 'publication', 'integration-deployment']) {
+test('P1 CLI does not persist a blocked result over an input or probe envelope', async () => {
+  for (const artifact of ['input', 'native-envelope', 'dispatch-envelope']) {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
     const inputPath = path.join(directory, 'input.json');
     const protectedPath = artifact === 'input'
       ? inputPath
-      : path.join(directory, artifact === 'native-envelope'
-        ? 'native.json'
-        : artifact === 'dispatch-envelope' ? 'recovery.json'
-          : artifact === 'publication' ? 'publication.json' : 'integration-deployment.json');
+      : path.join(directory, artifact === 'native-envelope' ? 'native.json' : 'recovery.json');
     const input = validInput();
     const original = artifact === 'input'
       ? JSON.stringify(input)
@@ -752,13 +685,8 @@ test('P1 CLI does not persist a blocked result over an input, envelope, or deplo
             'numeric-copilot-dispatch-boundaries',
             'checkpoint-restart-duplicate-fence',
           ]))
-        : 'protected deployment evidence';
-    if (artifact === 'publication') input.deploymentEvidence.publicationPath = protectedPath;
-    if (artifact === 'integration-deployment') {
-      input.deploymentEvidence.integrationDeploymentReceiptPath = protectedPath;
-    }
+        : '';
     const output = [];
-    let prepared = 0;
     try {
       await writeFile(inputPath, JSON.stringify(input), { encoding: 'utf8' });
       if (artifact !== 'input') await writeFile(protectedPath, original, { encoding: 'utf8' });
@@ -777,15 +705,9 @@ test('P1 CLI does not persist a blocked result over an input, envelope, or deplo
         '--surface', 'api', '--input', inputPath, '--output', outputPath,
         '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
         ...envelopeArgs,
-      ], {}, { log: text => output.push(text), error: text => output.push(text) }, {
-        async prepareDeploymentEvidence() {
-          prepared += 1;
-          return {};
-        },
-      });
+      ], {}, { log: text => output.push(text), error: text => output.push(text) });
 
       assert.equal(code, 2);
-      assert.equal(prepared, 0);
       assert.equal(await readFile(protectedPath, 'utf8'), original);
       const result = JSON.parse(output.at(-1));
       assert.equal(result.surfaceStatus, 'blocked');
@@ -803,7 +725,6 @@ test('P1 CLI rejects caller-supplied fixture receipts before credentials or surf
   const inputPath = path.join(directory, 'input.json');
   const outputPath = path.join(directory, 'evidence.jsonl');
   const output = [];
-  let prepared = 0;
   try {
     const input = validInput();
     input.pins.ownerFences = { runId: 'pre-existing-run' };
@@ -817,15 +738,9 @@ test('P1 CLI rejects caller-supplied fixture receipts before credentials or surf
       '--input', inputPath,
       '--output', outputPath,
       '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
-    ], credentialAccess, { log: text => output.push(text), error: text => output.push(text) }, {
-      async prepareDeploymentEvidence() {
-        prepared += 1;
-        return {};
-      },
-    });
+    ], credentialAccess, { log: text => output.push(text), error: text => output.push(text) });
 
     assert.equal(code, 2);
-    assert.equal(prepared, 0);
     const result = JSON.parse(output.at(-1));
     assert.equal(result.surfaceStatus, 'blocked');
     assert.match(result.failure.message, /caller-supplied owner fences or fixture receipts/);

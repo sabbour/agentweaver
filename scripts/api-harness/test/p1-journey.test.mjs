@@ -14,24 +14,7 @@ const IDS = {
   sessionId: 'controlled-session',
   executionFence: 9,
 };
-const SOURCE_SHA = 'a'.repeat(40);
-const SOURCE_TREE = 'b'.repeat(40);
 const PROVIDER_SOURCE = 'c'.repeat(40);
-const HOST_REGISTRY_DIGEST = `sha256:${'d'.repeat(64)}`;
-const HOST_ARCHIVE_SHA = 'e'.repeat(64);
-const HOST_MANIFEST_DIGEST = `sha256:${'f'.repeat(64)}`;
-const HOST_CONFIG_DIGEST = `sha256:${'1'.repeat(64)}`;
-const P1_SERVICE_COMPONENTS = [
-  ['Agentweaver.Identity.Broker', 'identity-broker'],
-  ['Agentweaver.EventsAndSessions', 'events-and-sessions'],
-  ['Agentweaver.Gateway', 'gateway'],
-  ['Agentweaver.Mcp', 'mcp'],
-  ['Agentweaver.Web', 'web'],
-  ['Agentweaver.Orchestrator', 'orchestrator'],
-  ['Agentweaver.Environment', 'environment'],
-  ['Agentweaver.Knowledge', 'knowledge'],
-  ['Agentweaver.Projects.Config', 'projects-config'],
-];
 
 function routePath(suffix = '') {
   return `/api/v1/projects/{projectId}/runs/{runId}/coordination${suffix}`;
@@ -365,12 +348,6 @@ function input(baseUrl, journey = 'journal') {
   return {
     executionIntent: 'execute',
     journey,
-    deploymentEvidence: {
-      publicationPath: 'artifacts/p1/publication.json',
-      manifestPath: 'releases/foundation.json',
-      agentHostArchivePath: 'artifacts/p1/Agentweaver.AgentHost.oci.tar',
-      integrationDeploymentReceiptPath: 'artifacts/p1/integration-deployment.json',
-    },
     environment: {
       baseUrl,
       issuer: 'https://identity.controlled.test/',
@@ -389,100 +366,13 @@ function input(baseUrl, journey = 'journal') {
       },
       runtimeReceipt: { status: 'passed' },
       storageReceipt: { status: 'passed' },
-      sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
-      imageReceipt: {
-        registryImage: `ghcr.io/sabbour/agentweaver/agenthost@${HOST_REGISTRY_DIGEST}`,
-        registryDigest: HOST_REGISTRY_DIGEST,
-        archiveSha256: HOST_ARCHIVE_SHA,
-        manifestDigest: HOST_MANIFEST_DIGEST,
-        configDigest: HOST_CONFIG_DIGEST,
-        compressedPullBytes: 1024,
-      },
       ownerFences: IDS,
       fixtureScope: scope,
     },
   };
 }
 
-const SOURCE_EVIDENCE = {
-  source: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
-  integrationDeployment: {
-    status: 'deployed',
-    sourceSha: SOURCE_SHA,
-    sourceTree: SOURCE_TREE,
-    manifestSha256: 'a'.repeat(64),
-    publicationSha256: 'b'.repeat(64),
-    readbackSha256: 'c'.repeat(64),
-    completedAt: '2026-10-13T00:00:00.000Z',
-    target: { clusterName: 'controlled-cluster', namespace: 'agentweaver' },
-  },
-  providerCatalog: {
-    name: 'provider-catalog-v1',
-    sourceCommit: PROVIDER_SOURCE,
-    uid: 'controlled-provider-uid',
-    resourceVersion: '12',
-  },
-  services: {
-    status: 'passed',
-    observedAt: '2026-10-13T00:00:00.000Z',
-    sourceSha: SOURCE_SHA,
-    sourceTree: SOURCE_TREE,
-    context: 'p1-control',
-    namespace: 'agentweaver',
-    providerCatalog: {
-      name: 'provider-catalog-v1',
-      sourceCommit: PROVIDER_SOURCE,
-      uid: 'controlled-provider-uid',
-      resourceVersion: '12',
-    },
-    services: P1_SERVICE_COMPONENTS.map(([componentId, name]) => ({
-      componentId,
-      deployment: {
-        name,
-        uid: `deployment-${name}-uid`,
-        generation: 2,
-        observedGeneration: 2,
-        desiredReplicas: 1,
-      },
-      replicaSet: { name: `${name}-replicaset`, uid: `replicaset-${name}-uid` },
-      pods: [{
-        name: `${name}-pod`,
-        uid: `pod-${name}-uid`,
-        phase: 'Running',
-        ready: true,
-        image: `ghcr.io/sabbour/agentweaver/${name}@sha256:${'2'.repeat(64)}`,
-        imageID: `ghcr.io/sabbour/agentweaver/${name}@sha256:${'2'.repeat(64)}`,
-        nodeName: 'controlled-node',
-        registry: {
-          manifestDigest: `sha256:${'2'.repeat(64)}`,
-          platformDigest: `sha256:${'2'.repeat(64)}`,
-          configDigest: `sha256:${'3'.repeat(64)}`,
-          sourceSha: SOURCE_SHA,
-          sourceTree: SOURCE_TREE,
-          platform: 'linux/amd64',
-        },
-      }],
-    })),
-  },
-  agentHostImageMeasurement: {
-    status: 'passed',
-    kind: 'agenthost-image',
-    schemaVersion: 1,
-    sourceSha: SOURCE_SHA,
-    sourceTree: SOURCE_TREE,
-    image: {
-      digest: HOST_MANIFEST_DIGEST,
-      configDigest: HOST_CONFIG_DIGEST,
-      platform: 'linux/amd64',
-      compressedPullBytes: 1024,
-    },
-    registryImage: `ghcr.io/sabbour/agentweaver/agenthost@${HOST_REGISTRY_DIGEST}`,
-    registryDigest: HOST_REGISTRY_DIGEST,
-    archiveSha256: HOST_ARCHIVE_SHA,
-    compressedPullBytes: 1024,
-  },
-  agentHostRuntime: { status: 'blocked', reason: 'controlled fixture' },
-};
+const SOURCE_EVIDENCE = null;
 const CLOCK = () => Date.parse('2026-10-13T00:00:00.000Z');
 
 test('P1 API journal journey checks a real denied-actor 403 and correlated Gateway replay evidence', async () => {
@@ -496,11 +386,6 @@ test('P1 API journal journey checks a real denied-actor 403 and correlated Gatew
     });
     assert.equal(result.surfaceStatus, 'passed');
     assert.equal(result.fullP1Status, 'blocked');
-    assert.equal(result.sourceEvidence.integrationDeployment.status, 'deployed');
-    assert.deepEqual(
-      result.sourceEvidence.services.services.map(service => service.componentId),
-      P1_SERVICE_COMPONENTS.map(([componentId]) => componentId),
-    );
     assert.deepEqual(result.observations.journal, { eventCount: 1, pageCount: 1 });
     assert.ok(result.steps.some(step => step.id === 'valid-denied-actor-403' && step.httpStatus === 403));
     const journalStep = result.steps.find(step => step.id === 'committed-run-journal');

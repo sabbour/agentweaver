@@ -42,18 +42,6 @@ function sessionMaterialBlockers() {
   ];
 }
 
-function sourceSnapshot(sourceEvidence) {
-  if (!sourceEvidence || typeof sourceEvidence !== 'object') return null;
-  return redact({
-    source: sourceEvidence.source ?? null,
-    deployment: sourceEvidence.integrationDeployment ?? sourceEvidence.releaseDeployment ?? null,
-    services: sourceEvidence.services ?? null,
-    providerCatalog: sourceEvidence.providerCatalog ?? null,
-    agentHostImageMeasurement: sourceEvidence.agentHostImageMeasurement ?? null,
-    agentHostRuntime: sourceEvidence.agentHostRuntime ?? null,
-  });
-}
-
 function identitySnapshot(environment, fixtureInput) {
   const fences = fixtureInput?.pins?.ownerFences ?? {};
   const fixture = fixtureInput?.pins?.fixtureScope ?? {};
@@ -77,7 +65,7 @@ function identitySnapshot(environment, fixtureInput) {
   });
 }
 
-export function createSessionMaterialAcceptance({ sourceEvidence, environment, fixtureInput } = {}) {
+export function createSessionMaterialAcceptance({ environment, fixtureInput } = {}) {
   const blockers = sessionMaterialBlockers();
   const identity = identitySnapshot(environment, fixtureInput);
   const result = {
@@ -85,7 +73,6 @@ export function createSessionMaterialAcceptance({ sourceEvidence, environment, f
     schemaVersion: 1,
     status: 'blocked',
     evidenceClass: 'deployed-runtime',
-    sourceEvidence: sourceSnapshot(sourceEvidence),
     identity,
     turn: {
       status: 'blocked',
