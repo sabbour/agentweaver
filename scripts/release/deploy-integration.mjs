@@ -128,6 +128,7 @@ export function validateIntegrationPublication(receipt, manifest, provenance, so
   preparedProvenanceSha256 = hash(JSON.stringify(provenance))) {
   if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) ||
       receipt.schemaVersion !== 1 || receipt.mode !== 'images-only' ||
+      !Array.isArray(receipt.requiredPackageIds) || receipt.requiredPackageIds.length !== 0 ||
       receipt.status !== 'published' || receipt.sourceSha !== sourceSha ||
       receipt.sourceTree !== sourceTree || !SHA.test(receipt.claimSha ?? '') ||
       !/^[a-f0-9]{64}$/.test(receipt.provenanceSha256 ?? '') ||
@@ -260,6 +261,7 @@ export async function verifyIntegrationPublicationRemote(receipt, sourceSha, { r
   const expectedClaim = {
     schemaVersion: 1,
     sourceSha,
+    requiredPackageIds: receipt.requiredPackageIds,
     mode: 'images-only',
     sourceTree: receipt.sourceTree,
     provenanceSha256: receipt.provenanceSha256,
