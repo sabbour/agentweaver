@@ -204,7 +204,7 @@ export function readSetupState(exec) {
   // RBAC evaluates the narrow Role/RoleBinding that this setup applies for the maintenance identity.
   const authorization = json(exec('az', ['aks', 'show', '--resource-group', target.resourceGroup,
     '--name', target.clusterName, '--subscription', target.subscriptionId,
-    '--query', '{azureRbac:aadProfile.enableAzureRbac,kubernetesRbac:enableRbac,oidcIssuer:oidcIssuerProfile.issuerURL}', '-o', 'json']),
+    '--query', '{azureRbac:aadProfile.enableAzureRbac,kubernetesRbac:enableRbac,oidcIssuer:oidcIssuerProfile.issuerUrl}', '-o', 'json']),
   'Could not read AKS authorization settings');
   state.kubernetesAuthorization = authorization;
   if (authorization?.azureRbac !== true || authorization?.kubernetesRbac !== true)

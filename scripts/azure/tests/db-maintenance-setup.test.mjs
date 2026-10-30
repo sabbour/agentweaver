@@ -185,7 +185,7 @@ test('setup verifies both AKS authorization modes before changing the workflow i
     /both Azure RBAC for Kubernetes and Kubernetes RBAC enabled/);
   const authorizationCall = fake.calls.find(call => call.command === 'az' && call.args[0] === 'aks' && call.args[1] === 'show');
   assert.equal(authorizationCall.args[authorizationCall.args.indexOf('--query') + 1],
-    '{azureRbac:aadProfile.enableAzureRbac,kubernetesRbac:enableRbac,oidcIssuer:oidcIssuerProfile.issuerURL}');
+    '{azureRbac:aadProfile.enableAzureRbac,kubernetesRbac:enableRbac,oidcIssuer:oidcIssuerProfile.issuerUrl}');
   assert.ok(!fake.calls.some(call => call.command === 'az' && call.args[0] === 'deployment'));
   assert.ok(!fake.calls.some(call => call.command === 'kubectl' && call.args.includes('apply')));
 });
