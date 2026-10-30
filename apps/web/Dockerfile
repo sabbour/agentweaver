@@ -11,6 +11,7 @@ ENV AGENTWEAVER_WEB_VERSION="${IMAGE_TAG}" \
     AGENTWEAVER_WEB_GIT_SHA="${GIT_SHA}"
 
 WORKDIR /app
+# Static assets are already included in publish; this build context has no separate wwwroot directory.
 COPY publish/ ./
 
 ENV ASPNETCORE_HTTP_PORTS=8080
