@@ -2,6 +2,7 @@
   "pages": [
     "docs/index.md",
     "docs/guide/quickstart.md",
+    "docs/guide/cli.md",
     "docs/guide/configure-providers.md",
     "docs/guide/configure-knowledge.md",
     "docs/guide/deploy-to-azure.md",
@@ -60,6 +61,31 @@
     "docs/reference/mcp-tools.md"
   ],
   "rules": [
+    {
+      "name": "Standalone .NET CLI and Gateway-derived API acceptance",
+      "sourcePrefixes": [
+        "tools/Agentweaver.Cli/",
+        "tests/Agentweaver.Cli.Tests/",
+        "tests/Agentweaver.Identity.Broker.Tests/NativeCliConsentTests.cs",
+        "tests/Agentweaver.Identity.Broker.Tests/GatewayCliOpenApiContractTests.cs",
+        "scripts/cli-dotnet/",
+        "scripts/api-harness/",
+        "scripts/harness-shared/",
+        ".github/workflows/v1-cli-package.yml",
+        "deploy/k8s/runtime-configs/identity-broker-runtime-config.json"
+      ],
+      "required": [
+        "docs/guide/cli.md",
+        "docs/guide/testing.md",
+        "docs/guide/identity-scopes.md",
+        "docs/reference/api.md",
+        "docs/reference/runtime-configuration.md",
+        "docs/reference/releases.md",
+        "docs/guide/quickstart.md",
+        "docs/index.md",
+        "docs/guide/index.md"
+      ]
+    },
     {
       "name": "Retained P1 surface harness adapters",
       "sourcePrefixes": [

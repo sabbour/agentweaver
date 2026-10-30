@@ -12,6 +12,10 @@ integration tests use disposable Testcontainers databases, so install a
 Docker-compatible engine and allow it to pull the test image. Do not point the
 tests at a shared or production database.
 
+The standalone CLI's distributed executable includes its .NET runtime and
+does not require Node.js or a .NET SDK to run. Building the CLI and running its
+test suite from source still require the .NET SDK.
+
 Run commands from the repository root unless a procedure says otherwise.
 
 ## Choose and run a test procedure
@@ -504,6 +508,76 @@ or current adapter support. The Canvas research did not run interoperability, re
 The adapter is not implemented yet. Do not
 report the planned cases as product behavior or passing test evidence.
 
+## Test the native CLI candidate
+
+Set `AGENTWEAVER_CLI_PATH` to the exact built apphost, then run the CLI
+acceptance project:
+
+```powershell
+$env:AGENTWEAVER_CLI_PATH = (Resolve-Path .\artifacts\cli\win-x64\publish\agentweaver.exe).Path
+dotnet test tests\Agentweaver.Cli.Acceptance.Tests\Agentweaver.Cli.Acceptance.Tests.csproj --no-restore
+```
+
+The project launches the exact apphost for `--version`, `api operations`
+discovery against locally emitted Gateway OpenAPI, and a valid
+`test --dry-run` manifest with `--interactive`. The dry-run reaches the
+production `Program` composition but must not authenticate, contact the
+manifest's loopback Gateway, or create evidence. Journey tests also call
+`CliApplication.RunAsync` in process. A supplemental spawned
+`Agentweaver.Cli.Acceptance.TestHost` exercises `CliApplication` with
+controlled providers and local HTTP; that test host is not the shipped apphost
+and is not production-authentication evidence. These checks do not exercise an
+authenticated mutation journey through the production apphost. Full P1
+acceptance remains blocked when its required native/session-material proof or
+authorized target evidence is unavailable.
+
+The API runtime entrypoint delegates only to the exact built apphost named by
+`AGENTWEAVER_CLI_PATH`. Set it and run against an explicitly approved
+non-production target because setup and cleanup make API changes:
+
+```powershell
+$env:AGENTWEAVER_CLI_PATH = (Resolve-Path .\artifacts\cli\win-x64\publish\agentweaver.exe).Path
+npm run harness:p1 -- --surface api --input .\artifacts\acceptance-input.json --output .\artifacts\api-evidence.jsonl
+```
+
+The wrapper invokes `agentweaver test` with the manifest, evidence path, and
+any supplied probe envelopes. It requires an executable `AGENTWEAVER_CLI_PATH`
+and fails for a missing or invalid path. The wrapper itself is Node-based, but
+it does not run the test in Node or fall back to `dotnet`. It removes
+`AGENTWEAVER_P1_SETUP_TOKEN` before launching the apphost, passes `--dry-run`
+unchanged, and adds `--interactive` only when explicitly requested. A valid
+API invocation missing required input/output or Node module options returns
+`2`; malformed or unknown options are rejected before journey execution,
+without a legacy API fallback. The `test` command gets its target from the
+manifest, not target flags or environment fallback. Other surfaces remain on
+their existing JavaScript harnesses.
+
+```powershell
+npm run harness:p1 -- --surface api --input .\artifacts\acceptance-input.json --output .\artifacts\api-evidence.jsonl --native-probe-envelope .\artifacts\native.json --dispatch-recovery-envelope .\artifacts\recovery.json --dry-run --interactive
+```
+
+The `--dry-run` example validates the manifest without network calls,
+authentication, or evidence creation; when `--interactive` is present, dry
+run still does not launch a browser. Production evidence providers for release
+and full integration readback, rollout/readiness, and OCI measurement/runtime
+remain incomplete; do not treat controlled tests or local runs as full release
+or deployed acceptance. See the [CLI guide](./cli.md) for current limits.
+
+For the specialized one-account API sign-in wrapper, use the same exact
+apphost and provide both files:
+
+```powershell
+npm run harness:p1:signin-run -- --surface api --input .\artifacts\acceptance-input.json --output .\artifacts\api-evidence.jsonl
+```
+
+For API, this wrapper delegates to the same CLI `test` path; it does not start
+the legacy Node/browser sign-in flow. `--interactive` explicitly controls CLI
+authorization; `--dry-run` remains noninteractive and does not reach the
+network. This one-account wrapper rejects manifests with
+`fixturePlan.deniedActor`; use the general `harness:p1 -- --surface api ...`
+entrypoint for journeys with a planned denied actor. Both wrappers remove
+`AGENTWEAVER_P1_SETUP_TOKEN` from the child process environment.
+
 ## Test retained API, UI, and MCP adapters
 
 Run the controlled local adapter tests with:
@@ -515,13 +589,16 @@ npm run test:harness:ui
 npm run test:harness:mcp
 ```
 
-The API tests use loopback HTTP and controlled contracts. The MCP tests use a
+`npm run test:harness:api` is a Node contract-test suite that mocks the
+wrapper/process contract; it does not launch the runtime acceptance apphost or
+retain a second Node API client. The runtime entrypoint is
+`npm run harness:p1 -- --surface api ...` described above. The MCP tests use a
 pinned SDK and loopback JSON-RPC server. The UI tests use injected page
 doubles, not a browser. These tests check fixture creation, selected surface
 calls, cleanup outcomes, and refusal of unverified ownership claims. They do
 not prove live owner behavior, native model execution, or deployment.
 
-The controlled P1 journal regression starts with an empty in-memory event
+The retained controlled P1 journal regression starts with an empty in-memory event
 journal. Fixture setup discovers and invokes the Gateway
 `sendProjectRunMessage` operation with its run-bound token and an
 invocation-scoped `Idempotency-Key`, then checks the exact accepted receipt
@@ -530,6 +607,8 @@ cursor, and position. This records one owner-addressed event; it does not
 dispatch native work. Missing execution intent or an invalid owner contract is
 refused, and an ambiguous message result leaves cleanup indeterminate rather
 than retrying the write.
+This controlled regression does not prove distributable apphost acceptance or
+verify the production evidence providers.
 
 The one-account P1 sign-in launcher also has a real browser regression that
 uses loopback redirects only. Install the Playwright test browser and run it:
@@ -550,11 +629,12 @@ attached until the page closes, including when sign-in fails or is cancelled.
 The shared contract tests delay the abort acknowledgement to check this
 ordering without depending on browser timing.
 It renders Broker consent when that response arrives through a redirect.
-The shared harness tests cover `--surface api,mcp`, separate evidence paths,
-one setup sign-in, and distinct run-bound tokens. These tests do not sign in
-to Entra, use an existing profile or credential cache, or prove live SSO.
-Each token request closes only its authorization page, keeping the shared
-browser alive until the launcher finishes.
+The shared harness rejects a mixed `--surface api,mcp` invocation. API and
+MCP use separate execution paths; UI and MCP browser flows retain their
+Chrome-based tests. These tests do not sign in to Entra, use an existing
+profile or credential cache, or prove live SSO. Each token request closes
+only its authorization page, keeping the shared browser alive until the
+launcher finishes.
 CI runs both the harness contract suite and this browser regression.
 
 The deployment evidence tests also check reused service labels and AgentHost

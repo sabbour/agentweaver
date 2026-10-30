@@ -56,6 +56,7 @@ internal sealed class LinuxSecretServiceVault : ICliCredentialVault
         }
         finally
         {
+            // libsecret owns this native password buffer; release it only after copying and zeroing the managed copy.
             SecretPasswordFree(password);
         }
     }
@@ -101,6 +102,7 @@ internal sealed class LinuxSecretServiceVault : ICliCredentialVault
             schema.Handle, attributes.Handle, IntPtr.Zero, out error);
         if (error != IntPtr.Zero)
             ThrowSecretServiceError(error, "Linux Secret Service could not remove the CLI sign-in.");
+        // Clear may affect duplicate matching items; confirm none remain before reporting successful logout.
         var remaining = SecretServiceSearchSync(
             IntPtr.Zero, schema.Handle, attributes.Handle, SecretSearchAll, IntPtr.Zero, out error);
         if (error != IntPtr.Zero)
@@ -184,6 +186,7 @@ internal sealed class LinuxSecretServiceVault : ICliCredentialVault
         }
     }
 
+    // Attribute tables own duplicated GLib strings through destroy callbacks; schema enum values are static and unowned.
     private sealed class NativeHashTable : IDisposable
     {
         public NativeHashTable(IntPtr handle) => Handle = handle;

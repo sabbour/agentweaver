@@ -25,6 +25,7 @@ Start with the [1.x documentation](docs/index.md). The site is organized as:
   [providers and models](docs/architecture/providers-models.md).
 - **How-to:** [configure providers](docs/guide/configure-providers.md),
   [configure Knowledge memory](docs/guide/configure-knowledge.md), and
+  [use the standalone CLI](docs/guide/cli.md) or
   [deploy to Azure](docs/guide/deploy-to-azure.md).
 - **Reference:** find every
   [runtime configuration setting](docs/reference/runtime-configuration.md),
@@ -48,6 +49,15 @@ publish a release, or deploy Kubernetes workloads. See the
 [quickstart](docs/guide/quickstart.md) for local checks and the
 [deployment guide](docs/guide/deploy-to-azure.md) for the separately approved
 Azure workflow.
+
+## Standalone CLI
+
+The source includes a self-contained .NET CLI project, but downloadable CLI
+archives are not yet available. The intended distributed executable includes
+its .NET runtime and does not require Node.js, a .NET runtime, or a source
+checkout. See the [CLI guide](docs/guide/cli.md) for the local publish command,
+target prerequisites, sign-in, API use, and acceptance workflow. Local
+publishing requires the .NET 10 SDK.
 
 ## Version boundary
 

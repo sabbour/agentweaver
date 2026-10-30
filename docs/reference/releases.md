@@ -51,6 +51,21 @@ images. Its compatibility table contains 59 direct dependency relationships.
 The Foundation Probe is not a product service; `--platform-only` excludes it
 from product preparation and publication.
 
+## Standalone CLI archive status
+
+The standalone CLI is a tool executable, not a `contract`, `library`, or
+`service` entry in `releases/foundation.json`. It does not use the foundation
+component package/image preparation or publication path. CLI version `1.0.0`
+is prepared separately from the foundation component manifest.
+
+Candidate archives target `win-x64`, glibc `linux-x64`, and `osx-arm64`; the
+expected formats are Windows ZIP and Unix tar.gz with the private .NET runtime
+included. Archive availability is pending. A local publish directory or CI
+candidate is not a published release, and this work does not authorize public
+publication, signing, notarization, installation, or deployment. See the
+[CLI guide](../guide/cli.md) for supported-host prerequisites and local build
+instructions.
+
 Identity Broker `1.2.0` includes the EF migration
 `20261021000100_AddIssueSyncGrants`. Publishing the image does not run the
 migration or update the database.

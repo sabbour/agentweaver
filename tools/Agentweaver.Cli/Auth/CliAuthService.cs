@@ -24,6 +24,7 @@ public sealed class CliAuthService : ICliAuthentication, IDisposable
     {
         ArgumentNullException.ThrowIfNull(brokerHttpClient);
         brokerHttpClient.Timeout = RequestTimeout;
+        // Default sign-in requires the platform vault; never fall back to writing refresh tokens to disk.
         return new CliAuthService(
             brokerHttpClient,
             NativeCredentialVault.CreateDefault(),
@@ -61,6 +62,7 @@ public sealed class CliAuthService : ICliAuthentication, IDisposable
             RecoverInterruptedRefresh(target.Account, intent, proceedToLogin: true);
             var metadata = await OidcProtocol.DiscoverAsync(_httpClient, target.Issuer, lockCt)
                 .ConfigureAwait(false);
+            // These independent random values bind the callback, ID token, and code exchange to this browser attempt.
             var state = RandomBase64Url(32);
             var nonce = RandomBase64Url(32);
             var verifier = RandomBase64Url(48);
@@ -104,6 +106,7 @@ public sealed class CliAuthService : ICliAuthentication, IDisposable
                 if (token.IdToken is null)
                     throw new InvalidOperationException("The Identity Broker did not issue a validated identity token.");
 
+                // The validated ID token identifies the actor; it is not used as a Gateway authorization decision.
                 var actorId = await OidcProtocol.ValidateIdTokenAsync(
                     _httpClient, metadata, token.IdToken, target.Identity, nonce, _timeProvider.GetUtcNow(), lockCt)
                     .ConfigureAwait(false);
@@ -244,6 +247,7 @@ public sealed class CliAuthService : ICliAuthentication, IDisposable
     {
         try
         {
+            // Persist recovery intent before sending the rotating token: a crash afterward must never replay it.
             intent.Mark();
         }
         catch (Exception exception)
@@ -266,6 +270,7 @@ public sealed class CliAuthService : ICliAuthentication, IDisposable
         }
         catch (Exception exception)
         {
+            // A transport failure can happen after token rotation, so clear the old credential instead of replaying it.
             _tokens.TryRemove(target.Account, out _);
             ClearCredentialAndIntent(target.Account, intent,
                 "The refresh outcome is uncertain and the OS vault could not clear the saved sign-in. Do not retry; resolve the vault error before signing in again.");
@@ -330,6 +335,7 @@ public sealed class CliAuthService : ICliAuthentication, IDisposable
         bool proceedToLogin)
     {
         if (!intent.Exists()) return false;
+        // The Broker may have consumed the old token before a crash; discard it instead of guessing or retrying.
         _tokens.TryRemove(account, out _);
         try
         {

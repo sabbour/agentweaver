@@ -5,6 +5,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Agentweaver.Cli.Vault;
 
+/// <summary>Serializes one account's vault changes across threads and CLI processes.</summary>
 internal sealed class CliCredentialLock
 {
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> ProcessLocks =
@@ -31,6 +32,7 @@ internal sealed class CliCredentialLock
 
         EnsurePrivateDirectory();
         var path = Path.Combine(_directory, account + ".lock");
+        // The semaphore covers this process; the OS lock on the stable file coordinates other processes.
         var processLock = ProcessLocks.GetOrAdd(path, static _ => new SemaphoreSlim(1, 1));
         if (!await processLock.WaitAsync(_timeout, ct).ConfigureAwait(false))
             throw new TimeoutException("Timed out waiting for another CLI process to finish using this sign-in.");
@@ -90,6 +92,7 @@ internal sealed class CliCredentialLock
             }
 
             EnsureDurableDirectoryPath(_directory);
+            // Recovery markers contain no token, but still identify a user's sign-in and must remain private.
             File.SetUnixFileMode(_directory,
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             if (new DirectoryInfo(_directory).LinkTarget is not null)
@@ -131,6 +134,7 @@ internal sealed class CliCredentialLock
     {
         if (OperatingSystem.IsWindows()) return;
 
+        // File fsync alone does not make a newly created or removed directory entry durable after a crash.
         var directoryFlag = OperatingSystem.IsMacOS() ? OpenDirectoryMac : OpenDirectoryLinux;
         var descriptor = Open(path, OpenReadOnly | directoryFlag);
         if (descriptor < 0)
@@ -161,6 +165,7 @@ internal sealed class CliCredentialLock
                 return new FileStream(path, options);
             }
 
+            // Keep this file at the same path/inode: unlinking it can split cooperating processes across two locks.
             var create = OperatingSystem.IsMacOS() ? OpenCreateMac : OpenCreateLinux;
             var closeOnExec = OperatingSystem.IsMacOS() ? OpenCloseOnExecMac : OpenCloseOnExecLinux;
             var descriptor = OpenFile(path, OpenReadWrite | create | closeOnExec, UnixPrivateFileMode);
@@ -266,6 +271,7 @@ internal sealed class CliCredentialLock
         {
             try
             {
+                // This marker is a durable "outcome may be unknown" bit, never a copy of the refresh credential.
                 var options = new FileStreamOptions
                 {
                     Mode = FileMode.CreateNew,
@@ -292,6 +298,7 @@ internal sealed class CliCredentialLock
         {
             try
             {
+                // Clear only after the replacement credential is stored (or the old one is deliberately discarded).
                 File.Delete(_path);
                 SyncDirectory(_directory);
             }
@@ -313,6 +320,7 @@ internal sealed class CliCredentialLock
     private const int ErrorInterrupted = 4;
     private const int OpenReadOnly = 0;
     private const int OpenReadWrite = 0x00000002;
+    // POSIX open(2) flag numbers differ between Linux and Darwin; keep each platform's values paired here.
     private const int OpenCreateLinux = 0x00000040;
     private const int OpenCreateMac = 0x00000200;
     private const int OpenCloseOnExecLinux = 0x00080000;

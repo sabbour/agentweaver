@@ -323,6 +323,14 @@ Key Vault redemption settings. It also supplies the optional browser origin
 used for direct Broker calls. Keep client secrets and signing material in
 Secrets.
 
+The source configuration statically registers the public `agentweaver-cli`
+client with its Gateway audience, allowed scopes, and exact loopback callback
+`http://127.0.0.1:49173/oauth/callback`. The Broker does not dynamically
+register this client. The checked-in map is not live configuration: replacing
+an immutable ConfigMap and rolling out the Broker are separate, explicitly
+authorized operations. Building or running the CLI does not apply either
+change. See the [CLI guide](../guide/cli.md) for local setup.
+
 | Setting | Contract |
 | --- | --- |
 | `IdentityBroker__Issuer` | Required Broker issuer. Use the exact externally reachable HTTPS issuer used by the Gateway and clients. |

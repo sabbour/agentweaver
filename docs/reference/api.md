@@ -12,6 +12,22 @@ For runtime settings, see [Runtime configuration](./runtime-configuration.md).
 The Gateway's `GET /openapi/v1.json` returns the versioned public schemas, which
 the [MCP tools](./mcp-tools.md) reference uses.
 
+## CLI operation discovery
+
+The native `agentweaver api operations`, `api describe`, and `api invoke`
+commands use the Gateway's currently served `GET /openapi/v1.json` document;
+they do not maintain a separate route inventory or apply the MCP admission
+filter. Supported public operations remain in the CLI catalog even when MCP
+does not expose them. The direct `agentweaver rest` command can address an
+uncatalogued path on the same Gateway origin, but this does not add that route
+to the catalog or prove operation/API parity. See the [CLI guide](../guide/cli.md#make-a-direct-gateway-request).
+
+Identity Connection browser BFF routes, including `/api/connections/...`, are
+not in the Gateway OpenAPI catalog and are not part of CLI parity. The CLI
+therefore does not provide complete browser or BFF parity. For the CLI
+commands, authorization, and current distribution status, see the
+[Agentweaver CLI guide](../guide/cli.md).
+
 ## Periodic issue sync
 
 These routes do not require a run. They require an authenticated project Owner

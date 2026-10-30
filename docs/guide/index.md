@@ -29,6 +29,8 @@ rendering the source does not deploy a platform.
   PostgreSQL Memory and preserve its store identity.
 - [Gateway and BFF](./gateway.md): discover fixed routes and understand
   authentication and forwarding.
+- [Agentweaver CLI](./cli.md): build and use the standalone CLI for secure
+  sign-in, Gateway API operations, and API acceptance.
 - [P1 reconciliation](./p1-reconciliation.md): inspect an interrupted P1 run
   using read-only project, authority, assignment, and audit evidence.
 - [Web client](./web-client.md): configure the browser client and sign-in.
