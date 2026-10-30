@@ -19,6 +19,14 @@ durable run result and resume the same run ID after a resolvable interruption.
 Do not treat a completed rehearsal as delivery proof. The run is bound to its
 initiating session, not shared across project sessions. There is no auto-run hook.
 
+## Release and deployment
+
+For v1 package, image, and Kubernetes release operations, follow the
+[release workflow runbook](../releases/README.md). Keep NuGet package
+publication, container image publication, and workload deployment distinct;
+do not revive image archives, publication receipts, source-claim gates, or
+manual migration-token handoffs.
+
 ## Documentation as you go
 
 Update affected v1 documentation and diagrams in the same PR as each behavior,
