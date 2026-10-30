@@ -158,7 +158,7 @@ test('pinned amd64 Web image serves and sanitizes the Copilot callback', {
     '--configuration', 'Release', '--no-restore', '--output', publishDirectory,
     '-p:UseAppHost=false', '-p:ContinuousIntegrationBuild=true',
   ], { timeout: 600_000 });
-  cpSync(path.join(webDirectory, 'dist'), path.join(context, 'wwwroot'), { recursive: true });
+  cpSync(path.join(webDirectory, 'dist'), path.join(context, 'dist'), { recursive: true });
   const sourceSha = run('git', ['rev-parse', 'HEAD']);
   run('docker', [
     'build', '--pull=false', '--network=none', '--no-cache', '--platform', 'linux/amd64',
