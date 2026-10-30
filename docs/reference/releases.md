@@ -190,13 +190,22 @@ Published images are immutable. An existing image that lacks the source-tree
 label cannot be relabeled in place; rebuild and publish a new image before it
 can pass the strict P1 source check.
 
-The `v1-release-pack.yml` workflow runs for a qualifying receipt push to `v1` or
-a manual dispatch. It requires the v1 CI and documentation checks for the exact
-source commit. The publication job uses the configured GitHub Packages and
-container registry destinations. It does not deploy to Azure or Kubernetes.
-Use the [release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md) for publication
-and partial-publication procedures. A one-use completion for the `v1.0.0`
-publication is recorded as consumed; it is not a general retry path.
+The `v1-release-pack.yml` workflow handles product publication for a qualifying
+receipt push to `v1` or a manual dispatch. It requires the v1 CI and
+documentation checks for the exact source commit, then publishes packages and
+product images to their configured destinations. It does not deploy to Azure
+or Kubernetes.
+
+The separate manual `v1-integration-images.yml` workflow accepts an exact
+`source_sha` reachable from `v1`, waits for that commit's CI and docs checks,
+then runs the canonical integration packer and images-only publisher. It
+publishes the ten source-bound service images and durable claim/result records
+to GHCR. Only its publisher job receives `contents: write` for those records
+and `packages: write` for GHCR. It does not publish NuGet packages, create a
+GitHub Release, or deploy to Azure or Kubernetes. See the [release operations
+guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md) for
+the manual inputs and publication details. A one-use completion for the
+`v1.0.0` publication is recorded as consumed; it is not a general retry path.
 
 The current draft manifest does not include published-artifact digests or
 deployment evidence. Use the source-bound publication receipt to verify the
@@ -222,6 +231,14 @@ flowchart LR
   Packages --> Artifacts["Upload exact-source artifacts"]
   Images --> Artifacts
   Artifacts --> Publish["Publish changed packages and images; save receipt"]
+```
+
+```mermaid
+flowchart LR
+  Dispatch["Manual integration workflow and exact source SHA"] --> Guard["Require v1 ancestry and exact-source CI/docs"]
+  Guard --> Pack["Build ten source-bound integration images"]
+  Pack --> Publish["Publish GHCR images and immutable receipts"]
+  Publish --> Boundary["No NuGet, GitHub Release, or Azure deployment"]
 ```
 
 ## Deploy and verify a published release

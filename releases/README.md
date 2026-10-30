@@ -466,9 +466,14 @@ or update the draft composition.
 npm run release:integration-pack -- --integration-source-sha <full-source-sha>
 ```
 
-The former GitHub integration-image workflow has been removed. This source-SHA
-publication path is available only through the local command, with explicit
-image-only and confirmation flags:
+The manual `v1-integration-images.yml` workflow provides the same source-pinned
+path on a GitHub runner. Dispatch it from `v1` with `source_sha` set to the
+exact full commit SHA. It verifies that the commit is reachable from `v1` and
+waits for that SHA's CI and docs checks before building. The read-only build job
+uploads the pack artifacts; only the publisher receives `contents: write` for
+the durable claim/result tags and `packages: write` for GHCR. This workflow
+publishes no NuGet packages, creates no GitHub Release, and does not deploy.
+The local command remains available with explicit image-only confirmation:
 
 ```powershell
 npm run release:integration-publish -- <full-source-sha> --integration-images-only --confirm-integration-publication
@@ -511,10 +516,10 @@ The existing `v1-ci.yml` and `v1-docs-ci.yml` workflows run on pull requests and
 pushes to `v1`. They retain the test, build, lint, coverage, release-composition,
 changeset, and documentation checks. A product version-application receipt
 committed to `v1` triggers `.github/workflows/v1-release-pack.yml`. A manual
-`workflow_dispatch` fallback uses the same validation and requires a fresh
-receipt, so it must target the version-application commit that added that
-receipt. Before building or publishing, the release workflow waits for both CI
-workflows to pass on the exact source commit.
+`workflow_dispatch` product-release path uses the same validation and requires
+a fresh receipt, so it must target the version-application commit that added
+that receipt. Before building or publishing, the product release workflow waits
+for both CI workflows to pass on the exact source commit.
 
 The release workflow validates the composition and changeset coverage, then
 starts two independent jobs. `packages` creates the NuGet package artifacts.
@@ -529,6 +534,15 @@ The publisher rechecks artifact hashes and image contracts before its first
 external write. Each built service image uses a tag containing its component
 version and the full source SHA, so a later receipt cannot move an existing
 version tag.
+
+The separate manual `.github/workflows/v1-integration-images.yml` workflow
+accepts one exact `source_sha`, requires it to be reachable from `v1`, and
+waits for both CI workflows on that SHA. It runs the canonical
+`release:integration-pack` and `release:integration-publish` commands, publishes
+the ten source- and tree-labeled service images to GHCR, and records the
+immutable integration claim/result and publication receipt. It does not use the
+product release validator, package job, NuGet feed, GitHub Release, or Azure
+deployment path.
 
 #### Incremental image reuse
 
