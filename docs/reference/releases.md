@@ -75,7 +75,11 @@ semantic-version intent. Documentation-only changes do not require a changeset.
    ```
 
    The base-aware command also checks changeset coverage against the selected
-   base commit. CI runs validation against its verified source history.
+   base commit. CI runs validation against the checked-out source tree.
+   For pull requests, CI selects the changeset comparison base from the Git
+   merge-base of the event's base and authored head commits; it does not depend
+   on the synthetic merge commit's parent layout. Push and manual comparisons
+   continue to derive authored history from their tested commit.
    A version receipt may use a source commit after the diff merge base when
    compatibility declarations were committed before planning. If the release
    PR is squash-merged, rebind its receipt to the integrated v1 commit before

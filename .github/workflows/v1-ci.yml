@@ -129,7 +129,7 @@ jobs:
             --label io.agentweaver.source-tree="$SOURCE_TREE" .
           node scripts/release/measure-agenthost-image.mjs artifacts/images/agenthost.oci.tar artifacts/images/agenthost.json
           IMAGE_CONFIG="$(docker image inspect --format '{{.Id}}' agentweaver-agenthost:ci)"
-          node --input-type=module -e 'import fs from "node:fs"; const receipt = JSON.parse(fs.readFileSync("artifacts/images/agenthost.json")); if (receipt.image.configDigest !== process.argv[1]) throw Error("The loaded smoke image differs from the measured OCI image.");' "$IMAGE_CONFIG"
+          node --input-type=module -e 'import fs from "node:fs"; const receipt = JSON.parse(fs.readFileSync("artifacts/images/agenthost.json")); const diagnostics = {dockerImageInspectOptions: ["--format", "{{.Id}}"], dockerImageId: process.argv[1], ociManifestDigest: receipt.image.digest, ociConfigDigest: receipt.image.configDigest, buildxExporterOptions: ["--load (Docker exporter)", "--output type=oci,dest=artifacts/images/agenthost.oci.tar"]}; console.log("AgentHost image identity diagnostics:", JSON.stringify(diagnostics)); if (receipt.image.configDigest !== process.argv[1]) throw Error("The loaded smoke image differs from the measured OCI image.");' "$IMAGE_CONFIG"
           timeout 60s docker run --rm --platform linux/amd64 --network none --read-only \
             --cap-drop ALL --security-opt no-new-privileges \
             --tmpfs /state:rw,noexec,nosuid,nodev,uid=1654,gid=1654,mode=700 \
