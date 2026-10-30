@@ -1405,6 +1405,9 @@
         "resolved": "18.0.0",
         "contentHash": "ptHVgcYmLejGuWXV7RMFoEqFKYMXnieOlWLPzEslfDtzZ9ngMhjYwykfqjBN2+fMEAEyobozkj07lKEpR4dssA=="
       },
+      "agentweaver": {
+        "type": "Project"
+      },
       "agentweaver.abstractions": {
         "type": "Project"
       },

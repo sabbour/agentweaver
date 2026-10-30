@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Net;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -7,6 +8,7 @@ using System.Text.RegularExpressions;
 using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
 using OpenIddict.Abstractions;
@@ -24,6 +26,7 @@ public static class IdentityBrokerEndpoints
 {
     public const string LocalCookieScheme = "Identity.Local";
     public const string ExternalScheme = "Identity.External";
+    private const string NativeCliClientId = "agentweaver-cli";
     private const string SilentAuthorizationProperty = "agentweaver.prompt.none";
 
     /// <summary>Maps OAuth endpoints, the discovery root redirect, and broker health and identity diagnostics routes.</summary>
@@ -34,6 +37,7 @@ public static class IdentityBrokerEndpoints
         webEndpoints.MapMethods("/authorize", [HttpMethods.Get], AuthorizeAsync);
         webEndpoints.MapGet("/authorize/resume", ResumeAsync);
         webEndpoints.MapPost("/consent", ConsentAsync);
+        webEndpoints.MapPost("/consent/native", NativeConsentAsync);
         webEndpoints.MapPost("/token", TokenAsync);
 
         app.MapGet("/", () => Results.Redirect("/.well-known/openid-configuration"));
@@ -169,13 +173,24 @@ public static class IdentityBrokerEndpoints
         });
         await db.SaveChangesAsync(ct);
 
+        var antiforgeryToken = antiforgery.GetAndStoreTokens(context).RequestToken;
+        if (string.Equals(request.ClientId, NativeCliClientId, StringComparison.Ordinal))
+        {
+            context.Response.Headers["Cache-Control"] = "no-store";
+            context.Response.Headers["Content-Security-Policy"] =
+                "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+            context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+            return Results.Content(BuildNativeConsentPage(consentHandle, antiforgeryToken, requestedScopes),
+                "text/html; charset=utf-8");
+        }
+
         return Results.Json(new
         {
             consent_required = true,
             consent_handle = consentHandle,
             client_id = request.ClientId,
             requested_scopes = requestedScopes,
-            csrf_token = antiforgery.GetAndStoreTokens(context).RequestToken,
+            csrf_token = antiforgeryToken,
         });
     }
 
@@ -288,6 +303,9 @@ public static class IdentityBrokerEndpoints
             return Results.BadRequest(new { error = Errors.InvalidRequest, error_description = "The consent transaction is invalid or expired." });
 
         var pending = await db.PendingAuthorizations.AsNoTracking().SingleAsync(p => p.HandleHash == hash, ct);
+        if (context.Request.Path.Equals("/connect/consent/native", StringComparison.Ordinal) &&
+            !string.Equals(pending.ClientId, NativeCliClientId, StringComparison.Ordinal))
+            return Results.BadRequest(new { error = Errors.InvalidRequest });
         var requestedScopes = (pending.Scope ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
         if (!decision.Approve)
@@ -328,6 +346,74 @@ public static class IdentityBrokerEndpoints
             cancellationToken: ct);
         await transaction.CommitAsync(ct);
         return Results.Redirect(BuildAuthorizeQuery(pending, scopeOverride: string.Join(' ', approvedScopes)));
+    }
+
+    private static async Task<IResult> NativeConsentAsync(
+        HttpContext context, IdentityBrokerDbContext db,
+        IOpenIddictAuthorizationManager authorizations, IOpenIddictApplicationManager applications,
+        TimeProvider timeProvider, IAntiforgery antiforgery, CancellationToken ct)
+    {
+        const int maxFormBytes = 16 * 1024;
+        var maxBodySize = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
+        if (maxBodySize is { IsReadOnly: false })
+            maxBodySize.MaxRequestBodySize = maxFormBytes;
+        if (!string.Equals(context.Request.ContentType?.Split(';', 2)[0].Trim(),
+                "application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase) ||
+            context.Request.ContentLength is > maxFormBytes)
+            return Results.BadRequest(new { error = Errors.InvalidRequest });
+
+        IFormCollection form;
+        try
+        {
+            form = await context.Request.ReadFormAsync(ct);
+        }
+        catch (InvalidDataException)
+        {
+            return Results.BadRequest(new { error = Errors.InvalidRequest });
+        }
+        catch (BadHttpRequestException)
+        {
+            return Results.BadRequest(new { error = Errors.InvalidRequest });
+        }
+        if (form.Keys.Any(key => key is not ("consent_handle" or "approve" or "__RequestVerificationToken")) ||
+            form["consent_handle"].Count != 1 || form["approve"].Count != 1 ||
+            form["__RequestVerificationToken"].Count != 1 ||
+            form.Any(field => field.Value.Any(value => value is null || value.Length > maxFormBytes)) ||
+            form.Sum(field => Encoding.UTF8.GetByteCount(field.Key) +
+                field.Value.Sum(value => Encoding.UTF8.GetByteCount(value ?? string.Empty))) > maxFormBytes ||
+            !bool.TryParse(form["approve"], out var approve))
+            return Results.BadRequest(new { error = Errors.InvalidRequest });
+
+        return await ConsentAsync(context,
+            new ConsentDecision(form["consent_handle"][0], approve, null),
+            db, authorizations, applications, timeProvider, antiforgery, ct);
+    }
+
+    private static string BuildNativeConsentPage(
+        string consentHandle, string? antiforgeryToken, IEnumerable<string> requestedScopes)
+    {
+        var scopes = string.Join(string.Empty, requestedScopes.Select(scope =>
+            $"<li>{WebUtility.HtmlEncode(scope)}</li>"));
+        return $"""
+            <!doctype html>
+            <html lang="en">
+            <head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+            <title>Authorize Agentweaver CLI</title></head>
+            <body>
+            <main>
+            <h1>Authorize Agentweaver CLI</h1>
+            <p>The CLI is requesting these permissions:</p>
+            <ul>{scopes}</ul>
+            <form method="post" action="/connect/consent/native">
+            <input type="hidden" name="consent_handle" value="{WebUtility.HtmlEncode(consentHandle)}">
+            <input type="hidden" name="__RequestVerificationToken" value="{WebUtility.HtmlEncode(antiforgeryToken ?? string.Empty)}">
+            <button type="submit" name="approve" value="true">Allow</button>
+            <button type="submit" name="approve" value="false">Deny</button>
+            </form>
+            </main>
+            </body>
+            </html>
+            """;
     }
 
     /// <summary>
