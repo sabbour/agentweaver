@@ -431,9 +431,10 @@ function createFixture(t) {
   const provenanceBytes = Buffer.from(`${JSON.stringify(provenance, null, 2)}\n`);
   const publication = {
     schemaVersion: 1,
+    sourceSha,
+    requiredPackageIds: [],
     mode: 'images-only',
     status: 'published',
-    sourceSha,
     sourceTree,
     claimSha: 'c'.repeat(40),
     provenanceSha256: sha256(provenanceBytes),
@@ -816,6 +817,7 @@ test('immutable publication claim must match the exact source, provenance, and i
   const claim = {
     schemaVersion: 1,
     sourceSha,
+    requiredPackageIds: fixture.publication.requiredPackageIds,
     mode: 'images-only',
     sourceTree,
     provenanceSha256: fixture.publication.provenanceSha256,
@@ -863,6 +865,14 @@ test('immutable publication claim must match the exact source, provenance, and i
     root: fixture.root,
     run,
   }), /immutable integration claim is not bound to the exact source and publication plan/);
+
+  const tamperedPackageClaim = structuredClone(claim);
+  tamperedPackageClaim.requiredPackageIds = ['Agentweaver.Identity.Broker'];
+  claimTag.message = JSON.stringify(tamperedPackageClaim);
+  await assert.rejects(verifyIntegrationPublicationRemote(fixture.publication, sourceSha, {
+    root: fixture.root,
+    run,
+  }), /immutable integration claim is not bound to the exact source and publication plan/);
 });
 
 test('integration deployment rejects draft, provenance, and receipt mismatches before remote checks', async t => {
@@ -885,6 +895,13 @@ test('integration deployment rejects draft, provenance, and receipt mismatches b
 
   const receiptWithWrongTree = { ...fixture.publication, sourceTree: 'c'.repeat(40) };
   await assert.rejects(deployIntegration(deployOptions(fixture, { publication: receiptWithWrongTree }), dependencies),
+    /images-only publication receipt is partial or not bound to the exact source and tree/);
+
+  const receiptWithPackages = {
+    ...fixture.publication,
+    requiredPackageIds: ['Agentweaver.Identity.Broker'],
+  };
+  await assert.rejects(deployIntegration(deployOptions(fixture, { publication: receiptWithPackages }), dependencies),
     /images-only publication receipt is partial or not bound to the exact source and tree/);
 });
 
