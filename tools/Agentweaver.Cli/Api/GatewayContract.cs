@@ -41,6 +41,8 @@ internal static partial class GatewayContract
 
     public static IReadOnlyDictionary<string, GatewayOperation> Parse(JsonObject document)
     {
+        // This is a deliberately bounded client contract, not a general OpenAPI interpreter:
+        // reject unsupported drift instead of silently weakening auth or request validation.
         var securitySchemes = (document["components"] as JsonObject)?["securitySchemes"] as JsonObject;
         var bearerSchemes = securitySchemes?
             .Where(item => item.Key.Equals("Bearer", StringComparison.OrdinalIgnoreCase))

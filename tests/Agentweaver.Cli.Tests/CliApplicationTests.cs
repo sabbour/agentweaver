@@ -20,6 +20,7 @@ public sealed class CliApplicationTests
         Assert.Equal(0, helpCode);
         Assert.Equal(0, versionCode);
         Assert.Contains("agentweaver api operations", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("agentweaver rest --method GET|HEAD", output.ToString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Agentweaver 1.x CLI 1.0.0 (source unbound, tree unbound)", output.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("1.0.0+", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("source unbound", output.ToString(), StringComparison.Ordinal);
