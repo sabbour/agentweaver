@@ -41,6 +41,12 @@ public static class IdentityBrokerEndpoints
         webEndpoints.MapPost("/consent/native", NativeConsentAsync);
         webEndpoints.MapPost("/token", TokenAsync);
 
+        app.MapGet("/agentweaver.png", () =>
+            Results.File(
+                typeof(IdentityBrokerEndpoints).Assembly.GetManifestResourceStream(
+                    "Agentweaver.Identity.Broker.agentweaver.png")
+                    ?? throw new InvalidOperationException("The embedded Agentweaver logo is missing."),
+                "image/png"));
         app.MapGet("/", () => Results.Redirect("/.well-known/openid-configuration"));
         app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
         app.MapGet("/health/ready", async (IdentityBrokerDbContext db, CancellationToken ct) =>
@@ -180,7 +186,7 @@ public static class IdentityBrokerEndpoints
             var styleNonce = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(18));
             context.Response.Headers["Cache-Control"] = "no-store";
             context.Response.Headers["Content-Security-Policy"] =
-                $"default-src 'none'; style-src 'nonce-{styleNonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+                $"default-src 'none'; img-src 'self'; style-src 'nonce-{styleNonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
             context.Response.Headers["X-Content-Type-Options"] = "nosniff";
             return Results.Content(BuildNativeConsentPage(consentHandle, antiforgeryToken, styleNonce, requestedScopes),
                 "text/html; charset=utf-8");
@@ -406,7 +412,7 @@ public static class IdentityBrokerEndpoints
             <body>
             <main class="v1-auth-page">
             <section class="v1-auth-card" aria-labelledby="consent-title">
-            <div class="v1-brand">Agentweaver</div>
+            <div class="v1-brand"><img src="/agentweaver.png" alt="">Agentweaver</div>
             <div>
             <h1 id="consent-title">Review access</h1>
             <p>Agentweaver's sign-in service asks to use these permissions for this app.</p>
@@ -480,7 +486,16 @@ public static class IdentityBrokerEndpoints
         }
 
         .v1-brand {
+          display: flex;
+          align-items: center;
+          gap: 10px;
           font-weight: 600;
+        }
+
+        .v1-brand img {
+          width: 28px;
+          height: 28px;
+          border-radius: 8px;
         }
 
         .v1-detail-list {
