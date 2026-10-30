@@ -797,9 +797,13 @@ test('run-binding descriptor preparation refuses a different kubectl context bef
   assert.equal(reads, 1);
 });
 
-test('source-only integration deployment remains local without a separate GitHub publication workflow', () => {
+test('source-only integration publication uses a separate workflow without entering release or deployment paths', () => {
   const workflowPath = path.join(root, '.github', 'workflows', 'v1-integration-images.yml');
-  assert.throws(() => readFileSync(workflowPath, 'utf8'), { code: 'ENOENT' });
+  const workflow = readFileSync(workflowPath, 'utf8');
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /release:integration-pack/);
+  assert.match(workflow, /release:integration-publish/);
+  assert.doesNotMatch(workflow, /RELEASE_NUGET_|release:deploy|merge-packs\.mjs/);
   const releaseWorkflow = readFileSync(path.join(root, '.github', 'workflows', 'v1-release-pack.yml'), 'utf8');
   assert.doesNotMatch(releaseWorkflow, /release:integration-pack|integration-source-sha/);
   assert.match(releaseWorkflow, /name: Agentweaver v1 release publication/);

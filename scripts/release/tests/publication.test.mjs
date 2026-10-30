@@ -980,6 +980,29 @@ test('only the publisher receives write permissions and package credentials for 
   assert.doesNotMatch(buildJobs, /GH_TOKEN|RELEASE_NUGET_API_KEY|RELEASE_REGISTRY_PASSWORD/);
 });
 
+test('manual integration publication is source-pinned and has only GHCR and receipt write permissions', () => {
+  const workflow = readFileSync('.github/workflows/v1-integration-images.yml', 'utf8').replaceAll('\r\n', '\n');
+  const build = workflow.slice(workflow.indexOf('\n  build:'), workflow.indexOf('\n  publish:'));
+  const publish = workflow.slice(workflow.indexOf('\n  publish:'));
+  assert.match(workflow, /source_sha:\n\s+description: Exact merged v1 source commit to build and publish\n\s+required: true\n\s+type: string/);
+  assert.match(workflow, /group: v1-integration-publication-\$\{\{ inputs\.source_sha \}\}/);
+  assert.match(build, /test "\$GITHUB_REF" = "refs\/heads\/v1"/);
+  assert.match(build, /if ! \[\[ "\$SOURCE_SHA" =~ \^\[0-9a-f\]\{40\}\$ \]\]; then/);
+  assert.match(build, /source_sha must be a lowercase 40-character commit SHA/);
+  assert.match(build, /git merge-base --is-ancestor "\$SOURCE_SHA" refs\/remotes\/origin\/v1/);
+  assert.match(build, /--workflow "\$workflow"[\s\S]*--commit "\$SOURCE_SHA"/);
+  assert.match(build, /gh run watch "\$run_id" --repo "\$GITHUB_REPOSITORY" --exit-status/);
+  assert.match(build, /git checkout --detach "\$SOURCE_SHA"/);
+  assert.match(build, /release:integration-pack -- --integration-source-sha "\$INTEGRATION_SOURCE_SHA"/);
+  assert.doesNotMatch(build, /contents: write|packages: write|RELEASE_REGISTRY_PASSWORD/);
+  assert.match(publish, /permissions:\n      contents: write\n      packages: write/);
+  assert.match(publish, /RELEASE_REGISTRY: ghcr\.io\/sabbour/);
+  assert.match(publish, /release:integration-publish -- "\$SOURCE_SHA" --integration-images-only --confirm-integration-publication/);
+  assert.match(publish, /v1-integration-publication-\$\{\{ inputs\.source_sha \}\}/);
+  assert.match(publish, /Remove temporary GHCR credentials/);
+  assert.doesNotMatch(workflow, /RELEASE_NUGET_|nuget\.push|GitHub Release|release:deploy|merge-packs\.mjs/);
+});
+
 test('confirmed initial replacement updates only the approved tag and preserves old index/platforms and history', t => {
   const { f, options, native } = initialProbeFixture(t);
   const historicalRef = 'refs/tags/agentweaver-publication/old-source/claim';
