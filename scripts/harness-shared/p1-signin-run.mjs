@@ -15,6 +15,7 @@ import { createP1SetupApi } from './p1-runtime-adapters.mjs';
 import { persistP1ReconcileEvidence, reconcileP1Run, reserveP1EvidenceOutput } from './p1-reconcile.mjs';
 import { isValidP1RecoveryEvidence, recoverP1RunCleanup } from './p1-recovery-cleanup.mjs';
 import { redact } from './redaction.mjs';
+import { runP1DotnetCli } from './p1-dotnet-cli.mjs';
 import { runP1Cli } from './run-p1.mjs';
 
 const OPTION_NAMES = new Set([
@@ -41,13 +42,18 @@ export function parseP1SigninArguments(argv) {
       result.dryRun = true;
       continue;
     }
+    if (option === '--interactive') {
+      if (result.interactive) throw new Error('The --interactive option can only be used once.');
+      result.interactive = true;
+      continue;
+    }
     if (option === '--identity-module') {
       throw new Error('The sign-in launcher supplies its built-in identity provider; --identity-module is not accepted.');
     }
     if (!OPTION_NAMES.has(option)
       || typeof argv[index + 1] !== 'string'
       || argv[index + 1].startsWith('--')) {
-      throw new Error('Use --surface api|mcp|api,mcp|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>], --reconcile <invocation-id> --input <manifest.json> --output <reconciliation.json>, or --recover-cleanup <invocation-id> --input <manifest.json> --reconcile-evidence <reconciliation.json> --output <cleanup.json>.');
+      throw new Error('Use --surface api|mcp|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>] [--interactive], --reconcile <invocation-id> --input <manifest.json> --output <reconciliation.json>, or --recover-cleanup <invocation-id> --input <manifest.json> --reconcile-evidence <reconciliation.json> --output <cleanup.json>.');
     }
     const key = option.slice(2).replaceAll('-', '');
     if (result[key] !== undefined) throw new Error(`The ${option} option can only be used once.`);
@@ -162,6 +168,8 @@ export function p1SigninSurfaceArguments(argv, surface, output, multiple) {
 /** Run selected surfaces sequentially; tokens and the shared browser session stay in memory. */
 export async function runP1SigninCli(argv = process.argv.slice(2), env = process.env, io = console, {
   runP1 = runP1Cli,
+  runDotnetCli = runP1DotnetCli,
+  readInput = readP1SignInInput,
   signIn = authorizeP1InBrowser,
   createSetupApi = createP1SetupApi,
   reconcile = reconcileP1Run,
@@ -182,11 +190,12 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
     return 2;
   }
   if (options.help) {
-    io.log?.('Usage: npm run harness:p1:signin-run -- --surface api|mcp|api,mcp|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>] [--dry-run]');
+    io.log?.('Usage: npm run harness:p1:signin-run -- --surface api|mcp|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>] [--dry-run] [--interactive]');
     io.log?.('Usage: npm run harness:p1:signin-run -- --reconcile <invocation-id> --input <manifest.json> --output <reconciliation.json> [--dry-run]');
     io.log?.('Usage: npm run harness:p1:signin-run -- --recover-cleanup <invocation-id> --input <manifest.json> --reconcile-evidence <reconciliation.json> --output <cleanup.json> [--dry-run]');
-    io.log?.('The launcher signs in with the registered agentweaver-web client. Broker tokens stay in memory and are not written to evidence.');
-    io.log?.('Multiple surfaces run sequentially with separate evidence files: evidence.api.jsonl and evidence.mcp.jsonl for --output evidence.jsonl. All surfaces run even if one returns a blocked or failed result.');
+    io.log?.('The .NET API apphost is selected only through AGENTWEAVER_CLI_PATH; it uses non-interactive auth unless --interactive is explicit.');
+    io.log?.('MCP and UI remain legacy browser surfaces using the registered agentweaver-web client; Broker tokens stay in memory.');
+    io.log?.('Mixed api,mcp runs are rejected; run API separately from MCP or UI.');
     printP1OperatorSteps(io);
     return 0;
   }
@@ -194,7 +203,7 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
     if (!options.input || !options.output
       || options.surface || Object.hasOwn(options, 'nativeprobeenvelope')
       || Object.hasOwn(options, 'dispatchrecoveryenvelope')
-      || options.recovercleanup || Object.hasOwn(options, 'reconcileevidence')
+      || options.recovercleanup || options.interactive || Object.hasOwn(options, 'reconcileevidence')
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(options.reconcile)) {
       io.error?.('Read-only reconciliation requires --reconcile <invocation-id>, --input <manifest.json>, and --output <reconciliation.json>; journey and probe options are not accepted.');
       return 2;
@@ -261,7 +270,7 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
   if (options.recovercleanup !== undefined) {
     if (!options.input || !options.output || !options.reconcileevidence || options.surface
       || options.reconcile || Object.hasOwn(options, 'nativeprobeenvelope')
-      || Object.hasOwn(options, 'dispatchrecoveryenvelope')
+      || Object.hasOwn(options, 'dispatchrecoveryenvelope') || options.interactive
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(options.recovercleanup)) {
       io.error?.('Guarded recovery cleanup requires --recover-cleanup <invocation-id>, --input <manifest.json>, --reconcile-evidence <reconciliation.json>, and --output <cleanup.json>; journey and probe options are not accepted.');
       return 2;
@@ -359,6 +368,35 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
     || !options.input || !options.output || options.reconcile
     || options.recovercleanup || Object.hasOwn(options, 'reconcileevidence')) {
     io.error?.('Select api, mcp, api,mcp, or ui and supply an input manifest and evidence output path.');
+    return 2;
+  }
+  if (surfaces.includes('api')) {
+    if (surfaces.length !== 1) {
+      io.error?.('The .NET API runner does not share a sign-in session with the legacy MCP or UI runners; run the API surface separately.');
+      return 2;
+    }
+    let validated;
+    try {
+      validated = await readInput(argv);
+    } catch (error) {
+      io.error?.(error.message);
+      return 2;
+    }
+    if (Object.hasOwn(validated.fixturePlan, 'deniedActor')) {
+      io.error?.('This launcher uses one Broker account only. Omit fixturePlan.deniedActor; distinct-actor coverage remains unavailable with one account.');
+      return 2;
+    }
+    return runDotnetCli({
+      input: options.input,
+      output: options.output,
+      nativeProbeEnvelope: options.nativeprobeenvelope,
+      dispatchRecoveryEnvelope: options.dispatchrecoveryenvelope,
+      dryRun: options.dryRun,
+      interactive: options.interactive === true,
+    }, env, io);
+  }
+  if (options.interactive) {
+    io.error?.('--interactive is supported only by the .NET API acceptance runner.');
     return 2;
   }
   let setupToken;

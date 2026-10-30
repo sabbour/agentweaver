@@ -9,9 +9,10 @@ import { suites } from '../../coverage/dotnet.mjs';
 const workflow = readFileSync(new URL('../../../.github/workflows/v1-ci.yml', import.meta.url), 'utf8');
 
 test('metadata-only and unrelated workflows skip expensive validation; unknown inputs fail safe', () => {
-  assert.deepEqual(classify(['docs/guide/testing.md', 'README.md']), { dotnet: false, web: false, node: false, images: false });
+  assert.deepEqual(classify(['docs/guide/testing.md', 'README.md']), { dotnet: false, web: false, node: false, images: false, cli: false });
   assert.deepEqual(classify(['.github/workflows/other.yml']), classify([]));
-  for (const path of ['.github/workflows/v1-ci.yml', 'scripts/ci/v1-changes.mjs', 'package-lock.json', 'new-input']) {
+  for (const path of ['.github/workflows/v1-ci.yml', '.github/workflows/v1-cli-package.yml',
+    'scripts/ci/v1-changes.mjs', 'package-lock.json', 'new-input']) {
     assert.ok(Object.values(classify([path])).every(Boolean), path);
   }
   assert.ok(Object.values(classify([], true)).every(Boolean));
@@ -135,7 +136,10 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   const { parse } = await import('yaml');
   const parsed = parse(workflow);
   const jobs = parsed.jobs;
-  assert.deepEqual(jobs.foundation.needs, ['changes', 'harness', 'go', 'images', 'node', 'web', 'dotnet', 'coverage']);
+  assert.deepEqual(jobs.foundation.needs, ['changes', 'harness', 'go', 'images', 'node', 'web', 'dotnet', 'coverage', 'cli-package']);
+  assert.equal(jobs['cli-package'].uses, './.github/workflows/v1-cli-package.yml');
+  assert.deepEqual(jobs['cli-package'].needs, 'changes');
+  assert.equal(jobs['cli-package'].if, "needs.changes.outputs.cli == 'true'");
   const harnessCommands = jobs.harness.steps.map((step) => step.run ?? '').join('\n');
   assert.match(harnessCommands, /npm run test:harness(?:\s|$)/);
   const packageManifest = JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'));
@@ -145,6 +149,9 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   assert.doesNotMatch(harnessCommands, /--experimental-test-coverage|--coverage|run coverage/);
   assert.equal(jobs.foundation.if, '${{ always() }}');
   assert.equal(jobs.dotnet.strategy['fail-fast'], false);
+  const cliApphost = jobs.dotnet.steps.find((step) => step.name === 'Select the built CLI apphost for process acceptance');
+  assert.equal(cliApphost.if, "matrix.name == 'cli-acceptance'");
+  assert.match(cliApphost.run, /AGENTWEAVER_CLI_PATH/);
   assert.match(parsed.concurrency['cancel-in-progress'], /pull_request/);
   assert.match(parsed.concurrency.group, /github.run_id/);
   assert.equal(parsed.env.COLLECT_COVERAGE, '${{ inputs.collect_coverage == true }}');
@@ -244,11 +251,11 @@ test('the real foundation gate rejects failures, cancellation and unexpected ski
   function execute(results, collect = 'false') {
     return runInNewContext(gate, { process: { env: { RESULTS: JSON.stringify(results), COLLECT_COVERAGE: collect } } });
   }
-  const full = Object.fromEntries(['changes', 'harness', 'go', 'images', 'node', 'web', 'dotnet', 'coverage']
+  const full = Object.fromEntries(['changes', 'harness', 'go', 'images', 'node', 'web', 'dotnet', 'coverage', 'cli-package']
     .map((name) => [name, { result: name === 'coverage' ? 'skipped' : 'success' }]));
-  full.changes.outputs = { images: 'true', web: 'true', dotnet: 'true' };
+  full.changes.outputs = { images: 'true', web: 'true', dotnet: 'true', cli: 'true' };
   execute(full);
-  for (const name of ['harness', 'images', 'node', 'web', 'dotnet', 'changes']) {
+  for (const name of ['harness', 'images', 'node', 'web', 'dotnet', 'cli-package', 'changes']) {
     for (const result of ['failure', 'cancelled', 'skipped']) {
       const broken = structuredClone(full);
       broken[name].result = result;
@@ -261,7 +268,7 @@ test('the real foundation gate rejects failures, cancellation and unexpected ski
   execute(weekly, 'true');
   assert.throws(() => execute(weekly), /coverage/);
   const scoped = structuredClone(full);
-  scoped.changes.outputs = { images: 'false', web: 'false', dotnet: 'false' };
-  for (const name of ['images', 'web', 'dotnet']) scoped[name].result = 'skipped';
+  scoped.changes.outputs = { images: 'false', web: 'false', dotnet: 'false', cli: 'false' };
+  for (const name of ['images', 'web', 'dotnet', 'cli-package']) scoped[name].result = 'skipped';
   execute(scoped);
 });

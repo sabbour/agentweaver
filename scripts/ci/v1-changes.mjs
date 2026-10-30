@@ -4,10 +4,11 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export function classify(paths, full = false) {
-  const result = { dotnet: full, web: full, node: full, images: full };
+  const result = { dotnet: full, web: full, node: full, images: full, cli: full };
   for (const path of paths) {
     if (/^(docs\/|\.squad\/|\.changeset\/)/.test(path) || /^[^/]+\.md$/.test(path)) continue;
-    if (path.startsWith('.github/workflows/') && path !== '.github/workflows/v1-ci.yml') continue;
+    if (path.startsWith('.github/workflows/') &&
+        !['.github/workflows/v1-ci.yml', '.github/workflows/v1-cli-package.yml'].includes(path)) continue;
     if (/^(apps\/web\/)/.test(path)) {
       result.dotnet = result.web = result.node = result.images = true;
     } else if (/^(services\/|packages\/|tests\/|deploy\/)/.test(path) ||

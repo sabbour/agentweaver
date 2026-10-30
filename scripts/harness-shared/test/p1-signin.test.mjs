@@ -848,7 +848,7 @@ test('built-in UI page adapter fails clearly when it cannot start silent authori
   }), /could not start silent authorization/);
 });
 
-test('launcher excludes external module inputs and reuses one signed-in account for setup and run scope', async () => {
+test('launcher excludes external modules and delegates API acceptance to the configured CLI', async () => {
   assert.throws(() => parseP1SigninArguments([
     '--surface', 'api', '--input', 'input.json', '--output', 'evidence.jsonl',
     '--identity-module', 'provider.mjs',
@@ -862,19 +862,9 @@ test('launcher excludes external module inputs and reuses one signed-in account 
   const manifestPath = path.resolve('scripts/harness-shared/test/p1-signin-input.fixture.json');
   const { writeFile: writeInput, rm } = await import('node:fs/promises');
   await writeInput(manifestPath, JSON.stringify(input), 'utf8');
-  const calls = [];
   const output = [];
-  const signIn = async request => {
-    calls.push(request);
-    return jwt({
-      actorId: request.actorId,
-      projectId: request.projectId,
-      runId: request.runId,
-      scopes: request.scopes,
-    });
-  };
   let browserSessions = 0;
-  const browserContext = {};
+  let invocation;
   try {
     const code = await runP1SigninCli([
       '--surface', 'api',
@@ -884,34 +874,16 @@ test('launcher excludes external module inputs and reuses one signed-in account 
       log: message => output.push(message),
       error: message => output.push(message),
     }, {
-      signIn,
-      chromium: {},
-      withBrowserContext: async (_options, useContext) => {
-        browserSessions += 1;
-        return useContext(browserContext);
-      },
-      async runP1(argv, env, _io, { identityProvider }) {
-        assert.equal(argv.includes('--identity-module'), false);
-        assert.notEqual(env.AGENTWEAVER_P1_SETUP_TOKEN, 'ignored-existing-value');
-        const identity = await identityProvider({
-          ...ENVIRONMENT,
-          projectId: PROJECT_ID,
-          runId: RUN_ID,
-        });
-        assert.deepEqual(Object.keys(identity), ['token']);
+      runDotnetCli: async options => {
+        invocation = options;
         return 0;
       },
     });
     assert.equal(code, 0, output.join('\n'));
-    assert.equal(browserSessions, 1);
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0].context, browserContext);
-    assert.equal(calls[1].context, browserContext);
-    assert.deepEqual(calls[0].scopes, P1_SETUP_SCOPES);
-    assert.deepEqual(calls[1].scopes, P1_RUN_SCOPES);
-    assert.equal(calls[1].projectId, PROJECT_ID);
-    assert.equal(calls[1].runId, RUN_ID);
-    assert.equal(calls[1].actorId, ENVIRONMENT.actorId);
+    assert.equal(browserSessions, 0);
+    assert.equal(invocation.input, manifestPath);
+    assert.equal(invocation.output, 'scripts/harness-shared/test/p1-signin-evidence.fixture.jsonl');
+    assert.equal(invocation.interactive, false);
     assert.doesNotMatch(output.join('\n'), /eyJ|accessToken|Bearer/);
   } finally {
     await rm(manifestPath, { force: true });
@@ -1093,7 +1065,7 @@ test('UI launcher reuses one browser context and supplies its built-in authorize
   }
 });
 
-test('launcher dry-run validates the manifest without opening a browser or writing output', async () => {
+test('launcher dry-run delegates without browser auth or evidence output', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-dry-run-'));
   const manifestPath = path.join(directory, 'input.json');
   const outputPath = path.join(directory, 'evidence.jsonl');
@@ -1101,7 +1073,7 @@ test('launcher dry-run validates the manifest without opening a browser or writi
   const output = [];
   let browserLoads = 0;
   let signIns = 0;
-  let runs = 0;
+  let invocation;
   try {
     const code = await runP1SigninCli([
       '--surface', 'api',
@@ -1114,15 +1086,17 @@ test('launcher dry-run validates the manifest without opening a browser or writi
     }, {
       loadChromium: async () => { browserLoads += 1; throw new Error('browser must not load'); },
       signIn: async () => { signIns += 1; },
-      async runP1() { runs += 1; },
+      async runDotnetCli(options) {
+        invocation = options;
+        return 0;
+      },
     });
 
     assert.equal(code, 0);
     assert.equal(browserLoads, 0);
     assert.equal(signIns, 0);
-    assert.equal(runs, 0);
-    assert.match(output.join('\n'), /Owner and Orchestrator/);
-    assert.match(output.join('\n'), /No browser, network request, evidence file, project, or assignment is created/);
+    assert.equal(invocation.dryRun, true);
+    assert.equal(invocation.interactive, false);
     await assert.rejects(access(outputPath), { code: 'ENOENT' });
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -1336,6 +1310,10 @@ test('launcher refuses a fixture that asks it to sign in a second actor', async 
     ], {}, { log() {}, error: message => errors.push(message) }, {
       signIn: async () => { signIns += 1; },
       chromium: {},
+      runDotnetCli: async () => {
+        signIns += 1;
+        return 0;
+      },
     });
     assert.equal(code, 2);
     assert.equal(signIns, 0);
@@ -1496,7 +1474,7 @@ test('the shared browser context stays usable for a second sign-in after the fir
   assert.equal(pages.length, 1);
 });
 
-test('multi-surface launcher shares one setup sign-in and runs both surfaces despite a blocked result', async () => {
+test('mixed API and MCP surfaces are rejected before sign-in or Node API execution', async () => {
   const { rm } = await import('node:fs/promises');
   const manifestPath = path.resolve('scripts/harness-shared/test/p1-signin-multiple.fixture.json');
   await writeFile(manifestPath, JSON.stringify(validInput()));
@@ -1532,12 +1510,9 @@ test('multi-surface launcher shares one setup sign-in and runs both surfaces des
       },
     });
     assert.equal(result, 2);
-    assert.deepEqual(runs, ['api', 'mcp']);
-    assert.equal(browserSessions, 1);
-    assert.equal(requests.length, 3);
-    assert.deepEqual(requests[0].scopes, P1_SETUP_SCOPES);
-    assert.equal(requests[1].projectId, `${PROJECT_ID}-api`);
-    assert.equal(requests[2].projectId, `${PROJECT_ID}-mcp`);
+    assert.deepEqual(runs, []);
+    assert.equal(browserSessions, 0);
+    assert.equal(requests.length, 0);
   } finally {
     await rm(manifestPath, { force: true });
   }

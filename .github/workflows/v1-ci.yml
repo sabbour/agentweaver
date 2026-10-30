@@ -64,6 +64,7 @@ jobs:
       web: ${{ steps.paths.outputs.web }}
       node: ${{ steps.paths.outputs.node }}
       images: ${{ steps.paths.outputs.images }}
+      cli: ${{ steps.paths.outputs.cli }}
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
@@ -78,6 +79,12 @@ jobs:
         run: node scripts/ci/v1-changes.mjs
       - id: matrix
         run: echo "matrix=$(node scripts/ci/v1-test-plan.mjs matrix)" >> "$GITHUB_OUTPUT"
+
+  cli-package:
+    name: v1 CLI candidate packaging
+    needs: changes
+    if: needs.changes.outputs.cli == 'true'
+    uses: ./.github/workflows/v1-cli-package.yml
 
   images:
     name: v1 image and native runtime validation
@@ -579,6 +586,12 @@ jobs:
         run: |
           dotnet restore "tests/$TEST_PROJECT/$TEST_PROJECT.csproj" --locked-mode
           dotnet build "tests/$TEST_PROJECT/$TEST_PROJECT.csproj" --no-restore --configuration Release
+      - name: Select the built CLI apphost for process acceptance
+        if: matrix.name == 'cli-acceptance'
+        run: |
+          cli="$GITHUB_WORKSPACE/tools/Agentweaver.Cli/bin/Release/net10.0/agentweaver"
+          test -x "$cli"
+          echo "AGENTWEAVER_CLI_PATH=$cli" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         if: matrix.shard > 0
         with:
@@ -719,7 +732,7 @@ jobs:
           retention-days: 30
 
   foundation:
-    needs: [changes, harness, go, images, node, web, dotnet, coverage]
+    needs: [changes, harness, go, images, node, web, dotnet, coverage, cli-package]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -734,6 +747,7 @@ jobs:
               images: jobs.changes.outputs.images === "true",
               web: jobs.changes.outputs.web === "true",
               dotnet: jobs.changes.outputs.dotnet === "true",
+              "cli-package": jobs.changes.outputs.cli === "true",
               coverage: process.env.COLLECT_COVERAGE === "true"
             };
             for (const [name, required] of Object.entries(expected)) {
