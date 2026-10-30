@@ -58,8 +58,7 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
             .Order(StringComparer.Ordinal).ToArray();
         var functions = plan.Functions.Select(function => function.Signature).Order(StringComparer.Ordinal).ToArray();
         await using var command = new NpgsqlCommand("""
-            SELECT current_database() = 'agentweaver'
-               AND current_user = @owner
+            SELECT current_user = @owner
                AND EXISTS (
                    SELECT 1 FROM pg_catalog.pg_roles
                    WHERE rolname = current_user AND rolcanlogin AND NOT rolsuper AND NOT rolcreatedb

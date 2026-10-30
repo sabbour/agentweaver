@@ -27,6 +27,7 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
 {
+    private const string MigrationOwner = "agentweaver-id-projects-config-migration";
     private readonly IHost _host;
     private readonly NpgsqlDataSource _dataSource;
     private readonly NpgsqlDataSource _privilegedDataSource;
@@ -87,11 +88,17 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                 "Projects run-binding HTTPS requires a distinct absolute HTTPS audience.");
 
         var privilegedDataSource = NpgsqlDataSource.Create(connectionString);
-        var privilegedDbOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
-            .UseNpgsql(privilegedDataSource, npgsql => npgsql.MigrationsHistoryTable(
+        await EnsureMigrationPrincipalAsync(privilegedDataSource);
+        var migrationConnectionString = new NpgsqlConnectionStringBuilder(connectionString)
+        {
+            Options = $"-c role={MigrationOwner}",
+        }.ConnectionString;
+        await using var migrationDataSource = NpgsqlDataSource.Create(migrationConnectionString);
+        var migrationDbOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+            .UseNpgsql(migrationDataSource, npgsql => npgsql.MigrationsHistoryTable(
                 "__ef_migrations_history", ProjectsConfigDbContext.Schema))
             .Options;
-        await ProjectsConfigMigrator.MigrateAsync(privilegedDataSource, privilegedDbOptions);
+        await ProjectsConfigMigrator.MigrateAsync(migrationDataSource, migrationDbOptions);
 
         var runtimeRole = $"projects_config_runtime_{Guid.NewGuid():N}";
         var runtimePassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
@@ -298,6 +305,36 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             await cleanup.ExecuteNonQueryAsync();
         }
         await _privilegedDataSource.DisposeAsync();
+    }
+
+    private static async Task EnsureMigrationPrincipalAsync(NpgsqlDataSource privilegedDataSource)
+    {
+        await using var connection = await privilegedDataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'agentweaver-id-projects-config-migration') THEN
+                    CREATE ROLE "agentweaver-id-projects-config-migration"
+                        LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+                END IF;
+            EXCEPTION WHEN duplicate_object THEN
+                NULL;
+            END $$;
+
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'agentweaver-id-projects-config') THEN
+                    CREATE ROLE "agentweaver-id-projects-config"
+                        NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+                END IF;
+            EXCEPTION WHEN duplicate_object THEN
+                NULL;
+            END $$;
+
+            CREATE SCHEMA IF NOT EXISTS projects_config
+                AUTHORIZATION "agentweaver-id-projects-config-migration";
+            """, connection);
+        await command.ExecuteNonQueryAsync();
     }
 
     private static async Task CreateRuntimeRoleAsync(
