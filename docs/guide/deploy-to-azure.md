@@ -335,30 +335,11 @@ managed `identity-broker-tls` Secret before deploying the workloads.
 
 ## 7. Run the v1 deployment
 
-The v1 image workflow pushes immutable `sha-<commit>` tags directly to GHCR.
-After the selected tag has been built and the runtime ConfigMaps, TLS
-certificates, workload identities, and operator-owned Secrets are ready,
-dispatch `.github/workflows/v1-deploy.yml` on `v1` with that `image_tag`.
-GitHub requires this workflow to exist on the repository's default branch
-before it appears in the manual dispatch list. The workflow uses the existing
-`v1-db-maintenance` environment and maintenance identity.
-
-The deployment command resolves all ten image tags to registry digests, runs
-the existing Broker and P1 migration Jobs, then runs the Projects & Config
-migration Job. It renders the existing `deploy/k8s` root overlay with those
-digests, applies it to the selected AKS context and `agentweaver` namespace,
-and waits for all nine Deployment rollouts. Any migration or apply error stops
-the sequence; no root workload apply occurs after a failed migration. It does
-not create Azure roles or credentials.
-
-**Current blocker:** Projects & Config has no approved schema-owner workload
-identity configured for this automated job. Its runtime identity is
-intentionally DDL-restricted, while the existing operator path requires a
-schema-owner connection and short-lived token. The deployment runner reports
-the missing identity configuration and stops before Kustomize apply; do not
-reuse the runtime identity or supply a token manually. The authorized Infra
-owner must verify or provision the existing approved migration identity before
-an end-to-end rollout can succeed.
+Use the [v1 release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#deploy-workloads)
+for dispatch, monitoring, recovery, and handover guard troubleshooting.
+Complete the one-time identity and PostgreSQL ownership prerequisites before
+dispatch; routine deployment runs migrations and grants before applying
+workloads.
 
 For a fresh installation, complete the managed certificate procedure from the
 [Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#application-routing-source-setting)

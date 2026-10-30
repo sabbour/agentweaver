@@ -3,6 +3,9 @@
 The tracked [`foundation.json`](https://github.com/sabbour/agentweaver/blob/v1/releases/foundation.json)
 manifest owns the current component IDs, versions, kinds, and project paths.
 Its schema is [`manifest.schema.json`](https://github.com/sabbour/agentweaver/blob/v1/releases/manifest.schema.json).
+For the exact GitHub Actions image-selection, deployment-dispatch, monitoring,
+and recovery commands, use the
+[v1 release workflow runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md).
 
 ## Versioning and NuGet packages
 

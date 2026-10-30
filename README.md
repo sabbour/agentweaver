@@ -27,6 +27,8 @@ Start with the [1.x documentation](docs/index.md). The site is organized as:
   [configure Knowledge memory](docs/guide/configure-knowledge.md), and
   [use the standalone CLI](docs/guide/cli.md) or
   [deploy to Azure](docs/guide/deploy-to-azure.md).
+- **Release workflows:** follow the [v1 release runbook](releases/README.md)
+  for package publication, container image builds, and Kubernetes deployment.
 - **Reference:** find every
   [runtime configuration setting](docs/reference/runtime-configuration.md),
   API route, event, and release contract.

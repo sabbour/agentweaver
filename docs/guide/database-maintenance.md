@@ -64,33 +64,26 @@ prints the steps an execute run would take and changes nothing.
 
 ## Automatic migration before deployment
 
-The supported v1 workload path runs database migrations before applying
-services:
+The supported v1 workload path runs migrations and Projects & Config
+runtime-grant reconciliation before applying services:
 
 ```powershell
 npm run deploy:kustomize -- --image-tag sha-<40-character-commit> --execute
 ```
 
-The command resolves image digests, runs the existing Broker and P1 migration
-Jobs in migration-only mode, invokes the Projects & Config migration with its
-digest-pinned image, then renders and applies the root Kustomize overlay once
-and waits for all nine Deployment rollouts. The routine apply excludes Namespace
-objects, so it does not change namespace Pod Security policy. Any migration or
-apply error stops the sequence; no workload rollout starts after a failed migration.
-
-Projects & Config requires its existing approved schema-owner migration
-identity. Its runtime identity is DDL-restricted and must not be granted schema
-ownership. That approved automated identity is not yet configured, so the
-Projects & Config runner fails closed before Kustomize apply. Do not replace it
-with an LLM-supplied operator token or treat the migration receipt as a
-workload-deployment gate. The authorized Infra owner must verify the existing
-migration identity before a complete deployment can succeed.
+The deployment excludes Namespace objects, runs migration Jobs first, then
+applies Kustomize and waits for nine rollouts. The one-time Projects & Config
+identity/ownership bootstrap is separate; on a guard failure, stop for
+authorized role inspection and never loosen the guard or broaden the role.
+See the [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#deploy-workloads)
+for dispatch and recovery.
 
 A successful migration is not itself a successful deployment. The runtime
 checks its database privileges at startup, and a failed startup guard causes
-the Deployment rollout check to fail. The deploy command does not change
-database roles or grants; any privilege remediation requires separate
-approval.
+the Deployment rollout check to fail. The Projects & Config migration
+automatically reconciles runtime grants to the reviewed allow-listed plan.
+Changes to role attributes or ownership, and privileges outside that plan,
+require separate authorization.
 
 ## Before you begin
 

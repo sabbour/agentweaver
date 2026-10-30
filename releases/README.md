@@ -31,42 +31,62 @@ build, smoke-test, checksum, and candidate artifact flow is documented in
 
 ## Container images
 
-Changes to service projects, Docker build inputs, or the component manifest on
-`v1` run `.github/workflows/v1-integration-images.yml`. Its ten-image matrix
-builds the existing AgentHost and Identity Broker Dockerfiles, the Web frontend
-and host, and the seven .NET service containers. Each image is pushed directly
-to its existing `ghcr.io/sabbour/...` repository with the immutable tag
-`sha-<commit>`. The workflow summary lists each image digest.
+Changes to service projects, Docker inputs, or the component manifest on `v1`
+automatically run `.github/workflows/v1-integration-images.yml` (push-triggered,
+not manual). It pushes ten images directly to GHCR as `sha-<40-character-commit>`
+tags; the workflow summary lists each digest. There are no image archives,
+publication receipts, or source-claim gates.
 
-There is no intermediate image archive, cross-runner artifact transfer,
-publication receipt, source-claim gate, or custom publisher. GitHub Actions
-uses the repository's `GITHUB_TOKEN` with package-write permission.
+## Deploy workloads
 
-## Deploy to Kubernetes
+`.github/workflows/v1-deploy.yml` requires only `image_tag` and uses the
+`v1-db-maintenance` GitHub environment. The workflow must exist on the default
+branch (`dev`) to be dispatchable; dispatch the run on `v1`.
 
-Use `.github/workflows/v1-deploy.yml` on branch `v1` with an immutable
-`sha-<commit>` image tag produced by the image workflow. GitHub requires the
-manual workflow to exist on the repository's default branch before it appears
-in the dispatch list. The workflow uses the existing `v1-db-maintenance`
-environment and maintenance identity.
+Select a successful image run, confirm its `headSha` and the ten digests in
+its summary, then dispatch `sha-<headSha>`. The deploy workflow accepts a tag,
+not a digest list, and resolves the image digests at run time:
 
-The workflow resolves all ten tags to registry digests and runs
-`npm run deploy:kustomize`. The command runs Broker and P1 migration Jobs,
-then the Projects & Config migration, renders the existing root overlay,
-applies it to the selected context and `agentweaver` namespace, and waits for
-all nine Deployments. A migration failure stops before the root Kustomize
-apply. No publication receipt or source-claim gate is required.
+```powershell
+gh run list --repo sabbour/agentweaver --workflow v1-integration-images.yml --branch v1 --limit 20
+gh run view <image-run-id> --repo sabbour/agentweaver --json status,conclusion,headBranch,headSha,url
+gh workflow run v1-deploy.yml --repo sabbour/agentweaver --ref v1 --raw-field image_tag=sha-<commit>
+```
 
-**Current blocker:** Projects & Config has no approved schema-owner workload
-identity configured for automated migration. Its runtime identity is
-intentionally DDL-restricted, and the old operator connection/token path is
-not used by deployment. The migration runner reports this missing identity
-and stops before workload apply. Do not grant the runtime identity DDL access
-or supply a manual token. The authorized Infra owner must verify or configure
-the existing approved migration identity before the full deployment can
-succeed.
+The `v1-db-maintenance` environment needs `AZURE_DB_MAINTENANCE_CLIENT_ID`.
+The one-time `npm run db:maintenance:setup -- --v1-deploy-only --execute`
+prepares deploy identity and namespace permissions; it does not change
+PostgreSQL ownership. The workflow checks its target and scoped permissions;
+it does not broaden them. Before first deploy, an authorized one-time handover
+must give the Projects & Config migration identity `CONNECT` and ownership
+only of `projects_config` and its planned objects. Its migration Job uses
+Workload Identity, not a per-release token. Normal deployment runs migrations
+and reviewed runtime-grant reconciliation before applying workloads.
 
-Complete the documented Azure, database, identity, certificate, and runtime
-configuration prerequisites first. See the [Azure deployment guide](../docs/guide/deploy-to-azure.md),
-[Kustomize operator guide](../deploy/k8s/README.md), and
+If the one-time handover guard rejects unexpected role attributes or
+memberships, stop for an authorized operator to diagnose and correct the
+confirmed mismatch within the approved role policy. Retry only after it is
+verified; do not loosen the guard or broaden the role.
+
+The deploy job resolves all ten images to digests, runs Broker, P1, and
+Projects & Config migration Jobs, applies the namespaced Kustomize overlay,
+then waits for all nine Deployments. It excludes Namespace objects (no
+Pod Security policy changes). There are no publication receipts, archives,
+claim bundles, or deployment evidence gates. Monitor the actual run:
+
+```powershell
+gh run list --repo sabbour/agentweaver --workflow v1-deploy.yml --branch v1 --limit 10
+gh run watch <deploy-run-id> --repo sabbour/agentweaver --exit-status
+gh run view <deploy-run-id> --repo sabbour/agentweaver --log-failed
+```
+
+Earlier migrations or workload apply may have completed when a later step
+fails; inspect partial state and do not assume rollback. For deployment-only
+failures, rerun with the same published `image_tag`; rebuild only if build
+inputs changed. Before retrying a failed migration, have an authorized
+operator diagnose the cause and state. Verify schema compatibility before
+choosing an older image.
+
+See the [Azure deployment guide](../docs/guide/deploy-to-azure.md),
+[Kustomize guide](../deploy/k8s/README.md), and
 [runtime configuration reference](../docs/reference/runtime-configuration.md).
