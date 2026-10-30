@@ -282,6 +282,13 @@ test('runtime configuration retains the run-owned acceptance client and seeds th
   assert.equal(data.IdentityBroker__WebOrigin, `https://${portalHostname}`);
   assert.equal(data.IdentityBroker__SecretRedemption__VaultUri, 'https://agentweaver-kv.vault.azure.net/');
   assert.equal(data.IdentityBroker__SecretRedemption__VaultHost, 'agentweaver-kv.vault.azure.net');
+  assert.equal(data.IdentityBroker__RunBinding__ProjectsAudience, 'https://projects.agentweaver.io/run-binding');
+  assert.equal(data.IdentityBroker__RunBinding__ProjectsOwnerAddress,
+    'https://projects-config.agentweaver.svc.cluster.local:8443/');
+  assert.equal(data.IdentityBroker__RunBinding__ProjectsServerCertificateSha256,
+    '2f8d3d969428d8ca3b33d1a083a2fc80da34ed54111d65eaf7a87c3a0240f053');
+  assert.equal(data.IdentityBroker__RunBinding__ProjectsTrustBundleSha256,
+    '5de6410b8a7ac85025497d89b230be09407428f7a29d0bc4f6f3e6db0ea3dbfa');
   assert.equal(data.IdentityBroker__Clients__0__Type, 'Public');
   assert.equal(data.IdentityBroker__Clients__0__ClientId, `identity-acceptance-${principalId}`);
   assert.equal(data.IdentityBroker__Clients__0__RedirectUris__0, config.acceptanceRedirectUri);
@@ -292,6 +299,13 @@ test('runtime configuration retains the run-owned acceptance client and seeds th
   assert.deepEqual(Array.from({ length: 7 }, (_, index) =>
     data[`IdentityBroker__Clients__1__Scopes__${index}`]),
   ['openid', 'profile', 'email', 'api.read', 'offline_access', 'projects.admin', 'projects.orchestrator']);
+  assert.equal(data.IdentityBroker__Clients__2__ClientId, 'agentweaver-cli');
+  assert.equal(data.IdentityBroker__Clients__2__DisplayName, 'Agentweaver CLI');
+  assert.equal(data.IdentityBroker__Clients__2__Type, 'Public');
+  assert.equal(data.IdentityBroker__Clients__2__RedirectUris__0, 'http://127.0.0.1:49173/oauth/callback');
+  assert.equal(data.IdentityBroker__Clients__2__Resources__0, `https://${hostname}/`);
+  assert.deepEqual(Array.from({ length: 3 }, (_, index) =>
+    data[`IdentityBroker__Clients__2__Scopes__${index}`]), ['openid', 'api.read', 'offline_access']);
   assert.ok(!Object.keys(data).some(key => key.includes('ClientSecret')));
   assert.ok(data.ConnectionStrings__IdentityBroker.endsWith('SSL Mode=VerifyFull'));
   assert.throws(() => brokerAcceptanceConfiguration(config, {
@@ -390,7 +404,7 @@ test('runtime setup creates absent native objects once and never overwrites conf
   denyDeploymentCreate = false;
   const receipt = bootstrapIdentityBrokerRuntime(runtimeConfig, deps);
   assert.equal(receipt.configMapCreated, true);
-  assert.equal(receipt.configMap, 'identity-broker-runtime-config-v2');
+  assert.equal(receipt.configMap, 'identity-broker-runtime-config-v3');
   assert.equal(receipt.routingBlocked, true);
   assert.equal(receipt.runtimeVerified, false);
   assert.equal(calls.filter(args => args.includes('--dry-run=client')).length, 8);

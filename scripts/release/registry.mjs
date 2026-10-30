@@ -185,3 +185,38 @@ export async function verifyServiceRegistryImage(image, fetchImpl = globalThis.f
     version,
   };
 }
+
+/** Reads only the OCI revision label used to parse a migration image's schema support. */
+export async function readServiceImageRevision(image, fetchImpl = globalThis.fetch, delay) {
+  const reference = splitImageReference(image);
+  const reader = await registryReader(reference.repository, fetchImpl, delay);
+  const top = await reader.manifest(reference.digest);
+  let childDigest = reference.digest;
+  let child = top;
+  if (Array.isArray(top.value.manifests)) {
+    const amd64 = top.value.manifests.filter(entry =>
+      entry.platform?.os === 'linux' && entry.platform?.architecture === 'amd64');
+    if (amd64.length !== 1 || !DIGEST.test(amd64[0]?.digest ?? '') ||
+        !Number.isSafeInteger(amd64[0]?.size) || amd64[0].size <= 0) {
+      fail('service image must have exactly one valid linux/amd64 platform manifest');
+    }
+    childDigest = amd64[0].digest;
+    child = await reader.manifest(childDigest, amd64[0].size);
+  }
+
+  const manifest = child.value;
+  if (!manifestTypes.has(manifest.mediaType) || !configTypes.has(manifest.config?.mediaType) ||
+      !DIGEST.test(manifest.config?.digest ?? '') || !Number.isSafeInteger(manifest.config.size) ||
+      manifest.config.size <= 0) {
+    fail('service image manifest has an invalid config descriptor');
+  }
+  const config = parseJson(
+    (await reader.blob(manifest.config.digest, manifest.config.size)).toString('utf8'),
+    'service image config',
+  );
+  const sourceSha = config.config?.Labels?.['org.opencontainers.image.revision'];
+  if (config.os !== 'linux' || config.architecture !== 'amd64' || !SHA.test(sourceSha ?? '')) {
+    fail('service image has no valid linux/amd64 revision label');
+  }
+  return { digest: childDigest, sourceSha };
+}

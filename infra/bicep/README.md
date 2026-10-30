@@ -140,50 +140,35 @@ Its parameters are `namePrefix`, `tags`, and the 40-character `sourceSha`. The
 [database maintenance runner](../../docs/guide/database-maintenance.md) deploys
 it to the existing resource group. A rerun changes nothing.
 
-`db-maintenance-ci-identity.bicep` defines the identity that the database
-maintenance workflow signs in as, `agentweaver-id-db-maintenance`. Its only
-federated credential trusts GitHub Actions jobs that use the
-`v1-db-maintenance` environment. It assigns Reader on the resource group, AKS
-Cluster User on the cluster, and no custom Azure role. The setup script applies
-a Kubernetes Role and RoleBinding only in the `agentweaver` namespace. The Role
-allows the maintenance Jobs, pod logs, ConfigMaps, Leases, ServiceAccounts,
-Cilium network policies, and the `orchestrator` and `events-and-sessions`
-Deployments used by the runner. The identity cannot deploy Azure resources,
-assign roles, or connect to PostgreSQL. Its parameters are `namePrefix`,
-`tags`, `sourceSha`, `githubRepository`, and `githubEnvironment`.
-`npm run db:maintenance:setup` deploys the identity and checks the Azure
-assignments, then applies and reads back the Kubernetes authorization.
+`db-maintenance-ci-identity.bicep` defines the existing v1 workflow identity
+`agentweaver-id-db-maintenance` and the dedicated
+`agentweaver-id-projects-config-migration` identity. GitHub Actions uses OIDC
+from the `v1-db-maintenance` environment; the deployment identity retains
+Reader on the resource group and AKS Cluster User on the cluster, with no
+custom Azure role. The migration identity receives no Azure resource role and
+is federated only to the `projects-config-migration` ServiceAccount in
+`agentweaver`. The setup command applies and verifies the namespace Role and
+RoleBinding for the workflow identity plus the migration ServiceAccount
+annotation. `npm run db:maintenance:setup -- --v1-deploy-only --execute`
+performs that one-time setup and sets
+`AZURE_DB_MAINTENANCE_CLIENT_ID` in the GitHub environment.
 
-Projects & Config applies migrations as its schema owner. The migration Job
-grants the runtime role nothing. The Projects & Config migration runner then
-applies and reads back the planned runtime grants with
-`bootstrap-p1-postgres.mjs --apply-projects-config-grants`, as described in
-[Applying the Projects & Config runtime grants](../../scripts/azure/README.md#applying-the-projects--config-runtime-grants).
+The Projects & Config migration identity must also be mapped to PostgreSQL as
+a schema owner. Its role needs database `CONNECT` and ownership only of the
+`projects_config` schema and its exact planned objects; it must not own the
+database, retain database `CREATE`, or access other schemas. The one-time
+Azure setup does not change PostgreSQL ownership. Do not use the
+DDL-restricted runtime principal or the P1 identity for this job.
 
-The reviewed plan includes the casting authority-lock function `EXECUTE` and
-the project role-assignment write set, so the grants step above applies them.
-`postgres-projectsconfig-runtime-grants.sql` holds the same grants as a
-standalone definition for a database whose grants are managed by hand. It
-needs migration `20261009021400_AddCastingAuthorityLockFunction`:
+The Projects & Config migration Job uses the projected Workload Identity
+token, applies EF migrations, then reconciles the reviewed runtime grants in
+the same migration operation. Ownership and object-inventory checks fail
+closed before grants; grant application and least-privilege readback are
+transactional. Extend and review the plan when new runtime permissions are
+needed; do not use blanket/default grants.
 
-```powershell
-psql "$PROJECTS_CONFIG_DATABASE_URL" `
-  -v runtime_role="approved_projects_config_runtime" `
-  -f infra\bicep\postgres-projectsconfig-runtime-grants.sql
-```
-
-The file defines these data-table grants for the project role-assignment API:
-
-- `INSERT` on `projects_config.project_role_assignments`.
-- `UPDATE (state, revision, revoked_by, revoked_at)` on
-  `projects_config.project_role_assignments`.
-- `INSERT` on `projects_config.authority_audit`.
-
-It grants no `DELETE` and no write access to `tenant_memberships`. The API
-allows these writes only for a current TenantAdmin and audits each change in
-the same transaction. Don't add other privileges to enable row locking. The
-function is owned by the migration/schema owner, returns authorization status
-only, and is not executable by `PUBLIC`. The SQL file is an operator
-definition, not an automatic grant or deployment. Each live grant needs a
-separate approval. See
+The plan preserves the project role-assignment boundary: only `INSERT` on
+`project_role_assignments` and `authority_audit`, plus `UPDATE` on
+`state`, `revision`, `revoked_by`, and `revoked_at`; it grants no `DELETE` and
+no writes on `tenant_memberships`. See
 [Runtime authority writes](../../docs/reference/runtime-configuration.md#runtime-authority-writes).

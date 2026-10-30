@@ -23,7 +23,6 @@ test('validated numeric owner evidence survives aggregation without satisfying e
   const aggregate = createP1AcceptanceResult({
     surface: 'api',
     surfaceStatus: 'passed',
-    sourceEvidence: { services: { status: 'passed' }, agentHostImageMeasurement: { status: 'passed' } },
     nativeProbeResults: [report],
   });
   assert.equal(aggregate.fullP1Status, 'blocked');

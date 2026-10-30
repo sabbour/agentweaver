@@ -5,8 +5,8 @@ paths. Infrastructure provisioning, artifact publication, and runtime rollout
 are separate operations. This page describes source and tooling; it does not
 report a live rollout.
 
-A successful build is not a deployment receipt, and a deployment receipt is
-not end-to-end product acceptance.
+A successful build does not prove that a cluster deployment or end-to-end
+product acceptance succeeded.
 
 ## Find deployment source
 
@@ -20,26 +20,27 @@ not end-to-end product acceptance.
 | `deploy/k8s/routing/identity-broker/` | Managed Gateway routing and backend TLS |
 | `deploy/k8s/profiles/` | Separately selected runtime profiles |
 | `scripts/azure/` | Exact-source infrastructure planning and deployment |
-| `scripts/release/` | Artifact preparation, publication, provenance, and rollout |
-| `.github/workflows/v1-integration-images.yml` and `v1-release-pack.yml` | Manually dispatched artifact workflows |
+| `scripts/release/` | Component version planning, Kustomize image helpers, and shared registry reads |
+| `.github/workflows/v1-integration-images.yml` | Direct GHCR image builds for v1 service changes |
+| `.github/workflows/v1-release-pack.yml` | NuGet package publication after component version changes |
+| `.github/workflows/v1-deploy.yml` | Migration-first Kustomize deployment |
 
-The Azure acceptance verifier is
-`scripts/azure/verify-acceptance.mjs`. Release deployment uses
-`scripts/release/deploy.mjs`, `deploy-integration.mjs`, and `runtime-list.mjs`.
+The Azure acceptance verifier is `scripts/azure/verify-acceptance.mjs`.
 
 ## Keep source and deployment boundaries
 
-- Source identity includes the exact commit and tree, not only a branch or
-  mutable image tag.
-- Runtime rollout consumes verified published images; it does not build
-  replacements during deployment.
+- The image workflow tags each direct GHCR push with its Git commit and
+  reports the registry digest.
+- The deployment command resolves those tags to digests, runs the existing
+  migration Jobs, then renders and applies the root Kustomize overlay.
 - Shared services and per-Sandbox AgentHost placement have separate lifecycles.
 - Missing runtime prerequisites stop deployment. Rollout does not create new
   credentials or grant itself access.
 
-The Broker migration Job is a separate write boundary: it applies migrations
-and the canonical explicit table grants as the migration owner. Initial
-bootstrap success alone does not prove post-migration runtime access.
+The Broker migration Job is a separate write boundary: the integrated
+deployment runs it before the root workload apply, applying migrations and
+canonical explicit table grants as the migration owner. Initial bootstrap
+success alone does not prove post-migration runtime access.
 Read-only bootstrap verification checks the table grants without repairing
 them. See [Broker database permissions](../reference/runtime-configuration#identity-broker-migration-history-and-grants).
 Its separate Kustomize overlay resolves migration DNS and TCP 5432 egress to
@@ -47,9 +48,14 @@ the exact `agentweaver-pg.postgres.database.azure.com` host; the guarded root
 release apply does not include that Job or policy.
 
 The Orchestrator and Events and Sessions migrations run as Jobs from the
-`migrations/p1-postgres/` overlay under the P1 migration identity. One
-command, `npm run db:maintenance`, runs the Broker and P1 Jobs, checks that
-the running service images support the new schema, and writes a receipt.
+`migrations/p1-postgres/` overlay under the P1 migration identity. The
+integrated `npm run deploy:kustomize` command runs Broker/P1 migrations, then
+Projects & Config migration, before applying the root overlay. The underlying
+The deployment command runs the P1/Broker runner with `--migrations-only`, so
+it does not apply an early service rollout or enforce the legacy image-order
+gate; the single root Kustomize apply updates workloads after all migration
+Jobs succeed. The normal standalone `npm run db:maintenance` mode retains its
+schema-ordering and readiness checks.
 `npm run db:maintenance:setup` creates the identities, role assignments, and
 GitHub environment that the command and its workflow need. Setup also applies
 and verifies a narrow Kubernetes Role and RoleBinding for the workflow identity;
@@ -145,75 +151,62 @@ The shared runtime `List` contains nine service Deployment/Service pairs.
 AgentHost is the tenth product image, but it runs per Sandbox instead of as a
 shared Deployment.
 
-## Prepare and publish images
+## Build and publish
 
-The integration workflow takes an exact `v1` source SHA, prepares ten
-source-tagged service images, and separates preparation from approved
-publication. Its images-only receipt retains the draft manifest and source
-tree. `deploy-integration.mjs` verifies that receipt and registry provenance
-before rendering or applying the composition.
+The v1 image workflow builds all ten images used by the root Kustomize overlay
+when service code, Docker build inputs, or component versions change. AgentHost
+and Identity Broker use their existing Dockerfiles and build contexts, Web
+builds its frontend and host, and the other seven images use .NET container
+publishing. Each image is pushed directly to GHCR with a `sha-<commit>` tag.
+The workflow summary lists each registry digest and the AgentHost compressed
+pull size.
 
-The release workflow prepares independently versioned packages and images
-from exact source. It rebuilds only images whose version or input fingerprint
-changed since the last published release, and reuses the others by their
-original digest and build provenance. Publication is a separate confirmed operation. Deployment
-consumes an already-published `v1.x.y` release, its manifest, and publication
-receipt.
+The package workflow runs separately when `releases/foundation.json` changes.
+It packs versioned contracts and libraries and pushes NuGet packages to GitHub
+Packages. The native CLI archive workflow remains separate. These workflows
+do not transfer image archives or require image publication receipts or
+source-claim gates.
 
-## Deploy a published release
+## Deploy the Kustomize overlay
 
-Before deployment, provide a clean product checkout, a published release with
-its source-bound manifest and receipt, and an Azure/Kubernetes target with
-required runtime configuration and TLS already present.
+Dispatch `.github/workflows/v1-deploy.yml` on `v1` with a `sha-<commit>` image
+tag produced by the image workflow. It runs `npm run deploy:kustomize`, which
+resolves ten immutable digests, runs Broker/P1 then Projects & Config
+migrations, renders `deploy/k8s`, applies it to the selected context and
+`agentweaver` namespace, and waits for all nine Deployments. Any failed
+migration prevents the root overlay apply.
 
-The v1.0.5 GitHub Release and tag are already published at source
-`edae14b469548b8409b0eef651504691e0216a1e`. Do not create another release or
-tag after the bootstrap-pins pull request merges. Its separate
-`release:deploy-bootstrap` pre-acceptance path compares every rendered
-immutable ConfigMap with its live object and blocks changed maps outside its
-allowlist during dry-run. It can replace only changed
-`agenthost-runtime-v1`, `projects-config-runtime-config`, and
-`gateway-runtime-config` ConfigMaps after preflighting the rest of the bundle.
-It restarts the `projects-config` and `gateway` Deployments when their runtime
-maps are replaced. It never replaces `environment-cilium-config` or
-`projects-config-provider-catalog`. Pending restarts are checkpointed and
-retried by `--resume` after a partial failure, even when ConfigMap drift is
-gone. This path does not complete release acceptance.
-See the
-[v1.0.5 release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v105-pre-acceptance-bootstrap)
-for the source-bound publication receipt and pinned images.
+The workflow requires `AZURE_DB_MAINTENANCE_CLIENT_ID` in the
+`v1-db-maintenance` GitHub environment and uses the existing GitHub OIDC
+identity. Run `npm run db:maintenance:setup -- --v1-deploy-only --execute`
+once to provision its federation, the approved namespace Role/RoleBinding, and
+the Projects & Config migration Workload Identity ServiceAccount. The deploy
+identity needs AKS Cluster User access and the namespace-scoped verbs listed
+in the [release reference](../reference/releases.md). The deploy command does
+not read Secrets or manage the Namespace.
 
-1. Verify the checkout, release source, manifest, and publication identity.
-2. Verify digest-pinned GitHub Container Registry (GHCR) images through the
-   registry API, including the measured AgentHost image and compressed pull
-   size.
-3. Render the checked-in runtime `List`, or validate an explicit runtime
-   manifest.
-4. Verify the Azure target, Kubernetes context, runtime configuration, TLS,
-   identities, and policies.
-5. Run client-side dry-run. Without `--execute`, stop before applying.
-6. Apply validated workloads and save an apply checkpoint.
-7. Recheck source, images, and target; wait for rollouts; verify ready Pods and
-   pulled image IDs.
+Projects & Config migration uses a dedicated Kubernetes Workload Identity. The
+`projects-config-migration` ServiceAccount uses the
+`agentweaver-id-projects-config-migration` identity, federated with audience
+`api://AzureADTokenExchange` and subject
+`system:serviceaccount:agentweaver:projects-config-migration`. The deploy
+command verifies its client-ID annotation before creating any migration Job.
+Provision the matching PostgreSQL Entra principal with `CONNECT` and ownership
+only of the `projects_config` schema and its exact planned objects; it must not
+own the database, retain database `CREATE`, or access other schemas. The
+one-time setup command does not change PostgreSQL ownership. No access token is
+stored in the migration Job.
 
-The tool does not create missing credentials, identities, routes, namespaces,
-migrations, or databases. Partial publication requires a verified completion
-proof; it is not accepted as a complete release. The one-use `v1.0.0`
-continuation is consumed after publishing the 11 missing outputs and verifying
-the full 23-output release. See the [release reference](../reference/releases.md)
-for status and the [release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md)
-for its evidence contract.
+The Projects & Config migration applies EF migrations and then reconciles the
+reviewed runtime-grant plan in the same migration operation. It verifies the
+schema-owner identity, object inventory, and least-privilege grants
+transactionally; a mismatch fails before rollout. Extend and review the plan
+when new objects need runtime access; do not use blanket/default grants.
 
-## Resume and diagnose rollout
-
-Source drift, a wrong target, missing prerequisites, mutable images, and
-provenance mismatches stop rollout. `--resume` can reuse the completed apply
-checkpoint, but repeats current source, registry, target, rollout, Pod, and
-health checks.
-
-Infrastructure success followed by bootstrap failure remains a partial
-result. A rendered profile or ready shared workload does not prove per-Sandbox
-execution or full API, UI, and MCP acceptance.
+The workflow must exist on the repository's default branch to appear in the
+manual dispatch UI. Azure provisioning, certificates, runtime configuration,
+and Gateway routing remain separate prerequisites and are not changed by the
+workload rollout.
 
 ## Related content
 

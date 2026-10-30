@@ -146,13 +146,9 @@ function dependencies({
   const execDotnet = (args, settings) => {
     dotnetInvocation = { args, settings };
     dotnetInvocations.push(dotnetInvocation);
-    if (args.includes('--initialize') || args.includes('--inspect') || args.includes('--apply-pending-migrations') ||
-        args.includes('--apply-projects-config-grants')) {
+    if (args.includes('--initialize') || args.includes('--inspect') || args.includes('--apply-pending-migrations')) {
       if (assertTunnelActiveForP1) assert.equal(portForwardStopped, false);
-      const grants = args.includes('--apply-projects-config-grants');
       const marker = args.includes('--inspect') ? 'P1_POSTGRES_INSPECTION_FINISHED writes=false'
-        : grants && args.includes('--dry-run') ? 'P1_POSTGRES_PROJECTS_CONFIG_GRANTS_DRY_RUN writes=false'
-        : grants ? 'P1_POSTGRES_PROJECTS_CONFIG_GRANTS_APPLIED runtimeIdentityProof=false deploymentProof=false'
         : args.includes('--dry-run') ? 'P1_POSTGRES_PENDING_MIGRATIONS_DRY_RUN writes=false'
           : args.includes('--apply-pending-migrations')
             ? 'P1_POSTGRES_PENDING_MIGRATIONS_APPLIED runtimeIdentityProof=false deploymentProof=false'
@@ -314,13 +310,6 @@ test('inspection and pending continuation never re-bootstrap Identity and pass e
       ['--apply-pending-migrations', '--source-sha', sourceSha, '--core-merge-sha', coreMergeSha,
         '--plan-sha256', planSha256, '--max-core-version', '23', '--max-events-version', '10', '--receipt', receiptPath],
       'pending-migrations-applied'],
-    [{ mode: 'projects-config-grants-dry-run', sourceSha, planSha256 },
-      ['--apply-projects-config-grants', '--source-sha', sourceSha, '--plan-sha256', planSha256, '--dry-run'],
-      'read-only-projects-config-grants-dry-run'],
-    [{ mode: 'projects-config-grants', sourceSha, planSha256, receiptPath },
-      ['--apply-projects-config-grants', '--source-sha', sourceSha, '--plan-sha256', planSha256,
-        '--receipt', receiptPath],
-      'projects-config-grants-applied'],
   ];
   for (const [p1Initializer, expected, verification] of cases) {
     const fakes = dependencies({ assertTunnelActiveForP1: true });
@@ -346,13 +335,6 @@ test('initialized-database modes reject Identity bootstrap, missing maxima, and 
     [true, { sourceSha: base.sourceSha, planSha256: base.planSha256, mode: 'inspect',
       receiptPath: join(options.repoRoot, 'Temp', 'p1-inspect.jsonl') }],
     [true, { ...base, mode: 'reset' }],
-    [true, { ...base, mode: 'projects-config-grants-dry-run' }],
-    [true, { sourceSha: base.sourceSha, planSha256: base.planSha256, mode: 'projects-config-grants' }],
-    [true, { sourceSha: base.sourceSha, planSha256: base.planSha256, mode: 'projects-config-grants-dry-run',
-      receiptPath: join(options.repoRoot, 'Temp', 'p1-grants.jsonl') }],
-    [true, { sourceSha: base.sourceSha, planSha256: base.planSha256, mode: 'projects-config-grants-dry-run',
-      maxCoreVersion: 23, maxEventsVersion: 9 }],
-    [false, { sourceSha: base.sourceSha, planSha256: base.planSha256, mode: 'projects-config-grants-dry-run' }],
   ];
   for (const [verifyOnly, p1Initializer] of invalid) {
     const fakes = dependencies();

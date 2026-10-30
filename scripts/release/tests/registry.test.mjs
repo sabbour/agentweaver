@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { verifyRegistryImage, verifyServiceRegistryImage } from '../registry.mjs';
+import { readServiceImageRevision, verifyRegistryImage, verifyServiceRegistryImage } from '../registry.mjs';
 
 const sourceSha = 'a'.repeat(40);
 const sourceTree = 'b'.repeat(40);
@@ -93,6 +93,17 @@ test('service registry verification checks raw index, unique amd64 child, and so
     sourceTree: result.sourceTree,
     version: result.version,
   }, { configDigest: fixture.configDigest, sourceSha, sourceTree, version });
+});
+
+test('migration revision lookup needs no source-tree or version publication claims', async () => {
+  const fixture = serviceFixture({
+    mutateConfig(config) {
+      delete config.config.Labels['io.agentweaver.source-tree'];
+      delete config.config.Labels['org.opencontainers.image.version'];
+    },
+  });
+  const result = await readServiceImageRevision(`${fixture.topReference}${fixture.topDigest}`, fixture.fetchImpl);
+  assert.deepEqual(result, { digest: fixture.childDigest, sourceSha });
 });
 
 test('service registry verification rejects duplicate amd64 children', async () => {

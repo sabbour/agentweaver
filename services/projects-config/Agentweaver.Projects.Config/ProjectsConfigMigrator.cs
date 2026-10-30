@@ -3,7 +3,7 @@ using Npgsql;
 
 namespace Agentweaver.Projects.Config;
 
-/// <summary>Applies explicit EF migrations and verifies runtime schema and authority permissions before serving traffic.</summary>
+/// <summary>Applies EF migrations, reconciles the reviewed runtime grants, and verifies permissions before serving traffic.</summary>
 public static class ProjectsConfigMigrator
 {
     private const string LockName = "agentweaver.projects_config.migrate";
@@ -156,6 +156,7 @@ public static class ProjectsConfigMigrator
                 npgsql.MigrationsHistoryTable("__ef_migrations_history", ProjectsConfigDbContext.Schema));
             await using var context = new ProjectsConfigDbContext(builder.Options);
             await context.Database.MigrateAsync(cancellationToken).ConfigureAwait(false);
+            await ProjectsConfigRuntimeGrantPlan.ApplyAsync(connection, cancellationToken).ConfigureAwait(false);
         }
         finally
         {

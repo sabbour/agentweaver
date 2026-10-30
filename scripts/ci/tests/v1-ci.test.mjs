@@ -171,6 +171,7 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   const cliApphost = jobs.dotnet.steps.find((step) => step.name === 'Select the built CLI apphost for process acceptance');
   assert.equal(cliApphost.if, "matrix.name == 'cli-acceptance'");
   assert.match(cliApphost.run, /AGENTWEAVER_CLI_PATH/);
+  assert.equal(jobs.images.steps.some((step) => step.uses === 'actions/upload-artifact@v4'), false);
   assert.match(parsed.concurrency['cancel-in-progress'], /pull_request/);
   assert.match(parsed.concurrency.group, /github.run_id/);
   assert.equal(parsed.env.COLLECT_COVERAGE, '${{ inputs.collect_coverage == true }}');
@@ -187,7 +188,12 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   assert.ok(jobs.node.steps.some((step) => step.name === 'Validate release composition'));
   assert.match(jobs.node.steps.find((step) => step.name === 'Validate release composition').run,
     /if \[ "\$GITHUB_EVENT_NAME" = workflow_dispatch \]; then[\s\S]*RELEASE_BASE_SHA="\$\(git rev-parse HEAD\^1\)"/);
-  assert.ok(jobs.node.steps.some((step) => step.name === 'Test controlled P1 API, MCP, and UI journeys'));
+  const p1JourneyTest = jobs.node.steps.find((step) =>
+    step.name === 'Test P1 journeys without release artifact receipts');
+  assert.ok(p1JourneyTest);
+  assert.match(p1JourneyTest.run, /p1-journey-input\.test\.mjs/);
+  assert.match(p1JourneyTest.run, /p1-acceptance-result\.test\.mjs/);
+  assert.doesNotMatch(p1JourneyTest.run, /p1-deployment-evidence\.test\.mjs/);
   assert.deepEqual(jobs.node.needs, ['changes', 'web']);
   assert.ok(jobs.node.steps.some((step) => step.with?.name === 'v1-web-dist'));
   assert.ok(jobs.node.steps.some((step) => step.run?.includes('dotnet restore services/agenthost/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj --locked-mode')));

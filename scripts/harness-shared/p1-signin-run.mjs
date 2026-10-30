@@ -64,7 +64,7 @@ export function parseP1SigninArguments(argv) {
 
 function printP1OperatorSteps(io, { dryRun = false } = {}) {
   io.log?.('Operator steps:');
-  io.log?.('1. Confirm the manifest matches one exact deployed release and source, publication and AgentHost archive measurements, live provider/runtime/storage receipts, and the current selection revision.');
+  io.log?.('1. Confirm the target, live provider/runtime/storage configuration, and current selection revision. Product tests do not require publication or image receipts.');
   io.log?.('2. Supply independent native and recovery evidence for any checks that need it. This one-account launcher does not create a second identity or invent missing evidence.');
   io.log?.('3. Complete one interactive sign-in in the headed Chrome window with the approved account. Review and approve only the scopes shown for the registered client.');
   io.log?.('4. Keep the redacted evidence output. The harness creates an invocation-owned project, grants Owner and Orchestrator, runs the selected journey, then revokes Orchestrator, archives the project, and revokes Owner.');

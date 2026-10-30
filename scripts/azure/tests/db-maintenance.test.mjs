@@ -185,6 +185,7 @@ test('arguments require exact digests and reject unknown or malformed flags', ()
   assert.equal(parsed.execute, false);
   assert.equal(parsed.handover, 'auto');
   assert.equal(parsed.jobTimeoutSeconds, 900);
+  assert.equal(parseDbMaintenanceArgs([...baseArgs, '--migrations-only']).migrationsOnly, true);
   assert.ok(!parsed.receiptDir.startsWith(process.cwd()));
   assert.throws(() => parseDbMaintenanceArgs([]), /--environment-digest must be an exact sha256/);
   assert.throws(() => parseDbMaintenanceArgs(['--environment-digest', 'latest', ...baseArgs.slice(2)]), /exact sha256/);
@@ -193,6 +194,10 @@ test('arguments require exact digests and reject unknown or malformed flags', ()
   assert.throws(() => parseDbMaintenanceArgs([...baseArgs, '--reset']), /Unknown argument/);
   assert.throws(() => parseDbMaintenanceArgs([...baseArgs, '--handover']), /requires a value/);
   assert.throws(() => parseDbMaintenanceArgs([...baseArgs, '--job-timeout-seconds', '5']), /60 to 3600/);
+  assert.throws(() => parseDbMaintenanceArgs([...baseArgs, '--migrations-only', '--deploy-apps']),
+    /--migrations-only cannot be combined with --deploy-apps/);
+  assert.throws(() => parseDbMaintenanceArgs(['--prepare-only', '--migrations-only']),
+    /--prepare-only cannot be combined with --migrations-only/);
   assert.equal(parseDbMaintenanceArgs(['--release-lock=abcdef123456']).releaseLock, 'abcdef123456');
   assert.throws(() => parseDbMaintenanceArgs(['--release-lock', 'someone']), /12-character run ID/);
 });
@@ -511,6 +516,25 @@ test('services on older images block the run unless the runner deploys the match
   assert.equal(fake.receipts[0].receipt.serviceOrder.order, 'planned-readiness-gap');
   // There is no switch to migrate and leave services on images that reject the schema.
   assert.throws(() => parseDbMaintenanceArgs([...baseArgs, '--allow-app-image-mismatch']), /Unknown argument/);
+});
+
+test('migrations-only runs the Jobs without schema gates or application rollouts', async () => {
+  const fake = appWorld();
+  try {
+    const receipt = await runDbMaintenance({
+      ...parseDbMaintenanceArgs([...baseArgs, '--migrations-only', '--execute']),
+      receiptDir: fake.receiptDir,
+    }, fake.deps);
+    assert.equal(receipt.result, 'succeeded');
+    assert.equal(receipt.serviceOrder.order, 'migrations-only');
+    assert.deepEqual(receipt.appImages, []);
+    assert.deepEqual(receipt.steps.map(step => step.name).filter(name => name.endsWith('-migrated')), [
+      'environment-migrated', 'orchestrator-migrated', 'events-and-sessions-migrated',
+    ]);
+    assert.equal(fake.calls.some(call => call.command === 'kubectl' &&
+      ['set', 'rollout'].includes(call.args[4])), false);
+    assert.equal(receipt.steps.some(step => step.name === 'app-ready'), false);
+  } finally { fake.done(); }
 });
 
 test('a planned readiness gap migrates, deploys the matching digests in the same run, and records the gap', async () => {

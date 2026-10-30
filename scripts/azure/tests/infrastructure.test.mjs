@@ -378,7 +378,7 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.match(identityDeploymentDocument, /ASPNETCORE_Kestrel__Certificates__Default__Path\s*\n\s+value: \/var\/run\/identity-broker-tls\/tls\.crt/);
   assert.match(identityDeploymentDocument, /ASPNETCORE_Kestrel__Certificates__Default__KeyPath\s*\n\s+value: \/var\/run\/identity-broker-tls\/tls\.key/);
   assert.match(identityDeploymentDocument, /claimName: identity-broker-key-ring/);
-  assert.match(identityDeploymentDocument, /configMapRef:\s+name: identity-broker-runtime-config-v2\s+optional: false/);
+  assert.match(identityDeploymentDocument, /configMapRef:\s+name: identity-broker-runtime-config-v3\s+optional: false/);
   assert.match(identityDeploymentDocument, /secretRef:\s+name: identity-broker-client-secrets\s+optional: true/);
   assert.match(identityDeploymentDocument, /optional: false\s+secretName: identity-broker-signing/);
   assert.match(identityDeploymentDocument, /optional: false\s+secretName: identity-broker-tls/);

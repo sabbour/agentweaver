@@ -92,7 +92,7 @@ patches:
 replacements:
   - source:
       kind: ConfigMap
-      name: identity-broker-runtime-config-v2
+      name: identity-broker-runtime-config-v3
       fieldPath: data.IdentityBroker__SecretRedemption__VaultHost
     targets:
       - select:
@@ -105,7 +105,7 @@ replacements:
           - spec.egress.3.toFQDNs.0.matchName
   - source:
       kind: ConfigMap
-      name: identity-broker-runtime-config-v2
+      name: identity-broker-runtime-config-v3
       fieldPath: data.IdentityBroker__SecretRedemption__WorkloadIdentityClientId
     targets:
       - select:
@@ -115,7 +115,7 @@ replacements:
           - metadata.annotations.[azure.workload.identity/client-id]
   - source:
       kind: ConfigMap
-      name: identity-broker-runtime-config-v2
+      name: identity-broker-runtime-config-v3
       fieldPath: data.IdentityBroker__SecretRedemption__WorkloadIdentityTenantId
     targets:
       - select:

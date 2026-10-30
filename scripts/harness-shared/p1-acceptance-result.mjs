@@ -169,14 +169,13 @@ export function validateP1NativeProbeResults(envelopes) {
 }
 
 /**
- * Combine surface execution with source-bound and native probe results into a redacted P1 receipt.
+ * Combine surface execution with optional native probe results into a redacted P1 receipt.
  * Required failed probes fail the overall result; missing or blocked probes prevent a pass.
  */
 export function createP1AcceptanceResult({
   surface,
   surfaceStatus,
   steps = [],
-  sourceEvidence,
   nativeProbeResults = [],
   observations = {},
   failure,
@@ -184,25 +183,7 @@ export function createP1AcceptanceResult({
   if (!['api', 'mcp', 'ui'].includes(surface) || !ACCEPTED_SURFACE_STATUSES.has(surfaceStatus)) {
     throw new Error('A known P1 surface and explicit surface result are required.');
   }
-  const probes = [
-    {
-      id: 'service-deployment-source-binding',
-      required: true,
-      status: sourceEvidence?.services?.status === 'passed' ? 'passed' : 'blocked',
-      reason: sourceEvidence?.services?.status === 'passed'
-        ? null
-        : 'Actual service Deployment/Pod identities and registry source labels were not verified.',
-    },
-    {
-      id: 'agenthost-image-measurement',
-      required: true,
-      status: sourceEvidence?.agentHostImageMeasurement?.status === 'passed' ? 'passed' : 'blocked',
-      reason: sourceEvidence?.agentHostImageMeasurement?.status === 'passed'
-        ? null
-        : 'The source-bound AgentHost OCI image was not measured with the existing image tool.',
-    },
-    ...nativeProbeRows(nativeProbeResults),
-  ];
+  const probes = nativeProbeRows(nativeProbeResults);
   const fullP1Status = surfaceStatus === 'failed' || probes.some(probe => probe.required && probe.status === 'failed')
     ? 'failed'
     : probes.some(probe => probe.required && probe.status !== 'passed') || surfaceStatus === 'blocked'
@@ -215,7 +196,6 @@ export function createP1AcceptanceResult({
     surfaceStatus,
     fullP1Status,
     exitCode: fullP1Status === 'failed' ? 1 : fullP1Status === 'blocked' ? 2 : 0,
-    sourceEvidence: sourceEvidence ?? null,
     steps,
     observations,
     probes,

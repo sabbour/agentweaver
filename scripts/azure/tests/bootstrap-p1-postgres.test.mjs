@@ -173,27 +173,6 @@ test('P1 PostgreSQL pending continuation requires explicit maxima and receipts o
   }
 });
 
-/** The Projects & Config grant step is bound to source and plan only; only its applying mode writes a receipt. */
-test('P1 PostgreSQL Projects & Config grant step takes no Core merge or maxima', async () => {
-  for (const mode of ['projects-config-grants-dry-run', 'projects-config-grants']) {
-    let input;
-    const result = await bootstrapP1Postgres({ repoRoot, execute: true, mode },
-      executionDependencies(value => { input = value; }));
-    assert.equal(result.coreMergeSha, undefined);
-    assert.equal(result.maxCoreVersion, undefined);
-    assert.equal(input.verifyOnly, true);
-    const { receiptPath, ...p1Initializer } = input.p1Initializer;
-    assert.deepEqual(p1Initializer, { mode, sourceSha: source.sha, planSha256: p1PostgresPlanHash() });
-    assert.equal(receiptPath === undefined, mode === 'projects-config-grants-dry-run');
-  }
-  const fail = { sourceResolver() { assert.fail('Invalid input must fail first.'); } };
-  await assert.rejects(bootstrapP1Postgres({ repoRoot, coreMergeSha, mode: 'projects-config-grants' }, fail),
-    /grant step take none/);
-  await assert.rejects(bootstrapP1Postgres({
-    repoRoot, mode: 'projects-config-grants', maxCoreVersion: 23, maxEventsVersion: 9,
-  }, fail), /explicit maximum Core and Events versions/);
-});
-
 /** Partial or contradictory mode inputs fail before any source or Azure lookup. */
 test('P1 PostgreSQL modes reject missing maxima, stray maxima, and inspection merge SHAs', async () => {
   const fail = { sourceResolver() { assert.fail('Invalid input must fail first.'); } };
@@ -202,8 +181,10 @@ test('P1 PostgreSQL modes reject missing maxima, stray maxima, and inspection me
   await assert.rejects(bootstrapP1Postgres({ repoRoot, coreMergeSha, maxCoreVersion: 23, maxEventsVersion: 9 }, fail),
     /explicit maximum Core and Events versions/);
   await assert.rejects(bootstrapP1Postgres({ repoRoot, coreMergeSha, mode: 'inspect' }, fail),
-    /inspection and the Projects & Config grant step take none/);
+    /inspection takes none/);
   await assert.rejects(bootstrapP1Postgres({ repoRoot, coreMergeSha, mode: 'reset' }, fail),
+    /supported mode/);
+  await assert.rejects(bootstrapP1Postgres({ repoRoot, mode: 'projects-config-grants' }, fail),
     /supported mode/);
   assert.equal(p1PostgresMode({ inspect: true }), 'inspect');
   assert.equal(p1PostgresMode({ 'apply-pending-migrations': true, 'dry-run': true }), 'apply-pending-dry-run');
@@ -212,10 +193,4 @@ test('P1 PostgreSQL modes reject missing maxima, stray maxima, and inspection me
   assert.throws(() => p1PostgresMode({ 'dry-run': true }), /--dry-run applies only/);
   assert.throws(() => p1PostgresMode({ inspect: true, 'apply-pending-migrations': true }), /only one of/);
   assert.throws(() => p1PostgresMode({ inspect: true, 'dry-run': true }), /does not apply to --inspect/);
-  assert.equal(p1PostgresMode({ 'apply-projects-config-grants': true, 'dry-run': true }),
-    'projects-config-grants-dry-run');
-  assert.equal(p1PostgresMode({ 'apply-projects-config-grants': true }), 'projects-config-grants');
-  assert.throws(() => p1PostgresMode({ 'apply-projects-config-grants': true, 'apply-pending-migrations': true }),
-    /only one of/);
-  assert.throws(() => p1PostgresMode({ 'apply-projects-config-grants': true, inspect: true }), /only one of/);
 });

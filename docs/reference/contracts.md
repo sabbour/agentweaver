@@ -1290,7 +1290,7 @@ For complete deployment-setting guidance, see
 | `ProjectsConfig:Tls:ServerCertificateSha256` | SHA-256 hex digest of the exact leaf certificate DER used by Kestrel. |
 | `ConnectionStrings:ProjectsConfigMigration` | Separate password-free PostgreSQL connection for `--migrate`, `--bootstrap-first-tenant-admin`, and `--bootstrap-first-platform-admin`. Its Entra role must own the Projects & Config schema and migration history. |
 | `ProjectsConfig:Migration:AccessToken` | Optional short-lived PostgreSQL Entra access token for the explicit migration connection. The command supplies it as the PostgreSQL password. Keep it in a short-lived Secret or environment variable, never in arguments or logs. |
-| `ProjectsConfig:Migration:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Alternative explicit migration credential used by `--migrate` and both bootstrap commands. Configure either this identity or `ProjectsConfig:Migration:AccessToken`, not both. |
+| `ProjectsConfig:Migration:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Explicit migration workload identity used by `--migrate` and both bootstrap commands. The automated Kustomize migration Job uses this identity from a pre-provisioned ServiceAccount. Configure either this identity or `ProjectsConfig:Migration:AccessToken`, not both. |
 | `ProjectsConfig:Authentication:Authority` and `ProjectsConfig:PrivilegedSetup:{ApprovedIssuer,ApprovedSubject,ApprovedTenantId}` | The approved identity and tenant for the first TenantAdmin and PlatformAdmin. The approved issuer must match the authentication authority. Neither command accepts a different identity as an argument. |
 
 The deployment profile also configures Kestrel's default certificate paths.
@@ -1453,20 +1453,11 @@ request tokens separately from public bearer tokens.
 For P0 deployment, the optional descriptor has exactly four fields:
 `projectsOwnerAddress`, `projectsAudience`,
 `projectsServerCertificateSha256`, and `projectsTrustBundleSha256`.
-`npm run release:prepare-broker-run-binding` reads only the public CA bundle
-and Projects Config `tls.crt` from the exact P0 context; it does not read
-`tls.key`. Both `release:deploy` and `release:deploy-integration` accept the
-descriptor with `--broker-run-binding`. The final-release path renders the
-matching Broker and Projects Config settings, Pod fingerprints, and two
-port-8443 Cilium policies only in a temporary Kustomize copy. It remains
-read-only unless `--execute` is supplied and can replace only those two
-immutable runtime ConfigMaps after its guarded preflight.
-Preflight also permits a partially completed rollout in which one map is
-absent and the other already matches; incomplete values within either map
-still fail, and post-apply verification requires both maps.
-For v1.0.14 run-binding redeployment only, a clean newer helper checkout may
-be used after it verifies the pinned release receipt and unchanged
-source-owned deployment inputs.
+Configure the corresponding existing Broker and Projects & Config runtime
+settings in the root Kustomize overlay. Apply the overlay with the ordinary
+Kubernetes deployment procedure after reviewing the certificate fingerprints,
+runtime values, and operator-owned TLS resources. Never read or copy
+`tls.key` into a ConfigMap or descriptor.
 
 ## Identity PostgreSQL access
 

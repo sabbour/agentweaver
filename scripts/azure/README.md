@@ -465,55 +465,23 @@ npm run platform:runtime-defaults -- --base-url https://<gateway-host> --issuer 
 npm run platform:runtime-defaults -- --base-url https://<gateway-host> --issuer https://<identity-broker-host>/ --audience https://<api-audience>/ --tenant <tenant-id> --execute
 ```
 
-#### Applying the Projects & Config runtime grants
+#### Projects & Config migration grants
 
-The Projects & Config migration Job runs as the schema owner and creates
-tables and functions with no runtime grants. Until the planned grants exist,
-the Projects & Config service can't read its own tables and fails to start.
-`--apply-projects-config-grants` applies only that service's planned runtime
-grants. It doesn't migrate, create roles, or change another service's schema,
-and it takes no Core merge SHA or maximum versions.
+The supported deployment runs the existing Projects & Config migration Job as
+its dedicated Workload Identity. `ProjectsConfigMigrator` applies EF
+migrations, then applies the reviewed runtime grant plan and verifies the
+exact object inventory and least-privilege result in one transaction. A
+mismatch fails the Job before the Kustomize workload rollout. There is no
+separate operator grant step or receipt gate.
 
-Before any write, the mode checks:
+The migration identity must own only the `projects_config` schema and its
+planned objects. The runtime role receives only the permissions in
+`scripts/azure/lib/p1-postgres-plan.json`; update and review that plan when a
+new object needs runtime access. Do not add blanket/default grants or widen
+the identity to make a migration pass.
 
-- the five runtime roles, object-ID mappings, operator memberships, and each
-  role's exact database `CONNECT`;
-- that the operator owns the Projects & Config schema and grants the runtime
-  role at most `USAGE`;
-- that every existing relation is planned, operator-owned, and holds no
-  runtime privilege beyond the plan;
-- that the runtime role and `PUBLIC` hold no column-level grants, except a
-  planned `UPDATE` on a table's lock column or on the role-assignment revoke
-  columns;
-- that the live migration history equals the source's compiled migrations and
-  the schema holds exactly the planned objects.
+This plan is applied and verified transactionally inside the migration Job.
 
-Add `--dry-run` to stop after these checks. It prints the current grant state
-as `exact` or `incomplete` with the first difference, then
-`P1_POSTGRES_PROJECTS_CONFIG_GRANTS_DRY_RUN writes=false`. Without
-`--dry-run`, the mode grants schema `USAGE`, the planned table privileges,
-`EXECUTE` on the casting authority function, and the project role-assignment
-writes: `INSERT` on `project_role_assignments` and `authority_audit`, and
-`UPDATE` on only the `state`, `revision`, `revoked_by`, and `revoked_at`
-columns of `project_role_assignments`. It also revokes `PUBLIC` execution
-from the schema's functions. It reads back every grant in the same
-transaction, including that the role can update exactly those columns and no
-others, and commits only an exact match. It writes its receipt to
-`~/.agentweaver/db-maintenance`, outside the checkout, so the checkout stays
-clean for the next command. Use `--receipt-dir <path>` to choose another
-directory outside the checkout. It ends with `P1_POSTGRES_PROJECTS_CONFIG_GRANTS_APPLIED`. Running it again on
-an exact state changes nothing.
-
-```powershell
-node scripts\azure\bootstrap-p1-postgres.mjs --apply-projects-config-grants --dry-run --execute
-node scripts\azure\bootstrap-p1-postgres.mjs --apply-projects-config-grants --execute
-```
-
-`npm run db:maintenance:projects-config -- --execute` runs this step
-automatically after its migration Job, under the same maintenance Lease, and
-records the grant readback in its receipt. The whole-release rollout refuses a
-migration receipt without that readback. Run the mode on its own only to
-inspect or repair grants.
 
 The source preflight rejects incompatible PUBLIC privileges before the first write.
 It also rejects default grants to unrelated principals and an inherited-only
@@ -682,19 +650,12 @@ An existing namespace must have matching ownership and policy labels.
 The installer refuses to change its policy.
 The P0 namespace retains restricted enforcement, audit, and warning labels.
 
-For a fresh product install, first run the certificate-only stage before
-`release:deploy-bootstrap --execute`. It creates the approved Gateway
+For a fresh product install, run the certificate-only stage before the
+manual v1 Kustomize deployment workflow. It creates the approved Gateway
 namespace when needed, applies the native managed certificates in both
 namespaces, waits for them to become Available, and returns their managed
 hostnames. It does not require or read the MCP Service and does not apply a
 Gateway, route, policy, or Cilium ingress rule.
-
-If a release-bootstrap attempt has already applied the root bundle, a retry
-also accepts its single `web-application` HTTPRoute when no Gateway or
-BackendTLSPolicy exists. The route must target Gateway `identity-broker` in
-`agentweaver-gateway`, select its shared `https` listener, and match the managed
-Portal host, `/` path, and Web Service backend. An explicit parent port must be
-443. Extra routes and any other partial routing state fail closed.
 
 ```powershell
 node scripts\azure\deploy.mjs `

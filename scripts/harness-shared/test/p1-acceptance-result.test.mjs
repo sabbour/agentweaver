@@ -50,7 +50,6 @@ test('preserves the exact native evidence and cleanup while aggregating all six 
   const result = createP1AcceptanceResult({
     surface: 'api',
     surfaceStatus: 'passed',
-    sourceEvidence: { services: { status: 'passed' }, agentHostImageMeasurement: { status: 'passed' } },
     nativeProbeResults: results,
   });
 
@@ -69,7 +68,6 @@ test('a failed required native probe makes the full P1 result failed', () => {
   const result = createP1AcceptanceResult({
     surface: 'api',
     surfaceStatus: 'passed',
-    sourceEvidence: { services: { status: 'passed' }, agentHostImageMeasurement: { status: 'passed' } },
     nativeProbeResults: results,
   });
 
@@ -77,11 +75,10 @@ test('a failed required native probe makes the full P1 result failed', () => {
   assert.equal(result.exitCode, 1);
 });
 
-test('all passed required native probes can produce a passed aggregate', () => {
+test('P1 product tests pass without publication or image artifact receipts', () => {
   const result = createP1AcceptanceResult({
     surface: 'api',
     surfaceStatus: 'passed',
-    sourceEvidence: { services: { status: 'passed' }, agentHostImageMeasurement: { status: 'passed' } },
     nativeProbeResults: nativeProbeResults('passed'),
   });
 
@@ -94,7 +91,6 @@ test('preserves the verified four-probe source envelope and blocks only the miss
   const result = createP1AcceptanceResult({
     surface: 'api',
     surfaceStatus: 'passed',
-    sourceEvidence: { services: { status: 'passed' }, agentHostImageMeasurement: { status: 'passed' } },
     nativeProbeResults: [sourceEnvelope],
   });
 

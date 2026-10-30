@@ -41,11 +41,12 @@ Use .NET 10 and Node.js 24 from the repository root:
 npm ci
 dotnet restore Agentweaver.slnx --locked-mode
 dotnet build Agentweaver.slnx --no-restore --configuration Release
-npm run release:validate
+npm run test:release
 ```
 
-These commands validate and build source. They do not provision Azure,
-publish a release, or deploy Kubernetes workloads. See the
+These commands build source and test the release/deployment workflow
+contracts. They do not provision Azure, publish packages, or deploy
+Kubernetes workloads. See the
 [quickstart](docs/guide/quickstart.md) for local checks and the
 [deployment guide](docs/guide/deploy-to-azure.md) for the separately approved
 Azure workflow.

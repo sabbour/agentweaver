@@ -1,223 +1,56 @@
-name: Agentweaver v1 release publication
+name: Agentweaver v1 NuGet packages
 
 on:
   push:
-    branches: [v1]
+    branches:
+      - v1
     paths:
-      - 'releases/receipts/**'
-  workflow_dispatch:
-    inputs:
-      rebuild_all_images:
-        description: Rebuild every product image instead of reusing unchanged published digests
-        type: boolean
-        default: false
+      - releases/foundation.json
+
 permissions:
   contents: read
-
-concurrency:
-  group: v1-product-publication-${{ github.repository }}
-  cancel-in-progress: false
-  queue: max
+  packages: write
 
 jobs:
-  validate:
-    outputs:
-      release_base_sha: ${{ steps.release-base.outputs.sha }}
+  publish-packages:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    permissions:
-      actions: read
-      contents: read
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
         with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Require the v1 branch
+          global-json-file: global.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: npm ci
+      - run: dotnet restore Agentweaver.slnx --locked-mode
+
+      - name: Pack versioned NuGet packages
+        shell: bash
         run: |
-          test "$GITHUB_REF" = "refs/heads/v1" || {
-            echo "::error::Release publication must run from refs/heads/v1 (got $GITHUB_REF)." >&2
+          set -euo pipefail
+          output="$RUNNER_TEMP/agentweaver-packages"
+          mkdir -p "$output"
+          while IFS= read -r project; do
+            dotnet pack "$project" --configuration Release --no-restore --output "$output"
+          done < <(jq -r '.components[] | select(.kind == "contract" or .kind == "library") | .project' releases/foundation.json)
+          compgen -G "$output/*.nupkg" >/dev/null || {
+            echo "No NuGet packages were produced." >&2
             exit 1
           }
-      - name: Resolve version-application base
-        id: release-base
+
+      - name: Publish NuGet packages
         env:
-          PUSH_BASE_SHA: ${{ github.event.before }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
           set -euo pipefail
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            base_sha="$PUSH_BASE_SHA"
-          elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            base_sha="$(git rev-parse "${GITHUB_SHA}^")"
-          else
-            echo "::error::Release publication requires a v1 push or manual dispatch." >&2
-            exit 1
-          fi
-          if ! [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Cannot resolve the version-application base commit." >&2
-            exit 1
-          fi
-          echo "sha=$base_sha" >> "$GITHUB_OUTPUT"
-      - name: Wait for CI and documentation checks on this source
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          for workflow in v1-ci.yml v1-docs-ci.yml; do
-            run_id=""
-            for attempt in $(seq 1 120); do
-              run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" \
-                --commit "$GITHUB_SHA" --json databaseId --jq '.[0].databaseId // empty')
-              if [ -n "$run_id" ]; then
-                break
-              fi
-              sleep 15
-            done
-            if [ -z "$run_id" ]; then
-              echo "::error::No $workflow run found for $GITHUB_SHA." >&2
-              exit 1
-            fi
-            gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
+          for package in "$RUNNER_TEMP"/agentweaver-packages/*.nupkg; do
+            dotnet nuget push "$package" \
+              --source "https://nuget.pkg.github.com/${GITHUB_REPOSITORY_OWNER}/index.json" \
+              --api-key "$GITHUB_TOKEN" \
+              --skip-duplicate
           done
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - name: Validate release composition, changeset coverage, and receipt
-        env:
-          RELEASE_BASE_SHA: ${{ steps.release-base.outputs.sha }}
-        run: npm run release:validate -- --ci --require-version-application-receipt
-
-  packages:
-    needs: validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - name: Pack NuGet packages
-        run: npm run release:pack -- --packages-only --out artifacts/release/packages
-      - uses: actions/upload-artifact@v4
-        with:
-          name: v1-release-packages-${{ github.sha }}-${{ github.run_id }}
-          overwrite: true
-          path: artifacts/release/packages/
-          if-no-files-found: error
-          retention-days: 30
-
-  images:
-    needs: validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - name: Set up product Docker engine
-        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
-        with:
-          version: 'v29.9.0'
-          set-host: true
-          daemon-config: |
-            {
-              "features": {
-                "containerd-snapshotter": true
-              }
-            }
-      - name: Prepare pinned product build inputs
-        env:
-          EXPECTED_SOURCE: ${{ github.sha }}
-          DOCKER_CONTEXT: default
-          npm_config_cache: ${{ runner.temp }}/agentweaver-release-npm-cache
-          npm_config_update_notifier: 'false'
-        run: npm run release:prepare-build-inputs
-      # Unchanged images keep their published digest and original provenance; scripts/release/image-reuse.mjs
-      # derives every image's inputs from the source tree so preparation and publication agree.
-      - name: Plan product image reuse
-        env:
-          RELEASE_REBUILD_ALL_IMAGES: ${{ inputs.rebuild_all_images && 'true' || 'false' }}
-        run: npm run release:plan-image-reuse -- --out artifacts/release/image-reuse-plan.json --registry ghcr.io/sabbour
-      - name: Build product Docker images
-        env:
-          DOCKER_CONTEXT: default
-          BUILDX_BUILDER: default
-          npm_config_cache: ${{ runner.temp }}/agentweaver-release-npm-cache
-        run: npm run release:pack -- --images-only --platform-only --reuse-plan artifacts/release/image-reuse-plan.json --out artifacts/release/images
-      - uses: actions/upload-artifact@v4
-        with:
-          name: v1-release-images-${{ github.sha }}-${{ github.run_id }}
-          overwrite: true
-          path: artifacts/release/images/
-          if-no-files-found: error
-          retention-days: 30
-
-  publish:
-    needs: [validate, packages, images]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - uses: actions/download-artifact@v4
-        with:
-          name: v1-release-packages-${{ github.sha }}-${{ github.run_id }}
-          path: artifacts/release/packages/
-      - uses: actions/download-artifact@v4
-        with:
-          name: v1-release-images-${{ github.sha }}-${{ github.run_id }}
-          path: artifacts/release/images/
-      - name: Merge source-bound package and image packs
-        run: node scripts/release/merge-packs.mjs releases/foundation.json artifacts/release/packages artifacts/release/images artifacts/release/publish --platform-only
-      - name: Set up product Docker engine
-        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
-        with:
-          version: 'v29.9.0'
-          set-host: true
-          daemon-config: |
-            {
-              "features": {
-                "containerd-snapshotter": true
-              }
-            }
-      - name: Publish packages and images to GitHub Packages and GHCR
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_NUGET_SOURCE: https://nuget.pkg.github.com/sabbour/index.json
-          RELEASE_NUGET_API_KEY: ${{ github.token }}
-          RELEASE_NUGET_USERNAME: ${{ github.repository_owner }}
-          RELEASE_REGISTRY: ghcr.io/sabbour
-          RELEASE_REGISTRY_USER: ${{ github.repository_owner }}
-          RELEASE_REGISTRY_PASSWORD: ${{ github.token }}
-          RELEASE_BASE_SHA: ${{ needs.validate.outputs.release_base_sha }}
-          RELEASE_REBUILD_ALL_IMAGES: ${{ inputs.rebuild_all_images && 'true' || 'false' }}
-          DOCKER_CONFIG: ${{ github.workspace }}/artifacts/docker-config
-        run: node scripts/release/publish.mjs releases/foundation.json artifacts/release/publish "$GITHUB_SHA" --confirm-publication --platform-only
-      - uses: actions/upload-artifact@v4
-        if: ${{ always() }}
-        with:
-          name: v1-publication-receipt-${{ github.sha }}-${{ github.run_attempt }}
-          path: artifacts/release/publish/publication.json
-          if-no-files-found: warn
-          retention-days: 30

@@ -12,8 +12,8 @@ import { run, redact } from './exec.mjs';
 import { p1PostgresPlanHash } from './p1-postgres-plan.mjs';
 import { bootstrapIdentityPostgres } from './identity-postgres-bootstrap.mjs';
 import { parseKustomizeResources } from '../../release/kustomize-runtime.mjs';
-import { componentImageRepository } from '../../release/pack.mjs';
-import { verifyServiceRegistryImage } from '../../release/registry.mjs';
+import { componentImageRepository } from '../../release/image-names.mjs';
+import { readServiceImageRevision } from '../../release/registry.mjs';
 
 /** The only environment this runner can touch. Every value is checked against the live account. */
 export const DB_MAINTENANCE_TARGET = Object.freeze({
@@ -114,6 +114,8 @@ Without --execute the runner only checks preconditions and prints what it would 
   --deploy-apps                 Roll the Environment, Orchestrator, and EventsAndSessions Deployments to the same
                                 digests in this run, before or after the migrations as the schema
                                 support of each image requires, and wait until they are ready.
+  --migrations-only             Run migration Jobs without checking or changing application Deployments.
+                                Use when a later Kustomize apply updates all workloads together.
   --apps-only                   Skip identity, handover, and migration Jobs. Only roll the three
                                 Deployments to the given digests under the lock and wait until they
                                 are ready. Use it when the schema is already migrated and services are
@@ -128,7 +130,8 @@ Without --execute the runner only checks preconditions and prints what it would 
 
 /** Parses flags. Unknown or malformed flags stop the run before anything else happens. */
 export function parseDbMaintenanceArgs(argv) {
-  const options = { execute: false, handover: 'auto', reconcileBrokerEgress: false, deployApps: false, appsOnly: false, prepareOnly: false,
+  const options = { execute: false, handover: 'auto', reconcileBrokerEgress: false, deployApps: false,
+    migrationsOnly: false, appsOnly: false, prepareOnly: false,
     receiptDir: join(homedir(), '.agentweaver', 'db-maintenance'), jobTimeoutSeconds: 900, readinessTimeoutSeconds: 600, help: false };
   const valued = new Map([
     ['--environment-digest', 'environmentDigest'], ['--orchestrator-digest', 'orchestratorDigest'],
@@ -143,6 +146,7 @@ export function parseDbMaintenanceArgs(argv) {
     else if (arg === '--execute') options.execute = true;
     else if (arg === '--reconcile-broker-egress') options.reconcileBrokerEgress = true;
     else if (arg === '--deploy-apps') options.deployApps = true;
+    else if (arg === '--migrations-only') options.migrationsOnly = true;
     else if (arg === '--apps-only') options.appsOnly = true;
     else if (arg === '--prepare-only') options.prepareOnly = true;
     else {
@@ -174,7 +178,7 @@ export function parseDbMaintenanceArgs(argv) {
       [options.environmentDigest !== undefined, '--environment-digest'],
       [options.orchestratorDigest !== undefined, '--orchestrator-digest'], [options.eventsDigest !== undefined, '--events-digest'],
       [options.brokerDigest !== undefined, '--broker-digest'], [options.deployApps, '--deploy-apps'],
-      [options.appsOnly, '--apps-only'],
+      [options.migrationsOnly, '--migrations-only'], [options.appsOnly, '--apps-only'],
     ].filter(([present]) => present).map(([, flag]) => flag);
     if (conflicting.length) throw new Error(`--prepare-only cannot be combined with ${conflicting.join(', ')}.`);
     return options;
@@ -194,6 +198,12 @@ export function parseDbMaintenanceArgs(argv) {
       [options.postgresAdmin !== undefined, '--postgres-admin'],
     ].filter(([present]) => present).map(([, flag]) => flag);
     if (conflicting.length) throw new Error(`--apps-only cannot be combined with ${conflicting.join(', ')}.`);
+  }
+  if (options.migrationsOnly) {
+    const conflicting = [
+      [options.deployApps, '--deploy-apps'], [options.appsOnly, '--apps-only'],
+    ].filter(([present]) => present).map(([, flag]) => flag);
+    if (conflicting.length) throw new Error(`--migrations-only cannot be combined with ${conflicting.join(', ')}.`);
   }
   return options;
 }
@@ -503,10 +513,10 @@ export async function runDbMaintenance(options, overrides = {}) {
   const deps = { ...defaultDependencies(), ...overrides };
   const repoRoot = deps.repoRoot ?? process.cwd();
   const { exec, log } = deps;
-  // Reads an image's accepted schema range from its source label and the source at that commit.
+  // Reads only the OCI revision needed to inspect each migrator's accepted schema range.
   // Tests replace it, or only the registry read, to stay offline.
   deps.imageSchemaRange ??= (image, component) => readImageSchemaRange({ image, component,
-    readImage: deps.readImage ?? (reference => verifyServiceRegistryImage(reference)), exec, repoRoot });
+    readImage: deps.readImage ?? (reference => readServiceImageRevision(reference)), exec, repoRoot });
   const target = DB_MAINTENANCE_TARGET;
   const runId = deps.newRunId();
   const receipt = {
@@ -658,7 +668,7 @@ export async function runDbMaintenance(options, overrides = {}) {
     // accepts only a range of schema versions, so the runner compares the running image, the
     // target image, the current schema, and the target schema, and picks the order that keeps
     // each service ready (see planServiceOrder). Prepare-only does not move the schema.
-    receipt.appImages = options.prepareOnly ? [] : checkAppImages(kubectl, options);
+    receipt.appImages = options.prepareOnly || options.migrationsOnly ? [] : checkAppImages(kubectl, options);
     for (const app of receipt.appImages.filter(entry => entry.status === 'mismatch'))
       log(`Deployment ${app.deployment} runs ${app.running}, not ${app.expected}.`);
 
@@ -667,6 +677,10 @@ export async function runDbMaintenance(options, overrides = {}) {
     // deployed. Older images reject the new schema, so rolling back is never an option.
     const pendingImages = Object.fromEntries(P1_JOBS.filter(job => stateData[`rollForward.${job.key}`])
       .map(job => [job.key, stateData[`rollForward.${job.key}`]]));
+    if (options.migrationsOnly && Object.keys(pendingImages).length) {
+      throw new Error(`Run ${stateData['rollForward.runId']} has an unfinished application roll-forward. ` +
+        'Finish that existing maintenance run before starting a migrations-only deployment.');
+    }
     if (!options.prepareOnly && Object.keys(pendingImages).length) {
       const differing = receipt.appImages.filter(app => pendingImages[app.deployment] && pendingImages[app.deployment] !== app.expected);
       if (differing.length)
@@ -677,14 +691,15 @@ export async function runDbMaintenance(options, overrides = {}) {
     }
 
     const plan = JSON.parse(readFileSync(join(repoRoot, PLAN_FILE), 'utf8'));
-    let ordering = { order: 'migrate-first', services: [] };
+    let ordering = { order: options.migrationsOnly ? 'migrations-only' : 'migrate-first', services: [] };
+    if (options.migrationsOnly) receipt.serviceOrder = ordering;
     if (options.appsOnly) {
       // Apps-only rolls existing Deployments; it never creates one, so a missing one is an error.
       const absent = receipt.appImages.filter(entry => entry.status === 'absent');
       if (absent.length)
         throw new Error(`Deployment ${absent.map(app => app.deployment).join(', ')} does not exist. ` +
           'Install the services with the release deploy path first.');
-    } else if (!options.prepareOnly) {
+    } else if (!options.prepareOnly && !options.migrationsOnly) {
       // Read the accepted schema range of every target image from the image's own source label.
       // Matching digests still need this gate: an unchanged image can reject a newer schema.
       // A target image must have a known range: an unreadable label or source stops the run, because guessing could
@@ -740,7 +755,13 @@ export async function runDbMaintenance(options, overrides = {}) {
     if (!options.execute) {
       // Dry run ends here, with the plan of record for an execute run.
       const mismatched = receipt.appImages.filter(entry => entry.status === 'mismatch');
-      receipt.plannedSteps = options.appsOnly
+      receipt.plannedSteps = options.migrationsOnly
+        ? ['lock', `migration-identity-${identityState.ready ? 'verified' : 'deploy'}`, 'serviceaccount-and-egress',
+          ...(receipt.brokerEgressDrift && options.reconcileBrokerEgress ? ['broker-egress-reconcile'] : []),
+          `handover-${handoverNeeded ? 'run' : 'skip'}`, 'connectivity-probes',
+          ...(options.brokerDigest ? ['broker-job'] : []), 'environment-job', 'orchestrator-job',
+          'events-and-sessions-job', 'cleanup', 'receipt']
+        : options.appsOnly
         ? ['lock', ...(mismatched.length ? ['deploy-apps'] : []), 'readiness', 'cleanup', 'receipt']
         : options.prepareOnly
           ? ['lock', `migration-identity-${identityState.ready ? 'verified' : 'deploy'}`, 'serviceaccount-and-egress',
@@ -973,15 +994,17 @@ export async function runDbMaintenance(options, overrides = {}) {
 
     // Services that follow the migration: those whose running image already accepts the new
     // schema (no gap) and those in a planned readiness gap. Then every service must be ready.
-    deployImages(deployAfter);
-    // A failure here leaves the gap open in the receipt (no end time) and the roll-forward record
-    // in place, so the next run can only finish the same deploy.
-    waitReady({ afterMigration: true });
-    if (receipt.readinessGap) {
-      receipt.readinessGap.endedAt = deps.now().toISOString();
-      receipt.readinessGap.durationSeconds = (Date.parse(receipt.readinessGap.endedAt) - Date.parse(receipt.readinessGap.startedAt)) / 1000;
+    if (!options.migrationsOnly) {
+      deployImages(deployAfter);
+      // A failure here leaves the gap open in the receipt (no end time) and the roll-forward record
+      // in place, so the next run can only finish the same deploy.
+      waitReady({ afterMigration: true });
+      if (receipt.readinessGap) {
+        receipt.readinessGap.endedAt = deps.now().toISOString();
+        receipt.readinessGap.durationSeconds = (Date.parse(receipt.readinessGap.endedAt) - Date.parse(receipt.readinessGap.startedAt)) / 1000;
+      }
+      if (deployAfter.length || Object.keys(pendingImages).length) clearRollForward();
     }
-    if (deployAfter.length || Object.keys(pendingImages).length) clearRollForward();
     receipt.result = 'succeeded';
   } catch (error) {
     primaryError = error;

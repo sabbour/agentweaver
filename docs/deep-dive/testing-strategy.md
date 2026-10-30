@@ -22,7 +22,8 @@ surface journey does not prove every native execution boundary.
 | `apps/web/e2e/` | Playwright journeys against the built Web app with fake Broker and Gateway services, including Priority create/order, notes, conversation links, and reloads |
 | `scripts/coverage/` | Coverage collection and receipt guards |
 | `.github/workflows/v1-ci.yml` and `v1-docs-ci.yml` | Automatic source and documentation validation |
-| Integration-image, release-pack, and continuation workflows | Artifact preparation and controlled publication |
+| `.github/workflows/v1-integration-images.yml` | Direct GHCR image build and push |
+| `.github/workflows/v1-deploy.yml` and `scripts/release/deploy-kustomize.mjs` | Migration-first Kustomize apply and rollout checks |
 
 ## Choose the right test boundary
 
@@ -189,22 +190,20 @@ focused suite runs without Azure or Kubernetes access:
 node --test scripts\azure\p1-native-probes\*.test.mjs
 ```
 
-The P1 runner accepts two deployment evidence paths. An images-only integration
-publication requires its saved integration deployment receipt and the current
-checkout at the exact source commit. A published release uses the exact
+The P1 runner accepts published-release evidence only. It uses the exact
 `releaseTag` and source manifest, verifies the tag and immutable publication
 result against GitHub, then reads the selected namespace and verifies each live
-image digest and its source-commit and source-tree labels. Release evidence can
-use a newer clean helper checkout because the manifest and project files are
-read from the exact source commit in Git.
+image digest and its source-commit and source-tree labels. This optional
+acceptance path is separate from the direct-GHCR and Kustomize deployment
+workflow, which emits no deployment receipt. Release evidence can use a newer
+clean helper checkout because the manifest and project files are read from the
+exact source commit in Git.
 
 The bootstrap path accepts only the tracked draft at its published source
 commit. It derives a digest-pinned deployment manifest from the verified
 publication receipt and records the result as `pre-acceptance`; it does not
-claim that the bootstrap command created release-acceptance evidence. Both
-release paths hash the publication and current resource readbacks together.
-Release and bootstrap inputs require `releaseTag` and omit
-`integrationDeploymentReceiptPath`. Images published without the required
+claim that the bootstrap command created release-acceptance evidence. The release and bootstrap inputs require `releaseTag` and hash the publication
+and current resource readbacks together. Images published without the required
 source-tree label fail this check; immutable images cannot be relabeled.
 
 Native probes cover Storage isolation, network datapath, Sandbox lifecycle,
@@ -265,10 +264,11 @@ The `go` job runs `gofmt`, `go vet`, and `go test` for the Go reference tools in
 validates diagram provenance and readability. On a `v1` push it stages a
 source-bound site artifact.
 
-Integration-image and release-pack workflows are manual artifact workflows,
-not substitutes for test CI. Preparation and publication are separate jobs.
-The partial-publication workflow admits only its exact recovery dispatch and
-missing artifacts; it does not rerun the general test strategy.
+The image workflow builds and pushes directly to GHCR on relevant `v1`
+changes. The package workflow publishes versioned NuGet packages separately.
+The manual deployment workflow runs migrations before applying the existing
+Kustomize overlay and waits for normal Deployment rollouts; it does not create
+or require a deployment-evidence artifact.
 
 ## Validate documentation changes
 

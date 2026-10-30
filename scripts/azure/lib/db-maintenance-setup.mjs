@@ -10,8 +10,8 @@
  */
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { run, redact } from './exec.mjs';
 import { DB_MAINTENANCE_TARGET, runDbMaintenance } from './db-maintenance.mjs';
@@ -23,6 +23,8 @@ export const SETUP_TARGET = Object.freeze({
   branch: 'v1',
   variable: 'AZURE_DB_MAINTENANCE_CLIENT_ID',
   identity: 'agentweaver-id-db-maintenance',
+  projectsConfigMigrationIdentity: 'agentweaver-id-projects-config-migration',
+  projectsConfigMigrationServiceAccount: 'projects-config-migration',
   deploymentName: 'db-maintenance-ci-identity',
   kubernetesRole: 'db-maintenance-workflow',
   kubernetesRoleBinding: 'db-maintenance-workflow',
@@ -36,19 +38,21 @@ const ROLES = [
 ];
 const GUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
-export const SETUP_USAGE = `Usage: npm run db:maintenance:setup -- [--execute] [--receipt-dir <path>]
+export const SETUP_USAGE = `Usage: npm run db:maintenance:setup -- [--execute] [--v1-deploy-only] [--receipt-dir <path>]
 
 Without --execute the command only checks the setup and lists what is missing; it exits 1 if
 anything is missing. With --execute it creates only the missing parts and checks them again.
 Run it signed in to Azure as the PostgreSQL Entra administrator and to GitHub as a repository admin.
+Use --v1-deploy-only to provision the approved v1 deployment identity and namespace permissions without running P1 maintenance setup.
 `;
 
 /** Parses flags. Unknown flags stop the command before anything runs. */
 export function parseSetupArgs(argv) {
-  const options = { execute: false, help: false, receiptDir: join(homedir(), '.agentweaver', 'db-maintenance') };
+  const options = { execute: false, v1DeployOnly: false, help: false, receiptDir: join(homedir(), '.agentweaver', 'db-maintenance') };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === '--execute') options.execute = true;
+    else if (arg === '--v1-deploy-only') options.v1DeployOnly = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg === '--receipt-dir' || arg.startsWith('--receipt-dir=')) {
       const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : argv[++index];
@@ -66,8 +70,10 @@ export function setupScopes(target = DB_MAINTENANCE_TARGET) {
   return { resourceGroup, cluster };
 }
 
-export function workflowAuthorizationResources(principalObjectId) {
-  // Job list/watch keeps foreground cleanup reliable; named Deployments limit access to the three rollouts.
+export function workflowAuthorizationResources(principalObjectId, projectsConfigMigrationClientId) {
+  if (!GUID.test(principalObjectId ?? '') || !GUID.test(projectsConfigMigrationClientId ?? ''))
+    throw new Error('Workflow authorization requires the exact maintenance principal and Projects & Config migration client IDs.');
+  // Job list/watch keeps cleanup reliable; Deployment access is limited to the v1 rollout names.
   const namespace = DB_MAINTENANCE_TARGET.namespace;
   const roleName = SETUP_TARGET.kubernetesRole;
   return [
@@ -77,14 +83,20 @@ export function workflowAuthorizationResources(principalObjectId) {
       metadata: { name: roleName, namespace },
       rules: [
         { apiGroups: ['batch'], resources: ['jobs'], verbs: ['create', 'delete', 'get', 'list', 'watch'] },
-        { apiGroups: [''], resources: ['pods'], verbs: ['get', 'list'] },
+        { apiGroups: [''], resources: ['pods'], verbs: ['get', 'list', 'watch'] },
         { apiGroups: [''], resources: ['pods/log'], verbs: ['get'] },
+        { apiGroups: [''], resources: ['resourcequotas', 'limitranges'], verbs: ['create', 'get', 'patch'] },
+        { apiGroups: [''], resources: ['services', 'networkpolicies'], verbs: ['create', 'get', 'patch'] },
         { apiGroups: [''], resources: ['configmaps'], verbs: ['create', 'get', 'patch'] },
         { apiGroups: [''], resources: ['serviceaccounts'], verbs: ['create', 'get', 'patch'] },
         { apiGroups: ['coordination.k8s.io'], resources: ['leases'], verbs: ['create', 'delete', 'get'] },
         { apiGroups: ['cilium.io'], resources: ['ciliumnetworkpolicies'], verbs: ['create', 'get', 'patch'] },
-        { apiGroups: ['apps'], resources: ['deployments'], resourceNames: ['environment', 'orchestrator', 'events-and-sessions'],
-          verbs: ['get', 'list', 'patch', 'watch'] },
+        { apiGroups: ['apps'], resources: ['deployments'], verbs: ['create'] },
+        { apiGroups: ['apps'], resources: ['deployments'], resourceNames: [
+          'environment', 'orchestrator', 'events-and-sessions', 'identity-broker',
+          'gateway', 'mcp', 'web', 'knowledge', 'projects-config',
+        ], verbs: ['get', 'list', 'patch', 'watch'] },
+        { apiGroups: ['gateway.networking.k8s.io'], resources: ['httproutes'], verbs: ['create', 'get', 'patch'] },
       ],
     },
     {
@@ -102,12 +114,26 @@ export function workflowAuthorizationResources(principalObjectId) {
         apiGroup: 'rbac.authorization.k8s.io',
       },
     },
+    {
+      apiVersion: 'v1',
+      kind: 'ServiceAccount',
+      metadata: {
+        name: SETUP_TARGET.projectsConfigMigrationServiceAccount,
+        namespace,
+        annotations: {
+          'azure.workload.identity/client-id': projectsConfigMigrationClientId,
+        },
+      },
+      automountServiceAccountToken: false,
+    },
   ];
 }
 
 function withSetupKubectl(exec, target, action) {
-  // Keep the operator's kubeconfig outside the checkout and remove only this temporary directory.
-  const directory = mkdtempSync(join(tmpdir(), 'agentweaver-db-maintenance-setup-'));
+  const scratch = join(process.cwd(), '.agentweaver-scratch');
+  mkdirSync(scratch, { recursive: true });
+  const directory = join(scratch, `db-maintenance-setup-${process.pid}-${randomUUID()}`);
+  mkdirSync(directory, { recursive: true });
   const kubeconfig = join(directory, 'config');
   const must = (result, operation) => {
     if (result.status !== 0)
@@ -138,9 +164,9 @@ function withSetupKubectl(exec, target, action) {
   return value;
 }
 
-function applyWorkflowAuthorization(exec, target, principalObjectId) {
-  // Server-side apply makes both namespace objects repeatable and leaves partial applies harmless.
-  const resources = workflowAuthorizationResources(principalObjectId);
+function applyWorkflowAuthorization(exec, target, principalObjectId, projectsConfigMigrationClientId) {
+  // Server-side apply makes namespace authorization and the migration identity annotation repeatable.
+  const resources = workflowAuthorizationResources(principalObjectId, projectsConfigMigrationClientId);
   withSetupKubectl(exec, target, kubectl => {
     for (const resource of resources) {
       const applied = kubectl(['apply', '--server-side', '--field-manager', 'agentweaver-db-maintenance-setup', '-f', '-'],
@@ -178,7 +204,7 @@ export function readSetupState(exec) {
   // RBAC evaluates the narrow Role/RoleBinding that this setup applies for the maintenance identity.
   const authorization = json(exec('az', ['aks', 'show', '--resource-group', target.resourceGroup,
     '--name', target.clusterName, '--subscription', target.subscriptionId,
-    '--query', '{azureRbac:aadProfile.enableAzureRbac,kubernetesRbac:enableRbac}', '-o', 'json']),
+    '--query', '{azureRbac:aadProfile.enableAzureRbac,kubernetesRbac:enableRbac,oidcIssuer:oidcIssuerProfile.issuerURL}', '-o', 'json']),
   'Could not read AKS authorization settings');
   state.kubernetesAuthorization = authorization;
   if (authorization?.azureRbac !== true || authorization?.kubernetesRbac !== true)
@@ -209,7 +235,31 @@ export function readSetupState(exec) {
     }
     if (authorization?.azureRbac === true && authorization?.kubernetesRbac === true) {
       if (!GUID.test(identity.principalId ?? '')) throw new Error('The workflow identity has no principal object ID.');
-      const [expectedRole, expectedBinding] = workflowAuthorizationResources(identity.principalId);
+      const migrationShown = exec('az', [
+        'identity', 'show', '--resource-group', target.resourceGroup,
+        '--name', SETUP_TARGET.projectsConfigMigrationIdentity, '-o', 'json',
+      ]);
+      if (notFound(migrationShown)) {
+        addGap(azureGaps, `Azure identity ${SETUP_TARGET.projectsConfigMigrationIdentity} does not exist.`);
+      }
+      const migrationIdentity = notFound(migrationShown)
+        ? undefined : json(migrationShown, `Could not read ${SETUP_TARGET.projectsConfigMigrationIdentity}`);
+      if (migrationIdentity) {
+        state.projectsConfigMigrationClientId = migrationIdentity.clientId;
+        state.projectsConfigMigrationPrincipalObjectId = migrationIdentity.principalId;
+        const credentials = json(exec('az', [
+          'identity', 'federated-credential', 'list', '--resource-group', target.resourceGroup,
+          '--identity-name', SETUP_TARGET.projectsConfigMigrationIdentity, '-o', 'json',
+        ]), `Could not read ${SETUP_TARGET.projectsConfigMigrationIdentity} federated credentials`);
+        const subject = `system:serviceaccount:${target.namespace}:${SETUP_TARGET.projectsConfigMigrationServiceAccount}`;
+        if (!(credentials ?? []).some(credential => credential.issuer === authorization?.oidcIssuer &&
+            credential.subject === subject && (credential.audiences ?? []).includes('api://AzureADTokenExchange')))
+          addGap(azureGaps, `${SETUP_TARGET.projectsConfigMigrationIdentity} is not federated to its exact AKS ServiceAccount.`);
+        if (!GUID.test(migrationIdentity.clientId ?? '') || !GUID.test(migrationIdentity.principalId ?? ''))
+          throw new Error(`${SETUP_TARGET.projectsConfigMigrationIdentity} has no valid client or principal object ID.`);
+      }
+      const [expectedRole, expectedBinding, expectedServiceAccount] = workflowAuthorizationResources(
+        identity.principalId, migrationIdentity?.clientId ?? '00000000-0000-0000-0000-000000000000');
       const actual = withSetupKubectl(exec, target, kubectl => {
         const read = (kind, name) => {
           const result = kubectl(['get', kind, name, '--namespace', target.namespace, '-o', 'json']);
@@ -219,6 +269,7 @@ export function readSetupState(exec) {
         return {
           role: read('role', expectedRole.metadata.name),
           binding: read('rolebinding', expectedBinding.metadata.name),
+          serviceAccount: read('serviceaccount', expectedServiceAccount.metadata.name),
         };
       });
       const roleMatches = actual.role?.metadata?.name === expectedRole.metadata.name &&
@@ -232,6 +283,13 @@ export function readSetupState(exec) {
         isDeepStrictEqual(actual.binding.roleRef, expectedBinding.roleRef);
       if (!bindingMatches)
         addGap(kubernetesGaps, `Kubernetes RoleBinding "${expectedBinding.metadata.name}" is missing or has a different subject.`);
+      const serviceAccountMatches = actual.serviceAccount?.metadata?.name === expectedServiceAccount.metadata.name &&
+        actual.serviceAccount.metadata.namespace === expectedServiceAccount.metadata.namespace &&
+        actual.serviceAccount.automountServiceAccountToken === false &&
+        actual.serviceAccount.metadata.annotations?.['azure.workload.identity/client-id'] ===
+          expectedServiceAccount.metadata.annotations['azure.workload.identity/client-id'];
+      if (!serviceAccountMatches)
+        addGap(kubernetesGaps, `ServiceAccount "${expectedServiceAccount.metadata.name}" is missing the approved migration identity annotation.`);
     }
   }
 
@@ -301,15 +359,20 @@ export async function runDbMaintenanceSetup(options, overrides = {}) {
 
     // 2. P1 identity, ServiceAccount, egress, and handover: the runner's own dry run says what is
     // missing, and its prepare-only execute run creates it. Both are safe to repeat.
-    const prepare = await deps.runner({ execute: options.execute, prepareOnly: true, handover: 'auto',
-      reconcileBrokerEgress: false, allowAppImageMismatch: false, deployApps: false, appsOnly: false,
-      receiptDir: options.receiptDir, jobTimeoutSeconds: 900 }, deps.runnerDependencies);
-    receipt.prepare = { runId: prepare.runId, result: prepare.result, receiptPath: prepare.receiptPath };
-    const p1Gaps = options.execute ? [] : (prepare.plannedSteps ?? [])
-      .filter(name => name === 'migration-identity-deploy' || name === 'handover-run')
-      .map(name => name === 'handover-run' ? 'The schema ownership handover has not run for the migration identity.'
-        : 'The P1 migration identity or its federated credential is missing.');
-    step(options.execute ? 'p1-prepared' : 'p1-checked', { gaps: p1Gaps });
+    let p1Gaps = [];
+    if (options.v1DeployOnly) {
+      step('p1-setup-skipped');
+    } else {
+      const prepare = await deps.runner({ execute: options.execute, prepareOnly: true, handover: 'auto',
+        reconcileBrokerEgress: false, allowAppImageMismatch: false, deployApps: false, appsOnly: false,
+        receiptDir: options.receiptDir, jobTimeoutSeconds: 900 }, deps.runnerDependencies);
+      receipt.prepare = { runId: prepare.runId, result: prepare.result, receiptPath: prepare.receiptPath };
+      p1Gaps = options.execute ? [] : (prepare.plannedSteps ?? [])
+        .filter(name => name === 'migration-identity-deploy' || name === 'handover-run')
+        .map(name => name === 'handover-run' ? 'The schema ownership handover has not run for the migration identity.'
+          : 'The P1 migration identity or its federated credential is missing.');
+      step(options.execute ? 'p1-prepared' : 'p1-checked', { gaps: p1Gaps });
+    }
 
     // 3. Workflow identity and GitHub settings.
     let current = readSetupState(exec);
@@ -331,20 +394,28 @@ export async function runDbMaintenanceSetup(options, overrides = {}) {
       const head = must(exec('git', ['rev-parse', 'HEAD'], { cwd: repoRoot }), 'Could not read HEAD').stdout.trim();
       const tags = JSON.parse(must(exec('az', ['group', 'show', '--name', target.resourceGroup, '--query', 'tags', '-o', 'json']),
         'Could not read resource group tags').stdout || '{}') ?? {};
-      const output = JSON.parse(must(exec('az', ['deployment', 'group', 'create', '--resource-group', target.resourceGroup,
+      const outputs = JSON.parse(must(exec('az', ['deployment', 'group', 'create', '--resource-group', target.resourceGroup,
         '--name', SETUP_TARGET.deploymentName, '--template-file', SETUP_TARGET.template,
         '--parameters', `tags=${JSON.stringify(tags)}`, `sourceSha=${head}`,
-        '--query', 'properties.outputs.maintenanceIdentity.value', '-o', 'json'], { cwd: repoRoot, timeout: 600_000 }),
+        '--query', 'properties.outputs', '-o', 'json'], { cwd: repoRoot, timeout: 600_000 }),
       'Workflow identity deployment failed').stdout);
-      if (output.name !== SETUP_TARGET.identity || !GUID.test(output.clientId ?? ''))
+      const maintenanceIdentity = outputs.maintenanceIdentity?.value;
+      const projectsConfigMigrationIdentity = outputs.projectsConfigMigrationIdentity?.value;
+      if (maintenanceIdentity?.name !== SETUP_TARGET.identity || !GUID.test(maintenanceIdentity?.clientId ?? '') ||
+          projectsConfigMigrationIdentity?.name !== SETUP_TARGET.projectsConfigMigrationIdentity ||
+          !GUID.test(projectsConfigMigrationIdentity?.clientId ?? '') ||
+          !GUID.test(projectsConfigMigrationIdentity?.principalObjectId ?? ''))
         throw new Error('The workflow identity deployment returned an unexpected identity.');
-      step('workflow-identity-deployed', { clientId: output.clientId });
+      step('workflow-identities-deployed', {
+        clientId: maintenanceIdentity.clientId,
+        projectsConfigMigrationClientId: projectsConfigMigrationIdentity.clientId,
+      });
       current = readSetupState(exec);
     }
     if (!GUID.test(current.clientId ?? '')) throw new Error('The workflow identity has no client ID.');
     if (current.kubernetesGaps.length) {
       if (!GUID.test(current.principalObjectId ?? '')) throw new Error('The workflow identity has no principal object ID.');
-      applyWorkflowAuthorization(exec, target, current.principalObjectId);
+      applyWorkflowAuthorization(exec, target, current.principalObjectId, current.projectsConfigMigrationClientId);
       step('workflow-kubernetes-authorization-applied');
       current = readSetupState(exec);
     }

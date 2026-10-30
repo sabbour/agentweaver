@@ -1,18 +1,16 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import {
-  collectGrantStageReceipts, parseProjectsConfigMigrationArgs, runProjectsConfigMigration,
+  parseProjectsConfigMigrationArgs, resolveProjectsConfigImage, runProjectsConfigMigration,
 } from '../lib/projects-config-migration.mjs';
 import { DB_MAINTENANCE_TARGET, LOCK_NAME } from '../lib/db-maintenance.mjs';
 
-const publicationSourceSha = 'f21632d48f606da215cf37e70921c85c2d604f1d';
 const deploymentSourceSha = 'c'.repeat(40);
-const sourceTree = 'b'.repeat(40);
 const imageDigest = `sha256:${'1'.repeat(64)}`;
-const componentId = 'Agentweaver.Projects.Config';
 const image = 'ghcr.io/sabbour/agentweaver.projects.config@' + imageDigest;
 const bootstrapSubject = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 const bootstrapTenantId = '11111111-2222-4333-8444-555555555555';
@@ -30,34 +28,6 @@ const inspectionOutput = [
   `AUDIT|role_assigned|Platform|default|PlatformAdmin|2026-10-23T00:00:01.000000Z|${inspectionMembershipId}|${inspectionAssignmentId}`,
   'OTHER_ACTIVE_PLATFORM_ADMIN_COUNT|1',
 ].join('\n');
-const manifest = {
-  stage: 'draft',
-  components: [{ id: componentId, kind: 'service', version: '1.0.9' }],
-};
-const publication = {
-  schemaVersion: 1,
-  sourceSha: publicationSourceSha,
-  status: 'published',
-  provenanceSha256: 'd'.repeat(64),
-  planned: [{
-    id: componentId, kind: 'image', version: '1.0.9', sha256: 'e'.repeat(64),
-    destination: 'ghcr.io/sabbour/agentweaver.projects.config:1.0.9',
-  }],
-  published: [{
-    id: componentId, kind: 'image', version: '1.0.9', archiveSha256: 'e'.repeat(64), image,
-  }],
-};
-
-const planSha256 = '9'.repeat(64);
-
-function grantResult(overrides = {}) {
-  return {
-    executed: true, mode: 'projects-config-grants', sourceSha: deploymentSourceSha, planSha256,
-    receipt: { p1Initializer: { verification: 'projects-config-grants-applied', planSha256 } },
-    ...overrides,
-  };
-}
-
 function createWorld({
   jobOutcome = 'Complete',
   bootstrapLog = 'The first PlatformAdmin was created.',
@@ -81,7 +51,6 @@ function createWorld({
     },
   },
   originV1 = deploymentSourceSha,
-  grants = async () => grantResult(),
 } = {}) {
   const directory = path.join(
     process.cwd(), '.test-scratch', `projects-config-migration-test-${randomUUID()}`);
@@ -99,12 +68,6 @@ function createWorld({
       }
       if (args[0] === 'rev-parse' && args[1] === 'origin/v1') {
         return { status: 0, stdout: `${originV1}\n`, stderr: '' };
-      }
-      if (args[0] === 'rev-parse' && args[1] === `${publicationSourceSha}^{tree}`) {
-        return { status: 0, stdout: `${sourceTree}\n`, stderr: '' };
-      }
-      if (args[0] === 'show' && args[1] === `${publicationSourceSha}:releases/foundation.json`) {
-        return { status: 0, stdout: JSON.stringify(manifest), stderr: '' };
       }
       throw new Error(`unexpected git ${args.join(' ')}`);
     }
@@ -154,31 +117,18 @@ function createWorld({
   return {
     calls, kubeconfigOptions, objects, receipts,
     options: parseProjectsConfigMigrationArgs([
-      '--publication', 'publication.json', '--receipt-dir', path.join(directory, 'receipts'),
+      '--image', image, '--receipt-dir', path.join(directory, 'receipts'),
     ]),
     overrides: {
       root: path.join(directory, 'checkout'),
       exec,
-      readFile: file => file.endsWith('publication.json')
-        ? JSON.stringify(publication)
-        : readFileSync(file.endsWith('job.yaml')
+      readFile: file => readFileSync(file.endsWith('job.yaml')
           ? path.join(process.cwd(), 'deploy', 'k8s', 'migrations', 'projects-config', 'job.yaml')
           : file, 'utf8'),
-      verifyImage: async () => ({
-        digest: imageDigest, sourceSha: publicationSourceSha, sourceTree, version: '1.0.9',
-      }),
+      verifyImage: async () => ({ digest: imageDigest }),
       withKubeconfig: async (_target, action, settings) => {
         kubeconfigOptions.push(settings);
         return action(['--kubeconfig', 'offline']);
-      },
-      // Record the grant step in the same call log so tests can check its order against kubectl calls.
-      applyRuntimeGrants: async root => {
-        calls.push({ command: 'grants', args: [root], lockHeld: objects.has(`lease/${LOCK_NAME}`) });
-        return grants();
-      },
-      collectGrantStageReceipts: (_root, destination, runId) => {
-        calls.push({ command: 'collect-grant-receipts', args: [destination, runId] });
-        return [{ path: path.join(destination, `projects-config-grants-${runId}-p1-postgres.jsonl`), sha256: 'a'.repeat(64) }];
       },
       newRunId: () => 'abcdef123456',
       now: () => new Date('2026-10-23T00:00:00.000Z'),
@@ -205,23 +155,99 @@ function withMigrationCredentials(callback, connection) {
   });
 }
 
-test('migration arguments are dry-run by default and require a publication', () => {
+test('migration arguments are dry-run by default and require an immutable image', () => {
   assert.equal(parseProjectsConfigMigrationArgs(['--help']).help, true);
-  assert.throws(() => parseProjectsConfigMigrationArgs([]), /--publication is required/);
-  assert.throws(() => parseProjectsConfigMigrationArgs(['--publication', 'x', '--reset']), /unknown argument/);
-  assert.equal(parseProjectsConfigMigrationArgs(['--publication', 'receipt.json']).execute, false);
+  assert.throws(() => parseProjectsConfigMigrationArgs([]), /--image is required/);
+  assert.throws(() => parseProjectsConfigMigrationArgs(['--image', 'x', '--reset']), /unknown argument/);
+  assert.throws(() => parseProjectsConfigMigrationArgs(['--image', 'x']), /immutable Projects & Config GHCR reference/);
+  assert.equal(parseProjectsConfigMigrationArgs(['--image', image]).execute, false);
+  assert.throws(() => parseProjectsConfigMigrationArgs(['--publication', 'receipt.json']), /unknown argument/);
   assert.equal(parseProjectsConfigMigrationArgs([
-    '--publication', 'receipt.json', '--bootstrap-first-platform-admin',
+    '--image', image, '--bootstrap-first-platform-admin',
   ]).bootstrapFirstPlatformAdmin, true);
   assert.equal(parseProjectsConfigMigrationArgs([
-    '--publication', 'receipt.json', '--inspect-first-platform-admin',
+    '--image', image, '--inspect-first-platform-admin',
   ]).inspectFirstPlatformAdmin, true);
   assert.throws(() => parseProjectsConfigMigrationArgs([
-    '--publication', 'receipt.json', '--inspect-first-platform-admin', '--execute',
+    '--image', image, '--inspect-first-platform-admin', '--execute',
   ]), /must not be combined with --execute/);
   assert.throws(() => parseProjectsConfigMigrationArgs([
-    '--publication', 'receipt.json', '--inspect-first-platform-admin', '--bootstrap-first-platform-admin',
+    '--image', image, '--inspect-first-platform-admin', '--bootstrap-first-platform-admin',
   ]), /mutually exclusive/);
+});
+
+test('default Projects & Config image verification returns the immutable service digest', async () => {
+  const hash = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  const configBytes = Buffer.from(JSON.stringify({
+    os: 'linux',
+    architecture: 'amd64',
+    config: { Labels: {
+      'org.opencontainers.image.revision': deploymentSourceSha,
+      'io.agentweaver.source-tree': 'd'.repeat(40),
+      'org.opencontainers.image.version': '1.0.0',
+    } },
+  }));
+  const configDigest = hash(configBytes);
+  const manifestBytes = Buffer.from(JSON.stringify({
+    schemaVersion: 2,
+    mediaType: 'application/vnd.oci.image.manifest.v1+json',
+    config: {
+      mediaType: 'application/vnd.oci.image.config.v1+json',
+      digest: configDigest,
+      size: configBytes.length,
+    },
+  }));
+  const manifestDigest = hash(manifestBytes);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    const request = String(url);
+    if (request.startsWith('https://ghcr.io/token?')) {
+      return { ok: true, status: 200, json: async () => ({ token: 'test-registry-token' }) };
+    }
+    if (request.endsWith(`/manifests/${manifestDigest}`)) {
+      return {
+        ok: true, status: 200,
+        headers: { get: name => name.toLowerCase() === 'docker-content-digest' ? manifestDigest : null },
+        text: async () => manifestBytes.toString('utf8'),
+      };
+    }
+    if (request.endsWith(`/blobs/${configDigest}`)) {
+      return { ok: true, status: 200, arrayBuffer: async () => configBytes };
+    }
+    assert.fail(`unexpected registry request: ${request}`);
+  };
+  try {
+    const verified = await resolveProjectsConfigImage(
+      `ghcr.io/sabbour/agentweaver.projects.config@${manifestDigest}`);
+    assert.deepEqual(verified, {
+      image: `ghcr.io/sabbour/agentweaver.projects.config@${manifestDigest}`,
+      digest: manifestDigest,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Projects & Config execution stops before Kubernetes writes without its schema-owner identity', async () => {
+  const world = createWorld();
+  const connection = process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION;
+  const accessToken = process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN;
+  delete process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION;
+  delete process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN;
+  try {
+    await assert.rejects(
+      runProjectsConfigMigration({ ...world.options, execute: true }, world.overrides),
+      /no approved Projects & Config schema-owner migration identity is configured/,
+    );
+    assert.equal(world.calls.some(call =>
+      call.command === 'kubectl' && ['create', 'apply', 'delete'].some(verb => call.args.includes(verb))), false);
+  } finally {
+    if (connection === undefined) delete process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION;
+    else process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION = connection;
+    if (accessToken === undefined) delete process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN;
+    else process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN = accessToken;
+    world.dispose();
+  }
 });
 
 test('PlatformAdmin inspection runs read-only without --execute and writes a sanitized receipt', async () => {
@@ -355,7 +381,7 @@ test('PlatformAdmin bootstrap dry run verifies the approved ConfigMap and avoids
     assert.equal(receipt.schemaVersion, 1);
     assert.equal(receipt.operation, 'bootstrap-first-platform-admin');
     assert.deepEqual(receipt.steps.map(step => step.name), [
-      'publication-image-verified', 'migration-lock-checked', 'bootstrap-identity-config-verified',
+      'image-verified', 'migration-lock-checked', 'bootstrap-identity-config-verified',
     ]);
     assert.ok(receipt.plannedSteps.includes('create-platform-admin-bootstrap-job'));
     assert.equal(world.calls.some(call =>
@@ -520,17 +546,17 @@ test('PlatformAdmin bootstrap fails closed when ConfigMap issuer differs from au
   }
 });
 
-test('dry run accepts the older publication from a newer v1 tool commit and makes no writes', async () => {
+test('dry run uses the selected immutable image and makes no writes', async () => {
   const world = createWorld();
   try {
     const receipt = await runProjectsConfigMigration(world.options, world.overrides);
     assert.equal(receipt.result, 'dry-run-passed');
     assert.equal(receipt.sourceSha, deploymentSourceSha);
-    assert.equal(receipt.publicationSourceSha, publicationSourceSha);
-    assert.equal(receipt.imageSourceSha, publicationSourceSha);
     assert.equal(receipt.target.namespace, 'agentweaver');
-    assert.deepEqual(receipt.steps.map(step => step.name), ['publication-image-verified', 'migration-lock-checked']);
-    assert.ok(receipt.plannedSteps.includes('apply-runtime-grants'));
+    assert.equal(receipt.publicationSourceSha, undefined);
+    assert.equal(receipt.imageSourceSha, undefined);
+    assert.deepEqual(receipt.steps.map(step => step.name), ['image-verified', 'migration-lock-checked']);
+    assert.equal(receipt.plannedSteps.includes('apply-runtime-grants'), false);
     assert.equal(world.calls.some(call =>
       call.command === 'kubectl' && ['create', 'delete', 'apply'].some(verb => call.args.includes(verb))), false);
     assert.equal(world.calls.some(call => call.command === 'grants'), false);
@@ -567,19 +593,13 @@ test('execute passes credentials only through Secret stdin, cleans up, and recor
       runProjectsConfigMigration({ ...world.options, execute: true }, world.overrides));
     assert.equal(receipt.result, 'succeeded');
     assert.equal(receipt.schemaVersion, 2);
-    assert.deepEqual(receipt.cleanup, {
-      job: true, secret: true, lock: true, grantStageReceipts: true, sourceCheckout: true,
-    });
-    assert.deepEqual(receipt.grants, { status: 'exact', sourceSha: deploymentSourceSha, planSha256 });
-    assert.deepEqual(receipt.steps.map(step => step.name).slice(-2), ['migration-job-completed', 'runtime-grants-applied']);
-    assert.equal(receipt.grantStageReceipts.length, 1);
-    // Grants run after the Job completes, while the lock is held, and before the Job, Secret and lock are removed.
-    const grantIndex = world.calls.findIndex(call => call.command === 'grants');
+    assert.deepEqual(receipt.cleanup, { job: true, secret: true, lock: true });
+    assert.deepEqual(receipt.steps.map(step => step.name).slice(-1), ['migration-job-completed']);
     const jobReadIndex = world.calls.findLastIndex(call =>
       call.command === 'kubectl' && call.args.includes('get') && call.args.includes('job'));
     const firstDeleteIndex = world.calls.findIndex(call => call.command === 'kubectl' && call.args.includes('delete'));
-    assert.ok(jobReadIndex < grantIndex && grantIndex < firstDeleteIndex);
-    assert.equal(world.calls[grantIndex].lockHeld, true);
+    assert.ok(jobReadIndex < firstDeleteIndex);
+    assert.equal(world.calls.some(call => call.command === 'grants'), false);
     assert.equal(receipt.target.subscriptionId, DB_MAINTENANCE_TARGET.subscriptionId);
     assert.equal(receipt.target.resourceGroup, DB_MAINTENANCE_TARGET.resourceGroup);
     assert.equal(JSON.stringify(receipt).includes('test-access-token'), false);
@@ -621,59 +641,6 @@ test('failed migration Job does not apply grants', async () => {
   }
 });
 
-test('a failed or unproven grant step fails the run, moves its receipt, and still cleans up', async () => {
-  for (const grants of [
-    async () => { throw new Error('grant readback incomplete'); },
-    async () => grantResult({ receipt: { p1Initializer: { verification: 'projects-config-grants-dry-run', planSha256 } } }),
-    async () => grantResult({ sourceSha: 'e'.repeat(40) }),
-    async () => grantResult({ planSha256: '8'.repeat(64) }),
-  ]) {
-    const world = createWorld({ grants });
-    try {
-      await assert.rejects(withMigrationCredentials(() =>
-        runProjectsConfigMigration({ ...world.options, execute: true }, world.overrides)),
-      /grant readback incomplete|did not prove exact Projects & Config grants/);
-      const receipt = world.receipts[0].receipt;
-      assert.equal(receipt.result, 'failed');
-      assert.equal(receipt.grants, undefined);
-      assert.equal(receipt.steps.some(step => step.name === 'runtime-grants-applied'), false);
-      assert.deepEqual(receipt.cleanup, {
-        job: true, secret: true, lock: true, grantStageReceipts: true, sourceCheckout: true,
-      });
-      assert.equal(receipt.grantStageReceipts.length, 1);
-      assert.equal(world.objects.size, 0);
-    } finally {
-      world.dispose();
-    }
-  }
-});
-
-test('a checkout left dirty by the grant step fails the run', async () => {
-  const world = createWorld();
-  try {
-    let grantsDone = false;
-    const exec = world.overrides.exec;
-    const overrides = {
-      ...world.overrides,
-      applyRuntimeGrants: async root => {
-        const result = await world.overrides.applyRuntimeGrants(root);
-        grantsDone = true;
-        return result;
-      },
-      exec: (command, args, settings) => command === 'git' && args[0] === 'status' && grantsDone
-        ? { status: 0, stdout: '?? Temp/unexpected.txt\n', stderr: '' }
-        : exec(command, args, settings),
-    };
-    await assert.rejects(withMigrationCredentials(() =>
-      runProjectsConfigMigration({ ...world.options, execute: true }, overrides)),
-    /source checkout left dirty/);
-    assert.equal(world.receipts[0].receipt.result, 'failed');
-    assert.equal(world.receipts[0].receipt.cleanup.sourceCheckout, false);
-  } finally {
-    world.dispose();
-  }
-});
-
 test('execute and dry run require the fetched origin/v1 tip before any Kubernetes access', async () => {
   for (const execute of [true, false]) {
     const world = createWorld({ originV1: 'e'.repeat(40) });
@@ -681,7 +648,7 @@ test('execute and dry run require the fetched origin/v1 tip before any Kubernete
       await assert.rejects(withMigrationCredentials(() =>
         runProjectsConfigMigration({ ...world.options, execute }, world.overrides)),
       /must be the fetched origin\/v1 tip/);
-      assert.equal(world.calls.some(call => call.command === 'kubectl' || call.command === 'grants'), false);
+      assert.equal(world.calls.some(call => call.command === 'kubectl'), false);
     } finally {
       world.dispose();
     }
@@ -697,33 +664,5 @@ test('the receipt directory must be outside the source checkout', async () => {
     assert.equal(world.receipts.length, 0);
   } finally {
     world.dispose();
-  }
-});
-
-test('grant stage receipts move out of Temp and leave unrelated files in place', () => {
-  const scratch = path.join(process.cwd(), '.test-scratch', `projects-config-grants-${randomUUID()}`);
-  const root = path.join(scratch, 'checkout');
-  const destination = path.join(scratch, 'receipts');
-  mkdirSync(root, { recursive: true });
-  mkdirSync(destination, { recursive: true });
-  try {
-    assert.deepEqual(collectGrantStageReceipts(root, destination, 'abcdef123456'), []);
-    const temp = path.join(root, 'Temp');
-    mkdirSync(temp);
-    const name = `p1-postgres-${'a'.repeat(32)}.jsonl`;
-    writeFileSync(path.join(temp, name), '{"stage":"grants"}\n');
-    const moved = collectGrantStageReceipts(root, destination, 'abcdef123456');
-    assert.equal(moved.length, 1);
-    assert.equal(moved[0].path, path.join(destination, `projects-config-grants-abcdef123456-${name}`));
-    assert.match(moved[0].sha256, /^[a-f0-9]{64}$/);
-    assert.equal(readFileSync(moved[0].path, 'utf8'), '{"stage":"grants"}\n');
-    assert.equal(existsSync(temp), false);
-
-    mkdirSync(temp);
-    writeFileSync(path.join(temp, 'unrelated.txt'), 'keep');
-    assert.deepEqual(collectGrantStageReceipts(root, destination, 'abcdef123456'), []);
-    assert.equal(existsSync(path.join(temp, 'unrelated.txt')), true);
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
   }
 });

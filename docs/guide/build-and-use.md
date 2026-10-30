@@ -33,14 +33,14 @@ Run the commands from the repository root:
 
    The build compiles the solution without changing the restored dependency set.
 
-3. Validate release metadata:
+3. Run the focused release/deployment workflow tests:
 
    ```powershell
-   npm run release:validate
+   npm run test:release
    ```
 
-   This command uses Node.js built-in modules. It does not install packages or
-   publish artifacts.
+   The tests inspect the direct GHCR image workflow and migration-first
+   Kustomize deployment contract. They do not publish artifacts.
 
 ## Use the foundation libraries
 
@@ -72,6 +72,6 @@ For package preparation, see [component releases](../reference/releases).
 
 ## Expected result
 
-The locked restore, Release build, and release-manifest validation complete
+The locked restore, Release build, and focused workflow tests complete
 successfully. The checks validate source and local tooling; they do not deploy
 services or provision the resources that an adapter uses.

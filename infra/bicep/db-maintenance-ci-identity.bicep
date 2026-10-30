@@ -58,6 +58,27 @@ resource githubCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/fede
   }
 }
 
+resource projectsConfigMigrationIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${namePrefix}-id-projects-config-migration'
+  location: resourceGroup().location
+  tags: union(tags, {
+    service: 'projects-config-migration'
+    'agentweaver:source-sha': sourceSha
+  })
+}
+
+resource projectsConfigMigrationCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: projectsConfigMigrationIdentity
+  name: 'projects-config-migration-workload-identity'
+  properties: {
+    issuer: aks.properties.oidcIssuerProfile.issuerURL
+    subject: 'system:serviceaccount:agentweaver:projects-config-migration'
+    audiences: [
+      'api://AzureADTokenExchange'
+    ]
+  }
+}
+
 resource readerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(resourceGroup().id, identity.id, readerRoleId)
   properties: {
@@ -82,4 +103,12 @@ output maintenanceIdentity object = {
   clientId: identity.properties.clientId
   principalObjectId: identity.properties.principalId
   githubSubject: githubCredential.properties.subject
+}
+
+output projectsConfigMigrationIdentity object = {
+  name: projectsConfigMigrationIdentity.name
+  clientId: projectsConfigMigrationIdentity.properties.clientId
+  principalObjectId: projectsConfigMigrationIdentity.properties.principalId
+  serviceAccount: 'projects-config-migration'
+  oidcSubject: projectsConfigMigrationCredential.properties.subject
 }

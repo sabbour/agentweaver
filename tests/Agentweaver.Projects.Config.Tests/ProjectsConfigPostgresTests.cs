@@ -3759,21 +3759,55 @@ public sealed class ProjectsConfigPostgresFixture : IAsyncLifetime
     private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:16-alpine").Build();
 
     public NpgsqlDataSource DataSource { get; private set; } = null!;
-    public string ConnectionString => _container.GetConnectionString();
+    public NpgsqlDataSource MigrationDataSource { get; private set; } = null!;
+    public string ConnectionString => new NpgsqlConnectionStringBuilder(_container.GetConnectionString())
+    {
+        Database = "agentweaver",
+    }.ConnectionString;
 
     public async Task InitializeAsync()
     {
         await _container.StartAsync();
-        DataSource = NpgsqlDataSource.Create(_container.GetConnectionString());
+        await using (var admin = NpgsqlDataSource.Create(_container.GetConnectionString()))
+        await using (var connection = await admin.OpenConnectionAsync())
+        await using (var createDatabase = new NpgsqlCommand("CREATE DATABASE agentweaver", connection))
+            await createDatabase.ExecuteNonQueryAsync();
+
+        var connectionString = ConnectionString;
+        DataSource = NpgsqlDataSource.Create(connectionString);
+        await using (var connection = await DataSource.OpenConnectionAsync())
+        {
+            await using var createMigrationRole = new NpgsqlCommand("""
+                CREATE ROLE "agentweaver-id-projects-config-migration"
+                    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT
+                """, connection);
+            await createMigrationRole.ExecuteNonQueryAsync();
+            await using var createRuntimeRole = new NpgsqlCommand("""
+                CREATE ROLE "agentweaver-id-projects-config"
+                    NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT
+                """, connection);
+            await createRuntimeRole.ExecuteNonQueryAsync();
+            await using var createSchema = new NpgsqlCommand(
+                "CREATE SCHEMA projects_config AUTHORIZATION \"agentweaver-id-projects-config-migration\"", connection);
+            await createSchema.ExecuteNonQueryAsync();
+        }
+
+        var migrationConnectionString = new NpgsqlConnectionStringBuilder(connectionString)
+        {
+            Options = "-c role=agentweaver-id-projects-config-migration",
+        }.ConnectionString;
+        MigrationDataSource = NpgsqlDataSource.Create(migrationConnectionString);
         var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
-            .UseNpgsql(DataSource, npgsql => npgsql.MigrationsHistoryTable(
+            .UseNpgsql(MigrationDataSource, npgsql => npgsql.MigrationsHistoryTable(
                 "__ef_migrations_history", ProjectsConfigDbContext.Schema))
             .Options;
-        await ProjectsConfigMigrator.MigrateAsync(DataSource, options);
+        await ProjectsConfigMigrator.MigrateAsync(MigrationDataSource, options);
     }
 
     public async Task DisposeAsync()
     {
+        if (MigrationDataSource is not null)
+            await MigrationDataSource.DisposeAsync();
         if (DataSource is not null)
             await DataSource.DisposeAsync();
         await _container.DisposeAsync();

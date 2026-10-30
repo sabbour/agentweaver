@@ -10,6 +10,9 @@ const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' });
 const fail = (stderr = 'failed', status = 1) => ({ status, stdout: '', stderr });
 const CLIENT_ID = '11111111-2222-4333-8444-555555555555';
 const PRINCIPAL_ID = '66666666-7777-4888-8999-aaaaaaaaaaaa';
+const MIGRATION_CLIENT_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const MIGRATION_PRINCIPAL_ID = 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff';
+const OIDC_ISSUER = 'https://eastus2euap.oic.prod-aks.azure.com/tenant/cluster/';
 const scopes = setupScopes();
 const environmentPath = `repos/${SETUP_TARGET.repository}/environments/${SETUP_TARGET.environment}`;
 const allRoles = [
@@ -23,12 +26,14 @@ const allRoles = [
  */
 function world({ complete = false, accountType = 'user', admin = 'true', extraRule, prepare = {},
   authorization = { azureRbac: true, kubernetesRbac: true } } = {}) {
-  const resources = complete ? workflowAuthorizationResources(PRINCIPAL_ID) : [];
+  const resources = complete ? workflowAuthorizationResources(PRINCIPAL_ID, MIGRATION_CLIENT_ID) : [];
   const live = complete
-    ? { identity: true, roles: [...allRoles], environment: true, rules: [{ name: 'v1', type: 'branch' }], variable: CLIENT_ID,
+    ? { identity: true, migrationIdentity: true, roles: [...allRoles], environment: true,
+      rules: [{ name: 'v1', type: 'branch' }], variable: CLIENT_ID,
       kubernetesResources: new Map(resources.map(resource =>
         [`${resource.kind.toLowerCase()}/${resource.metadata.name}`, structuredClone(resource)])) }
-    : { identity: false, roles: [], environment: false, rules: [], variable: undefined, kubernetesResources: new Map() };
+    : { identity: false, migrationIdentity: false, roles: [], environment: false, rules: [],
+      variable: undefined, kubernetesResources: new Map() };
   if (extraRule) live.rules.push(extraRule);
   const calls = [];
   const runnerCalls = [];
@@ -39,21 +44,38 @@ function world({ complete = false, accountType = 'user', admin = 'true', extraRu
     if (command === 'az') {
       if (args[0] === 'account') return ok(JSON.stringify({ id: DB_MAINTENANCE_TARGET.subscriptionId,
         tenantId: DB_MAINTENANCE_TARGET.tenantId, user: { name: 'admin@example.test', type: accountType } }));
-      if (args[0] === 'aks' && args[1] === 'show') return ok(JSON.stringify(authorization));
+      if (args[0] === 'aks' && args[1] === 'show') return ok(JSON.stringify({ ...authorization, oidcIssuer: OIDC_ISSUER }));
       if (args[0] === 'aks' && args[1] === 'get-credentials') return ok();
       if (args[0] === 'group') return ok('{}');
-      if (args[0] === 'identity' && args[1] === 'federated-credential')
-        return ok(JSON.stringify(live.identity ? [{ issuer: SETUP_TARGET.githubIssuer, audiences: ['api://AzureADTokenExchange'],
-          subject: `repo:${SETUP_TARGET.repository}:environment:${SETUP_TARGET.environment}` }] : []));
-      if (args[0] === 'identity') return live.identity ? ok(JSON.stringify({ clientId: CLIENT_ID, principalId: PRINCIPAL_ID }))
-        : fail(`ERROR: The Resource '${SETUP_TARGET.identity}' was not found.`, 3);
+      if (args[0] === 'identity' && args[1] === 'federated-credential') {
+        const identityName = args[args.indexOf('--identity-name') + 1];
+        const exists = identityName === SETUP_TARGET.identity ? live.identity : live.migrationIdentity;
+        const credential = identityName === SETUP_TARGET.identity
+          ? { issuer: SETUP_TARGET.githubIssuer, subject: `repo:${SETUP_TARGET.repository}:environment:${SETUP_TARGET.environment}` }
+          : { issuer: OIDC_ISSUER, subject: `system:serviceaccount:${DB_MAINTENANCE_TARGET.namespace}:${SETUP_TARGET.projectsConfigMigrationServiceAccount}` };
+        return ok(JSON.stringify(exists ? [{ ...credential, audiences: ['api://AzureADTokenExchange'] }] : []));
+      }
+      if (args[0] === 'identity' && args[1] === 'show') {
+        const identityName = args[args.indexOf('--name') + 1];
+        if (identityName === SETUP_TARGET.identity && live.identity)
+          return ok(JSON.stringify({ name: identityName, clientId: CLIENT_ID, principalId: PRINCIPAL_ID }));
+        if (identityName === SETUP_TARGET.projectsConfigMigrationIdentity && live.migrationIdentity)
+          return ok(JSON.stringify({ name: identityName, clientId: MIGRATION_CLIENT_ID, principalId: MIGRATION_PRINCIPAL_ID }));
+        return fail(`ERROR: The Resource '${identityName}' was not found.`, 3);
+      }
       if (args[0] === 'role') {
         const scope = args[args.indexOf('--scope') + 1];
         return ok(JSON.stringify(live.roles.filter(entry => entry.scope === scope)));
       }
       if (args[0] === 'deployment') {
-        Object.assign(live, { identity: true, roles: [...allRoles] });
-        return ok(JSON.stringify({ name: SETUP_TARGET.identity, clientId: CLIENT_ID, principalObjectId: PRINCIPAL_ID }));
+        Object.assign(live, { identity: true, migrationIdentity: true, roles: [...allRoles] });
+        return ok(JSON.stringify({
+          maintenanceIdentity: { value: { name: SETUP_TARGET.identity, clientId: CLIENT_ID, principalObjectId: PRINCIPAL_ID } },
+          projectsConfigMigrationIdentity: {
+            value: { name: SETUP_TARGET.projectsConfigMigrationIdentity,
+              clientId: MIGRATION_CLIENT_ID, principalObjectId: MIGRATION_PRINCIPAL_ID },
+          },
+        }));
       }
     }
     if (command === 'kubelogin') return ok();
@@ -103,9 +125,11 @@ function world({ complete = false, accountType = 'user', admin = 'true', extraRu
   };
 }
 
-test('setup arguments accept only --execute and --receipt-dir', () => {
+test('setup arguments accept only --execute, --v1-deploy-only, and --receipt-dir', () => {
   assert.equal(parseSetupArgs([]).execute, false);
-  assert.equal(parseSetupArgs(['--execute', '--receipt-dir=/tmp/r']).receiptDir, '/tmp/r');
+  assert.equal(parseSetupArgs(['--execute', '--receipt-dir=C:\\agentweaver-scratch\\r']).receiptDir,
+    'C:\\agentweaver-scratch\\r');
+  assert.equal(parseSetupArgs(['--v1-deploy-only']).v1DeployOnly, true);
   assert.throws(() => parseSetupArgs(['--force']), /Unknown argument/);
   assert.throws(() => parseSetupArgs(['--receipt-dir']), /requires a value/);
 });
@@ -127,7 +151,7 @@ test('execute creates only what is missing, then verifies it', async () => {
   const receipt = await runDbMaintenanceSetup(parseSetupArgs(['--execute']), fake.deps);
   assert.equal(receipt.result, 'succeeded');
   assert.deepEqual(receipt.steps.map(step => step.name),
-    ['accounts-verified', 'p1-prepared', 'workflow-identity-deployed', 'workflow-kubernetes-authorization-applied',
+    ['accounts-verified', 'p1-prepared', 'workflow-identities-deployed', 'workflow-kubernetes-authorization-applied',
       'github-environment-ready', 'setup-verified']);
   assert.equal(fake.runnerCalls[0].execute, true);
   assert.equal(fake.live.variable, CLIENT_ID);
@@ -135,10 +159,24 @@ test('execute creates only what is missing, then verifies it', async () => {
   assert.deepEqual(fake.live.roles, allRoles);
   const applied = fake.calls.filter(call => call.command === 'kubectl' && call.args.includes('apply'))
     .map(call => JSON.parse(call.settings.input));
-  assert.deepEqual(applied, workflowAuthorizationResources(PRINCIPAL_ID));
+  assert.deepEqual(applied, workflowAuthorizationResources(PRINCIPAL_ID, MIGRATION_CLIENT_ID));
   const deploy = fake.calls.find(call => call.args[0] === 'deployment');
   assert.ok(deploy.args.includes(SETUP_TARGET.template));
   assert.ok(deploy.args.includes(`sourceSha=${'b'.repeat(40)}`));
+});
+
+test('v1 deployment setup provisions only approved identities and namespace authorization', async () => {
+  const fake = world();
+  const receipt = await runDbMaintenanceSetup(
+    parseSetupArgs(['--execute', '--v1-deploy-only']), fake.deps);
+
+  assert.equal(receipt.result, 'succeeded');
+  assert.equal(fake.runnerCalls.length, 0);
+  assert.equal(fake.live.identity, true);
+  assert.equal(fake.live.migrationIdentity, true);
+  assert.deepEqual(fake.calls.filter(call => call.command === 'kubectl' && call.args.includes('apply'))
+    .map(call => JSON.parse(call.settings.input)),
+  workflowAuthorizationResources(PRINCIPAL_ID, MIGRATION_CLIENT_ID));
 });
 
 test('setup verifies both AKS authorization modes before changing the workflow identity', async () => {
@@ -147,7 +185,7 @@ test('setup verifies both AKS authorization modes before changing the workflow i
     /both Azure RBAC for Kubernetes and Kubernetes RBAC enabled/);
   const authorizationCall = fake.calls.find(call => call.command === 'az' && call.args[0] === 'aks' && call.args[1] === 'show');
   assert.equal(authorizationCall.args[authorizationCall.args.indexOf('--query') + 1],
-    '{azureRbac:aadProfile.enableAzureRbac,kubernetesRbac:enableRbac}');
+    '{azureRbac:aadProfile.enableAzureRbac,kubernetesRbac:enableRbac,oidcIssuer:oidcIssuerProfile.issuerURL}');
   assert.ok(!fake.calls.some(call => call.command === 'az' && call.args[0] === 'deployment'));
   assert.ok(!fake.calls.some(call => call.command === 'kubectl' && call.args.includes('apply')));
 });
@@ -158,25 +196,42 @@ test('AKS source enables both authorization modes used by setup', () => {
   assert.match(source, /enableAzureRBAC:\s*true/);
 });
 
-test('namespace Role grants only maintenance verbs and binds the workflow object ID', () => {
-  const [role, binding] = workflowAuthorizationResources(PRINCIPAL_ID);
+test('namespace Role grants only approved deploy and maintenance access and binds the workflow identity', () => {
+  const [role, binding, serviceAccount] = workflowAuthorizationResources(PRINCIPAL_ID, MIGRATION_CLIENT_ID);
   assert.equal(role.metadata.namespace, DB_MAINTENANCE_TARGET.namespace);
   assert.deepEqual(role.rules, [
     { apiGroups: ['batch'], resources: ['jobs'], verbs: ['create', 'delete', 'get', 'list', 'watch'] },
-    { apiGroups: [''], resources: ['pods'], verbs: ['get', 'list'] },
+    { apiGroups: [''], resources: ['pods'], verbs: ['get', 'list', 'watch'] },
     { apiGroups: [''], resources: ['pods/log'], verbs: ['get'] },
+    { apiGroups: [''], resources: ['resourcequotas', 'limitranges'], verbs: ['create', 'get', 'patch'] },
+    { apiGroups: [''], resources: ['services', 'networkpolicies'], verbs: ['create', 'get', 'patch'] },
     { apiGroups: [''], resources: ['configmaps'], verbs: ['create', 'get', 'patch'] },
     { apiGroups: [''], resources: ['serviceaccounts'], verbs: ['create', 'get', 'patch'] },
     { apiGroups: ['coordination.k8s.io'], resources: ['leases'], verbs: ['create', 'delete', 'get'] },
     { apiGroups: ['cilium.io'], resources: ['ciliumnetworkpolicies'], verbs: ['create', 'get', 'patch'] },
-    { apiGroups: ['apps'], resources: ['deployments'], resourceNames: ['environment', 'orchestrator', 'events-and-sessions'],
+    { apiGroups: ['apps'], resources: ['deployments'], verbs: ['create'] },
+    { apiGroups: ['apps'], resources: ['deployments'], resourceNames: [
+      'environment', 'orchestrator', 'events-and-sessions', 'identity-broker',
+      'gateway', 'mcp', 'web', 'knowledge', 'projects-config',
+    ],
       verbs: ['get', 'list', 'patch', 'watch'] },
+    { apiGroups: ['gateway.networking.k8s.io'], resources: ['httproutes'], verbs: ['create', 'get', 'patch'] },
   ]);
   assert.deepEqual(binding.subjects, [{
     kind: 'User', name: PRINCIPAL_ID, apiGroup: 'rbac.authorization.k8s.io',
   }]);
   assert.deepEqual(binding.roleRef, {
     kind: 'Role', name: SETUP_TARGET.kubernetesRole, apiGroup: 'rbac.authorization.k8s.io',
+  });
+  assert.deepEqual(serviceAccount, {
+    apiVersion: 'v1',
+    kind: 'ServiceAccount',
+    metadata: {
+      name: SETUP_TARGET.projectsConfigMigrationServiceAccount,
+      namespace: DB_MAINTENANCE_TARGET.namespace,
+      annotations: { 'azure.workload.identity/client-id': MIGRATION_CLIENT_ID },
+    },
+    automountServiceAccountToken: false,
   });
 });
 
@@ -213,6 +268,8 @@ test('the workflow identity template trusts its environment and creates no Azure
   assert.doesNotMatch(source, /resource\s+\w+\s+'Microsoft\.Authorization\/roleDefinitions@/);
   assert.match(source, /resource readerAssignment 'Microsoft\.Authorization\/roleAssignments/);
   assert.match(source, /resource clusterUserAssignment 'Microsoft\.Authorization\/roleAssignments/);
+  assert.match(source, /name: '\$\{namePrefix\}-id-projects-config-migration'/);
+  assert.match(source, /subject: 'system:serviceaccount:agentweaver:projects-config-migration'/);
   const result = spawnSync('az', ['bicep', 'build', '--file', 'infra/bicep/db-maintenance-ci-identity.bicep', '--stdout'],
     { encoding: 'utf8', shell: process.platform === 'win32' });
   // The Bicep CLI is optional offline; when present verify it compiles to Azure role assignments only.

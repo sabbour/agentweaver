@@ -11,12 +11,13 @@ import {
 } from './identity-broker-routing.mjs';
 
 const NAMESPACE = 'agentweaver';
-const CONFIG = 'identity-broker-runtime-config-v2';
+const CONFIG = 'identity-broker-runtime-config-v3';
 const GUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const OPTIONS = { check: false, timeout: 35_000 };
 const SENTINEL = 'ghcr.io/sabbour/agentweaver.identity.broker:receipt-pinned';
 const SCOPES = ['openid', 'profile', 'email', 'api.read', 'offline_access'];
 const WEB_SCOPES = [...SCOPES, 'projects.admin', 'projects.orchestrator'];
+const CLI_SCOPES = ['openid', 'api.read', 'offline_access'];
 
 /** Checks the required broker runtime source and target inputs before resource generation. */
 export function assertBrokerRuntimeInputs(config) {
@@ -53,6 +54,10 @@ export function brokerAcceptanceConfiguration(config, { issuer, identity, portal
     IdentityBroker__Issuer: issuer,
     IdentityBroker__WebOrigin: `https://${portalHostname}`,
     IdentityBroker__DataProtectionKeyPath: '/var/lib/identity-broker/key-ring',
+    IdentityBroker__RunBinding__ProjectsAudience: 'https://projects.agentweaver.io/run-binding',
+    IdentityBroker__RunBinding__ProjectsOwnerAddress: 'https://projects-config.agentweaver.svc.cluster.local:8443/',
+    IdentityBroker__RunBinding__ProjectsServerCertificateSha256: '2f8d3d969428d8ca3b33d1a083a2fc80da34ed54111d65eaf7a87c3a0240f053',
+    IdentityBroker__RunBinding__ProjectsTrustBundleSha256: '5de6410b8a7ac85025497d89b230be09407428f7a29d0bc4f6f3e6db0ea3dbfa',
     IdentityBroker__ExternalProvider__Authority: `https://login.microsoftonline.com/${config.tenantId}/v2.0`,
     IdentityBroker__ExternalProvider__ClientId: config.upstreamClientId,
     IdentityBroker__SecretRedemption__Audience: issuer,
@@ -71,9 +76,15 @@ export function brokerAcceptanceConfiguration(config, { issuer, identity, portal
     IdentityBroker__Clients__1__Type: 'Public',
     IdentityBroker__Clients__1__RedirectUris__0: `https://${portalHostname}/auth/callback`,
     IdentityBroker__Clients__1__Resources__0: issuer,
+    IdentityBroker__Clients__2__ClientId: 'agentweaver-cli',
+    IdentityBroker__Clients__2__DisplayName: 'Agentweaver CLI',
+    IdentityBroker__Clients__2__Type: 'Public',
+    IdentityBroker__Clients__2__RedirectUris__0: 'http://127.0.0.1:49173/oauth/callback',
+    IdentityBroker__Clients__2__Resources__0: issuer,
   };
   SCOPES.forEach((scope, index) => { data[`IdentityBroker__Clients__0__Scopes__${index}`] = scope; });
   WEB_SCOPES.forEach((scope, index) => { data[`IdentityBroker__Clients__1__Scopes__${index}`] = scope; });
+  CLI_SCOPES.forEach((scope, index) => { data[`IdentityBroker__Clients__2__Scopes__${index}`] = scope; });
   return data;
 }
 

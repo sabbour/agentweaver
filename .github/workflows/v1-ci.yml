@@ -412,14 +412,6 @@ jobs:
             exit "$test_status"
           fi
           exit "$verification_status"
-      - uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}
-        with:
-          name: v1-local-image-${{ github.sha }}-${{ github.run_attempt }}
-          path: artifacts/images/
-          if-no-files-found: error
-          retention-days: 30
-
   node:
     name: v1 release and P1 contracts
     needs: [changes, web]
@@ -477,9 +469,9 @@ jobs:
       - name: Test release and Azure tooling without coverage
         if: ${{ !cancelled() && env.COLLECT_COVERAGE != 'true' && needs.changes.outputs.node == 'true' }}
         run: node --test scripts/release/tests/*.test.mjs scripts/azure/tests/*.test.mjs
-      - name: Test controlled P1 API, MCP, and UI journeys
+      - name: Test P1 journeys without release artifact receipts
         if: ${{ !cancelled() }}
-        run: node --test scripts/api-harness/test/p1-journey.test.mjs scripts/harness-shared/test/run-p1.test.mjs scripts/harness-shared/test/p1-deployment-evidence.test.mjs
+        run: node --test scripts/api-harness/test/p1-journey.test.mjs scripts/harness-shared/test/run-p1.test.mjs scripts/harness-shared/test/p1-journey-input.test.mjs scripts/harness-shared/test/p1-acceptance-result.test.mjs
       - name: Test coverage report guards
         if: ${{ !cancelled() }}
         run: node --test scripts/coverage/tests/*.test.mjs scripts/ci/tests/*.test.mjs

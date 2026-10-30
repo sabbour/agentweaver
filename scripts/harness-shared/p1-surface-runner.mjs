@@ -16,7 +16,6 @@ import {
   requireP1Http,
   requireP1OwnedGate,
   sanitizeP1Failure,
-  summarizeP1SourceEvidence,
   validateP1AdapterBindings,
   waitForP1GateResolution,
 } from './p1-surface-common.mjs';
@@ -205,7 +204,6 @@ export async function runP1SurfaceJourney(surface, input, {
   deniedApi,
   mcp,
   ui,
-  sourceEvidence,
   nativeProbeResults = [],
   clock = () => Date.now(),
   sleep = delay => new Promise(resolve => setTimeout(resolve, delay)),
@@ -224,7 +222,6 @@ export async function runP1SurfaceJourney(surface, input, {
     ? 'not-started' : 'not-required';
   const observations = {};
   const actionReceipts = [];
-  let safeSourceEvidence;
   let cleanup = { intent: 'none', status: 'not-required' };
   const adapters = { api, deniedApi, mcp, ui };
 
@@ -241,7 +238,6 @@ export async function runP1SurfaceJourney(surface, input, {
     }
     const { environment, pins } = validated;
     validateP1AdapterBindings(adapters, environment, pins.fixtureScope, surface);
-    safeSourceEvidence = summarizeP1SourceEvidence(sourceEvidence, pins);
     await api.discover();
     if (surface === 'mcp') {
       try {
@@ -425,7 +421,6 @@ export async function runP1SurfaceJourney(surface, input, {
     surface,
     surfaceStatus,
     steps,
-    sourceEvidence: safeSourceEvidence,
     nativeProbeResults,
     observations: {
       ...observations,

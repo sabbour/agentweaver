@@ -674,30 +674,23 @@ They reject any extracted native package cache in private state.
 CI separately runs the same image as UID/GID 1000 with an owner-writable `0755` workspace and private `0700` mounts.
 It checks actual create, write, rename, read, and delete operations without network or a model call.
 Fixture configuration and TLS files use mode `0440`.
-The check provides simulated POSIX access proof, not a live Azure Files receipt or deployed TLS acceptance.
-The receipt and native status remain exact-candidate CI artifacts, not publication or live Sandbox acceptance.
+The check provides simulated POSIX access, not live Azure Files or deployed TLS acceptance.
+The native runtime checks run locally in CI and are not uploaded as deployment proof.
 
-Release preparation now uses this same Dockerfile with only committed inputs.
-It retains both a Docker-save archive and an OCI archive in one component record.
-Both hashes and sizes are required, with the same measured image-config digest.
-The existing measurer verifies the retained OCI bytes, source/tree labels, version, and platform.
-Preparation loads the saved image and checks its pinned native runtime without network or model access.
-Publication measures the OCI archive again and repeats the loaded-image and runtime checks before registry login.
-It tags the verified config digest, not an unchecked mutable local tag.
-Missing or changed archives, wrong image identity or labels, and failed size or runtime checks block publication.
-The publication receipt records the actual registry digest separately from the prepared OCI measurement.
-This source does not apply versions, publish an image, or prove deployed startup.
+The v1 image workflow builds the existing Dockerfiles with standard GitHub
+Actions Docker and .NET container steps, then pushes each image directly to
+GHCR under its `sha-<commit>` tag. Deployment resolves those tags to immutable
+digests and applies the existing Kustomize overlay. The workflow does not
+transfer image archives between jobs or require custom publication receipts,
+source claims, or provenance checks.
 
 ```mermaid
 flowchart LR
-    Source["Committed source and existing Dockerfile"] --> Build["Stage source and build one image"]
-    Build --> Saved["Docker-save archive"]
-    Build --> OCI["OCI archive"]
-    OCI --> Measure["Verify actual compressed bytes"]
-    Saved --> Load["Load and check matching config"]
-    Measure --> Load
-    Load --> Runtime["Check pinned native runtime without network"]
-    Runtime --> Publish["Separate approved publication"]
+    Source["Committed source and existing Dockerfiles"] --> Build["Standard image build"]
+    Build --> Push["Push sha-<commit> tags directly to GHCR"]
+    Push --> Digest["Resolve image digests"]
+    Digest --> Deploy["Render and apply existing Kustomize overlay"]
+    Build --> Runtime["Local native runtime checks"]
 ```
 
 ## BuildTest output collector mode

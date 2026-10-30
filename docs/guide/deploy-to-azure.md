@@ -325,276 +325,47 @@ Kustomize base intentionally does not own:
    policy, so routing acceptance needs a separately approved Gateway namespace
    using the `baseline` policy. Do not change the product namespace policy to
    work around this limitation.
-5. Pin product images to the digests in the reviewed publication receipt.
+5. Confirm the selected image tag was pushed by the v1 image workflow.
 
 Do not copy acceptance-only OAuth client IDs or loopback redirect URIs into a
 production registration. Keep passwords, OAuth secrets, PFX passwords, tokens,
 and private keys out of ConfigMaps and command-line arguments. For a fresh
-install, the certificate-only routing stage in step 7 creates the managed
-`identity-broker-tls` Secret before the release preflight.
+install, complete the certificate-only routing stage below so AKS creates the
+managed `identity-broker-tls` Secret before deploying the workloads.
 
-## 7. Render and install the Kustomize bundle
+## 7. Run the v1 deployment
 
-Render the complete bundle and inspect it before applying:
+The v1 image workflow pushes immutable `sha-<commit>` tags directly to GHCR.
+After the selected tag has been built and the runtime ConfigMaps, TLS
+certificates, workload identities, and operator-owned Secrets are ready,
+dispatch `.github/workflows/v1-deploy.yml` on `v1` with that `image_tag`.
+GitHub requires this workflow to exist on the repository's default branch
+before it appears in the manual dispatch list. The workflow uses the existing
+`v1-db-maintenance` environment and maintenance identity.
 
-```powershell
-kubectl kustomize deploy\k8s
-```
+The deployment command resolves all ten image tags to registry digests, runs
+the existing Broker and P1 migration Jobs, then runs the Projects & Config
+migration Job. It renders the existing `deploy/k8s` root overlay with those
+digests, applies it to the selected AKS context and `agentweaver` namespace,
+and waits for all nine Deployment rollouts. Any migration or apply error stops
+the sequence; no root workload apply occurs after a failed migration. It does
+not create Azure roles or credentials.
 
-This command renders the product Deployments, Services, ServiceAccounts,
-runtime ConfigMaps, provider catalog, namespace controls, and network policies.
+**Current blocker:** Projects & Config has no approved schema-owner workload
+identity configured for this automated job. Its runtime identity is
+intentionally DDL-restricted, while the existing operator path requires a
+schema-owner connection and short-lived token. The deployment runner reports
+the missing identity configuration and stops before Kustomize apply; do not
+reuse the runtime identity or supply a token manually. The authorized Infra
+owner must verify or provision the existing approved migration identity before
+an end-to-end rollout can succeed.
 
-Before applying, confirm that the active context and API-server host still
-match the approved cluster verified in step 4.
-
-After you verify the target, run client-side validation:
-
-```powershell
-kubectl apply --dry-run=client -k deploy\k8s
-```
-
-This command validates the rendered objects locally; it does not prove that
-the cluster will accept them.
-
-For a fresh install, use this order after the target, database, workload
-identities, operator-owned TLS resources, and runtime values are ready:
-
-1. Create the managed certificates before the release bootstrap. Use the
-   certificate-only form of the guarded routing installer from the
-   [Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#application-routing-source-setting).
-   It waits for both `DefaultDomainCertificate` resources to become Available
-   and for AKS to create `identity-broker-tls`. It does not create routes and
-   does not require product Services. Before any write, it checks the selected
-   tenant and client, single-tenant mode, public-client setting, and the exact
-   callback derived from the AKS managed domain. The Broker requests only
-   `openid`, `profile`, and `email`; no Agentweaver API permission or consent
-   grant is needed. If registration settings are missing, the command stops
-   before infrastructure changes and prints a supported reconciliation
-   command. After separate approval, run that command with
-   `--register-identity-broker-callback` and the exact callback confirmation.
-   This explicit option can be used with the certificate-only stage and only
-   updates the required registration fields. Use the returned managed hostname
-   to confirm that the approved runtime configuration uses the same issuer and
-   Web origin.
-
-2. Apply the Identity Broker migration overlay after its migration identity,
-   connection ConfigMap, and approved immutable Broker image are ready. Wait
-   for the Job to complete, then verify the runtime database grants. Confirm
-   the rendered migration egress policy names
-   `agentweaver-pg.postgres.database.azure.com` for DNS and TCP 5432; update
-   its reviewed Kustomize patch first if the approved database host differs.
-   The Broker runtime checks its schema at startup and does not run migrations.
-
-```powershell
-kubectl kustomize deploy\k8s\migrations\identity-broker
-kubectl apply -k deploy\k8s\migrations\identity-broker
-kubectl wait --for=condition=complete job/identity-broker-migration `
-  --namespace agentweaver --timeout=10m
-```
-
-3. Run the source-bound release bootstrap with `--execute`. It verifies the
-   publication receipt, image digests, target, complete runtime ConfigMaps,
-   managed Broker certificate, operator-owned resources, and rendered bundle
-   before it applies the root Kustomize bundle. The preflight accepts either
-   both valid managed certificates with no Gateway, route, or BackendTLSPolicy,
-   or the exact `web-application` route installed by the root bundle with no
-   Gateway or BackendTLSPolicy. In that retry state, the route must target
-   Gateway `identity-broker` in namespace `agentweaver-gateway` and select
-   its shared `https` listener. If the parent reference specifies a port, it must
-   be 443. The route must use the managed Portal hostname and route `/` to
-   the Web Service on port 8080. The preflight inventories all routes and
-   rejects extra or mismatched routing resources. Do not apply the root
-   bundle directly with `kubectl`; the release command is the guarded
-   workload apply. For patch upgrades, it compares every rendered immutable
-   ConfigMap with the live object. A read-only dry-run reports changed maps
-   that are eligible for guarded replacement and fails if any other immutable
-   map differs. For eligible changes, the command preflights the rest of the
-   bundle, checks namespace-scoped create and name-scoped delete permissions,
-   replaces only the changed map from the source-rendered object, and then
-   applies the bundle. It restarts the `projects-config` and `gateway`
-   Deployments when their runtime maps are replaced. Unchanged data follows
-   the normal apply path. This path never replaces `environment-cilium-config`
-   or `projects-config-provider-catalog`. See
-   [runtime configuration](../reference/runtime-configuration.md#guarded-pre-acceptance-configmap-patch-upgrades)
-   for the scope and behavior. If an apply or restart fails, rerun with
-   `--resume` to finish checkpointed rollouts even when the replaced ConfigMap
-   no longer differs.
-
-   ```powershell
-   npm run release:deploy-bootstrap -- v1.0.7 `
-     --manifest releases/foundation.json `
-     --publication artifacts/release/publish/publication.json `
-     --subscription-id <subscription-id> `
-     --tenant-id <tenant-id> `
-     --resource-group agentweaver `
-     --cluster agentweaver-aks `
-     --namespace agentweaver `
-     --node-min 2 `
-     --node-max 3 `
-     --provider-catalog-configmap projects-config-provider-catalog `
-     --provider-catalog-source-commit b002620bd8cb53a971b6d5b082d6ab43dbf11fb7 `
-     --execute
-   ```
-
-   With `--execute`, the guarded deployment command installs AgentSandbox
-   before applying the product bundle. It uses the upstream v1.0.7 release
-   manifest and verifies its SHA-256
-   (`136c10c9347cb5a6740b351444cae82f404e883c3f520272257ba785f2af0da8`),
-   applies it idempotently, waits for all four CRDs and the controller rollout,
-   and confirms the controller image is
-   `registry.k8s.io/agent-sandbox/agent-sandbox-controller:v1.0.7`. The asset
-   is pinned to source commit `807cc37107bd7c012115afac9fa9c3b77b8365c2`.
-   Before writing, the installer validates the full manifest locally,
-   server-validates cluster-scoped resources, and checks the required
-   get/create/patch permissions for controller resources in
-   `agent-sandbox-system`. This also supports a fresh install where that
-   namespace does not exist yet.
-   This procedure installs the upstream controller directly; it does not
-   enable the AKS AgentSandbox extension, which remains a future option.
-
-   Registry token, manifest, and image-config reads, and the pinned upstream
-   manifest download, retry network `TypeError` failures and HTTP 429/5xx up
-   to four attempts with 1, 2, and 4 second waits. Authorization failures,
-   other statuses, and digest/content mismatches do not retry. Exhaustion
-   reports the credential-free request URL and underlying network cause.
-   If apply completed before verification failed, preserve the checkpoint
-   and exact inputs. After connectivity recovers, use the same separately
-   authorized command with `--resume --execute`: apply is skipped only for
-   the matching completed stage, and all live verification still runs.
-   See the [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#local-v1-release-deployment)
-   for retry scope, diagnostics, and checkpoint recovery.
-
-   The [v1.0.7 GitHub Release and tag](https://github.com/sabbour/agentweaver/releases/tag/v1.0.7)
-   are published. Do not create another release or move the tag after the
-   bootstrap-pin pull request merges. Use the publication receipt for source
-   `e9f463b345a8ec1bc879a32dd80fd509ba836867` and source tree
-   `07c4c3435d594416b8c3a32cff218a06e2974148`. Verify the publication SHA-256
-   `9870a68fad4f96873572d5a171c1331cc50d18909d0bc7d9aece8b5253e927c4` and
-   provenance SHA-256
-   `ee3ec242366fd43a57e1a0d7e8aa7ba57d87f6f582b7583c630f88e5f4e02f1f`.
-   The receipt measures AgentHost version `1.0.3` on `linux/amd64` with image
-   config digest
-   `sha256:17f10354fae4f25d8f0b81b3447550323894c314e264d09bf7a3c0f7b736e6e0`
-   and compressed pull size `322214685` bytes. The rendered
-   `projects-config-runtime-config` includes all nine model-binding settings.
-   The AgentHost runtime ConfigMap's digest and pull-byte values also change
-   to match the receipt. The Gateway runtime ConfigMap adds the optional
-   `Gateway__Owners__Environment` HTTPS service root; the guarded bootstrap
-   replaces it when its live immutable data differs and restarts the Gateway
-   Deployment. The dry run compares every rendered immutable ConfigMap and
-   stops if a changed map is outside the guarded allowlist. Use the reviewed
-   provider-catalog ConfigMap and source commit shown in the command; do not
-   rebuild or substitute image tags. See
-   [local v1 release deployment](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v107-pre-acceptance-bootstrap)
-   for all image digests and the full admission contract.
-
-4. After the release bootstrap succeeds and the product Services exist, run
-   the full, default-off `--bootstrap-identity-routing` operation without
-   `--identity-routing-certificates-only`. It checks the exact private HTTPS
-   MCP Service before any route write, then applies and verifies the Gateway,
-   routes, backend TLS policies, and narrow ingress policies. The installer
-   does not guess `<managed-domain>`, change the Broker application, or create
-   service TLS certificates. An optional callback append requires a separate
-   explicit flag and the exact route-derived URI.
-
-Use the guarded release tooling for a published-image rollout. The
-`release:deploy-bootstrap` path is for its explicitly admitted pre-acceptance
-bootstrap; `release:deploy` is the separate release-acceptance deployment
-path. Both require a source-bound publication and explicit `--execute` for
-cluster writes. See [local v1 release deployment](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#local-v1-release-deployment)
-and the [Kubernetes operator guide](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md).
-
-For a complete publication rollout, use `release:deploy-whole`. It resolves
-the intended image for every installed service, using a previous publication
-receipt for unchanged images, then compares every live Deployment before any
-write. Dry run is read-only. Execute mode updates only the selected
-application containers, waits for readiness, verifies every Pod image ID and
-ReplicaSet, and waits up to two minutes for terminating or older-ReplicaSet
-Pods to disappear before final verification. It then runs authenticated Gateway
-checks for Projects, Priorities, project runs, and project metrics. Database
-migrations remain separate: run the Projects & Config migration runner first
-when the publication contains its new migrations, then pass that successful
-receipt to whole-release execute.
-
-```powershell
-npm run release:deploy-whole -- `
-  --publication artifacts\release\publication.json `
-  --previous-publication artifacts\release\previous-publication.json `
-  --subscription-id <subscription-id> `
-  --resource-group <resource-group> `
-  --cluster <cluster-name>
-```
-
-The whole-release dry run detects changed immutable runtime ConfigMaps and
-reports which managed Deployments will be restarted. Execute refuses changed
-immutable maps outside the source-owned replacement allow-list. For an
-approved change, it checks create and exact-name delete permission, stops the
-owning Deployment, waits for its Pods to terminate, and waits 70 seconds for
-the kubelet cache to expire before a guarded delete/create and readback. The
-Deployment is restored in the fixed rollout order with the publication image.
-
-For a publication with Projects & Config migrations, run
-`db:maintenance:projects-config` in dry-run mode first. After reviewing the
-plan, execute the migration and retain the receipt path printed by the runner.
-The execute run also applies and reads back the planned Projects & Config
-runtime grants, and the rollout refuses a receipt without them.
-Then use the whole-release dry run above. Include the successful migration
-receipt for the execute command:
-
-```powershell
-npm run release:deploy-whole -- `
-  --publication artifacts\release\publication.json `
-  --previous-publication artifacts\release\previous-publication.json `
-  --projects-config-migration-receipt <migration-receipt.json> `
-  --subscription-id <subscription-id> `
-  --resource-group <resource-group> `
-  --cluster <cluster-name> `
-  --execute
-```
-
-The whole-release receipt is `deployed` only when all services and smoke
-checks pass. A failed or incomplete rollout writes `partial` and exits
-non-zero. Component-only rollout receipts also report the installation as
-partial. Wait for `db:maintenance` to finish before running the whole-release
-command. If Projects & Config migrations are part of the release, run their
-dedicated migration runner first and pass its receipt to execute. Do not start
-another database maintenance run while the whole-release command is running.
-
-For a Web-only image update, use the separate `release:deploy-web` command with
-the publication receipt from the selected release. It always selects
-`Agentweaver.Web`; it has no option to select another service. The command
-requires a clean checkout whose source is already in `origin/v1`, the explicit
-Kubernetes context for the approved cluster, and a digest-pinned current Web
-image. It reads `releases/foundation.json` from the publication source commit.
-That tracked draft manifest supplies the Web version; the publication receipt
-must contain exactly one matching planned and published Web image, and its
-published image reference supplies the immutable digest. If the image was
-reused, the receipt must also agree on its original build commit and source
-tree. Before reading Deployments, the command checks the source ancestry, image
-tag, registry digest, and OCI revision, source tree, and version.
-
-Run without `--execute` first. This checks the cluster state and writes a plan
-receipt without changing it. The receipt lists the current and planned image
-digests for every Deployment in the `agentweaver` namespace.
-The inventory must be nonempty. The command accepts Kubernetes `List` and
-`DeploymentList` wrappers only when every item is an `apps/v1` Deployment in
-namespace `agentweaver`; malformed or unrelated items stop the rollout.
-
-```powershell
-npm run release:deploy-web -- `
-  --publication artifacts\release\publication.json `
-  --context <approved-kubernetes-context>
-```
-
-After reviewing the plan and target, add `--execute` to the same command. It
-changes only the `web` container image in `deployment/web`, using the digest
-from the publication receipt. A resource-version check stops an update if the
-Deployment changes between validation and the patch. The command waits for Web readiness,
-verifies that all other Deployment settings and images are unchanged, and
-writes a receipt with before and after image digests for every Deployment and
-the Web Deployment revision.
-This path does not install resources or change infrastructure, identity, or
-database state.
+For a fresh installation, complete the managed certificate procedure from the
+[Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#application-routing-source-setting)
+before deployment. After product Services exist, configure the separate
+managed Gateway and routing resources. The deployment command does not
+provision Azure resources, certificates, runtime configuration, or external
+permissions.
 
 ## 8. Verify the installation
 
@@ -605,18 +376,11 @@ database state.
    kubectl get pods -n agentweaver
    ```
 
-2. Check each required Deployment rollout:
+2. The deployment workflow already checks every rollout. To inspect them
+   again, use the selected context:
 
    ```powershell
-   kubectl rollout status deployment/identity-broker -n agentweaver
-   kubectl rollout status deployment/projects-config -n agentweaver
-   kubectl rollout status deployment/knowledge -n agentweaver
-   kubectl rollout status deployment/events-and-sessions -n agentweaver
-   kubectl rollout status deployment/orchestrator -n agentweaver
-   kubectl rollout status deployment/environment -n agentweaver
-   kubectl rollout status deployment/gateway -n agentweaver
-   kubectl rollout status deployment/mcp -n agentweaver
-   kubectl rollout status deployment/web -n agentweaver
+   kubectl --context <approved-kubernetes-context> --namespace agentweaver get deployments,services,pods
    ```
 
 ### Bootstrap the first Projects & Config TenantAdmin
@@ -756,8 +520,9 @@ revision. Until one is written, run selection returns
 
 The PlatformAdmin bootstrap uses the approved issuer, subject, and tenant in
 `projects-config-runtime-config`. It does not accept identity arguments. It
-uses the publication-bound Projects & Config image, verifies that the schema
-is already migrated, and runs one Job under the database-maintenance lock.
+uses the immutable Projects & Config image selected for the deployment,
+verifies that the schema is already migrated, and runs one Job under the
+database-maintenance lock.
 The Job uses the approved identity configuration and the same short-lived
 schema-owner database credential as the migration command. The runner removes
 the Job and credential Secret and writes its receipt outside the checkout.
@@ -766,7 +531,7 @@ From a clean checkout of the fetched `origin/v1` tip, first check the plan:
 
 ```powershell
 npm run db:maintenance:projects-config -- `
-  --publication .\artifacts\release\publication.json `
+  --image ghcr.io/sabbour/agentweaver.projects.config@sha256:<digest> `
   --bootstrap-first-platform-admin
 ```
 
@@ -781,7 +546,7 @@ $env:AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION =
 $env:AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN =
   Get-Content -Raw .\projects-config-access-token.txt
 npm run db:maintenance:projects-config -- `
-  --publication .\artifacts\release\publication.json `
+  --image ghcr.io/sabbour/agentweaver.projects.config@sha256:<digest> `
   --bootstrap-first-platform-admin --execute
 ```
 
@@ -801,7 +566,7 @@ variables shown above:
 
 ```powershell
 npm run db:maintenance:projects-config -- `
-  --publication .\artifacts\release\publication.json `
+  --image ghcr.io/sabbour/agentweaver.projects.config@sha256:<digest> `
   --inspect-first-platform-admin
 ```
 

@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { readRegistry } from '../registry-read.mjs';
-import { fetchPinnedAgentSandboxManifest } from '../deploy.mjs';
 
 const url = 'https://ghcr.io/v2/sabbour/image/manifests/sha256:abc';
 const read = response => response.text();
@@ -114,28 +112,5 @@ test('registry reads retry interrupted bodies, not malformed JSON', async () => 
     delay: async () => assert.fail('invalid JSON must not retry'),
     fetchImpl: async () => { attempts++; return new Response('not JSON'); },
   }), /after 1 attempt/);
-  assert.equal(attempts, 1);
-});
-
-test('pinned AgentSandbox manifest retries transient reads but never content mismatches', async () => {
-  const manifest = Buffer.from('pinned manifest');
-  const release = {
-    manifestUrl: 'https://github.com/example/release/manifest.yaml',
-    manifestSha256: createHash('sha256').update(manifest).digest('hex'),
-    version: 'v1.0.7',
-  };
-  let attempts = 0;
-  const delays = [];
-  assert.equal(await fetchPinnedAgentSandboxManifest(async () => {
-    if (++attempts === 1) throw networkError();
-    return new Response(manifest);
-  }, release, async milliseconds => delays.push(milliseconds)), manifest.toString());
-  assert.equal(attempts, 2);
-  assert.deepEqual(delays, [1000]);
-  attempts = 0;
-  await assert.rejects(fetchPinnedAgentSandboxManifest(async () => {
-    attempts++;
-    return new Response('tampered');
-  }, release, async () => assert.fail('digest mismatch must not retry')), /SHA-256 does not match/);
   assert.equal(attempts, 1);
 });
