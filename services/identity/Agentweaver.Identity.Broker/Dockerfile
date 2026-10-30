@@ -21,6 +21,7 @@ COPY packages/Agentweaver.Secrets.AzureKeyVault/Agentweaver.Secrets.AzureKeyVaul
 COPY packages/Agentweaver.Secrets.AzureKeyVault/packages.lock.json packages/Agentweaver.Secrets.AzureKeyVault/
 COPY packages/Agentweaver.SourceControl/Agentweaver.SourceControl.csproj packages/Agentweaver.SourceControl/
 COPY packages/Agentweaver.SourceControl/packages.lock.json packages/Agentweaver.SourceControl/
+COPY apps/web/public/agentweaver.png apps/web/public/agentweaver.png
 RUN dotnet restore services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj --locked-mode
 
 COPY services/identity/Agentweaver.Identity.Broker/ services/identity/Agentweaver.Identity.Broker/
