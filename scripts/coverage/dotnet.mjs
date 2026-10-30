@@ -58,9 +58,9 @@ const expectedAssemblies = [
 const dotnet = process.env.DOTNET_HOST_PATH || 'dotnet';
 
 /** Invoke the selected dotnet executable and convert a spawn failure into a nonzero status. */
-function run(args) {
+function run(args, env = process.env) {
   console.log(`dotnet ${args.join(' ')}`);
-  const result = spawnSync(dotnet, args, { cwd: root, stdio: 'inherit' });
+  const result = spawnSync(dotnet, args, { cwd: root, env, stdio: 'inherit' });
   if (result.error) {
     console.error(result.error.message);
     return 1;
@@ -92,13 +92,20 @@ function main() {
   const reports = [];
   for (const [name, project] of combineOnly ? [] : suites) {
     const directory = join(output, name);
+    const env = name === 'cli-acceptance'
+      ? {
+        ...process.env,
+        AGENTWEAVER_CLI_PATH: join(root, 'tools', 'Agentweaver.Cli', 'bin', 'Release', 'net10.0',
+          `agentweaver${process.platform === 'win32' ? '.exe' : ''}`),
+      }
+      : process.env;
     const code = run([
       'test', join('tests', project, `${project}.csproj`),
       '--no-build', '--no-restore', '--configuration', 'Release',
       '--settings', 'coverage.runsettings', '--collect', 'XPlat Code Coverage',
       '--logger', `trx;LogFileName=${name}.trx`,
       '--results-directory', directory,
-    ]);
+    ], env);
     if (code) {
       console.error(`${project} exited with code ${code}`);
       failed = true;

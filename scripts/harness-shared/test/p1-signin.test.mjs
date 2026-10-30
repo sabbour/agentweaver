@@ -22,7 +22,6 @@ import { createP1AcceptanceResult } from '../p1-acceptance-result.mjs';
 import {
   createP1SigninIdentityProvider,
   parseP1SigninArguments,
-  p1SigninSurfaceArguments,
   runP1SigninCli,
 } from '../p1-signin-run.mjs';
 import { runP1Cli } from '../run-p1.mjs';
@@ -1474,63 +1473,23 @@ test('the shared browser context stays usable for a second sign-in after the fir
   assert.equal(pages.length, 1);
 });
 
-test('mixed API and MCP surfaces are rejected before sign-in or Node API execution', async () => {
-  const { rm } = await import('node:fs/promises');
-  const manifestPath = path.resolve('scripts/harness-shared/test/p1-signin-multiple.fixture.json');
-  await writeFile(manifestPath, JSON.stringify(validInput()));
-  let browserSessions = 0;
-  const context = {};
-  const requests = [];
-  const runs = [];
-  try {
-    const result = await runP1SigninCli([
-      '--surface', 'api,mcp', '--input', manifestPath, '--output', 'evidence.jsonl',
-      '--native-probe-envelope', 'native.json',
-    ], {}, { log() {}, error() {} }, {
-      chromium: {},
-      withBrowserContext: async (_options, useContext) => {
-        browserSessions += 1;
-        return useContext(context);
-      },
-      signIn: async request => {
-        assert.equal(request.context, context);
-        requests.push(request);
-        return jwt(request);
-      },
-      async runP1(argv, env, _io, { identityProvider }) {
-        const surface = argv[argv.indexOf('--surface') + 1];
-        runs.push(surface);
-        assert.equal(argv[argv.indexOf('--output') + 1], `evidence.${surface}.jsonl`);
-        assert.equal(argv[argv.indexOf('--native-probe-envelope') + 1], 'native.json');
-        assert.equal(env.AGENTWEAVER_P1_SETUP_TOKEN, jwt());
-        await identityProvider({
-          ...ENVIRONMENT, projectId: `${PROJECT_ID}-${surface}`, runId: RUN_ID,
-        });
-        return surface === 'api' ? 2 : 0;
-      },
+test('MCP selection is explicitly unsupported by the 1.x sign-in launcher', async () => {
+  for (const surface of ['mcp', 'api,mcp', 'mcp,api']) {
+    const errors = [];
+    const code = await runP1SigninCli([
+      '--surface', surface, '--input', 'input.json', '--output', 'evidence.jsonl',
+    ], {}, { error: message => errors.push(message) }, {
+      runDotnetCli: () => assert.fail('Unsupported MCP selection must not invoke the API CLI.'),
+      runP1: () => assert.fail('Unsupported MCP selection must not fall back to the legacy runner.'),
+      withBrowserContext: () => assert.fail('Unsupported MCP selection must not open a browser.'),
     });
-    assert.equal(result, 2);
-    assert.deepEqual(runs, []);
-    assert.equal(browserSessions, 0);
-    assert.equal(requests.length, 0);
-  } finally {
-    await rm(manifestPath, { force: true });
+
+    assert.equal(code, 2);
+    assert.match(errors.join('\n'), /does not support an MCP surface/);
   }
 });
 
-test('surface output names are deterministic and invalid surface lists never open a browser', async () => {
-  for (const [output, expected] of [
-    ['evidence.jsonl', 'evidence.mcp.jsonl'],
-    ['evidence', 'evidence.mcp'],
-    ['dir.with.dot\\evidence.jsonl', 'dir.with.dot\\evidence.mcp.jsonl'],
-  ]) {
-    const argv = ['--surface', 'mcp,api', '--output', output];
-    assert.deepEqual(p1SigninSurfaceArguments(argv, 'mcp', output, true),
-      ['--surface', 'mcp', '--output', expected]);
-    assert.deepEqual(argv, ['--surface', 'mcp,api', '--output', output]);
-    assert.deepEqual(p1SigninSurfaceArguments(argv, 'mcp', output, false),
-      ['--surface', 'mcp', '--output', output]);
-  }
+test('invalid surface lists never open a browser', async () => {
   for (const surface of ['api,api', 'api,ui', 'api,', 'api, mcp', 'unknown', '']) {
     assert.equal(await runP1SigninCli([
       '--surface', surface, '--input', 'manifest.json', '--output', 'evidence.jsonl',

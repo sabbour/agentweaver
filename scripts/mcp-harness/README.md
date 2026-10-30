@@ -1,8 +1,12 @@
-# P1 MCP harness adapter
+# Legacy MCP harness adapter
 
-This candidate uses the released 0.x MCP client pattern and its exact SDK `1.29.0` pin.
+This retained adapter uses the released 0.x MCP client pattern and its exact SDK `1.29.0` pin.
 It uses Streamable HTTP at the exact `/mcp` path.
 It does not import remote P2 tools, persona actors, or a second protocol framework.
+It is not an Agentweaver 1.x MCP product or supported acceptance surface.
+Agentweaver 1.x acceptance uses the native .NET CLI API; its P1 CLI entrypoints
+reject MCP surface selections explicitly. The adapter and its shared legacy
+files remain for compatibility and independent tests.
 
 Restore this package's locked dependencies when they are missing:
 
@@ -65,7 +69,7 @@ It is SDK message evidence, not a raw network-byte capture.
 It does not archive projects, release Environments, or clean up sessions.
 Product cleanup needs separate current owner authority and observed receipts.
 
-## Executable P1 journey
+## Legacy 0.x P1 compatibility journey
 
 The exported `runP1McpJourney` function reads journal pages through the
 discovered `agentweaver_replayRunEvents` tool. The API client still reads
@@ -73,7 +77,7 @@ owner snapshots and verifies a denied-actor `403`, but API replay does not
 count as MCP evidence. Gate-answer, approval, rejection, and addressed-message
 journeys call the corresponding discovered Gateway-derived MCP tool.
 
-The shared CLI creates and verifies an invocation-owned project, grants,
+The retained legacy CLI creates and verifies an invocation-owned project, grants,
 selection, and sessions before it supplies those receipts to the selected
 surface. It rejects caller-supplied `ownerFences` and `fixtureScope` claims.
 It uses the public Projects API with the signed-in setup token. Cleanup
@@ -97,36 +101,27 @@ compare-and-swap checks it against current state. The fixture retains its
 project-configuration read and does not call the PlatformAdmin-only global
 runtime-default endpoint.
 
-```powershell
-npm run harness:p1:signin-run -- --surface mcp --input <manifest.json> --output <evidence.jsonl>
-```
-
 See the [P1 operator guide](../harness-shared/P1-operator.md) for the
 prerequisites, dry run, one-account sign-in, and cleanup instructions.
 
-Use `--surface api,mcp` to run both surfaces sequentially after one sign-in.
-The setup token and fresh browser session are shared. Each surface creates its
-own fixture, run-bound token, and evidence file: `evidence.api.jsonl` and
-`evidence.mcp.jsonl`. The unsuffixed output path is not written. A blocked
-surface does not skip the next surface; the command returns the highest exit
-code. See the [API harness guide](../api-harness/README.md) for the full contract.
+Do not invoke this retained MCP journey through the Agentweaver 1.x P1 CLI:
+`--surface mcp` and `--surface api,mcp` are unsupported there and fail
+explicitly. See the [API harness guide](../api-harness/README.md) for the
+supported 1.x acceptance contract.
 
-The sign-in launcher uses the registered public client and one interactive
-sign-in. It uses one fresh headed-Chrome profile for setup and run-bound
-authorization, then deletes it on success, failure, or cancellation. It does
-not read or copy an existing browser profile, cookie store, or credential
-cache. Token values stay in memory and never enter logs or evidence. The
-one-account route does not create a distinct denied actor, and missing native
-or recovery evidence remains blocked.
+The 1.x sign-in launcher supports the API and separate UI surfaces only. It
+uses the registered public client and one interactive sign-in for UI, with a
+fresh headed-Chrome profile that it deletes on success, failure, or
+cancellation. It does not read or copy an existing browser profile, cookie
+store, or credential cache. Token values stay in memory and never enter logs
+or evidence. The one-account API route does not create a distinct denied
+actor, and missing native or recovery evidence remains blocked.
 
-For advanced runs, the lower-level `npm run harness:p1` command still accepts
-`--identity-module` and `AGENTWEAVER_P1_SETUP_TOKEN`. A separately authorized
-actor can be supplied there when one is genuinely available; do not use the
-one-account launcher to impersonate or substitute an actor. The unfinished
-invocation ID is persisted so setup and idempotent MCP actions can be replayed
-with the same IDs.
+Legacy source and fixtures retain the lower-level identity-module and
+idempotency behavior for compatibility tests. These are not supported
+Agentweaver 1.x CLI options or an MCP acceptance route.
 
-Surface results are reported separately from full P1 acceptance. Full P1 stays
+Legacy adapter results are separate from full P1 acceptance. Full P1 stays
 blocked until the required native probes have real evidence. Controlled MCP
 and runner tests use local fixtures; they do not prove a deployed Gateway,
 Broker, owner, native execution, or AKS acceptance.
