@@ -93,9 +93,11 @@ public sealed class NativeCliConsentTests : IAsyncLifetime
         var csp = page.Response.Headers.GetValues("Content-Security-Policy").Single();
         var styleNonce = Regex.Match(csp, "style-src 'nonce-([^']+)'").Groups[1].Value;
         Assert.False(string.IsNullOrEmpty(styleNonce));
+        Assert.Contains("img-src 'self'", csp);
 
         var html = await page.Response.Content.ReadAsStringAsync();
         Assert.Contains($"<style nonce=\"{styleNonce}\">", html);
+        Assert.Contains("""<img src="/agentweaver.png" alt="">""", html);
         Assert.Contains("background: #efeae7", html);
         Assert.Contains("background: #fdfbf8", html);
         Assert.Contains("background: #272320", html);
@@ -108,6 +110,12 @@ public sealed class NativeCliConsentTests : IAsyncLifetime
         Assert.Contains("""name="approve" value="false">Deny</button>""", html);
         Assert.Contains("""name="consent_handle" value=""", html);
         Assert.Contains("""name="__RequestVerificationToken" value=""", html);
+
+        using var logo = await _broker.GetAsync("/agentweaver.png");
+        Assert.Equal(HttpStatusCode.OK, logo.StatusCode);
+        Assert.Equal("image/png", logo.Content.Headers.ContentType?.MediaType);
+        var image = await logo.Content.ReadAsByteArrayAsync();
+        Assert.Equal(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }, image.Take(8).ToArray());
     }
 
     [Fact]
