@@ -55,3 +55,7 @@ its resource, or a user workflow succeeds.
 To continue, read [What Agentweaver 1.x can do](../experience/00-overview.md),
 then follow [Configure providers](./configure-providers.md) or
 [Deploy to Azure](./deploy-to-azure.md).
+
+To build and run the standalone command-line client, including its
+self-contained local publish command and distribution status, see the
+[Agentweaver CLI guide](./cli.md).

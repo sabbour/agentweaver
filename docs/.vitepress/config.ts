@@ -40,6 +40,7 @@ export default defineConfig({
           items: [
             { text: 'Guides and tutorials', link: '/guide/' },
             { text: 'Quickstart: build the source', link: '/guide/quickstart' },
+            { text: 'Agentweaver CLI', link: '/guide/cli' },
             { text: 'Build and use', link: '/guide/build-and-use' },
           ],
         },

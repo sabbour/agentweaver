@@ -8,6 +8,33 @@ a project role.
 Agentweaver registers permissions for each app. The Web app requests the
 permissions below. Other apps may request a different set.
 
+## CLI sign-in and token storage
+
+The standalone CLI uses the statically registered public client
+`agentweaver-cli`, authorization code with S256 PKCE, and the exact callback
+`http://127.0.0.1:49173/oauth/callback`. Its default request is
+`openid api.read offline_access`; it requests `projects.admin` or
+`projects.orchestrator` only when explicitly needed for the selected operation
+or journey. These scopes do not grant project roles.
+
+The CLI keeps access tokens in memory and stores only refresh tokens in the
+operating system credential store. It uses Windows Credential Manager, macOS
+Keychain, or Linux Secret Service; Linux requires an installed, unlocked
+Secret Service session. There is no plaintext fallback. `auth logout` removes
+only the selected local entry and does not revoke a Broker token family or
+another process's in-memory access token.
+
+Login, refresh, and logout for the same selected credential identity are
+serialized across processes. An interrupted or uncertain refresh requires a
+fresh sign-in rather than retrying a possibly consumed refresh token.
+
+For API acceptance, interaction is off by default. Only `agentweaver test
+--interactive` allows browser authorization, and it obtains exact project/run
+authority only after the runner has set up its owned fixture and selected the
+run. Setup and run authorization must have the same actor and tenant. See the
+[CLI guide](./cli.md) for target configuration, acceptance results, and
+cleanup recovery.
+
 ## `openid`
 
 Lets Agentweaver confirm who you are. It lets you sign in and connects your
@@ -50,16 +77,17 @@ Agentweaver checks your current project access, that you are assigned to manage
 runs, and that the saved settings match the requested project and run. This
 permission alone does not give you project access or a role.
 
-To start a new chat, the app first calls create with a token that is not bound
-to a run. It persists the pending run ID across a top-level PKCE redirect with
-`prompt=none`, `project_id`, and `run_id`, then exchanges the code for a
-run-bound token and calls start. With an existing Broker session and matching
-consent, this needs no UI. On `login_required` or `consent_required`, the client
-falls back to interactive sign-in without retrying silently. Cancel instead
-uses a token that is not bound to a run and a current Contributor, Owner, or
-tenant administrator role. Creating a chat requires the project Orchestrator
-role (`acceptRunSelection`); Owner or Contributor alone receives `403`.
-A tenant admin grants that role through the project role assignments API.
+For the Web client, starting a new chat first calls create with a token that is
+not bound to a run. It persists the pending run ID across a top-level PKCE
+redirect with `prompt=none`, `project_id`, and `run_id`, then exchanges the code
+for a run-bound token and calls start. With an existing Broker session and
+matching consent, this needs no UI. On `login_required` or `consent_required`,
+the client falls back to interactive sign-in without retrying silently. Cancel
+instead uses a token that is not bound to a run and a current Contributor,
+Owner, or tenant administrator role. Creating a chat requires the project
+Orchestrator role (`acceptRunSelection`); Owner or Contributor alone receives
+`403`. A tenant admin grants that role through the project role assignments
+API.
 
 ## OpenID Connect references
 

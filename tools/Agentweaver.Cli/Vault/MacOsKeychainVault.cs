@@ -37,6 +37,7 @@ internal sealed class MacOsKeychainVault : ICliCredentialVault
             if (length is <= 0 or > MaximumCredentialBytes)
                 throw new CliVaultException("The saved CLI sign-in is invalid or exceeds the vault limit.");
 
+            // Copy CFData into a managed buffer so its native object can be released without extending secret lifetime.
             var bytes = new byte[(int)length];
             try
             {
@@ -131,6 +132,7 @@ internal sealed class MacOsKeychainVault : ICliCredentialVault
             : throw new CliVaultException("macOS Keychain returned an invalid native attribute.");
     }
 
+    // The dictionary has no retain/release callbacks, so keep created CFStrings alive separately until after CFRelease.
     private sealed class NativeDictionary : IDisposable
     {
         private readonly List<IntPtr> _ownedValues = [];
@@ -170,6 +172,7 @@ internal sealed class MacOsKeychainVault : ICliCredentialVault
     {
         public NativeData(IntPtr bytes, int length)
         {
+            // CFDataCreate copies the temporary bytes; the caller can zero its source buffer after this native value is made.
             Handle = CFDataCreate(IntPtr.Zero, bytes, (nint)length);
             if (Handle == IntPtr.Zero)
                 throw new CliVaultException("macOS Keychain could not prepare secure credential data.");

@@ -7,6 +7,7 @@ namespace Agentweaver.Cli.Vault;
 internal sealed class WindowsCredentialVault : ICliCredentialVault
 {
     private const uint GenericCredential = 1;
+    // CRED_PERSIST_LOCAL_MACHINE: retain this current-user credential across logon sessions on this computer.
     private const uint PersistLocalMachine = 2;
     private const int ErrorNotFound = 1168;
     private const int MaximumBlobBytes = 5 * 512;
@@ -24,6 +25,7 @@ internal sealed class WindowsCredentialVault : ICliCredentialVault
 
         try
         {
+            // CredReadW owns the returned structure and blob; do not retain either pointer past CredFree below.
             var native = Marshal.PtrToStructure<NativeCredential>(credential);
             if (native.CredentialBlobSize is 0 or > MaximumBlobBytes ||
                 native.CredentialBlob == IntPtr.Zero)
@@ -63,6 +65,7 @@ internal sealed class WindowsCredentialVault : ICliCredentialVault
         var target = Marshal.StringToHGlobalUni(Target(account));
         try
         {
+            // CredWriteW consumes a pointer into this pinned buffer synchronously; zero it after the call completes.
             var credential = new NativeCredential
             {
                 Type = GenericCredential,

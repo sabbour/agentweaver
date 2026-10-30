@@ -59,6 +59,7 @@ internal sealed class LoopbackOAuthCallbackListener : IOAuthCallbackListener
         CancellationToken ct)
     {
         using var client = await _listener.AcceptTcpClientAsync(ct).ConfigureAwait(false);
+        // A loopback listener is not proof of a local caller; reject every peer except the exact IPv4 loopback address.
         if (client.Client.RemoteEndPoint is not IPEndPoint remote ||
             remote.AddressFamily != AddressFamily.InterNetwork ||
             !IPAddress.Loopback.Equals(remote.Address))
@@ -233,6 +234,7 @@ internal static class OAuthCallbackParser
             }
         }
 
+        // State is mandatory and compared in constant time; when the Broker supplies iss, it must match discovery.
         if (!values.TryGetValue("state", out var state) ||
             !CryptographicOperations.FixedTimeEquals(
                 Encoding.UTF8.GetBytes(state), Encoding.UTF8.GetBytes(expectedState)))

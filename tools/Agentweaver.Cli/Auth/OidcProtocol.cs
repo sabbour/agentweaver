@@ -31,6 +31,7 @@ internal static class OidcProtocol
         string issuer,
         CancellationToken ct)
     {
+        // Discovery is remote input: accept only the configured issuer's HTTPS endpoints and reject redirected responses.
         var issuerUri = new Uri(issuer, UriKind.Absolute);
         var discoveryUri = new Uri(issuerUri, ".well-known/openid-configuration");
         using var requestCancellation = CreateRequestCancellation(client, ct);
@@ -69,6 +70,7 @@ internal static class OidcProtocol
         string nonce,
         string challenge)
     {
+        // Keep the code flow bound to this local callback, random state/nonce, and S256 verifier challenge.
         var query = new List<KeyValuePair<string, string>>
         {
             new("client_id", identity.Identity.Target.ClientId),
@@ -121,6 +123,8 @@ internal static class OidcProtocol
             new("refresh_token", refreshToken),
         ], ct);
 
+    /// <summary>Validates the ID-token signature, issuer, audience, nonce, and time claims.</summary>
+    /// <remarks>The returned subject identifies the signed-in actor; it does not grant Gateway authority.</remarks>
     public static async Task<string> ValidateIdTokenAsync(
         HttpClient client,
         OidcMetadata metadata,
@@ -141,6 +145,7 @@ internal static class OidcProtocol
         using var claims = ParseBase64Json(parts[1], MaximumIdTokenLength);
         var algorithm = RequiredString(header.RootElement, "alg", 16);
         var keyId = RequiredString(header.RootElement, "kid", 256);
+        // Pin verification to the supported signature profile; token headers cannot select a weaker algorithm.
         if (algorithm != "RS256" || HasProperty(header.RootElement, "crit") ||
             HasProperty(header.RootElement, "b64"))
             throw new InvalidOperationException("The Identity Broker used an unsupported identity-token signature.");
@@ -161,6 +166,7 @@ internal static class OidcProtocol
         }
 
         var root = claims.RootElement;
+        // This verifies the sign-in identity only; Gateway authority still comes from current owner authorization checks.
         if (!string.Equals(RequiredString(root, "iss", 2048), metadata.Issuer, StringComparison.Ordinal))
             throw new InvalidOperationException("The Identity Broker identity token has an unexpected issuer.");
         var actorId = RequiredString(root, "sub", 256);

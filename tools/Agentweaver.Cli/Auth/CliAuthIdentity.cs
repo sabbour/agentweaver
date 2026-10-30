@@ -46,6 +46,7 @@ internal sealed record CliAuthIdentity(
         if ((project is null) != (run is null))
             throw new ArgumentException("Project and run selectors must be supplied together.", nameof(identity));
 
+        // A run-bound selection uses the orchestrator scope; unbound tenant administration cannot be combined with it.
         var issuer = target.Issuer.AbsoluteUri;
         var hasAdmin = scopes.Contains("projects.admin", StringComparer.Ordinal);
         var hasOrchestrator = scopes.Contains("projects.orchestrator", StringComparer.Ordinal);
@@ -57,6 +58,7 @@ internal sealed record CliAuthIdentity(
         var normalized = new CliIdentity(target, scopes, project, run);
         var gatewayOrigin = target.Gateway.GetLeftPart(UriPartial.Authority);
         var canonicalScopes = scopes.OrderBy(scope => scope, StringComparer.Ordinal).ToArray();
+        // Keep Broker, Gateway, tenant, scopes, and exact binding in the vault account key to prevent credential crossover.
         var keyMaterial = JsonSerializer.SerializeToUtf8Bytes(new[]
         {
             issuer,
