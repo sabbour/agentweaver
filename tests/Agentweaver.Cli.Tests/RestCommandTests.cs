@@ -44,6 +44,23 @@ public sealed class RestCommandTests
     }
 
     [Fact]
+    public async Task RawRootRelativeUrlResolvesOnLinuxAndPreservesQuery()
+    {
+        var handler = new RestHandler();
+        using var http = new HttpClient(handler);
+
+        var result = await CliApplication.RunAsync(
+            Rest("--method", "GET", "--url", "/api/v1/uncatalogued?limit=1"),
+            new CliRuntimeOptions(HttpClient: http, Authentication: new TestAuthentication()));
+
+        Assert.Equal(0, result);
+        var raw = Assert.Single(handler.Requests, request => request.Path != "/api/v1/authorization/context");
+        Assert.Equal("/api/v1/uncatalogued", raw.Path);
+        Assert.Equal("?limit=1", raw.Query);
+        Assert.Equal("primary-bearer", raw.Authorization);
+    }
+
+    [Fact]
     public async Task RawRequestDistinguishesOmittedBodyFromUtf8FileBody()
     {
         var bodyPath = Path.GetFullPath($"rest-body-{Guid.NewGuid():N}.json");
@@ -110,6 +127,8 @@ public sealed class RestCommandTests
     [InlineData("https://gateway.example/api/v1/call?access_token=secret")]
     [InlineData("https://gateway.example/api/v1/call?X-Amz-Signature=secret")]
     [InlineData("/api/v1/call#fragment")]
+    [InlineData("//other.example/api/v1/call")]
+    [InlineData("file:///api/v1/call")]
     public async Task RawRequestRejectsUnsafeUrlsBeforeAuthenticationOrNetwork(string url)
     {
         var handler = new RestHandler();
