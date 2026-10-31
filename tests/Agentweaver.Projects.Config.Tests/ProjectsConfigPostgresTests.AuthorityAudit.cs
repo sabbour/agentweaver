@@ -90,7 +90,8 @@ public sealed partial class ProjectsConfigPostgresTests
                 item => item.Name,
                 $"operation-backfill-{setupInvocationId:N}"));
 
-        var migrator = db.GetService<IMigrator>();
+        await using var migrationDb = CreateMigrationDbContext();
+        var migrator = migrationDb.GetService<IMigrator>();
         const string beforeInvocationAudit = "20261023201615_AddHostedModelReasoningCatalogAfterCasting";
         const string invocationAudit = "20261026183946_039_LinkProjectSetupAuthorityAuditInvocation";
         var latestMigration = db.Database.GetMigrations().Last();
@@ -177,7 +178,8 @@ public sealed partial class ProjectsConfigPostgresTests
         string expectedError)
     {
         await using var db = CreateDbContext();
-        var migrator = db.GetService<IMigrator>();
+        await using var migrationDb = CreateMigrationDbContext();
+        var migrator = migrationDb.GetService<IMigrator>();
         const string beforeInvocationAudit = "20261023201615_AddHostedModelReasoningCatalogAfterCasting";
         const string invocationAudit = "20261026183946_039_LinkProjectSetupAuthorityAuditInvocation";
         var latestMigration = db.Database.GetMigrations().Last();
@@ -349,6 +351,12 @@ public sealed partial class ProjectsConfigPostgresTests
         await transaction.CommitAsync();
         return legacy;
     }
+
+    private ProjectsConfigDbContext CreateMigrationDbContext() =>
+        new(new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+            .UseNpgsql(fixture.MigrationDataSource, npgsql => npgsql.MigrationsHistoryTable(
+                "__ef_migrations_history", ProjectsConfigDbContext.Schema))
+            .Options);
 
     private static async Task InsertMigration039ProjectAsync(
         NpgsqlConnection connection,
