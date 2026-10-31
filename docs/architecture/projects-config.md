@@ -50,7 +50,10 @@ must identify a current non-CA server certificate with the server
 authentication purpose, and the digest must match its exact leaf certificate.
 The private route also requires a native TLS 1.2 or TLS 1.3 handshake; proxy
 headers cannot stand in for TLS. The deployed TLS Secret and Kestrel default
-certificate must use the same leaf certificate.
+certificate must use the same leaf certificate. The canonical Kubernetes
+runtime ConfigMap supplies this audience and TLS profile together; its audience
+and leaf pin must match the Broker's run-binding settings. The certificate and
+key paths refer to the existing read-only `projects-config-tls` mount.
 
 The provider catalog owner must supply an existing immutable, nonempty ConfigMap
 in the same namespace and its reviewed source commit.
