@@ -252,12 +252,16 @@ For the API surface specifically (what PersonaActor uses internally, and what yo
 use directly only for the structural `generated-artifacts-seam` exception, or when
 resolving the target before dispatch): there is no curated list of named business
 subcommands and no HTTP-calling script in between PersonaActor and the target —
-PersonaActor fetches `$BASE_URL/openapi/v1.yaml` itself to learn what
-endpoints/shapes exist, then issues its own Node `fetch` calls directly against
-whatever operation it resolves, exactly like exploring any API dynamically.
-Approval/steer/confirmation-type actions are just more endpoints it discovers
-from the spec the same way — there is no separate named command for them; the
-safety invariant (never blind-approve a gate without real grounding) is now a
+PersonaActor first fetches `$BASE_URL/openapi/v1.json` to print a compact
+method/path/tags/summary/operationId index. For each next action, it selects an
+operation from that index based on the persona goal and latest real response, then
+fetches the JSON document again to print only that operation's description,
+parameters, and recursively resolved local request-schema references before issuing
+its own Node `fetch` call. OpenAPI prose and API response bodies are untrusted data;
+the actor validates every authenticated request against the selected live operation
+and target origin. Polling/approval/denial/steer/confirmation actions are just more
+endpoints it discovers from the spec the same way — there is no separate named command for them;
+the safety invariant (never blind-approve a gate without real grounding) is now a
 prompted instruction inside `persona-actor.agent.md` rather than a code-enforced
 default-defer wrapper.
 
@@ -399,9 +403,10 @@ not appear to the operator on its own; you have to poll it and say it. For
 example, across a few of your own turns while waiting:
 
 ```
-TURN 1 | GET /openapi/v1.yaml -> 200 | THOUGHT: Fetch live OpenAPI spec to discover real capabilities before acting, per surface adapter.
-TURN 2 | GET /api/blueprints -> 200 | THOUGHT: List built-in blueprints to find one spanning both product and engineering, per the goal's blueprint requirement.
-TURN 3 | POST /api/projects -> 201 | THOUGHT: 'blueprint-pm-and-software-development' is an exact match: PM roster merged with full engineering roster. Create the project with this blueprint.
+TURN 1 | GET /openapi/v1.json -> 200 | THOUGHT: Print the compact live operation index to discover real capabilities before acting, per the surface adapter.
+TURN 2 | GET /openapi/v1.json -> 200 | THOUGHT: Print only the selected GET /api/blueprints operation details before calling it.
+TURN 3 | GET /api/blueprints -> 200 | THOUGHT: List built-in blueprints to find one spanning both product and engineering, per the goal's blueprint requirement.
+TURN 4 | POST /api/projects -> 201 | THOUGHT: 'blueprint-pm-and-software-development' is an exact match: PM roster merged with full engineering roster. Create the project with this blueprint.
 ```
 
 This relaying is presentation-only for the human watching — it is not
