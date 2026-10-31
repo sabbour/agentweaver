@@ -105,6 +105,9 @@ The default requested scopes are `openid api.read offline_access`.
 needed for the selected operation or journey. A scope does not grant a project
 role; the Gateway checks current actor, tenant, project, run, and role
 authority. For the consent meanings, see [Identity Broker permissions](./identity-scopes.md).
+Run selection uses unbound Orchestrator scope before a run exists; the
+acceptance runner then reads the selection back and obtains authorization
+bound to that exact project and run before run operations.
 
 `logout` confirms removal of only the selected local credential entry. It does
 not revoke the Broker's server-side refresh-token family or clear access tokens
