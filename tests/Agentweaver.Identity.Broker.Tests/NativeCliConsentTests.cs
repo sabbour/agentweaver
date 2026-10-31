@@ -23,6 +23,7 @@ public sealed class NativeCliConsentTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         var connectionString = await _postgres.CreateMigratedDatabaseAsync();
+        await BrokerCliScopePermissionTestSupport.ProvisionAndMigrateLegacyCliClientAsync(connectionString);
         _fakeIdp = await FakeIdentityProvider.StartAsync();
         _signingCertificate = TestSigningCertificate.Create();
         _factory = new IdentityBrokerWebApplicationFactory(
@@ -82,6 +83,35 @@ public sealed class NativeCliConsentTests : IAsyncLifetime
             _broker, IdentityBrokerWebApplicationFactory.CliClientId,
             tokens.GetProperty("refresh_token").GetString()!);
         Assert.Equal(HttpStatusCode.OK, replayCode.StatusCode);
+    }
+
+    [Fact]
+    public async Task CliWildcardAllowsRegisteredScopesButNotUnknownScopesOrOtherClients()
+    {
+        var (_, cliChallenge) = Pkce.Create();
+        using var cliRequest = await BrokerFlowDriver.StartAuthorizeAsync(
+            _broker, IdentityBrokerWebApplicationFactory.CliClientId,
+            IdentityBrokerWebApplicationFactory.CliClientRedirectUri,
+            "openid projects.admin", cliChallenge, "S256");
+        Assert.Equal(HttpStatusCode.Redirect, cliRequest.StatusCode);
+
+        var promptsBeforeUnknownScope = _fakeIdp.AuthorizationPrompts.Count;
+        var (_, unknownChallenge) = Pkce.Create();
+        using var unknownScope = await BrokerFlowDriver.StartAuthorizeAsync(
+            _broker, IdentityBrokerWebApplicationFactory.CliClientId,
+            IdentityBrokerWebApplicationFactory.CliClientRedirectUri,
+            "openid future.unregistered", unknownChallenge, "S256");
+        Assert.Equal(HttpStatusCode.BadRequest, unknownScope.StatusCode);
+        Assert.Contains("error:invalid_scope", await unknownScope.Content.ReadAsStringAsync());
+        Assert.Equal(promptsBeforeUnknownScope, _fakeIdp.AuthorizationPrompts.Count);
+
+        var (_, otherClientChallenge) = Pkce.Create();
+        using var otherClient = await BrokerFlowDriver.StartAuthorizeAsync(
+            _broker, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            "openid projects.admin", otherClientChallenge, "S256");
+        Assert.Equal(HttpStatusCode.BadRequest, otherClient.StatusCode);
+        Assert.Contains("error:invalid_request", await otherClient.Content.ReadAsStringAsync());
     }
 
     [Fact]

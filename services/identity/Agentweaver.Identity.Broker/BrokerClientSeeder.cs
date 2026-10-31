@@ -22,7 +22,9 @@ public sealed class BrokerClientSeeder
     }
 
     /// <summary>
-    /// Creates declared clients that are not yet registered. Existing clients are only
+    /// Creates declared clients that are not yet registered, except the CLI client whose
+    /// wildcard permission must be introduced by an explicit administrative migration.
+    /// Existing clients are only
     /// accepted when their persisted type, secret, redirects, permissions and PKCE
     /// requirements match exactly; mismatches fail startup.
     /// </summary>
@@ -34,6 +36,13 @@ public sealed class BrokerClientSeeder
 
             var existing = await _applications.FindByClientIdAsync(client.ClientId, cancellationToken);
             var descriptor = BuildDescriptor(client);
+
+            if (existing is null && client.ClientId == BrokerCliScopePermissions.ClientId)
+            {
+                throw new InvalidOperationException(
+                    $"Client '{client.ClientId}' must be provisioned and its all-registered-scopes permission " +
+                    "must be applied through the explicit administrative migration.");
+            }
 
             if (existing is null)
             {
@@ -54,6 +63,15 @@ public sealed class BrokerClientSeeder
     /// <summary>Rejects unsupported redirects and invalid public/confidential client secret combinations.</summary>
     private static void ValidateClient(BrokerClientOptions client)
     {
+        if (client.ClientId == BrokerCliScopePermissions.ClientId && client.Type != BrokerClientType.Public)
+            throw new InvalidOperationException("The Agentweaver CLI must remain a public PKCE client.");
+        if (client.ClientId == BrokerCliScopePermissions.ClientId &&
+            !BrokerCliScopePermissions.HasRequiredScopes(client.Scopes))
+        {
+            throw new InvalidOperationException(
+                "The Agentweaver CLI must retain its openid, api.read, and offline_access scopes.");
+        }
+
         foreach (var redirect in client.RedirectUris)
         {
             if (!Uri.TryCreate(redirect, UriKind.Absolute, out var uri) ||
@@ -82,6 +100,9 @@ public sealed class BrokerClientSeeder
 
     private static OpenIddictApplicationDescriptor BuildDescriptor(BrokerClientOptions client)
     {
+        if (client.ClientId == BrokerCliScopePermissions.ClientId)
+            return BrokerCliScopePermissions.CreateDescriptor(client, allowAllRegisteredScopes: true);
+
         var descriptor = new OpenIddictApplicationDescriptor
         {
             ClientId = client.ClientId,

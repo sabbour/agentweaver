@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -25,6 +26,7 @@ public sealed class NativeCliAuthIntegrationTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         var connectionString = await _postgres.CreateMigratedDatabaseAsync();
+        await BrokerCliScopePermissionTestSupport.ProvisionAndMigrateLegacyCliClientAsync(connectionString);
         _fakeIdp = await FakeIdentityProvider.StartAsync();
         _signingCertificate = TestSigningCertificate.Create();
         _factory = new IdentityBrokerWebApplicationFactory(
@@ -80,7 +82,7 @@ public sealed class NativeCliAuthIntegrationTests : IAsyncLifetime
                     IdentityBrokerWebApplicationFactory.CliClientId,
                     "https://api.test",
                     "test-tenant"),
-                ["openid", "api.read", "offline_access"]);
+                ["openid", "api.read", "offline_access", "projects.admin"]);
 
             var status = await authentication.LoginAsync(identity, CancellationToken.None);
             var bearer = await authentication.GetBearerAsync(
@@ -109,6 +111,12 @@ public sealed class NativeCliAuthIntegrationTests : IAsyncLifetime
             Assert.Equal(1, browser.ConsentCount);
             Assert.Equal("text/html", browser.CallbackContentType);
             Assert.False(string.IsNullOrWhiteSpace(bearer));
+            var accessToken = new JwtSecurityTokenHandler().ReadJwtToken(bearer);
+            Assert.Contains("projects.admin", accessToken.Claims
+                .Where(claim => claim.Type == "scope")
+                .SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries)));
+            Assert.DoesNotContain(accessToken.Claims, claim =>
+                claim.Type is "role" or "roles" or "project_id" or "run_id");
             Assert.False(string.IsNullOrWhiteSpace(refreshedBearer));
             Assert.NotEqual(beforeRefresh, afterRefresh);
             Assert.All(vault.Values.Values, value => Assert.DoesNotContain("access-token", value, StringComparison.Ordinal));
@@ -159,6 +167,7 @@ public sealed class NativeCliAuthIntegrationTests : IAsyncLifetime
             var html = await page.Content.ReadAsStringAsync(ct);
             Assert.Contains("Authorize Agentweaver CLI", html);
             Assert.Contains("api.read", html);
+            Assert.Contains("projects.admin", html);
 
             var handle = HiddenInput(html, "consent_handle");
             var antiforgery = HiddenInput(html, "__RequestVerificationToken");

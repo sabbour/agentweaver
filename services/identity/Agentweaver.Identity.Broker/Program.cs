@@ -29,18 +29,21 @@ using WorkloadIdentityCredential = AzureIdentity::Azure.Identity.WorkloadIdentit
 using WorkloadIdentityCredentialOptions = AzureIdentity::Azure.Identity.WorkloadIdentityCredentialOptions;
 
 var runMigrations = IdentityBrokerMigrationCommand.IsRequested(args);
+var runCliScopePermissionMigration = IdentityBrokerMigrationCommand.IsCliScopePermissionMigrationRequested(args);
 var runPostgresBootstrap = IdentityBrokerPostgresBootstrapCommand.IsRequested(args);
 var verifyPostgresBootstrap = IdentityBrokerPostgresBootstrapCommand.IsVerifyRequested(args);
-if (IdentityBrokerMigrationCommand.ContainsArgument(args) && !runMigrations)
-    throw new ArgumentException("The --migrate command must be used by itself.", nameof(args));
+if (IdentityBrokerMigrationCommand.ContainsArgument(args) &&
+    !runMigrations && !runCliScopePermissionMigration)
+    throw new ArgumentException("An Identity broker migration command must be used by itself.", nameof(args));
 if (IdentityBrokerPostgresBootstrapCommand.ContainsArgument(args) &&
     !runPostgresBootstrap && !verifyPostgresBootstrap)
     throw new ArgumentException("An identity PostgreSQL maintenance command must be used by itself.", nameof(args));
-if ((runMigrations ? 1 : 0) + (runPostgresBootstrap ? 1 : 0) + (verifyPostgresBootstrap ? 1 : 0) > 1)
+if ((runMigrations ? 1 : 0) + (runCliScopePermissionMigration ? 1 : 0) +
+    (runPostgresBootstrap ? 1 : 0) + (verifyPostgresBootstrap ? 1 : 0) > 1)
     throw new ArgumentException("Only one Identity broker maintenance command can run at a time.", nameof(args));
 
 var builder = WebApplication.CreateBuilder(
-    runMigrations || runPostgresBootstrap || verifyPostgresBootstrap
+    runMigrations || runCliScopePermissionMigration || runPostgresBootstrap || verifyPostgresBootstrap
         ? Array.Empty<string>()
         : args);
 if (runMigrations)
@@ -66,6 +69,11 @@ if (runMigrations)
     {
         Console.CancelKeyPress -= cancelHandler;
     }
+    return;
+}
+if (runCliScopePermissionMigration)
+{
+    await IdentityBrokerMigrationCommand.RunCliScopePermissionMigrationAsync(builder.Configuration);
     return;
 }
 if (runPostgresBootstrap)
@@ -197,6 +205,8 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(vaultConfiguration);
 builder.Services.AddSingleton(workloadIdentityOptions);
 builder.Services.AddSingleton(secretClientOptions);
+builder.Services.AddScoped<BrokerCliAuthorizationScopePermissionFilter>();
+builder.Services.AddScoped<BrokerCliTokenScopePermissionFilter>();
 builder.Services.AddSingleton<AzureKeyVaultSecretRedemption>(provider =>
     AzureKeyVaultSecretRedemption.CreateWithWorkloadIdentity(
         provider.GetRequiredService<AzureKeyVaultConfiguration>(),
@@ -442,6 +452,7 @@ builder.Services.AddOpenIddict()
             serverOptions.CodeChallengeMethods.Remove(OpenIddictConstants.CodeChallengeMethods.Plain);
             serverOptions.RequireProofKeyForCodeExchange = true;
             serverOptions.RefreshTokenReuseLeeway = TimeSpan.Zero;
+            BrokerScopePermissionHandlers.AddCliRegisteredScopePermissionFilters(serverOptions);
         });
 
         // Access tokens stay unencrypted signed JWTs so resource servers can validate them

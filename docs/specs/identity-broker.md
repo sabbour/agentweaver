@@ -35,6 +35,17 @@ Consent requires the local cookie, the exact pending subject, and a native antif
 An atomic PostgreSQL transaction consumes consent and creates the permanent authorization together.
 Anonymous, other-user, invalid-scope, replayed, expired, and canceled approvals fail closed.
 
+The statically registered public `agentweaver-cli` has a Broker-specific
+`agentweaver:scope:all-registered` application permission. It bypasses only
+OpenIddict's per-client scope-permission check for that exact client; the
+registered-scope catalog, consent, redirect URI, PKCE, grant, and downstream
+authorization checks remain in force. The permission covers scopes already
+registered and any registered later, so a newly registered scope also becomes
+requestable by the CLI with the resource audiences attached to that scope.
+Scope owners must not rely only on per-client scope permissions to protect
+internal scopes; resource servers must independently enforce current
+authorization.
+
 Issued principals carry the permanent authorization ID and resources from native scope registration.
 Resources are global scope attributes in OpenIddict, not client-supplied token audiences.
 Clients that share a scope share its operator-declared resource set.
@@ -52,8 +63,19 @@ membership and resource-role records. OAuth scopes and tenant selectors cannot
 create authority. Signed `project_id` and `run_id` claims are included only after
 the broker validates the exact run-bound grant.
 
-Startup creates missing clients and scopes.
-It refuses changes to registered redirects, permissions, requirements, type, consent policy, credentials, or scope resources.
+Startup creates missing clients and scopes, but never auto-creates the CLI
+registration or grants its all-registered-scopes permission.
+The separate `--migrate-cli-scope-permission` command requires applied schema
+migrations and adds the permission only when the persisted CLI application
+matches the exact prior public registration; it is idempotent and refuses
+missing or drifted registrations. It does not run schema migrations or change
+other registration fields. Apply this one-time permission migration before
+rolling out the Broker build that requires it; older Broker processes still
+enforce their original client scope permissions, and restarting an older build
+afterward fails its strict registration check. `--migrate` remains schema-only.
+Production execution and the subsequent rollout require explicit operator
+approval. Startup refuses changes to registered redirects,
+permissions, requirements, type, consent policy, credentials, or scope resources.
 Confidential-client reconciliation uses native secret verification, never plaintext-to-hash comparison.
 Credential changes require an explicit administrative migration.
 
@@ -224,8 +246,11 @@ audience. The v3 snapshot preserves the existing acceptance and
 `agentweaver-web` clients and adds the public `agentweaver-cli` client with
 loopback redirect `http://127.0.0.1:49173/oauth/callback` and scopes `openid`,
 `api.read`, and `offline_access`. The Broker seeder requires PKCE for every
-client. The snapshot also sets `IdentityBroker:WebOrigin` to the exact Portal
-origin for browser OAuth CORS.
+client. The CLI's persisted all-registered-scopes permission also allows it to
+request scopes registered by another configured client (including the Web
+client's project scopes); a literal `*` is neither configured nor accepted.
+The snapshot also sets `IdentityBroker:WebOrigin` to the exact Portal origin
+for browser OAuth CORS.
 Confidential client secrets use Secret keys, not ConfigMap values.
 
 The `identity-broker` runtime ServiceAccount is federated to its own UAMI.

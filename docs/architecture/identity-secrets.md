@@ -11,6 +11,15 @@ The broker accepts an external OIDC provider. It validates the upstream issuer, 
 
 OAuth authorization codes require registered clients, exact redirect URIs, registered scopes, and S256 PKCE. Consent requires the local cookie and antiforgery token. Refresh-token replay revokes the authorization and token family.
 
+The existing public `agentweaver-cli` registration may request any scope in
+the Broker's registered-scope catalog, including future registrations. This
+client-specific permission does not accept unknown scope names or change other
+clients, but the CLI receives the resource audiences attached to requested
+scopes. New internal scopes must use independent resource-side authorization;
+per-client scope permissions alone do not protect them from CLI requests.
+Project roles, memberships, grants, consent, and trusted run provenance remain
+separately enforced.
+
 After upstream OIDC validation, the broker creates a local subject and issues access tokens with registered OAuth scopes and resources. It does not forward upstream tenant or role claims and does not assign application roles. Projects & Config is the sole live owner of issuer-and-subject project memberships and resource-role assignments. Other resource services obtain current effective permissions through `GET /api/authorization/context` instead of keeping duplicate membership or role records or caches. The route uses the validated caller and returns a versioned, no-store context; token claims and tenant selectors cannot create authority. Grant-validated `project_id` and `run_id` are included only for tokens bound to that exact project and run.
 
 ```mermaid
@@ -27,7 +36,7 @@ sequenceDiagram
         Broker->>Projects: Private TLS 1.2/1.3 signed proof request for actor and exact project/run
         Projects-->>Broker: Current membership, Orchestrator assignment, and accepted-selection receipt
     end
-    Broker->>Broker: Apply registered scopes and resource audience
+    Broker->>Broker: Validate catalog scopes; apply client permission and resource audience
     Broker-->>API: Signed access token (sub, scope, audience, optional project/run binding)
     API->>API: Validate issuer, signature, lifetime, and audience
     API->>Projects: GET /api/authorization/context with caller token
