@@ -257,7 +257,15 @@ merge and required migration wiring, and recomputes the plan hash. It then
 requests an Azure CLI token, connects to verify the exact operator and fresh
 target, and runs the permission preflight before role creation. These checks
 block unsafe writes; they do not prevent credential requests or database
-connections. The CLI arguments are technical guards, not approval.
+connections. Fresh initialization also requires the dedicated Projects
+migration role to have no memberships of its own and proves the operator can
+`SET ROLE` to it, either through existing SET membership or a temporary
+membership grant that is rolled back during preflight. If neither path is
+available, initialization stops before role creation. Schema creation,
+Projects migrations, reviewed runtime-grant reconciliation, and any temporary
+membership are then committed or rolled back together as the dedicated owner;
+existing SET membership is preserved. The CLI arguments are technical guards,
+not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
@@ -321,16 +329,19 @@ whose five runtime roles already exist and whose Projects & Config schema is the
 only migrated service schema. It requires the exact prior source, plan hash, and
 receipt bytes, and writes a new receipt rather than replacing the old one.
 Before creating another service schema, the continuation validates the exact
-Projects migration history, object inventory, ownership, ACLs, and setup guards.
+Projects migration history, object inventory, dedicated migration ownership,
+reviewed runtime grants, ACLs, and setup guards.
 It rejects unplanned views and materialized views, including views that could
 expose owner-only data after runtime schema access is granted.
-Before the final grant transaction, planned non-runtime functions may have only
-their exact owner grant, or that grant plus PostgreSQL's default `PUBLIC EXECUTE`;
-the casting function must remain owner-only. Any grant to a runtime or other
-role is rejected. Runtime roles have no schema access at this point. The final
-transaction revokes `PUBLIC EXECUTE` from every planned function and grants
-direct EXECUTE only to the planned casting role, then checks the complete ACL
-state before commit.
+Before the final grant transaction, planned non-runtime functions in the
+remaining service schemas may have only their exact owner grant, or that grant
+plus PostgreSQL's default `PUBLIC EXECUTE`; the casting function must remain
+owner-only. Any grant to a runtime or other role in those schemas is rejected.
+The Projects & Config runtime role already has only the
+permissions reconciled from the reviewed plan; the other runtime roles have no
+schema access at this point. The final transaction adds `CONNECT` and the
+planned grants for the remaining services without changing Projects & Config
+privileges.
 
 The continuation migrates the remaining four service schemas without runtime
 table, sequence, or function grants. It verifies each exact migration inventory
@@ -385,8 +396,9 @@ apply every missing catalog version. Before any write, the mode checks:
 
 - the five runtime roles, object-ID mappings, and operator memberships;
 - each runtime role's exact database `CONNECT`;
-- each service schema's owner and ACL;
-- that every existing relation is planned, operator-owned, and within its
+- each P1 service schema's operator ownership and ACL, plus the Projects & Config
+  dedicated-owner and reviewed runtime-grant contract;
+- that every existing relation is planned, owned by its expected schema owner, and within its
   planned runtime privileges;
 - that Core and Events histories are exact prefixes of the plan, with no gaps
   or unplanned versions. Other services must already match the plan exactly.
@@ -394,8 +406,8 @@ apply every missing catalog version. Before any write, the mode checks:
 Add `--dry-run` to stop after these checks; it prints the pending versions and
 `P1_POSTGRES_PENDING_MIGRATIONS_DRY_RUN writes=false`. Without `--dry-run`, the
 mode applies only the pending versions and verifies each migrated history and
-object inventory. It then applies the exact plan grants in one transaction,
-reads back every ACL before commit, and writes a new receipt under `Temp`. It
+object inventory. It then applies the exact pending-service grants in one
+transaction, reads back every ACL before commit, and writes a new receipt under `Temp`. It
 ends with `P1_POSTGRES_PENDING_MIGRATIONS_APPLIED`. That marker does not prove
 runtime identity or deployment.
 

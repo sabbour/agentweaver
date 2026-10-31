@@ -202,6 +202,9 @@ reviewed runtime-grant plan in the same migration operation. It verifies the
 schema-owner identity, object inventory, and least-privilege grants
 transactionally; a mismatch fails before rollout. Extend and review the plan
 when new objects need runtime access; do not use blanket/default grants.
+The separate first-time operator initializer also uses this dedicated owner:
+it preflights SET-role access before creating runtime roles, then creates the
+Projects schema, migrations, and reviewed grants in one transaction.
 
 The workflow must exist on the repository's default branch to appear in the
 manual dispatch UI. Azure provisioning, certificates, runtime configuration,

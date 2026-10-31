@@ -240,14 +240,23 @@ reviewed runtime-grant plan as the dedicated schema owner. It validates the
 exact schema/object inventory and verifies runtime/PUBLIC privileges in the
 same transaction before committing; any mismatch fails the Job before
 workload rollout.
-The separate continuation mode admits only the exact Projects-only prefix,
-checks ordered EF migration histories and every service's migration inventory,
-and migrates the other schemas without runtime object grants. Its pre-grant
-checks allow only owner ACLs or the known default `PUBLIC EXECUTE` on planned
-non-runtime functions while service schemas remain unavailable to runtime
-roles. It rejects unplanned views and materialized views, and checks their
-relation and column ACLs. The final grant transaction removes those public
-function grants and applies only the planned casting-function grant.
+Fresh operator initialization follows the same ownership boundary: it proves
+the operator can assume the dedicated migration role before creating runtime
+roles, then creates the Projects schema, applies EF migrations, and reconciles
+the reviewed runtime grants as that owner in one transaction. If the role
+assumption is unavailable or any migration/grant check fails, the transaction
+leaves no partial Projects schema or temporary membership.
+The separate continuation mode admits only the exact Projects & Config prefix:
+the dedicated migration identity owns its schema and planned objects, and the
+runtime role has only the automatically reconciled grants in the reviewed plan.
+It checks the ordered EF migration history, exact object inventory, setup
+guards, and absence of Projects schema privileges for the other runtime roles.
+It then migrates the other four schemas without runtime object grants. Their
+pre-grant checks allow only owner ACLs or the known default `PUBLIC EXECUTE`
+on planned non-runtime functions. It rejects unplanned views and materialized
+views, and checks their relation and column ACLs. The final grant transaction
+adds database `CONNECT` and the planned grants for those four services; it
+does not try to grant Projects & Config privileges as the operator.
 These source changes do not change the P0 Azure topology.
 See the [operator initialization procedure](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-operator-initialization),
 the [initializer source limits](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal)

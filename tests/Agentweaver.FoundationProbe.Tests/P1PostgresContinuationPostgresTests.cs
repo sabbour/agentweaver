@@ -11,7 +11,99 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
     : IClassFixture<ProbePostgresFixture>
 {
     [Fact]
-    public async Task ContinuationMigratesAllServicesFromTheExactProjectsPrefixWithoutRuntimeGrants()
+    public async Task FreshProjectsInitializationMigratesAsDedicatedOwnerAndPreservesSetMembership()
+    {
+        await using var state = await ContinuationState.CreateAsync(fixture);
+        await state.GrantProjectsMigrationOwnerSetMembershipAsync();
+        await state.CreatePrincipalFunctionAsync();
+
+        await using var connection = await state.DataSource.OpenConnectionAsync();
+        await P1PostgresContinuation.AssertProjectsMigrationOwnerReadyAsync(
+            connection, state.OperatorName, CancellationToken.None);
+        await P1PostgresContinuation.MigrateProjectsConfigAsDedicatedOwnerAsync(
+            connection, state.Plan.Services[0], CancellationToken.None);
+        await state.AssertProjectsPrefixAsync(
+            connection, requireOnlyProjectsSchema: true, CancellationToken.None);
+        Assert.True(await ScalarAsync<bool>(connection, """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_auth_members
+                WHERE roleid = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @owner)
+                  AND member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user))
+            """, ("owner", P1PostgresContinuation.ProjectsConfigMigrationOwner)));
+    }
+
+    [Fact]
+    public async Task PendingHistoryVerificationTemporarilyAssumesProjectsOwnerWithoutPersistingMembership()
+    {
+        await using var state = await ContinuationState.CreateAsync(fixture);
+        await state.EnableTemporaryRoleGrantForTestAsync();
+        await state.CreatePrincipalFunctionAsync();
+
+        await using var connection = await state.DataSource.OpenConnectionAsync();
+        await P1PostgresContinuation.AssertProjectsMigrationOwnerReadyAsync(
+            connection, state.OperatorName, CancellationToken.None);
+        await P1PostgresContinuation.MigrateProjectsConfigAsDedicatedOwnerAsync(
+            connection, state.Plan.Services[0], CancellationToken.None);
+        await P1PostgresContinuation.VerifyServiceMigrationsAsync(
+            state.DataSource, state.Plan.Services[0], CancellationToken.None);
+
+        Assert.Equal(state.OperatorName, await ScalarAsync<string>(connection, "SELECT current_user"));
+        Assert.False(await ScalarAsync<bool>(connection, """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_auth_members
+                WHERE roleid = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @owner)
+                  AND member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user))
+            """, ("owner", P1PostgresContinuation.ProjectsConfigMigrationOwner)));
+    }
+
+    [Fact]
+    public async Task FreshProjectsInitializationFailsBeforeWritesWithoutSetMembershipAndRollsBackMigrationFailure()
+    {
+        await using var state = await ContinuationState.CreateAsync(fixture);
+        await using var connection = await state.DataSource.OpenConnectionAsync();
+        var permissionFailure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            P1PostgresContinuation.AssertProjectsMigrationOwnerReadyAsync(
+                connection, state.OperatorName, CancellationToken.None));
+        Assert.Contains("must have SET permission", permissionFailure.Message, StringComparison.Ordinal);
+        Assert.False(await ScalarAsync<bool>(connection, """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = 'projects_config')
+            """));
+        Assert.False(await ScalarAsync<bool>(connection, """
+            SELECT pg_catalog.pg_has_role(current_user, @owner, 'SET')
+            """, ("owner", P1PostgresContinuation.ProjectsConfigMigrationOwner)));
+
+        await state.EnableTemporaryRoleGrantForTestAsync();
+        await P1PostgresContinuation.AssertProjectsMigrationOwnerReadyAsync(
+            connection, state.OperatorName, CancellationToken.None);
+        Assert.False(await ScalarAsync<bool>(connection, """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_auth_members
+                WHERE roleid = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @owner)
+                  AND member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user))
+            """, ("owner", P1PostgresContinuation.ProjectsConfigMigrationOwner)));
+        await using (var admin = await state.TargetAdminDataSource.OpenConnectionAsync())
+            await ExecuteAsync(admin, $"DROP ROLE {InitializerChecks.Quote(state.Plan.Services[0].Role)}");
+
+        var failure = await Assert.ThrowsAsync<PostgresException>(() =>
+            P1PostgresContinuation.MigrateProjectsConfigAsDedicatedOwnerAsync(
+                connection, state.Plan.Services[0], CancellationToken.None));
+
+        Assert.Equal(PostgresErrorCodes.UndefinedObject, failure.SqlState);
+        Assert.False(await ScalarAsync<bool>(connection, """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = 'projects_config')
+            """));
+        Assert.False(await ScalarAsync<bool>(connection, """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_auth_members
+                WHERE roleid = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @owner)
+                  AND member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user))
+            """, ("owner", P1PostgresContinuation.ProjectsConfigMigrationOwner)));
+    }
+
+    [Fact]
+    public async Task ContinuationMigratesAllServicesFromTheExactProjectsPrefixWithRuntimeGrants()
     {
         await using var state = await ContinuationState.CreateAsync(fixture);
         await state.CreateProjectsPrefixAsync();
@@ -64,12 +156,12 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
             finalConnection, requireOnlyProjectsSchema: false, CancellationToken.None);
         foreach (var service in state.Plan.Services)
         {
-            await P1PostgresContinuation.VerifyServiceMigrationsAsync(
-                state.DataSource, service, CancellationToken.None);
+            await state.VerifyServiceMigrationsAsync(service, CancellationToken.None);
             await AssertSchemaOwnedAndRuntimeDeniedAsync(
                 finalConnection, service, state);
         }
-        await AssertOwnerOnlyPrivilegesAbsentAsync(finalConnection, state);
+        await using var adminConnection = await state.TargetAdminDataSource.OpenConnectionAsync();
+        await AssertOwnerOnlyPrivilegesAbsentAsync(adminConnection, state);
     }
 
     [Fact]
@@ -81,7 +173,8 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
         await using var connection = await state.DataSource.OpenConnectionAsync();
         await state.AssertProjectsPrefixAsync(
             connection, requireOnlyProjectsSchema: true, CancellationToken.None);
-        await ExecuteAsync(connection,
+        await using var migrationConnection = await state.MigrationDataSource.OpenConnectionAsync();
+        await ExecuteAsync(migrationConnection,
             $"GRANT SELECT ON TABLE projects_config.project_setup_operations TO {InitializerChecks.Quote(state.RuntimeRoles[0])}");
 
         var stages = new List<string>();
@@ -100,7 +193,7 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
                 _ => Task.CompletedTask,
                 CancellationToken.None));
 
-        Assert.Contains("ACL", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("reviewed plan", failure.Message, StringComparison.Ordinal);
         Assert.Empty(stages);
         await using var verify = await state.DataSource.OpenConnectionAsync();
         Assert.True(await ScalarAsync<bool>(verify, """
@@ -119,7 +212,8 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
         await using var connection = await state.DataSource.OpenConnectionAsync();
         await state.AssertProjectsPrefixAsync(
             connection, requireOnlyProjectsSchema: true, CancellationToken.None);
-        await ExecuteAsync(connection, $"""
+        await using var migrationConnection = await state.MigrationDataSource.OpenConnectionAsync();
+        await ExecuteAsync(migrationConnection, $"""
             GRANT EXECUTE ON FUNCTION projects_config.reject_project_setup_operation_mutation()
             TO {InitializerChecks.Quote(state.RuntimeRoles[0])}
             """);
@@ -224,13 +318,14 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
         await state.CreateProjectsPrefixAsync();
 
         await using var connection = await state.DataSource.OpenConnectionAsync();
-        await ExecuteAsync(connection, """
+        await using var migrationConnection = await state.MigrationDataSource.OpenConnectionAsync();
+        await ExecuteAsync(migrationConnection, """
             CREATE VIEW projects_config.project_setup_operations_view AS
                 SELECT * FROM projects_config.project_setup_operations;
             CREATE MATERIALIZED VIEW projects_config.project_setup_operations_snapshot AS
                 SELECT * FROM projects_config.project_setup_operations;
             """);
-        await ExecuteAsync(connection, $"""
+        await ExecuteAsync(migrationConnection, $"""
             GRANT SELECT ON TABLE
                 projects_config.project_setup_operations_view,
                 projects_config.project_setup_operations_snapshot
@@ -268,6 +363,12 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
         ServicePlan service,
         ContinuationState state)
     {
+        if (service.Service == "projects-config")
+        {
+            await state.AssertProjectsPrefixAsync(connection, requireOnlyProjectsSchema: false, CancellationToken.None);
+            return;
+        }
+
         await P1PostgresContinuation.AssertOwnedObjectsAsync(
             connection, service, state.OperatorName, CancellationToken.None);
         await using var command = new NpgsqlCommand("""
@@ -356,7 +457,9 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
 
     private sealed class ContinuationState(
         NpgsqlDataSource adminDataSource,
+        NpgsqlDataSource targetAdminDataSource,
         NpgsqlDataSource dataSource,
+        NpgsqlDataSource migrationDataSource,
         string databaseName,
         string metadataSchema,
         string operatorName,
@@ -364,12 +467,31 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
         PostgresPlan plan) : IAsyncDisposable
     {
         private const string TenantId = "11111111-1111-1111-1111-111111111111";
+        private const string MigrationOwner = "agentweaver-id-projects-config-migration";
 
         public NpgsqlDataSource DataSource { get; } = dataSource;
+        public NpgsqlDataSource TargetAdminDataSource { get; } = targetAdminDataSource;
+        public NpgsqlDataSource MigrationDataSource { get; } = migrationDataSource;
         public string OperatorName { get; } = operatorName;
         public uint OperatorOid { get; } = operatorOid;
         public PostgresPlan Plan { get; } = plan;
         public string[] RuntimeRoles { get; } = plan.Services.Select(service => service.Role).ToArray();
+
+        public async Task GrantProjectsMigrationOwnerSetMembershipAsync()
+        {
+            await using var admin = await TargetAdminDataSource.OpenConnectionAsync();
+            await ExecuteAsync(admin, $"""
+                GRANT {InitializerChecks.Quote(MigrationOwner)} TO {InitializerChecks.Quote(OperatorName)}
+                WITH INHERIT FALSE, SET TRUE
+                """);
+        }
+
+        public async Task EnableTemporaryRoleGrantForTestAsync()
+        {
+            await using var admin = await TargetAdminDataSource.OpenConnectionAsync();
+            await ExecuteAsync(admin,
+                $"ALTER ROLE {InitializerChecks.Quote(OperatorName)} SUPERUSER");
+        }
 
         public static async Task<ContinuationState> CreateAsync(ProbePostgresFixture fixture)
         {
@@ -382,6 +504,10 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
 
             await using (var admin = await fixture.AdminDataSource.OpenConnectionAsync())
             {
+                await ExecuteAsync(admin, $"""
+                    CREATE ROLE {InitializerChecks.Quote(MigrationOwner)}
+                    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT
+                    """);
                 await ExecuteAsync(admin, $"""
                     CREATE ROLE {InitializerChecks.Quote(operatorName)}
                     LOGIN PASSWORD '{password}'
@@ -410,26 +536,54 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
                 Pooling = false,
             }.ConnectionString;
             var dataSource = NpgsqlDataSource.Create(connectionString);
+            var targetAdminDataSource = NpgsqlDataSource.Create(
+                new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
+                {
+                    Database = databaseName,
+                    Pooling = false,
+                }.ConnectionString);
+            var migrationConnectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
+            {
+                Database = databaseName,
+                Options = $"-c role={MigrationOwner}",
+                Pooling = false,
+            }.ConnectionString;
+            var migrationDataSource = NpgsqlDataSource.Create(migrationConnectionString);
             await using var connection = await dataSource.OpenConnectionAsync();
             var operatorOid = await ScalarAsync<uint>(
                 connection, "SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user");
             return new ContinuationState(
-                fixture.AdminDataSource, dataSource, databaseName, metadataSchema,
+                fixture.AdminDataSource, targetAdminDataSource, dataSource, migrationDataSource, databaseName, metadataSchema,
                 operatorName, operatorOid, plan);
         }
 
         public async Task CreateProjectsPrefixAsync()
         {
-            await using var connection = await DataSource.OpenConnectionAsync();
-            await ExecuteAsync(connection,
-                $"CREATE SCHEMA projects_config AUTHORIZATION {InitializerChecks.Quote(OperatorName)}");
-            await ExecuteAsync(connection, "REVOKE ALL ON SCHEMA projects_config FROM PUBLIC");
-            await ExecuteAsync(connection, BuildPrincipalFunctionSql());
+            await GrantProjectsMigrationOwnerSetMembershipAsync();
+            await using (var admin = await TargetAdminDataSource.OpenConnectionAsync())
+            {
+                await ExecuteAsync(admin,
+                    $"CREATE SCHEMA projects_config AUTHORIZATION {InitializerChecks.Quote(MigrationOwner)}");
+                await ExecuteAsync(admin, "REVOKE ALL ON SCHEMA projects_config FROM PUBLIC");
+            }
+            await CreatePrincipalFunctionAsync();
+
             await P1PostgresContinuation.MigrateServiceAsync(
-                DataSource, Plan.Services[0], CancellationToken.None);
-            await P1PostgresContinuation.VerifyServiceMigrationsAsync(
-                DataSource, Plan.Services[0], CancellationToken.None);
+                MigrationDataSource, Plan.Services[0], CancellationToken.None);
+            await VerifyServiceMigrationsAsync(Plan.Services[0], CancellationToken.None);
         }
+
+        public async Task CreatePrincipalFunctionAsync()
+        {
+            await using (var connection = await DataSource.OpenConnectionAsync())
+                await ExecuteAsync(connection, BuildPrincipalFunctionSql());
+        }
+
+        public Task VerifyServiceMigrationsAsync(
+            ServicePlan service,
+            CancellationToken cancellationToken) =>
+            P1PostgresContinuation.VerifyServiceMigrationsAsync(
+                DataSource, service, cancellationToken);
 
         public async Task AssertProjectsPrefixAsync(
             NpgsqlConnection connection,
@@ -438,8 +592,9 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
         {
             var principals = await ReadPrincipalsAsync(connection, cancellationToken);
             await P1PostgresContinuation.AssertProjectsPrefixAsync(
-                DataSource, connection, Plan, principals, OperatorOid, OperatorName,
+                connection, Plan, principals, OperatorOid, OperatorName,
                 TenantId, cancellationToken, requireOnlyProjectsSchema);
+            Assert.Equal(OperatorName, await ScalarAsync<string>(connection, "SELECT current_user"));
         }
 
         public Task<RuntimePrincipal[]> ReadPrincipalsAsync(
@@ -451,12 +606,15 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
 
         public async ValueTask DisposeAsync()
         {
+            await MigrationDataSource.DisposeAsync();
             await DataSource.DisposeAsync();
+            await TargetAdminDataSource.DisposeAsync();
             await using var admin = await adminDataSource.OpenConnectionAsync();
             await ExecuteAsync(admin, $"DROP DATABASE IF EXISTS {InitializerChecks.Quote(databaseName)}");
             foreach (var role in RuntimeRoles)
                 await ExecuteAsync(admin, $"DROP ROLE IF EXISTS {InitializerChecks.Quote(role)}");
             await ExecuteAsync(admin, $"DROP ROLE IF EXISTS {InitializerChecks.Quote(OperatorName)}");
+            await ExecuteAsync(admin, $"DROP ROLE IF EXISTS {InitializerChecks.Quote(MigrationOwner)}");
         }
 
         private string BuildPrincipalFunctionSql()
@@ -516,7 +674,9 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
             };
             var services = sourcePlan.Services.Select(service => service with
             {
-                Role = $"p1rt_{suffix}_{service.Service.Replace("-", "_", StringComparison.Ordinal)}",
+                Role = service.Service == "projects-config"
+                    ? "agentweaver-id-projects-config"
+                    : $"p1rt_{suffix}_{service.Service.Replace("-", "_", StringComparison.Ordinal)}",
                 PrincipalObjectId = Guid.NewGuid().ToString("D"),
             }).ToArray();
             return sourcePlan with { Target = target, Services = services };

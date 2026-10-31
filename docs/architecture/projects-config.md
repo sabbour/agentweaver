@@ -185,6 +185,12 @@ guard verifies the exact function execution rights, the PUBLIC revocation, and
 the continued absence of direct runtime access to `project_setup_operations`.
 No separate HTTP-host database identity, general table grant, cleanup
 privilege, or live grant change is part of this source change.
+Fresh P1 operator initialization creates and migrates this schema as the
+dedicated Projects migration owner, then reconciles the reviewed runtime
+grants in the same transaction. The operator must be able to assume that role;
+the initializer checks this before creating runtime roles and fails without
+partial schema state when it cannot. Runtime principals never own the schema
+or apply its DDL.
 
 `GET /api/p1/invocations/{invocationId}/setup` exposes only the existing
 `read_p1_project` function. It uses the same authenticated actor, selected tenant,

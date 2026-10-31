@@ -13,6 +13,7 @@ namespace Agentweaver.P1PostgresInitializer;
 /// <summary>Verifies or resumes the narrowly permitted PostgreSQL initialization sequence.</summary>
 internal static class P1PostgresContinuation
 {
+    internal const string ProjectsConfigMigrationOwner = "agentweaver-id-projects-config-migration";
     private static readonly string[] ExpectedServices =
         ["projects-config", "environment", "knowledge", "events-and-sessions", "orchestrator"];
 
@@ -34,10 +35,9 @@ internal static class P1PostgresContinuation
             ?? throw new InvalidOperationException("The required runtime principal facts are missing.");
     }
 
-    /// <summary>Proves that the target contains exactly the migrated, owner-only Projects prefix.</summary>
-    /// <remarks>The checks bind database identity, schema ownership, migration history, objects, guards, and grants.</remarks>
+    /// <summary>Proves that the target contains the migrated Projects prefix with its reviewed runtime grants.</summary>
+    /// <remarks>The checks bind database identity, dedicated schema ownership, migration history, objects, guards, and grants.</remarks>
     internal static async Task AssertProjectsPrefixAsync(
-        NpgsqlDataSource dataSource,
         NpgsqlConnection connection,
         PostgresPlan plan,
         RuntimePrincipal[] principals,
@@ -52,6 +52,8 @@ internal static class P1PostgresContinuation
             throw new InvalidOperationException("The exact five-service continuation order is required.");
 
         var projects = plan.Services[0];
+        var projectsOwnerOid = await ReadRoleOidAsync(
+            connection, ProjectsConfigMigrationOwner, cancellationToken).ConfigureAwait(false);
         var grantors = InitializerChecks.CaptureMembershipGrantors(
             plan.Services, principals, operatorOid, tenantId);
         InitializerChecks.AssertPrincipals(plan.Services, principals, operatorOid, tenantId, grantors);
@@ -82,47 +84,152 @@ internal static class P1PostgresContinuation
                 throw new InvalidOperationException("The continuation target contains a service schema beyond the Projects-only prefix.");
         }
 
-        await using (var schemaAcl = new NpgsqlCommand("""
-            SELECT n.nspowner = @owner_oid
-               AND (SELECT array_agg(a.privilege_type ORDER BY a.privilege_type)
-                    FROM pg_catalog.aclexplode(coalesce(n.nspacl,
-                        pg_catalog.acldefault('n', n.nspowner))) AS a) = ARRAY['CREATE', 'USAGE']::text[]
+        var runtimeOid = principals.Single(item => item.Role == projects.Role).Oid;
+        await using (var schemaAcl = new NpgsqlCommand(InitializerChecks.SchemaAclQuery, connection))
+        {
+            schemaAcl.Parameters.AddWithValue("schema", projects.Schema);
+            var schemaJson = await schemaAcl.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+            var schemaState = schemaJson is null
+                ? null
+                : JsonSerializer.Deserialize<SchemaAclState>(schemaJson,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            InitializerChecks.AssertServiceSchemaAcl(projects, schemaState, projectsOwnerOid, runtimeOid);
+        }
+
+        await AssertProjectsMigrationHistoryAsync(connection, projects, cancellationToken).ConfigureAwait(false);
+
+        await AssertOwnedObjectsAsync(
+            connection, projects, ProjectsConfigMigrationOwner, cancellationToken).ConfigureAwait(false);
+        await AssertIdentitySequenceAsync(connection, projects.Schema, cancellationToken).ConfigureAwait(false);
+        await AssertProjectsSetupGuardsAsync(connection, projects.Schema, projectsOwnerOid, cancellationToken)
+            .ConfigureAwait(false);
+        await AssertNoRuntimePrivilegesAsync(connection, projects,
+            principals.Where(item => item.Role != projects.Role).Select(item => item.Role).ToArray(),
+            cancellationToken).ConfigureAwait(false);
+        await AssertNoRuntimeFunctionPrivilegesAsync(connection, projects,
+            principals.Where(item => item.Role != projects.Role).Select(item => item.Role).ToArray(),
+            cancellationToken)
+            .ConfigureAwait(false);
+        await ProjectsConfigRuntimeGrantPlan.VerifyRuntimeGrantsAsync(connection, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>Proves the operator can assume the dedicated Projects migration role without committing temporary membership.</summary>
+    internal static async Task AssertProjectsMigrationOwnerReadyAsync(
+        NpgsqlConnection connection,
+        string operatorName,
+        CancellationToken cancellationToken)
+    {
+        await using (var identity = new NpgsqlCommand("""
+            SELECT current_user = @operator
+               AND EXISTS (
+                   SELECT 1 FROM pg_catalog.pg_roles
+                   WHERE rolname = @owner AND rolcanlogin AND NOT rolsuper AND NOT rolcreatedb
+                     AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls)
+               AND NOT has_database_privilege(@owner, current_database(), 'CREATE')
                AND NOT EXISTS (
-                    SELECT 1
-                    FROM pg_catalog.aclexplode(coalesce(n.nspacl,
-                        pg_catalog.acldefault('n', n.nspowner))) AS a
-                    WHERE a.grantee <> n.nspowner OR a.grantor <> n.nspowner OR a.is_grantable)
-            FROM pg_catalog.pg_namespace AS n
-            WHERE n.nspname = @schema
+                   SELECT 1 FROM pg_catalog.pg_auth_members
+                   WHERE member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @owner))
             """, connection))
         {
-            schemaAcl.Parameters.AddWithValue("owner_oid", NpgsqlDbType.Oid, operatorOid);
-            schemaAcl.Parameters.AddWithValue("schema", projects.Schema);
-            if (await schemaAcl.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
-                throw new InvalidOperationException("The Projects schema owner or ACL differs from the exact continuation prefix.");
+            identity.Parameters.AddWithValue("operator", operatorName);
+            identity.Parameters.AddWithValue("owner", ProjectsConfigMigrationOwner);
+            if (await identity.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+                throw new InvalidOperationException(
+                    "Fresh initialization requires the exact, dedicated Projects migration role with no memberships granted to that owner.");
         }
+
+        if (await CanAssumeProjectsMigrationOwnerAsync(connection, null, cancellationToken).ConfigureAwait(false))
+            return;
+
+        if (await HasDirectMigrationOwnerMembershipAsync(connection, null, cancellationToken).ConfigureAwait(false))
+            throw new InvalidOperationException(
+                "The operator has a Projects migration-owner membership without SET permission; reconcile it before initialization.");
+
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await ExecuteAsync(connection, transaction,
+                $"GRANT {InitializerChecks.Quote(ProjectsConfigMigrationOwner)} TO CURRENT_USER WITH INHERIT FALSE, SET TRUE",
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (PostgresException error) when (error.SqlState == PostgresErrorCodes.InsufficientPrivilege)
+        {
+            throw new InvalidOperationException(
+                "The operator must have SET permission on the dedicated Projects migration role, or be able to grant temporary SET membership, before initialization writes begin.",
+                error);
+        }
+        await using (var canAssume = new NpgsqlCommand(
+            "SELECT pg_catalog.pg_has_role(current_user, @owner, 'SET')", connection, transaction))
+        {
+            canAssume.Parameters.AddWithValue("owner", ProjectsConfigMigrationOwner);
+            if (await canAssume.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+                throw new InvalidOperationException(
+                    "The initializer operator cannot temporarily assume the Projects migration role.");
+        }
+        await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Migrates a fresh Projects schema and reconciles its grants atomically as its dedicated owner.</summary>
+    internal static async Task MigrateProjectsConfigAsDedicatedOwnerAsync(
+        NpgsqlConnection connection,
+        ServicePlan service,
+        CancellationToken cancellationToken)
+    {
+        if (service.Service != "projects-config")
+            throw new InvalidOperationException("Only Projects & Config uses the dedicated migration owner.");
+
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var temporaryMembership = !await CanAssumeProjectsMigrationOwnerAsync(
+            connection, transaction, cancellationToken).ConfigureAwait(false);
+        if (temporaryMembership)
+        {
+            if (await HasDirectMigrationOwnerMembershipAsync(connection, transaction, cancellationToken)
+                    .ConfigureAwait(false))
+                throw new InvalidOperationException(
+                    "The operator has a Projects migration-owner membership without SET permission; reconcile it before initialization.");
+            await ExecuteAsync(connection, transaction,
+                $"GRANT {InitializerChecks.Quote(ProjectsConfigMigrationOwner)} TO CURRENT_USER WITH INHERIT FALSE, SET TRUE",
+                cancellationToken).ConfigureAwait(false);
+        }
+        await ExecuteAsync(connection, transaction,
+            $"CREATE SCHEMA {InitializerChecks.Quote(service.Schema)} AUTHORIZATION {InitializerChecks.Quote(ProjectsConfigMigrationOwner)}",
+            cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, transaction,
+            $"SET LOCAL ROLE {InitializerChecks.Quote(ProjectsConfigMigrationOwner)}",
+            cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, transaction,
+            $"REVOKE ALL ON SCHEMA {InitializerChecks.Quote(service.Schema)} FROM PUBLIC",
+            cancellationToken).ConfigureAwait(false);
 
         var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
-            .UseNpgsql(dataSource, npgsql =>
-                npgsql.MigrationsHistoryTable("__ef_migrations_history", projects.Schema))
+            .UseNpgsql(connection, npgsql =>
+                npgsql.MigrationsHistoryTable("__ef_migrations_history", service.Schema))
             .Options;
-        await using (var context = new ProjectsConfigDbContext(options))
-        {
-            var expected = context.Database.GetMigrations().ToArray();
-            var applied = (await context.Database.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false)).ToArray();
-            InitializerChecks.AssertExactMigrationHistory(expected, applied, projects.Service);
-        }
+        await ProjectsConfigMigrator.MigrateAsync(connection, transaction, options, cancellationToken)
+            .ConfigureAwait(false);
 
-        await AssertOwnedObjectsAsync(connection, projects, operatorName, cancellationToken).ConfigureAwait(false);
-        await AssertRelationAclsAsync(connection, projects.Schema, cancellationToken).ConfigureAwait(false);
-        await AssertIdentitySequenceAsync(connection, projects.Schema, cancellationToken).ConfigureAwait(false);
-        await AssertProjectsSetupGuardsAsync(connection, projects.Schema, operatorOid, cancellationToken)
-            .ConfigureAwait(false);
-        await AssertNoRuntimePrivilegesAsync(connection, projects, principals.Select(item => item.Role).ToArray(),
-            cancellationToken).ConfigureAwait(false);
-        await AssertFunctionGrantsAsync(
-            connection, projects, principals, operatorOid, cancellationToken, beforeRuntimeGrants: true)
-            .ConfigureAwait(false);
+        await ExecuteAsync(connection, transaction, "RESET ROLE", cancellationToken).ConfigureAwait(false);
+        if (temporaryMembership)
+            await ExecuteAsync(connection, transaction,
+                $"REVOKE {InitializerChecks.Quote(ProjectsConfigMigrationOwner)} FROM CURRENT_USER",
+                cancellationToken).ConfigureAwait(false);
+        await using (var membership = new NpgsqlCommand("""
+            SELECT CASE WHEN @temporary
+                THEN NOT EXISTS (
+                    SELECT 1 FROM pg_catalog.pg_auth_members
+                    WHERE roleid = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @owner)
+                      AND member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user))
+                ELSE pg_catalog.pg_has_role(current_user, @owner, 'SET')
+            END
+            """, connection, transaction))
+        {
+            membership.Parameters.AddWithValue("owner", ProjectsConfigMigrationOwner);
+            membership.Parameters.AddWithValue("temporary", temporaryMembership);
+            if (await membership.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+                throw new InvalidOperationException("Projects migration-owner membership changed unexpectedly.");
+        }
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Creates and verifies only the missing service schemas after rechecking the existing prefix.</summary>
@@ -204,16 +311,8 @@ internal static class P1PostgresContinuation
         {
             case "projects-config":
             {
-                var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
-                        .UseNpgsql(dataSource, settings =>
-                            settings.MigrationsHistoryTable("__ef_migrations_history", service.Schema)).Options;
-                await ProjectsConfigMigrator.VerifyMigrationsAppliedAsync(dataSource, options, cancellationToken)
-                    .ConfigureAwait(false);
-                await using var context = new ProjectsConfigDbContext(options);
-                InitializerChecks.AssertExactMigrationHistory(
-                    context.Database.GetMigrations().ToArray(),
-                    (await context.Database.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false)).ToArray(),
-                    service.Service);
+                await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+                await AssertProjectsMigrationHistoryAsync(connection, service, cancellationToken).ConfigureAwait(false);
                 break;
             }
             case "environment":
@@ -245,7 +344,7 @@ internal static class P1PostgresContinuation
         }
     }
 
-    /// <summary>Requires a service schema to contain only the planned objects, all owned by the operator.</summary>
+    /// <summary>Requires a service schema to contain only the planned objects, all owned by the expected owner.</summary>
     internal static async Task AssertOwnedObjectsAsync(
         NpgsqlConnection connection,
         ServicePlan service,
@@ -266,7 +365,14 @@ internal static class P1PostgresContinuation
               AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_proc p
                               WHERE p.pronamespace = n.oid AND p.proowner <> n.nspowner)
               AND NOT EXISTS (SELECT 1 FROM unnest(@functions) AS required(signature)
-                              WHERE pg_catalog.to_regprocedure(required.signature) IS NULL)
+                              WHERE NOT EXISTS (
+                                  SELECT 1 FROM pg_catalog.pg_proc p
+                                  WHERE p.pronamespace = n.oid
+                                    AND format('%I(%s)', p.proname, coalesce((
+                                        SELECT string_agg(pg_catalog.format_type(argument.type_oid, NULL),
+                                            ', ' ORDER BY argument.ordinality)
+                                        FROM unnest(p.proargtypes) WITH ORDINALITY
+                                            AS argument(type_oid, ordinality)), '')) = required.signature))
             FROM pg_catalog.pg_namespace n WHERE n.nspname = @schema
             """, connection);
         query.Parameters.AddWithValue("owner", owner);
@@ -275,7 +381,7 @@ internal static class P1PostgresContinuation
             .Concat(service.OwnerOnlyTables).Order(StringComparer.Ordinal).ToArray());
         query.Parameters.AddWithValue("sequences", service.OwnerOnlySequences.Order(StringComparer.Ordinal).ToArray());
         query.Parameters.AddWithValue("functions",
-            service.Functions.Select(item => $"{service.Schema}.{item.Signature}").ToArray());
+            service.Functions.Select(item => item.Signature).ToArray());
         if (await query.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
             throw new InvalidOperationException($"The {service.Service} schema contains unexpected or foreign-owned objects. No grants were applied.");
     }
@@ -333,10 +439,28 @@ internal static class P1PostgresContinuation
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand("""
-            SELECT pg_catalog.pg_get_serial_sequence(@table, 'revision') = @sequence
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_catalog.pg_class AS sequence
+                JOIN pg_catalog.pg_namespace AS sequence_schema ON sequence_schema.oid = sequence.relnamespace
+                JOIN pg_catalog.pg_depend AS dependency
+                  ON dependency.classid = 'pg_catalog.pg_class'::pg_catalog.regclass
+                 AND dependency.objid = sequence.oid
+                 AND dependency.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
+                 AND dependency.deptype IN ('a', 'i')
+                JOIN pg_catalog.pg_class AS relation ON relation.oid = dependency.refobjid
+                JOIN pg_catalog.pg_namespace AS relation_schema ON relation_schema.oid = relation.relnamespace
+                JOIN pg_catalog.pg_attribute AS attribute
+                  ON attribute.attrelid = relation.oid
+                 AND attribute.attnum = dependency.refobjsubid
+                WHERE sequence.relkind = 'S'
+                  AND sequence_schema.nspname = @schema
+                  AND sequence.relname = 'platform_runtime_revisions_revision_seq'
+                  AND relation_schema.nspname = @schema
+                  AND relation.relname = 'platform_runtime_revisions'
+                  AND attribute.attname = 'revision')
             """, connection);
-        command.Parameters.AddWithValue("table", $"{schema}.platform_runtime_revisions");
-        command.Parameters.AddWithValue("sequence", $"{schema}.platform_runtime_revisions_revision_seq");
+        command.Parameters.AddWithValue("schema", schema);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
             throw new InvalidOperationException("The Projects identity sequence is not attached to the exact source column.");
     }
@@ -408,8 +532,11 @@ internal static class P1PostgresContinuation
                 SELECT NOT EXISTS (
                     SELECT 1
                     FROM unnest(@tables) AS table_name(name)
+                    JOIN pg_catalog.pg_namespace AS namespace ON namespace.nspname = @schema
+                    JOIN pg_catalog.pg_class AS relation
+                      ON relation.relnamespace = namespace.oid AND relation.relname = table_name.name
                     CROSS JOIN unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) AS privilege(name)
-                    WHERE pg_catalog.has_table_privilege(@role, @schema || '.' || table_name.name, privilege.name))
+                    WHERE pg_catalog.has_table_privilege(@role, relation.oid, privilege.name))
                 """, connection))
             {
                 tablesCommand.Parameters.AddWithValue("role", role);
@@ -423,16 +550,59 @@ internal static class P1PostgresContinuation
             {
                 foreach (var privilege in new[] { "USAGE", "SELECT", "UPDATE" })
                 {
-                    await using var sequenceCommand = new NpgsqlCommand(
-                        "SELECT pg_catalog.has_sequence_privilege(@role, @sequence, @privilege)", connection);
+                    await using var sequenceCommand = new NpgsqlCommand("""
+                        SELECT pg_catalog.has_sequence_privilege(@role, sequence.oid, @privilege)
+                        FROM pg_catalog.pg_class AS sequence
+                        JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = sequence.relnamespace
+                        WHERE namespace.nspname = @schema AND sequence.relname = @sequence
+                          AND sequence.relkind = 'S'
+                        """, connection);
                     sequenceCommand.Parameters.AddWithValue("role", role);
-                    sequenceCommand.Parameters.AddWithValue("sequence", $"{service.Schema}.{sequence}");
+                    sequenceCommand.Parameters.AddWithValue("schema", service.Schema);
+                    sequenceCommand.Parameters.AddWithValue("sequence", sequence);
                     sequenceCommand.Parameters.AddWithValue("privilege", privilege);
                     if (await sequenceCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true)
                         throw new InvalidOperationException($"Runtime role {role} already has sequence authority on {service.Schema}.{sequence}.");
                 }
             }
         }
+    }
+
+    private static async Task AssertNoRuntimeFunctionPrivilegesAsync(
+        NpgsqlConnection connection,
+        ServicePlan service,
+        string[] runtimeRoles,
+        CancellationToken cancellationToken)
+    {
+        if (runtimeRoles.Length == 0) return;
+        await using var command = new NpgsqlCommand("""
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM unnest(@roles) AS runtime(role_name)
+                CROSS JOIN pg_catalog.pg_proc AS p
+                JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = p.pronamespace
+                WHERE namespace.nspname = @schema
+                  AND pg_catalog.has_function_privilege(runtime.role_name, p.oid, 'EXECUTE'))
+            """, connection);
+        command.Parameters.AddWithValue("roles", runtimeRoles);
+        command.Parameters.AddWithValue("schema", service.Schema);
+        if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+            throw new InvalidOperationException(
+                $"A non-Projects runtime role has unexpected EXECUTE privileges on {service.Schema}.");
+    }
+
+    private static async Task<uint> ReadRoleOidAsync(
+        NpgsqlConnection connection,
+        string role,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @role", connection);
+        command.Parameters.AddWithValue("role", role);
+        var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return result is uint oid
+            ? oid
+            : throw new InvalidOperationException($"The dedicated Projects & Config migration owner {role} is missing.");
     }
 
     /// <summary>Checks every planned function grant for each runtime role.</summary>
@@ -486,6 +656,117 @@ internal static class P1PostgresContinuation
             ?? throw new InvalidOperationException("The Projects function ACL readback is missing.");
     }
 
+    private static async Task AssertProjectsMigrationHistoryAsync(
+        NpgsqlConnection connection,
+        ServicePlan service,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var temporaryMembership = !await CanAssumeProjectsMigrationOwnerAsync(
+                connection, transaction, cancellationToken).ConfigureAwait(false);
+            if (temporaryMembership)
+            {
+                if (await HasDirectMigrationOwnerMembershipAsync(connection, transaction, cancellationToken)
+                        .ConfigureAwait(false))
+                    throw new InvalidOperationException(
+                        "The operator has a Projects migration-owner membership without SET permission; reconcile it before verification.");
+                try
+                {
+                    await ExecuteAsync(connection, transaction,
+                        $"GRANT {InitializerChecks.Quote(ProjectsConfigMigrationOwner)} TO CURRENT_USER WITH INHERIT FALSE, SET TRUE",
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (PostgresException error) when (error.SqlState == PostgresErrorCodes.InsufficientPrivilege)
+                {
+                    throw new InvalidOperationException(
+                        "The operator must have SET permission on the dedicated Projects migration role, or be able to grant temporary SET membership, to verify Projects migration history.",
+                        error);
+                }
+            }
+            await ExecuteAsync(connection, transaction,
+                $"SET LOCAL ROLE {InitializerChecks.Quote(ProjectsConfigMigrationOwner)}", cancellationToken)
+                .ConfigureAwait(false);
+            await using (var identity = new NpgsqlCommand(
+                "SELECT current_user = @owner", connection, transaction))
+            {
+                identity.Parameters.AddWithValue("owner", ProjectsConfigMigrationOwner);
+                if (await identity.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+                    throw new InvalidOperationException("Projects migration history must be read as its dedicated owner.");
+            }
+
+            var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+                .UseNpgsql(connection, npgsql =>
+                    npgsql.MigrationsHistoryTable("__ef_migrations_history", service.Schema))
+                .Options;
+            await using (var context = new ProjectsConfigDbContext(options))
+            {
+                await context.Database.UseTransactionAsync(transaction, cancellationToken).ConfigureAwait(false);
+                InitializerChecks.AssertExactMigrationHistory(
+                    context.Database.GetMigrations().ToArray(),
+                    (await context.Database.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false)).ToArray(),
+                    service.Service);
+            }
+
+            await ExecuteAsync(connection, transaction, "RESET ROLE", cancellationToken).ConfigureAwait(false);
+            if (temporaryMembership)
+                await ExecuteAsync(connection, transaction,
+                    $"REVOKE {InitializerChecks.Quote(ProjectsConfigMigrationOwner)} FROM CURRENT_USER",
+                    cancellationToken).ConfigureAwait(false);
+            await using (var membership = new NpgsqlCommand("""
+                SELECT CASE WHEN @temporary
+                    THEN NOT EXISTS (
+                        SELECT 1 FROM pg_catalog.pg_auth_members
+                        WHERE roleid = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @owner)
+                          AND member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user))
+                    ELSE pg_catalog.pg_has_role(current_user, @owner, 'SET')
+                END
+                """, connection, transaction))
+            {
+                membership.Parameters.AddWithValue("owner", ProjectsConfigMigrationOwner);
+                membership.Parameters.AddWithValue("temporary", temporaryMembership);
+                if (await membership.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+                    throw new InvalidOperationException("Projects migration-owner membership changed unexpectedly during history verification.");
+            }
+            await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            if (transaction.Connection is not null)
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async Task<bool> HasDirectMigrationOwnerMembershipAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("""
+            SELECT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_auth_members
+                WHERE roleid = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @owner)
+                  AND member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user))
+            """, connection, transaction);
+        command.Parameters.AddWithValue("owner", ProjectsConfigMigrationOwner);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
+    }
+
+    private static async Task<bool> CanAssumeProjectsMigrationOwnerAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("""
+            SELECT NOT (SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname = current_user)
+               AND pg_catalog.pg_has_role(current_user, @owner, 'SET')
+            """, connection, transaction);
+        command.Parameters.AddWithValue("owner", ProjectsConfigMigrationOwner);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
+    }
+
     /// <summary>Executes one SQL statement on an existing connection without changing its transaction scope.</summary>
     private static async Task ExecuteAsync(
         NpgsqlConnection connection,
@@ -493,6 +774,16 @@ internal static class P1PostgresContinuation
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task ExecuteAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string sql,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 }

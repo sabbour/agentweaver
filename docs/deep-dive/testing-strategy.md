@@ -62,6 +62,10 @@ reproduce SQLSTATE `42501` on migration history, verify the production
 migration/grant path, repair a missing grant on a no-pending-migrations rerun,
 and reject history writes. They also confirm that read-only verification
 does not repair missing grants. These cases do not change live permissions.
+Foundation Probe's continuation PostgreSQL suite also exercises fresh
+Projects initialization under the dedicated owner, refusal before writes when
+the operator cannot assume it, and transaction rollback of the schema and
+temporary membership when grant reconciliation fails.
 
 The Orchestrator store suites prove that the reviewed migration plan applies
 032 with the rest of the Core catalog, preserves its first-applied coverage

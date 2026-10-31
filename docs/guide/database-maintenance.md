@@ -365,11 +365,12 @@ npm run db:maintenance -- --release-lock <run-id>
 
 These changes need their own review.
 
-After the ownership handover, the operator no longer owns the P1 schemas. The
-`--inspect` and `--apply-pending-migrations` modes of
-`bootstrap-p1-postgres.mjs` expect operator ownership, so use this runner for
-later P1 migrations instead. Projects & Config runtime grants are reconciled
-by its schema-owner migration Job after EF migrations; this P1 operator runner
+After the ownership handover, the operator no longer owns the P1 schemas.
+`--apply-pending-migrations` of `bootstrap-p1-postgres.mjs` is limited to
+operator-owned P1 schemas, so use this runner for later P1 migrations instead.
+Its read-only `--inspect` mode reports live ownership and grants without
+changing them. Projects & Config runtime grants are reconciled by its
+dedicated-owner migration Job after EF migrations; the P1 operator initializer
 does not grant access in that schema.
 
 ## Related information

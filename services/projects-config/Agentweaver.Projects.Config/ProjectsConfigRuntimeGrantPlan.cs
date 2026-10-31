@@ -16,8 +16,17 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
 
     internal static async Task ApplyAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
     {
-        var plan = Plan.Value;
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await ApplyAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static async Task ApplyAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var plan = Plan.Value;
         await VerifyMigrationOwnerAsync(connection, transaction, plan, cancellationToken).ConfigureAwait(false);
 
         await ExecuteAsync(connection, transaction,
@@ -43,9 +52,17 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
                 await ExecuteAsync(connection, transaction,
                     $"GRANT EXECUTE ON FUNCTION {signature} TO {Quote(plan.Role)}", cancellationToken).ConfigureAwait(false);
         }
-
         await VerifyRuntimeGrantsAsync(connection, transaction, plan, cancellationToken).ConfigureAwait(false);
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static async Task VerifyRuntimeGrantsAsync(
+        NpgsqlConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var plan = Plan.Value;
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await VerifyRuntimeGrantsAsync(connection, transaction, plan, cancellationToken).ConfigureAwait(false);
+        await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task VerifyMigrationOwnerAsync(
@@ -136,8 +153,13 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
             var expected = table.Privileges.ToHashSet(StringComparer.Ordinal);
             foreach (var privilege in TablePrivileges)
                 await AssertPrivilegeAsync(connection, transaction,
-                    "SELECT has_table_privilege(@role, @relation, @privilege)",
-                    plan.Role, $"{Quote(plan.Schema)}.{Quote(table.Name)}", privilege,
+                    """
+                    SELECT pg_catalog.has_table_privilege(@role, relation.oid, @privilege)
+                    FROM pg_catalog.pg_class AS relation
+                    JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+                    WHERE namespace.nspname = @schema AND relation.relname = @relation
+                    """,
+                    plan.Role, plan.Schema, table.Name, privilege,
                     expected.Contains(privilege), cancellationToken).ConfigureAwait(false);
 
             var columns = await ReadColumnsAsync(connection, transaction, plan.Schema, table.Name, cancellationToken)
@@ -149,8 +171,13 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
                     var expectedColumn = expected.Contains(privilege) ||
                         (privilege == "UPDATE" && updateColumns.Contains(column));
                     await AssertPrivilegeAsync(connection, transaction,
-                        "SELECT has_column_privilege(@role, @relation, @column, @privilege)",
-                        plan.Role, $"{Quote(plan.Schema)}.{Quote(table.Name)}", privilege,
+                        """
+                        SELECT pg_catalog.has_column_privilege(@role, relation.oid, @column, @privilege)
+                        FROM pg_catalog.pg_class AS relation
+                        JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+                        WHERE namespace.nspname = @schema AND relation.relname = @relation
+                        """,
+                        plan.Role, plan.Schema, table.Name, privilege,
                         expectedColumn, cancellationToken, column).ConfigureAwait(false);
                 }
         }
@@ -158,34 +185,82 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
         foreach (var table in plan.OwnerOnlyTables)
             foreach (var privilege in TablePrivileges)
                 await AssertPrivilegeAsync(connection, transaction,
-                    "SELECT has_table_privilege(@role, @relation, @privilege)",
-                    plan.Role, $"{Quote(plan.Schema)}.{Quote(table)}", privilege, false, cancellationToken)
+                    """
+                    SELECT pg_catalog.has_table_privilege(@role, relation.oid, @privilege)
+                    FROM pg_catalog.pg_class AS relation
+                    JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+                    WHERE namespace.nspname = @schema AND relation.relname = @relation
+                    """,
+                    plan.Role, plan.Schema, table, privilege, false, cancellationToken)
                     .ConfigureAwait(false);
+
+        await using (var columnAcl = new NpgsqlCommand("""
+            SELECT format('%I.%I %s to %s', relation.relname, attribute.attname,
+                acl.privilege_type,
+                CASE WHEN acl.grantee = 0 THEN 'PUBLIC'
+                     ELSE coalesce(pg_catalog.quote_ident(grantee.rolname), acl.grantee::text) END)
+            FROM pg_catalog.pg_class AS relation
+            JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+            JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = relation.oid
+            CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) AS acl
+            LEFT JOIN pg_catalog.pg_roles AS grantee ON grantee.oid = acl.grantee
+            WHERE namespace.nspname = @schema
+              AND relation.relname = ANY(@tables)
+              AND attribute.attnum > 0 AND NOT attribute.attisdropped
+              AND acl.grantee <> relation.relowner
+            ORDER BY relation.relname, attribute.attname, acl.grantee, acl.privilege_type
+            LIMIT 1
+            """, connection, transaction))
+        {
+            columnAcl.Parameters.AddWithValue("schema", plan.Schema);
+            columnAcl.Parameters.AddWithValue("tables", plan.OwnerOnlyTables);
+            if (await columnAcl.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is string unexpected)
+                throw new InvalidOperationException(
+                    $"The owner-only Projects & Config receipt has an unexpected column privilege ({unexpected}); no grants were committed.");
+        }
 
         foreach (var sequence in plan.OwnerOnlySequences)
             foreach (var privilege in new[] { "USAGE", "SELECT", "UPDATE" })
                 await AssertPrivilegeAsync(connection, transaction,
-                    "SELECT has_sequence_privilege(@role, @relation, @privilege)",
-                    plan.Role, $"{Quote(plan.Schema)}.{Quote(sequence)}", privilege, false, cancellationToken)
+                    """
+                    SELECT pg_catalog.has_sequence_privilege(@role, relation.oid, @privilege)
+                    FROM pg_catalog.pg_class AS relation
+                    JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+                    WHERE namespace.nspname = @schema AND relation.relname = @relation
+                      AND relation.relkind = 'S'
+                    """,
+                    plan.Role, plan.Schema, sequence, privilege, false, cancellationToken)
                     .ConfigureAwait(false);
 
         foreach (var function in plan.Functions)
         {
             var signature = $"{Quote(plan.Schema)}.{function.Signature}";
             await AssertPrivilegeAsync(connection, transaction,
-                "SELECT has_function_privilege(@role, @relation, 'EXECUTE')",
-                plan.Role, signature, null, function.Execute, cancellationToken).ConfigureAwait(false);
+                """
+                SELECT pg_catalog.has_function_privilege(@role, routine.oid, 'EXECUTE')
+                FROM pg_catalog.pg_proc AS routine
+                JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = routine.pronamespace
+                WHERE namespace.nspname = @schema
+                  AND format('%I(%s)', routine.proname,
+                      pg_catalog.oidvectortypes(routine.proargtypes)) = @relation
+                """,
+                plan.Role, plan.Schema, function.Signature, null, function.Execute, cancellationToken)
+                .ConfigureAwait(false);
             await using var publicGrant = new NpgsqlCommand("""
                 SELECT NOT EXISTS (
                     SELECT 1
                     FROM pg_catalog.pg_proc AS p
+                    JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = p.pronamespace
                     CROSS JOIN LATERAL pg_catalog.aclexplode(
                         coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) AS acl
-                    WHERE p.oid = pg_catalog.to_regprocedure(@signature)
+                    WHERE namespace.nspname = @schema
+                      AND format('%I(%s)', p.proname,
+                          pg_catalog.oidvectortypes(p.proargtypes)) = @signature
                       AND acl.grantee = 0 AND acl.privilege_type = 'EXECUTE'
                 )
                 """, connection, transaction);
-            publicGrant.Parameters.AddWithValue("signature", signature);
+            publicGrant.Parameters.AddWithValue("schema", plan.Schema);
+            publicGrant.Parameters.AddWithValue("signature", function.Signature);
             if (await publicGrant.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
                 throw new InvalidOperationException(
                     $"PUBLIC can execute the Projects & Config function {function.Signature}; no grants were committed.");
@@ -197,6 +272,7 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
         NpgsqlTransaction transaction,
         string sql,
         string role,
+        string schema,
         string relation,
         string? privilege,
         bool expected,
@@ -205,13 +281,14 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
     {
         await using var command = new NpgsqlCommand(sql, connection, transaction);
         command.Parameters.AddWithValue("role", role);
+        command.Parameters.AddWithValue("schema", schema);
         command.Parameters.AddWithValue("relation", relation);
         if (privilege is not null) command.Parameters.AddWithValue("privilege", privilege);
         if (column is not null) command.Parameters.AddWithValue("column", column);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not bool actual ||
             actual != expected)
             throw new InvalidOperationException(
-                $"The Projects & Config runtime grants differ from the reviewed plan for {relation}; no grants were committed.");
+                $"The Projects & Config runtime grants differ from the reviewed plan for {schema}.{relation} {privilege ?? column ?? "EXECUTE"}; no grants were committed.");
     }
 
     private static async Task<string[]> ReadColumnsAsync(

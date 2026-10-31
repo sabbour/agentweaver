@@ -48,6 +48,9 @@ creation authorization and does not establish cross-database atomicity. P1
 tooling is not switched to this operation by this source change. See [P1
 project setup receipt](./runtime-configuration.md#p1-project-setup-receipt)
 for the migration, grant-catalog, and operator-command boundaries.
+Fresh P1 initialization creates and migrates the Projects schema as its
+dedicated owner and reconciles the reviewed runtime grants in one transaction;
+the operator's role-assumption permission is checked before any role creation.
 
 ## P1 Environment creation binding
 
