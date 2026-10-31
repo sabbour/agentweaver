@@ -41,28 +41,43 @@ Examples:
    gh issue edit {number} --add-label "status:in-progress"
    ```
 
-3. **Do the work.** Make changes, write tests, and commit the completed issue on its own
-   branch before accepting another issue.
+3. **Do the work.** Make changes and write tests on the issue branch.
 
-4. **Run bounded independent review, then push and open a draft PR:**
+4. **Commit, push, and open the draft PR before admission evidence is collected:**
    ```bash
    git push -u origin squad/{issue-number}-{slug}
    gh pr create --base dev --title "{description}" --body "Closes #{issue-number}" --draft
    ```
-   Mark the PR ready only after required validation and independent review/admission have
-   completed with no unresolved blocker:
+   Run exact validations through `scripts/ci/squad-validation-evidence.mjs` from the
+   assigned absolute worktree and exact candidate SHA. Collect structured phase-aware
+   review outputs. After candidate validations finish, materialize and read-validate the
+   v3 ledger through launcher and policy bytes extracted by Git object ID from a freshly
+   fetched exact `origin/dev` commit. Run the preflight
+   while the PR is still draft. Only then may the PR
+   move to ready:
    ```bash
    gh pr ready <number>
    gh pr merge <number> --squash --match-head-commit <validated-sha>
    ```
-   Before ready and immediately before this command, Ralph fetches `origin/dev`, gets
-   the live PR head SHA, and runs
-   `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> --head-sha <live-head-sha>`.
-   The preflight uses the pinned Squad SDK to resolve declared external state and checks
-   the coordinator-owned findings ledger. Ralph records the returned
+   Before ready and again immediately before merge, Ralph fetches `origin/dev`, gets the
+   live PR head and base SHAs, extracts
+   `scripts/ci/squad-admission-launcher.mjs` from that base commit into a private temporary
+   directory, and runs the documented `materialize` or `preflight` command with repository,
+   PR number, absolute worktree, head SHA, base ref/SHA, team root, backend, and materialize
+   input path. Never execute candidate checkout admission code. The launcher refetches and
+   binds the base, verifies and records every source blob ID and digest plus the aggregate
+   digest, and cleans its ephemeral modules in `finally`. The
+   preflight uses the explicit authoritative state backend and checks
+   the coordinator-owned v3 findings ledger. Missing, legacy, incomplete, or provenance-
+   mismatched evidence blocks admission. Ralph records the returned
    `<validated-sha>` and uses it immediately with `--match-head-commit`. Coordinator/Ralph
-   and authoritative external Squad state are trusted operational components; GitHub is
+   invokes the trusted exported functions with the invocation-owned adapter for non-local
+   backends; no filesystem fallback is permitted. Coordinator/Ralph and authoritative
+   external Squad state are trusted operational components; GitHub is
    evidence and CI only, and repository code is not an adversarially immutable boundary.
+   PR #1504 alone bootstraps through the pre-existing v1/manual exact-head procedure;
+   after merge, every invocation uses the exact fetched `dev` bytes and v3 is mandatory
+   for every subsequent PR. There is no persistent runtime installation.
    Confirm the PR reports `MERGED`, `mergedAt`, and merge SHA before dispatching
    dependent work.
 
