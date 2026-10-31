@@ -58,13 +58,8 @@ they are not Agentweaver sign-in providers.
    - Before merge, the branch must be current with `dev` and all blocking CI must rerun
      successfully. GitHub enforces this through “require branches to be up to date
      before merging.”
-   - Before ready and immediately before merge, Ralph fetches `origin/dev`, gets the
-     live PR `headRefOid`, and runs the external-state preflight with that SHA:
-     `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number>
-     --head-sha <live-head-sha>`. The preflight resolves the declared external Squad
-     state with the pinned Squad SDK and validates its coordinator-owned findings ledger.
-     Ralph records the returned `<validated-sha>` and merges manually with
-     `gh pr merge <number> --squash --match-head-commit <validated-sha>`.
+   - Before merge, complete independent review and merge manually with
+     `gh pr merge <number> --squash --match-head-commit <head-sha>`.
      GitHub automatically deletes the source branch after merge.
    - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
      soaked release promotion or an audited emergency hotfix only. A release promotion
@@ -98,8 +93,8 @@ Bad: “feat: add export.” It repeats a commit title without explaining the us
 The active topology is `dev → release/vX.Y.Z → main`:
 
 - **`dev`** is the default, protected integration branch. Normal PRs target it and use
-  required PRs, blocking CI, an external-state exact-head admission preflight, manual squash merge,
-  and automatic source branch deletion.
+  required PRs, blocking CI, independent review, manual squash merge, and automatic
+  source branch deletion.
 - **`release/vX.Y.Z`** is an ephemeral release-candidate/soak branch cut from a green
   `dev` SHA. Stabilization fixes land there by PR and are immediately forward-ported to
   `dev`.
@@ -231,12 +226,7 @@ web, docs, and changeset jobs on a branch that is up to date with `dev`. Path-co
 non-.NET jobs count as passing when skipped; the named .NET shard jobs intentionally run
 on every `dev` PR so GitHub emits each required context. The GitHub ruleset described in
 [`.github/dev-branch-protection.md`](.github/dev-branch-protection.md) provides ordinary
-branch and CI protection. **Squad/Ralph external-state preflight owns admission**:
-the Coordinator/Ralph process and authoritative external Squad state are trusted
-operational components, while GitHub supplies PR evidence and CI only. Repository code
-does not create an adversarially immutable execution boundary. The coordinator must
-validate the closed findings policy and ledger state at the live head before manual
-squash merge.
+branch and CI protection. Independent review is required before manual squash merge.
 `Changeset advisory` now fails the build (not just a warning) when a release-relevant
 change has no changeset and no `changeset:not-required` exemption.
 
@@ -306,9 +296,9 @@ to build the tag images before it creates the GitHub Release.
 - **Make sure the blocking CI jobs are green** and that you have not introduced new lint
   findings before asking for review.
 - **Update, retest, then merge manually:** If another PR reaches `dev` first,
-  update from `origin/dev`, resolve conflicts, rerun relevant tests/CI and the
-  external-state preflight, then use
-  `gh pr merge <number> --squash --match-head-commit <validated-sha>`.
+  update from `origin/dev`, resolve conflicts, rerun relevant tests/CI, complete
+  independent review, then use
+  `gh pr merge <number> --squash --match-head-commit <head-sha>`.
 
 ### Target release milestone
 
@@ -353,7 +343,7 @@ Rules:
 Fork the repository on GitHub, clone **your fork**, add the canonical repository as
 the `upstream` remote, and create your short-lived branch from an up-to-date
 `upstream/dev`. Open the PR from that branch to `dev`; it follows the same CI,
-up-to-date, review, external-state preflight, and manual squash-merge rules as every
+up-to-date, review, and manual squash-merge rules as every
 other contribution.
 
 Fork PRs do not receive repository secrets: CI uses the `pull_request` trigger (not
