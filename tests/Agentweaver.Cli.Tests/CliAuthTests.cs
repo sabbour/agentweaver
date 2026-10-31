@@ -24,6 +24,8 @@ public sealed class CliAuthTests
         var reordered = CliAuthIdentity.Create(new CliIdentity(target, ["offline_access", "openid", "api.read"]));
         var noSlashIssuer = CliAuthIdentity.Create(new CliIdentity(
             target with { Issuer = new Uri("https://broker.test") }, Scopes));
+        var unboundOrchestrator = CliAuthIdentity.Create(new CliIdentity(
+            target, ["openid", "api.read", "offline_access", "projects.orchestrator"]));
         var run = CliAuthIdentity.Create(new CliIdentity(
             target, ["openid", "api.read", "offline_access", "projects.orchestrator"], "project-a", "run-a"));
         var otherRun = CliAuthIdentity.Create(new CliIdentity(
@@ -32,7 +34,9 @@ public sealed class CliAuthTests
         Assert.Equal(unbound.Account, reordered.Account);
         Assert.Equal(unbound.Account, noSlashIssuer.Account);
         Assert.Equal(Issuer, noSlashIssuer.Issuer);
+        Assert.NotEqual(unbound.Account, unboundOrchestrator.Account);
         Assert.NotEqual(unbound.Account, run.Account);
+        Assert.NotEqual(unboundOrchestrator.Account, run.Account);
         Assert.NotEqual(run.Account, otherRun.Account);
     }
 
@@ -49,6 +53,9 @@ public sealed class CliAuthTests
         Assert.Throws<ArgumentException>(() =>
             CliAuthIdentity.Create(new CliIdentity(
                 target, ["openid", "api.read", "offline_access", "projects.admin"], "project-a", "run-a")));
+        Assert.Throws<ArgumentException>(() =>
+            CliAuthIdentity.Create(new CliIdentity(
+                target, ["openid", "api.read", "offline_access", "projects.admin", "projects.orchestrator"])));
     }
 
     [Fact]
@@ -143,9 +150,11 @@ public sealed class CliAuthTests
             using var http = new HttpClient(new DelegateHandler((_, _) =>
                 throw new InvalidOperationException("No Broker request is expected.")));
             using var service = CreateService(http, vault, browser, directory);
+            var identity = new CliIdentity(
+                Target(), ["openid", "api.read", "offline_access", "projects.orchestrator"]);
 
             await Assert.ThrowsAsync<CliAuthNeedsLoginException>(() =>
-                service.GetBearerAsync(Identity(), InteractionPolicy.Never, CancellationToken.None));
+                service.GetBearerAsync(identity, InteractionPolicy.Never, CancellationToken.None));
 
             Assert.False(browser.WasOpened);
             Assert.Empty(vault.Values);

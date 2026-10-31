@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Agentweaver.Cli;
 using Agentweaver.Cli.Api;
+using Agentweaver.Cli.Auth;
 using Agentweaver.Gateway;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -701,6 +702,15 @@ public sealed class ApiAcceptanceRunnerTests
 
         public Task<string> GetBearerAsync(CliIdentity identity, InteractionPolicy interaction, CancellationToken ct)
         {
+            // The controlled Gateway uses loopback HTTP; validate scopes and bindings against production HTTPS origins.
+            _ = CliAuthIdentity.Create(identity with
+            {
+                Target = identity.Target with
+                {
+                    Gateway = new Uri("https://gateway.test/"),
+                    Issuer = new Uri("https://broker.test/"),
+                },
+            });
             string actor = identity.Target.TenantId == "tenant-denied" ? "denied" : "owner";
             string binding = identity.ProjectId is null ? "unbound" : "project-bound";
             string scopes = string.Join(',', identity.Scopes.Order(StringComparer.Ordinal));
