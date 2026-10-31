@@ -39,6 +39,7 @@ internal static class AgentweaverApiTools
         "coordinator_children_get",
         "orchestration_topology",
         "agent_message_send",
+        "agent_message_retry",
         "agent_message_list",
         "agent_message_get",
         "agent_message_claim",
@@ -304,6 +305,17 @@ internal static class AgentweaverApiTools
                     new { recipient, target_run_id, content, idempotency_key, reply_to_id, reference_kind, reference_id },
                     ct).ConfigureAwait(false),
             "agent_message_send", "Persist a direct message to one teammate's active run. Retry with the same idempotency key.");
+
+        yield return AIFunctionFactory.Create(
+            async (
+                [Description("Expired or undeliverable message ID")] string message_id,
+                [Description("New retry-stable idempotency key")] string idempotency_key,
+                [Description("Optional replacement active run ID")] string? target_run_id = null,
+                CancellationToken ct = default) =>
+                await PostMessageAsync(http,
+                    $"{messageRoute}/{Uri.EscapeDataString(message_id)}/retry",
+                    new { idempotency_key, target_run_id }, ct).ConfigureAwait(false),
+            "agent_message_retry", "Retry your failed addressed message with a new key and optional active run.");
 
         yield return AIFunctionFactory.Create(
             async (CancellationToken ct = default) =>

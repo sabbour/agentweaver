@@ -11,13 +11,15 @@ import {
   it,
   vi,
 } from 'vitest';
-import type { AgentMemoryDto, AgentMemoryRevisionDto, DecisionDto, DecisionInboxEntryDto, SessionHistoryDto } from '../api/types';
+import type { AddressedMessageDto, AgentMemoryDto, AgentMemoryRevisionDto, DecisionDto, DecisionInboxEntryDto, SessionHistoryDto } from '../api/types';
 import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getDecisions: vi.fn(),
     getDecisionsInbox: vi.fn(),
     getAddressedMessages: vi.fn(),
+    sendAddressedMessage: vi.fn(),
+    retryAddressedMessage: vi.fn(),
     getProjectMemory: vi.fn(),
     getProjectSessions: vi.fn(),
     mergeDecisionInboxEntry: vi.fn(),
@@ -114,25 +116,35 @@ function makeNumberedPending(id: string, index: number): DecisionInboxEntryDto {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'stable-key') });
 });
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
+
+function addressedMessage(over: Partial<AddressedMessageDto> = {}): AddressedMessageDto {
+  return {
+    id: 'msg-1', projectId: 'proj-001', sender: 'Operator', recipient: 'Trinity',
+    sourceRunId: null, targetRunId: 'run-b', threadId: 'thread-1',
+    replyToId: null, referenceKind: null, referenceId: null,
+    idempotencyKey: 'key-1', content: 'Can you check the result?',
+    status: 'accepted', createdAt: '2026-09-27T10:00:00Z',
+    expiresAt: '2026-09-28T10:00:00Z', deliveredAt: null,
+    acknowledgedAt: null, failureReason: null,
+    ...over,
+  };
+}
 
 describe('MemoriesPage — Addressed messages tab', () => {
   it('shows delivery correlation and errors without treating acknowledgment as a decision', async () => {
     vi.mocked(apiClient.getDecisions).mockResolvedValue(page([]));
     vi.mocked(apiClient.getDecisionsInbox).mockResolvedValue(page([]));
-    vi.mocked(apiClient.getAddressedMessages).mockResolvedValue([{
-      id: 'msg-1', projectId: 'proj-001', sender: 'Neo', recipient: 'Trinity',
-      sourceRunId: 'run-a', targetRunId: 'run-b', threadId: 'thread-1',
-      replyToId: null, referenceKind: 'backlog_task', referenceId: 'task-1',
-      idempotencyKey: 'key-1', content: 'Can you check the result?',
-      status: 'undeliverable', createdAt: '2026-09-27T10:00:00Z',
-      expiresAt: '2026-09-28T10:00:00Z', deliveredAt: null,
-      acknowledgedAt: null, failureReason: 'target_cancelled',
-    }]);
+    vi.mocked(apiClient.getAddressedMessages).mockResolvedValue([addressedMessage({
+      sender: 'Neo', sourceRunId: 'run-a', status: 'undeliverable',
+      referenceKind: 'backlog_task', referenceId: 'task-1', failureReason: 'target_cancelled',
+    })]);
 
     renderPage();
     fireEvent.click(screen.getByRole('tab', { name: 'Addressed messages' }));
@@ -142,6 +154,61 @@ describe('MemoriesPage — Addressed messages tab', () => {
     expect(screen.getByText(/Thread thread-1/)).toBeTruthy();
     expect(screen.getByText(/backlog_task: task-1/)).toBeTruthy();
     expect(apiClient.getAddressedMessages).toHaveBeenCalledWith('proj-001');
+  });
+
+  it('sends with a stable key across a failed response and refreshes after success', async () => {
+    vi.mocked(apiClient.getAddressedMessages).mockResolvedValue([]);
+    vi.mocked(apiClient.sendAddressedMessage)
+      .mockRejectedValueOnce(new Error('Connection lost'))
+      .mockResolvedValueOnce(addressedMessage());
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Addressed messages' }));
+    await screen.findByText('No addressed messages');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Recipient agent' }), { target: { value: 'Trinity' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Target run ID' }), { target: { value: 'run-b' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Check result' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await screen.findByText('Connection lost');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await waitFor(() => expect(apiClient.sendAddressedMessage).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(apiClient.sendAddressedMessage).mock.calls.map((call) => call[1])).toEqual([
+      { recipient: 'Trinity', target_run_id: 'run-b', content: 'Check result', idempotency_key: 'stable-key' },
+      { recipient: 'Trinity', target_run_id: 'run-b', content: 'Check result', idempotency_key: 'stable-key' },
+    ]);
+  });
+
+  it('replies in the same thread and preserves correlation', async () => {
+    vi.mocked(apiClient.getAddressedMessages).mockResolvedValue([addressedMessage({ status: 'acknowledged' })]);
+    vi.mocked(apiClient.sendAddressedMessage).mockResolvedValue(addressedMessage({ id: 'reply-1', replyToId: 'msg-1' }));
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Addressed messages' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Reply' }));
+    expect(screen.getByText(/Replying to msg-1 in thread thread-1/)).toBeTruthy();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Following up' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send reply' }));
+    await waitFor(() => expect(apiClient.sendAddressedMessage).toHaveBeenCalledWith('proj-001', {
+      recipient: 'Trinity', target_run_id: 'run-b', content: 'Following up',
+      idempotency_key: 'stable-key', reply_to_id: 'msg-1',
+    }));
+  });
+
+  it('retries an undeliverable message with a replacement run and stable key', async () => {
+    vi.mocked(apiClient.getAddressedMessages).mockResolvedValue([addressedMessage({
+      status: 'undeliverable', failureReason: 'target_cancelled',
+    })]);
+    vi.mocked(apiClient.retryAddressedMessage).mockRejectedValueOnce(new Error('Retry failed'))
+      .mockResolvedValueOnce(addressedMessage({ id: 'retry-1' }));
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Addressed messages' }));
+    fireEvent.change(await screen.findByRole('textbox', { name: /Replacement target run for msg-1/ }), { target: { value: 'run-c' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry delivery' }));
+    await screen.findByText('Retry failed');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry delivery' }));
+    await waitFor(() => expect(apiClient.retryAddressedMessage).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(apiClient.retryAddressedMessage).mock.calls.map((call) => call[2])).toEqual([
+      { idempotency_key: 'stable-key', target_run_id: 'run-c' },
+      { idempotency_key: 'stable-key', target_run_id: 'run-c' },
+    ]);
   });
 });
 

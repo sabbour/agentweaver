@@ -942,6 +942,18 @@ export class AgentweaverApiClient {
     );
   }
 
+  sendAddressedMessage(projectId: string, request: import('./types').SendAddressedMessageRequest): Promise<import('./types').AddressedMessageDto> {
+    return this.request<import('./types').AddressedMessageDto>(
+      'POST', `/projects/${encodeURIComponent(projectId)}/agent-messages`, request,
+    );
+  }
+
+  retryAddressedMessage(projectId: string, messageId: string, request: import('./types').RetryAddressedMessageRequest): Promise<import('./types').AddressedMessageDto> {
+    return this.request<import('./types').AddressedMessageDto>(
+      'POST', `/projects/${encodeURIComponent(projectId)}/agent-messages/${encodeURIComponent(messageId)}/retry`, request,
+    );
+  }
+
   getDecisionRevisions(
     projectId: string,
     decisionId: string,
