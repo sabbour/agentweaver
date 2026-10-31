@@ -37,55 +37,46 @@ not manual). It pushes ten images directly to GHCR as `sha-<40-character-commit>
 tags; the workflow summary lists each digest. There are no image archives,
 publication receipts, or source-claim gates.
 
-## Deploy workloads
+## Deploy workloads locally
 
-`.github/workflows/v1-deploy.yml` requires only `image_tag` and uses the
-`v1-db-maintenance` GitHub environment. The workflow must exist on the default
-branch (`dev`) to be dispatchable; dispatch the run on `v1`.
-
-Select a successful image run, confirm its `headSha` and the ten digests in
-its summary, then dispatch `sha-<headSha>`. The deploy workflow accepts a tag,
-not a digest list, and resolves the image digests at run time:
+The v1 image workflow automatically builds and pushes all ten images to GHCR
+as `sha-<40-character-commit>` tags. Find a successful run with the
+`v1-integration-images.yml` workflow and use its full `headSha` as the image
+tag. Workload deployment is an operator-run command from a machine with Azure
+CLI, `kubectl`, `kubelogin`, Docker, and Node.js 24:
 
 ```powershell
-gh run list --repo sabbour/agentweaver --workflow v1-integration-images.yml --branch v1 --limit 20
-gh run view <image-run-id> --repo sabbour/agentweaver --json status,conclusion,headBranch,headSha,url
-gh workflow run v1-deploy.yml --repo sabbour/agentweaver --ref v1 --raw-field image_tag=sha-<commit>
+az login
+az account set --subscription <approved-subscription>
+az account show --query "{subscriptionId:id,tenantId:tenantId}" --output table
+az aks get-credentials --resource-group agentweaver --name agentweaver-aks `
+  --subscription <approved-subscription>
+kubelogin convert-kubeconfig --login azurecli
+kubectl config current-context
+npm run deploy:kustomize -- --image-tag sha-<40-character-commit> --execute
 ```
 
-The `v1-db-maintenance` environment needs `AZURE_DB_MAINTENANCE_CLIENT_ID`.
-The one-time `npm run db:maintenance:setup -- --v1-deploy-only --execute`
-prepares deploy identity and namespace permissions; it does not change
-PostgreSQL ownership. The workflow checks its target and scoped permissions;
-it does not broaden them. Before first deploy, an authorized one-time handover
-must give the Projects & Config migration identity `CONNECT` and ownership
-only of `projects_config` and its planned objects. Its migration Job uses
-Workload Identity, not a per-release token. Normal deployment runs migrations
-and reviewed runtime-grant reconciliation before applying workloads.
+Confirm the Azure subscription, tenant, and Kubernetes context are the
+approved target before executing. The local Azure CLI identity must already
+have the required AKS and namespace permissions; the deployment does not
+grant access or provision Azure resources.
 
-If the one-time handover guard rejects unexpected role attributes or
-memberships, stop for an authorized operator to diagnose and correct the
-confirmed mismatch within the approved role policy. Retry only after it is
-verified; do not loosen the guard or broaden the role.
+The command resolves all ten GHCR tags to digests, runs the Broker, P1, and
+Projects & Config migration Jobs with runtime-grant reconciliation, renders
+the Kustomize overlay, applies namespaced resources, and waits for all nine
+Deployments. It excludes Namespace objects. A migration failure stops before
+the root workload apply. Earlier migrations or workload apply may have
+completed when a later step fails; inspect partial state and do not assume
+rollback. Before retrying a failed migration, have an authorized operator
+diagnose the cause and state. Verify schema compatibility before choosing an
+older image.
 
-The deploy job resolves all ten images to digests, runs Broker, P1, and
-Projects & Config migration Jobs, applies the namespaced Kustomize overlay,
-then waits for all nine Deployments. It excludes Namespace objects (no
-Pod Security policy changes). There are no publication receipts, archives,
-claim bundles, or deployment evidence gates. Monitor the actual run:
-
-```powershell
-gh run list --repo sabbour/agentweaver --workflow v1-deploy.yml --branch v1 --limit 10
-gh run watch <deploy-run-id> --repo sabbour/agentweaver --exit-status
-gh run view <deploy-run-id> --repo sabbour/agentweaver --log-failed
-```
-
-Earlier migrations or workload apply may have completed when a later step
-fails; inspect partial state and do not assume rollback. For deployment-only
-failures, rerun with the same published `image_tag`; rebuild only if build
-inputs changed. Before retrying a failed migration, have an authorized
-operator diagnose the cause and state. Verify schema compatibility before
-choosing an older image.
+The Projects & Config migration identity must already have `CONNECT` and
+ownership only of `projects_config` and its planned objects. Its migration
+Job uses Kubernetes Workload Identity, not a per-release token. The command
+checks the ServiceAccount annotation before creating a migration Job and
+fails closed if it is missing. See the [database maintenance guide](../docs/guide/database-maintenance.md)
+for the separate maintenance workflow and setup.
 
 See the [Azure deployment guide](../docs/guide/deploy-to-azure.md),
 [Kustomize guide](../deploy/k8s/README.md), and

@@ -22,7 +22,7 @@ for ConfigMap keys, defaults, and value sources.
 Select the approved cluster context and complete the environment-specific
 prerequisites:
 
-1. Select the immutable `sha-<commit>` tag produced by the v1 image workflow.
+1. Select the immutable `sha-<commit>` tag produced by the automatic v1 image workflow.
 2. Complete the workload runtime ConfigMaps and Projects & Config provider
    catalog. Follow the runtime configuration reference; do not put credentials
    or private keys in ConfigMaps.
@@ -65,9 +65,9 @@ The command resolves all ten tags to GHCR digests, runs the existing Broker
 and P1 migrations, runs Projects & Config migration, renders the root overlay,
 applies it to the selected `kubectl` context in namespace `agentweaver`, then
 waits for the nine Deployments. A migration failure stops before the root
-overlay is applied. The GitHub workflow
-`.github/workflows/v1-deploy.yml` prepares the approved context and invokes
-this command.
+overlay is applied. Run it from the operator machine after selecting the
+approved Azure CLI subscription and AKS kubeconfig context; it uses the local
+interactive Azure CLI identity, not a GitHub-hosted deployment identity.
 
 Projects & Config's runtime identity is DDL-restricted. The migration Job uses
 Kubernetes Workload Identity, not a token Secret. The one-time setup provisions

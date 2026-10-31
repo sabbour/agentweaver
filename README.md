@@ -28,7 +28,8 @@ Start with the [1.x documentation](docs/index.md). The site is organized as:
   [use the standalone CLI](docs/guide/cli.md) or
   [deploy to Azure](docs/guide/deploy-to-azure.md).
 - **Release workflows:** follow the [v1 release runbook](releases/README.md)
-  for package publication, container image builds, and Kubernetes deployment.
+  for package publication, automatic GHCR image builds, and local Kubernetes
+  deployment.
 - **Reference:** find every
   [runtime configuration setting](docs/reference/runtime-configuration.md),
   API route, event, and release contract.
@@ -50,8 +51,8 @@ These commands build source and test the release/deployment workflow
 contracts. They do not provision Azure, publish packages, or deploy
 Kubernetes workloads. See the
 [quickstart](docs/guide/quickstart.md) for local checks and the
-[deployment guide](docs/guide/deploy-to-azure.md) for the separately approved
-Azure workflow.
+[deployment guide](docs/guide/deploy-to-azure.md) for the separately approved,
+operator-run Azure deployment.
 
 ## Standalone CLI
 

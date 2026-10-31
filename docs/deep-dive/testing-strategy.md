@@ -23,7 +23,7 @@ surface journey does not prove every native execution boundary.
 | `scripts/coverage/` | Coverage collection and receipt guards |
 | `.github/workflows/v1-ci.yml` and `v1-docs-ci.yml` | Automatic source and documentation validation |
 | `.github/workflows/v1-integration-images.yml` | Direct GHCR image build and push |
-| `.github/workflows/v1-deploy.yml` and `scripts/release/deploy-kustomize.mjs` | Migration-first Kustomize apply and rollout checks |
+| `scripts/release/deploy-kustomize.mjs` | Local migration-first Kustomize apply and rollout checks |
 
 ## Choose the right test boundary
 
