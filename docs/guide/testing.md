@@ -396,6 +396,10 @@ flags. They do not execute the initializer against Azure or the approved
 database. See the
 [Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md)
 for the separate live-state and approval requirements.
+The continuation PostgreSQL tests also exercise fresh Projects initialization:
+the dedicated owner receives the schema and objects, missing operator role
+assumption is rejected before writes, and a grant-reconciliation failure rolls
+back both the schema and temporary membership.
 
 ## Test Gateway and authenticated client paths
 

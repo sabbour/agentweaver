@@ -401,7 +401,7 @@ internal static class InitializerChecks
         WHERE p.principal_type = 'service'
         """;
 
-    /// <summary>Requires a service schema to be operator-owned with only owner CREATE/USAGE and runtime USAGE.</summary>
+    /// <summary>Requires a service schema to be owned by the expected owner with only owner CREATE/USAGE and runtime USAGE.</summary>
     internal static void AssertServiceSchemaAcl(ServicePlan service, SchemaAclState? state, uint operatorOid, uint runtimeOid,
         bool allowMissingRuntimeUsage = false)
     {

@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql;
 
 namespace Agentweaver.Projects.Config;
@@ -165,5 +167,36 @@ public static class ProjectsConfigMigrator
             release.Parameters.AddWithValue("lock_name", LockName);
             await release.ExecuteNonQueryAsync(CancellationToken.None).ConfigureAwait(false);
         }
+    }
+
+    internal static async Task MigrateAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        DbContextOptions<ProjectsConfigDbContext> options,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ArgumentNullException.ThrowIfNull(options);
+
+        await using (var advisoryLock = new NpgsqlCommand(
+            "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext(@lock_name))",
+            connection,
+            transaction))
+        {
+            advisoryLock.Parameters.AddWithValue("lock_name", LockName);
+            await advisoryLock.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        var builder = new DbContextOptionsBuilder<ProjectsConfigDbContext>(options);
+        builder.UseNpgsql(connection, npgsql =>
+            npgsql.MigrationsHistoryTable("__ef_migrations_history", ProjectsConfigDbContext.Schema));
+        await using var context = new ProjectsConfigDbContext(builder.Options);
+        var script = context.GetService<IMigrator>()
+            .GenerateScript(options: MigrationsSqlGenerationOptions.NoTransactions);
+        await using (var migration = new NpgsqlCommand(script, connection, transaction))
+            await migration.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await ProjectsConfigRuntimeGrantPlan.ApplyAsync(connection, transaction, cancellationToken)
+            .ConfigureAwait(false);
     }
 }

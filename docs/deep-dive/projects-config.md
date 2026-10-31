@@ -129,6 +129,10 @@ even when a token has not expired.
 Ordinary startup verifies applied migrations and runtime database privileges;
 it does not apply migrations. Retained revisions and idempotent selection replay
 provide recovery without rewriting accepted history.
+Fresh P1 operator initialization is separate: it verifies the operator can
+assume the dedicated migration owner before creating runtime roles, and runs
+Projects migrations plus reviewed runtime-grant reconciliation in one
+transaction. Runtime principals never own this schema or apply its DDL.
 
 ## Related content
 

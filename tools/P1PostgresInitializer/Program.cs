@@ -256,6 +256,8 @@ try
         fresh.Parameters.AddWithValue("schemas", plan.Services.Select(item => item.Schema).ToArray());
         if (await fresh.ExecuteScalarAsync(cancellationToken) is not true)
             throw new InvalidOperationException("The target contains existing, partial, or unapproved state. Refusing to adopt, reset, or retry it.");
+        await P1PostgresContinuation.AssertProjectsMigrationOwnerReadyAsync(
+            connection, plan.Target.OperatorName, cancellationToken);
     }
     var existingBoundary = await ReadExistingBoundaryAsync(connection, null, plan, cancellationToken);
     var operatorOid = await ReadJsonAsync<uint>(connection, null,
@@ -393,9 +395,12 @@ try
         // "pending" keeps the planned versions that are not yet applied.
         var before = new Dictionary<string, int[]>(StringComparer.Ordinal);
         var pending = new Dictionary<string, int[]>(StringComparer.Ordinal);
-        foreach (var service in plan.Services)
+        await P1PostgresContinuation.AssertProjectsPrefixAsync(
+            connection, plan, principals, operatorOid, plan.Target.OperatorName,
+            plan.Target.TenantId, cancellationToken, requireOnlyProjectsSchema: false);
+        foreach (var service in plan.Services.Skip(1))
         {
-            // The schema must be owned by the operator and grant the runtime role only USAGE, and every
+            // P1 schemas remain operator-owned until the maintenance handover, and every
             // live table or sequence must be one the plan knows about. Unknown objects stop the run.
             var runtimeOid = principals.Single(item => item.Role == service.Role).Oid;
             InitializerChecks.AssertServiceSchemaAcl(service,
@@ -472,6 +477,7 @@ try
             // transaction is disposed without commit, so no partial grant change is kept.
             foreach (var service in plan.Services)
             {
+                if (service.Service == "projects-config") continue;
                 var runtimeOid = principals.Single(item => item.Role == service.Role).Oid;
                 await AssertFunctionGrantsAsync(connection, grants, service, operatorOid, runtimeOid, cancellationToken);
                 await transactionCheckAsync(connection, grants, service, operatorOid, runtimeOid, cancellationToken);
@@ -512,7 +518,7 @@ try
             existingBoundary, principals.Select(item => item.Oid).ToArray());
         await AssertPreflightAsync(connection, plan, existingBoundary, operatorOid, cancellationToken);
         await P1PostgresContinuation.AssertProjectsPrefixAsync(
-            source, connection, plan, principals, operatorOid, plan.Target.OperatorName,
+            connection, plan, principals, operatorOid, plan.Target.OperatorName,
             plan.Target.TenantId, cancellationToken);
         await RecordAsync("projects_config_prefix_checked");
     }
@@ -577,7 +583,7 @@ try
                 await ReadExistingBoundaryAsync(connection, null, plan, cancellationToken),
                 principals.Select(item => item.Oid).ToArray());
             await P1PostgresContinuation.AssertProjectsPrefixAsync(
-                source, connection, plan, principals, operatorOid, plan.Target.OperatorName,
+                connection, plan, principals, operatorOid, plan.Target.OperatorName,
                 plan.Target.TenantId, cancellationToken, requireOnlyProjectsSchema: completedServices.Count == 0);
             foreach (var completed in completedServices)
             {
@@ -615,6 +621,8 @@ try
                 await ExecuteAsync(connection, grants,
                     $"GRANT CONNECT ON DATABASE {Quote(plan.Target.Database)} TO {Quote(service.Role)}",
                     cancellationToken);
+                if (service.Service == "projects-config") continue;
+
                 await ExecuteAsync(connection, grants,
                     $"GRANT USAGE ON SCHEMA {Quote(service.Schema)} TO {Quote(service.Role)}",
                     cancellationToken);
@@ -636,6 +644,7 @@ try
                 await ReadExistingBoundaryAsync(connection, grants, plan, cancellationToken), runtimeOids);
             foreach (var service in plan.Services)
             {
+                if (service.Service == "projects-config") continue;
                 var runtimeOid = principals.Single(item => item.Role == service.Role).Oid;
                 await AssertFunctionGrantsAsync(connection, grants, service, operatorOid, runtimeOid, cancellationToken);
                 await transactionCheckAsync(connection, grants, service, operatorOid, runtimeOid, cancellationToken);
@@ -651,32 +660,56 @@ try
     List<uint> connectedRoles = [];
     foreach (var service in plan.Services)
     {
-        await ExecuteAsync(connection, null, $"CREATE SCHEMA {Quote(service.Schema)} AUTHORIZATION {Quote(plan.Target.OperatorName)}", cancellationToken);
-        await ExecuteAsync(connection, null, $"REVOKE ALL ON SCHEMA {Quote(service.Schema)} FROM PUBLIC", cancellationToken);
-        await RecordAsync($"{service.Service}:schema_created");
-        await P1PostgresContinuation.MigrateServiceAsync(source, service, cancellationToken);
-        await RecordAsync($"{service.Service}:migrated");
-        await P1PostgresContinuation.AssertOwnedObjectsAsync(
-            connection, service, plan.Target.OperatorName, cancellationToken);
+        var projectsConfig = service.Service == "projects-config";
+        if (projectsConfig)
+        {
+            await P1PostgresContinuation.MigrateProjectsConfigAsDedicatedOwnerAsync(
+                connection, service, cancellationToken);
+            await RecordAsync($"{service.Service}:schema_created");
+            await RecordAsync($"{service.Service}:migrated");
+            await P1PostgresContinuation.AssertOwnedObjectsAsync(
+                connection, service, P1PostgresContinuation.ProjectsConfigMigrationOwner, cancellationToken);
+        }
+        else
+        {
+            await ExecuteAsync(connection, null,
+                $"CREATE SCHEMA {Quote(service.Schema)} AUTHORIZATION {Quote(plan.Target.OperatorName)}", cancellationToken);
+            await ExecuteAsync(connection, null,
+                $"REVOKE ALL ON SCHEMA {Quote(service.Schema)} FROM PUBLIC", cancellationToken);
+            await RecordAsync($"{service.Service}:schema_created");
+            await P1PostgresContinuation.MigrateServiceAsync(source, service, cancellationToken);
+            await RecordAsync($"{service.Service}:migrated");
+            await P1PostgresContinuation.AssertOwnedObjectsAsync(
+                connection, service, plan.Target.OperatorName, cancellationToken);
+        }
         await using var grants = await connection.BeginTransactionAsync(cancellationToken);
         await ExecuteAsync(connection, grants, $"GRANT CONNECT ON DATABASE agentweaver TO {Quote(service.Role)}", cancellationToken);
-        await ExecuteAsync(connection, grants, $"GRANT USAGE ON SCHEMA {Quote(service.Schema)} TO {Quote(service.Role)}", cancellationToken);
-        foreach (var table in service.Tables)
-            foreach (var statement in InitializerChecks.TableGrantStatements(service, table))
-                await ExecuteAsync(connection, grants, statement, cancellationToken);
-        foreach (var function in service.Functions)
+        if (!projectsConfig)
         {
-            var signature = $"{Quote(service.Schema)}.{function.Signature}";
-            await ExecuteAsync(connection, grants, $"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC", cancellationToken);
-            if (function.Execute)
-                await ExecuteAsync(connection, grants, $"GRANT EXECUTE ON FUNCTION {signature} TO {Quote(service.Role)}", cancellationToken);
+            await ExecuteAsync(connection, grants,
+                $"GRANT USAGE ON SCHEMA {Quote(service.Schema)} TO {Quote(service.Role)}", cancellationToken);
+            foreach (var table in service.Tables)
+                foreach (var statement in InitializerChecks.TableGrantStatements(service, table))
+                    await ExecuteAsync(connection, grants, statement, cancellationToken);
+            foreach (var function in service.Functions)
+            {
+                var signature = $"{Quote(service.Schema)}.{function.Signature}";
+                await ExecuteAsync(connection, grants,
+                    $"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC", cancellationToken);
+                if (function.Execute)
+                    await ExecuteAsync(connection, grants,
+                        $"GRANT EXECUTE ON FUNCTION {signature} TO {Quote(service.Role)}", cancellationToken);
+            }
         }
         var runtimeOid = principals.Single(item => item.Role == service.Role).Oid;
         InitializerChecks.AssertBoundary(existingBoundary,
             await ReadExistingBoundaryAsync(connection, grants, plan, cancellationToken),
             [.. connectedRoles, runtimeOid]);
-        await AssertFunctionGrantsAsync(connection, grants, service, operatorOid, runtimeOid, cancellationToken);
-        await transactionCheckAsync(connection, grants, service, operatorOid, runtimeOid, cancellationToken);
+        if (!projectsConfig)
+        {
+            await AssertFunctionGrantsAsync(connection, grants, service, operatorOid, runtimeOid, cancellationToken);
+            await transactionCheckAsync(connection, grants, service, operatorOid, runtimeOid, cancellationToken);
+        }
         await grants.CommitAsync(cancellationToken);
         connectedRoles.Add(runtimeOid);
         await RecordAsync($"{service.Service}:exact_grants_checked_and_committed");
