@@ -532,61 +532,33 @@ manifest's loopback Gateway, or create evidence. Journey tests also call
 `Agentweaver.Cli.Acceptance.TestHost` exercises `CliApplication` with
 controlled providers and local HTTP; that test host is not the shipped apphost
 and is not production-authentication evidence. These checks do not exercise an
-authenticated mutation journey through the production apphost. Full P1
-acceptance remains blocked when its required native/session-material proof or
-authorized target evidence is unavailable.
+authenticated mutation journey through the production apphost.
 
-The API runtime entrypoint delegates only to the exact built apphost named by
-`AGENTWEAVER_CLI_PATH`. Set it and run against an explicitly approved
-non-production target because setup and cleanup make API changes:
+## Run API acceptance with the native CLI
 
 ```powershell
-$env:AGENTWEAVER_CLI_PATH = (Resolve-Path .\artifacts\cli\win-x64\publish\agentweaver.exe).Path
-npm run harness:p1 -- --surface api --input .\artifacts\acceptance-input.json --output .\artifacts\api-evidence.jsonl
+$cli = (Resolve-Path .\artifacts\cli\win-x64\publish\agentweaver.exe).Path
+& $cli test --input .\artifacts\acceptance-input.json --output .\artifacts\api-evidence.jsonl --interactive
 ```
 
-The wrapper invokes `agentweaver test` with the manifest, evidence path, and
-any supplied probe envelopes. The legacy wrapper resolves deployment proof
-paths from the repository root and passes the CLI an equivalent temporary
-manifest; direct `agentweaver test` invocations keep their manifest-relative
-proof-path behavior. Probe envelope paths retain the wrapper's working-directory
-resolution. It requires an executable `AGENTWEAVER_CLI_PATH`
-and fails for a missing or invalid path. The wrapper itself is Node-based, but
-it does not run the test in Node or fall back to `dotnet`. It removes
-`AGENTWEAVER_P1_SETUP_TOKEN` before launching the apphost, passes `--dry-run`
-unchanged, and adds `--interactive` only when explicitly requested. A valid
-API invocation missing required input/output or Node module options returns
-`2`; malformed or unknown options are rejected before journey execution,
-without a legacy API fallback. The `test` command gets its target from the
-manifest, not target flags or environment fallback. The Agentweaver 1.x P1
-entrypoints reject `--surface mcp` rather than falling back to the legacy
-JavaScript runner; API acceptance uses the .NET CLI.
+Publish the self-contained apphost as described in the
+[CLI guide](./cli.md#build-and-run-from-source), or invoke the exact apphost
+extracted from a distribution candidate. The `test` target comes from the
+manifest, not target flags or environment variables; relative local paths in
+the manifest are resolved from its directory. `--interactive` explicitly
+allows browser authorization; use a fresh evidence path for each run. A live
+run creates and cleans up API fixtures, so use only an explicitly approved
+non-production target.
 
-```powershell
-npm run harness:p1 -- --surface api --input .\artifacts\acceptance-input.json --output .\artifacts\api-evidence.jsonl --native-probe-envelope .\artifacts\native.json --dispatch-recovery-envelope .\artifacts\recovery.json --dry-run --interactive
-```
-
-The `--dry-run` example validates the manifest without network calls,
-authentication, or evidence creation; when `--interactive` is present, dry
-run still does not launch a browser. Production evidence providers for release
-and full integration readback, rollout/readiness, and OCI measurement/runtime
-remain incomplete; do not treat controlled tests or local runs as full release
-or deployed acceptance. See the [CLI guide](./cli.md) for current limits.
-
-For the specialized one-account API sign-in wrapper, use the same exact
-apphost and provide both files:
-
-```powershell
-npm run harness:p1:signin-run -- --surface api --input .\artifacts\acceptance-input.json --output .\artifacts\api-evidence.jsonl
-```
-
-For API, this wrapper delegates to the same CLI `test` path; it does not start
-the legacy Node/browser sign-in flow. `--interactive` explicitly controls CLI
-authorization; `--dry-run` remains noninteractive and does not reach the
-network. This one-account wrapper rejects manifests with
-`fixturePlan.deniedActor`; use the general `harness:p1 -- --surface api ...`
-entrypoint for journeys with a planned denied actor. Both wrappers remove
-`AGENTWEAVER_P1_SETUP_TOKEN` from the child process environment.
+For input-only validation, add `--dry-run`. A successful dry run performs no
+network request, authentication, or browser launch and writes no evidence,
+even when `--interactive` is also present; validation failure may persist a
+blocked result to the requested output. The Node `harness:p1 -- --surface api`
+entrypoint is compatibility delegation only. If used, set
+`AGENTWEAVER_CLI_PATH` to this exact apphost; the wrapper delegates to
+`agentweaver test` and does not run a Node API journey or fall back to another
+runner. The CLI `rest` command makes individual Gateway requests and is not a
+substitute for this acceptance journey.
 
 ## Test API, UI, and retained MCP compatibility code
 
@@ -601,9 +573,9 @@ npm run test:harness:mcp
 
 `npm run test:harness:api` is a Node contract-test suite that mocks the
 wrapper/process contract; it does not launch the runtime acceptance apphost or
-retain a second Node API client. The runtime entrypoint is
-`npm run harness:p1 -- --surface api ...` described above. The retained MCP
-adapter tests use a pinned SDK and loopback JSON-RPC server; they are legacy
+retain a second Node API client. Use the native apphost command above for API
+acceptance. The retained MCP adapter tests use a pinned SDK and loopback
+JSON-RPC server; they are legacy
 compatibility tests, not a supported Agentweaver 1.x MCP product or acceptance
 surface. The UI tests use injected page doubles, not a browser. These tests
 check fixture creation, selected surface calls, cleanup outcomes, and refusal
