@@ -25,9 +25,9 @@ kind is `contract` or `library` and publishes their NuGet packages to GitHub
 Packages. Duplicate package versions are skipped. The workflow does not build
 or publish container images.
 
-The standalone .NET CLI archives remain a separate product release asset. Their
-build, smoke-test, checksum, and candidate artifact flow is documented in
-[`scripts/cli-dotnet/README.md`](../scripts/cli-dotnet/README.md).
+The CLI build, run, and API-acceptance contract is documented in the
+[CLI guide](../docs/guide/cli.md). This package-publication workflow does not
+publish standalone CLI archives.
 
 ## Container images
 

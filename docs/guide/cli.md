@@ -213,14 +213,40 @@ controlled providers and local HTTP; it is not the shipped apphost or proof
 of production authentication. None of these checks is an authenticated
 mutation journey through the production apphost.
 
-The production evidence provider is wired to verify source-bound publication,
-AgentHost archive measurements, and service readback. A non-dry-run needs the
-exact external manifest and publication/deployment proof files, and may
-change API state during fixture setup and cleanup; do not use it against
-production. Full P1 acceptance remains blocked when required native/session-
-material proof or authorized target evidence is unavailable. The manifest and
-evidence are external files; relative proof paths resolve from the manifest
-directory.
+The production evidence provider verifies the committed source manifest, the
+canonical GHCR image selection, and Kubernetes service readbacks. A non-dry-run
+needs the exact external source manifest and image manifest, and may change API
+state during fixture setup and cleanup; do not use it against production.
+Full P1 acceptance remains blocked when required native/session-material proof
+or authorized target evidence is unavailable. The manifest and evidence are
+external files; relative proof paths resolve from the manifest directory.
+
+`deploymentEvidence` contains exactly `manifestPath` and `imageManifestPath`.
+The image-manifest file uses the same sparse JSON contract as
+`npm run deploy:kustomize`:
+
+```json
+{
+  "images": {
+    "agentweaver.gateway": "sha-<40-character-source-commit>",
+    "agentweaver-agenthost": "sha256:<64-hex-digest>"
+  }
+}
+```
+
+Repository names are the canonical GHCR names in the Kustomize deployment
+guide. Each value is either a source-commit tag or an immutable digest.
+Selected tags are resolved to digests, and every selected reference must match
+the live workload. Omitted entries are read from Kubernetes and must already
+be immutable references for the exact pinned source. All observed images are
+verified against their registry manifest, platform, config digest, and exact
+source revision; a present source-tree label must match the pinned Git tree.
+The AgentHost measurement is calculated from its digest-verified
+`linux/amd64` platform manifest plus the unique config and layer descriptor
+sizes, then compared with the Environment Deployment and Pod's configured
+compressed-byte value. Missing or inconsistent size evidence blocks the
+provider; it is never replaced with zero or a guessed value. Caller-supplied
+image receipts and local OCI archives are not accepted.
 
 ```powershell
 agentweaver test --input manifest.json --output evidence.jsonl
@@ -250,12 +276,11 @@ refresh cannot stand in for exact-run authority.
 `--dry-run` validates the manifest without network calls, authentication,
 browser launch, or evidence creation, even when `--interactive` is present.
 The intended distributed runner does not need Node.js, a .NET SDK/runtime,
-Git, `gh`, or a repository checkout. The intended source and deployment checks
-use read-only pinned GitHub and OCI evidence; full deployed evidence also
-requires `kubectl` configured for the operator-selected context. These
-production evidence paths remain incomplete as noted above. The CLI does not
-download or execute repository code or forward Gateway credentials to GitHub,
-a registry, or a cluster.
+Git, `gh`, or a repository checkout. Source and image checks use read-only,
+pinned GitHub and OCI evidence; deployed evidence also requires `kubectl`
+configured for the operator-selected context. The CLI does not download or
+execute repository code or forward Gateway credentials to GitHub, a registry,
+or a cluster.
 
 Source verification is bound to the committed `releases/foundation.json` in
 `sabbour/agentweaver` at the exact pinned commit and tree. The supplied
@@ -263,10 +288,9 @@ manifest's local name or path cannot select a different repository or source
 blob.
 
 The expected result contract is `0` for passed, `1` for failed, and `2` for
-blocked; spawned-process behavior for `test` has not been verified yet. A
-missing or denied exact-run authorization is blocked only if owned-fixture
-cleanup succeeds. Failed or uncertain cleanup takes precedence and returns
-failed; reconcile that invocation before retrying. Do not start a new
+blocked. A missing or denied exact-run authorization is blocked only if
+owned-fixture cleanup succeeds. Failed or uncertain cleanup takes precedence
+and returns failed; reconcile that invocation before retrying. Do not start a new
 invocation or reuse the cleaned project/run while cleanup is unresolved. After
 successful cleanup or reconciliation, a new attempt uses
 `--interactive`, a new invocation identity, and a new evidence path. Native
