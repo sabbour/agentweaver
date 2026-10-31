@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Net;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -43,7 +42,6 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
     private readonly HttpClient httpClient;
     private readonly Func<string, string, CancellationToken, Task<JsonObject>> readKubernetesObjects;
     private readonly Func<TimeSpan, CancellationToken, Task> delay;
-    private readonly Func<(string SourceSha, string SourceTree)> readBuildIdentity;
 
     public AcceptanceDeploymentEvidenceProvider(HttpClient httpClient)
         : this(httpClient, ReadKubernetesObjectsAsync)
@@ -53,13 +51,11 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
     internal AcceptanceDeploymentEvidenceProvider(
         HttpClient httpClient,
         Func<string, string, CancellationToken, Task<JsonObject>> readKubernetesObjects,
-        Func<TimeSpan, CancellationToken, Task>? delay = null,
-        Func<(string SourceSha, string SourceTree)>? readBuildIdentity = null)
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
         this.httpClient = httpClient;
         this.readKubernetesObjects = readKubernetesObjects;
         this.delay = delay ?? ((duration, ct) => Task.Delay(duration, ct));
-        this.readBuildIdentity = readBuildIdentity ?? ReadCliBuildIdentity;
     }
 
     public async Task<JsonObject> PrepareAsync(AcceptanceManifest manifest, CancellationToken ct)
@@ -73,31 +69,14 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
             throw new InvalidDataException("A full GitHub source commit and tree are required.");
 
         string manifestFile = ResolveProofPath(manifest, deployment, "manifestPath");
-        string publicationFile = ResolveProofPath(manifest, deployment, "publicationPath");
-        string hostArchive = ResolveProofPath(manifest, deployment, "agentHostArchivePath");
-        string? integrationFile = deployment.ContainsKey("integrationDeploymentReceiptPath")
-            ? ResolveProofPath(manifest, deployment, "integrationDeploymentReceiptPath")
-            : null;
+        string imageManifestFile = ResolveProofPath(manifest, deployment, "imageManifestPath");
         JsonObject localManifest = await ReadObjectAsync(manifestFile, "The exact source manifest is missing or malformed.", ct)
             .ConfigureAwait(false);
-        JsonObject publication = await ReadObjectAsync(publicationFile,
-            "The exact source-bound publication, required deployment receipt, or manifest is missing or malformed.", ct)
+        (JsonObject imageManifest, byte[] imageManifestBytes) = await ReadObjectBytesAsync(
+            imageManifestFile, "The canonical GHCR image-selection manifest is missing or malformed.", ct)
             .ConfigureAwait(false);
-        bool integration = ApiAcceptanceSupport.GetString(publication, "mode") == "images-only";
-        string? releaseTag = ApiAcceptanceSupport.GetString(deployment, "releaseTag");
-        if (integration && (releaseTag is not null || integrationFile is null)
-            || !integration && (string.IsNullOrWhiteSpace(releaseTag) || integrationFile is not null))
-            throw new InvalidDataException("Release and integration publication evidence must use their exact supported receipt mode.");
+        Dictionary<string, string> selectedImages = ValidateImageManifest(imageManifest, sourceSha);
 
-        if (integration)
-        {
-            (string buildSha, string buildTree) = readBuildIdentity();
-            if (!Sha.IsMatch(buildSha) || !Sha.IsMatch(buildTree)
-                || sourceSha != buildSha || sourceTree != buildTree)
-                throw new InvalidDataException("The selected source commit and tree must exactly match the CLI embedded build identity.");
-        }
-
-        // The pinned Git commit and tree are the trust root for all local publication and runtime receipts below.
         JsonObject commit = await GetGitHubObjectAsync($"/commits/{sourceSha}", ct).ConfigureAwait(false);
         JsonObject commitTree = (commit["commit"] as JsonObject)?["tree"] as JsonObject ?? [];
         if (ApiAcceptanceSupport.GetString(commit, "sha") != sourceSha
@@ -117,85 +96,8 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
         }
         await ValidateProjectMetadataAsync(remoteManifest, sourceSha, ct).ConfigureAwait(false);
 
-        if (!integration)
-        {
-            bool bootstrapDraft = ApiAcceptanceSupport.GetString(remoteManifest, "stage") == "draft";
-            await VerifyReleasePublicationAsync(
-                releaseTag!, sourceSha, publication, bootstrapDraft, publicationFile, ct)
-                .ConfigureAwait(false);
-            if (bootstrapDraft)
-                ValidateBootstrapProductComponents(remoteManifest, releaseTag!);
-        }
-        JsonArray images = ValidatePublicationEquivalent(
-            publication, remoteManifest, sourceSha, sourceTree, integration, out JsonObject deploymentManifest);
-
-        JsonObject imagePin = (JsonObject)pins["imageReceipt"]!;
-        JsonObject hostPublished = FindPublished(publication, "Agentweaver.AgentHost");
-        string hostImage = ApiAcceptanceSupport.GetString(hostPublished, "image")!;
-        if (ApiAcceptanceSupport.GetString(imagePin, "registryImage") != hostImage
-            || ApiAcceptanceSupport.GetString(imagePin, "registryDigest") != DigestFromImage(hostImage)
-            || ApiAcceptanceSupport.GetString(hostPublished, "ociArchiveSha256") != ApiAcceptanceSupport.GetString(imagePin, "archiveSha256")
-            || ApiAcceptanceSupport.GetString(hostPublished, "manifestDigest") is string manifestDigest
-                && manifestDigest != ApiAcceptanceSupport.GetString(imagePin, "manifestDigest")
-            || ApiAcceptanceSupport.GetString(hostPublished, "imageConfigDigest") != ApiAcceptanceSupport.GetString(imagePin, "configDigest")
-            || !ApiAcceptanceSupport.TryLong(hostPublished["preparedOciMeasurement"]?["image"]?["compressedPullBytes"], out long pullBytes)
-            || ApiAcceptanceSupport.TryLong(imagePin["compressedPullBytes"], out long pinnedBytes) && pinnedBytes != pullBytes)
-        {
-            throw new InvalidDataException("The AgentHost image receipt does not match the exact source publication.");
-        }
-
-        string archiveSha256;
-        try
-        {
-            archiveSha256 = await OciArchiveMeasurement.HashFileAsync(hostArchive, ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch
-        {
-            throw new InvalidDataException("The exact AgentHost OCI archive could not be read for its pinned SHA-256.");
-        }
-        if (archiveSha256 != ApiAcceptanceSupport.GetString(imagePin, "archiveSha256"))
-            throw new InvalidDataException("The measured AgentHost OCI archive does not match the exact source-bound publication receipt.");
-
-        JsonObject hostImageRow = FindPublishedImage(images, "Agentweaver.AgentHost");
-        JsonObject buildSource = (JsonObject)hostImageRow["buildSource"]!;
-        JsonObject measuredHost = await OciArchiveMeasurement.MeasureAsync(
-            hostArchive,
-            ApiAcceptanceSupport.GetString(buildSource, "sourceSha")!,
-            ApiAcceptanceSupport.GetString(buildSource, "sourceTree")!,
-            ct).ConfigureAwait(false);
-        JsonObject publishedMeasurement = FindPublishedImage(images, "Agentweaver.AgentHost")["preparedOciMeasurement"] as JsonObject
-            ?? throw new InvalidDataException("The published AgentHost image receipt has no source-bound OCI measurement.");
-        JsonObject measuredImage = measuredHost["image"] as JsonObject ?? [];
-        if (ApiAcceptanceSupport.GetString(measuredHost, "kind") != "agenthost-image"
-            || ApiAcceptanceSupport.GetString(measuredHost, "sourceSha") != ApiAcceptanceSupport.GetString(publishedMeasurement, "sourceSha")
-            || ApiAcceptanceSupport.GetString(measuredHost, "sourceTree") != ApiAcceptanceSupport.GetString(publishedMeasurement, "sourceTree")
-            || ApiAcceptanceSupport.GetString(measuredImage, "digest") != ApiAcceptanceSupport.GetString(imagePin, "manifestDigest")
-            || ApiAcceptanceSupport.GetString(measuredImage, "digest")
-                != ApiAcceptanceSupport.GetString(publishedMeasurement["image"] as JsonObject ?? [], "digest")
-            || ApiAcceptanceSupport.GetString(measuredImage, "configDigest") != ApiAcceptanceSupport.GetString(imagePin, "configDigest")
-            || ApiAcceptanceSupport.GetString(hostPublished, "imageConfigDigest") != ApiAcceptanceSupport.GetString(measuredImage, "configDigest")
-            || !ApiAcceptanceSupport.TryLong(measuredImage["compressedPullBytes"], out long measuredPullBytes)
-            || measuredPullBytes != pullBytes
-            || !ApiAcceptanceSupport.TryLong(imagePin["compressedPullBytes"], out long pinnedPullBytes)
-            || measuredPullBytes != pinnedPullBytes
-            || !JsonNode.DeepEquals(measuredImage, publishedMeasurement["image"])
-            || archiveSha256 != ApiAcceptanceSupport.GetString(hostPublished, "ociArchiveSha256"))
-            throw new InvalidDataException("The measured AgentHost OCI archive does not match the exact source-bound publication receipt.");
-
         JsonObject services = await ObserveServicesEquivalentAsync(
-            manifest, sourceSha, sourceTree, images, ct).ConfigureAwait(false);
-        JsonObject? integrationReceipt = integrationFile is null
-            ? null
-            : await ReadObjectAsync(integrationFile, "The integration deployment receipt is missing or malformed.", ct)
-                .ConfigureAwait(false);
-        JsonObject deploymentEvidence = integration
-            ? ValidateIntegrationReceiptEquivalent(integrationReceipt!, sourceSha, sourceTree, remoteManifest, publication, manifest, images)
-            : CreateReleaseDeploymentEvidenceEquivalent(
-                sourceSha, sourceTree, remoteManifest, deploymentManifest, publication, pins, images, services);
+            manifest, sourceSha, sourceTree, selectedImages, ct).ConfigureAwait(false);
 
         return new JsonObject
         {
@@ -207,24 +109,15 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
                 ["sourceTree"] = sourceTree,
                 ["manifestBlobSha"] = remoteManifestHash,
             },
-            [integration ? "integrationDeployment" : "releaseDeployment"] = deploymentEvidence,
+            ["imageManifest"] = new JsonObject
+            {
+                ["sha256"] = ApiAcceptanceSupport.Sha256Hex(imageManifestBytes),
+                ["selectedRepositories"] = new JsonArray(selectedImages.Keys.Order(StringComparer.Ordinal)
+                    .Select(repository => (JsonNode?)JsonValue.Create(repository)).ToArray()),
+            },
             ["providerCatalog"] = services["providerCatalog"]?.DeepClone(),
             ["services"] = services,
-            ["agentHostImageMeasurement"] = new JsonObject
-            {
-                ["status"] = "passed",
-                ["kind"] = measuredHost["kind"]!.DeepClone(),
-                ["schemaVersion"] = measuredHost["schemaVersion"]!.DeepClone(),
-                ["sourceSha"] = measuredHost["sourceSha"]!.DeepClone(),
-                ["sourceTree"] = measuredHost["sourceTree"]!.DeepClone(),
-                ["image"] = measuredHost["image"]!.DeepClone(),
-                ["measurement"] = measuredHost["measurement"]!.DeepClone(),
-                ["registryImage"] = hostImage,
-                ["registryDigest"] = ApiAcceptanceSupport.GetString(imagePin, "registryDigest"),
-                ["archiveSha256"] = archiveSha256,
-                ["compressedPullBytes"] = measuredHost["image"]?["compressedPullBytes"]?.DeepClone(),
-                ["hardByteCeiling"] = null,
-            },
+            ["agentHostImageMeasurement"] = services["agentHostImageMeasurement"]?.DeepClone(),
             ["agentHostRuntime"] = services["agentHostRuntime"]?.DeepClone(),
         };
     }
@@ -285,104 +178,6 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
         request.Headers.Accept.ParseAdd("application/vnd.github+json");
         request.Headers.TryAddWithoutValidation("X-GitHub-Api-Version", "2022-11-28");
         return request;
-    }
-
-    internal async Task VerifyReleasePublicationAsync(
-        string tag,
-        string sourceSha,
-        JsonObject publication,
-        bool bootstrapDraft,
-        string publicationFile,
-        CancellationToken ct)
-    {
-        BootstrapRelease? bootstrap = null;
-        if (bootstrapDraft)
-        {
-            if (!BootstrapReleases.TryGetValue(tag, out bootstrap) || bootstrap.SourceSha != sourceSha)
-                throw new InvalidDataException($"The pre-acceptance bootstrap requires the exact published {tag} source.");
-            bool hasContinuation = publication.ContainsKey("continuation");
-            if (ApiAcceptanceSupport.GetString(publication, "sourceSha") != sourceSha
-                || ApiAcceptanceSupport.GetString(publication, "status") != "published"
-                || bootstrap.Continuation && publication["continuation"] is not JsonObject
-                || !bootstrap.Continuation && hasContinuation)
-                throw new InvalidDataException("The bootstrap publication receipt does not match the exact release mode and source.");
-            if (bootstrap.PublicationSha256 is string expectedHash
-                && await OciArchiveMeasurement.HashFileAsync(publicationFile, ct).ConfigureAwait(false) != expectedHash)
-                throw new InvalidDataException($"{tag} publication.json does not match its pinned SHA-256.");
-        }
-        else if (publication.ContainsKey("continuation"))
-        {
-            throw new InvalidDataException("A continuation publication receipt is only valid for its pinned bootstrap source.");
-        }
-
-        JsonObject release = await GetGitHubObjectAsync($"/releases/tags/{Uri.EscapeDataString(tag)}", ct).ConfigureAwait(false);
-        if (ApiAcceptanceSupport.GetString(release, "tag_name") != tag
-            || release["draft"]?.GetValue<bool>() != false
-            || release["prerelease"]?.GetValue<bool>() != false)
-            throw new InvalidDataException("The selected source tag must identify a published, non-prerelease GitHub Release.");
-        JsonObject reference = await GetGitHubObjectAsync($"/git/ref/tags/{Uri.EscapeDataString(tag)}", ct).ConfigureAwait(false);
-        JsonObject tagObject = reference["object"] as JsonObject ?? [];
-        string? tagType = ApiAcceptanceSupport.GetString(tagObject, "type");
-        string? tagSha = ApiAcceptanceSupport.GetString(tagObject, "sha");
-        if (tagType == "commit" && bootstrap?.AllowLightweightTag == true)
-        {
-            if (tagSha != sourceSha)
-                throw new InvalidDataException($"The published {tag} tag does not resolve to the exact source commit.");
-        }
-        else if (tagType != "tag" || !Matches(Sha, tagSha))
-            throw new InvalidDataException("The published source release must use an annotated Git tag.");
-        if (tagType == "tag")
-        {
-            JsonObject annotated = await GetGitHubObjectAsync(
-                $"/git/tags/{Uri.EscapeDataString(tagSha!)}", ct).ConfigureAwait(false);
-            if (ApiAcceptanceSupport.GetString(annotated, "tag") != tag
-                || ApiAcceptanceSupport.GetString(annotated["object"] as JsonObject ?? [], "type") != "commit"
-                || ApiAcceptanceSupport.GetString(annotated["object"] as JsonObject ?? [], "sha") != sourceSha)
-                throw new InvalidDataException("The published release tag does not resolve to the exact source commit.");
-        }
-
-        string resultName = publication.ContainsKey("continuation")
-            ? PartialPublicationResultRef
-            : $"agentweaver-publication/{sourceSha}/result";
-        if (publication.ContainsKey("continuation") && sourceSha != PartialPublicationSourceSha)
-            throw new InvalidDataException("A continuation publication receipt is only valid for the approved partial source.");
-        JsonObject resultRef = await GetGitHubObjectAsync($"/git/ref/tags/{Uri.EscapeDataString(resultName)}", ct).ConfigureAwait(false);
-        JsonObject resultTagRef = resultRef["object"] as JsonObject ?? [];
-        if (ApiAcceptanceSupport.GetString(resultTagRef, "type") != "tag"
-            || ApiAcceptanceSupport.GetString(resultTagRef, "sha") is not string resultTagSha
-            || !Matches(Sha, resultTagSha))
-            throw new InvalidDataException("The immutable publication result for the exact source SHA is missing.");
-        JsonObject resultTag = await GetGitHubObjectAsync($"/git/tags/{Uri.EscapeDataString(resultTagSha)}", ct).ConfigureAwait(false);
-        JsonObject published;
-        try
-        {
-            published = JsonNode.Parse(ApiAcceptanceSupport.GetString(resultTag, "message") ?? "") as JsonObject
-                ?? throw new JsonException();
-        }
-        catch
-        {
-            throw new InvalidDataException("The immutable GitHub publication result is malformed.");
-        }
-        if (ApiAcceptanceSupport.GetString(resultTag, "tag") != resultName
-            || ApiAcceptanceSupport.GetString(resultTag["object"] as JsonObject ?? [], "type") != "commit"
-            || ApiAcceptanceSupport.GetString(resultTag["object"] as JsonObject ?? [], "sha") != sourceSha
-            || JsonText(published) != JsonText(publication))
-            throw new InvalidDataException("The supplied publication receipt differs from the immutable GitHub publication result.");
-    }
-
-    private static void ValidateBootstrapProductComponents(JsonObject manifest, string tag)
-    {
-        BootstrapRelease release = BootstrapReleases[tag];
-        string[] expected = BaseProductComponents.Concat(release.AdditionalProductComponents ?? [])
-            .Order(StringComparer.Ordinal).ToArray();
-        string[] actual = (manifest["components"] as JsonArray ?? [])
-            .OfType<JsonObject>()
-            .Select(component => ApiAcceptanceSupport.GetString(component, "id") ?? "")
-            .Where(id => id != "Agentweaver.FoundationProbe")
-            .Order(StringComparer.Ordinal)
-            .ToArray();
-        if (!actual.SequenceEqual(expected, StringComparer.Ordinal))
-            throw new InvalidDataException($"{tag} draft manifest must contain exactly the expected product components.");
     }
 
     private static bool ValidateFoundationManifest(JsonObject manifest, string sourceSha)
@@ -595,68 +390,6 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
         return result;
     }
 
-    private static (string SourceSha, string SourceTree) ReadCliBuildIdentity()
-    {
-        Assembly assembly = typeof(AcceptanceDeploymentEvidenceProvider).Assembly;
-        AssemblyMetadataAttribute[] metadata = assembly.GetCustomAttributes<AssemblyMetadataAttribute>().ToArray();
-        string[] sourceShas = metadata.Where(item => item.Key == "Agentweaver.SourceSha")
-            .Select(item => item.Value ?? "").ToArray();
-        string[] sourceTrees = metadata.Where(item => item.Key == "Agentweaver.SourceTree")
-            .Select(item => item.Value ?? "").ToArray();
-        return (sourceShas.Length == 1 ? sourceShas[0] : "",
-            sourceTrees.Length == 1 ? sourceTrees[0] : "");
-    }
-
-    private static void ValidatePublication(JsonObject publication, JsonObject manifest, string sourceSha, string sourceTree, bool integration)
-    {
-        if (ApiAcceptanceSupport.TryLong(publication["schemaVersion"], out long schema) is false || schema != 1
-            || ApiAcceptanceSupport.GetString(publication, "status") != "published"
-            || ApiAcceptanceSupport.GetString(publication, "sourceSha") != sourceSha
-            || ApiAcceptanceSupport.GetString(publication, "sourceTree") != sourceTree
-            || !Sha256.IsMatch(ApiAcceptanceSupport.GetString(publication, "provenanceSha256") ?? "")
-            || ApiAcceptanceSupport.GetString(publication, "mode") != (integration ? "images-only" : null)
-            || publication["published"] is not JsonArray published
-            || published.Count != ServiceComponents.Length
-            || publication["planned"] is not JsonArray planned
-            || planned.Count != ServiceComponents.Length)
-            throw new InvalidDataException("The source-bound publication receipt is not a complete result for the exact source.");
-
-        HashSet<string> ids = new(StringComparer.Ordinal);
-        foreach (JsonObject entry in published.OfType<JsonObject>())
-        {
-            string? id = ApiAcceptanceSupport.GetString(entry, "id");
-            string? image = ApiAcceptanceSupport.GetString(entry, "image");
-            if (id is null || !ids.Add(id) || !ServiceComponents.Any(component => component.Id == id)
-                || image is null || !image.StartsWith("ghcr.io/", StringComparison.Ordinal)
-                || !image.Contains("@sha256:", StringComparison.Ordinal))
-                throw new InvalidDataException("The source-bound publication receipt contains an invalid or duplicate product image.");
-        }
-        if (ServiceComponents.Any(component => !ids.Contains(component.Id)))
-            throw new InvalidDataException("The source-bound publication receipt does not contain the exact service and AgentHost image set.");
-
-        JsonArray manifestComponents = (JsonArray)manifest["components"]!;
-        foreach (JsonObject publishedItem in published.OfType<JsonObject>())
-        {
-            string id = ApiAcceptanceSupport.GetString(publishedItem, "id")!;
-            JsonObject component = manifestComponents.OfType<JsonObject>().Single(item => ApiAcceptanceSupport.GetString(item, "id") == id);
-            JsonObject[] plans = planned.OfType<JsonObject>().Where(item => ApiAcceptanceSupport.GetString(item, "id") == id).ToArray();
-            if (plans.Length != 1
-                || ApiAcceptanceSupport.GetString(plans[0], "version") != ApiAcceptanceSupport.GetString(component, "version"))
-                throw new InvalidDataException($"The exact source manifest is missing service component {id}.");
-        }
-    }
-
-    private static string DigestFromImage(string image)
-    {
-        int separator = image.LastIndexOf('@');
-        return separator >= 0 ? image[(separator + 1)..] : "";
-    }
-
-    private static JsonObject FindPublished(JsonObject publication, string id) =>
-        (publication["published"] as JsonArray)?.OfType<JsonObject>()
-            .SingleOrDefault(item => ApiAcceptanceSupport.GetString(item, "id") == id)
-        ?? throw new InvalidDataException($"The source-bound publication is missing {id}.");
-
     private static async Task<JsonObject> ReadKubernetesObjectsAsync(string context, string namespaceName, CancellationToken ct)
     {
         ProcessStartInfo start = new("kubectl")
@@ -700,46 +433,6 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
         }
     }
 
-    private static JsonObject ValidateIntegrationReceipt(
-        JsonObject receipt,
-        string sourceSha,
-        string sourceTree,
-        JsonObject foundation,
-        JsonObject publication,
-        AcceptanceManifest manifest)
-    {
-        JsonObject readbacks = receipt["readbacks"] as JsonObject ?? [];
-        if (ApiAcceptanceSupport.GetString(receipt, "status") != "deployed"
-            || ApiAcceptanceSupport.GetString(receipt, "sourceSha") != sourceSha
-            || ApiAcceptanceSupport.GetString(receipt, "sourceTree") != sourceTree
-            || ApiAcceptanceSupport.GetString(receipt, "manifestSha256") != HashJson(foundation)
-            || ApiAcceptanceSupport.GetString(receipt, "publicationSha256") != HashJson(publication)
-            || ApiAcceptanceSupport.GetString(readbacks, "sha256") is not string readbackHash
-            || readbacks["resources"] is not JsonArray resources
-            || !Sha256.IsMatch(readbackHash)
-            || ApiAcceptanceSupport.GetString(receipt["target"] as JsonObject ?? [], "namespace")
-                != ApiAcceptanceSupport.GetString(manifest.Pins, "namespace"))
-        {
-            throw new InvalidDataException("The integration deployment receipt is not bound to the exact source, manifest, and publication.");
-        }
-        return new JsonObject
-        {
-            ["status"] = "blocked",
-            ["reason"] = "The supplied integration receipt is source-bound, but the .NET runner does not validate its complete image and resource readback set.",
-            ["sourceSha"] = sourceSha,
-            ["sourceTree"] = sourceTree,
-            ["manifestSha256"] = ApiAcceptanceSupport.GetString(receipt, "manifestSha256"),
-            ["publicationSha256"] = ApiAcceptanceSupport.GetString(receipt, "publicationSha256"),
-            ["readbackSha256"] = readbackHash,
-            ["completedAt"] = ApiAcceptanceSupport.GetString(receipt, "completedAt"),
-            ["target"] = new JsonObject
-            {
-                ["clusterName"] = ApiAcceptanceSupport.GetString(receipt["target"] as JsonObject ?? [], "clusterName"),
-                ["namespace"] = ApiAcceptanceSupport.GetString(receipt["target"] as JsonObject ?? [], "namespace"),
-            },
-        };
-    }
-
     private static string ResolveProofPath(AcceptanceManifest manifest, JsonObject evidence, string property)
     {
         string path = ApiAcceptanceSupport.RequireString(evidence, property, $"deployment evidence {property}");
@@ -752,6 +445,26 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
         {
             return JsonNode.Parse(await File.ReadAllTextAsync(path, ct).ConfigureAwait(false)) as JsonObject
                 ?? throw new InvalidDataException();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            throw new InvalidDataException(error);
+        }
+    }
+
+    private static async Task<(JsonObject Value, byte[] Bytes)> ReadObjectBytesAsync(
+        string path,
+        string error,
+        CancellationToken ct)
+    {
+        try
+        {
+            byte[] bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
+            return (JsonNode.Parse(bytes) as JsonObject ?? throw new InvalidDataException(), bytes);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

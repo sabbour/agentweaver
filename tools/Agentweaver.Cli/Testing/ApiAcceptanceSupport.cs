@@ -37,7 +37,7 @@ internal static partial class ApiAcceptanceSupport
         ["gate-answer", "gate-approve", "gate-reject", "message", "journal"];
 
     private static readonly string[] RequiredReceiptPins =
-        ["providerReceipt", "runtimeReceipt", "storageReceipt", "sourceReceipt", "imageReceipt"];
+        ["providerReceipt", "runtimeReceipt", "storageReceipt", "sourceReceipt"];
 
     private static readonly string[] NativeProbeNames =
     [
@@ -147,25 +147,18 @@ internal static partial class ApiAcceptanceSupport
             }
         }
 
+        if (pins.ContainsKey("imageReceipt"))
+        {
+            throw new InvalidDataException("Image evidence is read from the canonical GHCR manifest and Kubernetes; caller-supplied image receipts are not accepted.");
+        }
+
         ValidatePins(pins);
         JsonObject evidence = RequireObject(root["deploymentEvidence"], "Exact source deployment evidence paths are required.");
-        string[] requiredPaths = ["publicationPath", "manifestPath", "agentHostArchivePath"];
-        string[] allowedPaths = [.. requiredPaths, "integrationDeploymentReceiptPath", "releaseTag"];
-        RequireExactKeys(evidence, allowedPaths.Where(evidence.ContainsKey).ToArray(), "deployment evidence");
+        string[] requiredPaths = ["manifestPath", "imageManifestPath"];
+        RequireExactKeys(evidence, requiredPaths, "deployment evidence");
         foreach (string name in requiredPaths)
         {
             RequireString(evidence, name, $"deployment evidence {name}");
-        }
-
-        if (evidence.ContainsKey("integrationDeploymentReceiptPath"))
-        {
-            RequireString(evidence, "integrationDeploymentReceiptPath", "deployment evidence integrationDeploymentReceiptPath");
-        }
-        if (evidence.ContainsKey("releaseTag")
-            && !Regex.IsMatch(RequireString(evidence, "releaseTag", "deployment evidence releaseTag"),
-                "^v\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$", RegexOptions.CultureInvariant))
-        {
-            throw new InvalidDataException("The deployment evidence releaseTag must be an exact versioned release tag.");
         }
 
         string journey = RequireString(root, "journey", "supported P1 journey");
@@ -213,20 +206,6 @@ internal static partial class ApiAcceptanceSupport
         RequireSha(source["sourceSha"]?.GetValue<string>(), "The source receipt must pin an exact Git commit and tree.");
         RequireSha(source["sourceTree"]?.GetValue<string>(), "The source receipt must pin an exact Git commit and tree.");
 
-        JsonObject image = (JsonObject)pins["imageReceipt"]!;
-        RequireExactKeys(image,
-            ["registryImage", "registryDigest", "archiveSha256", "manifestDigest", "configDigest", "compressedPullBytes"],
-            "AgentHost image receipt pin");
-        string reference = RequireString(image, "registryImage", "immutable AgentHost registry image");
-        Match match = Regex.Match(reference, "^ghcr\\.io/[a-z0-9._/-]+@(sha256:[a-f0-9]{64})$", RegexOptions.CultureInvariant);
-        if (!match.Success || GetString(image, "registryDigest") != match.Groups[1].Value
-            || !IsSha256(GetString(image, "archiveSha256"))
-            || !Regex.IsMatch(GetString(image, "manifestDigest") ?? "", "^sha256:[a-f0-9]{64}$", RegexOptions.CultureInvariant)
-            || !Regex.IsMatch(GetString(image, "configDigest") ?? "", "^sha256:[a-f0-9]{64}$", RegexOptions.CultureInvariant)
-            || !TryLong(image["compressedPullBytes"], out long bytes) || bytes < 1)
-        {
-            throw new InvalidDataException("The AgentHost image receipt must pin its immutable registry, archive, OCI, config, and byte identities.");
-        }
     }
 
     private static void ValidateFixturePlan(JsonObject plan, JsonObject environment, string journey, JsonObject pins)
@@ -665,7 +644,7 @@ internal static partial class ApiAcceptanceSupport
             ["status"] = sourceEvidence?["services"]?["status"]?.GetValue<string>() == "passed" ? "passed" : "blocked",
             ["reason"] = sourceEvidence?["services"]?["status"]?.GetValue<string>() == "passed"
                 ? null
-                : "Actual service Deployment/Pod identities and registry source labels were not verified.",
+                : "Live service identities and immutable GHCR images were not verified against the exact source.",
         });
         probes.Add(new JsonObject
         {
@@ -674,7 +653,7 @@ internal static partial class ApiAcceptanceSupport
             ["status"] = sourceEvidence?["agentHostImageMeasurement"]?["status"]?.GetValue<string>() == "passed" ? "passed" : "blocked",
             ["reason"] = sourceEvidence?["agentHostImageMeasurement"]?["status"]?.GetValue<string>() == "passed"
                 ? null
-                : "The source-bound AgentHost OCI image was not measured with the existing image tool.",
+                : "The exact GHCR manifest/config size and deployed AgentHost image settings were not verified against the pinned source.",
         });
 
         Dictionary<string, JsonObject> native = [];

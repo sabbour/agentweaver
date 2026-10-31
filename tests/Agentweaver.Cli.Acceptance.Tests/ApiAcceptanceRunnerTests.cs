@@ -21,6 +21,36 @@ namespace Agentweaver.Cli.Acceptance.Tests;
 public sealed class ApiAcceptanceRunnerTests
 {
     [Fact]
+    public async Task AcceptanceInputRejectsLegacyImageReceiptsAndPublicationPaths()
+    {
+        string workspace = Path.Combine(AppContext.BaseDirectory, "acceptance-work", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        try
+        {
+            JsonObject manifest = CreateManifest(workspace, new Uri("http://127.0.0.1:49241/"));
+            string inputPath = Path.Combine(workspace, "manifest.json");
+            manifest["pins"]!["imageReceipt"] = new JsonObject();
+            await File.WriteAllTextAsync(inputPath, manifest.ToJsonString());
+
+            InvalidDataException receiptFailure = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                ApiAcceptanceSupport.ReadManifestAsync(inputPath, default));
+            Assert.Contains("caller-supplied image receipts are not accepted", receiptFailure.Message, StringComparison.Ordinal);
+
+            manifest["pins"]!.AsObject().Remove("imageReceipt");
+            manifest["deploymentEvidence"]!["publicationPath"] = "publication.json";
+            await File.WriteAllTextAsync(inputPath, manifest.ToJsonString());
+            InvalidDataException pathFailure = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                ApiAcceptanceSupport.ReadManifestAsync(inputPath, default));
+            Assert.Contains("deployment evidence", pathFailure.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(workspace))
+                Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    [Fact]
     public void UnverifiedDeploymentEvidenceKeepsFullAcceptanceBlockedAfterJourneyPasses()
     {
         JsonObject source = new()
@@ -566,10 +596,9 @@ public sealed class ApiAcceptanceRunnerTests
     {
         const string sourceSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         const string sourceTree = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-        const string digest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-        File.WriteAllText(Path.Combine(workspace, "publication.json"), "{}");
         File.WriteAllText(Path.Combine(workspace, "foundation.json"), "{}");
-        File.WriteAllBytes(Path.Combine(workspace, "agenthost.oci"), [1, 2, 3]);
+        File.WriteAllText(Path.Combine(workspace, "images.json"),
+            $"{{\"images\":{{\"agentweaver-agenthost\":\"sha-{sourceSha}\"}}}}");
         return new JsonObject
         {
             ["executionIntent"] = "execute",
@@ -596,21 +625,11 @@ public sealed class ApiAcceptanceRunnerTests
                 ["runtimeReceipt"] = new JsonObject { ["revision"] = 1 },
                 ["storageReceipt"] = new JsonObject { ["shareId"] = "storage-test" },
                 ["sourceReceipt"] = new JsonObject { ["sourceSha"] = sourceSha, ["sourceTree"] = sourceTree },
-                ["imageReceipt"] = new JsonObject
-                {
-                    ["registryImage"] = $"ghcr.io/sabbour/agentweaver/agenthost@{digest}",
-                    ["registryDigest"] = digest,
-                    ["archiveSha256"] = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-                    ["manifestDigest"] = digest,
-                    ["configDigest"] = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-                    ["compressedPullBytes"] = 3,
-                },
             },
             ["deploymentEvidence"] = new JsonObject
             {
-                ["publicationPath"] = "publication.json",
                 ["manifestPath"] = "foundation.json",
-                ["agentHostArchivePath"] = "agenthost.oci",
+                ["imageManifestPath"] = "images.json",
             },
             ["fixturePlan"] = new JsonObject
             {

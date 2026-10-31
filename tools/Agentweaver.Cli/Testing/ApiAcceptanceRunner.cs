@@ -314,9 +314,7 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
     {
         JsonObject evidence = ApiAcceptanceSupport.RequireObject(
             manifest.Root["deploymentEvidence"], "Exact source deployment evidence paths are required.");
-        List<string> names = ["publicationPath", "manifestPath", "agentHostArchivePath"];
-        if (evidence.ContainsKey("integrationDeploymentReceiptPath"))
-            names.Add("integrationDeploymentReceiptPath");
+        List<string> names = ["manifestPath", "imageManifestPath"];
         string outputIdentity = ApiAcceptanceSupport.PathIdentity(outputPath);
         Dictionary<string, string> hashes = new(StringComparer.Ordinal);
         foreach (string name in names)
@@ -353,7 +351,7 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
     {
         string outputIdentity = ApiAcceptanceSupport.PathIdentity(outputPath);
         HashSet<string> inputs = [ApiAcceptanceSupport.PathIdentity(inputPath)];
-        foreach (string name in new[] { "publicationPath", "manifestPath", "agentHostArchivePath", "integrationDeploymentReceiptPath" })
+        foreach (string name in new[] { "manifestPath", "imageManifestPath" })
         {
             if (manifest.Root["deploymentEvidence"]?[name] is not JsonValue value
                 || !value.TryGetValue<string>(out string? proofPath))
