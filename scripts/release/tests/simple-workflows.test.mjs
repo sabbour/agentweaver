@@ -3,11 +3,14 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } fr
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { parse } from 'yaml';
-import { deployKustomize, parseDeployKustomizeArgs } from '../deploy-kustomize.mjs';
+import { parse, stringify } from 'yaml';
+import { deployKustomize, parseDeployKustomizeArgs, parseImageManifest } from '../deploy-kustomize.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const REGISTRY = 'ghcr.io/sabbour';
+const runtimeConfig = JSON.parse(readFileSync(
+  path.join(root, 'deploy', 'k8s', 'runtime-configs', 'projects-config-runtime-config.json'), 'utf8',
+));
 const readYaml = relativePath => parse(readFileSync(path.join(root, relativePath), 'utf8'));
 const imageDigest = `sha256:${'a'.repeat(64)}`;
 const serviceClientId = '12345678-1234-4123-8123-123456789abc';
@@ -19,6 +22,34 @@ const jobNames = [
   'identity-broker-migration', 'environment-migration', 'orchestrator-migration',
   'events-and-sessions-migration', 'projects-config-migration',
 ];
+const imageRepositories = readYaml('deploy/k8s/kustomization.yaml').images
+  .map(({ name }) => name.replace(`${REGISTRY}/`, ''));
+const deploymentImages = {
+  'identity-broker': 'agentweaver.identity.broker',
+  'events-and-sessions': 'agentweaver.eventsandsessions',
+  gateway: 'agentweaver.gateway',
+  mcp: 'agentweaver.mcp',
+  web: 'agentweaver-web',
+  orchestrator: 'agentweaver.orchestrator',
+  environment: 'agentweaver.environment',
+  knowledge: 'agentweaver.knowledge',
+  'projects-config': 'agentweaver.projects.config',
+};
+const deploymentFiles = {
+  'identity-broker': '../identity-broker/deployment.yaml',
+  'events-and-sessions': 'events-and-sessions-deployment.json',
+  gateway: 'gateway-deployment.json',
+  mcp: 'mcp-deployment.json',
+  web: 'web-deployment.json',
+  orchestrator: 'orchestrator-deployment.json',
+  environment: 'environment-deployment.json',
+  knowledge: 'knowledge-deployment.json',
+  'projects-config': 'projects-config-deployment.json',
+};
+const selectedTag = `sha-${'b'.repeat(40)}`;
+const existingTag = `sha-${'c'.repeat(40)}`;
+const digestForTag = tag => `sha256:${tag.slice(4)}${'0'.repeat(24)}`;
+const restoreReplicasAnnotation = 'agentweaver.io/local-deploy-restore-replicas';
 
 function scratch() {
   const directory = path.join(root, '.test-scratch', `simple-deploy-${process.pid}-${Math.random().toString(16).slice(2)}`);
@@ -40,25 +71,111 @@ function job(name) {
   };
 }
 
+function workloadSource(kustomizationPath, name) {
+  return parse(readFileSync(path.join(path.dirname(kustomizationPath), 'base', 'workloads',
+    deploymentFiles[name]), 'utf8'));
+}
+
 function renderedRoot(kustomizationPath) {
   const source = parse(readFileSync(kustomizationPath, 'utf8'));
   assert.equal(source.images.length, 10);
-  assert.equal(source.images.every(image => image.digest === imageDigest), true);
+  assert.equal(source.images.every(image => /^sha256:[a-f0-9]{64}$/.test(image.digest)), true);
+  const resources = serviceNames.map(name => workloadSource(kustomizationPath, name));
+  for (const image of source.images) {
+    const oldImage = `${image.name}:`;
+    const newImage = `${image.newName}@${image.digest}`;
+    for (const resource of resources) {
+      for (const container of [
+        ...(resource.spec?.template?.spec?.containers ?? []),
+        ...(resource.spec?.template?.spec?.initContainers ?? []),
+      ]) {
+        if (container.image?.startsWith(oldImage)) container.image = newImage;
+        for (const setting of container.env ?? []) {
+          if (setting.value?.startsWith(oldImage)) setting.value = newImage;
+        }
+      }
+    }
+  }
   return [
     'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: agentweaver\n  labels:\n    pod-security.kubernetes.io/enforce: restricted\n',
-    ...serviceNames.map(name =>
-      `apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: ${name}\nspec: {}\n`),
+    stringify(runtimeConfig),
+    ...resources.map(stringify),
   ].join('---\n');
 }
 
-function fakeExec(calls, { failedJob, failedRollout, missingProjectsConfigClientId } = {}) {
+function fakeExec(calls, {
+  failedJob, failedRollout, missingProjectsConfigClientId, liveImageRefs, distinctDigests = false,
+  liveRuntimeConfig = runtimeConfig, denyRuntimeConfigDelete = false,
+  liveAgentHostSettings = {}, failApplyCount = 0, remainingPodPolls = 0, state,
+} = {}) {
+  const live = state ?? { runtimeConfig: structuredClone(liveRuntimeConfig), deployments: {} };
+  let podPolls = remainingPodPolls;
+  let failedApplies = failApplyCount;
+  const liveDeployment = name => {
+    if (!live.deployments[name]) {
+      const kustomizationPath = path.join(calls[0].options.cwd, 'deploy', 'k8s', 'kustomization.yaml');
+      const deployment = workloadSource(kustomizationPath, name);
+      for (const container of [
+        ...(deployment.spec?.template?.spec?.containers ?? []),
+        ...(deployment.spec?.template?.spec?.initContainers ?? []),
+      ]) {
+        for (const repository of imageRepositories) {
+          const prefix = `${REGISTRY}/${repository}:`;
+          const reference = liveImageRefs && Object.hasOwn(liveImageRefs, repository)
+            ? liveImageRefs[repository]
+            : existingTag;
+          if (reference === null) {
+            if (container.image?.startsWith(prefix)) container.image = undefined;
+          } else if (container.image?.startsWith(prefix)) container.image = `${prefix}${reference}`;
+          for (const setting of container.env ?? []) {
+            if (reference === null) {
+              if (setting.value?.startsWith(prefix)) setting.value = undefined;
+            } else if (setting.value?.startsWith(prefix)) setting.value = `${prefix}${reference}`;
+          }
+        }
+      }
+      if (name === 'environment') {
+        for (const [settingName, value] of Object.entries(liveAgentHostSettings)) {
+          const setting = deployment.spec.template.spec.containers
+            .find(container => container.name === 'environment').env
+            .find(entry => entry.name === settingName);
+          if (setting) setting.value = value;
+        }
+      }
+      live.deployments[name] = deployment;
+    }
+    return live.deployments[name];
+  };
   return (command, args, options = {}) => {
     calls.push({ command, args, options });
-    if (command === 'docker') return { status: 0, stdout: `${imageDigest}\n`, stderr: '' };
+    if (command === 'docker') {
+      const reference = args[3];
+      const digest = !distinctDigests ? imageDigest
+        : reference.includes('@sha256:') ? reference.slice(reference.lastIndexOf('@') + 1)
+          : reference.endsWith(`:${selectedTag}`) ? digestForTag(selectedTag)
+            : digestForTag(existingTag);
+      return { status: 0, stdout: `${digest}\n`, stderr: '' };
+    }
     if (command === 'az') return { status: 0, stdout: `${serviceClientId}\n`, stderr: '' };
     if (command !== 'kubectl') return { status: 1, stdout: '', stderr: `unexpected command ${command}` };
     if (args[0] === 'config') return { status: 0, stdout: 'selected-context\n', stderr: '' };
-    if (args[0] === 'auth') return { status: 0, stdout: 'yes\n', stderr: '' };
+    if (args[0] === 'auth') return {
+      status: 0,
+      stdout: denyRuntimeConfigDelete && args[2] === 'delete' &&
+        args[3] === 'configmap/projects-config-runtime-config' ? 'no\n' : 'yes\n',
+      stderr: '',
+    };
+    if (args[0] === 'get' && args[1] === 'configmap') {
+      return { status: 0, stdout: live.runtimeConfig ? JSON.stringify(live.runtimeConfig) : '', stderr: '' };
+    }
+    if (args[0] === 'get' && args[1] === 'deployment') {
+      return { status: 0, stdout: JSON.stringify(liveDeployment(args[2])), stderr: '' };
+    }
+    if (args[0] === 'get' && args[1] === 'pods') {
+      const items = podPolls > 0 ? [{ metadata: { name: 'projects-config-0' } }] : [];
+      podPolls = Math.max(0, podPolls - 1);
+      return { status: 0, stdout: JSON.stringify({ items }), stderr: '' };
+    }
     if (args[0] === 'get' && args[1] === 'serviceaccount' && args[2] === 'p1-postgres-migration') {
       return { status: 0, stdout: JSON.stringify({ metadata: {
         annotations: { 'azure.workload.identity/client-id': serviceClientId },
@@ -78,6 +195,7 @@ function fakeExec(calls, { failedJob, failedRollout, missingProjectsConfigClient
     if (args[0] === 'kustomize') {
       const relative = path.relative(calls[0].options.cwd, args[1]).replaceAll('\\', '/');
       if (relative === 'deploy/k8s') {
+        calls.at(-1).renderedImages = parse(readFileSync(path.join(args[1], 'kustomization.yaml'), 'utf8')).images;
         return { status: 0, stdout: renderedRoot(path.join(args[1], 'kustomization.yaml')), stderr: '' };
       }
       if (relative.endsWith('migrations/p1-postgres')) {
@@ -90,7 +208,34 @@ function fakeExec(calls, { failedJob, failedRollout, missingProjectsConfigClient
       }
       return { status: 1, stdout: '', stderr: `unexpected kustomize path ${relative}` };
     }
-    if (args[0] === 'create') return { status: 0, stdout: 'job created\n', stderr: '' };
+    if (args[0] === 'create') {
+      const resource = parse(options.input);
+      if (resource.kind === 'ConfigMap') {
+        live.runtimeConfig = resource;
+        return { status: 0, stdout: 'configmap created\n', stderr: '' };
+      }
+      return { status: 0, stdout: 'job created\n', stderr: '' };
+    }
+    if (args[0] === 'delete' && args[1] === 'configmap') {
+      live.runtimeConfig = undefined;
+      return { status: 0, stdout: 'configmap deleted\n', stderr: '' };
+    }
+    if (args[0] === 'annotate') {
+      const deployment = liveDeployment('projects-config');
+      deployment.metadata.annotations ??= {};
+      const annotation = args[2];
+      if (annotation.endsWith('-')) delete deployment.metadata.annotations[annotation.slice(0, -1)];
+      else {
+        const [key, value] = annotation.split('=');
+        deployment.metadata.annotations[key] = value;
+      }
+      return { status: 0, stdout: 'deployment annotated\n', stderr: '' };
+    }
+    if (args[0] === 'scale') {
+      const replicas = Number(args.find(arg => arg.startsWith('--replicas=')).split('=')[1]);
+      liveDeployment('projects-config').spec.replicas = replicas;
+      return { status: 0, stdout: 'deployment scaled\n', stderr: '' };
+    }
     if (args[0] === 'wait') {
       const name = args[2].slice('job/'.length);
       return name.startsWith(failedJob ?? '\u0000')
@@ -98,7 +243,28 @@ function fakeExec(calls, { failedJob, failedRollout, missingProjectsConfigClient
         : { status: 0, stdout: 'condition met\n', stderr: '' };
     }
     if (args[0] === 'logs') return { status: 0, stdout: 'migration failed safely\n', stderr: '' };
-    if (args[0] === 'apply') return { status: 0, stdout: 'resources applied\n', stderr: '' };
+    if (args[0] === 'apply') {
+      if (failedApplies > 0) {
+        failedApplies -= 1;
+        return { status: 1, stdout: '', stderr: 'simulated workload apply failure' };
+      }
+      const resources = parse(options.input).items;
+      for (const resource of resources) {
+        if (resource.kind === 'ConfigMap' && resource.metadata.name === 'projects-config-runtime-config') {
+          live.runtimeConfig = resource;
+        }
+        if (resource.kind === 'Deployment') {
+          const current = live.deployments[resource.metadata.name];
+          const marker = current?.metadata?.annotations?.[restoreReplicasAnnotation];
+          if (marker !== undefined) {
+            resource.metadata.annotations ??= {};
+            resource.metadata.annotations[restoreReplicasAnnotation] = marker;
+          }
+          live.deployments[resource.metadata.name] = resource;
+        }
+      }
+      return { status: 0, stdout: 'resources applied\n', stderr: '' };
+    }
     if (args[0] === 'rollout' && args[2] === `deployment/${failedRollout}`) {
       return { status: 1, stdout: '', stderr: 'CrashLoopBackOff' };
     }
@@ -154,7 +320,7 @@ test('v1 workload deployment is operator-run rather than a hosted AKS workflow',
   assert.equal(existsSync(path.join(root, '.github/workflows/v1-deploy.yml')), false);
   const runbook = readFileSync(path.join(root, 'releases/README.md'), 'utf8');
   assert.match(runbook, /az login/);
-  assert.match(runbook, /npm run deploy:kustomize -- --image-tag/);
+  assert.match(runbook, /npm run deploy:kustomize -- --image-manifest/);
   assert.doesNotMatch(runbook, /gh workflow run .*v1-deploy/);
 });
 
@@ -193,8 +359,18 @@ test('deployment creates existing migration Jobs directly before one namespaced 
     assert.equal(projectsConfigSpec.containers[0].env.some(setting => setting.valueFrom?.secretKeyRef), false);
     assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
       call.args[3] === 'secrets'), false);
+    assert.deepEqual(
+      calls.filter(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
+        call.args[1] === 'can-i' && call.args[3]?.startsWith('deployment/'))
+        .map(call => `${call.args[2]}:${call.args[3]}`).sort(),
+      serviceNames.flatMap(name => ['get', 'list', 'patch', 'watch']
+        .map(verb => `${verb}:deployment/${name}`)).sort(),
+    );
     assert.equal(calls.some(call => call.command === 'npm'), false);
     assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'apply'), true);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'replace'), false);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'rollout' &&
+      call.args[1] === 'restart'), false);
 
     const render = calls.findIndex(call => call.command === 'kubectl' &&
       call.args[0] === 'kustomize' && call.args[1].endsWith(path.join('deploy', 'k8s')));
@@ -265,6 +441,217 @@ test('a failed Deployment rollout does not report a complete deployment', async 
     assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'apply'), true);
     assert.equal(logs.filter(message => message.startsWith('Deployment ') && message.endsWith(' is ready.')).length, 8);
     assert.equal(logs.includes('Deployment projects-config is ready.'), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('image manifest arguments select exactly one input and require execution', () => {
+  assert.deepEqual(parseDeployKustomizeArgs(['--image-manifest', 'images.json', '--execute']),
+    { imageManifest: 'images.json' });
+  assert.deepEqual(parseDeployKustomizeArgs(['--image-tag', selectedTag, '--execute']),
+    { imageTag: selectedTag });
+  assert.throws(() => parseDeployKustomizeArgs([
+    '--image-manifest', 'images.json', '--image-tag', selectedTag, '--execute',
+  ]), /exactly one/);
+  assert.throws(() => parseDeployKustomizeArgs(['--image-manifest', '--execute']), /requires a file path/);
+});
+
+test('image manifest accepts published tags or digests and rejects invalid or duplicate entries', () => {
+  assert.deepEqual([...parseImageManifest(JSON.stringify({ images: {
+    'agentweaver-web': selectedTag,
+    'agentweaver.identity.broker': imageDigest,
+  } }))], [
+    ['agentweaver-web', selectedTag],
+    ['agentweaver.identity.broker', imageDigest],
+  ]);
+  assert.throws(() => parseImageManifest(JSON.stringify({ images: { unknown: selectedTag } })),
+    /unknown repository/);
+  assert.throws(() => parseImageManifest(JSON.stringify({ images: { 'agentweaver-web': 'latest' } })),
+    /must be sha-/);
+  assert.throws(() => parseImageManifest(`images:\n  agentweaver-web: ${selectedTag}`), /valid JSON/);
+  assert.throws(() => parseImageManifest(
+    `{"images":{"agentweaver-web":"${selectedTag}","agentweaver-web":"${existingTag}"}}`),
+  /unique keys/);
+});
+
+test('partial deployment preserves unselected live images and skips unrelated migration Jobs', async () => {
+  const directory = scratch();
+  const manifestPath = path.join(directory, 'images.json');
+  const calls = [];
+  const liveImageRefs = Object.fromEntries(imageRepositories.map(repository => [repository, existingTag]));
+  const liveAgentHostSettings = {
+    Environment__Sandbox__AgentSandbox__OptionsRevision: 'p1-v1.2.3',
+    Environment__Sandbox__AgentSandbox__ContainerImagePlatform: 'linux/arm64',
+    Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes: '987654321',
+  };
+  writeFileSync(manifestPath, JSON.stringify({ images: { 'agentweaver-web': selectedTag } }));
+  try {
+    await deployKustomize({ imageManifest: manifestPath }, {
+      root: directory,
+      exec: fakeExec(calls, { liveImageRefs, liveAgentHostSettings, distinctDigests: true }),
+      log() {},
+    });
+
+    const rootRender = calls.find(call => call.command === 'kubectl' && call.args[0] === 'kustomize' &&
+      call.args[1].endsWith(path.join('deploy', 'k8s')));
+    const rendered = Object.fromEntries(rootRender.renderedImages.map(image => [
+      image.name.replace(`${REGISTRY}/`, ''), image.digest,
+    ]));
+    assert.equal(rendered['agentweaver-web'], digestForTag(selectedTag));
+    for (const repository of imageRepositories.filter(repository => repository !== 'agentweaver-web')) {
+      assert.equal(rendered[repository], digestForTag(existingTag), `${repository} keeps its deployed image`);
+    }
+    assert.equal(calls.filter(call => call.command === 'kubectl' && call.args[0] === 'create').length, 0);
+    assert.equal(calls.some(call => call.command === 'az'), false);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
+      ['jobs.batch', 'pods', 'pods/log'].includes(call.args[3])), false);
+    assert.equal(calls.filter(call => call.command === 'kubectl' && call.args[0] === 'rollout').length, 9);
+
+    const applied = parse(calls.find(call => call.command === 'kubectl' && call.args[0] === 'apply').options.input);
+    const environment = applied.items.find(resource =>
+      resource.kind === 'Deployment' && resource.metadata.name === 'environment');
+    const environmentContainer = environment.spec.template.spec.containers
+      .find(container => container.name === 'environment');
+    const environmentSettings = Object.fromEntries(environmentContainer.env.map(({ name, value }) => [name, value]));
+    assert.equal(environmentContainer.image,
+      `${REGISTRY}/agentweaver.environment@${digestForTag(existingTag)}`);
+    assert.equal(environmentSettings.Environment__Sandbox__AgentSandbox__ContainerImage,
+      `${REGISTRY}/agentweaver-agenthost@${digestForTag(existingTag)}`);
+    assert.equal(environmentSettings.Environment__Sandbox__AgentSandbox__OptionsRevision,
+      liveAgentHostSettings.Environment__Sandbox__AgentSandbox__OptionsRevision);
+    assert.equal(environmentSettings.Environment__Sandbox__AgentSandbox__ContainerImagePlatform,
+      liveAgentHostSettings.Environment__Sandbox__AgentSandbox__ContainerImagePlatform);
+    assert.equal(environmentSettings.Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes,
+      liveAgentHostSettings.Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('single Broker image update runs only its matching migration Job', async () => {
+  const directory = scratch();
+  const manifestPath = path.join(directory, 'images.json');
+  const calls = [];
+  const liveImageRefs = Object.fromEntries(imageRepositories.map(repository => [repository, existingTag]));
+  writeFileSync(manifestPath, JSON.stringify({ images: { 'agentweaver.identity.broker': selectedTag } }));
+  try {
+    await deployKustomize({ imageManifest: manifestPath }, {
+      root: directory, exec: fakeExec(calls, { liveImageRefs, distinctDigests: true }), log() {},
+    });
+    const createdJobs = calls.filter(call => call.command === 'kubectl' && call.args[0] === 'create')
+      .map(call => parse(call.options.input));
+    assert.deepEqual(createdJobs.map(value => value.metadata.name.split('-').slice(0, -1).join('-')),
+      ['identity-broker-migration']);
+    assert.equal(calls.some(call => call.command === 'az'), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('partial deployment fails before writes when an omitted live image is unavailable', async () => {
+  const directory = scratch();
+  const manifestPath = path.join(directory, 'images.json');
+  const calls = [];
+  const liveImageRefs = Object.fromEntries(imageRepositories
+    .filter(repository => repository !== 'agentweaver-agenthost')
+    .map(repository => [repository, existingTag]));
+  liveImageRefs['agentweaver-agenthost'] = null;
+  writeFileSync(manifestPath, JSON.stringify({ images: { 'agentweaver-web': selectedTag } }));
+  try {
+    await assert.rejects(deployKustomize({ imageManifest: manifestPath }, {
+      root: directory, exec: fakeExec(calls, { liveImageRefs, distinctDigests: true }), log() {},
+    }), /Could not find the currently deployed image for agentweaver-agenthost/);
+    assert.equal(calls.some(call => call.command === 'kubectl' &&
+      ['create', 'apply', 'rollout'].includes(call.args[0])), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('immutable Projects & Config replacement follows stop-wait-replace-resume and retries activation', async () => {
+  const directory = scratch();
+  const manifestPath = path.join(directory, 'images.json');
+  const calls = [];
+  const liveRuntimeConfig = structuredClone(runtimeConfig);
+  liveRuntimeConfig.data.AgentHost__ModelBindingsRevision = 'old-revision';
+  const projectConfigDeployment = workloadSource(path.join(directory, 'deploy', 'k8s', 'kustomization.yaml'),
+    'projects-config');
+  projectConfigDeployment.spec.replicas = 3;
+  projectConfigDeployment.spec.template.spec.containers[0].image =
+    `${REGISTRY}/agentweaver.projects.config:${existingTag}`;
+  const state = {
+    runtimeConfig: liveRuntimeConfig,
+    deployments: { 'projects-config': projectConfigDeployment },
+  };
+  const sleeps = [];
+  writeFileSync(manifestPath, JSON.stringify({ images: { 'agentweaver-web': selectedTag } }));
+  try {
+    const exec = fakeExec(calls, {
+      liveRuntimeConfig,
+      state,
+      failApplyCount: 1,
+      remainingPodPolls: 1,
+    });
+    const options = { root: directory, exec, sleep: async milliseconds => sleeps.push(milliseconds), log() {} };
+    await assert.rejects(deployKustomize({ imageManifest: manifestPath }, options),
+      /Workload apply failed: simulated workload apply failure/);
+
+    const firstDelete = calls.findIndex(call => call.command === 'kubectl' &&
+      call.args[0] === 'delete' && call.args[1] === 'configmap');
+    const firstCreate = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'ConfigMap');
+    const firstScaleDown = calls.findIndex(call => call.command === 'kubectl' &&
+      call.args[0] === 'scale' && call.args[2] === '--replicas=0');
+    const firstScaleUp = calls.findIndex(call => call.command === 'kubectl' &&
+      call.args[0] === 'scale' && call.args[2] === '--replicas=3');
+    const firstApply = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'apply');
+    assert.ok(firstScaleDown < firstDelete && firstDelete < firstCreate &&
+      firstCreate < firstScaleUp && firstScaleUp < firstApply);
+    assert.equal(calls[firstDelete].args[2], 'projects-config-runtime-config');
+    assert.equal(parse(calls[firstCreate].options.input).metadata.name, 'projects-config-runtime-config');
+    assert.equal(state.deployments['projects-config'].spec.replicas, 3);
+    assert.equal(state.deployments['projects-config'].metadata.annotations[restoreReplicasAnnotation], '3');
+    assert.equal(parse(calls[firstApply].options.input).items.find(resource =>
+      resource.kind === 'Deployment' && resource.metadata.name === 'projects-config').spec.replicas, 3);
+
+    const callsBeforeRetry = calls.length;
+    await deployKustomize({ imageManifest: manifestPath }, options);
+    const retryCalls = calls.slice(callsBeforeRetry);
+    assert.equal(retryCalls.some(call => call.command === 'kubectl' && call.args[0] === 'delete'), false);
+    assert.equal(retryCalls.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'ConfigMap'), false);
+    assert.deepEqual(retryCalls.filter(call => call.command === 'kubectl' && call.args[0] === 'scale')
+      .map(call => call.args[2]), ['--replicas=0', '--replicas=3']);
+    assert.equal(state.deployments['projects-config'].spec.replicas, 3);
+    assert.equal(state.deployments['projects-config'].metadata.annotations[restoreReplicasAnnotation], undefined);
+    assert.deepEqual(sleeps, [5_000, 70_000, 70_000]);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
+      call.args[1] === 'can-i' && call.args[2] === 'delete' &&
+      call.args[3] === 'configmap/projects-config-runtime-config'), true);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('immutable runtime ConfigMap update checks delete permission before migration writes', async () => {
+  const directory = scratch();
+  const manifestPath = path.join(directory, 'images.json');
+  const calls = [];
+  const liveRuntimeConfig = structuredClone(runtimeConfig);
+  liveRuntimeConfig.data.AgentHost__ModelBindingsRevision = 'old-revision';
+  writeFileSync(manifestPath, JSON.stringify({ images: { 'agentweaver.identity.broker': selectedTag } }));
+  try {
+    await assert.rejects(deployKustomize({ imageManifest: manifestPath }, {
+      root: directory,
+      exec: fakeExec(calls, { liveRuntimeConfig, denyRuntimeConfigDelete: true }),
+      log() {},
+    }), /cannot delete configmap\/projects-config-runtime-config/);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
+      call.args[1] === 'can-i' && call.args[2] === 'delete' &&
+      call.args[3] === 'configmap/projects-config-runtime-config'), true);
+    assert.equal(calls.some(call => call.command === 'kubectl' &&
+      ['annotate', 'create', 'delete', 'apply', 'scale'].includes(call.args[0])), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

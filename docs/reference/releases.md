@@ -44,7 +44,11 @@ publication receipts, source claims, or provenance checks.
 
 The image workflow automatically pushes all ten image repositories to GHCR as
 `sha-<commit>` tags. An operator runs the workload deployment locally from an
-approved Azure CLI and Kubernetes context:
+approved Azure CLI and Kubernetes context. Select the repositories to update
+in the JSON image manifest described in the
+[Kustomize guide](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md#select-images-with-a-manifest);
+omitted repositories keep their live image references. The legacy
+`--image-tag` form updates all ten images.
 
 ```powershell
 az login
@@ -53,14 +57,14 @@ az aks get-credentials --resource-group agentweaver --name agentweaver-aks `
   --subscription <approved-subscription>
 kubelogin convert-kubeconfig --login azurecli
 kubectl config current-context
-npm run deploy:kustomize -- --image-tag sha-<40-character-commit> --execute
+npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --execute
 ```
 
 Confirm the selected subscription and cluster context before execution. The
 operator identity must already have the required AKS and namespace permissions;
 the command does not provision Azure resources, grant access, read Secrets, or
-manage Namespaces. It resolves all ten GHCR tags to digests, runs the
-Broker/P1 and Projects & Config migration Jobs with runtime-grant reconciliation,
+manage Namespaces. It resolves selected GHCR references to digests, runs only
+the selected services' migration Jobs with runtime-grant reconciliation,
 applies the namespaced Kustomize overlay, then checks all nine Deployment
 rollouts. A migration failure prevents the root workload apply.
 

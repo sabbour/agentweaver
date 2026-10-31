@@ -156,6 +156,17 @@ bundle. For an existing installation, use the manual maintenance procedure:
    kubectl rollout status deployment/knowledge -n agentweaver
    ```
 
+The local `deploy:kustomize` helper follows this stop/wait/cache-expiry
+procedure for `projects-config-runtime-config`. It records the existing
+replica count on `deployment/projects-config`, waits for that Deployment's
+Pods to terminate, waits 70 seconds, replaces only the named ConfigMap, then
+restores the replica count before applying workloads and checking rollouts.
+If replacement, apply, or rollout fails, the recovery annotation remains;
+rerun the same deployment command to resume. If the ConfigMap is absent, the
+helper leaves the Deployment stopped until the retry recreates it. Do not
+clear the annotation manually. Other immutable ConfigMaps, including
+`knowledge-runtime-config`, still require the manual procedure above.
+
 Kubelet caches immutable ConfigMap data per node and does not watch it for
 changes. If a pod that references the ConfigMap keeps running on a node while
 you delete and recreate the ConfigMap under the same name, new pods on that

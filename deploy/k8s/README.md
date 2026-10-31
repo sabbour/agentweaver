@@ -22,7 +22,7 @@ for ConfigMap keys, defaults, and value sources.
 Select the approved cluster context and complete the environment-specific
 prerequisites:
 
-1. Select the immutable `sha-<commit>` tag produced by the automatic v1 image workflow.
+1. Select the published GHCR image tags or digests in an operator-supplied JSON manifest.
 2. Complete the workload runtime ConfigMaps and Projects & Config provider
    catalog. Follow the runtime configuration reference; do not put credentials
    or private keys in ConfigMaps.
@@ -30,7 +30,7 @@ prerequisites:
    the workloads. Complete the managed certificate procedure so AKS creates
    `identity-broker-tls`.
 4. Confirm the database and Entra workload identities are ready. The deploy
-   command runs the Broker and P1 migration Jobs before it applies workloads.
+   command runs the selected service migrations before it applies workloads.
 5. After the product Services exist, configure the separate managed Gateway
    and routing resources using the Azure operator guide.
 
@@ -58,16 +58,17 @@ resources remain separate from the product overlay.
 ## Deploy
 
 ```powershell
-npm run deploy:kustomize -- --image-tag sha-<40-character-commit> --execute
+npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --execute
 ```
 
-The command resolves all ten tags to GHCR digests, runs the existing Broker
-and P1 migrations, runs Projects & Config migration, renders the root overlay,
-applies it to the selected `kubectl` context in namespace `agentweaver`, then
-waits for the nine Deployments. A migration failure stops before the root
-overlay is applied. Run it from the operator machine after selecting the
-approved Azure CLI subscription and AKS kubeconfig context; it uses the local
-interactive Azure CLI identity, not a GitHub-hosted deployment identity.
+The command resolves selected published images to GHCR digests, runs
+migrations for selected services, renders the root overlay, applies it to the
+selected `kubectl` context in namespace `agentweaver`, then waits for the nine
+Deployments. A migration failure stops before the root overlay is applied.
+Run it from the operator machine after selecting the approved Azure CLI
+subscription and AKS kubeconfig context; it uses the local interactive Azure
+CLI identity, not a GitHub-hosted deployment identity. Builds still publish
+images automatically to GHCR.
 
 Projects & Config's runtime identity is DDL-restricted. The migration Job uses
 Kubernetes Workload Identity, not a token Secret. The one-time setup provisions
@@ -122,3 +123,59 @@ before deploying workloads. Follow the
 when changing an existing installation. For Knowledge, preserve the stable
 resource label `agentweaver.knowledge` and increase `ResourceGeneration` only
 after wiping or replacing the store.
+
+## Select images with a manifest
+
+The local deploy command accepts an operator-supplied JSON file mapping GHCR
+repository names to published `sha-<40-character-commit>` tags or
+`sha256:<64-hex-digest>` references:
+
+```json
+{
+  "images": {
+    "agentweaver-web": "sha-<40-character-commit>",
+    "agentweaver.identity.broker": "sha256:<64-hex-digest>"
+  }
+}
+```
+
+Run the same deployment helper with that file:
+
+```powershell
+npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --execute
+```
+
+The v1 image workflow pushes tags and lists digests in its run summary; it does
+not produce an image-manifest artifact. This file is only the image selection
+input, not a publication receipt or source-claim gate. Its repository names
+match the GHCR names in the image workflow and are unrelated to the
+component-version manifest at `releases/foundation.json`.
+
+Include only the images to update. For omitted repositories, the helper reads
+the current references from the live Deployments, including the AgentHost
+image configured in the Environment Deployment, and pins them to their
+resolved digests. It fails if any omitted image cannot be read or validated;
+it never falls back to the checked-in Kustomize pins. A full ten-image
+manifest also works when no live Deployment refs are available. The existing
+`--image-tag sha-<commit>` form remains available to update all ten images.
+
+Only selected images with schema migrations run migration Jobs: Broker runs
+the Broker Job; Environment, Orchestrator, and Events & Sessions each run
+their matching P1 Job; Projects & Config runs its migration Job. Web, Gateway,
+MCP, Knowledge, and AgentHost updates do not trigger these deployment
+migration Jobs. The root Kustomize bundle is still applied and all nine
+Deployment rollouts are checked.
+
+If the rendered `projects-config-runtime-config` data changes, the helper
+checks delete permission scoped to `configmap/projects-config-runtime-config`
+before migrations. It saves the existing replica count on the exact
+`projects-config` Deployment, stops that Deployment, waits for its Pods to
+terminate and for the 70-second immutable-ConfigMap cache window, then deletes
+and recreates only `projects-config-runtime-config`. It restores the saved
+replica count before applying the workloads and checking all rollouts.
+
+If replacement, workload apply, or rollout fails, the helper keeps a recovery
+annotation on `projects-config`. Rerun the same deployment command to resume
+the stop/wait/replace/resume sequence; if the ConfigMap is absent, the helper
+keeps the Deployment stopped until the retry recreates it. Do not clear the
+annotation manually.

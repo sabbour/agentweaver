@@ -43,7 +43,7 @@ export const SETUP_USAGE = `Usage: npm run db:maintenance:setup -- [--execute] [
 Without --execute the command only checks the setup and lists what is missing; it exits 1 if
 anything is missing. With --execute it creates only the missing parts and checks them again.
 Run it signed in to Azure as the PostgreSQL Entra administrator and to GitHub as a repository admin.
-Use --v1-deploy-only to provision the approved v1 deployment identity and namespace permissions without running P1 maintenance setup.
+Use --v1-deploy-only to configure the shared v1 database-maintenance workflow identity and namespace permissions without running P1 maintenance setup.
 `;
 
 /** Parses flags. Unknown flags stop the command before anything runs. */

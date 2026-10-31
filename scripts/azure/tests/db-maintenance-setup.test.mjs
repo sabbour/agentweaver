@@ -165,7 +165,7 @@ test('execute creates only what is missing, then verifies it', async () => {
   assert.ok(deploy.args.includes(`sourceSha=${'b'.repeat(40)}`));
 });
 
-test('v1 deployment setup provisions only approved identities and namespace authorization', async () => {
+test('maintenance workflow identity setup can skip P1 preparation', async () => {
   const fake = world();
   const receipt = await runDbMaintenanceSetup(
     parseSetupArgs(['--execute', '--v1-deploy-only']), fake.deps);

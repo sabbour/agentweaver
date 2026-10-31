@@ -170,7 +170,11 @@ source-claim gates.
 ## Deploy the Kustomize overlay
 
 Run the workload deployment locally from an approved operator machine with an
-interactive Azure CLI identity and the intended Kubernetes context:
+interactive Azure CLI identity and the intended Kubernetes context. Select
+image repositories using the operator-supplied JSON manifest documented in
+the [Kustomize guide](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md#select-images-with-a-manifest);
+omitted repositories retain their live image references. The legacy
+`--image-tag` form updates all ten images:
 
 ```powershell
 az login
@@ -179,14 +183,14 @@ az aks get-credentials --resource-group agentweaver --name agentweaver-aks `
   --subscription <approved-subscription>
 kubelogin convert-kubeconfig --login azurecli
 kubectl config current-context
-npm run deploy:kustomize -- --image-tag sha-<40-character-commit> --execute
+npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --execute
 ```
 
-The command resolves the ten image tags to immutable digests, runs Broker/P1
-and Projects & Config migrations with runtime-grant reconciliation, renders
-`deploy/k8s`, applies the namespaced resources to the selected context, and
-waits for all nine Deployments. Any failed migration prevents the root overlay
-apply. The local operator identity needs the required AKS and namespace
+The command resolves selected image references to immutable digests, runs
+only the selected services' migrations with runtime-grant reconciliation,
+renders `deploy/k8s`, applies the namespaced resources to the selected context,
+and waits for all nine Deployments. Any failed migration prevents the root
+overlay apply. The local operator identity needs the required AKS and namespace
 permissions; this command neither provisions Azure resources nor grants
 access.
 
