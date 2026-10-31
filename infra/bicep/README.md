@@ -143,15 +143,17 @@ it to the existing resource group. A rerun changes nothing.
 `db-maintenance-ci-identity.bicep` defines the existing v1 workflow identity
 `agentweaver-id-db-maintenance` and the dedicated
 `agentweaver-id-projects-config-migration` identity. GitHub Actions uses OIDC
-from the `v1-db-maintenance` environment; the deployment identity retains
+from the `v1-db-maintenance` environment; the workflow identity retains
 Reader on the resource group and AKS Cluster User on the cluster, with no
 custom Azure role. The migration identity receives no Azure resource role and
 is federated only to the `projects-config-migration` ServiceAccount in
 `agentweaver`. The setup command applies and verifies the namespace Role and
 RoleBinding for the workflow identity plus the migration ServiceAccount
 annotation. `npm run db:maintenance:setup -- --v1-deploy-only --execute`
-performs that one-time setup and sets
-`AZURE_DB_MAINTENANCE_CLIENT_ID` in the GitHub environment.
+performs that one-time setup for the shared database-maintenance workflow
+identity and namespace permissions without running P1 maintenance setup. It
+sets `AZURE_DB_MAINTENANCE_CLIENT_ID` in the GitHub environment used by that
+workflow; it does not configure a hosted AKS deployment workflow.
 
 The Projects & Config migration identity must also be mapped to PostgreSQL as
 a schema owner. Its role needs database `CONNECT` and ownership only of the

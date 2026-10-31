@@ -39,11 +39,14 @@ publication receipts, or source-claim gates.
 
 ## Deploy workloads locally
 
-The v1 image workflow automatically builds and pushes all ten images to GHCR
-as `sha-<40-character-commit>` tags. Find a successful run with the
-`v1-integration-images.yml` workflow and use its full `headSha` as the image
-tag. Workload deployment is an operator-run command from a machine with Azure
-CLI, `kubectl`, `kubelogin`, Docker, and Node.js 24:
+For a local deployment that updates only selected repositories, use the JSON
+image manifest described in the
+[Kustomize guide](../deploy/k8s/README.md#select-images-with-a-manifest).
+
+Run deployment from a machine with Azure CLI, `kubectl`, `kubelogin`, Docker,
+and Node.js 24. Select the published references you want to update in the
+operator-supplied manifest; the helper keeps live references for omitted
+images. The legacy `--image-tag` option still updates all ten images.
 
 ```powershell
 az login
@@ -53,7 +56,7 @@ az aks get-credentials --resource-group agentweaver --name agentweaver-aks `
   --subscription <approved-subscription>
 kubelogin convert-kubeconfig --login azurecli
 kubectl config current-context
-npm run deploy:kustomize -- --image-tag sha-<40-character-commit> --execute
+npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --execute
 ```
 
 Confirm the Azure subscription, tenant, and Kubernetes context are the
@@ -61,11 +64,12 @@ approved target before executing. The local Azure CLI identity must already
 have the required AKS and namespace permissions; the deployment does not
 grant access or provision Azure resources.
 
-The command resolves all ten GHCR tags to digests, runs the Broker, P1, and
-Projects & Config migration Jobs with runtime-grant reconciliation, renders
-the Kustomize overlay, applies namespaced resources, and waits for all nine
-Deployments. It excludes Namespace objects. A migration failure stops before
-the root workload apply. Earlier migrations or workload apply may have
+The command resolves selected manifest references to GHCR digests and keeps
+live references for omitted repositories. It runs only migrations for
+selected services, renders the Kustomize overlay, applies namespaced
+resources, and waits for all nine Deployments. It excludes Namespace objects.
+A migration failure stops before the root workload apply. Earlier migrations
+or workload apply may have
 completed when a later step fails; inspect partial state and do not assume
 rollback. Before retrying a failed migration, have an authorized operator
 diagnose the cause and state. Verify schema compatibility before choosing an

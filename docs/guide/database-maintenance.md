@@ -68,7 +68,7 @@ The supported v1 workload path runs migrations and Projects & Config
 runtime-grant reconciliation before applying services:
 
 ```powershell
-npm run deploy:kustomize -- --image-tag sha-<40-character-commit> --execute
+npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --execute
 ```
 
 The deployment excludes Namespace objects, runs migration Jobs first, then
