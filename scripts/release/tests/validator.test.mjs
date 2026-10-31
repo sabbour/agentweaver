@@ -171,7 +171,7 @@ test('the AgentHost collector dependency is present in the fixture and still req
 test('the Orchestrator host is registered as a prepared service with all project dependencies pinned', () => {
   const host = fixture.components.find(component => component.id === 'Agentweaver.Orchestrator');
   assert.equal(host.kind, 'service');
-  assert.equal(host.version, '1.7.0');
+  assert.equal(host.version, '1.8.0');
   assert.equal(host.project, 'services/orchestrator/Agentweaver.Orchestrator/Agentweaver.Orchestrator.csproj');
   assert.deepEqual(fixture.compatibility
     .filter(({ consumer }) => consumer === host.id)
@@ -186,7 +186,8 @@ test('the Orchestrator host is registered as a prepared service with all project
   assert.equal(check(fixture).stage, 'draft');
 });
 
-test('current Abstractions consumers declare 1.6.0 and predeclare 1.7.0 compatibility', () => {
+test('current Abstractions consumers retain compatibility with 1.6.0 and 1.7.0', () => {
+  assert.equal(fixture.components.find(({ id }) => id === 'Agentweaver.Abstractions').version, '1.7.0');
   const consumers = ['Agentweaver.AgentRuntime', 'Agentweaver.FoundationProbe',
     'Agentweaver.Providers', 'Agentweaver.SourceControl', 'Agentweaver.Orchestrator.Core',
     'Agentweaver.Orchestrator', 'Agentweaver.Secrets.AzureKeyVault', 'Agentweaver.Identity',
@@ -201,7 +202,8 @@ test('current Abstractions consumers declare 1.6.0 and predeclare 1.7.0 compatib
   assert.ok(relationships.every(({ versions }) => versions.includes('1.7.0')));
 });
 
-test('current Identity consumers declare 1.6.0 and predeclare 1.7.0 compatibility', () => {
+test('current Identity consumers retain compatibility with 1.6.0 and 1.7.0', () => {
+  assert.equal(fixture.components.find(({ id }) => id === 'Agentweaver.Identity').version, '1.7.0');
   const consumers = ['Agentweaver.AgentRuntime', 'Agentweaver.Orchestrator',
     'Agentweaver.Identity.Broker', 'Agentweaver.EventsAndSessions', 'Agentweaver.Gateway',
     'Agentweaver.Mcp', 'Agentweaver.Projects.Config', 'Agentweaver.Environment',
@@ -213,7 +215,8 @@ test('current Identity consumers declare 1.6.0 and predeclare 1.7.0 compatibilit
   assert.ok(relationships.every(({ versions }) => versions.includes('1.7.0')));
 });
 
-test('current Persistence.Postgres consumers declare 1.2.2 and predeclare 1.2.3 compatibility', () => {
+test('current Persistence.Postgres consumers retain compatibility with 1.2.2 and 1.2.3', () => {
+  assert.equal(fixture.components.find(({ id }) => id === 'Agentweaver.Persistence.Postgres').version, '1.2.3');
   const consumers = ['Agentweaver.FoundationProbe', 'Agentweaver.Orchestrator',
     'Agentweaver.EventsAndSessions', 'Agentweaver.Environment', 'Agentweaver.Knowledge'];
   const relationships = fixture.compatibility
@@ -224,18 +227,19 @@ test('current Persistence.Postgres consumers declare 1.2.2 and predeclare 1.2.3 
   assert.ok(relationships.every(({ versions }) => versions.includes('1.2.3')));
 });
 
-test('current AgentRuntime, Orchestrator.Core, and Sandbox consumers predeclare the exact bumped versions', () => {
+test('current AgentRuntime, Orchestrator.Core, and Sandbox consumers accept current and previous versions', () => {
   const expected = [
-    ['Agentweaver.AgentRuntime', 'Agentweaver.AgentHost', '1.3.1', '1.4.0'],
-    ['Agentweaver.Orchestrator.Core', 'Agentweaver.Orchestrator', '1.4.0', '1.4.1'],
-    ['Agentweaver.Providers.Sandbox.AgentSandbox', 'Agentweaver.Environment', '1.1.4', '1.2.0'],
+    ['Agentweaver.AgentRuntime', 'Agentweaver.AgentHost', '1.4.0', '1.3.1'],
+    ['Agentweaver.Orchestrator.Core', 'Agentweaver.Orchestrator', '1.4.1', '1.4.0'],
+    ['Agentweaver.Providers.Sandbox.AgentSandbox', 'Agentweaver.Environment', '1.2.0', '1.1.4'],
   ];
-  for (const [dependency, consumer, current, prospective] of expected) {
+  for (const [dependency, consumer, current, previous] of expected) {
+    assert.equal(fixture.components.find(({ id }) => id === dependency).version, current);
     const relationships = fixture.compatibility
       .filter((rule) => rule.dependency === dependency);
     assert.deepEqual(relationships.map(({ consumer: id }) => id), [consumer]);
     assert.ok(relationships[0].versions.includes(current));
-    assert.ok(relationships[0].versions.includes(prospective));
+    assert.ok(relationships[0].versions.includes(previous));
   }
 });
 

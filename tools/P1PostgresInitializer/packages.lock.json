@@ -790,11 +790,11 @@
       "agentweaver.environment": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )",
-          "Agentweaver.Identity": "[1.6.0, )",
-          "Agentweaver.Persistence.Postgres": "[1.2.2, )",
+          "Agentweaver.Abstractions": "[1.7.0, )",
+          "Agentweaver.Identity": "[1.7.0, )",
+          "Agentweaver.Persistence.Postgres": "[1.2.3, )",
           "Agentweaver.Providers": "[1.1.0, )",
-          "Agentweaver.Providers.Sandbox.AgentSandbox": "[1.1.4, )",
+          "Agentweaver.Providers.Sandbox.AgentSandbox": "[1.2.0, )",
           "Agentweaver.Providers.Storage.AzureFiles": "[1.0.4, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
@@ -805,10 +805,10 @@
       "agentweaver.eventsandsessions": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )",
-          "Agentweaver.Identity": "[1.6.0, )",
+          "Agentweaver.Abstractions": "[1.7.0, )",
+          "Agentweaver.Identity": "[1.7.0, )",
           "Agentweaver.ObjectStore.AzureBlob": "[1.0.2, )",
-          "Agentweaver.Persistence.Postgres": "[1.2.2, )",
+          "Agentweaver.Persistence.Postgres": "[1.2.3, )",
           "Agentweaver.Providers": "[1.1.0, )",
           "Agentweaver.Telemetry": "[1.0.2, )",
           "Azure.Identity": "[1.17.1, )",
@@ -820,15 +820,15 @@
       "agentweaver.identity": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )"
+          "Agentweaver.Abstractions": "[1.7.0, )"
         }
       },
       "agentweaver.knowledge": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )",
-          "Agentweaver.Identity": "[1.6.0, )",
-          "Agentweaver.Persistence.Postgres": "[1.2.2, )",
+          "Agentweaver.Abstractions": "[1.7.0, )",
+          "Agentweaver.Identity": "[1.7.0, )",
+          "Agentweaver.Persistence.Postgres": "[1.2.3, )",
           "Agentweaver.Providers": "[1.1.0, )",
           "Agentweaver.Telemetry": "[1.0.2, )",
           "Azure.Identity": "[1.17.1, )",
@@ -841,17 +841,17 @@
       "agentweaver.objectstore.azureblob": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )",
+          "Agentweaver.Abstractions": "[1.7.0, )",
           "Azure.Storage.Blobs": "[12.26.0, )"
         }
       },
       "agentweaver.orchestrator": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )",
-          "Agentweaver.Identity": "[1.6.0, )",
-          "Agentweaver.Orchestrator.Core": "[1.4.0, )",
-          "Agentweaver.Persistence.Postgres": "[1.2.2, )",
+          "Agentweaver.Abstractions": "[1.7.0, )",
+          "Agentweaver.Identity": "[1.7.0, )",
+          "Agentweaver.Orchestrator.Core": "[1.4.1, )",
+          "Agentweaver.Persistence.Postgres": "[1.2.3, )",
           "Agentweaver.Providers": "[1.1.0, )",
           "Agentweaver.SourceControl": "[1.3.0, )",
           "Azure.Identity": "[1.17.1, )",
@@ -864,7 +864,7 @@
       "agentweaver.orchestrator.core": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )",
+          "Agentweaver.Abstractions": "[1.7.0, )",
           "Agentweaver.Providers": "[1.1.0, )",
           "Microsoft.AgentGovernance": "[4.0.0, )"
         }
@@ -878,8 +878,8 @@
       "agentweaver.projects.config": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )",
-          "Agentweaver.Identity": "[1.6.0, )",
+          "Agentweaver.Abstractions": "[1.7.0, )",
+          "Agentweaver.Identity": "[1.7.0, )",
           "Agentweaver.ObjectStore.AzureBlob": "[1.0.2, )",
           "Agentweaver.Providers": "[1.1.0, )",
           "Azure.Identity": "[1.17.1, )",
@@ -892,7 +892,7 @@
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )",
+          "Agentweaver.Abstractions": "[1.7.0, )",
           "Microsoft.Extensions.Configuration.Abstractions": "[10.0.0, )",
           "Microsoft.Extensions.Configuration.Binder": "[10.0.0, )"
         }
@@ -900,19 +900,19 @@
       "agentweaver.providers.sandbox.agentsandbox": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )"
+          "Agentweaver.Abstractions": "[1.7.0, )"
         }
       },
       "agentweaver.providers.storage.azurefiles": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )"
+          "Agentweaver.Abstractions": "[1.7.0, )"
         }
       },
       "agentweaver.sourcecontrol": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )",
+          "Agentweaver.Abstractions": "[1.7.0, )",
           "Agentweaver.Providers": "[1.1.0, )"
         }
       },

@@ -1,0 +1,205 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "6157c1252eece767932173b2c66973b1ef3c768f",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "071fe74d01d599024fd6f80362bb2d50a8a2b206119e186628ef1e74478c07ad",
+  "appliedAt": "2026-10-29T02:29:21.995Z",
+  "components": [
+    {
+      "id": "Agentweaver.Abstractions",
+      "fromVersion": "1.6.0",
+      "toVersion": "1.7.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.AgentHost",
+      "fromVersion": "1.1.0",
+      "toVersion": "1.1.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.AgentRuntime",
+      "fromVersion": "1.3.1",
+      "toVersion": "1.4.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Environment",
+      "fromVersion": "1.3.1",
+      "toVersion": "1.4.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.EventsAndSessions",
+      "fromVersion": "1.5.1",
+      "toVersion": "1.5.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Gateway",
+      "fromVersion": "1.7.1",
+      "toVersion": "1.8.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Identity",
+      "fromVersion": "1.6.0",
+      "toVersion": "1.7.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Identity.Broker",
+      "fromVersion": "1.3.0",
+      "toVersion": "1.3.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Orchestrator",
+      "fromVersion": "1.7.0",
+      "toVersion": "1.8.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Orchestrator.Core",
+      "fromVersion": "1.4.0",
+      "toVersion": "1.4.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Persistence.Postgres",
+      "fromVersion": "1.2.2",
+      "toVersion": "1.2.3",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Projects.Config",
+      "fromVersion": "1.7.2",
+      "toVersion": "1.8.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Providers.Sandbox.AgentSandbox",
+      "fromVersion": "1.1.4",
+      "toVersion": "1.2.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Web",
+      "fromVersion": "1.7.0",
+      "toVersion": "1.7.1",
+      "bump": "patch"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/active-sandbox-lifetime.md",
+      "archivedPath": ".changeset/archive/active-sandbox-lifetime.md",
+      "sha256": "c7051899be5f8b1e4c7c48dff9b75d665669cd72ef42910421cd0e354ffba488"
+    },
+    {
+      "sourcePath": ".changeset/agent-runtime-inline-comments.md",
+      "archivedPath": ".changeset/archive/agent-runtime-inline-comments.md",
+      "sha256": "536b080b8c6251ddd32099e9c7ea0dd69dc54381767ec20f0124a59516fd67c3"
+    },
+    {
+      "sourcePath": ".changeset/agenthost-readiness-mount-evidence.md",
+      "archivedPath": ".changeset/archive/agenthost-readiness-mount-evidence.md",
+      "sha256": "fb67b845149d293490a349dd72aa5cb9c4b47004a38368e36b8cb7366c2efd17"
+    },
+    {
+      "sourcePath": ".changeset/environment-p1-creation-read.md",
+      "archivedPath": ".changeset/archive/environment-p1-creation-read.md",
+      "sha256": "7da4f903afc3a4ad78d1717c75dc847b1f01c601eb4d48e5260e799f508935ce"
+    },
+    {
+      "sourcePath": ".changeset/environment-pod-configuration-observation.md",
+      "archivedPath": ".changeset/archive/environment-pod-configuration-observation.md",
+      "sha256": "1724eeacd3e6e96341a66b6ba8ca5629665a9ac57f6e5d0476a88f621d88f6ea"
+    },
+    {
+      "sourcePath": ".changeset/fixed-credit-current-selector.md",
+      "archivedPath": ".changeset/archive/fixed-credit-current-selector.md",
+      "sha256": "9873df064fd1ed6a153925a9666e6ea7c85effe9bd4438289bb64940340637ae"
+    },
+    {
+      "sourcePath": ".changeset/host-core-p1-root-binding-reader.md",
+      "archivedPath": ".changeset/archive/host-core-p1-root-binding-reader.md",
+      "sha256": "0c6a25cfbeef7e9aebf1d312b0e3ec565380c75b5b1ec0ba25eca5b37a100231"
+    },
+    {
+      "sourcePath": ".changeset/native-host-readiness-audience.md",
+      "archivedPath": ".changeset/archive/native-host-readiness-audience.md",
+      "sha256": "ef7500029e6816ea207c31696309c9b8e0ffbe1ea14b0b57f076c34d07f523a9"
+    },
+    {
+      "sourcePath": ".changeset/native-model-receipt-grant.md",
+      "archivedPath": ".changeset/archive/native-model-receipt-grant.md",
+      "sha256": "84692426438b7a9517e27bea7e987b13a3bd634788008d00bfc7620b150e8cff"
+    },
+    {
+      "sourcePath": ".changeset/orchestrator-comment-clarity.md",
+      "archivedPath": ".changeset/archive/orchestrator-comment-clarity.md",
+      "sha256": "8cd030bff7b2c46895215dc989ce0d63b443db41917ee731741ae17e42a324d4"
+    },
+    {
+      "sourcePath": ".changeset/orchestrator-core-comment-clarity.md",
+      "archivedPath": ".changeset/archive/orchestrator-core-comment-clarity.md",
+      "sha256": "122c51e56fd229c8e099518568771af7856e9e60ec1ce153066992f366096764"
+    },
+    {
+      "sourcePath": ".changeset/overview-health-unavailable-2259.md",
+      "archivedPath": ".changeset/archive/overview-health-unavailable-2259.md",
+      "sha256": "94384babed21113f23e53324489689d9141a56d32297f89826b68288ea12c7d9"
+    },
+    {
+      "sourcePath": ".changeset/p1-authority-setup-gateway.md",
+      "archivedPath": ".changeset/archive/p1-authority-setup-gateway.md",
+      "sha256": "2b5fa7ed67242dc11db918de85e4df44e93dbb81308d260ada44933fa4b531e8"
+    },
+    {
+      "sourcePath": ".changeset/p1-environment-binding.md",
+      "archivedPath": ".changeset/archive/p1-environment-binding.md",
+      "sha256": "fa261f96a3a54489460b742d563356ad3e3ec3f622a2b1b147e460a74891a50b"
+    },
+    {
+      "sourcePath": ".changeset/p1-run-setup-binding.md",
+      "archivedPath": ".changeset/archive/p1-run-setup-binding.md",
+      "sha256": "bde701064f0489f917cbe5a9a26c50f1227806bcc28a8f7f8f3f0fa3dcd24123"
+    },
+    {
+      "sourcePath": ".changeset/p1-setup-read-transport.md",
+      "archivedPath": ".changeset/archive/p1-setup-read-transport.md",
+      "sha256": "d28f770f508e5af816e09d2fe964cb5e5979ce0ccd6fc02d02c484c6e8245764"
+    },
+    {
+      "sourcePath": ".changeset/root-dispatch-placement-egress.md",
+      "archivedPath": ".changeset/archive/root-dispatch-placement-egress.md",
+      "sha256": "219e8476ffd24759710afa6d7f46421a478d9e4a23737b148a3de20819696d5c"
+    },
+    {
+      "sourcePath": ".changeset/runtime-evidence-receipts.md",
+      "archivedPath": ".changeset/archive/runtime-evidence-receipts.md",
+      "sha256": "b421052f23e5c70a9d3d15733bc6d247181fe7c696dfd4877382f5a9e305cf56"
+    },
+    {
+      "sourcePath": ".changeset/scribe-pending-knowledge-output.md",
+      "archivedPath": ".changeset/archive/scribe-pending-knowledge-output.md",
+      "sha256": "9b710a57e3459f0aaaac87904c9e853e9fdb6b8dc11c96691d22766ea773af57"
+    },
+    {
+      "sourcePath": ".changeset/scribe-selected-gate-checkpoints.md",
+      "archivedPath": ".changeset/archive/scribe-selected-gate-checkpoints.md",
+      "sha256": "5847a8680e4d3743fa69bee5bf4b99bdc9f7b0b8afc37838f1ceb9048f80149d"
+    },
+    {
+      "sourcePath": ".changeset/service-group-comment-clarity.md",
+      "archivedPath": ".changeset/archive/service-group-comment-clarity.md",
+      "sha256": "f4b368c469b7c82c5da6a6130e8a46b7b7760532baf2d89919a9a9d7b3c62775"
+    },
+    {
+      "sourcePath": ".changeset/workflows-composition-2259.md",
+      "archivedPath": ".changeset/archive/workflows-composition-2259.md",
+      "sha256": "b1b750612f01c8cf29aa3b1e12bbee58109976433c24dc776bca0f235c1066c3"
+    }
+  ]
+}
