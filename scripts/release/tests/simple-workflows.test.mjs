@@ -569,11 +569,18 @@ test('partial deployment fails before writes when an omitted live image is unava
   }
 });
 
-test('immutable Projects & Config replacement follows stop-wait-replace-resume and retries activation', async () => {
+test('selective deployment replaces the Projects ConfigMap with run-binding TLS settings and retries activation', async () => {
   const directory = scratch();
   const manifestPath = path.join(directory, 'images.json');
   const calls = [];
   const liveRuntimeConfig = structuredClone(runtimeConfig);
+  Object.assign(liveRuntimeConfig.data, {
+    ProjectsConfig__Authentication__BrokerRunBindingAudience: 'https://projects.agentweaver.io/run-binding',
+    ProjectsConfig__Tls__CertificatePath: '/var/run/projects-config-tls/tls.crt',
+    ProjectsConfig__Tls__KeyPath: '/var/run/projects-config-tls/tls.key',
+    ProjectsConfig__Tls__ServerCertificateSha256:
+      '2f8d3d969428d8ca3b33d1a083a2fc80da34ed54111d65eaf7a87c3a0240f053',
+  });
   liveRuntimeConfig.data.AgentHost__ModelBindingsRevision = 'old-revision';
   const projectConfigDeployment = workloadSource(path.join(directory, 'deploy', 'k8s', 'kustomization.yaml'),
     'projects-config');
@@ -592,6 +599,7 @@ test('immutable Projects & Config replacement follows stop-wait-replace-resume a
       state,
       failApplyCount: 1,
       remainingPodPolls: 1,
+      distinctDigests: true,
     });
     const options = { root: directory, exec, sleep: async milliseconds => sleeps.push(milliseconds), log() {} };
     await assert.rejects(deployKustomize({ imageManifest: manifestPath }, options),
@@ -609,11 +617,34 @@ test('immutable Projects & Config replacement follows stop-wait-replace-resume a
     assert.ok(firstScaleDown < firstDelete && firstDelete < firstCreate &&
       firstCreate < firstScaleUp && firstScaleUp < firstApply);
     assert.equal(calls[firstDelete].args[2], 'projects-config-runtime-config');
-    assert.equal(parse(calls[firstCreate].options.input).metadata.name, 'projects-config-runtime-config');
+    const replacedRuntimeConfig = parse(calls[firstCreate].options.input);
+    assert.equal(replacedRuntimeConfig.metadata.name, 'projects-config-runtime-config');
+    assert.equal(replacedRuntimeConfig.data.ProjectsConfig__Authentication__BrokerRunBindingAudience,
+      'https://projects.agentweaver.io/run-binding');
+    assert.equal(replacedRuntimeConfig.data.ProjectsConfig__Tls__CertificatePath,
+      '/var/run/projects-config-tls/tls.crt');
+    assert.equal(replacedRuntimeConfig.data.ProjectsConfig__Tls__KeyPath,
+      '/var/run/projects-config-tls/tls.key');
+    assert.equal(replacedRuntimeConfig.data.ProjectsConfig__Tls__ServerCertificateSha256,
+      '2f8d3d969428d8ca3b33d1a083a2fc80da34ed54111d65eaf7a87c3a0240f053');
     assert.equal(state.deployments['projects-config'].spec.replicas, 3);
     assert.equal(state.deployments['projects-config'].metadata.annotations[restoreReplicasAnnotation], '3');
-    assert.equal(parse(calls[firstApply].options.input).items.find(resource =>
-      resource.kind === 'Deployment' && resource.metadata.name === 'projects-config').spec.replicas, 3);
+    const appliedResources = parse(calls[firstApply].options.input).items;
+    const appliedRuntimeConfig = appliedResources.find(resource =>
+      resource.kind === 'ConfigMap' && resource.metadata.name === 'projects-config-runtime-config');
+    assert.equal(appliedRuntimeConfig.data.ProjectsConfig__Authentication__BrokerRunBindingAudience,
+      'https://projects.agentweaver.io/run-binding');
+    assert.equal(appliedRuntimeConfig.data.ProjectsConfig__Tls__CertificatePath,
+      '/var/run/projects-config-tls/tls.crt');
+    assert.equal(appliedRuntimeConfig.data.ProjectsConfig__Tls__KeyPath,
+      '/var/run/projects-config-tls/tls.key');
+    assert.equal(appliedRuntimeConfig.data.ProjectsConfig__Tls__ServerCertificateSha256,
+      '2f8d3d969428d8ca3b33d1a083a2fc80da34ed54111d65eaf7a87c3a0240f053');
+    const appliedProjectsDeployment = appliedResources.find(resource =>
+      resource.kind === 'Deployment' && resource.metadata.name === 'projects-config');
+    assert.equal(appliedProjectsDeployment.spec.replicas, 3);
+    assert.equal(appliedProjectsDeployment.spec.template.spec.containers[0].image,
+      `${REGISTRY}/agentweaver.projects.config@${digestForTag(existingTag)}`);
 
     const callsBeforeRetry = calls.length;
     await deployKustomize({ imageManifest: manifestPath }, options);

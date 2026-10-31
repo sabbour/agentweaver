@@ -595,6 +595,11 @@ test('Gateway, Web, Knowledge, and Projects ConfigMaps contain complete sourced 
     ProjectsConfig__Database__WorkloadIdentity__TokenFilePath: tokenFile,
     ProjectsConfig__Authentication__Authority: broker,
     ProjectsConfig__Authentication__Audience: broker,
+    ProjectsConfig__Authentication__BrokerRunBindingAudience: 'https://projects.agentweaver.io/run-binding',
+    ProjectsConfig__Tls__CertificatePath: '/var/run/projects-config-tls/tls.crt',
+    ProjectsConfig__Tls__KeyPath: '/var/run/projects-config-tls/tls.key',
+    ProjectsConfig__Tls__ServerCertificateSha256:
+      '2f8d3d969428d8ca3b33d1a083a2fc80da34ed54111d65eaf7a87c3a0240f053',
     ProjectsConfig__Knowledge__BaseAddress: serviceAddress('knowledge'),
     ProjectsConfig__PrivilegedSetup__ApprovedIssuer: broker,
     ProjectsConfig__PrivilegedSetup__ApprovedTenantId: tenant,
@@ -612,7 +617,7 @@ test('Gateway, Web, Knowledge, and Projects ConfigMaps contain complete sourced 
   assert.equal(projects.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
   assert.equal(projects.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
     undefined);
-  assert.equal(Object.keys(projects.data).some(key => key.includes('BrokerRunBinding')), false);
+  assert.equal(Object.keys(projects.data).some(key => key.includes('BrokerRunBinding')), true);
 });
 
 /** Return the binding revision, references and source modes from flat runtime keys. */

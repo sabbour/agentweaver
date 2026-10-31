@@ -411,6 +411,9 @@ The `projects-config-runtime-config.json` map contains:
 | `ProjectsConfig__Database__WorkloadIdentity__TokenFilePath` | Required absolute projected-token path. |
 | `ProjectsConfig__Authentication__Authority` | Required absolute HTTPS Broker authority. |
 | `ProjectsConfig__Authentication__Audience` | Required token audience for Projects & Config. |
+| `ProjectsConfig__Authentication__BrokerRunBindingAudience` | Optional private Broker run-binding proof audience. When enabled, it must match `IdentityBroker__RunBinding__ProjectsAudience`. |
+| `ProjectsConfig__Tls__CertificatePath`, `ProjectsConfig__Tls__KeyPath` | Absolute paths to the leaf certificate and private key in the existing read-only `projects-config-tls` mount. Required together with the private Broker run-binding audience. |
+| `ProjectsConfig__Tls__ServerCertificateSha256` | SHA-256 pin of the exact Projects leaf certificate. It must match `IdentityBroker__RunBinding__ProjectsServerCertificateSha256`; the Broker separately pins the trusted client CA bundle. |
 | `ProjectsConfig__Knowledge__BaseAddress` | Required HTTPS Knowledge service root. Projects uses the mounted backend CA and forwards the current caller's bearer and tenant selector to read private agent history. |
 | `ProjectsConfig__PrivilegedSetup__ApprovedIssuer` | Exact issuer approved for the privileged project-setup command: `https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/`. |
 | `ProjectsConfig__PrivilegedSetup__ApprovedTenantId` | Exact approved Entra tenant: `72f988bf-86f1-41af-91ab-2d7cd011db47`. |

@@ -122,7 +122,10 @@ before deploying workloads. Follow the
 [runtime configuration reference](../../docs/reference/runtime-configuration.md)
 when changing an existing installation. For Knowledge, preserve the stable
 resource label `agentweaver.knowledge` and increase `ResourceGeneration` only
-after wiping or replacing the store.
+after wiping or replacing the store. Keep the Projects private Broker
+run-binding audience, certificate/key paths, and leaf pin together: the root
+bundle may replace its immutable ConfigMap during a selective image deployment,
+even when the Projects image is omitted.
 
 ## Select images with a manifest
 
