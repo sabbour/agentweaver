@@ -2,7 +2,9 @@ using Agentweaver.Abstractions;
 using Azure.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using OpenIddict.Abstractions;
 using Xunit;
 
 namespace Agentweaver.Identity.Broker.Tests;
@@ -10,6 +12,21 @@ namespace Agentweaver.Identity.Broker.Tests;
 [Collection("IdentityBrokerPostgres")]
 public sealed class IdentityBrokerMigrationCommandTests(PostgresContainerFixture postgres)
 {
+    [Fact]
+    public void CliScopePermissionMigrationIsSeparateFromSchemaMigration()
+    {
+        var schemaMigration = new[] { "--migrate" };
+        var cliPermissionMigration = new[] { "--migrate-cli-scope-permission" };
+
+        Assert.True(IdentityBrokerMigrationCommand.IsRequested(schemaMigration));
+        Assert.False(IdentityBrokerMigrationCommand.IsRequested(cliPermissionMigration));
+        Assert.True(IdentityBrokerMigrationCommand.ContainsArgument(cliPermissionMigration));
+        Assert.True(IdentityBrokerMigrationCommand.IsCliScopePermissionMigrationRequested(cliPermissionMigration));
+        Assert.False(IdentityBrokerMigrationCommand.IsCliScopePermissionMigrationRequested(schemaMigration));
+        Assert.False(IdentityBrokerMigrationCommand.IsCliScopePermissionMigrationRequested(
+            ["--migrate", "--migrate-cli-scope-permission"]));
+    }
+
     [Fact]
     public async Task MigrationCommandRequiresItsOwnExplicitConfiguration()
     {
@@ -79,6 +96,33 @@ public sealed class IdentityBrokerMigrationCommandTests(PostgresContainerFixture
 
         Assert.Equal(new IdentityBrokerMigrationIdentity(tenantId, clientId, tokenFilePath), usedIdentity);
         Assert.Contains("https://ossrdbms-aad.database.windows.net/.default", migrationCredential.Scopes);
+
+        var migrationPasswordConnection = new NpgsqlConnectionStringBuilder(adminBuilder.ConnectionString)
+        {
+            Username = migrationRole,
+            Password = migrationPassword,
+        };
+        await using (var setupProvider = BrokerCliScopePermissionTestSupport.CreateStoreProvider(
+            migrationPasswordConnection.ConnectionString))
+        {
+            using var setupScope = setupProvider.CreateScope();
+            await setupScope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>()
+                .CreateAsync(BrokerCliScopePermissions.CreatePreviousDescriptor());
+        }
+
+        await IdentityBrokerMigrationCommand.RunCliScopePermissionMigrationAsync(
+            configuration, _ => migrationCredential, SslMode.Disable);
+        await using (var verifyProvider = BrokerCliScopePermissionTestSupport.CreateStoreProvider(
+            migrationPasswordConnection.ConnectionString))
+        {
+            using var verifyScope = verifyProvider.CreateScope();
+            var applications = verifyScope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+            var application = await applications.FindByClientIdAsync(BrokerCliScopePermissions.ClientId);
+            Assert.NotNull(application);
+            Assert.True(await applications.HasPermissionAsync(
+                application, BrokerCliScopePermissions.AllRegisteredScopes));
+        }
+
         var runtimeCredential = new PasswordTokenCredential(runtimePassword);
         await using var runtimeDataSource = IdentityBrokerPostgresDataSource.Create(
             runtimeConnectionString, runtimeCredential, SslMode.Disable);
@@ -106,6 +150,16 @@ public sealed class IdentityBrokerMigrationCommandTests(PostgresContainerFixture
         await IdentityBrokerMigrationCommand.RunAsync(
             configuration, _ => migrationCredential, SslMode.Disable);
         await IdentityBrokerMigrator.VerifyMigrationsAppliedAsync(runtimeDataSource, options);
+        await using (var verifyProvider = BrokerCliScopePermissionTestSupport.CreateStoreProvider(
+            migrationPasswordConnection.ConnectionString))
+        {
+            using var verifyScope = verifyProvider.CreateScope();
+            var applications = verifyScope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+            var application = await applications.FindByClientIdAsync(BrokerCliScopePermissions.ClientId);
+            Assert.NotNull(application);
+            Assert.True(await applications.HasPermissionAsync(
+                application, BrokerCliScopePermissions.AllRegisteredScopes));
+        }
 
         await using (var db = new IdentityBrokerDbContext(options))
         {

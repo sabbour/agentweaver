@@ -24,6 +24,19 @@ Secret Service session. There is no plaintext fallback. `auth logout` removes
 only the selected local entry and does not revoke a Broker token family or
 another process's in-memory access token.
 
+The persisted CLI registration has a Broker-specific permission to request any
+scope currently or later registered in the Broker catalog. It is not a literal
+`*` scope and does not add scope names to the catalog: the Broker still rejects
+unknown scopes and keeps explicit consent. This lets the CLI request scopes
+registered for another configured client, including `projects.admin` and
+`projects.orchestrator`, without changing the other clients' permissions.
+The Broker also attaches the resource audiences configured on each requested
+scope, so the CLI may receive those audiences too. Because newly registered
+scopes become requestable, scope owners must not protect internal resources
+only with a per-client scope allowlist; each resource must independently check
+the caller's current authorization. OAuth scopes still do not add project
+roles or grants, and admin and orchestrator authority remain separate sessions.
+
 Login, refresh, and logout for the same selected credential identity are
 serialized across processes. An interrupted or uncertain refresh requires a
 fresh sign-in rather than retrying a possibly consumed refresh token.
