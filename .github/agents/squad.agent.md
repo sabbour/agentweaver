@@ -363,10 +363,12 @@ The routing table determines **WHO** handles work. After routing, use Response M
 If a matching skill exists, add to the spawn prompt: `Relevant skill: {path}/SKILL.md — read before starting.` This makes earned knowledge an input to routing, not passive documentation.
 
 **Implementation spawn invariant:** For every task that changes code, tests, prompts,
-automation, or infrastructure-as-code, do not use Lightweight mode. Require the
-implementer to invoke `ponytail` before acting. Before integration, enforce the external
-Implementation Admission Gate from `.squad/ceremonies.md`; `ponytail-review` must be
-performed by someone other than the implementer.
+automation, or infrastructure-as-code, do not use Lightweight mode. A routine, known
+issue fix uses Standard mode: an issue, concrete acceptance criteria, focused validation,
+and one final admission ceremony. Reserve Full mode and its extra ceremony for novel,
+cross-domain, or high-risk design decisions. Require the implementer to invoke
+`ponytail` before acting. `ponytail-review` must be performed by someone other than the
+implementer when it is required by the risk-based review gate.
 
 **Review gate:** Every change receives review. Apply the full three-review gate —
 independent code review, Seraph security review, and Ponytail review — when either
@@ -376,6 +378,23 @@ persistent data, or cross-surface API/MCP/UI behavior, or (2) it spans multiple 
 or crosses domains or subsystems. A small, isolated, low-risk change gets one focused
 review selected by its risk or domain; it does not skip review. Keep documentation and
 validation prerequisites proportional to the change.
+
+### Parallel implementation and sequential admission
+
+Maintain two explicit coordinator lanes:
+
+- **Implementation lane:** run at most five independent implementation streams. Each
+  stream gets its own clean issue worktree, focused validation, commit, push, and draft
+  PR. A draft that is not the admission candidate remains untouched after other PRs
+  merge: do not rebase it, wait for or investigate final CI, run final reviews, create
+  or update a findings ledger, mark it ready, merge it, or clean up its worktree.
+- **Admission lane:** exactly one queue-head draft PR is the admission candidate. Only
+  this candidate may receive the final queue-head rebase, final CI waiting or diagnosis,
+  exact-head reviews, findings-ledger work, readiness, merge, and post-merge cleanup.
+  When it merges, promote one successor; leave every other draft untouched until then.
+
+Scribe, status reporting, and common-gotchas maintenance are asynchronous support work:
+they do not consume an implementation-lane slot and never block admission.
 
 **Implementation lifecycle gates:**
 - During design, identify the appropriate GitHub milestone for each feature or fix and
@@ -390,13 +409,21 @@ validation prerequisites proportional to the change.
   preserve normal approval, admission, and secret-handling gates regardless of the
   evidence. Do not require live diagnostics for feature work.
 - Create implementation PRs as drafts and apply the recorded milestone when the draft
-  is created. Run `gh pr ready` only after implementation, required documentation and
-  validation, and independent review/admission checks are complete with no unresolved
-  blockers.
-- **Milestone PR checkpoint:** when a draft has passed that gate, run `gh pr ready <number>`,
-  run the coordinator-owned external-state admission preflight before ready and again
-  before `gh pr merge <number> --squash --match-head-commit <validated-sha>`. Ralph
-  fetches `origin/dev`, gets the live PR head SHA, and runs
+  is created. This completes implementation-lane work. Do not perform final admission
+  work on a non-front draft.
+- **Admission-candidate checkpoint:** select exactly one queue-head draft, rebase it
+  onto current `origin/dev`, then run and wait for its final affected validation/CI.
+  Diagnose CI failures only for this candidate. After that final queue-head rebase, run
+  the risk-based required review set at its exact head: full independent code, Seraph,
+  and Ponytail reviews for high-risk or cross-domain work, or one focused review for a
+  small isolated low-risk change. If a reviewer rejects it, allow one bounded correction
+  on this candidate, rerun the necessary validation, and re-review only the stated
+  finding at the corrected exact head; escalate only if that finding remains unresolved.
+  Create or update the findings ledger only for this candidate. With no unresolved
+  blockers, run `gh pr ready <number>`, then run the coordinator-owned external-state
+  admission preflight before ready and again before
+  `gh pr merge <number> --squash --match-head-commit <validated-sha>`. Ralph fetches
+  `origin/dev`, gets the live PR head SHA, and runs
   `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number>
   --head-sha <live-head-sha>`. The preflight resolves declared external state with the
   pinned Squad SDK and requires the coordinator-owned findings ledger to resolve every
