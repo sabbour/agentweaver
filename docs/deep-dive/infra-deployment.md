@@ -23,7 +23,7 @@ product acceptance succeeded.
 | `scripts/release/` | Component version planning, Kustomize image helpers, and shared registry reads |
 | `.github/workflows/v1-integration-images.yml` | Direct GHCR image builds for v1 service changes |
 | `.github/workflows/v1-release-pack.yml` | NuGet package publication after component version changes |
-| `.github/workflows/v1-deploy.yml` | Migration-first Kustomize deployment |
+| `scripts/release/deploy-kustomize.mjs` | Local migration-first Kustomize deployment |
 
 The Azure acceptance verifier is `scripts/azure/verify-acceptance.mjs`.
 
@@ -31,8 +31,8 @@ The Azure acceptance verifier is `scripts/azure/verify-acceptance.mjs`.
 
 - The image workflow tags each direct GHCR push with its Git commit and
   reports the registry digest.
-- The deployment command resolves those tags to digests, runs the existing
-  migration Jobs, then renders and applies the root Kustomize overlay.
+- The local deployment command resolves those tags to digests, runs the
+  existing migration Jobs, then renders and applies the root Kustomize overlay.
 - Shared services and per-Sandbox AgentHost placement have separate lifecycles.
 - Missing runtime prerequisites stop deployment. Rollout does not create new
   credentials or grant itself access.
@@ -48,18 +48,18 @@ the exact `agentweaver-pg.postgres.database.azure.com` host; the guarded root
 release apply does not include that Job or policy.
 
 The Orchestrator and Events and Sessions migrations run as Jobs from the
-`migrations/p1-postgres/` overlay under the P1 migration identity. The
-integrated `npm run deploy:kustomize` command runs Broker/P1 migrations, then
-Projects & Config migration, before applying the root overlay. The underlying
-The deployment command runs the P1/Broker runner with `--migrations-only`, so
+`migrations/p1-postgres/` overlay under the P1 migration identity. The local
+`npm run deploy:kustomize` command runs Broker/P1 migrations, then Projects &
+Config migration, before applying the root overlay. The deployment command
+runs the P1/Broker runner with `--migrations-only`, so
 it does not apply an early service rollout or enforce the legacy image-order
 gate; the single root Kustomize apply updates workloads after all migration
 Jobs succeed. The normal standalone `npm run db:maintenance` mode retains its
 schema-ordering and readiness checks.
-`npm run db:maintenance:setup` creates the identities, role assignments, and
-GitHub environment that the command and its workflow need. Setup also applies
-and verifies a narrow Kubernetes Role and RoleBinding for the workflow identity;
-it creates no custom Azure role. See
+`npm run db:maintenance:setup` prepares the identities, role assignments, and
+GitHub environment for the separate database-maintenance workflow. It also
+applies and verifies that workflow identity's narrow Kubernetes Role and
+RoleBinding; it creates no custom Azure role. See
 [Database maintenance](../guide/database-maintenance.md).
 
 The Events & Sessions migration Job includes every Sessions and Messaging option
@@ -169,21 +169,26 @@ source-claim gates.
 
 ## Deploy the Kustomize overlay
 
-Dispatch `.github/workflows/v1-deploy.yml` on `v1` with a `sha-<commit>` image
-tag produced by the image workflow. It runs `npm run deploy:kustomize`, which
-resolves ten immutable digests, runs Broker/P1 then Projects & Config
-migrations, renders `deploy/k8s`, applies it to the selected context and
-`agentweaver` namespace, and waits for all nine Deployments. Any failed
-migration prevents the root overlay apply.
+Run the workload deployment locally from an approved operator machine with an
+interactive Azure CLI identity and the intended Kubernetes context:
 
-The workflow requires `AZURE_DB_MAINTENANCE_CLIENT_ID` in the
-`v1-db-maintenance` GitHub environment and uses the existing GitHub OIDC
-identity. Run `npm run db:maintenance:setup -- --v1-deploy-only --execute`
-once to provision its federation, the approved namespace Role/RoleBinding, and
-the Projects & Config migration Workload Identity ServiceAccount. The deploy
-identity needs AKS Cluster User access and the namespace-scoped verbs listed
-in the [release reference](../reference/releases.md). The deploy command does
-not read Secrets or manage the Namespace.
+```powershell
+az login
+az account set --subscription <approved-subscription>
+az aks get-credentials --resource-group agentweaver --name agentweaver-aks `
+  --subscription <approved-subscription>
+kubelogin convert-kubeconfig --login azurecli
+kubectl config current-context
+npm run deploy:kustomize -- --image-tag sha-<40-character-commit> --execute
+```
+
+The command resolves the ten image tags to immutable digests, runs Broker/P1
+and Projects & Config migrations with runtime-grant reconciliation, renders
+`deploy/k8s`, applies the namespaced resources to the selected context, and
+waits for all nine Deployments. Any failed migration prevents the root overlay
+apply. The local operator identity needs the required AKS and namespace
+permissions; this command neither provisions Azure resources nor grants
+access.
 
 Projects & Config migration uses a dedicated Kubernetes Workload Identity. The
 `projects-config-migration` ServiceAccount uses the
@@ -206,10 +211,8 @@ The separate first-time operator initializer also uses this dedicated owner:
 it preflights SET-role access before creating runtime roles, then creates the
 Projects schema, migrations, and reviewed grants in one transaction.
 
-The workflow must exist on the repository's default branch to appear in the
-manual dispatch UI. Azure provisioning, certificates, runtime configuration,
-and Gateway routing remain separate prerequisites and are not changed by the
-workload rollout.
+Azure provisioning, certificates, runtime configuration, and Gateway routing
+remain separate prerequisites and are not changed by the workload rollout.
 
 ## Related content
 

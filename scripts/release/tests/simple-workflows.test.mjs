@@ -150,21 +150,12 @@ test('v1 package workflow publishes versioned NuGet packages without image recei
   assert.equal(JSON.stringify(workflow).includes('source_sha'), false);
 });
 
-test('manual deployment uses only direct migration Jobs and the Kustomize workload path', () => {
-  const workflow = readYaml('.github/workflows/v1-deploy.yml');
-  const steps = workflow.jobs.deploy.steps;
-  const deployment = steps.find(({ run = '' }) => run.includes('deploy:kustomize'));
-  const checkout = steps.find(({ uses = '' }) => uses.startsWith('actions/checkout@'));
-
-  assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch']);
-  assert.match(steps[0].run, /refs\/heads\/v1/);
-  assert.equal(checkout.with.ref, 'v1');
-  assert.equal(steps.some(({ run = '' }) => run.includes('db:maintenance')), false);
-  assert.match(deployment.run, /npm run deploy:kustomize -- --image-tag/);
-  assert.equal(JSON.stringify(workflow).includes('AZURE_DB_MAINTENANCE_CLIENT_ID'), true);
-  assert.equal(JSON.stringify(workflow).includes('AZURE_V1_DEPLOY_CLIENT_ID'), false);
-  assert.equal(steps.some(({ uses = '' }) => /upload-artifact|download-artifact/.test(uses)), false);
-  assert.equal(JSON.stringify(workflow).match(/evidence|receipt|provenance|publication/i), null);
+test('v1 workload deployment is operator-run rather than a hosted AKS workflow', () => {
+  assert.equal(existsSync(path.join(root, '.github/workflows/v1-deploy.yml')), false);
+  const runbook = readFileSync(path.join(root, 'releases/README.md'), 'utf8');
+  assert.match(runbook, /az login/);
+  assert.match(runbook, /npm run deploy:kustomize -- --image-tag/);
+  assert.doesNotMatch(runbook, /gh workflow run .*v1-deploy/);
 });
 
 test('deployment creates existing migration Jobs directly before one namespaced apply', async () => {

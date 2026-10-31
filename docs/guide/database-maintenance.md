@@ -75,8 +75,8 @@ The deployment excludes Namespace objects, runs migration Jobs first, then
 applies Kustomize and waits for nine rollouts. The one-time Projects & Config
 identity/ownership bootstrap is separate; on a guard failure, stop for
 authorized role inspection and never loosen the guard or broaden the role.
-See the [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#deploy-workloads)
-for dispatch and recovery.
+See the [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#deploy-workloads-locally)
+for the local workload deployment procedure.
 
 A successful migration is not itself a successful deployment. The runtime
 checks its database privileges at startup, and a failed startup guard causes

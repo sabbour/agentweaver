@@ -335,11 +335,10 @@ managed `identity-broker-tls` Secret before deploying the workloads.
 
 ## 7. Run the v1 deployment
 
-Use the [v1 release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#deploy-workloads)
-for dispatch, monitoring, recovery, and handover guard troubleshooting.
-Complete the one-time identity and PostgreSQL ownership prerequisites before
-dispatch; routine deployment runs migrations and grants before applying
-workloads.
+Use the [v1 release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#deploy-workloads-locally)
+for local execution, monitoring, recovery, and context verification. Complete
+the one-time identity and PostgreSQL ownership prerequisites before running
+the local command; it runs migrations and grants before applying workloads.
 
 For a fresh installation, complete the managed certificate procedure from the
 [Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#application-routing-source-setting)

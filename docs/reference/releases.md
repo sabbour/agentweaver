@@ -3,8 +3,8 @@
 The tracked [`foundation.json`](https://github.com/sabbour/agentweaver/blob/v1/releases/foundation.json)
 manifest owns the current component IDs, versions, kinds, and project paths.
 Its schema is [`manifest.schema.json`](https://github.com/sabbour/agentweaver/blob/v1/releases/manifest.schema.json).
-For the exact GitHub Actions image-selection, deployment-dispatch, monitoring,
-and recovery commands, use the
+For automatic GHCR image builds and the local Kubernetes deployment command,
+use the
 [v1 release workflow runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md).
 
 ## Versioning and NuGet packages
@@ -42,25 +42,27 @@ publication receipts, source claims, or provenance checks.
 
 ## Kubernetes deployment
 
-Dispatch `.github/workflows/v1-deploy.yml` on `v1` with a `sha-<commit>` tag
-from the image workflow. The deployment workflow must be present on the
-repository's default branch to appear in GitHub's manual dispatch UI.
+The image workflow automatically pushes all ten image repositories to GHCR as
+`sha-<commit>` tags. An operator runs the workload deployment locally from an
+approved Azure CLI and Kubernetes context:
 
-The workflow resolves all ten tags to digests, invokes
-`npm run deploy:kustomize`, runs Broker/P1 and Projects & Config migration
-Jobs, renders the existing Kustomize overlay, applies it to the selected
-context, and checks all nine Deployment rollouts. A migration failure prevents
-the root workload apply. Publication receipts and source-claim gates are not
-part of this path.
+```powershell
+az login
+az account set --subscription <approved-subscription>
+az aks get-credentials --resource-group agentweaver --name agentweaver-aks `
+  --subscription <approved-subscription>
+kubelogin convert-kubeconfig --login azurecli
+kubectl config current-context
+npm run deploy:kustomize -- --image-tag sha-<40-character-commit> --execute
+```
 
-The workflow requires `AZURE_DB_MAINTENANCE_CLIENT_ID` in the
-`v1-db-maintenance` GitHub environment and uses GitHub OIDC. The existing
-`agentweaver-id-db-maintenance` identity needs AKS Cluster User access and the
-namespace-scoped Kubernetes permissions applied by
-`npm run db:maintenance:setup -- --v1-deploy-only --execute`. The Role limits
-Deployment read/update/watch permissions to the nine v1 workload names; it
-does not grant Secret or RBAC access. The deploy command does not read Secrets
-or manage Namespaces.
+Confirm the selected subscription and cluster context before execution. The
+operator identity must already have the required AKS and namespace permissions;
+the command does not provision Azure resources, grant access, read Secrets, or
+manage Namespaces. It resolves all ten GHCR tags to digests, runs the
+Broker/P1 and Projects & Config migration Jobs with runtime-grant reconciliation,
+applies the namespaced Kustomize overlay, then checks all nine Deployment
+rollouts. A migration failure prevents the root workload apply.
 
 Projects & Config migrations use Kubernetes Workload Identity, not a token
 Secret. The one-time setup provisions the `projects-config-migration`
