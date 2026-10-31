@@ -19,6 +19,24 @@ durable run result and resume the same run ID after a resolvable interruption.
 Do not treat a completed rehearsal as delivery proof. The run is bound to its
 initiating session, not shared across project sessions. There is no auto-run hook.
 
+For Agentweaver 1.x API acceptance, exercise the native .NET CLI apphost with
+`agentweaver test --input <manifest> --output <new-evidence-file>`. Use the
+self-contained apphost published from source, or the exact extracted apphost
+when validating a distribution candidate. Do not substitute targeted `rest`
+requests, unit or controlled tests, or the Node runner for API journey
+acceptance. The Node `harness:p1 -- --surface api` entrypoint is compatibility
+delegation only: if used, set `AGENTWEAVER_CLI_PATH` to the exact apphost; it
+does not fall back to a Node API runner. `test` takes its target from the
+manifest, not target flags or environment variables. `--interactive` explicitly
+permits browser authorization and should be used only when authorized; a live
+test creates and cleans up API fixtures, so run it only against an explicitly
+approved non-production target.
+A successful `--dry-run` validates input without network, authentication, or
+browser launch and writes no evidence, even with `--interactive`; validation
+failure may write a blocked result to the requested output. See the [testing
+guide](../docs/guide/testing.md) and [CLI guide](../docs/guide/cli.md) for
+commands and target requirements.
+
 ## Release and deployment
 
 For v1 package, image, and Kubernetes release operations, follow the
