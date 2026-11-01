@@ -32,6 +32,10 @@ public sealed class GatewayP1SetupTests
         Assert.Equal(operationId, operation.GetProperty("operationId").GetString());
         Assert.Equal("Projects", operation.GetProperty("x-agentweaver-owner").GetString());
         Assert.True(operation.GetProperty("x-agentweaver-mcp-excluded").GetBoolean());
+        var description = operation.GetProperty("description").GetString();
+        Assert.Contains("api.read", description);
+        Assert.Contains("projects.admin", description);
+        Assert.DoesNotContain("projects.orchestrator", description);
         Assert.True(!operation.TryGetProperty("requestBody", out var body) ||
             body.ValueKind == JsonValueKind.Null);
         Assert.True(Assert.Single(operation.GetProperty("parameters").EnumerateArray(),
@@ -70,7 +74,7 @@ public sealed class GatewayP1SetupTests
             new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
             "https://api.test",
             [new Claim("sub", "setup-actor"),
-                new Claim("scope", "api.read projects.admin projects.orchestrator")],
+                new Claim("scope", "api.read projects.admin")],
             DateTime.UtcNow.AddMinutes(-1), DateTime.UtcNow.AddMinutes(5),
             new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256));
         var bearer = new JwtSecurityTokenHandler().WriteToken(token);
@@ -145,7 +149,7 @@ public sealed class GatewayP1SetupTests
             new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
             "https://api.test",
             [new Claim("sub", "setup-actor"),
-                new Claim("scope", "api.read projects.admin projects.orchestrator")],
+                new Claim("scope", "api.read projects.admin")],
             DateTime.UtcNow.AddMinutes(-1), DateTime.UtcNow.AddMinutes(5),
             new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256));
         var bearer = new JwtSecurityTokenHandler().WriteToken(token);

@@ -133,7 +133,7 @@ agentweaver api invoke getProject --path projectId=PROJECT_ID
 Invocation accepts only parameters described by that operation:
 
 ```text
-agentweaver api invoke <operationId> [--path name=value] [--query name=value] [--body <JSON|@file>] [--header name=value] [--output <new-file>]
+agentweaver api invoke <operationId> [--path name=value] [--query name=value] [--scope <scope>] [--body <JSON|@file>] [--header name=value] [--output <new-file>]
 ```
 
 `--output` is for an advertised binary response and must name a new file.
@@ -143,6 +143,23 @@ redirect, and reserved-header guards. It does not accept caller-supplied
 bearer tokens or project-authorization headers. When an operation advertises
 `X-Agentweaver-Project-Authorization`, the CLI obtains the separate,
 unbound `projects.admin` authorization for the same actor and tenant.
+
+The P1 setup receipt operations are `createP1InvocationSetup` (POST) and
+`readP1InvocationSetup` (GET), both on
+`/api/v1/p1/invocations/{invocationId}/setup`. They use the separate unbound
+`api.read` plus `projects.admin` identity and still require current TenantAdmin
+authority. For the setup receipt flow:
+
+```powershell
+agentweaver auth login --scope projects.admin
+agentweaver api invoke createP1InvocationSetup --path invocationId=<INVOCATION_ID> --scope projects.admin
+agentweaver api invoke readP1InvocationSetup --path invocationId=<INVOCATION_ID> --scope projects.admin
+```
+
+The create operation mutates the owned P1 fixture; use it only in an approved
+setup context. These individual calls do not replace the native
+`agentweaver test --input <manifest>` acceptance journey. The operations remain
+excluded from MCP.
 
 The operation list includes supported public operations in the served Gateway
 catalog even when they are not admitted to MCP. Identity Connection browser

@@ -29,8 +29,8 @@ operation continues to check current owner authority.
 The source-only `POST /api/v1/p1/invocations/{invocationId}/setup`
 (`POST /api/p1/invocations/{invocationId}/setup` on Projects & Config)
 accepts no JSON body or existing project/resource IDs. It uses the current
-unbound actor token with the existing `api.read`, `projects.admin`, and
-`projects.orchestrator` scopes, explicit tenant selection, and current
+unbound actor token with the existing `api.read` and `projects.admin` scopes,
+explicit tenant selection, and current
 TenantAdmin authority. It is excluded from MCP.
 
 The runtime invokes the purpose-limited `SECURITY DEFINER`

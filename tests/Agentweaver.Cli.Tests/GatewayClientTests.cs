@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json.Nodes;
 using Agentweaver.Cli;
+using Agentweaver.Cli.Auth;
 using Agentweaver.Cli.Api;
 
 namespace Agentweaver.Cli.Tests;
@@ -62,6 +63,64 @@ public sealed class GatewayClientTests
             request.Authorization == "Bearer run-bearer" &&
             request.ProjectAuthorization == "Bearer writer-bearer" &&
             request.Tenant == "tenant-1");
+    }
+
+    [Theory]
+    [InlineData("createP1InvocationSetup", "POST")]
+    [InlineData("readP1InvocationSetup", "GET")]
+    public async Task P1SetupOperationsInvokeWithUnboundAdminIdentity(string operationId, string method)
+    {
+        var handler = new TestGatewayHandler();
+        using var http = new HttpClient(handler);
+        var authentication = new TestAuthentication();
+        var error = new StringWriter();
+        var result = await CliApplication.RunAsync(
+        [
+            "api", "invoke", operationId,
+            "--path", "invocationId=2a2eb07e-85be-4c99-9b1d-1d3c8b923825",
+            "--scope", "projects.admin",
+            "--gateway-url", "https://gateway.example/",
+            "--broker-issuer", "https://identity.example/",
+            "--client-id", "agentweaver-cli",
+            "--api-audience", "https://gateway.example/",
+            "--tenant-id", "tenant-1",
+        ],
+        new CliRuntimeOptions(HttpClient: http, Authentication: authentication, Error: error));
+
+        Assert.True(result == 0, error.ToString());
+        var request = Assert.Single(handler.Requests,
+            item => item.Path == "/api/v1/p1/invocations/2a2eb07e-85be-4c99-9b1d-1d3c8b923825/setup");
+        Assert.Equal(method, request.Method);
+        Assert.Equal("tenant-1", request.Tenant);
+        Assert.Contains("writer-bearer", authentication.RequestedBearers);
+        Assert.DoesNotContain("run-bearer", authentication.RequestedBearers);
+    }
+
+    [Fact]
+    public async Task CompositeSetupScopesAreRejectedBeforeProtectedRequest()
+    {
+        var handler = new TestGatewayHandler();
+        using var http = new HttpClient(handler);
+        var authentication = new TestAuthentication();
+        var error = new StringWriter();
+        var result = await CliApplication.RunAsync(
+        [
+            "api", "invoke", "createP1InvocationSetup",
+            "--path", "invocationId=2a2eb07e-85be-4c99-9b1d-1d3c8b923825",
+            "--scope", "projects.admin",
+            "--scope", "projects.orchestrator",
+            "--gateway-url", "https://gateway.example/",
+            "--broker-issuer", "https://identity.example/",
+            "--client-id", "agentweaver-cli",
+            "--api-audience", "https://gateway.example/",
+            "--tenant-id", "tenant-1",
+        ],
+        new CliRuntimeOptions(HttpClient: http, Authentication: authentication, Error: error));
+
+        Assert.Equal(1, result);
+        Assert.Contains("Project scopes do not match", error.ToString(), StringComparison.Ordinal);
+        Assert.Single(handler.Requests, request => request.Path == "/openapi/v1.json");
+        Assert.Empty(authentication.RequestedBearers);
     }
 
     [Fact]
@@ -566,6 +625,7 @@ public sealed class GatewayClientTests
 
         public Task<string> GetBearerAsync(CliIdentity identity, InteractionPolicy interaction, CancellationToken ct)
         {
+            _ = CliAuthIdentity.Create(identity);
             var token = identity.Scopes.Contains("projects.admin", StringComparer.Ordinal)
                 ? "writer-bearer"
                 : "run-bearer";
@@ -593,6 +653,7 @@ public sealed class GatewayClientTests
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             Requests.Add(new RequestSnapshot(
+                request.Method.Method,
                 request.RequestUri!.AbsolutePath,
                 request.RequestUri.Query,
                 request.RequestUri.GetLeftPart(UriPartial.Authority),
@@ -633,6 +694,10 @@ public sealed class GatewayClientTests
                     ? AuthorizationContext(isAdmin)
                     : AuthorizationContext(OwnerPermission));
             }
+
+            if (request.RequestUri.AbsolutePath.StartsWith("/api/v1/p1/invocations/", StringComparison.Ordinal) &&
+                request.RequestUri.AbsolutePath.EndsWith("/setup", StringComparison.Ordinal))
+                return Json(HttpStatusCode.OK, ResponseBody);
 
             if (request.RequestUri.AbsolutePath == "/api/v1/files/file-1")
             {
@@ -709,7 +774,27 @@ public sealed class GatewayClientTests
           "security":[{"Bearer":[]}],
           "components":{"securitySchemes":{"Bearer":{"type":"http","scheme":"bearer"}}},
           "paths":{
-            "/api/v1/authorization/context":{
+          "/api/v1/p1/invocations/{invocationId}/setup":{
+            "post":{
+              "operationId":"createP1InvocationSetup",
+              "security":[{"Bearer":[]}],
+              "parameters":[
+                {"name":"invocationId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
+                {"name":"X-Agentweaver-Tenant","in":"header","required":true,"schema":{"type":"string"}}
+              ],
+              "responses":{"200":{"content":{"application/json":{"schema":{"type":"object"}}}}}
+            },
+            "get":{
+              "operationId":"readP1InvocationSetup",
+              "security":[{"Bearer":[]}],
+              "parameters":[
+                {"name":"invocationId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
+                {"name":"X-Agentweaver-Tenant","in":"header","required":true,"schema":{"type":"string"}}
+              ],
+              "responses":{"200":{"content":{"application/json":{"schema":{"type":"object"}}}}}
+            }
+          },
+          "/api/v1/authorization/context":{
               "get":{
                 "operationId":"getAuthorizationContext",
                 "security":[{"Bearer":[]}],
@@ -786,6 +871,7 @@ public sealed class GatewayClientTests
     }
 
     private sealed record RequestSnapshot(
+        string Method,
         string Path,
         string Query,
         string Origin,

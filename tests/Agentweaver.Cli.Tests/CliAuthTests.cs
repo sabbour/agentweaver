@@ -24,6 +24,8 @@ public sealed class CliAuthTests
         var reordered = CliAuthIdentity.Create(new CliIdentity(target, ["offline_access", "openid", "api.read"]));
         var noSlashIssuer = CliAuthIdentity.Create(new CliIdentity(
             target with { Issuer = new Uri("https://broker.test") }, Scopes));
+        var unboundAdmin = CliAuthIdentity.Create(new CliIdentity(
+            target, ["openid", "api.read", "offline_access", "projects.admin"]));
         var unboundOrchestrator = CliAuthIdentity.Create(new CliIdentity(
             target, ["openid", "api.read", "offline_access", "projects.orchestrator"]));
         var run = CliAuthIdentity.Create(new CliIdentity(
@@ -34,6 +36,8 @@ public sealed class CliAuthTests
         Assert.Equal(unbound.Account, reordered.Account);
         Assert.Equal(unbound.Account, noSlashIssuer.Account);
         Assert.Equal(Issuer, noSlashIssuer.Issuer);
+        Assert.NotEqual(unbound.Account, unboundAdmin.Account);
+        Assert.NotEqual(unboundAdmin.Account, unboundOrchestrator.Account);
         Assert.NotEqual(unbound.Account, unboundOrchestrator.Account);
         Assert.NotEqual(unbound.Account, run.Account);
         Assert.NotEqual(unboundOrchestrator.Account, run.Account);
