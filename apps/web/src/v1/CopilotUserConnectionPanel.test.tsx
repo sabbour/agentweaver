@@ -5,6 +5,7 @@ import type { CopilotConnectionReceipt } from './contracts';
 
 const mocks = vi.hoisted(() => ({
   apiCall: vi.fn(),
+  copilotGatewayBaseUrl: '/api/v1',
   getAuthorizationContext: vi.fn(),
   beginCopilotConnection: vi.fn(),
   completeCopilotConnection: vi.fn(),
@@ -21,9 +22,14 @@ vi.mock('./AuthContext', () => ({
 vi.mock('./api', () => ({
   gatewayClient: {
     getAuthorizationContext: mocks.getAuthorizationContext,
+  },
+  copilotGatewayClient: {
     beginCopilotConnection: mocks.beginCopilotConnection,
     completeCopilotConnection: mocks.completeCopilotConnection,
     getCopilotConnection: mocks.getCopilotConnection,
+  },
+  get copilotGatewayBaseUrl() {
+    return mocks.copilotGatewayBaseUrl;
   },
   GatewayError: class GatewayError extends Error {
     status = 0;
@@ -31,7 +37,9 @@ vi.mock('./api', () => ({
   },
 }));
 
-const callbackUri = 'https://app.example.test/auth/github/copilot-app/callback';
+const portalOrigin = 'https://portal.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io';
+const apiOrigin = 'https://api.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io';
+const callbackUri = `${portalOrigin}/auth/github/copilot-app/callback`;
 const receipt = {
   connectionId: '12c8f32e-3340-4820-a712-d10bda31ab8a',
   revision: 1,
@@ -66,7 +74,8 @@ describe('Copilot user connection panel', () => {
     const happyDOM = Reflect.get(window, 'happyDOM') as {
       setURL(url: string): void | Promise<void>;
     };
-    await happyDOM.setURL('https://app.example.test/projects/project-1/settings');
+    await happyDOM.setURL(`${portalOrigin}/projects/project-1/settings`);
+    mocks.copilotGatewayBaseUrl = '/api/v1';
     mocks.apiCall.mockReset().mockImplementation(
       (operation: (token: string, tenantSelector: string) => Promise<unknown>) =>
         operation('broker-token', 'tenant-1'),
@@ -98,6 +107,8 @@ describe('Copilot user connection panel', () => {
       await waitFor(() => expect(popup.location.replace).toHaveBeenCalledWith(
         expect.stringContaining('https://github.com/login/oauth/authorize'),
       ));
+      expect(new URL(popup.location.replace.mock.calls[0][0]).searchParams.get('redirect_uri'))
+        .toBe(callbackUri);
       expect(open).toHaveBeenCalledWith(
         'about:blank',
         'agentweaver-copilot-user',
@@ -109,11 +120,24 @@ describe('Copilot user connection panel', () => {
         state: 'request-1',
         code: 'one-time-code',
       };
+      for (const origin of [
+        `${apiOrigin}`,
+        'https://auth.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io',
+        'https://untrusted.example.test',
+      ]) {
+        act(() => {
+          window.dispatchEvent(new MessageEvent('message', {
+            data: callback,
+            origin,
+            source: popup as unknown as MessageEventSource,
+          }));
+        });
+      }
       act(() => {
         window.dispatchEvent(new MessageEvent('message', {
           data: callback,
-          origin: 'https://untrusted.example.test',
-          source: popup as unknown as MessageEventSource,
+          origin: window.location.origin,
+          source: createPopup() as unknown as MessageEventSource,
         }));
       });
       expect(mocks.completeCopilotConnection).not.toHaveBeenCalled();
@@ -138,6 +162,121 @@ describe('Copilot user connection panel', () => {
         'tenant-1',
       );
       expect(await screen.findByText('Connected', { selector: 'strong' })).toBeTruthy();
+      expect(popup.close).toHaveBeenCalledOnce();
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it.each([
+    ['an insecure page', `http://portal.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/projects/project-1`, '/api/v1'],
+    ['an off-origin Copilot transport', `${portalOrigin}/projects/project-1`, `${apiOrigin}/api/v1`],
+  ])('does not begin a connection from %s', async (_case, pageUrl, transportBaseUrl) => {
+    const happyDOM = Reflect.get(window, 'happyDOM') as {
+      setURL(url: string): void | Promise<void>;
+    };
+    await happyDOM.setURL(pageUrl);
+    mocks.copilotGatewayBaseUrl = transportBaseUrl;
+    const popup = createPopup();
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    try {
+      render(<CopilotUserConnectionPanel projectId="project-1" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub Copilot' }));
+
+      expect(await screen.findByRole('alert')).toBeTruthy();
+      expect(mocks.apiCall).not.toHaveBeenCalled();
+      expect(mocks.beginCopilotConnection).not.toHaveBeenCalled();
+      expect(popup.close).toHaveBeenCalledOnce();
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it('rejects a callback with mismatched state before completing the BFF request', async () => {
+    const popup = createPopup();
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    try {
+      render(<CopilotUserConnectionPanel projectId="project-1" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub Copilot' }));
+      await waitFor(() => expect(popup.location.replace).toHaveBeenCalledOnce());
+
+      act(() => {
+        window.dispatchEvent(new MessageEvent('message', {
+          data: {
+            type: 'agentweaver.copilot-user.callback',
+            state: 'wrong-state',
+            code: 'one-time-code',
+          },
+          origin: window.location.origin,
+          source: popup as unknown as MessageEventSource,
+        }));
+      });
+
+      expect((await screen.findByRole('alert')).textContent).toContain('did not match');
+      expect(mocks.completeCopilotConnection).not.toHaveBeenCalled();
+      expect(popup.close).toHaveBeenCalledOnce();
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it('rejects a completion receipt for another project or connection', async () => {
+    mocks.completeCopilotConnection.mockResolvedValueOnce({
+      ...receipt,
+      connectionId: 'another-connection',
+      scopeId: 'another-project',
+      state: 'connected',
+      revision: 2,
+    });
+    const popup = createPopup();
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    try {
+      render(<CopilotUserConnectionPanel projectId="project-1" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub Copilot' }));
+      await waitFor(() => expect(popup.location.replace).toHaveBeenCalledOnce());
+      act(() => {
+        window.dispatchEvent(new MessageEvent('message', {
+          data: {
+            type: 'agentweaver.copilot-user.callback',
+            state: 'request-1',
+            code: 'one-time-code',
+          },
+          origin: window.location.origin,
+          source: popup as unknown as MessageEventSource,
+        }));
+      });
+
+      expect(await screen.findByRole('alert')).toBeTruthy();
+      expect(mocks.getCopilotConnection).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it('stops a pending callback when the authenticated actor changes', async () => {
+    mocks.getAuthorizationContext
+      .mockResolvedValueOnce({ actorId: 'actor-1' })
+      .mockResolvedValueOnce({ actorId: 'actor-2' });
+    const popup = createPopup();
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    try {
+      render(<CopilotUserConnectionPanel projectId="project-1" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub Copilot' }));
+      await waitFor(() => expect(popup.location.replace).toHaveBeenCalledOnce());
+      act(() => {
+        window.dispatchEvent(new MessageEvent('message', {
+          data: {
+            type: 'agentweaver.copilot-user.callback',
+            state: 'request-1',
+            code: 'one-time-code',
+          },
+          origin: window.location.origin,
+          source: popup as unknown as MessageEventSource,
+        }));
+      });
+
+      expect((await screen.findByRole('alert')).textContent).toContain('identity changed');
+      expect(mocks.completeCopilotConnection).not.toHaveBeenCalled();
       expect(popup.close).toHaveBeenCalledOnce();
     } finally {
       open.mockRestore();
