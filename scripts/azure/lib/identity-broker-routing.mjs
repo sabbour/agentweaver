@@ -188,17 +188,23 @@ function managedPortalHostname(certificate, namespace) {
   return `portal.${managedBrokerHostname(certificate, namespace).slice('agentweaver.'.length)}`;
 }
 
+function managedAliasHostname(hostname, service) {
+  return `${service}.${hostname.slice('agentweaver.'.length)}`;
+}
+
 function managedWildcardHostname(hostname) {
   return `*.${hostname.slice('agentweaver.'.length)}`;
 }
 
 /** Reads existing P0 broker routing resources and checks them against the desired routing shape. */
 export function observeExistingP0BrokerRouting({
-  certificate, gateway, route, backendPolicy, webRoute, apiRoute, apiBackendPolicy,
-  mcpRoute, mcpBackendPolicy,
+  certificate, gateway, route, backendPolicy, authRoute, webRoute, apiRoute, apiHostRoute,
+  copilotBffRoute, apiBackendPolicy, mcpRoute, mcpBackendPolicy,
   requireApplicationRoutes = true,
 }) {
   const hostname = managedBrokerHostname(certificate, P0_NAMESPACE);
+  const authHostname = managedAliasHostname(hostname, 'auth');
+  const apiHostname = managedAliasHostname(hostname, 'api');
   const portalHostname = managedPortalHostname(certificate, P0_NAMESPACE);
   const gatewayNamespace = route?.spec?.parentRefs?.[0]?.namespace;
   if (gatewayNamespace !== GATEWAY_NAMESPACE) {
@@ -210,8 +216,11 @@ export function observeExistingP0BrokerRouting({
     [backendPolicy, 'BackendTLSPolicy', 'identity-broker', 'identity-broker'],
   ];
   if (requireApplicationRoutes) ownedObjects.push(
+    [authRoute, 'HTTPRoute', 'identity-broker-auth', 'identity-broker'],
     [webRoute, 'HTTPRoute', 'web-application', 'web'],
     [apiRoute, 'HTTPRoute', 'gateway-api', 'gateway'],
+    [apiHostRoute, 'HTTPRoute', 'gateway-api-host', 'gateway'],
+    [copilotBffRoute, 'HTTPRoute', 'gateway-copilot-bff', 'gateway'],
     [apiBackendPolicy, 'BackendTLSPolicy', 'gateway-api', 'gateway'],
     [mcpRoute, 'HTTPRoute', 'mcp', 'mcp'],
     [mcpBackendPolicy, 'BackendTLSPolicy', 'mcp', 'mcp'],
@@ -222,17 +231,35 @@ export function observeExistingP0BrokerRouting({
         !object.metadata.resourceVersion) throw new Error('Existing P0 routing object is not the exact owned version.');
   }
   const brokerListener = gateway.spec?.listeners?.find(item => item.name === 'https');
+  const authListener = gateway.spec?.listeners?.find(item => item.name === 'auth');
+  const apiListener = gateway.spec?.listeners?.find(item => item.name === 'api');
   const observedBrokerHost = route.spec?.hostnames?.[0];
   const legacyHost = hostname.replace(/^agentweaver\./, 'identity-broker.');
   const permittedBrokerHost = requireApplicationRoutes ? hostname : [hostname, legacyHost].includes(observedBrokerHost)
     ? observedBrokerHost : hostname;
+  const listenerNames = gateway.spec?.listeners?.map(item => item.name) ?? [];
+  const aliasesConfigured = listenerNames.length === 3 &&
+    new Set(listenerNames).size === 3 &&
+    ['https', 'auth', 'api'].every(name => listenerNames.includes(name)) &&
+    hasManagedP0Listener(authListener, 'auth', authHostname, gatewayNamespace) &&
+    hasManagedP0Listener(apiListener, 'api', apiHostname, gatewayNamespace);
+  const legacyPortalListenerConfigured = listenerNames.length === 2 &&
+    new Set(listenerNames).size === 2 &&
+    ['https', 'portal'].every(name => listenerNames.includes(name)) &&
+    hasManagedP0Listener(gateway.spec.listeners.find(item => item.name === 'portal'),
+      'portal', portalHostname, gatewayNamespace);
+  const expectedBrokerListenerHostname = aliasesConfigured
+    ? managedWildcardHostname(hostname) : permittedBrokerHost;
+  const brokerListenerHostname = requireApplicationRoutes || aliasesConfigured
+    ? managedWildcardHostname(hostname) : hostname;
   if (gateway.spec?.gatewayClassName !== 'approuting-istio' ||
-      (requireApplicationRoutes ? gateway.spec.listeners?.length !== 1
-        : ![1, 2].includes(gateway.spec.listeners?.length)) ||
+      (requireApplicationRoutes
+        ? !aliasesConfigured
+        : ![1, 2, 3].includes(gateway.spec.listeners?.length) ||
+          (gateway.spec.listeners.length === 2 && !legacyPortalListenerConfigured) ||
+          (gateway.spec.listeners.length === 3 && !aliasesConfigured)) ||
       !hasManagedP0Listener(brokerListener, 'https',
-        requireApplicationRoutes ? managedWildcardHostname(hostname) : permittedBrokerHost, gatewayNamespace) ||
-      (!requireApplicationRoutes && gateway.spec.listeners.length === 2 && !hasManagedP0Listener(
-        gateway.spec.listeners.find(item => item.name === 'portal'), 'portal', portalHostname, gatewayNamespace))) {
+            expectedBrokerListenerHostname, gatewayNamespace)) {
     throw new Error('Existing P0 Gateway references or managed TLS configuration changed.');
   }
   assertManagedRoute(route, {
@@ -241,6 +268,10 @@ export function observeExistingP0BrokerRouting({
   });
   assertManagedBackendTlsPolicy(backendPolicy, 'identity-broker', 'identity-broker', permittedBrokerHost);
   if (requireApplicationRoutes) {
+    assertManagedRoute(authRoute, {
+      name: 'identity-broker-auth', service: 'identity-broker', hostname: authHostname, gatewayNamespace,
+      sectionName: 'auth', paths: [{ type: 'PathPrefix', value: '/' }], backend: 'identity-broker', port: 443,
+    });
     assertManagedRoute(webRoute, {
       name: 'web-application', service: 'web', hostname: portalHostname, gatewayNamespace,
       sectionName: 'https', paths: [{ type: 'PathPrefix', value: '/' }], backend: 'web', port: 8080,
@@ -250,6 +281,22 @@ export function observeExistingP0BrokerRouting({
       sectionName: 'https', paths: [
         { type: 'PathPrefix', value: '/api/v1' },
         { type: 'Exact', value: '/openapi/v1.json' },
+      ], backend: 'gateway', port: 8443,
+    });
+    assertManagedRoute(apiHostRoute, {
+      name: 'gateway-api-host', service: 'gateway', hostname: apiHostname, gatewayNamespace,
+      sectionName: 'api', paths: [
+        { type: 'PathPrefix', value: '/api/v1' },
+        { type: 'PathPrefix', value: '/api/connections/copilot-user/v1' },
+        { type: 'PathPrefix', value: '/api/connections/remote-mcp/v1' },
+        { type: 'PathPrefix', value: '/api/auth/github/repo-app' },
+        { type: 'Exact', value: '/openapi/v1.json' },
+      ], backend: 'gateway', port: 8443,
+    });
+    assertManagedRoute(copilotBffRoute, {
+      name: 'gateway-copilot-bff', service: 'gateway', hostname: portalHostname, gatewayNamespace,
+      sectionName: 'https', paths: [
+        { type: 'PathPrefix', value: '/api/connections/copilot-user/v1' },
       ], backend: 'gateway', port: 8443,
     });
     assertManagedBackendTlsPolicy(apiBackendPolicy, 'gateway-api', 'gateway',
@@ -264,27 +311,37 @@ export function observeExistingP0BrokerRouting({
     assertManagedBackendTlsPolicy(mcpBackendPolicy, 'mcp', 'mcp',
       'mcp.agentweaver.svc.cluster.local', 'service-backend-ca');
     requireManagedRouteConditions(route, gatewayNamespace, 'https');
+    requireManagedRouteConditions(authRoute, gatewayNamespace, 'auth');
     requireManagedRouteConditions(webRoute, gatewayNamespace, 'https');
     requireManagedRouteConditions(apiRoute, gatewayNamespace, 'https');
+    requireManagedRouteConditions(apiHostRoute, gatewayNamespace, 'api');
+    requireManagedRouteConditions(copilotBffRoute, gatewayNamespace, 'https');
     requireManagedRouteConditions(mcpRoute, gatewayNamespace, 'https');
     requireManagedBackendConditions(backendPolicy, gatewayNamespace, 'https');
     requireManagedBackendConditions(apiBackendPolicy, gatewayNamespace, 'https');
     requireManagedBackendConditions(mcpBackendPolicy, gatewayNamespace, 'https');
   }
-  if (requireApplicationRoutes && (gateway.spec.listeners.length !== 1 ||
-      !hasCurrentListenerConditions(gateway, 'https'))) {
-    throw new Error('Existing P0 shared Gateway listener is not accepted and programmed.');
+  if (requireApplicationRoutes && !['https', 'auth', 'api'].every(name =>
+    hasCurrentListenerConditions(gateway, name))) {
+    throw new Error('Existing P0 Gateway listeners are not accepted and programmed for their current generations.');
   }
   return {
     hostname,
+    authHostname,
+    apiHostname,
     issuer: `https://${route.spec.hostnames[0]}/`,
     portalHostname,
     applicationRoutesConfigured: requireApplicationRoutes,
+    brokerListenerHostname,
     hostnameAligned: route.spec.hostnames[0] === hostname &&
       gateway.spec.listeners.find(item => item.name === 'https').hostname ===
-        (requireApplicationRoutes ? managedWildcardHostname(hostname) : hostname) &&
+        brokerListenerHostname &&
+      (!aliasesConfigured || (
+        authListener.hostname === authHostname && apiListener.hostname === apiHostname)) &&
       (!requireApplicationRoutes || (
-      webRoute.spec.hostnames[0] === portalHostname && apiRoute.spec.hostnames[0] === portalHostname)),
+      authRoute.spec.hostnames[0] === authHostname &&
+      webRoute.spec.hostnames[0] === portalHostname && apiRoute.spec.hostnames[0] === portalHostname &&
+      apiHostRoute.spec.hostnames[0] === apiHostname && copilotBffRoute.spec.hostnames[0] === portalHostname)),
     gatewayProgrammed: gateway.status?.conditions?.some(condition => condition.type === 'Programmed' &&
       condition.status === 'True' && condition.observedGeneration === gateway.metadata.generation) ?? false,
     gatewayNamespace,
@@ -321,7 +378,7 @@ export function alignExistingP0BrokerHostname(config, {
     const brokerListenerIndex = gateway.spec.listeners.findIndex(item => item.name === 'https');
     const updates = [
       ['gateway', gateway, `/spec/listeners/${brokerListenerIndex}/hostname`,
-        gateway.spec.listeners[brokerListenerIndex].hostname, observed.hostname],
+        gateway.spec.listeners[brokerListenerIndex].hostname, observed.brokerListenerHostname],
       ['httproute', route, '/spec/hostnames', route.spec.hostnames, [observed.hostname]],
       ['backendtlspolicy', backendPolicy, '/spec/validation/hostname', backendPolicy.spec.validation.hostname, observed.hostname],
     ];
@@ -461,30 +518,41 @@ function requireManagedBackendConditions(policy, gatewayNamespace, sectionName) 
 
 /** Builds the desired routing resource description from validated certificate and callback inputs. */
 export function deriveIdentityRouting({
-  gatewayCertificate, brokerCertificate, gateway, route, backendPolicy, webRoute, apiRoute, apiBackendPolicy,
-  mcpRoute, mcpBackendPolicy,
+  gatewayCertificate, brokerCertificate, gateway, route, backendPolicy, authRoute, webRoute, apiRoute,
+  apiHostRoute, copilotBffRoute, apiBackendPolicy, mcpRoute, mcpBackendPolicy,
 }) {
   const hostname = managedBrokerHostname(gatewayCertificate, GATEWAY_NAMESPACE);
   if (managedBrokerHostname(brokerCertificate, P0_NAMESPACE) !== hostname) {
     throw new Error('Gateway and Broker managed certificates do not identify the same domain.');
   }
+  const authHostname = managedAliasHostname(hostname, 'auth');
+  const apiHostname = managedAliasHostname(hostname, 'api');
   const portalHostname = managedPortalHostname(gatewayCertificate, GATEWAY_NAMESPACE);
   assertObject(gateway, 'Gateway', GATEWAY_NAMESPACE);
   if (gateway.spec?.gatewayClassName !== 'approuting-istio') {
     throw new Error('Identity Gateway must use the native AKS approuting-istio Gateway class.');
   }
   requireConditions(gateway, gateway.status?.conditions, ['Accepted', 'Programmed']);
-  const listener = gateway.spec?.listeners?.find(item => item.name === 'https');
-  if (gateway.spec.listeners.length !== 1 ||
-      !hasManagedP0Listener(listener, 'https', managedWildcardHostname(hostname), GATEWAY_NAMESPACE)) {
-    throw new Error('Identity Gateway must terminate managed wildcard HTTPS on the exact P0 namespace.');
+  const listeners = gateway.spec?.listeners ?? [];
+  const listenerByName = name => listeners.find(item => item.name === name);
+  if (listeners.length !== 3 || new Set(listeners.map(item => item.name)).size !== 3 ||
+      !hasManagedP0Listener(listenerByName('https'), 'https',
+        managedWildcardHostname(hostname), GATEWAY_NAMESPACE) ||
+      !hasManagedP0Listener(listenerByName('auth'), 'auth', authHostname, GATEWAY_NAMESPACE) ||
+      !hasManagedP0Listener(listenerByName('api'), 'api', apiHostname, GATEWAY_NAMESPACE)) {
+    throw new Error('Identity Gateway must retain wildcard HTTPS and exact auth/api aliases on the P0 namespace.');
   }
-  if (!hasCurrentListenerConditions(gateway, 'https')) {
-    throw new Error('Identity Gateway shared listener is not accepted, programmed, and resolved for its current generation.');
+  if (!['https', 'auth', 'api'].every(name => hasCurrentListenerConditions(gateway, name))) {
+    throw new Error('Identity Gateway listeners are not accepted, programmed, and resolved for their current generations.');
   }
   assertManagedRoute(route, {
     name: 'identity-broker', service: 'identity-broker', hostname, gatewayNamespace: GATEWAY_NAMESPACE,
     sectionName: 'https', paths: [{ type: 'PathPrefix', value: '/' }], backend: 'identity-broker', port: 443,
+  });
+  assertManagedRoute(authRoute, {
+    name: 'identity-broker-auth', service: 'identity-broker', hostname: authHostname,
+    gatewayNamespace: GATEWAY_NAMESPACE, sectionName: 'auth',
+    paths: [{ type: 'PathPrefix', value: '/' }], backend: 'identity-broker', port: 443,
   });
   assertManagedRoute(webRoute, {
     name: 'web-application', service: 'web', hostname: portalHostname, gatewayNamespace: GATEWAY_NAMESPACE,
@@ -496,6 +564,22 @@ export function deriveIdentityRouting({
       { type: 'PathPrefix', value: '/api/v1' },
       { type: 'Exact', value: '/openapi/v1.json' },
     ], backend: 'gateway', port: 8443,
+  });
+  assertManagedRoute(apiHostRoute, {
+    name: 'gateway-api-host', service: 'gateway', hostname: apiHostname, gatewayNamespace: GATEWAY_NAMESPACE,
+    sectionName: 'api', paths: [
+      { type: 'PathPrefix', value: '/api/v1' },
+      { type: 'PathPrefix', value: '/api/connections/copilot-user/v1' },
+      { type: 'PathPrefix', value: '/api/connections/remote-mcp/v1' },
+      { type: 'PathPrefix', value: '/api/auth/github/repo-app' },
+      { type: 'Exact', value: '/openapi/v1.json' },
+    ], backend: 'gateway', port: 8443,
+  });
+  assertManagedRoute(copilotBffRoute, {
+    name: 'gateway-copilot-bff', service: 'gateway', hostname: portalHostname,
+    gatewayNamespace: GATEWAY_NAMESPACE, sectionName: 'https',
+    paths: [{ type: 'PathPrefix', value: '/api/connections/copilot-user/v1' }],
+    backend: 'gateway', port: 8443,
   });
   assertManagedBackendTlsPolicy(backendPolicy, 'identity-broker', 'identity-broker', hostname);
   assertManagedBackendTlsPolicy(apiBackendPolicy, 'gateway-api', 'gateway',
@@ -510,7 +594,8 @@ export function deriveIdentityRouting({
   assertManagedBackendTlsPolicy(mcpBackendPolicy, 'mcp', 'mcp',
     'mcp.agentweaver.svc.cluster.local', 'service-backend-ca');
   for (const [managedRoute, section] of [
-    [route, 'https'], [webRoute, 'https'], [apiRoute, 'https'], [mcpRoute, 'https'],
+    [route, 'https'], [authRoute, 'auth'], [webRoute, 'https'], [apiRoute, 'https'],
+    [apiHostRoute, 'api'], [copilotBffRoute, 'https'], [mcpRoute, 'https'],
   ]) requireManagedRouteConditions(managedRoute, GATEWAY_NAMESPACE, section);
   requireManagedBackendConditions(backendPolicy, GATEWAY_NAMESPACE, 'https');
   requireManagedBackendConditions(apiBackendPolicy, GATEWAY_NAMESPACE, 'https');
@@ -520,7 +605,8 @@ export function deriveIdentityRouting({
   if (!addresses?.length) throw new Error('Programmed Gateway has no observed public IP address.');
   const issuer = `https://${route.spec.hostnames[0]}/`;
   return {
-    hostname: route.spec.hostnames[0], portalHostname, issuer, callbackUri: `${issuer}signin-oidc`, addresses,
+    hostname: route.spec.hostnames[0], authHostname, apiHostname, portalHostname,
+    issuer, callbackUri: `${issuer}signin-oidc`, addresses,
     gatewayUid: gateway.metadata.uid, routeUid: route.metadata.uid,
     routingConfigured: true, runtimeVerified: false,
   };
@@ -741,21 +827,35 @@ export function verifyIdentityBrokerReadiness(receipt, {
 } = {}) {
   if (!receipt?.routingConfigured || receipt.issuer !== `https://${receipt.hostname}/` ||
       !/^agentweaver\.[a-z0-9.-]+\.aksapp\.io$/.test(receipt.hostname) ||
+      receipt.authHostname !== `auth.${receipt.hostname.slice('agentweaver.'.length)}` ||
+      receipt.apiHostname !== `api.${receipt.hostname.slice('agentweaver.'.length)}` ||
       receipt.portalHostname !== `portal.${receipt.hostname.slice('agentweaver.'.length)}` ||
       !receipt.addresses?.length || receipt.addresses.some(address => !isIP(address))) {
     throw new Error('Broker readiness requires an independently derived managed routing receipt.');
   }
-  for (const path of ['health/live', 'health/ready']) {
+  const httpsProbes = [
+    ...['health/live', 'health/ready'].map(path => ({
+      hostname: receipt.hostname, path: `/${path}`, expectedStatus: '200', label: `Broker ${path}`,
+    })),
+    ...['health/live', 'health/ready'].map(path => ({
+      hostname: receipt.authHostname, path: `/${path}`, expectedStatus: '200', label: `Auth alias ${path}`,
+    })),
+    {
+      hostname: receipt.apiHostname, path: '/openapi/v1.json',
+      expectedStatus: '200', label: 'API alias OpenAPI route',
+    },
+  ];
+  for (const { hostname, path, expectedStatus, label } of httpsProbes) {
     const result = execCurl([
       '--disable', '--fail', '--silent', '--show-error', '--proto', '=https', '--tlsv1.2',
       '--connect-timeout', '10', '--max-time', '20',
-      '--write-out', '\n%{http_code}\n%{remote_ip}', `${receipt.issuer}${path}`,
+      '--write-out', '\n%{http_code}\n%{remote_ip}', `https://${hostname}${path}`,
     ], COMMAND_OPTIONS);
     const lines = result.stdout.trim().split(/\r?\n/);
     const remoteIp = lines.pop();
     const status = lines.pop();
-    if (result.status !== 0 || status !== '200' || !receipt.addresses.includes(remoteIp)) {
-      throw new Error(`Broker HTTPS ${path} DNS/TLS/readiness verification failed: ${redact(result.stderr || `HTTP ${status}, remote IP ${remoteIp}`)}`);
+    if (result.status !== 0 || status !== expectedStatus || !receipt.addresses.includes(remoteIp)) {
+      throw new Error(`${label} DNS/TLS verification failed: ${redact(result.stderr || `HTTP ${status}, remote IP ${remoteIp}`)}`);
     }
   }
   const crossHostRequests = [
@@ -854,8 +954,11 @@ export function bootstrapIdentityRouting(config, {
       ['gateway', GATEWAY_NAMESPACE, 'identity-broker', 'identity-broker'],
       ['httproute', P0_NAMESPACE, 'identity-broker', 'identity-broker'],
       ['backendtlspolicy', P0_NAMESPACE, 'identity-broker', 'identity-broker'],
+      ['httproute', P0_NAMESPACE, 'identity-broker-auth', 'identity-broker'],
       ['httproute', P0_NAMESPACE, 'web-application', 'web'],
       ['httproute', P0_NAMESPACE, 'gateway-api', 'gateway'],
+      ['httproute', P0_NAMESPACE, 'gateway-api-host', 'gateway'],
+      ['httproute', P0_NAMESPACE, 'gateway-copilot-bff', 'gateway'],
       ['backendtlspolicy', P0_NAMESPACE, 'gateway-api', 'gateway'],
       ['httproute', P0_NAMESPACE, 'mcp', 'mcp'],
       ['backendtlspolicy', P0_NAMESPACE, 'mcp', 'mcp'],
@@ -906,8 +1009,11 @@ export function bootstrapIdentityRouting(config, {
       ['gateway', 'gateways', GATEWAY_NAMESPACE, 'identity-broker'],
       ['httproute', 'httproutes', P0_NAMESPACE, 'identity-broker'],
       ['backendtlspolicy', 'backendtlspolicies', P0_NAMESPACE, 'identity-broker'],
+      ['httproute', 'httproutes', P0_NAMESPACE, 'identity-broker-auth'],
       ['httproute', 'httproutes', P0_NAMESPACE, 'web-application'],
       ['httproute', 'httproutes', P0_NAMESPACE, 'gateway-api'],
+      ['httproute', 'httproutes', P0_NAMESPACE, 'gateway-api-host'],
+      ['httproute', 'httproutes', P0_NAMESPACE, 'gateway-copilot-bff'],
       ['backendtlspolicy', 'backendtlspolicies', P0_NAMESPACE, 'gateway-api'],
       ['httproute', 'httproutes', P0_NAMESPACE, 'mcp'],
       ['backendtlspolicy', 'backendtlspolicies', P0_NAMESPACE, 'mcp'],
@@ -946,6 +1052,8 @@ export function bootstrapIdentityRouting(config, {
       throw new Error('The certificate-derived callback differs from the preflighted AKS domain; route writes were not attempted.');
     }
     const portalHostname = managedPortalHostname(gatewayCertificate, GATEWAY_NAMESPACE);
+    const authHostname = managedAliasHostname(hostname, 'auth');
+    const apiHostname = managedAliasHostname(hostname, 'api');
     const wildcardHostname = managedWildcardHostname(hostname);
     // Return after both managed certificates converge; only the full phase may apply routes.
     if (certificatesOnly) {
@@ -957,11 +1065,16 @@ export function bootstrapIdentityRouting(config, {
     for (const [filename, replacements] of [
       ['gateway.yaml', {
         'CHANGEME-MANAGED-WILDCARD-HOST': wildcardHostname,
+        'CHANGEME-AUTH-HOST': authHostname,
+        'CHANGEME-API-HOST': apiHostname,
       }],
       ['httproute.yaml', { 'CHANGEME-MANAGED-HOST': hostname }],
       ['backend-tls-policy.yaml', { 'CHANGEME-MANAGED-HOST': hostname }],
+      ['identity-broker-auth.yaml', { 'CHANGEME-AUTH-HOST': authHostname }],
       ['web-application.yaml', { 'CHANGEME-PORTAL-HOST': portalHostname }],
       ['gateway-api.yaml', { 'CHANGEME-PORTAL-HOST': portalHostname }],
+      ['gateway-api-host.yaml', { 'CHANGEME-API-HOST': apiHostname }],
+      ['gateway-copilot-bff.yaml', { 'CHANGEME-PORTAL-HOST': portalHostname }],
       ['gateway-api-backend-tls.yaml', {}],
       ['gateway-mcp.yaml', { 'CHANGEME-PORTAL-HOST': portalHostname }],
       ['gateway-mcp-backend-tls.yaml', {}],
@@ -974,11 +1087,28 @@ export function bootstrapIdentityRouting(config, {
     }
     command(['wait', '--for=condition=Programmed', 'gateway/identity-broker',
       '--namespace', GATEWAY_NAMESPACE, '--timeout=180s'], { timeout: 190_000 });
+    const gatewayGeneration = read('gateway', GATEWAY_NAMESPACE).metadata?.generation;
+    if (!Number.isInteger(gatewayGeneration) || gatewayGeneration < 1) {
+      throw new Error('Identity Gateway has no current native generation.');
+    }
+    for (const listenerName of ['https', 'auth', 'api']) {
+      for (const condition of ['Accepted', 'Programmed', 'ResolvedRefs']) {
+        command(['wait',
+          `--for=jsonpath={.status.listeners[?(@.name=="${listenerName}")].conditions[?(@.type=="${condition}")].status}=True`,
+          'gateway/identity-broker', '--namespace', GATEWAY_NAMESPACE, '--timeout=180s'], { timeout: 190_000 });
+        command(['wait',
+          `--for=jsonpath={.status.listeners[?(@.name=="${listenerName}")].conditions[?(@.type=="${condition}")].observedGeneration}=${gatewayGeneration}`,
+          'gateway/identity-broker', '--namespace', GATEWAY_NAMESPACE, '--timeout=180s'], { timeout: 190_000 });
+      }
+    }
     for (const [kind, name, field] of [
       ['httproute', 'identity-broker', 'parents'],
       ['backendtlspolicy', 'identity-broker', 'ancestors'],
+      ['httproute', 'identity-broker-auth', 'parents'],
       ['httproute', 'web-application', 'parents'],
       ['httproute', 'gateway-api', 'parents'],
+      ['httproute', 'gateway-api-host', 'parents'],
+      ['httproute', 'gateway-copilot-bff', 'parents'],
       ['backendtlspolicy', 'gateway-api', 'ancestors'],
       ['httproute', 'mcp', 'parents'],
       ['backendtlspolicy', 'mcp', 'ancestors'],
@@ -1003,8 +1133,11 @@ export function bootstrapIdentityRouting(config, {
       gateway: read('gateway', GATEWAY_NAMESPACE),
       route: read('httproute', P0_NAMESPACE),
       backendPolicy: read('backendtlspolicy', P0_NAMESPACE),
+      authRoute: read('httproute', P0_NAMESPACE, 'identity-broker-auth'),
       webRoute: read('httproute', P0_NAMESPACE, 'web-application'),
       apiRoute: read('httproute', P0_NAMESPACE, 'gateway-api'),
+      apiHostRoute: read('httproute', P0_NAMESPACE, 'gateway-api-host'),
+      copilotBffRoute: read('httproute', P0_NAMESPACE, 'gateway-copilot-bff'),
       apiBackendPolicy: read('backendtlspolicy', P0_NAMESPACE, 'gateway-api'),
       mcpRoute: read('httproute', P0_NAMESPACE, 'mcp'),
       mcpBackendPolicy: read('backendtlspolicy', P0_NAMESPACE, 'mcp'),

@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "Azure resource and evidence dependencies",
-  "alt": "Structural Azure topology and evidence map. AKS has a public API endpoint with Kubernetes RBAC, managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault, Blob, and AMPLS endpoints use the private-endpoint subnet. Blob has private platform-artifacts and session-material containers. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2; AMPLS is global. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights; the Events & Sessions identity receives Storage Blob Data Contributor only on session-material. The separate P1 migration Jobs use their migration identity; the Events & Sessions Job mirrors its runtime Sessions and Messaging settings because the host validates them before migration. Identity runtime-table permissions are separate source definitions, not live bootstrap evidence. No live deployment or P0 completion is claimed.",
+  "alt": "Structural Azure topology and evidence map. AKS has a public API endpoint with Kubernetes RBAC, managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault, Blob, and AMPLS endpoints use the private-endpoint subnet. Blob has private platform-artifacts and session-material containers. The managed wildcard Gateway keeps the canonical agentweaver issuer and adds exact auth and api transport aliases; Portal's Copilot BFF remains same-origin. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2; AMPLS is global. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights; the Events & Sessions identity receives Storage Blob Data Contributor only on session-material. The separate P1 migration Jobs use their migration identity; the Events & Sessions Job mirrors its runtime Sessions and Messaging settings because the host validates them before migration. Identity runtime-table permissions are separate source definitions, not live bootstrap evidence. No live deployment or P0 completion is claimed.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [],
@@ -27,7 +27,7 @@
     {
       "id": "default-domain",
       "label": "Managed route and TLS",
-      "subLabel": "Native TLS; wildcard listener; exact-host routes",
+      "subLabel": "Wildcard HTTPS; exact auth/api aliases; canonical issuer retained",
       "icon": "network",
       "fluentIcon": "network",
       "badge": { "text": "Preview", "tone": "marigold" }
@@ -143,7 +143,7 @@
     "nodes": [
       { "id": "aks", "type": "card", "position": { "x": 500, "y": 80 }, "data": { "label": "AKS", "subLabel": "Public API; Kubernetes RBAC; Azure RBAC; Cilium; OIDC; Gateway API" } },
       { "id": "vnet", "type": "card", "position": { "x": 80, "y": 80 }, "data": { "label": "Dedicated VNet", "subLabel": "Separate AKS-node, delegated PostgreSQL, and private-endpoint subnets" } },
-      { "id": "default-domain", "type": "card", "position": { "x": 500, "y": 310 }, "data": { "label": "Managed route and TLS", "subLabel": "Native certificate; agentweaver route; explicit Gateway placement" } },
+      { "id": "default-domain", "type": "card", "position": { "x": 500, "y": 310 }, "data": { "label": "Managed route and TLS", "subLabel": "Wildcard HTTPS; exact auth/api aliases; canonical issuer retained" } },
       { "id": "routing-identity", "type": "card", "position": { "x": 860, "y": 310 }, "data": { "label": "App Routing identity", "subLabel": "AKS-generated resourceId, clientId, and objectId" } },
       { "id": "custom-zones", "type": "card", "position": { "x": 860, "y": 540 }, "data": { "label": "Optional existing DNS zones", "subLabel": "1–5 public/private IDs; roles scoped to each exact zone" } },
       { "id": "postgres", "type": "card", "position": { "x": 80, "y": 310 }, "data": { "label": "Azure Database for PostgreSQL", "subLabel": "Entra-only; private network" } },

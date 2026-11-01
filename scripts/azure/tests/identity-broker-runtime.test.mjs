@@ -17,6 +17,8 @@ const config = {
 };
 const zone = '0123456789abcdef.eastus2euap.aksapp.io';
 const hostname = `agentweaver.${zone}`;
+const authHostname = `auth.${zone}`;
+const apiHostname = `api.${zone}`;
 const portalHostname = `portal.${zone}`;
 const legacyHostname = `identity-broker.${zone}`;
 const issuer = `https://eastus2euap.oic.prod-aks.azure.com/${clientId}/cluster/`;
@@ -28,16 +30,19 @@ function object(kind, spec, status, { name = 'identity-broker', service = 'ident
     generation: 1, labels: { 'agentweaver.io/service': service } }, spec, status };
 }
 function routing(host = legacyHostname, includeApplicationRoutes = false) {
-  const gatewayListeners = [{
-    name: 'https', hostname: includeApplicationRoutes ? `*.${zone}` : host, protocol: 'HTTPS', port: 443,
+  const listenerNames = includeApplicationRoutes
+    ? [['https', `*.${zone}`], ['auth', authHostname], ['api', apiHostname]]
+    : [['https', host]];
+  const gatewayListeners = listenerNames.map(([name, listenerHost]) => ({
+    name, hostname: listenerHost, protocol: 'HTTPS', port: 443,
     tls: { mode: 'Terminate', certificateRefs: [{ name: 'identity-broker-tls' }] },
     allowedRoutes: { namespaces: { from: 'Same' } },
-  }];
-  const gatewayListenerStatus = [{
-    name: 'https', conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
+  }));
+  const gatewayListenerStatus = listenerNames.map(([name]) => ({
+    name, conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
       { type: 'Programmed', status: 'True', observedGeneration: 1 },
       { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }],
-  }];
+  }));
   const state = {
     certificate: object('DefaultDomainCertificate', { target: { secret: 'identity-broker-tls' } }, {
       domain: `*.${zone}`, conditions: [{ type: 'Available', status: 'True', observedGeneration: 1 }],
@@ -63,6 +68,15 @@ function routing(host = legacyHostname, includeApplicationRoutes = false) {
     }] }),
   };
   if (includeApplicationRoutes) {
+    state.authRoute = object('HTTPRoute', {
+      hostnames: [authHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'auth' }],
+      rules: [{ matches: [{ path: { type: 'PathPrefix', value: '/' } }],
+        backendRefs: [{ name: 'identity-broker', port: 443 }] }],
+    }, { parents: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
+      parentRef: { name: 'identity-broker', sectionName: 'auth' },
+      conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
+        { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
+    { name: 'identity-broker-auth', service: 'identity-broker' });
     state.webRoute = object('HTTPRoute', {
       hostnames: [portalHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'https' }],
       rules: [{ matches: [{ path: { type: 'PathPrefix', value: '/' } }],
@@ -84,6 +98,29 @@ function routing(host = legacyHostname, includeApplicationRoutes = false) {
       conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
         { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
     { name: 'gateway-api', service: 'gateway' });
+    state.apiHostRoute = object('HTTPRoute', {
+      hostnames: [apiHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'api' }],
+      rules: [{ matches: [
+        { path: { type: 'PathPrefix', value: '/api/v1' } },
+        { path: { type: 'PathPrefix', value: '/api/connections/copilot-user/v1' } },
+        { path: { type: 'PathPrefix', value: '/api/connections/remote-mcp/v1' } },
+        { path: { type: 'PathPrefix', value: '/api/auth/github/repo-app' } },
+        { path: { type: 'Exact', value: '/openapi/v1.json' } },
+      ], backendRefs: [{ name: 'gateway', port: 8443 }] }],
+    }, { parents: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
+      parentRef: { name: 'identity-broker', sectionName: 'api' },
+      conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
+        { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
+    { name: 'gateway-api-host', service: 'gateway' });
+    state.copilotBffRoute = object('HTTPRoute', {
+      hostnames: [portalHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'https' }],
+      rules: [{ matches: [{ path: { type: 'PathPrefix', value: '/api/connections/copilot-user/v1' } }],
+        backendRefs: [{ name: 'gateway', port: 8443 }] }],
+    }, { parents: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
+      parentRef: { name: 'identity-broker', sectionName: 'https' },
+      conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
+        { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
+    { name: 'gateway-copilot-bff', service: 'gateway' });
     state.apiBackendPolicy = object('BackendTLSPolicy', { targetRefs: [{
       name: 'gateway', kind: 'Service', group: '', sectionName: 'https',
     }], validation: {
@@ -124,6 +161,8 @@ const resourceKeys = {
 function resourceKey(resource, name) {
   if (resource === 'httproute') return ({
     'identity-broker': 'route', 'web-application': 'webRoute', 'gateway-api': 'apiRoute', mcp: 'mcpRoute',
+    'identity-broker-auth': 'authRoute', 'gateway-api-host': 'apiHostRoute',
+    'gateway-copilot-bff': 'copilotBffRoute',
   })[name];
   if (resource === 'backendtlspolicy') return ({
     'identity-broker': 'backendPolicy', 'gateway-api': 'apiBackendPolicy', mcp: 'mcpBackendPolicy',
@@ -161,7 +200,8 @@ function gatewayRouting(host = hostname, includeApplicationRoutes = false) {
   if (state.backendPolicy.status?.ancestors?.[0]) {
     state.backendPolicy.status.ancestors[0].ancestorRef.namespace = 'agentweaver-gateway';
   }
-  for (const route of [state.webRoute, state.apiRoute, state.mcpRoute].filter(Boolean)) {
+  for (const route of [state.authRoute, state.webRoute, state.apiRoute, state.apiHostRoute,
+    state.copilotBffRoute, state.mcpRoute].filter(Boolean)) {
     route.spec.parentRefs[0].namespace = 'agentweaver-gateway';
     route.status.parents[0].parentRef.namespace = 'agentweaver-gateway';
   }
@@ -195,6 +235,23 @@ test('post-placement alignment reads the exact Gateway namespace and leaves alig
   assert.throws(() => observeExistingP0BrokerRouting({
     ...state, requireApplicationRoutes: false,
   }), /configuration changed/);
+});
+
+test('pre-runtime hostname alignment retains additive auth and API listeners', () => {
+  const state = gatewayRouting(hostname, true);
+  const listeners = structuredClone(state.gateway.spec.listeners);
+  const result = alignExistingP0BrokerHostname(config, {
+    withKubeconfig: (_config, action) => action(['--kubeconfig', 'owned']),
+    execKubectl(args, options) {
+      const resource = args[args.indexOf('get') + 1];
+      const name = args[args.indexOf('get') + 2];
+      const target = resourceKey(resource, name);
+      return ok(JSON.stringify(options.projectJson(state[target])));
+    },
+  });
+  assert.equal(result.changed, false);
+  assert.deepEqual(state.gateway.spec.listeners, listeners);
+  assert.deepEqual(state.gateway.spec.listeners.map(listener => listener.name), ['https', 'auth', 'api']);
 });
 
 test('existing P0 alignment replaces only hostname fields with optimistic tests and keeps programming blocked', () => {

@@ -268,16 +268,26 @@ the Gateway and Broker namespaces.
 The installer derives the initial `agentweaver` hostname from the certificate's status.
 It applies native v1 Gateway and HTTPRoute resources, BackendTLSPolicy,
 and exact namespace/Gateway-label ingress to the HTTPS Broker.
-The listener admits only the P0 namespace's routes. Broker, Web, Gateway API,
-and MCP HTTPRoutes share the HTTPS listener for the wildcard managed domain.
-Each route retains its exact hostname, path, and backend so a reused
-HTTP/2 connection can select the Broker route by authority; an unknown
-hostname has no matching route. The listener routes `/` to Web, `/api/v1` plus exact
-`/openapi/v1.json` to Gateway, and exact `/mcp` plus the exact protected-resource
-metadata path to MCP over verified backend
-HTTPS. Gateway and MCP use operator-owned leaf certificates for their exact
-service DNS names, signed by the public CA certificate in
-the `service-backend-ca` ConfigMap. The installer checks the native BackendTLSPolicy
+The listeners admit only the P0 namespace's routes. The existing wildcard
+`https` listener and Broker, Web, Gateway API, Copilot BFF, and MCP routes stay
+in place. Exact `auth` and `api` HTTPS listeners use the same managed TLS
+Secret: `auth` routes to the existing Broker Service, and `api` routes the
+existing Gateway API, OpenAPI, Copilot/Remote MCP BFF, and Repo App Gateway
+paths to the Gateway Service. The Portal Copilot BFF route stays on `https` to
+preserve the same-origin browser flow. Each route retains its exact hostname,
+path, and backend; the wildcard listener continues to support HTTP/2
+coalescing between the canonical Broker and Portal origins, and unknown hosts
+have no matching route.
+
+The shared listener routes `/` to Web, `/api/v1` and exact
+`/openapi/v1.json` to Gateway, the Copilot BFF path to Gateway, and exact
+`/mcp` plus the protected-resource metadata path to MCP over verified backend
+HTTPS. The API alias keeps those Gateway and BFF paths available on its exact
+host. The `auth` alias is not an issuer or callback migration: the issuer and
+`/signin-oidc` callback remain derived from the canonical `agentweaver` Broker
+HTTPRoute. Gateway and MCP use operator-owned leaf certificates for their
+exact service DNS names, signed by the public CA certificate in the
+`service-backend-ca` ConfigMap. The installer checks native BackendTLSPolicy
 references but does not create these certificate Secrets.
 No custom DNS zone, additional role, mesh resource, or injection is necessary.
 The installer derives the issuer and native `/signin-oidc` callback only

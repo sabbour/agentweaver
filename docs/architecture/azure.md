@@ -88,20 +88,30 @@ addon or an Istio API requirement.
 The root Kustomize bundle supplies the exact-host Portal Web HTTPRoute, which
 references the shared `https` listener but does not create the Gateway or
 listener. The separate default-off routing installer uses native managed
-certificates, one v1 HTTPS listener for the wildcard managed domain, the
-Broker/Web/Gateway API/MCP HTTPRoutes, and verified backend HTTPS. It requires
+certificates, the existing wildcard `https` listener, and exact `auth` and
+`api` HTTPS alias listeners using the same managed TLS Secret. It requires
 explicit approved Gateway namespace and security-policy inputs. The product
 namespace remains restricted.
-All four routes attach to that listener, while each HTTPRoute retains its exact
-Broker or Portal hostname and its existing paths and backend. This keeps both
-hosts' routes available when HTTP/2 connection coalescing reuses a connection
-across the certificate-covered origins; unknown hostnames still have no matching
-route. The shared listener routes `/` to Web, `/api/v1` plus exact
-`/openapi/v1.json` to Gateway, and exact `/mcp` plus the MCP protected-resource
-metadata path to MCP. Gateway and MCP use operator-owned TLS Secrets with
-service-DNS certificates signed by the public CA in the
-`service-backend-ca` ConfigMap. These source routes do not prove live traffic.
-The issuer comes from the admitted route hostname.
+
+The existing Broker, Web, Gateway API, Copilot BFF, and MCP routes remain on
+the `https` listener and retain their exact hosts, paths, and backends. The
+Copilot BFF route stays on the Portal host so its browser flow remains
+same-origin. The `auth` listener routes its exact host to the existing Broker
+Service; the `api` listener routes existing Gateway API, OpenAPI, Copilot/
+Remote MCP BFF, and Repo App Gateway paths to the existing Gateway Service.
+The Broker issuer and callback remain on the canonical `agentweaver` route;
+the aliases do not change issuer, audience, callback registration, token
+scopes, or authorization. The wildcard listener still supports HTTP/2
+connection coalescing between the Broker and Portal origins, while unmatched
+hosts have no route.
+
+The shared listener routes `/` to Web, `/api/v1` and exact
+`/openapi/v1.json` to Gateway, the Copilot BFF path to Gateway, and exact
+`/mcp` plus the MCP protected-resource metadata path to MCP. The `api` alias
+retains the Gateway API and BFF paths on its exact host. Gateway and MCP use
+operator-owned TLS Secrets with service-DNS certificates signed by the public
+CA in the `service-backend-ca` ConfigMap. These source routes do not prove live
+traffic. The issuer comes from the admitted canonical Broker route hostname.
 Public callback changes default to read-only append/no-op plans.
 An append requires separate explicit registration and exact-URI confirmation.
 The installer fresh-reads the selected application and preserves all other properties.

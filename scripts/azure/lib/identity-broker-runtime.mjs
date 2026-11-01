@@ -209,8 +209,11 @@ export function bootstrapIdentityBrokerRuntime(config, {
       return JSON.parse(result.stdout);
     }
     const route = read('httproutes', 'identity-broker', projectIdentityRoutingReadback);
+    const authRoute = read('httproutes', 'identity-broker-auth', projectIdentityRoutingReadback);
     const webRoute = read('httproutes', 'web-application', projectIdentityRoutingReadback);
     const apiRoute = read('httproutes', 'gateway-api', projectIdentityRoutingReadback);
+    const apiHostRoute = read('httproutes', 'gateway-api-host', projectIdentityRoutingReadback);
+    const copilotBffRoute = read('httproutes', 'gateway-copilot-bff', projectIdentityRoutingReadback);
     const mcpRoute = read('httproutes', 'mcp', projectIdentityRoutingReadback);
     const mcpBackendPolicy = read('backendtlspolicies', 'mcp', projectIdentityRoutingReadback);
     const gatewayNamespace = route?.spec?.parentRefs?.[0]?.namespace;
@@ -221,9 +224,12 @@ export function bootstrapIdentityBrokerRuntime(config, {
       certificate: read('defaultdomaincertificates', 'identity-broker', projectIdentityRoutingReadback),
       gateway: read('gateways', 'identity-broker', projectIdentityRoutingReadback, gatewayNamespace),
       route,
+      authRoute,
       backendPolicy: read('backendtlspolicies', 'identity-broker', projectIdentityRoutingReadback),
       webRoute,
       apiRoute,
+      apiHostRoute,
+      copilotBffRoute,
       apiBackendPolicy: read('backendtlspolicies', 'gateway-api', projectIdentityRoutingReadback),
       mcpRoute,
       mcpBackendPolicy,

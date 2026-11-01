@@ -465,7 +465,7 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
 test('separate routing candidate preserves native managed certificates and HTTPS to the Broker', () => {
   const rendered = run('kubectl', ['kustomize', 'deploy/k8s/routing/identity-broker']).stdout;
   const documents = rendered.split('---').filter(document => document.trim());
-  assert.equal(documents.length, 15);
+  assert.equal(documents.length, 18);
   function document(kind, namespace = 'agentweaver', name = 'identity-broker') {
     const value = documents.find(item => item.includes(`kind: ${kind}\n`) &&
       item.includes(`namespace: ${namespace}\n`) && item.includes(`\n  name: ${name}\n`));
@@ -481,17 +481,23 @@ test('separate routing candidate preserves native managed certificates and HTTPS
   assert.match(gateway, /gatewayClassName: approuting-istio/);
   assert.match(gateway, /hostname: CHANGEME-MANAGED-WILDCARD-HOST\s+name: https\s+port: 443\s+protocol: HTTPS/);
   assert.doesNotMatch(gateway, /name: portal/);
-  assert.equal((gateway.match(/name: identity-broker-tls/g) ?? []).length, 1);
+  assert.equal((gateway.match(/name: identity-broker-tls/g) ?? []).length, 3);
   assert.match(gateway, /port: 443/);
   assert.match(gateway, /protocol: HTTPS/);
   assert.match(gateway, /certificateRefs:\s+- kind: Secret\s+name: identity-broker-tls/);
   assert.match(gateway, /mode: Terminate/);
   assert.match(gateway, /namespaces:\s+from: Selector/);
   assert.match(gateway, /kubernetes\.io\/metadata\.name: agentweaver/);
+  assert.match(gateway, /hostname: CHANGEME-AUTH-HOST\s+name: auth\s+port: 443\s+protocol: HTTPS/);
+  assert.match(gateway, /hostname: CHANGEME-API-HOST\s+name: api\s+port: 443\s+protocol: HTTPS/);
   const route = document('HTTPRoute');
   assert.match(route, /parentRefs:\s+- name: identity-broker\s+namespace: agentweaver-gateway\s+sectionName: https/);
   assert.match(route, /hostnames:\s+- CHANGEME-MANAGED-HOST/);
   assert.match(route, /backendRefs:\s+- name: identity-broker\s+port: 443/);
+  const authRoute = document('HTTPRoute', 'agentweaver', 'identity-broker-auth');
+  assert.match(authRoute, /sectionName: auth/);
+  assert.match(authRoute, /hostnames:\s+- CHANGEME-AUTH-HOST/);
+  assert.match(authRoute, /backendRefs:\s+- name: identity-broker\s+port: 443/);
   const webRoute = documents.find(item => item.includes('name: web-application\n'));
   assert.ok(webRoute);
   assert.match(webRoute, /service: web|agentweaver\.io\/service: web/);
@@ -508,6 +514,18 @@ test('separate routing candidate preserves native managed certificates and HTTPS
   assert.match(apiRoute,
     /matches:\n    - path:\n        type: PathPrefix\n        value: \/api\/v1\n    - path:\n        type: Exact\n        value: \/openapi\/v1\.json/);
   assert.match(apiRoute, /backendRefs:\s+- name: gateway\s+port: 8443/);
+  const apiHostRoute = document('HTTPRoute', 'agentweaver', 'gateway-api-host');
+  assert.match(apiHostRoute, /sectionName: api/);
+  assert.match(apiHostRoute, /hostnames:\s+- CHANGEME-API-HOST/);
+  for (const path of ['/api/v1', '/api/connections/copilot-user/v1',
+    '/api/connections/remote-mcp/v1', '/api/auth/github/repo-app']) {
+    assert.ok(apiHostRoute.includes(`value: ${path}`));
+  }
+  const copilotBffRoute = document('HTTPRoute', 'agentweaver', 'gateway-copilot-bff');
+  assert.match(copilotBffRoute, /sectionName: https/);
+  assert.match(copilotBffRoute, /hostnames:\s+- CHANGEME-PORTAL-HOST/);
+  assert.match(copilotBffRoute, /value: \/api\/connections\/copilot-user\/v1/);
+  assert.match(copilotBffRoute, /backendRefs:\s+- name: gateway\s+port: 8443/);
   const apiBackend = documents.find(item => item.includes('name: gateway-api\n') &&
     item.includes('kind: BackendTLSPolicy\n'));
   assert.ok(apiBackend);

@@ -1,0 +1,34 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: gateway-api-host
+  namespace: agentweaver
+  labels:
+    agentweaver.io/service: gateway
+spec:
+  parentRefs:
+    - name: identity-broker
+      namespace: agentweaver-gateway
+      sectionName: api
+  hostnames:
+    - CHANGEME-API-HOST
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1
+        - path:
+            type: PathPrefix
+            value: /api/connections/copilot-user/v1
+        - path:
+            type: PathPrefix
+            value: /api/connections/remote-mcp/v1
+        - path:
+            type: PathPrefix
+            value: /api/auth/github/repo-app
+        - path:
+            type: Exact
+            value: /openapi/v1.json
+      backendRefs:
+        - name: gateway
+          port: 8443
