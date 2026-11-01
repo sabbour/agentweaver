@@ -14,6 +14,8 @@ const tenant = '72f988bf-86f1-41af-91ab-2d7cd011db47';
 const managedDomain = '6ad4aaa13923a30001c83518.eastus2euap.aksapp.io';
 const brokerHost = `agentweaver.${managedDomain}`;
 const broker = `https://${brokerHost}/`;
+const brokerTransport = `https://auth.${managedDomain}/`;
+const apiGateway = `https://api.${managedDomain}/api/v1`;
 const portalOrigin = `https://portal.${managedDomain}`;
 const p1InitializationBlockedReason =
   'P1 initialization is blocked because the initializer requires an already-ready 127.0.0.1:15432 connection, but the documented bootstrap removes its temporary tunnel before returning and no documented continuation keeps or shares it.';
@@ -540,8 +542,8 @@ test('Gateway, Web, Knowledge, and Projects ConfigMaps contain complete sourced 
     'VITE_GATEWAY_URL', 'VITE_IDENTITY_BROKER_ISSUER', 'VITE_IDENTITY_BROKER_URL',
     'VITE_OAUTH_CLIENT_ID', 'VITE_OAUTH_SCOPES',
   ].sort());
-  assert.equal(web.data.VITE_GATEWAY_URL, '/api/v1');
-  assert.equal(web.data.VITE_IDENTITY_BROKER_URL, broker);
+  assert.equal(web.data.VITE_GATEWAY_URL, apiGateway);
+  assert.equal(web.data.VITE_IDENTITY_BROKER_URL, brokerTransport);
   assert.equal(web.data.VITE_IDENTITY_BROKER_ISSUER, broker);
   assert.equal(web.data.VITE_OAUTH_CLIENT_ID, 'agentweaver-web');
   assert.equal(web.data.VITE_OAUTH_SCOPES,
