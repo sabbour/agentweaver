@@ -2,8 +2,12 @@ import { Button, MessageBar, MessageBarBody } from '@fluentui/react-components';
 import { PageSection } from '../components/ui/PageSection';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAuth } from './AuthContext';
-import { gatewayClient, GatewayError } from './api';
-import { gatewayBaseUrl } from './config';
+import {
+  copilotGatewayBaseUrl,
+  copilotGatewayClient,
+  gatewayClient,
+  GatewayError,
+} from './api';
 import {
   isCopilotConnectionBegin,
   isCopilotConnectionReceipt,
@@ -82,7 +86,7 @@ function copilotCallbackUri(): string {
   }
   // The server sets a one-time cookie for the callback. Browsers only send it back
   // to the same origin, so a Gateway on another origin cannot complete the flow.
-  const gatewayUrl = new URL(gatewayBaseUrl, window.location.origin);
+  const gatewayUrl = new URL(copilotGatewayBaseUrl, window.location.origin);
   if (gatewayUrl.origin !== window.location.origin) {
     throw new Error('The GitHub Copilot connection must use the same site as this app.');
   }
@@ -247,7 +251,7 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
             !isCurrentScope(active.projectId, active.accessToken, active.generation)) {
           throw new Error('The selected project or identity changed during GitHub authorization.');
         }
-        const completed = await gatewayClient.completeCopilotConnection(
+        const completed = await copilotGatewayClient.completeCopilotConnection(
           token,
           callback,
           tenantSelector,
@@ -257,7 +261,7 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
             !isCurrentScope(active.projectId, active.accessToken, active.generation)) {
           throw new Error('The selected project or identity changed during GitHub authorization.');
         }
-        const refreshed = await gatewayClient.getCopilotConnection(
+        const refreshed = await copilotGatewayClient.getCopilotConnection(
           token,
           active.connectionId,
           tenantSelector,
@@ -348,7 +352,7 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
             !isCurrentScope(attempt.projectId, attempt.accessToken, attempt.generation)) {
           throw new Error('The selected project or identity changed during GitHub authorization.');
         }
-        const begin = await gatewayClient.beginCopilotConnection(
+        const begin = await copilotGatewayClient.beginCopilotConnection(
           token,
           'project',
           attempt.projectId,
@@ -434,7 +438,7 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
     setNotice(null);
     try {
       const status = await apiCall((token, tenantSelector) =>
-        gatewayClient.getCopilotConnection(token, currentReceipt.connectionId, tenantSelector));
+        copilotGatewayClient.getCopilotConnection(token, currentReceipt.connectionId, tenantSelector));
       if (!isCurrentRequest()) return;
       setReceipt(receiptForProject(status, currentReceipt.connectionId, currentProjectId));
     } catch (reason) {

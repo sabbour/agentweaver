@@ -1,8 +1,113 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AgentweaverGatewayClient } from './api';
+import { AgentweaverGatewayClient, copilotGatewayBaseUrl } from './api';
 import type { KnowledgeRecordTransferBundle, ProjectConfiguration } from './contracts';
 
 describe('Gateway API client', () => {
+  it.each([
+    [
+      'API hostname',
+      'https://api.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/api/v1',
+      'https://api.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/api/v1/projects',
+    ],
+    [
+      'legacy relative URL',
+      '/api/v1',
+      'https://portal.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/api/v1/projects',
+    ],
+  ])('keeps Copilot BFF requests on the portal with the %s product URL', async (
+    _label,
+    productBaseUrl,
+    expectedProductUrl,
+  ) => {
+    const pageUrl = 'https://portal.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/projects/project-1';
+    const happyDOM = Reflect.get(window, 'happyDOM') as {
+      setURL(url: string): void | Promise<void>;
+    };
+    await happyDOM.setURL(pageUrl);
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(
+      async () => new Response('{}', {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const copilotClient = new AgentweaverGatewayClient(copilotGatewayBaseUrl, fetcher);
+    const productClient = new AgentweaverGatewayClient(productBaseUrl, fetcher);
+    const callback = { state: 'state-1', code: 'code-1' };
+    const mutation = { connectionId: 'connection-1', expectedRevision: 3 };
+
+    await copilotClient.beginCopilotConnection('token', 'project', 'project-1', 'tenant-1');
+    await copilotClient.completeCopilotConnection('token', callback, 'tenant-1');
+    await copilotClient.getCopilotConnection('token', 'connection/1', 'tenant-1');
+    await copilotClient.refreshCopilotConnection('token', mutation, 'tenant-1');
+    await copilotClient.revokeCopilotConnection('token', mutation, 'tenant-1');
+    await productClient.listProjects('token', 'tenant-1');
+
+    const portal = 'https://portal.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io';
+    const urls = fetcher.mock.calls.map(([url]) => new URL(String(url), pageUrl).toString());
+    expect(urls).toEqual([
+      `${portal}/api/connections/copilot-user/v1/begin`,
+      `${portal}/api/connections/copilot-user/v1/complete`,
+      `${portal}/api/connections/copilot-user/v1/connection%2F1`,
+      `${portal}/api/connections/copilot-user/v1/refresh`,
+      `${portal}/api/connections/copilot-user/v1/revoke`,
+      expectedProductUrl,
+    ]);
+    expect(fetcher.mock.calls.map(([, init]) => init?.credentials)).toEqual([
+      'include',
+      'include',
+      'omit',
+      'omit',
+      'omit',
+      'omit',
+    ]);
+    for (const [, init] of fetcher.mock.calls) {
+      expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer token');
+      expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+      expect(init?.cache).toBe('no-store');
+    }
+  });
+
+  it('rejects an off-origin Copilot BFF target before fetch', async () => {
+    const happyDOM = Reflect.get(window, 'happyDOM') as {
+      setURL(url: string): void | Promise<void>;
+    };
+    await happyDOM.setURL(
+      'https://portal.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/projects/project-1',
+    );
+    const fetcher = vi.fn<typeof fetch>();
+    const client = new AgentweaverGatewayClient(
+      'https://api.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/api/v1',
+      fetcher,
+    );
+
+    await expect(client.beginCopilotConnection('token', 'project', 'project-1'))
+      .rejects.toThrow('same site');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('preserves structured errors from the portal Copilot BFF', async () => {
+    const happyDOM = Reflect.get(window, 'happyDOM') as {
+      setURL(url: string): void | Promise<void>;
+    };
+    await happyDOM.setURL(
+      'https://portal.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/projects/project-1',
+    );
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({
+        code: 'copilot_connection_denied',
+        detail: 'The current actor cannot connect this project.',
+      }), { status: 403, headers: { 'Content-Type': 'application/problem+json' } }),
+    );
+    const client = new AgentweaverGatewayClient(copilotGatewayBaseUrl, fetcher);
+
+    await expect(client.getCopilotConnection('token', 'connection-1', 'tenant-1'))
+      .rejects.toMatchObject({
+        status: 403,
+        code: 'copilot_connection_denied',
+        message: 'The current actor cannot connect this project.',
+      });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
   it('uses one-shot repository selection codes for explicit team-sync preview and commit', async () => {
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({

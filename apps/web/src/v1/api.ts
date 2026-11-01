@@ -326,6 +326,34 @@ export class AgentweaverGatewayClient {
     return await response.json() as T;
   }
 
+  /** Sends a Copilot BFF request only through this portal's HTTPS origin. */
+  private async requestCopilot<T>(
+    token: string,
+    path: string,
+    init: RequestInit = {},
+    tenantSelector?: string | null,
+  ): Promise<T> {
+    const requestUrl = `${this.gatewayRootUrl}${path}`;
+    if (typeof window === 'undefined' ||
+        window.location.protocol !== 'https:' ||
+        !requestUrl.startsWith('/') ||
+        requestUrl.startsWith('//') ||
+        requestUrl.includes('\\')) {
+      throw new Error('The GitHub Copilot connection must use the same site as this app over HTTPS.');
+    }
+
+    let target: URL;
+    try {
+      target = new URL(requestUrl, window.location.origin);
+    } catch {
+      throw new Error('The GitHub Copilot connection must use the same site as this app over HTTPS.');
+    }
+    if (target.origin !== window.location.origin) {
+      throw new Error('The GitHub Copilot connection must use the same site as this app over HTTPS.');
+    }
+    return this.request(token, path, init, this.gatewayRootUrl, tenantSelector);
+  }
+
   /** Reads and validates the Projects owner's authorization context for this session. */
   async getAuthorizationContext(
     token: string,
@@ -908,7 +936,7 @@ export class AgentweaverGatewayClient {
     scopeId: string,
     tenantSelector?: string | null,
   ): Promise<CopilotConnectionBegin> {
-    return this.request(
+    return this.requestCopilot(
       token,
       '/api/connections/copilot-user/v1/begin',
       {
@@ -916,7 +944,6 @@ export class AgentweaverGatewayClient {
         body: JSON.stringify({ scope, scopeId }),
         credentials: 'include',
       },
-      this.gatewayRootUrl,
       tenantSelector,
     );
   }
@@ -927,7 +954,7 @@ export class AgentweaverGatewayClient {
     callback: CopilotAuthorizationCallback,
     tenantSelector?: string | null,
   ): Promise<CopilotConnectionReceipt> {
-    return this.request(
+    return this.requestCopilot(
       token,
       '/api/connections/copilot-user/v1/complete',
       {
@@ -935,7 +962,6 @@ export class AgentweaverGatewayClient {
         body: JSON.stringify(callback),
         credentials: 'include',
       },
-      this.gatewayRootUrl,
       tenantSelector,
     );
   }
@@ -946,11 +972,10 @@ export class AgentweaverGatewayClient {
     connectionId: string,
     tenantSelector?: string | null,
   ): Promise<CopilotConnectionReceipt> {
-    return this.request(
+    return this.requestCopilot(
       token,
       `/api/connections/copilot-user/v1/${encodeURIComponent(connectionId)}`,
       {},
-      this.gatewayRootUrl,
       tenantSelector,
     );
   }
@@ -961,11 +986,10 @@ export class AgentweaverGatewayClient {
     request: CopilotConnectionMutation,
     tenantSelector?: string | null,
   ): Promise<CopilotConnectionReceipt> {
-    return this.request(
+    return this.requestCopilot(
       token,
       '/api/connections/copilot-user/v1/refresh',
       { method: 'POST', body: JSON.stringify(request) },
-      this.gatewayRootUrl,
       tenantSelector,
     );
   }
@@ -976,11 +1000,10 @@ export class AgentweaverGatewayClient {
     request: CopilotConnectionMutation,
     tenantSelector?: string | null,
   ): Promise<CopilotConnectionReceipt> {
-    return this.request(
+    return this.requestCopilot(
       token,
       '/api/connections/copilot-user/v1/revoke',
       { method: 'POST', body: JSON.stringify(request) },
-      this.gatewayRootUrl,
       tenantSelector,
     );
   }
@@ -2813,4 +2836,7 @@ export class AgentweaverGatewayClient {
 }
 
 /** Shared Gateway client used by the v1 browser application. */
+/** Fixed same-origin Gateway route for the portal's cookie-bound Copilot BFF. */
+export const copilotGatewayBaseUrl = '/api/v1';
+export const copilotGatewayClient = new AgentweaverGatewayClient(copilotGatewayBaseUrl);
 export const gatewayClient = new AgentweaverGatewayClient();
