@@ -10,8 +10,11 @@ resources:
   - gateway.yaml
   - httproute.yaml
   - backend-tls-policy.yaml
+  - identity-broker-auth.yaml
   - web-application.yaml
   - gateway-api.yaml
+  - gateway-api-host.yaml
+  - gateway-copilot-bff.yaml
   - gateway-api-backend-tls.yaml
   - gateway-mcp.yaml
   - gateway-mcp-backend-tls.yaml

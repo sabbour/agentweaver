@@ -630,15 +630,19 @@ It contains no nginx controller, IngressClass, or Ingress resource.
 It does not remove an existing controller.
 
 The separate candidate manifests under `deploy/k8s/routing/identity-broker`
-define a managed certificate, HTTPS Gateway, HTTPRoute, and BackendTLSPolicy.
+define a managed certificate, HTTPS Gateway, HTTPRoutes, and BackendTLSPolicies.
 They are not part of ordinary namespace bootstrap.
 The managed certificate supplies a wildcard domain through its status.
-The route uses `agentweaver` as its single-label prefix, not the zone root.
-One HTTPS listener uses that wildcard domain; Broker and Portal HTTPRoutes
-retain their exact hostnames and paths on the shared listener. This allows
-HTTP/2 connection coalescing between the certificate-covered hosts without
-creating a route for unknown hostnames. The public issuer must match the
-hostname on the admitted Broker route.
+The canonical Broker route uses `agentweaver` as its single-label prefix, not
+the zone root. The existing wildcard `https` listener and Broker/Portal routes
+remain in place. Exact `auth` and `api` listeners are additive aliases using
+the same managed TLS Secret; they route to the existing Broker and Gateway
+Services respectively. The Copilot BFF route remains on the Portal `https`
+listener so its browser flow stays same-origin. The aliases do not change the
+canonical Broker issuer, callback, audience, scopes, or authorization. The
+wildcard listener continues to permit HTTP/2 coalescing between the
+certificate-covered Broker and Portal hosts without creating routes for
+unknown hostnames.
 
 The Gateway requires a namespace policy compatible with its managed pods.
 AKS currently rejects a Gateway customization that sets a pod or container
@@ -696,11 +700,14 @@ when the exact route-derived URI is confirmed.
 After the release bootstrap creates the product Services, run the same
 guarded command again without `--identity-routing-certificates-only`. The full
 phase first verifies that the MCP Service is the exact private HTTPS backend,
-then applies the Gateway, Broker/Web/Gateway API/MCP HTTPRoutes, corresponding
-BackendTLSPolicies, and narrow Cilium ingress policies. All routes attach to
-the shared wildcard-domain `https` listener, which sends `/` to Web, `/api/v1`
-plus exact `/openapi/v1.json` to Gateway, and exact
-`/mcp` plus `/.well-known/oauth-protected-resource/mcp` to MCP over HTTPS.
+then applies the Gateway, Broker/auth alias, Web, Gateway API/API alias,
+same-origin Copilot BFF, and MCP HTTPRoutes, corresponding BackendTLSPolicies,
+and narrow Cilium ingress policies. The `https` listener sends `/` to Web,
+`/api/v1`, exact `/openapi/v1.json`, and the Copilot BFF path to Gateway, and
+exact `/mcp` plus `/.well-known/oauth-protected-resource/mcp` to MCP over
+HTTPS. The exact `auth` listener routes the Broker alias to the existing
+Broker Service; the exact `api` listener routes the Gateway API, OpenAPI,
+BFF, and Repo App paths to the existing Gateway Service.
 The full phase rejects a missing or changed MCP Service before its first
 routing write.
 Gateway and MCP backend TLS use operator-owned
@@ -748,13 +755,15 @@ It never grants permissions, creates an application, or creates a client secret.
 A routing receipt sets `routingConfigured: true` and `runtimeVerified: false`.
 It is not runtime acceptance.
 After the Broker starts with the approved issuer and required runtime inputs,
-`--verify-identity-broker-readiness` also checks `/health/live` and `/health/ready`.
-Both requests use ordinary DNS, trusted HTTPS, and the Gateway's observed IP.
-It then opens HTTP/2 sessions to the observed Gateway IP in both directions,
-using Broker SNI with Portal authority and Portal SNI with Broker authority;
-each response must negotiate `h2` and return `200`. This verifies the route
-behavior when a browser coalesces the certificate-covered hosts. No insecure
-TLS, DNS override, or redirect following is permitted.
+`--verify-identity-broker-readiness` checks `/health/live` and `/health/ready`
+on the canonical Broker and `auth` alias, plus unauthenticated
+`/openapi/v1.json` on the `api` alias. Each request uses ordinary DNS, trusted
+HTTPS, and the Gateway's observed IP. It then opens HTTP/2 sessions to the
+observed Gateway IP in both directions, using Broker SNI with Portal authority
+and Portal SNI with Broker authority; each response must negotiate `h2` and
+return `200`. This verifies the existing route behavior when a browser
+coalesces the certificate-covered hosts. No insecure TLS, DNS override, or
+redirect following is permitted.
 Failure prevents a successful installer receipt.
 The routing option does not create the Broker's runtime ConfigMap, signing
 Secret, key-ring PVC, OAuth registrations, or runtime Deployment.

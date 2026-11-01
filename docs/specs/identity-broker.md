@@ -267,14 +267,21 @@ immutable registry digest; the checked-in sentinel is not deployable.
 
 The separate routing candidate uses native AKS-managed Gateway API resources.
 Its managed certificate supplies the `agentweaver` hostname within the AKS
-wildcard domain, not the DNS zone root. Broker and Portal HTTPRoutes attach to
-one HTTPS listener for that wildcard domain, but retain their exact hostnames,
-paths, and backends. The shared listener supports HTTP/2 connection coalescing
-between the certificate-covered origins without routing unknown hostnames.
-BackendTLSPolicy keeps HTTPS between the Gateway and Kestrel.
+wildcard domain, not the DNS zone root. It retains the existing wildcard
+`https` listener and Broker and Portal routes, then adds exact `auth` and `api`
+listeners with the same managed TLS Secret. The `auth` alias routes to the
+existing Broker Service; the `api` alias routes existing Gateway API, OpenAPI,
+Copilot/Remote MCP BFF, and Repo App Gateway paths to the Gateway Service.
+The Copilot BFF path also remains on the existing Portal `https` listener so
+the browser's cookie-backed flow stays same-origin. These are transport aliases:
+the canonical Broker issuer and `/signin-oidc` callback remain on the existing
+`agentweaver` hostname. No callback, audience, token scope, or authorization
+behavior changes. The guarded installer checks current-generation listener and
+route conditions, DNS/TLS for the aliases, and the unauthenticated API OpenAPI
+route. BackendTLSPolicy keeps HTTPS between the Gateway and Kestrel.
 It validates the backend certificate with system trust and the route hostname.
-The guarded installer derives the issuer and `/signin-oidc` callback from the
-current admitted HTTPRoute.
+The issuer and callback are still derived from the admitted canonical Broker
+HTTPRoute, never from the `auth` alias.
 It defaults to a read-only public-platform append or no-op plan.
 An append requires separate explicit registration and exact-URI confirmation.
 It fresh-reads the exact tenant and existing application before the write.
