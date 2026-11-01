@@ -141,7 +141,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var tenantId = $"p1-read-tenant-{Guid.NewGuid():N}";
         var caller = await SeedCallerAsync(
             db, authorityStore, $"p1-read-admin-{Guid.NewGuid():N}", tenantId,
-            ["api.read", "projects.admin", "projects.orchestrator"],
+            ["api.read", "projects.admin"],
             ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
         var other = await SeedCallerAsync(
             db, authorityStore, $"p1-read-other-{Guid.NewGuid():N}", tenantId,
@@ -246,7 +246,7 @@ public sealed partial class ProjectsConfigPostgresTests
             authorityStore,
             subject,
             tenantId,
-            ["api.read", "projects.admin", "projects.orchestrator"],
+            ["api.read", "projects.admin"],
             ProjectAuthorityResourceType.Tenant,
             tenantId,
             ProjectAuthorityRole.TenantAdmin);
@@ -267,6 +267,7 @@ public sealed partial class ProjectsConfigPostgresTests
         await using var app = await StartP1SetupServerAsync(fixture.DataSource);
         using var client = app.GetTestClient();
         var invocationId = Guid.NewGuid();
+        var beforeDeniedRequests = await SetupCountsAsync();
 
         using (var body = SetupRequest(invocationId, subject, tenantId))
         {
@@ -290,6 +291,7 @@ public sealed partial class ProjectsConfigPostgresTests
         using (var mismatchedAssertion = SetupRequest(
                    invocationId, subject, tenantId, tenantAssertion: "foreign-tenant"))
             Assert.Equal(HttpStatusCode.Forbidden, await SendStatusAsync(client, mismatchedAssertion));
+        Assert.Equal(beforeDeniedRequests, await SetupCountsAsync());
 
         using var initial = SetupRequest(invocationId, subject, tenantId);
         using var response = await client.SendAsync(initial);
@@ -322,8 +324,10 @@ public sealed partial class ProjectsConfigPostgresTests
         using var changedOwnerResponse = await client.SendAsync(changedOwner);
         Assert.Equal(HttpStatusCode.Conflict, changedOwnerResponse.StatusCode);
 
+        var cleanupCaller = await ResolveCallerAsync(
+            db, caller.ActorId, tenantId, ["api.read", "projects.admin", "projects.orchestrator"]);
         await authorityStore.ExecuteProjectSetupOperationAsync(
-            caller,
+            cleanupCaller,
             new ProjectSetupOperationRequest(
                 1,
                 invocationId,
@@ -334,6 +338,12 @@ public sealed partial class ProjectsConfigPostgresTests
         using var cleanedReplayRequest = SetupRequest(invocationId, subject, tenantId);
         using var cleanedReplayResponse = await client.SendAsync(cleanedReplayRequest);
         Assert.Equal(HttpStatusCode.Conflict, cleanedReplayResponse.StatusCode);
+
+        async Task<(int Projects, int Roles, int Audits, int Operations)> SetupCountsAsync() => (
+            await db.Projects.CountAsync(),
+            await db.RoleAssignments.CountAsync(),
+            await db.AuthorityAudit.CountAsync(),
+            await db.ProjectSetupOperations.CountAsync());
     }
 
     [Fact]
@@ -667,7 +677,7 @@ public sealed partial class ProjectsConfigPostgresTests
         request.Headers.Add("X-Test-Subject", subject);
         request.Headers.Add(
             "X-Test-Scope",
-            scope ?? "api.read projects.admin projects.orchestrator");
+            scope ?? "api.read projects.admin");
         if (tenantId is not null)
             request.Headers.Add(ProjectAuthorizationOwner.TenantSelectorHeader, tenantId);
         if (boundProjectId is not null)

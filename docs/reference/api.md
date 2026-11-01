@@ -479,13 +479,16 @@ Owner.
 
 `POST /api/v1/p1/invocations/{invocationId}/setup` is a REST-only Gateway
 route backed by `POST /api/p1/invocations/{invocationId:guid}/setup` in Projects.
-It requires the existing unbound bearer with `api.read`, `projects.admin`, and
-`projects.orchestrator`, plus exactly one `X-Agentweaver-Tenant` header naming
-the selected tenant. The Projects owner resolves the actor, membership, and
-current TenantAdmin assignment from that authenticated request. The route
+It requires the existing unbound bearer with `api.read` and `projects.admin`,
+plus exactly one `X-Agentweaver-Tenant` header naming the selected tenant. The
+Projects owner resolves the actor, membership, and current TenantAdmin
+assignment from that authenticated request. The route
 accepts no body or query parameters and returns the immutable Projects setup
 receipt with `Cache-Control: no-store`; it accepts no existing project or
 resource IDs.
+The Gateway operation ID is `createP1InvocationSetup`; `GET` on the same path
+is `readP1InvocationSetup`. Both are available through CLI API invocation
+although neither is exposed through MCP.
 
 The Projects runtime principal can execute only the dedicated issue/read
 functions for this operation. The issue function creates the project, initial

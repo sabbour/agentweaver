@@ -152,10 +152,10 @@ Revision conflicts and a reused run ID with a different request return conflict 
 
 `POST /api/p1/invocations/{invocationId}/setup` is a purpose-limited source
 endpoint for the upstream P1 fixture producer. It requires the existing
-authenticated bearer token, exactly one `X-Agentweaver-Tenant` header, and the
-existing `api.read`, `projects.admin`, and `projects.orchestrator` scopes. The
-service resolves that principal against current Projects authority and requires
-exactly one active TenantAdmin assignment for the selected tenant.
+authenticated unbound bearer with `api.read` and `projects.admin`, exactly one
+`X-Agentweaver-Tenant` header, and current TenantAdmin authority for the
+selected tenant. The service resolves the principal against current Projects
+authority and requires exactly one active TenantAdmin assignment.
 
 The route accepts no body or query parameters. It creates or exactly replays
 `projects_config.issue_p1_project`, a `SECURITY DEFINER` function that creates
@@ -197,8 +197,9 @@ or apply its DDL.
 
 `GET /api/p1/invocations/{invocationId}/setup` exposes only the existing
 `read_p1_project` function. It uses the same authenticated actor, selected tenant,
-unbound token, scopes, and current TenantAdmin checks as issuance, accepts no body
-or query, and returns only the validated receipt with `Cache-Control: no-store`.
+unbound `api.read` and `projects.admin` token, and current TenantAdmin checks as
+issuance. It accepts no body or query and returns only the validated receipt with
+`Cache-Control: no-store`.
 Unknown or foreign invocations are denied with `403`; stale setup state returns
 `409`. There is no fallback to issuance and no project, role, audit, or setup-row
 write. Repeated reads do not hold Projects authority locks across a later

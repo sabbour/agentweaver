@@ -623,7 +623,7 @@ else if (route.OperationId is
         else if (route.OperationId == "createP1InvocationSetup")
         {
             description +=
-                " Requires the existing unbound api.read, projects.admin and projects.orchestrator bearer, " +
+                " Requires the existing unbound api.read and projects.admin bearer, " +
                 "the selected tenant and current TenantAdmin authority. The Projects owner calls its " +
                 "SECURITY DEFINER issue function, which atomically creates the project, initial configuration, " +
                 "Owner and Orchestrator assignments, audit events and immutable setup receipt; the runtime " +
@@ -635,7 +635,7 @@ else if (route.OperationId is
         else if (route.OperationId == "readP1InvocationSetup")
         {
             description +=
-                " Requires the existing unbound api.read, projects.admin and projects.orchestrator bearer, " +
+                " Requires the existing unbound api.read and projects.admin bearer, " +
                 "the selected tenant and current TenantAdmin authority. Calls only the existing read function, " +
                 "rechecking current authority and exact setup readback. An unknown, foreign or revoked locator " +
                 "is denied without issuing a project, assignments, audits or setup rows. Accepts no body or query. " +

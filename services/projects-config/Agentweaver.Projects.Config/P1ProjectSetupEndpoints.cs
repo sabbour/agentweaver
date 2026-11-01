@@ -143,7 +143,6 @@ internal static class P1ProjectSetupEndpoints
                 cancellationToken).ConfigureAwait(false);
             caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
             caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
-            caller.RequireScope(ProjectAuthorizationOwner.OrchestratorScope);
             caller.RequireUnboundRequest();
 
             var tenantAdminGrants = caller.Grants.Where(grant =>
