@@ -773,9 +773,9 @@ The `web-runtime-config.json` map contains:
 
 | Setting | Contract |
 | --- | --- |
-| `VITE_GATEWAY_URL` | Optional Gateway base path or URL. The client defaults to `/api/v1`; the checked-in profile explicitly sets that same-origin path, which the managed portal routes to Gateway. Use a different value only when it matches the reviewed route configuration. |
-| `VITE_IDENTITY_BROKER_URL` | Required HTTPS Broker URL used for OAuth. |
-| `VITE_IDENTITY_BROKER_ISSUER` | Optional when the Broker URL is a valid HTTPS issuer. The client derives the issuer from that URL; when set, it must exactly match the issuer configured in Gateway and Broker. The checked-in profile sets it explicitly. |
+| `VITE_GATEWAY_URL` | Gateway base path or absolute URL ending in `/api/v1`. The checked-in P0 profile uses the dedicated `https://api.<managed-domain>/api/v1` listener; the Gateway CORS policy must allow the exact Portal origin. Keep the Copilot BFF client on its Portal-relative route. |
+| `VITE_IDENTITY_BROKER_URL` | Required HTTPS Broker transport URL used for OAuth. It may use the `auth.<managed-domain>` route alias independently of the stable OIDC issuer. |
+| `VITE_IDENTITY_BROKER_ISSUER` | Explicit OIDC issuer, which must exactly match Gateway and Broker configuration. Do not derive or change it merely because the Broker transport uses an alias; this P0 profile retains `https://agentweaver.<managed-domain>/`. |
 | `VITE_OAUTH_CLIENT_ID` | Required ID of the explicitly registered public Web client. Do not reuse an acceptance-only client in production. |
 | `VITE_OAUTH_SCOPES` | Required space-separated scopes registered for that client. |
 
