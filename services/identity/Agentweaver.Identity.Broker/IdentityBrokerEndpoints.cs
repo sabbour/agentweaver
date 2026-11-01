@@ -183,10 +183,15 @@ public static class IdentityBrokerEndpoints
         var antiforgeryToken = antiforgery.GetAndStoreTokens(context).RequestToken;
         if (string.Equals(request.ClientId, NativeCliClientId, StringComparison.Ordinal))
         {
+            var callbackSource = BuildNativeConsentCallbackSource(request.RedirectUri);
+            if (callbackSource is null)
+                return Results.BadRequest(new { error = Errors.InvalidRequest });
+
             var styleNonce = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(18));
             context.Response.Headers["Cache-Control"] = "no-store";
             context.Response.Headers["Content-Security-Policy"] =
-                $"default-src 'none'; img-src 'self'; style-src 'nonce-{styleNonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+                $"default-src 'none'; img-src 'self'; style-src 'nonce-{styleNonce}'; " +
+                $"form-action 'self' {callbackSource}; base-uri 'none'; frame-ancestors 'none'";
             context.Response.Headers["X-Content-Type-Options"] = "nosniff";
             return Results.Content(BuildNativeConsentPage(consentHandle, antiforgeryToken, styleNonce, requestedScopes),
                 "text/html; charset=utf-8");
@@ -200,6 +205,25 @@ public static class IdentityBrokerEndpoints
             requested_scopes = requestedScopes,
             csrf_token = antiforgeryToken,
         });
+    }
+
+    private static string? BuildNativeConsentCallbackSource(string? redirectUri)
+    {
+        if (!Uri.TryCreate(redirectUri, UriKind.Absolute, out var callback) ||
+            (!string.Equals(callback.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(callback.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) ||
+            !string.IsNullOrEmpty(callback.UserInfo) ||
+            !string.IsNullOrEmpty(callback.Fragment))
+            return null;
+
+        // CSP sources cannot constrain query strings; OpenIddict already validated this exact redirect URI.
+        var source = callback.GetLeftPart(UriPartial.Path);
+        if (source.Any(character =>
+                char.IsWhiteSpace(character) || char.IsControl(character) ||
+                character is ';' or '\'' or '"' or '*'))
+            return null;
+
+        return source;
     }
 
     /// <summary>

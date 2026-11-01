@@ -10,6 +10,7 @@ service candidate with no published image or deployment.
 The broker accepts an external OIDC provider. It validates the upstream issuer, signature, audience, expiry, and nonce before it creates a local user.
 
 OAuth authorization codes require registered clients, exact redirect URIs, registered scopes, and S256 PKCE. Consent requires the local cookie and antiforgery token. Refresh-token replay revokes the authorization and token family.
+The native CLI consent page keeps a strict `form-action` policy that permits same-origin consent submission and only the exact callback destination validated for the registered client.
 
 The existing public `agentweaver-cli` registration may request any scope in
 the Broker's registered-scope catalog, including future registrations. This
