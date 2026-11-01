@@ -1,9 +1,17 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Playwright;
 using Xunit;
 
 namespace Agentweaver.Identity.Broker.Tests;
@@ -124,6 +132,16 @@ public sealed class NativeCliConsentTests : IAsyncLifetime
         var styleNonce = Regex.Match(csp, "style-src 'nonce-([^']+)'").Groups[1].Value;
         Assert.False(string.IsNullOrEmpty(styleNonce));
         Assert.Contains("img-src 'self'", csp);
+        Assert.Contains(
+            $"form-action 'self' {IdentityBrokerWebApplicationFactory.CliClientRedirectUri}",
+            csp);
+        var alternatePort = new UriBuilder(IdentityBrokerWebApplicationFactory.CliClientRedirectUri)
+        {
+            Port = 49174,
+        }.Uri.GetLeftPart(UriPartial.Path);
+        Assert.DoesNotContain(alternatePort, csp);
+        Assert.DoesNotContain("http://127.0.0.1:*", csp);
+        Assert.DoesNotContain("form-action *", csp);
 
         var html = await page.Response.Content.ReadAsStringAsync();
         Assert.Contains($"<style nonce=\"{styleNonce}\">", html);
@@ -195,9 +213,62 @@ public sealed class NativeCliConsentTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.BadRequest, replay.StatusCode);
     }
 
+    [Fact]
+    public async Task NativeCliConsentAllowsOnlyRegisteredCallbackAcrossBrowserRedirects()
+    {
+        using var callbackListener = new LoopbackCallbackListener(
+            new Uri(IdentityBrokerWebApplicationFactory.CliClientRedirectUri));
+        var playwright = await _postgres.GetPlaywrightAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
+        {
+            Headless = true,
+            Args = ["--no-proxy-server"],
+        });
+
+        var deniedPage = await StartCliConsentAsync();
+        var deniedCallbackTask = callbackListener.WaitForCallbackAsync(TimeSpan.FromSeconds(15));
+        var denied = await SubmitNativeConsentInChromiumAsync(browser, deniedPage, approve: false);
+        var deniedCallback = await AwaitCallbackOrExplainAsync(deniedCallbackTask, denied);
+        var deniedCsp = deniedPage.Response.Headers.GetValues("Content-Security-Policy").Single();
+        Assert.Contains(
+            $"form-action 'self' {IdentityBrokerWebApplicationFactory.CliClientRedirectUri}",
+            deniedCsp);
+        Assert.Equal(deniedPage.State, QueryValue(deniedCallback, "state"));
+        Assert.Equal("access_denied", QueryValue(deniedCallback, "error"));
+        Assert.Null(QueryValue(deniedCallback, "code"));
+        Assert.Empty(denied.CspViolations);
+
+        var approvedPage = await StartCliConsentAsync();
+        var approvedCallbackTask = callbackListener.WaitForCallbackAsync(TimeSpan.FromSeconds(15));
+        var approved = await SubmitNativeConsentInChromiumAsync(browser, approvedPage, approve: true);
+        var approvedCallback = await AwaitCallbackOrExplainAsync(approvedCallbackTask, approved);
+        var code = QueryValue(approvedCallback, "code");
+        Assert.Equal(approvedPage.State, QueryValue(approvedCallback, "state"));
+        Assert.False(string.IsNullOrWhiteSpace(code));
+        Assert.Empty(approved.CspViolations);
+
+        var tokens = await BrokerFlowDriver.ExchangeCodeForTokensAsync(
+            _broker, IdentityBrokerWebApplicationFactory.CliClientId,
+            IdentityBrokerWebApplicationFactory.CliClientRedirectUri, code!,
+            approvedPage.CodeVerifier);
+        Assert.False(string.IsNullOrWhiteSpace(tokens.GetProperty("access_token").GetString()));
+
+        var unapprovedRedirectUri =
+            new Uri(IdentityBrokerWebApplicationFactory.CliClientRedirectUri)
+                .GetLeftPart(UriPartial.Authority) + "/oauth/unapproved";
+        var (_, challenge) = Pkce.Create();
+        using var rejected = await BrokerFlowDriver.StartAuthorizeAsync(
+            _broker, IdentityBrokerWebApplicationFactory.CliClientId, unapprovedRedirectUri,
+            "openid api.read offline_access", challenge, "S256", Guid.NewGuid().ToString("N"),
+            Guid.NewGuid().ToString("N"));
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        Assert.Null(rejected.Headers.Location);
+    }
+
     private async Task<NativeConsentPage> StartCliConsentAsync(string scope = "openid api.read offline_access")
     {
-        const string state = "native-cli-test-state";
+        var state = Guid.NewGuid().ToString("N");
+        var nonce = Guid.NewGuid().ToString("N");
         var (verifier, challenge) = Pkce.Create();
         var authorize = await BrokerFlowDriver.StartAuthorizeAsync(
             _broker,
@@ -207,7 +278,9 @@ public sealed class NativeCliConsentTests : IAsyncLifetime
             challenge,
             "S256",
             state,
-            "native-cli-test-nonce");
+            nonce);
+        if (authorize.StatusCode == HttpStatusCode.OK)
+            return new NativeConsentPage(authorize, state, verifier);
         Assert.Equal(HttpStatusCode.Redirect, authorize.StatusCode);
 
         var upstream = await _fakeIdpClient.GetAsync(authorize.Headers.Location!);
@@ -219,6 +292,93 @@ public sealed class NativeCliConsentTests : IAsyncLifetime
         var consent = await _broker.GetAsync(Resolve(resume.Headers.Location!));
 
         return new NativeConsentPage(consent, state, verifier);
+    }
+
+    private async Task<BrowserConsentResult> SubmitNativeConsentInChromiumAsync(
+        IBrowser browser, NativeConsentPage consentPage, bool approve)
+    {
+        var proxy = await StartBrowserBrokerProxyAsync(consentPage);
+        await using var proxyApp = proxy.App;
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        var violations = new List<string>();
+        var trace = new List<string>();
+        page.Console += (_, message) =>
+        {
+            if (message.Text.Contains("form-action", StringComparison.OrdinalIgnoreCase))
+                violations.Add(message.Text);
+        };
+        page.RequestFailed += (_, request) => trace.Add($"failed {request.Method} {request.Url}: {request.Failure}");
+
+        var response = await page.GotoAsync(new Uri(proxy.BaseAddress, "/native-consent").AbsoluteUri);
+        Assert.Equal((int)HttpStatusCode.OK, response?.Status);
+        await page.Locator($"button[name='approve'][value='{(approve ? "true" : "false")}']").ClickAsync();
+        trace.Add($"final browser URL: {page.Url}");
+        return new BrowserConsentResult(violations, trace);
+    }
+
+    private async Task<BrowserProxy> StartBrowserBrokerProxyAsync(NativeConsentPage consentPage)
+    {
+        var consentHtml = await consentPage.Response.Content.ReadAsStringAsync();
+        var csp = consentPage.Response.Headers.GetValues("Content-Security-Policy").Single();
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseKestrel().UseUrls("http://127.0.0.1:0");
+        var app = builder.Build();
+        app.MapGet("/native-consent", async context =>
+        {
+            context.Response.StatusCode = (int)consentPage.Response.StatusCode;
+            context.Response.ContentType = "text/html; charset=utf-8";
+            context.Response.Headers.CacheControl = "no-store";
+            context.Response.Headers["Content-Security-Policy"] = csp;
+            context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+            await context.Response.WriteAsync(consentHtml);
+        });
+        app.Map("/{**path}", async context =>
+        {
+            using var request = new HttpRequestMessage(
+                new HttpMethod(context.Request.Method),
+                new Uri(_broker.BaseAddress!, context.Request.Path + context.Request.QueryString));
+            if (context.Request.ContentLength > 0)
+            {
+                request.Content = new StreamContent(context.Request.Body);
+                if (context.Request.ContentType is { } contentType)
+                    request.Content.Headers.TryAddWithoutValidation("Content-Type", contentType);
+            }
+
+            using var response = await _broker.SendAsync(
+                request, HttpCompletionOption.ResponseHeadersRead, context.RequestAborted);
+            context.Response.StatusCode = (int)response.StatusCode;
+            if (response.Headers.Location is { } location)
+            {
+                context.Response.Headers.Location = location.IsAbsoluteUri &&
+                    location.Host.Equals(_broker.BaseAddress!.Host, StringComparison.OrdinalIgnoreCase)
+                    ? location.PathAndQuery
+                    : location.ToString();
+            }
+            if (response.Content.Headers.ContentType is { } responseContentType)
+                context.Response.ContentType = responseContentType.ToString();
+            await response.Content.CopyToAsync(context.Response.Body, context.RequestAborted);
+        });
+        await app.StartAsync();
+        var address = app.Services.GetRequiredService<IServer>().Features
+            .Get<IServerAddressesFeature>()!.Addresses.Single();
+        return new BrowserProxy(app, new Uri(address));
+    }
+
+    private static async Task<Uri> AwaitCallbackOrExplainAsync(
+        Task<Uri> callbackTask, BrowserConsentResult result)
+    {
+        try
+        {
+            return await callbackTask;
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException(
+                $"Browser callback not reached. CSP violations: {string.Join(" | ", result.CspViolations)}. " +
+                string.Join("; ", result.Trace),
+                exception);
+        }
     }
 
     private static async Task<HttpResponseMessage> SubmitNativeConsentAsync(
@@ -275,6 +435,44 @@ public sealed class NativeCliConsentTests : IAsyncLifetime
         return query.TryGetValue(name, out var value) ? value.ToString() : null;
     }
 
+    private sealed record BrowserProxy(WebApplication App, Uri BaseAddress);
+    private sealed record BrowserConsentResult(
+        IReadOnlyCollection<string> CspViolations, IReadOnlyCollection<string> Trace);
     private sealed record NativeConsent(string Handle, string? AntiforgeryToken);
     private sealed record NativeConsentPage(HttpResponseMessage Response, string State, string CodeVerifier);
+
+    private sealed class LoopbackCallbackListener : IDisposable
+    {
+        private readonly TcpListener _listener;
+
+        public LoopbackCallbackListener(Uri redirectUri)
+        {
+            RedirectUri = redirectUri;
+            _listener = new TcpListener(IPAddress.Loopback, redirectUri.Port);
+            _listener.Start();
+        }
+
+        public Uri RedirectUri { get; }
+
+        public async Task<Uri> WaitForCallbackAsync(TimeSpan timeout)
+        {
+            using var cancellation = new CancellationTokenSource(timeout);
+            using var client = await _listener.AcceptTcpClientAsync(cancellation.Token);
+            await using var stream = client.GetStream();
+            using var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
+            var requestLine = await reader.ReadLineAsync(cancellation.Token)
+                ?? throw new InvalidOperationException("The callback request was empty.");
+            while (await reader.ReadLineAsync(cancellation.Token) is { Length: > 0 })
+            {
+            }
+
+            var requestTarget = requestLine.Split(' ', 3)[1];
+            var response = Encoding.ASCII.GetBytes(
+                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            await stream.WriteAsync(response, cancellation.Token);
+            return new Uri(RedirectUri, requestTarget);
+        }
+
+        public void Dispose() => _listener.Stop();
+    }
 }

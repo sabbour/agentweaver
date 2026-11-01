@@ -100,6 +100,10 @@ in the host's native credential store: Windows Credential Manager, macOS
 Keychain, or Linux Secret Service. If the secure store is unavailable,
 sign-in fails closed; there is no plaintext-file fallback.
 
+The native consent page keeps a restrictive content security policy and allows
+form redirects only to the exact registered CLI callback, in addition to the
+same-origin consent submission.
+
 The default requested scopes are `openid api.read offline_access`.
 `projects.admin` and `projects.orchestrator` are requested only when explicitly
 needed for the selected operation or journey. A scope does not grant a project
