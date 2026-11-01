@@ -526,21 +526,42 @@ export function deriveIdentityRouting({
   };
 }
 
-/** Produces a tenant- and application-bound callback registration plan without applying it. */
-export function planPublicBrokerCallback(application, clientId, callbackUri, tenantId) {
-  let callback;
+/** Produces a tenant- and application-bound callback plan without applying it. */
+export function planPublicBrokerCallback(application, clientId, callbackUri, tenantId, stableIssuerUri) {
+  let callback, stableIssuer, stableDomain;
   try {
     callback = new URL(callbackUri);
   } catch {
     throw new Error('Public callback plan requires the exact upstream application and managed Broker callback URI.');
   }
+  if (stableIssuerUri !== undefined) {
+    try {
+      stableIssuer = new URL(stableIssuerUri);
+      stableDomain = stableIssuer.hostname.startsWith('agentweaver.')
+        ? stableIssuer.hostname.slice('agentweaver.'.length) : '';
+      if (stableIssuer.protocol !== 'https:' || stableIssuerUri !== `https://${stableIssuer.hostname}/` ||
+          stableIssuer.pathname !== '/' ||
+          stableIssuer.search || stableIssuer.hash || stableIssuer.username || stableIssuer.password ||
+          stableIssuer.port || stableIssuerUri.includes('?') || stableIssuerUri.includes('#') ||
+          stableIssuerUri.includes('@') ||
+          managedBrokerHostnameFromDomain(stableDomain) !== stableIssuer.hostname) {
+        stableIssuer = undefined;
+      }
+    } catch {
+      stableIssuer = undefined;
+    }
+  }
+  const callbackHostAllowed = stableIssuerUri === undefined
+    ? callback.hostname.startsWith('agentweaver.') && callback.hostname.endsWith('.aksapp.io')
+    : stableIssuer && [stableIssuer.hostname, `auth.${stableDomain}`].includes(callback.hostname);
   const redirects = application?.publicClient?.redirectUris;
   if (!GUID_PATTERN.test(application?.id ?? '') || !GUID_PATTERN.test(clientId ?? '') ||
       !GUID_PATTERN.test(tenantId ?? '') || typeof application?.appId !== 'string' ||
       application.appId.toLowerCase() !== clientId.toLowerCase() ||
       callback.protocol !== 'https:' || callback.pathname !== '/signin-oidc' ||
-      callback.search || callback.hash || callback.username || callback.password ||
-      !callback.hostname.startsWith('agentweaver.') || !callback.hostname.endsWith('.aksapp.io') ||
+      callback.search || callback.hash || callback.username || callback.password || callback.port ||
+      callbackUri.includes('?') || callbackUri.includes('#') || callbackUri.includes('@') ||
+      callbackUri !== `https://${callback.hostname}/signin-oidc` || !callbackHostAllowed ||
       (redirects != null && (!Array.isArray(redirects) ||
         redirects.some(uri => typeof uri !== 'string')))) {
     throw new Error('Public callback plan requires the exact upstream application and managed Broker callback URI.');

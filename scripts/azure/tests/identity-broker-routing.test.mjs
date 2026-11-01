@@ -463,6 +463,51 @@ test('public callback planning includes only required public-client settings and
     /exact upstream/);
 });
 
+test('public callback planning accepts only the auth alias of an explicit stable issuer', () => {
+  const stableIssuerUri = `https://${hostname}/`;
+  const oldCallbackUri = `${stableIssuerUri}signin-oidc`;
+  const authHostname = `auth.${hostname.slice('agentweaver.'.length)}`;
+  const callbackUri = `https://${authHostname}/signin-oidc`;
+  const application = {
+    id: applicationObjectId, appId: clientId, signInAudience: 'AzureADMyOrg', isFallbackPublicClient: true,
+    publicClient: { redirectUris: ['http://localhost', oldCallbackUri] },
+    web: { redirectUris: ['https://portal.example.com/auth/callback'] },
+    requiredResourceAccess: [{ resourceAppId: 'unchanged' }],
+  };
+  const original = structuredClone(application);
+  const plan = planPublicBrokerCallback(application, clientId, callbackUri, clientId, stableIssuerUri);
+  assert.equal(plan.action, 'append');
+  assert.equal(plan.platform, 'publicClient');
+  assert.equal(plan.mutationExecuted, false);
+  assert.deepEqual(plan.redirectUris, ['http://localhost', oldCallbackUri, callbackUri]);
+  assert.deepEqual(plan.patch, {
+    publicClient: { redirectUris: ['http://localhost', oldCallbackUri, callbackUri] },
+  });
+  assert.deepEqual(application, original);
+  assert.equal(planPublicBrokerCallback(application, clientId, oldCallbackUri, clientId, stableIssuerUri).action, 'noop');
+
+  for (const [invalidCallback, issuer] of [
+    [callbackUri, undefined],
+    [callbackUri, `https://agentweaver.other.eastus2.aksapp.io/`],
+    [`https://auth.other.eastus2.aksapp.io/signin-oidc`, stableIssuerUri],
+    [`https://attacker.${hostname.slice('agentweaver.'.length)}/signin-oidc`, stableIssuerUri],
+    [`https://auth.${hostname.slice('agentweaver.'.length)}:8443/signin-oidc`, stableIssuerUri],
+    [`https://auth.${hostname.slice('agentweaver.'.length)}:443/signin-oidc`, stableIssuerUri],
+    [`https://auth.${hostname.slice('agentweaver.'.length)}/signin-oidc?`, stableIssuerUri],
+    [`https://auth.${hostname.slice('agentweaver.'.length)}/signin-oidc#`, stableIssuerUri],
+    [`https://@auth.${hostname.slice('agentweaver.'.length)}/signin-oidc`, stableIssuerUri],
+    [`https://auth.${hostname.slice('agentweaver.'.length)}/auth/callback`, stableIssuerUri],
+    [`http://auth.${hostname.slice('agentweaver.'.length)}/signin-oidc`, stableIssuerUri],
+  ]) {
+    assert.throws(() => planPublicBrokerCallback(application, clientId, invalidCallback, clientId, issuer),
+      /exact upstream/);
+  }
+  assert.throws(() => planPublicBrokerCallback(application, 'wrong-client', callbackUri, clientId, stableIssuerUri),
+    /exact upstream/);
+  assert.throws(() => planPublicBrokerCallback(application, clientId, callbackUri, 'wrong-tenant', stableIssuerUri),
+    /exact upstream/);
+});
+
 test('readiness proves DNS, trusted HTTPS, and both directions of HTTP/2 cross-host routing', () => {
   const calls = [];
   const http2Calls = [];
