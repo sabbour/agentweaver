@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { parse } from 'yaml';
+import { parse, stringify } from 'yaml';
 import {
   assertIdentityRoutingPlacement, bootstrapIdentityRouting, deriveIdentityRouting,
   managedBrokerHostname, managedBrokerHostnameFromDomain, planPublicBrokerCallback,
@@ -28,18 +28,51 @@ const config = {
 };
 const ok = stdout => ({ status: 0, stdout: stdout ?? '', stderr: '' });
 const conditions = (...types) => types.map(type => ({ type, status: 'True', observedGeneration: 1 }));
+function kubectlCommand(args) {
+  if (args.includes('auth')) return [];
+  const index = args.findIndex(value => ['get', 'wait', 'apply', 'create', 'patch'].includes(value));
+  return index < 0 ? [] : args.slice(index);
+}
+function writtenResource(call) {
+  const command = kubectlCommand(call.args);
+  if (command[0] === 'create') return parse(call.options.input);
+  const patch = JSON.parse(command[command.indexOf('--patch') + 1]);
+  const kind = {
+    backendtlspolicy: 'BackendTLSPolicy',
+    ciliumnetworkpolicy: 'CiliumNetworkPolicy',
+    defaultdomaincertificate: 'DefaultDomainCertificate',
+    gateway: 'Gateway',
+    httproute: 'HTTPRoute',
+  }[command[1]];
+  return {
+    kind,
+    metadata: {
+      name: command[2],
+      namespace: command[command.indexOf('--namespace') + 1],
+      labels: Object.fromEntries(patch.filter(operation => operation.path.startsWith('/metadata/labels/'))
+        .map(operation => [operation.path.slice('/metadata/labels/'.length)
+          .replaceAll('~1', '/').replaceAll('~0', '~'), operation.value])),
+    },
+    spec: patch.find(operation => operation.path === '/spec').value,
+  };
+}
+function writtenText(call) {
+  const command = kubectlCommand(call.args);
+  return command[0] === 'create' ? call.options.input : stringify(writtenResource(call));
+}
 function object(kind, namespace, spec, status, { name = 'identity-broker', service = 'identity-broker' } = {}) {
   return {
     apiVersion: kind === 'DefaultDomainCertificate'
       ? 'approuting.kubernetes.azure.com/v1alpha1' : 'gateway.networking.k8s.io/v1',
-    kind, metadata: { name, namespace, uid: `${kind}-${name}-uid`, generation: 1,
+    kind, metadata: { name, namespace, uid: `${kind}-${name}-uid`, resourceVersion: '1', generation: 1,
       labels: { 'agentweaver.io/service': service } }, spec, status,
   };
 }
 function networkPolicy(name, service) {
   return {
     apiVersion: 'cilium.io/v2', kind: 'CiliumNetworkPolicy',
-    metadata: { name, namespace: p0, labels: { 'agentweaver.io/service': service } },
+    metadata: { name, namespace: p0, uid: `CiliumNetworkPolicy-${name}-uid`, resourceVersion: '1',
+      labels: { 'agentweaver.io/service': service } },
   };
 }
 function managedListener(name, host) {
@@ -209,12 +242,32 @@ function transport({ native: nativeFixture = snapshot(), namespace, failWait = f
       if (args.includes('auth')) {
         return deniedWrite?.(args) ? ok('no\n') : ok('yes\n');
       }
-      const command = args.slice(args.findIndex(value => ['get', 'wait', 'apply'].includes(value)));
-      if (command[0] === 'apply') {
-        if (certificateOnlyFresh && options.input?.includes('kind: DefaultDomainCertificate')) {
-          const isGateway = options.input.includes(`namespace: ${gatewayNamespace}`);
-          native[isGateway ? 'gatewayCertificate' : 'brokerCertificate'] =
-            issuedCertificates[isGateway ? 'gatewayCertificate' : 'brokerCertificate'];
+      const command = kubectlCommand(args);
+      if (command[0] === 'create') {
+        const resource = parse(options.input);
+        if (certificateOnlyFresh && resource.kind === 'DefaultDomainCertificate') {
+          native[resource.metadata.namespace === gatewayNamespace ? 'gatewayCertificate' : 'brokerCertificate'] =
+            issuedCertificates[resource.metadata.namespace === gatewayNamespace ? 'gatewayCertificate' : 'brokerCertificate'];
+        }
+        return ok();
+      }
+      if (command[0] === 'patch') {
+        const patch = JSON.parse(command[command.indexOf('--patch') + 1]);
+        const namespace = command[command.indexOf('--namespace') + 1];
+        const resource = [...Object.values(native), ...Object.values(policies)]
+          .find(value => value?.kind?.toLowerCase() === command[1] &&
+            value.metadata?.name === command[2] && value.metadata?.namespace === namespace);
+        if (!resource || patch.some(operation => operation.op === 'test' &&
+            (operation.path === '/metadata/uid' && operation.value !== resource.metadata.uid ||
+             operation.path === '/metadata/resourceVersion' && operation.value !== resource.metadata.resourceVersion))) {
+          return { status: 1, stdout: '', stderr: 'Conflict: routing object changed after inventory' };
+        }
+        for (const operation of patch) {
+          if (operation.path === '/spec') resource.spec = operation.value;
+          if (operation.path.startsWith('/metadata/labels/')) {
+            const key = operation.path.slice('/metadata/labels/'.length).replaceAll('~1', '/').replaceAll('~0', '~');
+            resource.metadata.labels[key] = operation.value;
+          }
         }
         return ok();
       }
@@ -379,7 +432,7 @@ test('routing checks all required writes before applying the first manifest', ()
   });
   assert.throws(() => bootstrapIdentityRouting(config, dependencies),
     /Kubernetes API access is unavailable or insufficient for Identity routing bootstrap: required permission "patch gateways" in namespace agentweaver-gateway/);
-  assert.equal(calls.filter(call => call.args.includes('apply')).length, 0);
+  assert.equal(calls.filter(call => ['apply', 'create', 'patch'].includes(kubectlCommand(call.args)[0])).length, 0);
 });
 
 test('fresh certificate-only bootstrap works before identity-broker-tls and Services exist', () => {
@@ -392,11 +445,12 @@ test('fresh certificate-only bootstrap works before identity-broker-tls and Serv
   assert.equal(receipt.routingConfigured, false);
   assert.equal(receipt.runtimeVerified, false);
   assert.equal(receipt.hostname, hostname);
-  const applies = calls.filter(call => call.args.includes('apply'));
+  const applies = calls.filter(call => ['create', 'patch'].includes(kubectlCommand(call.args)[0]));
+  const rendered = applies.map(writtenText);
   assert.equal(applies.length, 3);
-  assert.equal(applies.filter(call => call.options.input.includes('kind: DefaultDomainCertificate')).length, 2);
+  assert.equal(rendered.filter(text => text.includes('kind: DefaultDomainCertificate')).length, 2);
   assert.equal(calls.some(call => call.args.includes('service')), false);
-  assert.ok(!applies.some(call => /kind: (?:Gateway|HTTPRoute|BackendTLSPolicy|CiliumNetworkPolicy)/.test(call.options.input)));
+  assert.ok(!rendered.some(text => /kind: (?:Gateway|HTTPRoute|BackendTLSPolicy|CiliumNetworkPolicy)/.test(text)));
   assert.equal(calls.filter(call => call.args.includes('wait') &&
     call.args.some(value => value.startsWith('--for=condition=Available'))).length, 2);
 });
@@ -758,7 +812,7 @@ test('guarded bootstrap uses normal user kubeconfig, managed certificates in bot
     IdentityBroker__Issuer: `https://${hostname}/`, IdentityBroker__ExternalProvider__ClientId: clientId,
   });
   assert.equal(receipt.runtimeConfigMutationExecuted, false);
-  const applies = calls.filter(call => call.args.includes('apply')).map(call => call.options.input);
+  const applies = calls.filter(call => ['create', 'patch'].includes(kubectlCommand(call.args)[0])).map(writtenText);
   assert.equal(applies.length, 18);
   assert.ok(applies.every(text => !text.includes('CHANGEME-')));
   assert.ok(applies.some(text => text.includes('enforce: baseline')));
@@ -832,6 +886,30 @@ test('guarded bootstrap uses normal user kubeconfig, managed certificates in bot
   assert.equal(existsSync(dirname(kubeconfig)), false);
 });
 
+test('routing refuses to overwrite an object changed after ownership inventory', () => {
+  const { calls, dependencies } = transport();
+  const original = dependencies.execKubectl;
+  let conditionalPatch;
+  dependencies.execKubectl = (args, options) => {
+    const command = kubectlCommand(args);
+    if (command[0] === 'patch' && command[1] === 'httproute' && command[2] === 'gateway-api-host') {
+      calls.push({ args, options });
+      conditionalPatch = JSON.parse(command[command.indexOf('--patch') + 1]);
+      return { status: 1, stdout: '', stderr: 'Conflict: routing object changed after inventory' };
+    }
+    return original(args, options);
+  };
+  assert.throws(() => bootstrapIdentityRouting(config, dependencies),
+    /Identity routing Kubernetes operation failed: Conflict: routing object changed after inventory/);
+  assert.deepEqual(conditionalPatch.slice(0, 2), [
+    { op: 'test', path: '/metadata/uid', value: 'HTTPRoute-gateway-api-host-uid' },
+    { op: 'test', path: '/metadata/resourceVersion', value: '1' },
+  ]);
+  assert.equal(calls.some(call => kubectlCommand(call.args)[0] === 'apply'), false);
+  assert.equal(calls.some(call => kubectlCommand(call.args)[0] === 'patch' &&
+    kubectlCommand(call.args)[2] === 'gateway-copilot-bff'), false);
+});
+
 test('routing validates the selected account before subscription-free directory reads or Kubernetes changes', () => {
   for (const selected of [
     { id: applicationObjectId, tenantId: config.tenantId, state: 'Enabled' },
@@ -867,6 +945,8 @@ test('bootstrap refuses an existing namespace policy change or unowned route and
     assert.throws(() => bootstrapIdentityRouting(config, dependencies),
       /differs|not an owned|not the exact private|timed out/);
     assert.equal(existsSync(dirname(calls[0].args[1])), false);
-    if (!value.failWait) assert.equal(calls.filter(call => call.args.includes('apply')).length, 0);
+    if (!value.failWait) {
+      assert.equal(calls.filter(call => ['apply', 'create', 'patch'].includes(kubectlCommand(call.args)[0])).length, 0);
+    }
   }
 });

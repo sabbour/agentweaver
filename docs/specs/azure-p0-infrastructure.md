@@ -262,6 +262,12 @@ upstream public application client ID. Namespace security approval remains separ
 The P0 namespace stays restricted. An existing Gateway namespace must have
 the exact approved ownership and policy labels.
 The installer never weakens an existing namespace policy.
+For an already provisioned platform, `--identity-routing-only` reuses the
+same source, target, namespace-policy, TLS, ownership, and current-generation
+guards while skipping ARM what-if/create and the nested FIC deployment.
+Execution still applies the existing Kubernetes routing resources and remains
+separately authorized; it does not change the canonical issuer or Entra
+registration.
 
 Native `DefaultDomainCertificate` resources supply managed TLS Secrets in
 the Gateway and Broker namespaces.

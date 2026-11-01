@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 import { run, runAz, redact } from './exec.mjs';
 import { assertP0KubernetesPermissions, withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 
@@ -926,14 +927,38 @@ export function bootstrapIdentityRouting(config, {
     function read(kind, namespace, name = 'identity-broker') {
       return JSON.parse(command(['get', kind, name, '--namespace', namespace, '-o', 'json']));
     }
-    function apply(filename, replacements = {}) {
+    function writeManagedObject(filename, replacements = {}) {
       const text = readFileSync(join(config.repoRoot ?? process.cwd(), 'deploy', 'k8s', 'routing',
         'identity-broker', filename), 'utf8');
       const rendered = Object.entries({
         'CHANGEME-GATEWAY-POLICY': config.gatewaySecurityPolicy, ...replacements,
       }).reduce((value, [placeholder, replacement]) => value.replaceAll(placeholder, replacement), text);
       if (rendered.includes('CHANGEME-')) throw new Error('Identity routing manifest has unresolved operator inputs.');
-      command(['apply', '--filename', '-'], { input: rendered });
+      const desired = parseYaml(rendered);
+      if (!desired?.kind || !desired.metadata?.name) {
+        throw new Error('Identity routing manifest does not identify one Kubernetes object.');
+      }
+      const namespace = desired.metadata.namespace ?? '';
+      const existing = existingObjects.get(`${desired.kind.toLowerCase()}/${namespace}/${desired.metadata.name}`);
+      if (!existing) {
+        command(['create', '--filename', '-'], { input: rendered });
+        return;
+      }
+      if (!desired.spec || !existing.metadata?.uid || !existing.metadata?.resourceVersion) {
+        throw new Error(`Existing ${desired.kind} lacks the identity required for a conditional routing update.`);
+      }
+      const patch = [
+        { op: 'test', path: '/metadata/uid', value: existing.metadata.uid },
+        { op: 'test', path: '/metadata/resourceVersion', value: existing.metadata.resourceVersion },
+        { op: 'replace', path: '/spec', value: desired.spec },
+        ...Object.entries(desired.metadata.labels ?? {}).map(([key, value]) => ({
+          op: Object.hasOwn(existing.metadata.labels ?? {}, key) ? 'replace' : 'add',
+          path: `/metadata/labels/${key.replaceAll('~', '~0').replaceAll('/', '~1')}`,
+          value,
+        })),
+      ];
+      command(['patch', desired.kind.toLowerCase(), desired.metadata.name, '--type=json', '--patch',
+        JSON.stringify(patch), ...(namespace ? ['--namespace', namespace] : [])]);
     }
     const p0 = JSON.parse(command(['get', 'namespace', P0_NAMESPACE, '-o', 'json']));
     for (const mode of ['enforce', 'audit', 'warn']) {
@@ -979,7 +1004,7 @@ export function bootstrapIdentityRouting(config, {
           object.metadata?.labels?.['agentweaver.io/service'] !== service)) {
         throw new Error(`Existing ${kind} is not an owned routing object. Refusing replacement.`);
       }
-      existingObjects.set(`${kind}/${namespace}/${name}`, Boolean(object));
+      existingObjects.set(`${kind}/${namespace}/${name}`, object ?? false);
       if (kind === 'service' && (!object ||
           object.spec?.type !== 'ClusterIP' ||
            object.spec?.selector?.['app.kubernetes.io/name'] !== 'mcp' ||
@@ -1031,12 +1056,12 @@ export function bootstrapIdentityRouting(config, {
     ]));
     assertP0KubernetesPermissions(baseArgs, execKubectl, writePermissions,
       certificatesOnly ? 'Identity routing certificate bootstrap' : 'Identity routing bootstrap');
-    if (!existing) apply('gateway-namespace.yaml');
+    if (!existing) writeManagedObject('gateway-namespace.yaml');
     for (const [filename, namespace] of [
       ['gateway-certificate.yaml', GATEWAY_NAMESPACE],
       ['default-domain-certificate.yaml', P0_NAMESPACE],
     ]) {
-      apply(filename);
+      writeManagedObject(filename);
       command(['wait', '--for=condition=Available', 'defaultdomaincertificate/identity-broker',
         '--namespace', namespace, '--timeout=180s'], { timeout: 190_000 });
     }
@@ -1083,7 +1108,7 @@ export function bootstrapIdentityRouting(config, {
       ['gateway-api-ingress.yaml', {}],
       ['mcp-gateway-ingress.yaml', {}],
     ]) {
-      apply(filename, replacements);
+      writeManagedObject(filename, replacements);
     }
     command(['wait', '--for=condition=Programmed', 'gateway/identity-broker',
       '--namespace', GATEWAY_NAMESPACE, '--timeout=180s'], { timeout: 190_000 });

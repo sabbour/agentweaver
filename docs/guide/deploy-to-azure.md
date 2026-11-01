@@ -347,6 +347,13 @@ managed Gateway and routing resources. The deployment command does not
 provision Azure resources, certificates, runtime configuration, or external
 permissions.
 
+For routing-only maintenance on an existing platform, use the
+[`--identity-routing-only` procedure](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#identity-routing-only-mode-for-an-existing-platform).
+It keeps the source, target, namespace-policy, TLS, ownership, and
+current-generation preflights but skips ARM what-if/create and nested FIC
+deployment. `--execute` still writes Kubernetes routing resources and requires
+separate authorization; it does not change Entra registration or runtime URLs.
+
 ## 8. Verify the installation
 
 1. Confirm the expected namespace and workloads exist:

@@ -245,6 +245,9 @@ test('runtime phase cannot reuse the earlier initial PostgreSQL bootstrap receip
 test('Identity routing is default-off with explicit placement, policy, and public client inputs', async () => {
   assert.equal(cliOptions['bootstrap-identity-routing'].default, false);
   assert.equal(cliConfig({}).bootstrapIdentityRouting, false);
+  assert.equal(cliOptions['identity-routing-only'].default, false);
+  assert.equal(cliConfig({}).identityRoutingOnly, false);
+  assert.equal(cliConfig({ 'identity-routing-only': true }).bootstrapIdentityRouting, true);
   assert.equal(cliOptions['identity-routing-certificates-only'].default, false);
   assert.equal(cliConfig({}).identityRoutingCertificatesOnly, false);
   assert.equal(cliOptions['identity-gateway-namespace'].default, undefined);
@@ -300,6 +303,33 @@ test('Identity routing is default-off with explicit placement, policy, and publi
   }), /cannot verify Broker readiness/);
 });
 
+test('identity-routing-only dry-run prints no ARM operation and preserves the explicit routing plan', async () => {
+  const config = {
+    ...fixture, identityRoutingOnly: true, gatewayNamespace: 'agentweaver-gateway',
+    gatewaySecurityPolicy: 'baseline', upstreamClientId: ids.subscriptionId,
+  };
+  const aksSource = { ...source, scope: 'aks-only', template: 'infra/bicep/aks-redeploy.bicep',
+    parametersFile: 'infra/bicep/parameters/p0-aks-redeploy.approved.json' };
+  const result = await deploy(config, {
+    sourceResolver: () => aksSource,
+    execAz() { throw new Error('dry-run Azure call'); },
+    initializeIdentityRouting() { throw new Error('dry-run route write'); },
+  });
+  assert.equal(result.executed, false);
+  assert.equal(result.identityRoutingOnly, true);
+  assert.equal(result.bootstrapIdentityRouting, true);
+  assert.equal(result.identityRoutingPlan.gatewayNamespace, 'agentweaver-gateway');
+  assert.equal(result.identityRoutingPlan.gatewaySecurityPolicy, 'baseline');
+  assert.equal(result.args, undefined);
+  assert.equal(result.deploymentName, undefined);
+  await assert.rejects(deploy(config, { sourceResolver: () => source }), /requires the reviewed AKS-only/);
+  await assert.rejects(deploy({ ...config, registerBrokerCallback: true,
+    confirmBrokerCallback: 'https://agentweaver.test.aksapp.io/signin-oidc' },
+  { sourceResolver: () => aksSource }), /cannot be combined with callback registration/);
+  await assert.rejects(deploy({ ...config, gatewaySecurityPolicy: 'unknown' },
+    { sourceResolver: () => aksSource }), /explicit restricted or baseline policy/);
+});
+
 test('guarded routing runs without namespace bootstrap, PostgreSQL, or application mutation', async () => {
   const steps = [];
   const routing = { bootstrapIdentityRouting: true, gatewayNamespace: 'agentweaver-gateway',
@@ -333,6 +363,56 @@ test('guarded routing runs without namespace bootstrap, PostgreSQL, or applicati
     }; },
     initializeIdentityRouting: () => { throw new Error('Gateway not Programmed'); },
   }), /Identity routing bootstrap failed: Gateway not Programmed/);
+});
+
+test('identity-routing-only reuses target and registration preflights without ARM or FIC deployment', async () => {
+  const calls = [];
+  const steps = [];
+  const config = {
+    ...fixture, identityRoutingOnly: true, execute: true,
+    gatewayNamespace: 'agentweaver-gateway', gatewaySecurityPolicy: 'baseline',
+    upstreamClientId: ids.subscriptionId,
+  };
+  const aksSource = { ...source, scope: 'aks-only', template: 'infra/bicep/aks-redeploy.bicep',
+    parametersFile: 'infra/bicep/parameters/p0-aks-redeploy.approved.json' };
+  const result = await deploy(config, {
+    sourceResolver: () => aksSource,
+    execAz: fakeAzure({}, calls),
+    preflightIdentityBrokerRegistration(value) {
+      steps.push('registration-preflight');
+      assert.equal(value.clusterName, 'agentweaver-aks');
+      return {
+        callbackUri: 'https://agentweaver.test.eastus2.aksapp.io/signin-oidc',
+        registrationReady: true, mutationExecuted: false,
+      };
+    },
+    initializeIdentityRouting(value) {
+      steps.push('routing');
+      assert.equal(value.gatewayNamespace, config.gatewayNamespace);
+      assert.equal(value.gatewaySecurityPolicy, config.gatewaySecurityPolicy);
+      assert.equal(value.registerBrokerCallback, false);
+      assert.equal(value.verifyBrokerReadiness, false);
+      return { routingConfigured: true, runtimeVerified: false };
+    },
+  });
+  assert.deepEqual(steps, ['registration-preflight', 'routing']);
+  assert.ok(calls.some(args => args[0] === 'account' && args[1] === 'show'));
+  assert.ok(calls.some(args => args[0] === 'group' && args[1] === 'show'));
+  assert.ok(!calls.some(args => args[0] === 'deployment'));
+  assert.ok(!calls.some(args => args[0] === 'identity' && args[1] === 'federated-credential' &&
+    ['create', 'update'].includes(args[2])));
+  assert.equal(result.receipt.identityRouting.routingConfigured, true);
+  assert.equal(result.receipt.deploymentId, undefined);
+  assert.equal(result.args, undefined);
+  const ownerCalls = [];
+  let routingStarted = false;
+  await assert.rejects(deploy(config, {
+    sourceResolver: () => aksSource,
+    execAz: fakeAzure({ group: { tags: { ...tags, 'agentweaver:owner': 'other' } } }, ownerCalls),
+    initializeIdentityRouting() { routingStarted = true; },
+  }), /Source parameter ownership differs from the actual target/);
+  assert.equal(routingStarted, false);
+  assert.ok(!ownerCalls.some(args => args[0] === 'deployment'));
 });
 
 test('Entra application preflight does not add a subscription flag to az ad app show', async () => {
