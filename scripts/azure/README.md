@@ -722,6 +722,39 @@ The installer reads the public issuer from the admitted route hostname.
 Current-generation conditions and exact certificate, listener, parent,
 controller, backend, and namespace references must match.
 
+### Identity-routing-only mode for an existing platform
+
+When the platform is already provisioned, use `--identity-routing-only` to
+update the managed routes without running an ARM deployment:
+
+```powershell
+node scripts\azure\deploy.mjs `
+  --resource-group agentweaver `
+  --template infra\bicep\aks-redeploy.bicep `
+  --parameters infra\bicep\parameters\<approved-aks-only-parameters>.json `
+  --subscription <subscription-id> `
+  --allowed-subscription <subscription-id> `
+  --tenant <tenant-id> `
+  --allowed-tenant <tenant-id> `
+  --identity-gateway-namespace agentweaver-gateway `
+  --identity-gateway-security-policy <approved-policy> `
+  --identity-upstream-client-id <public-client-guid> `
+  --identity-routing-only `
+  --execute
+```
+
+The mode still requires a clean checkout at the exact fetched `origin/v1` tip,
+the reviewed AKS-only inputs, matching target ownership tags, the enabled
+subscription/tenant, and the same explicit namespace policy, managed TLS,
+route ownership, and current-generation checks. Without `--execute` it prints
+an offline routing summary. With `--execute` it performs Azure read preflight
+and Kubernetes routing writes, but skips ARM what-if/create entirely, so it
+cannot refresh the nested workload-identity FICs. Existing objects are
+updated only with UID/resourceVersion preconditions; absent objects use
+create-only writes, so a concurrent change fails closed. It does not register
+an Entra callback or change runtime URLs or the canonical issuer. Route
+execution and namespace-policy approval remain separately authorized actions.
+
 Before an identity routing or Broker runtime deployment, the installer checks
 the enabled Azure account, exact AKS cluster, managed Application Routing
 domain, and existing Entra application. It derives

@@ -63,12 +63,21 @@ export async function deploy(config, {
   assertDedicatedTarget(config.resourceGroup);
   assertSubscription(config.subscriptionId, config.allowedSubscriptionId);
   assertTenant(config.tenantId, config.allowedTenantId);
+  const routingRequested = Boolean(config.bootstrapIdentityRouting || config.identityRoutingOnly);
+  if (config.identityRoutingOnly && (
+    config.registerBrokerCallback || config.confirmBrokerCallback ||
+    config.bootstrapIdentityPostgres || config.bootstrapIdentityBrokerState ||
+    config.alignExistingIdentityBrokerHostname || config.bootstrapIdentityBrokerRuntime ||
+    config.bootstrapFoundationProbeInputs || config.bootstrapFoundationProbePostgres
+  )) {
+    throw new Error('Identity-routing-only cannot be combined with callback registration or unrelated bootstrap options.');
+  }
   if (config.bootstrapIdentityBrokerRuntime) {
     assertBrokerRuntimeInputs({ ...config, clusterName: `${config.resourceGroup}-aks` });
   } else if (config.acceptanceRunId || config.acceptanceRedirectUri || config.brokerImage) {
     throw new Error('Broker runtime inputs require --bootstrap-identity-broker-runtime.');
   }
-  if (config.bootstrapIdentityRouting) {
+  if (routingRequested) {
     assertIdentityRoutingPlacement(config);
     if (!GUID_PATTERN.test(config.upstreamClientId ?? '')) {
       throw new Error('Identity routing requires the exact upstream public application client ID.');
@@ -91,19 +100,23 @@ export async function deploy(config, {
   if (source.nodePoolMinCount !== 2 || source.nodePoolMaxCount !== 3) {
     throw new Error('Reviewed deployment source must bind the approved system autoscaler bounds 2-3.');
   }
+  if (config.identityRoutingOnly && source.scope !== 'aks-only') {
+    throw new Error('Identity-routing-only requires the reviewed AKS-only template and parameters.');
+  }
   const deploymentName = `${config.resourceGroup}-${source.scope === 'aks-only' ? 'aks-' : ''}${source.sha.slice(0, 12)}`;
   const clusterId = `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${config.resourceGroup}-aks`;
-  let args = buildDeployArgs({ resourceGroup: config.resourceGroup, ...source,
+  let args = config.identityRoutingOnly ? undefined : buildDeployArgs({ resourceGroup: config.resourceGroup, ...source,
     subscription: config.subscriptionId, sourceSha: source.sha, deploymentName });
-  const summary = { ...source, resourceGroup: config.resourceGroup, deploymentName, args, executed: false,
+  const summary = { ...source, resourceGroup: config.resourceGroup,
+    ...(config.identityRoutingOnly ? { identityRoutingOnly: true } : { deploymentName, args }), executed: false,
     bootstrapIdentityPostgres: Boolean(config.bootstrapIdentityPostgres),
-    bootstrapIdentityRouting: Boolean(config.bootstrapIdentityRouting),
+    bootstrapIdentityRouting: routingRequested,
     bootstrapIdentityBrokerState: Boolean(config.bootstrapIdentityBrokerState),
     alignExistingIdentityBrokerHostname: Boolean(config.alignExistingIdentityBrokerHostname),
     bootstrapIdentityBrokerRuntime: Boolean(config.bootstrapIdentityBrokerRuntime),
     bootstrapFoundationProbeInputs: Boolean(config.bootstrapFoundationProbeInputs),
     bootstrapFoundationProbePostgres: Boolean(config.bootstrapFoundationProbePostgres),
-    ...(config.bootstrapIdentityRouting ? { identityRoutingPlan: {
+    ...(routingRequested ? { identityRoutingPlan: {
       gatewayNamespace: config.gatewayNamespace, gatewaySecurityPolicy: config.gatewaySecurityPolicy,
       upstreamClientId: config.upstreamClientId, verifyBrokerReadiness: Boolean(config.verifyBrokerReadiness),
       certificatesOnly: Boolean(config.identityRoutingCertificatesOnly),
@@ -116,7 +129,7 @@ export async function deploy(config, {
   if (group.tags['agentweaver:owner'] !== source.owner || group.tags['agentweaver:cost-center'] !== source.costCenter) {
     throw new Error('Source parameter ownership differs from the actual target.');
   }
-  if (config.bootstrapIdentityRouting || config.bootstrapIdentityBrokerRuntime) {
+  if (routingRequested || config.bootstrapIdentityBrokerRuntime) {
     // Validate the selected registration before what-if/create; any app write still requires explicit confirmation.
     const preflight = await preflightIdentityBrokerRegistration({
       ...config, clusterName: `${config.resourceGroup}-aks`,
@@ -126,6 +139,40 @@ export async function deploy(config, {
       registrationReady: preflight.registrationReady,
       mutationExecuted: preflight.mutationExecuted,
     };
+  }
+  function assertSourceUnchanged(stage = 'after what-if') {
+    const confirmed = sourceResolver(config);
+    if (confirmed.sha !== source.sha || confirmed.sourceTree !== source.sourceTree ||
+        confirmed.sourceHash !== source.sourceHash || confirmed.template !== source.template ||
+        confirmed.parametersFile !== source.parametersFile ||
+        confirmed.nodePoolMinCount !== source.nodePoolMinCount ||
+        confirmed.nodePoolMaxCount !== source.nodePoolMaxCount) {
+      throw new Error(`Source inputs changed ${stage}; refusing deployment.`);
+    }
+  }
+  function initializeRouting() {
+    return initializeIdentityRouting({
+      repoRoot: config.repoRoot, resourceGroup: config.resourceGroup,
+      subscriptionId: config.subscriptionId, tenantId: config.tenantId,
+      clusterName: `${config.resourceGroup}-aks`,
+      gatewayNamespace: config.gatewayNamespace, gatewaySecurityPolicy: config.gatewaySecurityPolicy,
+      upstreamClientId: config.upstreamClientId, verifyBrokerReadiness: Boolean(config.verifyBrokerReadiness),
+      identityRoutingCertificatesOnly: Boolean(config.identityRoutingCertificatesOnly),
+      registerBrokerCallback: Boolean(config.registerBrokerCallback), confirmBrokerCallback: config.confirmBrokerCallback,
+    });
+  }
+  if (config.identityRoutingOnly) {
+    try {
+      assertSourceUnchanged('after routing preflight');
+      const identityRouting = await initializeRouting();
+      return { ...summary, executed: true, receipt: {
+        scope: source.scope, sourceSha: source.sha, sourceTree: source.sourceTree, sourceHash: source.sourceHash,
+        subscriptionId: config.subscriptionId, tenantId: config.tenantId, resourceGroup: config.resourceGroup,
+        identityRouting,
+      } };
+    } catch (error) {
+      throw new Error(`Identity routing bootstrap failed: ${error.message}`);
+    }
   }
   const existingIdentityPostgres = (config.bootstrapIdentityPostgres || config.bootstrapFoundationProbePostgres ||
     config.bootstrapIdentityBrokerRuntime) && source.scope === 'aks-only'
@@ -145,16 +192,6 @@ export async function deploy(config, {
   function runWhatIf() {
     const result = boundAz(whatIfArgs, { check: false });
     if (result.status !== 0) throw new Error(`What-if failed: ${result.stderr}`);
-  }
-  function assertSourceUnchanged() {
-    const confirmed = sourceResolver(config);
-    if (confirmed.sha !== source.sha || confirmed.sourceTree !== source.sourceTree ||
-        confirmed.sourceHash !== source.sourceHash || confirmed.template !== source.template ||
-        confirmed.parametersFile !== source.parametersFile ||
-        confirmed.nodePoolMinCount !== source.nodePoolMinCount ||
-        confirmed.nodePoolMaxCount !== source.nodePoolMaxCount) {
-      throw new Error('Source inputs changed after what-if; refusing deployment.');
-    }
   }
   runWhatIf();
   assertSourceUnchanged();
@@ -327,15 +364,7 @@ export async function deploy(config, {
   if (config.bootstrapIdentityRouting) {
     try {
       assertSourceUnchanged();
-      identityRouting = await initializeIdentityRouting({
-        repoRoot: config.repoRoot, resourceGroup: config.resourceGroup,
-        subscriptionId: config.subscriptionId, tenantId: config.tenantId,
-        clusterName: `${config.resourceGroup}-aks`,
-        gatewayNamespace: config.gatewayNamespace, gatewaySecurityPolicy: config.gatewaySecurityPolicy,
-        upstreamClientId: config.upstreamClientId, verifyBrokerReadiness: Boolean(config.verifyBrokerReadiness),
-        identityRoutingCertificatesOnly: Boolean(config.identityRoutingCertificatesOnly),
-        registerBrokerCallback: Boolean(config.registerBrokerCallback), confirmBrokerCallback: config.confirmBrokerCallback,
-      });
+      identityRouting = await initializeRouting();
     } catch (error) {
       throw new Error(`Infrastructure deployment succeeded, but Identity routing bootstrap failed: ${error.message}`);
     }
@@ -360,7 +389,8 @@ export function cliConfig(values) {
     repoRoot: process.cwd(), execute: values.execute, subscriptionId: values.subscription,
     allowedSubscriptionId: values['allowed-subscription'], tenantId: values.tenant, allowedTenantId: values['allowed-tenant'],
     bootstrapIdentityPostgres: values['bootstrap-identity-postgres'] ?? false,
-    bootstrapIdentityRouting: values['bootstrap-identity-routing'] ?? false,
+    bootstrapIdentityRouting: Boolean(values['bootstrap-identity-routing'] || values['identity-routing-only']),
+    identityRoutingOnly: values['identity-routing-only'] ?? false,
     identityRoutingCertificatesOnly: values['identity-routing-certificates-only'] ?? false,
     bootstrapIdentityBrokerState: values['bootstrap-identity-broker-state'] ?? false,
     alignExistingIdentityBrokerHostname: values['align-existing-identity-broker-hostname'] ?? false,
@@ -385,6 +415,7 @@ export const cliOptions = {
   tenant: { type: 'string' }, 'allowed-tenant': { type: 'string' },
   'bootstrap-identity-postgres': { type: 'boolean', default: false },
   'bootstrap-identity-routing': { type: 'boolean', default: false },
+  'identity-routing-only': { type: 'boolean', default: false },
   // This stage creates managed TLS certificates only; route writes remain service-guarded.
   'identity-routing-certificates-only': { type: 'boolean', default: false },
   'bootstrap-identity-broker-state': { type: 'boolean', default: false },

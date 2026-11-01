@@ -80,6 +80,9 @@ function addNestedDeploymentChanges(result, source) {
  * Target or source validation failures throw before the what-if call.
  */
 export function plan(config, { execAz = runAz, sourceResolver = resolveSource } = {}) {
+  if (config.identityRoutingOnly) {
+    throw new Error('--identity-routing-only is only supported by deploy.mjs.');
+  }
   const source = sourceResolver(config);
   const { group } = guardAzureTarget({ ...config, ...source }, execAz);
   if (group.tags['agentweaver:owner'] !== source.owner || group.tags['agentweaver:cost-center'] !== source.costCenter) {

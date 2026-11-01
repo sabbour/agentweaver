@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildWhatIfArgs, plan } from '../plan.mjs';
+import { cliConfig } from '../deploy.mjs';
 import { fixture, source, fakeAzure, ids } from './fixtures/target.mjs';
 
 test('what-if uses identical source and account/ownership guards without mutation', () => {
@@ -11,6 +12,21 @@ test('what-if uses identical source and account/ownership guards without mutatio
   assert.ok(calls.at(-1).includes('what-if'));
   assert.ok(!calls.some(args => args.includes('create')));
   for (const args of calls) assert.equal(args[args.indexOf('--subscription') + 1], ids.subscriptionId);
+});
+
+test('plan rejects identity-routing-only before source resolution or Azure calls', () => {
+  const calls = [];
+  let sourceResolved = false;
+
+  assert.throws(() => plan(cliConfig({ 'identity-routing-only': true }), {
+    sourceResolver() {
+      sourceResolved = true;
+      return source;
+    },
+    execAz: fakeAzure({}, calls),
+  }), /--identity-routing-only is only supported by deploy\.mjs/);
+  assert.equal(sourceResolved, false);
+  assert.deepEqual(calls, []);
 });
 
 // The parent deployment's changes array does not include resources in its nested federation module.
