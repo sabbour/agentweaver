@@ -1,6 +1,8 @@
-# Quickstart: build the Agentweaver 1.x source
+<a id="quickstart-build-the-agentweaver-1-x-source"></a>
 
-In this quickstart, you restore the v1 dependencies, build the solution, and
+# Quickstart: build Agentweaver from source
+
+In this quickstart, you restore the locked dependencies, build the solution, and
 run local source checks. These steps do not deploy Azure resources, publish
 packages or images, or start a product platform.
 
@@ -10,7 +12,7 @@ Install:
 
 - .NET 10 SDK, as selected by `global.json`.
 - Node.js 24 and npm.
-- Git with the v1 source checkout.
+- Git with this repository checked out.
 
 PostgreSQL integration tests use Testcontainers and require a container engine
 and permission to pull the test image. This quickstart runs source checks that
@@ -51,7 +53,7 @@ results validate source contracts and local tooling. They do not prove that
 Azure resources exist, a Kubernetes workload is running, a provider can reach
 its resource, or a user workflow succeeds.
 
-To continue, read [What Agentweaver 1.x can do](../experience/00-overview.md),
+To continue, read [What the web app can do](../experience/00-overview.md),
 then follow [Configure providers](./configure-providers.md) or
 [Deploy to Azure](./deploy-to-azure.md).
 

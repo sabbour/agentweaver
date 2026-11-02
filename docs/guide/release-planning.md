@@ -1,13 +1,20 @@
 # Plan issues and releases
 
-Use GitHub version milestones to show what each Agentweaver release is
-expected to contain. Labels describe the kind of work, product area,
-priority and current state. Neither a milestone nor a label proves that
-work is implemented, published, deployed or accepted.
+Use this guide to set a target milestone, apply the repository's existing
+labels, and reconcile changes that actually shipped. Milestones and labels
+describe plans; they do not show that work was implemented, published, or
+deployed.
 
-This is the same planning mechanism used for the 0.x product line. The v1
+This is the same planning mechanism used for the 0.x product line. The
 component manifest and changesets remain the versioning mechanism; issue
 metadata does not publish packages or deploy workloads.
+
+## Before you begin
+
+You need access to the repository's issues, pull requests, milestones, and
+labels. Authenticate the GitHub CLI before using the commands below. This
+guide changes repository planning metadata; it does not authorize package
+publication, cloud access, migrations, or deployment.
 
 ## Choose a target release
 
@@ -24,7 +31,8 @@ one has been agreed.
 
 Use the earliest suitable **unreleased** milestone when the target is not
 yet clear. Do not choose an old open milestone just because its version is
-lower: publication and acceptance records can remain open after shipping.
+lower: publication records and unfinished validation work can remain open
+after shipping.
 If the work is genuinely deferred or not scheduled, leave its milestone
 unset and apply `release:backlog`.
 
@@ -36,9 +44,9 @@ gh pr edit <pr-number> --repo sabbour/agentweaver --milestone <version>
 
 A milestone is a target, not an instruction to start work. Keep dependency
 order and existing implementation ownership. A partly implemented
-prerequisite is not complete because it has a target version. Resolve its
-actual required slice before the dependent work can ship; move the target
-if that prerequisite misses the cut.
+prerequisite is not complete because it has a target version. Finish the
+required prerequisite before dependent work can ship. Move the target if the
+prerequisite misses the cut.
 
 ## Apply the existing labels
 
@@ -48,7 +56,7 @@ or use a programme label instead of a milestone.
 | Label family | Meaning |
 | --- | --- |
 | `type:*` | Use one applicable type: `feature`, `bug`, `spike`, `chore`, `docs` or `epic`. |
-| `area:*` | Name the affected product surface, such as `api`, `web`, `workflows`, `mcp`, `backlog`, `runtime-resilience`, `observability`, `infra` or `testing`. Several areas are allowed. |
+| `area:*` | Name the affected product surface, such as `api`, `web`, `workflows`, `backlog`, `runtime-resilience`, `observability`, `infra` or `testing`. Several areas are allowed. |
 | `priority:p0` | A release blocker. |
 | `priority:p1` | Work in the current implementation batch. |
 | `priority:p2` | Work queued after the current batch. |
@@ -57,7 +65,7 @@ or use a programme label instead of a milestone.
 | `go:no` | The work is not being pursued. |
 | `status:in-progress` | Implementation is actually in progress. |
 | `status:testing` | Validation is actually in progress. |
-| `release:blocking` | The work blocks release or release acceptance. |
+| `release:blocking` | The work blocks the release or its required checks. |
 | `release:backlog` | The work has no scheduled release target. |
 
 Use at most one label within each of `type:`, `priority:`, `go:` and
@@ -83,9 +91,9 @@ removes release labels when `go:no` is applied.
 That workflow does not use the milestone to decide whether work is
 scheduled. After applying `go:yes` to a scheduled issue, remove any
 automatically added `release:backlog`. Do not remove a genuine
-`release:blocking` label. Area and status labels, milestone assignments and
-release reconciliation still need human or coordinator review. The label
-sync workflow manages shared labels; there is no v1 milestone-enforcement
+`release:blocking` label. A person must review area and status labels,
+milestone assignments, and release reconciliation. The label
+sync workflow manages shared labels; there is no milestone-enforcement
 workflow. Do not copy branch-specific issue workflows or assume CI checks
 the release plan.
 
@@ -102,41 +110,44 @@ first published version containing its changes, and assign the issues that
 PR actually completed to that version. Do not move an unfinished parent
 issue just because one partial contribution shipped.
 
-Tag ancestry is useful supporting evidence:
+Check whether a merge commit is in the release tag's history:
 
 ```powershell
 git merge-base --is-ancestor <merge-commit> <release-tag>
 ```
 
-Exit code zero means the commit is an ancestor. It does not prove that the
-feature was enabled, deployed or accepted. Check the package or CLI release
-itself as well. A PR merged after the latest release tag
+Exit code zero means the commit is an ancestor. It does not show that the
+feature was enabled or deployed. Check the package or CLI release itself as
+well. A PR merged after the latest release tag
 belongs to the next planned milestone, not the last published one.
 
 Move work that missed the cut to the next suitable milestone. Do not leave
 unshipped work on a closed milestone. Close the implementation milestone
-only after publication and reconciliation are verified and its outstanding
-acceptance work is complete. A published release with unfinished acceptance
-can retain an open milestone; explain the outstanding work in its
-description.
+only after publication and reconciliation are complete and no required
+validation work remains. A published release with unfinished checks can
+retain an open milestone; explain the remaining work in its description.
 
-## Complete acceptance and track repairs
+<a id="complete-acceptance-and-track-repairs"></a>
+
+## Follow up on release gaps
 
 Follow the [component release reference](../reference/releases.md) and
 [release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md)
 for versioning, NuGet package publishing, direct GHCR image builds, and
-Kustomize deployment. Planning
-does not authorize credentials, cloud access, migrations or deployment.
+Kustomize deployment. Keep package publication, image publication, and
+workload deployment as separate operations.
 
-For separately approved deployed acceptance, run the representative
-integration project and focused API, UI or MCP scenarios for each new
-feature. Record the result and any blocked checks. A local test or successful
-rollout does not replace those
-journeys.
+If a required check finds a defect, create a focused repair issue in the next
+patch milestone. Link the affected change and describe the observed result.
+Use the approved release and deployment procedures for any corrected
+publication or deployment. Update the original issue only when its required
+work is complete; a merged repair or a release tag alone does not show that a
+corrected workload is running.
 
-File each abnormal result as a narrow repair issue in the next patch
-milestone for that release. Implement and review the fix, publish and deploy
-the approved corrected source when required, then rerun the affected
-scenarios. Keep the original acceptance issue open until every required
-criterion has evidence. Never close it because the repair merged, a tag
-exists or the remaining checks are blocked.
+## Verify the plan
+
+Check that each scheduled issue and its pull request use the same target
+milestone, the labels match the current work, and no unfinished prerequisite
+is treated as complete. After a release, reconcile the published package or
+CLI version with the changesets and merged changes before closing the
+milestone.

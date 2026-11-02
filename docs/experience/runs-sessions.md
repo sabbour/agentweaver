@@ -4,14 +4,16 @@ Use this page to start or cancel a run, inspect an existing run, respond to
 owner-reported requests, and read committed activity and usage. A **session**
 is a node in the run's owner-reported tree.
 
-## Prerequisites
+## Before you begin
 
-- Sign in with a Broker token bound to that project and run.
-- To create a chat, have the project Orchestrator role (`acceptRunSelection`).
-  Owner or Contributor alone receives `403`. A tenant admin grants the role through
+- To inspect a run, open it from **Sessions**, **Overview**, the project
+  **Dashboard**, or **Orchestrations**. The app signs in for that exact
+  project and run.
+- To create a chat, you need current project authority to create runs and a
+  project token with `api.read` and `projects.orchestrator` that is not bound
+  to a run. Owner or Contributor alone receives `403`. A tenant administrator
+  grants the Orchestrator role through
   `/api/v1/projects/{projectId}/role-assignments`.
-- Create requests need a token that requests `api.read` and
-  `projects.orchestrator` and is not bound to a run.
 
 Open a run from **Sessions**, **Overview**, the project **Dashboard**, or
 **Orchestrations**. These lists read the project run list. The app signs in to
@@ -104,8 +106,8 @@ pass. Select **Refresh** for an immediate read.
 | **Run settings** | Read the model, the revisions the run started with, and the platform components it can use. |
 
 The `view` query selects `chat`, `topology`, `approvals`, `activity`,
-`changes`, `usage`, or `selection` (**Run settings**). An invalid value
-selects `topology`.
+`changes`, `usage`, or `selection` (**Run settings**). The page opens **Chat**
+by default and replaces an unknown value with `chat`.
 
 **Run settings** shows the settings the run started with. Changing project
 settings doesn't change them. It lists the model reference, the project
@@ -113,32 +115,33 @@ configuration revision, and the platform defaults revision. The table
 **Allowed implementations for this run** lists each platform component, its
 choice (one, an ordered list, or several), and its implementations in order.
 The table shows allowed implementations, not the implementation that is
-running. Some service candidates in the repository are source-only or
-unpublished; see the [provider and model reference](../architecture/providers-models.md).
+running. A source build does not confirm which implementation is available in
+your environment; see the [provider and model reference](../architecture/providers-models.md).
 
 In **Changes**, use **GitHub App repository access** to
 [pin a repository to the run](./connections.md#pin-a-repository-to-an-existing-run).
 
 ## Send a message
 
-**Prerequisites:** The run tree contains at least two active sessions.
+**Prerequisites:** Sign in for the exact run. The coordinator must be active
+to receive a message; no second active session is needed.
 
-1. Open **Chat**. **Message the coordinator** is selected by default.
-2. To message another session, select it in the **Run tree**.
+1. Open **Chat**. The coordinator is the default recipient.
+2. To message another active session, select it in the **Run tree**.
 3. Enter a message.
 4. Select **Send**, or press Ctrl+Enter.
 
-The service accepts messages only between sessions of the run. The app sends
-the message from another active session: the coordinator, or the first active
-session when you message the coordinator. You can't message the
-coordinator directly, because the service has no API for messages from a user.
+The signed-in user sends the message directly to the selected active session.
+When the coordinator is the only active session, you can still message it.
 
 **Expected result:** The page shows **Message accepted.** and lists the
 message under the composer. The list is local to the page; reloading clears
-it. The receipt does not prove delivery or completion. If a send fails and you
-retry the same text, the app reuses the same request, so the message isn't
-sent twice. The journal contains typed events and opaque object references;
-the page has no message-content reader.
+it. The receipt means the owner accepted the message; it does not confirm
+delivery or run completion. If a send fails and you retry the same text, the
+app reuses the same request, so the message isn't sent twice. The **Messages**
+panel in **Chat** separately reads recorded user and assistant turns. The
+**Activity** view shows journal events and opaque object references, not chat
+text.
 
 ## Answer a gate
 
@@ -160,8 +163,8 @@ You can also open a pending request from the notification bell or from
 projects. **Dismiss** hides a notification for you only; it doesn't answer
 the request.
 
-**Expected result:** The owner reports whether it accepted the request. A
-refreshed snapshot, not the receipt, shows the resulting gate state.
+**Expected result:** The owner reports whether it accepted the request. Read
+the refreshed snapshot to see the resulting gate state.
 
 ## Detach or archive a child session
 
@@ -221,7 +224,7 @@ All versioned routes use the Gateway. The common prefix is
 | Follow live events | `GET /{runId}/events/live?cursor=...` | Gateway SSE over Events replay |
 
 The Orchestrator, Events & Sessions, and Projects & Config entries identify
-owners in checked-in source. These include source-only or unpublished service
-candidates, not confirmed deployments. See the [Events reference](../reference/events.md)
+owners in checked-in source; they do not confirm deployment in your
+environment. See the [Events reference](../reference/events.md)
 for ordering and replay, and [Events & Sessions architecture](../architecture/events-sessions.md)
 for owner and runtime boundaries.

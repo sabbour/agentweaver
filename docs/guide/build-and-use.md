@@ -1,10 +1,9 @@
 # Build and use the foundation libraries
 
-Agentweaver's .NET solution contains contracts and adapters for identity, providers,
-persistence, objects, and telemetry. Building these libraries does not start a
-deployed Agentweaver platform. The Identity Broker is a source-level service
-candidate, and Foundation Probe is an acceptance executable rather than a product
-service.
+Agentweaver's .NET solution contains contracts and adapters for identity,
+providers, persistence, objects, and telemetry. Building these libraries does
+not start an Agentweaver deployment. Foundation Probe is a local executable
+for checking selected infrastructure contracts; it is not a product service.
 
 ## Prerequisites
 

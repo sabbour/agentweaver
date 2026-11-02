@@ -28,10 +28,15 @@
     "docs/guide/p1-reconciliation.md",
     "docs/guide/troubleshooting.md",
     "docs/guide/build-and-use.md",
+    "docs/guide/chief-of-staff.md",
     "docs/guide/testing.md",
     "docs/guide/gateway.md",
+    "docs/guide/identity-scopes.md",
+    "docs/guide/notifications.md",
     "docs/guide/platform-components.md",
+    "docs/guide/release-planning.md",
     "docs/guide/azure-acceptance.md",
+    "docs/guide/web-client.md",
     "docs/diagrams/README.md",
     "docs/architecture/overview.md",
     "docs/architecture/events-sessions.md",
@@ -639,7 +644,16 @@
       ],
       "required": [
         "docs/reference/web.md",
-        "docs/experience/00-overview.md"
+        "docs/experience/README.md",
+        "docs/experience/00-overview.md",
+        "docs/experience/onboarding-auth.md",
+        "docs/experience/projects.md",
+        "docs/experience/configuration.md",
+        "docs/experience/skills.md",
+        "docs/experience/connections.md",
+        "docs/experience/runs-sessions.md",
+        "docs/experience/knowledge.md",
+        "docs/guide/web-client.md"
       ]
     }
   ]

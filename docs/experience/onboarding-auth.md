@@ -1,6 +1,6 @@
 # Sign in and access
 
-Use this page to sign in to the Agentweaver v1 browser app and request access
+Use this page to sign in to the Agentweaver browser app and request access
 to a run. The app signs you in through the Identity Broker;
 you do not enter a browser API key.
 

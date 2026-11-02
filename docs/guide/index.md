@@ -1,58 +1,93 @@
-# How-to guides and tutorials
+<a id="how-to-guides-and-tutorials"></a>
 
-Use these guides and tutorials to build, configure, deploy, and validate Agentweaver 1.x.
-Each guide names the source boundary and required target access. Building or
-rendering the source does not deploy a platform.
+# Guides and tutorials
 
-## Get started
+Choose a guide by the task you need to complete. Some tasks change cloud or
+Kubernetes resources. Each such guide states its access and approval needs
+before its commands.
 
-1. Follow [Quickstart: build the source](./quickstart.md) to restore the
-   solution and run local checks.
-2. Read [What Agentweaver 1.x can do](../experience/00-overview.md) before
-   choosing a workflow or service.
-3. Review [Foundation architecture](../architecture/overview.md) to find the
-   service that owns each operation.
-4. Read [Workflow execution](../deep-dive/orchestration.md) to see how
-   confirmed plans, platform gates, and retries work.
+<a id="get-started"></a>
 
-## Tutorial
+## Build and understand
 
-- [Deploy Agentweaver to Azure](./deploy-to-azure.md): provision an approved
-  target, bootstrap its database and identities, apply Kustomize, and verify
-  the workloads.
+- [Build and check the source](./quickstart.md): restore dependencies, build
+  the solution, and run local source checks. This does not install or deploy
+  Agentweaver.
+- [Build and use the foundation libraries](./build-and-use.md): build the
+  source and compose the reusable libraries.
+- [Find CLI commands without signing in](./find-cli-commands.md): read local
+  help from the Windows executable built from source.
+- [Build and configure the web client](./web-client.md): configure and build
+  the checked-in browser app.
+- [Foundation architecture](../architecture/overview.md) and
+  [system overview](../deep-dive/00-system-overview.md): understand component
+  ownership and runtime behavior.
+
+## Use the browser app
+
+If your team has configured and deployed the web app, start with
+[browser tasks](../experience/README.md). Those pages describe source
+behavior; they do not confirm availability in a particular environment.
+
+- [Chief of Staff](./chief-of-staff.md): manage personal conversations and
+  Priorities.
+- [Read and dismiss notifications](./notifications.md): review pending requests and
+  dismiss a notification.
+- [Read platform component status](./platform-components.md): interpret the
+  owner-reported report.
+
+<a id="tutorial"></a>
 
 ## Configure and deploy
 
-- [Configure providers](./configure-providers.md): review the providers that
-  are registered in the current catalog and their limits.
-- [Configure Knowledge memory](./configure-knowledge.md): configure native
-  PostgreSQL Memory and preserve its store identity.
-- [Gateway and BFF](./gateway.md): discover fixed routes and understand
-  authentication and forwarding.
-- [Agentweaver CLI](./cli.md): build and use the standalone CLI for secure
-  sign-in, Gateway API operations, and API acceptance.
-- [P1 reconciliation](./p1-reconciliation.md): inspect an interrupted P1 run
-  using read-only project, authority, assignment, and audit evidence.
-- [Web client](./web-client.md): configure the browser client and sign-in.
+- [Configure Knowledge memory](./configure-knowledge.md): configure the
+  native PostgreSQL Memory provider.
+- [Use the Gateway](./gateway.md): read the authorization boundary and call a
+  supported API route.
+- [Deploy Agentweaver to Azure](./deploy-to-azure.md): deploy to an approved
+  target.
+- [Run database maintenance](./database-maintenance.md): perform an approved
+  database operation.
+- [Verify an Azure deployment](./azure-acceptance.md): run approved,
+  source-bound checks.
+- [Test Environment Sandbox](./environment-sandbox-testing.md): verify the
+  supported lifecycle contract.
 
-## Test and accept
+<a id="test-and-accept"></a>
 
-- [Testing](./testing.md): run tests and interpret exactly what they prove.
-- [Plan issues and releases](./release-planning.md): label work, choose
-  version milestones and reconcile publication and acceptance evidence.
-- [Environment Sandbox testing](./environment-sandbox-testing.md): run
-  controlled lifecycle and provider tests.
-- [Azure acceptance](./azure-acceptance.md): verify the deployed foundation
-  with approved, bounded checks.
-- [Troubleshoot Agentweaver 1.x](./troubleshooting.md): diagnose safe,
-  source-grounded configuration and rollout failures.
+## Plan, diagnose, and reconcile
+
+- [Plan issues and releases](./release-planning.md): choose a target
+  milestone and update repository planning metadata.
+
+<a id="troubleshooting"></a>
+
+- [Troubleshoot Agentweaver](./troubleshooting.md):
+  diagnose a symptom before you choose a remedy.
+
+## Use the CLI and run tests
+
+Use [Agentweaver CLI](./cli.md) for source publishing, target configuration,
+sign-in, and API requests. Use [Testing](./testing.md) to choose a test
+command and understand its limits.
+
+<a id="find-reference-information"></a>
 
 ## Find reference information
 
+- [Provider choices](./configure-providers.md)
+- [Identity Broker permissions](./identity-scopes.md)
 - [Runtime configuration](../reference/runtime-configuration.md)
 - [HTTP API](../reference/api.md)
 - [Events](../reference/events.md)
-- [MCP tools](../reference/mcp-tools.md)
 - [Contracts and endpoints](../reference/contracts.md)
+- [Web integration](../reference/web.md)
+- [Web UI parity](../reference/web-ui-parity.md)
+- [AgentSuite import and export](../reference/agentsuite-import.md)
 - [Component releases](../reference/releases.md)
 - [Diagram authoring](../diagrams/README.md)
+
+<a id="understand-the-version-boundary"></a>
+
+For the difference between this rebuild and Agentweaver 0.x, see the
+[documentation home](../index.md#understand-the-version-boundary).

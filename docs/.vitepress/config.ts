@@ -1,9 +1,9 @@
-/** Navigation, source exclusions, and local-search settings for the v1 documentation site. */
+/** Navigation, source exclusions, and local-search settings for the documentation site. */
 import { defineConfig } from 'vitepress'
 
 export default defineConfig({
-  title: 'Agentweaver 1.x',
-  description: 'Implementation documentation for Agentweaver 1.x.',
+  title: 'Agentweaver',
+  description: 'Documentation for Agentweaver.',
   base: '/agentweaver/v1/',
   srcExclude: [
     'architecture/decisions/**',
@@ -23,12 +23,13 @@ export default defineConfig({
     aside: false,
     outline: false,
     nav: [
-      { text: 'Get started', link: '/guide/' },
-      { text: 'Tutorials', link: '/guide/deploy-to-azure' },
-      { text: 'Concepts', link: '/experience/00-overview' },
-      { text: 'How-to', link: '/guide/configure-providers' },
+      { text: 'Docs home', link: '/' },
+      { text: 'Build source', link: '/guide/quickstart' },
+      { text: 'Browser tasks', link: '/experience/README' },
+      { text: 'How-to guides', link: '/guide/' },
+      { text: 'System overview', link: '/deep-dive/00-system-overview' },
       { text: 'Reference', link: '/reference/runtime-configuration' },
-      { text: 'Troubleshooting', link: '/guide/troubleshooting' },
+      { text: 'Operations', link: '/guide/deploy-to-azure' },
       {
         text: '0.x documentation',
         link: 'https://sabbour.github.io/agentweaver/',
@@ -39,11 +40,11 @@ export default defineConfig({
         {
           text: 'Get started',
           items: [
-            { text: 'Guides and tutorials', link: '/guide/' },
-            { text: 'Quickstart: build the source', link: '/guide/quickstart' },
+            { text: 'All guides', link: '/guide/' },
+            { text: 'Build and check the source', link: '/guide/quickstart' },
             { text: 'Agentweaver CLI', link: '/guide/cli' },
             { text: 'Find CLI commands', link: '/guide/find-cli-commands' },
-            { text: 'Build and use', link: '/guide/build-and-use' },
+            { text: 'Build and use foundation libraries', link: '/guide/build-and-use' },
           ],
         },
         {
@@ -55,18 +56,17 @@ export default defineConfig({
         {
           text: 'Configure and deploy',
           items: [
-            { text: 'Configure providers', link: '/guide/configure-providers' },
             { text: 'Configure Knowledge memory', link: '/guide/configure-knowledge' },
-            { text: 'Web client', link: '/guide/web-client' },
-            { text: 'Notifications', link: '/guide/notifications' },
-            { text: 'Gateway/BFF', link: '/guide/gateway' },
+            { text: 'Build and configure the web client', link: '/guide/web-client' },
+            { text: 'Read and dismiss notifications', link: '/guide/notifications' },
+            { text: 'Use the Gateway', link: '/guide/gateway' },
             { text: 'Chief of Staff', link: '/guide/chief-of-staff' },
-            { text: 'Platform components', link: '/guide/platform-components' },
+            { text: 'Read platform component status', link: '/guide/platform-components' },
             { text: 'Run database maintenance', link: '/guide/database-maintenance' },
           ],
         },
         {
-          text: 'Test and troubleshoot',
+          text: 'Plan and troubleshoot',
           items: [
             { text: 'Testing', link: '/guide/testing' },
             { text: 'Plan issues and releases', link: '/guide/release-planning' },
@@ -76,14 +76,21 @@ export default defineConfig({
             { text: 'Diagram authoring', link: '/diagrams/README' },
           ],
         },
+        {
+          text: 'Find reference information',
+          items: [
+            { text: 'Provider choices', link: '/guide/configure-providers' },
+            { text: 'Identity Broker permissions', link: '/guide/identity-scopes' },
+          ],
+        },
       ],
       '/experience/': [
         {
-          text: 'Experience',
+          text: 'Browser tasks',
           items: [
-            { text: 'Overview', link: '/experience/README' },
-            { text: 'What you can do', link: '/experience/00-overview' },
-            { text: 'Sign-in and consent', link: '/experience/onboarding-auth' },
+            { text: 'Choose a browser task', link: '/experience/README' },
+            { text: 'What the web app can do', link: '/experience/00-overview' },
+            { text: 'Sign in and access', link: '/experience/onboarding-auth' },
             { text: 'Projects', link: '/experience/projects' },
             { text: 'Configuration', link: '/experience/configuration' },
             { text: 'Skills', link: '/experience/skills' },
@@ -117,7 +124,7 @@ export default defineConfig({
             { text: 'Orchestration', link: '/deep-dive/orchestration' },
             { text: 'Events and sessions', link: '/deep-dive/events-sessions' },
             { text: 'Agent runtime', link: '/deep-dive/agent-runtime' },
-            { text: 'MCP server', link: '/deep-dive/mcp-server' },
+            { text: 'MCP compatibility adapter source', link: '/deep-dive/mcp-server' },
           ],
         },
         {
@@ -143,9 +150,11 @@ export default defineConfig({
             { text: 'Runtime configuration', link: '/reference/runtime-configuration' },
             { text: 'HTTP API', link: '/reference/api' },
             { text: 'Events', link: '/reference/events' },
-            { text: 'Web client', link: '/reference/web' },
-            { text: 'MCP tools', link: '/reference/mcp-tools' },
-            { text: 'AgentSuite import', link: '/reference/agentsuite-import' },
+            { text: 'Web integration', link: '/reference/web' },
+            { text: 'Web UI parity', link: '/reference/web-ui-parity' },
+            { text: 'AgentSuite import and export', link: '/reference/agentsuite-import' },
+            { text: 'Environment creation and readiness records', link: '/reference/p1-creation-evidence' },
+            { text: 'MCP compatibility adapter reference', link: '/reference/mcp-tools' },
             { text: 'Contracts and endpoints', link: '/reference/contracts' },
             { text: 'Component releases', link: '/reference/releases' },
           ],

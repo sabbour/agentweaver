@@ -1,25 +1,31 @@
-# Configure providers
+<a id="configure-providers"></a>
 
-Use this article to identify the provider choices that the current Agentweaver
-1.x catalog can resolve. A provider is an adapter for a capability such as
-Memory or Storage. A provider registration makes an adapter available to a
-service. A configuration value by itself does not install an adapter or make a
-cloud resource available.
+# Provider choices and configuration boundaries
+
+Use this reference to find registered provider choices, distinguish them from
+source-only candidates, and understand which configuration each owner controls.
+A provider is an adapter for a capability such as Memory or Storage. A provider
+registration makes an adapter available to a service. A configuration value
+by itself does not install an adapter or make a cloud resource available.
 
 ## Before you begin
 
-You need access to the v1 source and the approved target's provider catalog.
-Read [providers and models](../architecture/providers-models.md) for the
-resolution and pinning model. Use the
+This reference describes the checked-in catalog. It does not show which
+providers are available in a particular deployment. To compare a deployment,
+ask its operator for the deployed catalog. Read
+[providers and models](../architecture/providers-models.md) for the resolution
+and pinning model. Use the
 [runtime configuration reference](../reference/runtime-configuration.md) for
-the exact setting names and validation rules.
+exact setting names and validation rules.
 
-## Review the current provider catalog
+<a id="review-the-current-provider-catalog"></a>
+
+## Registered provider choices
 
 The checked-in snapshot in
 `deploy/k8s/provider-catalogs/projects-config-provider-catalog.snapshot.json`
-is the source for the default Projects & Config catalog. It is not proof that
-the services or providers are deployed.
+is the source for the default Projects & Config catalog. It does not show
+whether the services or providers are deployed.
 
 | Capability | Provider ID | Current catalog behavior |
 | --- | --- | --- |
@@ -50,7 +56,9 @@ selection; they are not automatically removed or migrated. See
 [Project settings](../experience/configuration.md) for the owner-backed
 choices and save behavior.
 
-## Understand source candidates
+<a id="understand-source-candidates"></a>
+
+## Source candidates and unregistered options
 
 Some adapters and options exist in source without being registered in the
 checked-in application catalog:
@@ -106,27 +114,30 @@ Registering a source candidate requires a reviewed catalog and runtime
 integration. Do not add a catalog entry unless the adapter is available to the
 service and its options, capabilities, and resource negotiation are supported.
 
-## Configure a provider
+<a id="configure-a-provider"></a>
 
-1. **Identify the owning capability.** Use the catalog table to find the
-   provider ID and its owning service.
-2. **Prepare the external resource.** For example, create the PostgreSQL
-   database and Entra role, or install the supported CSI and Sandbox
-   controllers. The provider adapter validates an existing resource; it does
-   not provision that resource.
-3. **Set the provider options.** Update the owning service's runtime
-   ConfigMap. Keep credentials and private keys in operator-managed Kubernetes
-   Secrets, not in the checked-in JSON files.
-4. **Keep identity and generation stable.** The Knowledge Memory
-   `ResourceId` is stored with data and must never change. For other providers,
-   follow the adapter's resource-identity contract. Increase
-   `ResourceGeneration` only after the resource is wiped or replaced. A normal
-   restart or options change does not create a new resource generation.
-5. **Validate the complete installation.** Render the root Kustomize bundle,
-   then run the release preflight before applying it. See
-   [deploy Agentweaver to Azure](./deploy-to-azure.md).
+## Provider configuration boundaries
 
-## Configure the Identity Broker's upstream provider
+Only an authorized operator should change a provider's runtime settings.
+Before making a change, identify the owning capability and service in the
+catalog. The adapter validates an existing resource; it does not provision
+that resource. For example, the operator must provide the PostgreSQL database
+and Entra role, or install the supported CSI and Sandbox controllers.
+
+Store credentials and private keys in operator-managed Kubernetes Secrets,
+not in checked-in JSON files. The Knowledge Memory `ResourceId` is stored with
+data and must never change. For other providers, follow the adapter's
+resource-identity contract. Increase `ResourceGeneration` only after the
+resource is wiped or replaced. A normal restart or options change does not
+create a new resource generation.
+
+To deploy a reviewed configuration, render the root Kustomize bundle and run
+the release preflight before applying it. See
+[deploy Agentweaver to Azure](./deploy-to-azure.md) for that task.
+
+<a id="configure-the-identity-brokers-upstream-provider"></a>
+
+## Identity Broker upstream provider contract
 
 The Identity Broker supports one configured upstream OpenID Connect provider
 for user sign-in. `IdentityBroker:Issuer` is the Broker's own issuer;
@@ -151,7 +162,9 @@ Workload identity is a different mechanism. It lets a Kubernetes service
 authenticate to Azure resources such as PostgreSQL or Key Vault. It does not
 sign users in and does not replace the upstream OpenID Connect provider.
 
-## Configure model bindings
+<a id="configure-model-bindings"></a>
+
+## Model binding contract
 
 Model bindings are a separate runtime map, not provider-catalog registrations.
 The `AgentHost__ModelBindingsRevision` value versions the map. Each reference
@@ -184,7 +197,9 @@ provider settings, headers, or credential references. Keep it in step with the
 AgentHost map; see
 [Projects & Config settings](../reference/runtime-configuration.md#projects-config-settings).
 
-## Configure spend budgets
+<a id="configure-spend-budgets"></a>
+
+## Spend budget rules
 
 Spend budgets limit priced usage that Events records. Add them to
 `runLimits.spendBudgets` in the platform runtime defaults or in a project
@@ -250,14 +265,18 @@ card in [Understand source candidates](#understand-source-candidates).
 For the enforcement design and error codes, see
 [Scoped spend budgets and dispatch exposure](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/provider-seams.md#scoped-spend-budgets-and-dispatch-exposure).
 
-## Expected result
+<a id="expected-result"></a>
+
+## Resolution result
 
 The owning service starts only when its selected provider can validate the
 configured resource and negotiate the required capabilities. It pins the
 provider identity and generation for the relevant run. Provider resolution
 does not prove resource provisioning, deployment, or network enforcement.
 
-## Related information
+<a id="related-information"></a>
+
+## Related tasks and references
 
 - [Configure Knowledge memory](./configure-knowledge.md)
 - [Runtime configuration reference](../reference/runtime-configuration.md)

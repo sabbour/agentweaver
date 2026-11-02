@@ -1,66 +1,94 @@
-# Agentweaver 1.x documentation
+<a id="agentweaver-1-x-documentation"></a>
 
-Learn how to build, configure, and validate the Agentweaver 1.x source. These
-articles describe the current `v1` branch. They distinguish implemented
-contracts from source candidates and do not claim that a service, provider, or
-Azure environment is deployed.
+# Agentweaver documentation
 
-## Get started
+Choose a guide by what you want to do. These pages describe the checked-in
+source. A source build or route definition does not show that a package
+was published or that a service is running in your environment.
 
-| Article | Use it to |
+<a id="get-started"></a>
+
+## Build the source
+
+Use [Quickstart: build and check the source](./guide/quickstart.md) to restore
+the locked dependencies, build the solution, and run local checks. The result
+is a source build, not an installed or deployed platform.
+
+## Use the browser app
+
+If you have access to a configured Agentweaver web app, start with
+[the browser experience](./experience/README.md). It describes the checked-in
+web implementation and links to tasks for sign-in, projects, settings, runs,
+connections, Skills, and Knowledge. It does not confirm that a web app or its
+owner services are deployed.
+
+<a id="concepts"></a>
+
+## Learn how Agentweaver works
+
+| Start here | Learn about |
 | --- | --- |
-| [Quickstart: build the source](./guide/quickstart.md) | Restore and build the v1 solution and run local checks. |
-| [Build and use the foundation libraries](./guide/build-and-use.md) | Understand and compose the reusable foundation libraries. |
-
-## Tutorials
-
-| Article | Use it to |
-| --- | --- |
-| [Tutorial: deploy Agentweaver to Azure](./guide/deploy-to-azure.md) | Provision an approved target, bootstrap its database and identities, install the Kubernetes bundle, and verify the workloads. |
-
-## Concepts
-
-| Article | Learn about |
-| --- | --- |
-| [What Agentweaver 1.x can do](./experience/00-overview.md) | Current product capabilities and source boundaries. |
+| [What the web app can do](./experience/00-overview.md) | Browser tasks, routes, access, and source boundaries. |
 | [Foundation architecture](./architecture/overview.md) | Component ownership and dependencies. |
-| [Providers and models](./architecture/providers-models.md) | Provider registration, resolution, model bindings, and limits. |
-| [Knowledge and Memory](./architecture/knowledge-memory.md) | Project memory, decisions, revisions, and provider binding. |
+| [System overview](./deep-dive/00-system-overview.md) | System context and runtime views. |
+| [Providers and models](./architecture/providers-models.md) | Provider registration, model bindings, and limits. |
+| [Knowledge and Memory](./architecture/knowledge-memory.md) | Memory records, revisions, and provider bindings. |
 | [Identity and secrets](./architecture/identity-secrets.md) | Broker identity, workload identity, grants, and Key Vault. |
 
-## How-to guides
+<a id="how-to-guides"></a>
 
-| Article | Use it to |
+## Complete a task
+
+| Task | Guide |
 | --- | --- |
-| [Configure providers](./guide/configure-providers.md) | Choose from the providers registered in the current catalog. |
-| [Configure Knowledge memory](./guide/configure-knowledge.md) | Configure native PostgreSQL Memory and understand store identity. |
-| [Gateway and BFF](./guide/gateway.md) | Discover and call the finite Gateway API. |
-| [Agentweaver CLI](./guide/cli.md) | Build and use the standalone CLI for sign-in, Gateway operations, and API acceptance. |
-| [Web client](./guide/web-client.md) | Configure the browser client and its authentication flow. |
-| [Identity Broker scopes](./guide/identity-scopes.md) | Understand the permissions shown on the Broker consent screen. |
-| [Testing](./guide/testing.md) | Run the relevant test suites and interpret their limits. |
-| [Plan issues and releases](./guide/release-planning.md) | Label work, choose version milestones and reconcile shipped changes. |
-| [Azure acceptance](./guide/azure-acceptance.md) | Prepare and verify approved Azure acceptance checks. |
+| Configure native PostgreSQL Memory | [Configure Knowledge memory](./guide/configure-knowledge.md) |
+| Call a Gateway API route | [Use the Gateway](./guide/gateway.md) |
+| Configure or build the web client | [Build and configure the web client](./guide/web-client.md) |
+| Read and dismiss notifications | [Read notifications](./guide/notifications.md) |
+| Read platform component status | [Read the platform components report](./guide/platform-components.md) |
+| Find local CLI commands | [Find CLI commands](./guide/find-cli-commands.md) |
+| Plan a release | [Plan issues and releases](./guide/release-planning.md) |
+| Deploy to an approved Azure target | [Deploy Agentweaver to Azure](./guide/deploy-to-azure.md) |
 
-## Reference
+See the [guide index](./guide/index.md) for tutorials, operations, and
+troubleshooting.
 
-| Article | Use it to |
+<a id="reference"></a>
+
+## Find reference information
+
+| Reference | Use it to |
 | --- | --- |
-| [Runtime configuration](./reference/runtime-configuration.md) | Find runtime keys, defaults, validation rules, and value sources. |
-| [Contracts and endpoints](./reference/contracts.md) | Read shared contracts and service endpoint behavior. |
-| [HTTP API](./reference/api.md) | Find the versioned API routes and owners. |
-| [Events](./reference/events.md) | Read journal event and outbox contracts. |
-| [MCP tools](./reference/mcp-tools.md) | Discover the Gateway-derived MCP tool surface. |
+| [Provider choices](./guide/configure-providers.md) | Find registered provider choices, source candidates, and configuration boundaries. |
+| [Identity Broker permissions](./guide/identity-scopes.md) | Understand what each permission allows and what it does not authorize. |
+| [Runtime configuration](./reference/runtime-configuration.md) | Find setting names, defaults, validation, and value sources. |
+| [Contracts and endpoints](./reference/contracts.md) | Read shared contracts and endpoint behavior. |
+| [HTTP API](./reference/api.md) | Find versioned routes, owners, and request contracts. |
+| [Events](./reference/events.md) | Read journal event, ordering, and outbox contracts. |
+| [Web integration](./reference/web.md) | Find browser routes, configuration, and auth integration. |
+| [Web UI parity](./reference/web-ui-parity.md) | Check the implemented browser surface and its limits. |
+| [AgentSuite import and export](./reference/agentsuite-import.md) | Read the team archive contract. |
 | [Component releases](./reference/releases.md) | Understand component versioning, publication, and deployment. |
 
-## Troubleshooting
+<a id="tutorials"></a>
 
-Use [Troubleshoot Agentweaver 1.x](./guide/troubleshooting.md) to diagnose
-provider resolution, authentication, configuration, and rollout failures.
+## Deploy and operate
+
+Deployment changes resources. Use the
+[Azure deployment guide](./guide/deploy-to-azure.md) only for an approved
+target. The [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md)
+keeps package publication, image publication, and workload deployment separate.
+
+<a id="troubleshooting"></a>
+
+For a source-grounded diagnosis, use
+[Troubleshoot Agentweaver](./guide/troubleshooting.md). For approved
+source-bound Azure checks, see
+[Azure acceptance](./guide/azure-acceptance.md).
 
 ## Understand the version boundary
 
 Agentweaver 0.x remains a separate product line on `dev`. Read the
 [0.x documentation](https://sabbour.github.io/agentweaver/) for that product.
-The v1 source is a separate rebuild. Proposed architecture and source-only
-service candidates do not imply a released or deployed capability.
+This source is a separate rebuild; it does not silently upgrade or replace the
+0.x deployment.

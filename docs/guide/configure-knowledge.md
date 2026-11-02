@@ -4,7 +4,7 @@ Knowledge stores project- and agent-scoped Memory and Decision records. It
 keeps revisions and composes authorized context for a run. Knowledge is not
 the Sessions journal: Sessions stores run events and session history.
 
-The default v1 catalog selects native PostgreSQL Memory. Cosmos and Redis
+The default catalog selects native PostgreSQL Memory. Cosmos and Redis
 options exist in source, but the checked-in catalog does not register those
 providers. Adding their settings to a ConfigMap does not switch the provider.
 The Knowledge Deployment also imports the immutable
