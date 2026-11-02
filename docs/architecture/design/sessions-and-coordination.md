@@ -1,7 +1,25 @@
-# Sessions and coordination
+# Specification: Durable sessions and coordination
 > Part of [ADR 0001: Agentweaver 1.0 platform architecture](../decisions/0001-platform-architecture.md). **Status:** Proposed.
 
-## Summary
+For contributors implementing journal, runtime, workflow, and coordination
+boundaries. Current source behavior is identified separately from proposed
+suspend/resume and later product journeys.
+
+## Problem and goals
+
+A process-local SDK cache cannot be the authoritative history for audit, recovery,
+or coordination. The platform needs ordered durable records and owner-controlled
+state transitions without treating a delivered message as approval or completion.
+
+## Non-goals
+
+The design does not replay external effects during recovery, make repository files
+the memory database, or let saved run pins stand in for current authorization.
+Later-stage consistency-manifest work is not newly required for v1.1.
+
+<a id="summary"></a>
+
+## Intended behavior and requirements
 
 - The Agentweaver run journal is the record of truth for playback, audit, usage, UI state,
   and rebuilding agent context. A Copilot SDK conversation cache and a Microsoft Agent
@@ -15,15 +33,16 @@
   and state version; recovery advances the execution fence without claiming SDK effects.
 - One addressed-message primitive carries steering, questions, approvals, progress,
   handoffs, and errors. Receipt acknowledgment is neither task completion nor approval.
-- Coordination verbs are typed API and first-party MCP operations. Knowledge and agent
+- Coordination verbs are typed API operations. Knowledge and agent
   configuration are records, not files that must be committed or reconciled.
 - Agentweaver keeps its own run page, topology, approvals, chat, and surface panel. It
   borrows coordination primitives, not the Copilot app's UX.
 
 ## Current v1 source slice
 
-The repository contains unpublished Events & Sessions and Orchestrator service
-candidates. Events & Sessions supplies provider-neutral versioned event contracts, an
+The repository contains Events & Sessions and Orchestrator implementations.
+This section describes their source contracts, not their deployment state.
+Events & Sessions supplies provider-neutral versioned event contracts, an
 authoritative PostgreSQL run journal with transactional append, one ordered position
 across every session in a project/run, bounded run or session replay, reconnectable
 live cursors, immutable native Sessions provider pins, and addressed-message storage.
@@ -91,7 +110,7 @@ missing or incompatible cache triggers explicit journal-based context rebuilding
 never external-effect replay. A valid correlated reply makes request input available
 without approving its gate, and acknowledgment remains receipt-only. Automatic AgentHost scheduling, a background delivery relay,
 consistency manifests, Knowledge records, native platform-gate execution,
-source-complete usage and recovery enforcement, and product UI/MCP integration
+source-complete usage and recovery enforcement, and complete product UI integration
 remain outside this slice. The
 Orchestrator also owns current grant and redacted PolicyEvaluation receipt
 production. Events & Sessions fetches those immutable owner receipts by ID and
@@ -314,7 +333,9 @@ approval gates have their own durable paths. Child work is tracked by dispatch a
 workflow-child services rather than by a single queryable session tree. The 0.x line
 continues to ship while 1.0 is built.
 
-## Durable history and resume aids
+## Contracts and boundaries
+
+### Durable history and resume aids
 
 The Events & Sessions service owns the journal and the current internal addressed-message
 storage primitive. The Orchestrator owns workflow and session-tree transitions; its MAF
@@ -754,7 +775,7 @@ sequenceDiagram
 
 ### Coordination verbs
 
-The Orchestrator exposes these as typed API actions and first-party MCP tools for
+The Orchestrator exposes these as typed API actions for
 agents. Authorization, fencing, and pending request ids are checked at the action
 boundary, not inferred from chat prose.
 
@@ -853,6 +874,22 @@ Agentweaver's run page, topology, approvals, chat, and [surface
 panel](applications-and-surfaces.md) are views and typed actions over this state.
 A user action in a surface arrives as a typed message, not as an untracked UI command.
 
+## Failure and recovery
+
+Owner state and the current execution fence govern recovery. A cache miss can
+rebuild authorized context, but missing required turn material fails explicitly.
+A message acknowledgment records receipt only: it cannot complete work, approve a
+gate, or authorize an external effect. Preserve durable uncertain outcomes rather
+than replaying model or tool effects to reconstruct history.
+
+## Acceptance and validation
+
+| Criterion | How to verify | Evidence boundary |
+| --- | --- | --- |
+| Journal order and replay remain stable across sessions and reconnects | Native journal PostgreSQL and cursor tests | Disposable database tests are not deployed replay |
+| Message claim, presentation, acknowledgment, and gate transitions retain their different meanings | Events and Orchestrator owner tests with stale authority and binding cases | Delivery alone does not establish workflow completion |
+| Runtime recovery consumes verified owner material without effect replay | [Session-material acceptance](session-material-acceptance.md) and controlled owner/runtime cases | Deployed acceptance remains blocked where the authorized consumer contract is missing |
+
 ## Alternatives considered
 
 | Option | Why not |
@@ -863,14 +900,16 @@ A user action in a surface arrives as a typed message, not as an untracked UI co
 | Keep steering, questions, approvals, and addressed messages as separate transports | Multiple queues obscure ordering, correlation, and fencing; gates still decide independently of delivery |
 | Keep repository files as writable memory | Commit mirrors, inbox reconciliation, and exports create conflicting copies of durable knowledge |
 
-## Phasing
+<a id="phasing"></a>
+
+## Rollout and compatibility
 
 - **P0 — Foundation:** native Postgres identities, service schemas and outbox, Object
   Store references, and provider contracts support the journal and future manifest.
 - **P1 — Core:** journal, MAF checkpoints, cache references, session tree, addressed
   messages, Knowledge records, coordination verbs, status snapshot, and tracked message
   acknowledgment ship with
-  the native providers. The UI and MCP server read the same workflow state.
+  the native providers. The UI and CLI read the same workflow state.
 - **P2 — Parity and cutover:** suspend/resume with manifest, explicit Squad
   import/export, Canvas surface messages, Cosmos and Redis Memory providers, and the 0.x parity acceptance list are verified on an
   exact-SHA AKS deployment before cutover. VM snapshots are not required.

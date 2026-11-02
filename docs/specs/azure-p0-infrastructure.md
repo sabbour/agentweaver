@@ -1,8 +1,18 @@
-# Story: Dedicated Azure P0 infrastructure
+# Specification: Dedicated Azure foundation infrastructure
 
-**Status:** Source definitions and validation tooling; no completed P0 smoke acceptance.
+**Status:** Infrastructure definitions and validation tooling in source.
+This specification does not attest a particular deployment or completed smoke
+acceptance.
 
-## Scope
+## Problem and goals
+
+The platform needs a dedicated Azure target with explicit identity, networking,
+data ownership, and operator approval. Configuration validation must fail closed
+before an effect can reach a different subscription or an unapproved resource.
+
+<a id="scope"></a>
+
+## Contracts and boundaries
 
 Native Bicep defines dedicated AKS, workload identity, PostgreSQL, Key Vault,
 Blob, and Azure Monitor resources. Kustomize defines a namespace, quotas,
@@ -20,11 +30,15 @@ egress. Identity runtime and migration have their own separate UAMIs and
 federated ServiceAccounts. No Azure resource, principal, PostgreSQL role, or
 Kubernetes workload was created by these source definitions.
 
+## Non-goals
+
 The source definitions do not provision resources or prove runtime behavior.
 Cloud operations require separate explicit approval for the dedicated target
 and each owned write effect.
 
-## Dedicated target
+## Intended behavior and requirements
+
+### Dedicated target
 
 The `agentweaver` naming convention is necessary, but does not prove isolation.
 Every live tooling route queries the selected account with `--subscription`.
@@ -465,17 +479,28 @@ Upload failure, timeout, changed ownership, and cleanup failure block the result
 The report retains both primary and cleanup errors.
 No unscoped deletion occurs.
 
-## Validation and release
+<a id="validation-and-release"></a>
+
+## Acceptance and validation
 
 `npm run test:azure` runs credential-free guard and full-report regressions.
 `az bicep build` compiles locally. `kubectl kustomize` renders locally.
 Neither command contacts a deployed target.
 The tooling has no new npm dependency.
 
-The Identity broker source change has a component-scoped minor changeset:
-`.changeset/identity-broker-runtime.md`. It records release intent only; it
-does not bump a version, change the draft release manifest, publish an image,
-or establish deployed acceptance. No publishing pipeline ran.
+## Failure and recovery
+
+An account, ownership, source, permission, or private-network mismatch blocks the
+affected operation. A failed bootstrap can follow a successful infrastructure
+update; inspect that partial state before retrying. Do not repair access by
+granting a broader role or switching to a default subscription.
+
+## Rollout and compatibility
+
+Use the approved full-foundation or AKS-only path for its stated scope. Keep
+database bootstrap, runtime grants, image publication, and workload deployment
+separate. The [release runbook](../../releases/README.md) defines current package,
+image, and workload operations; source definitions do not report their execution.
 
 ## Vendor references
 

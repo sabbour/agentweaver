@@ -1,4 +1,18 @@
-# Session material deployment validation
+# Specification: Session material deployment composition
+
+**Status:** Source-composition contract, not deployed storage acceptance.
+
+## Problem and goals
+
+Session material must reach Blob through the Events owner with its own narrow
+identity, rather than distributing storage credentials to runtimes.
+
+## Non-goals
+
+This validation does not provision resources, apply role assignments, run database
+migrations, prove private connectivity, or treat readiness as a typed storage test.
+
+## Contracts and boundaries
 
 Events & Sessions is the only service in this deployment path that connects to
 Blob for session material. Its runtime ConfigMap provides one HTTPS container
@@ -6,6 +20,8 @@ URI. The Events host uses its projected workload identity credential to create
 the Blob client. Runtime clients send material to the Events owner over HTTP;
 they do not receive Blob account keys, SAS values, connection strings, or
 container credentials.
+
+## Intended behavior and requirements
 
 The deployment composes that setting through the
 [Events runtime ConfigMap](../../../deploy/k8s/runtime-configs/events-and-sessions-runtime-config.json),
@@ -23,10 +39,20 @@ allows the configured Blob, PostgreSQL, DNS, and private owner destinations.
 These source relationships describe intended composition, not an applied role
 assignment or a proven network path.
 
+## Rollout and compatibility
+
 The PostgreSQL maintenance Job runs with its separate migration ServiceAccount
 and connection. Its plan includes Events migration 010 and the runtime grants
 for the material inventory. The runtime Deployment continues to use the Events
 runtime identity and does not consume the migration connection or plan settings.
+
+## Failure and recovery
+
+Do not substitute a migration credential for the runtime identity when storage or
+schema access fails. Resolve the specific ConfigMap, ServiceAccount, policy, role,
+or migration mismatch through its owning operation before retrying.
+
+## Acceptance and validation
 
 Readiness and provider catalogs are not session-material storage evidence.
 Health can report that the service and database schema are ready without

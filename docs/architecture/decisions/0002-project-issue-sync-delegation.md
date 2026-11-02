@@ -1,6 +1,9 @@
 # ADR 0002: Owner-delegated project issue synchronization
 
-**Status:** Accepted and implemented in source for periodic project issue synchronization; not deployed.
+**Status:** Accepted.
+
+**Implementation scope:** Periodic project issue synchronization is implemented
+in source. This record does not attest deployment or live application grants.
 
 ## Context
 
@@ -10,6 +13,14 @@ each cycle. Existing run-bound grants cannot authorize a background project job.
 An installation ID, saved actor ID, or persisted user bearer is not authority.
 The project owner approved a separately reviewed delegation path. In that path an
 existing project Owner explicitly delegates issue-sync authority to a background job.
+
+## Options considered
+
+| Approach | Constraint and trade-off |
+| --- | --- |
+| Reuse run-bound grants for the project job | A background project job has no current run whose grant authorizes this work. |
+| Treat an installation ID, saved actor, or persisted user bearer as authority | These values do not prove current Owner authority or an explicit purpose-bound delegation. |
+| Require an explicit, revocable Owner delegation | Supports periodic synchronization without manual import each cycle, but requires fresh owner/repository proof, private service authentication, mint auditing, and bounded credential lifetime. |
 
 ## Decision
 
@@ -43,7 +54,9 @@ Failure to persist audit fails closed; a requested-only record deliberately
 does not claim that an uncertain remote mint succeeded. Audit rows contain no
 token, bearer, private key or OAuth secret.
 
-## Consequences and reuse
+<a id="consequences-and-reuse"></a>
+
+## Consequences
 
 The grant ID is a background-job authority reference, not a run ID. Public
 management, private issuance, current-owner proof, mint auditing and bounded
@@ -62,4 +75,12 @@ accepted by GitHub.
 Identity migration `20261021000100_AddIssueSyncGrants` creates the grant and
 mint-audit tables. Orchestrator migration 027 requires backlog migration 026
 only. Exact grants, migrations, TLS profiles and live application grants are
-code-only, unapplied and require separate operator approval.
+source-defined; applying them and obtaining live application grants require
+separate operator approval. Source implementation is not evidence that these
+operations occurred.
+
+## Related decisions
+
+[ADR 0001](0001-platform-architecture.md) remains Proposed. This Accepted
+delegation decision is narrower: it does not accept the platform proposal,
+introduce a general scheduler grant, or change ordinary run-bound secret grants.

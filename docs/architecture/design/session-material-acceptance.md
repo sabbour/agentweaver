@@ -1,12 +1,29 @@
-# Session-material acceptance scenario
+# Specification: Integrated session-material acceptance
+
+**Status:** Scenario requirements and blocked evidence producer in source.
+Controlled coverage does not complete the deployed scenario.
+
+## Problem and goals
+
+Acceptance needs to join its own authorized invocation to the material actually
+committed and restored by the owner. A session identifier or healthy service alone
+cannot establish that relationship.
+
+## Non-goals
+
+This scenario adds no product MCP surface, acceptance program, material-deletion
+endpoint, live fault privilege, or permission to run against a deployment.
 
 The P1 harness records a bounded session-material scenario beside its selected
-API, MCP, or UI journey. The surface result, exact-source evidence, controlled
+native CLI/API or browser journey. Retained MCP adapters are compatibility
+tooling, not a supported 1.x acceptance surface. The surface result, exact-source evidence, controlled
 source tests, and deployed runtime outcome remain separate evidence classes.
 The scenario is part of the existing P1 result; it does not add another
 acceptance program or change the native probe envelope.
 
-## Evidence and boundaries
+## Contracts and boundaries
+
+### Evidence and boundaries
 
 The scenario carries the checked deployment source SHA and tree, service
 readbacks, provider-catalog receipt, and AgentHost image measurement into the
@@ -50,7 +67,9 @@ identifier, source receipt, or controlled fixture. The full P1 result cannot be
 success-shaped while this required scenario is blocked; the selected surface
 status remains independent.
 
-## Required scenario when the authorized boundary exists
+## Intended behavior and requirements
+
+### Required scenario when the authorized boundary exists
 
 An authorized implementation must use the current owner routes and native
 runtime path, bound to the same exact source, image, actor, tenant, project,
@@ -75,7 +94,9 @@ run, session, invocation, and current execution fence:
    owner path. Keep its result visible; retained journal material follows the
    existing retention policy and is not deleted by this scenario.
 
-## Controlled evidence
+## Acceptance and validation
+
+### Controlled evidence
 
 The scenario lists the precise existing controlled test cases for the owner
 turn/acknowledgment, replacement restore, cache rebuild, retry, and required
@@ -105,3 +126,16 @@ The JSONL scenario records non-attempted operations explicitly, distinguishes
 optional-cache recovery from required-turn failure, and preserves the precise
 authorized-boundary blockers. It performs no live operation and creates no
 additional fixture, identity, or cleanup work.
+
+## Failure and recovery
+
+Keep a missing authorized dispatch, readback, replacement, or fault boundary
+blocked. Do not send an unbound turn, reinterpret required-turn failure as optional
+cache absence, or infer cleanup from fixture creation.
+
+## Rollout and compatibility
+
+Use the existing result and native probe envelope. Implementing a missing consumer
+boundary requires its own reviewed contract; these criteria do not authorize a new
+route or a live run. Keep surface, controlled-test, and deployed scenario outcomes
+independently visible.

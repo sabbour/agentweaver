@@ -1,6 +1,22 @@
-# Story: Identity broker foundation
+# Specification: Identity Broker authentication and run-bound credentials
 
-**Status:** P0 implementation candidate. No publication, deployment, or Azure acceptance.
+**Status:** Broker contracts implemented in source. This document does not
+establish release availability, deployment, or live authorization acceptance.
+
+## Problem and goals
+
+Clients need one validated local identity and purpose-bound credentials without
+turning upstream claims, requested scopes, or saved selectors into project
+authority. The Broker must preserve that boundary through login, consent, token
+exchange, refresh, and secret redemption.
+
+## Non-goals
+
+The Broker does not assign Projects roles, trust caller-asserted actor identity,
+or choose an ambient credential. This specification does not authorize production
+registration, migration, key creation, or deployment.
+
+## Contracts and boundaries
 
 `Agentweaver.Identity.Broker` is a .NET 10/OpenIddict service.
 It owns the `identity_broker` PostgreSQL schema and native OpenIddict stores.
@@ -18,7 +34,9 @@ It creates no upstream Entra application or credential.
 An intended route-derived issuer is configuration, not public routing or
 authorization acceptance.
 
-## Authentication and grants
+## Intended behavior and requirements
+
+### Authentication and grants
 
 The native OIDC handler completes token-response and nonce validation before it provisions a local user.
 Its authenticated-ticket event remaps the upstream subject to a broker user.
@@ -86,6 +104,7 @@ Credential changes require an explicit administrative migration.
 | `GET /connect/authorize` | Native OAuth validation, external login, or JSON consent prompt |
 | `GET /connect/authorize/resume` | Authenticated, single-use continuation of external login |
 | `POST /connect/consent` | JSON `consent_handle`, `approve`, optional scope subset, local cookie, and `X-CSRF-TOKEN` |
+| `POST /connect/consent/native` | Bounded native-client consent form, local cookie, and antiforgery validation; delegates to the same consent decision |
 | `POST /connect/token` | Native form-encoded authorization-code or refresh exchange |
 | `GET /diagnostics/whoami` | Local native bearer validation diagnostic, not an audience-policy acceptance test |
 | `POST /secrets/redeem` | OpenIddict-validated bearer for the configured audience plus JSON `secretId`, `secretVersion`, `purpose`, and `runId`; success returns the short-lived credential value |
@@ -95,7 +114,10 @@ Credential changes require an explicit administrative migration.
 The JSON consent prompt includes `consent_handle`, `client_id`, `requested_scopes`, and `csrf_token`.
 The browser must retain the local and antiforgery cookies.
 The client sends `csrf_token` through `X-CSRF-TOKEN` when it submits consent.
-Consent is API-only in P0. The consent UI remains P1 work.
+The Broker also renders consent for the registered native CLI flow. That form
+accepts only its saved handle, explicit approval, and antiforgery field; displaying
+the page does not grant consent. A `prompt=none` request that needs consent returns
+`consent_required` rather than opening an interactive decision.
 
 ## Run-bound SecretRef redemption
 
@@ -134,7 +156,9 @@ value only to the authenticated caller. Any denial or request cancellation after
 backend acquisition invalidates the credential before the service responds.
 The backend receives the exact requested SecretRef version.
 
-## Host and deployment contract
+## Rollout and compatibility
+
+### Host and deployment contract
 
 ### Runtime credential source candidate
 
@@ -354,7 +378,9 @@ was run against a live database for this source change.
 
 Readiness alone does not prove OAuth or deployed acceptance.
 
-## Evidence and release boundary
+<a id="evidence-and-release-boundary"></a>
+
+## Acceptance and validation
 
 Tests use real framework middleware, generated credentials, a fake upstream transport, and an isolated Testcontainers PostgreSQL database.
 They cover code/PKCE, consent ownership/CSRF, cancellation during a real lock wait, permanent grants, restart, refresh, and invalid protocol.
@@ -379,9 +405,17 @@ cross-project/run denial using the broker-issued token. These local tests do
 not prove deployed token issuance, workload identity, Key Vault RBAC, or Azure
 acceptance.
 
-The draft release manifest registers `Agentweaver.Identity.Broker` at project version `0.0.0`.
-The draft omits `imageDigest` until actual publication supplies it.
-A local Docker image proves only the local build, not registry publication or cloud execution.
+The [component manifest](../../releases/foundation.json) defines the current
+Broker version. A local Docker image proves a local build, not registry
+publication or cloud execution. Follow the [release runbook](../../releases/README.md)
+for the separate package, image, and deployment operations; do not infer their
+state from this specification.
 
-Azure publication and deployed proof require a separately approved image
-publication and deployment.
+## Failure and recovery
+
+Invalid external identity, stale run authority, replayed consent or refresh,
+registration drift, and unsafe credential configuration fail closed under the
+contracts above. Preserve operational failures rather than mapping them to
+successful authorization. Reconcile an explicit registration or schema migration
+through its administrative path; Broker startup must not repair authority or
+invent fallback key material.

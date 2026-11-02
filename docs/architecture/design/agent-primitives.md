@@ -1,12 +1,28 @@
-# Agent primitives and AgentSessions
+# Specification: Optional AgentSessions records and verification
 
 > Part of [ADR 0001: Agentweaver 1.0 platform architecture](../decisions/0001-platform-architecture.md). **Status:** Proposed.
 
-This page describes how Agentweaver uses the public
+For provider authors and contributors evaluating the public
 [agent-primitives/sessions](https://github.com/agent-primitives/sessions) (AgentSessions) and
 [agent-primitives/suite](https://github.com/agent-primitives/suite) (AgentSuite) contracts.
+The optional package exists in source; making it a selectable Events host provider
+and completing the broader proof of concept are separate work.
 
-## Upstream source references
+## Problem and goals
+
+Imported session records need independent verification and a provider-neutral
+read projection. An optional integration must not make upstream types or tooling
+mandatory for Agentweaver's default journal.
+
+## Non-goals
+
+This design does not replace the native PostgreSQL journal, add append or fork
+support to a read-only adapter, prove authorship with an unkeyed hash chain,
+or claim live model execution. Later proof-of-concept work is not a v1.1 dependency.
+
+## Contracts and boundaries
+
+### Upstream source references
 
 | Contract | Repository | Commit | Contract version |
 | --- | --- | --- | --- |
@@ -18,7 +34,9 @@ AgentSuite commit above is a documentation reference. The .NET verifier pins the
 commit in `AgentSessionsPin` and rejects exports from any other commit or contract version with
 `unsupported_source`.
 
-## AgentSessions as an optional Sessions provider
+## Intended behavior and requirements
+
+### AgentSessions as an optional Sessions provider
 
 AgentSessions is one optional implementation of the Sessions provider contract. The native
 PostgreSQL journal stays the default Sessions provider. Agentweaver builds, tests, and runs with
@@ -163,6 +181,8 @@ The verifier stops at the first failure and reports one stable code: `unsupporte
 The tests reproduce every golden vector in the pinned upstream `hack/verify_chain.py` and an
 exact canonical byte literal for a delete record.
 
+## Failure and recovery
+
 ### Limits of an unkeyed chain
 
 The record chain uses plain SHA-256 with no key or signature. Verification proves that the
@@ -171,6 +191,8 @@ consistent truncation of the tail: an export cut after record N, with `source_he
 record N, verifies. To detect truncation or a rewritten history, compare the verified head hash
 with a head that you received through a separate trusted channel. `source_head` in the export is
 metadata from the exporter, not an external anchor.
+
+## Acceptance and validation
 
 ### Regenerate the reference fixture
 
@@ -185,3 +207,11 @@ go run ./cmd/agentsessions-fixture -out ../../tests/Agentweaver.Providers.Sessio
 
 Each run writes new timestamps and execution IDs, so commit both files together. CI runs `gofmt`, `go vet`, and `go test` for the module in the `go`
 job, and the .NET tests verify the committed fixture.
+
+## Rollout and compatibility
+
+Keep the upstream commit and contract version pinned together. An unsupported
+source fails with `unsupported_source`; do not reinterpret a newer export as the
+pinned format. Host routing and capability-aware selection must be implemented
+before advertising AgentSessions as selectable. Native PostgreSQL stays the
+default when this optional package is absent.
