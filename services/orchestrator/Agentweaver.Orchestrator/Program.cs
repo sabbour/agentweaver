@@ -238,6 +238,8 @@ builder.Services.AddTransient<ISourceControlIssueAdapter>(services =>
     services.GetRequiredService<GitHubSourceControlAdapter>());
 builder.Services.AddTransient<ISourceControlTeamSyncAdapter>(services =>
     services.GetRequiredService<GitHubSourceControlAdapter>());
+builder.Services.AddTransient<ISourceControlWorkspaceAdapter>(services =>
+    services.GetRequiredService<GitHubSourceControlAdapter>());
 builder.Services.AddScoped<ProjectTeamSyncTokenClient>();
 builder.Services.AddScoped<IProjectTeamSyncTokenClient>(services =>
     services.GetRequiredService<ProjectTeamSyncTokenClient>());

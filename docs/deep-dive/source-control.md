@@ -96,6 +96,37 @@ files in a configured GitHub repository. AgentSuite export and import transfer
 a reviewed portable archive and verify its digest; import stages a casting
 proposal for confirmation. They do not read or write a repository.
 
+## Browse the configured repository
+
+The Workspace browser reads committed files from the repository already saved
+in project configuration. Its Gateway routes are
+`GET /api/v1/projects/{projectId}/source-control/refs`,
+`GET /api/v1/projects/{projectId}/source-control/tree?ref={commitSha}`, and
+`GET /api/v1/projects/{projectId}/source-control/files/{path}?ref={commitSha}`.
+The browser uses the existing Identity Repo App selection flow; Orchestrator
+matches its short-lived selection code to the configured repository, requires
+current project read authority, and obtains an exact-repository
+`contents:read` token from Identity. It rechecks current authority after each
+provider read and invalidates the temporary credential. Secret-auth mode does
+not enable this browser. The routes do not accept a repository host, owner, or
+name override.
+
+Refs return at most 100 branches and tags per page, each resolved to a commit
+SHA. The tree and file routes require that full SHA, so switching branches
+cannot mix a moving tree with a later file. Recursive trees are limited to
+25,000 entries and 8 MiB; a provider-truncated or oversized tree fails rather
+than appearing complete. The Gateway allows up to 56 MiB for the serialized
+tree response to accommodate bounded JSON escaping. File reads must match a
+regular blob in that commit's tree and are limited to 1 MiB. Relative paths
+reject traversal and encoded separators. Binary files are identified without
+returning text content; symbolic links, submodules, and unsupported tree
+entries are not viewable. Responses are no-store, and unavailable or revoked
+authority is not replaced with cached or local files.
+
+This configured-repository view is not Run Changes' produced-output capture,
+and does not expose uncommitted local worktree changes or repository import.
+Neither it nor the existing produced-run browser writes to the repository.
+
 ## Prepare and recover a workspace
 
 Before preparing a workspace, you need an accepted repository binding, the

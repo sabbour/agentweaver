@@ -25,6 +25,7 @@ import { useProjectConfiguration, useProjectIssues, useProjectPullRequests } fro
 import { metricTiles, useProjectMetrics, type MetricsRangeKey } from './projectMetrics';
 import { ProjectMetricsSections } from './ProjectMetricsSections';
 import { RunList } from './RunList';
+import { WorkspaceRepositoryBrowser } from './WorkspaceRepositoryBrowser';
 import { useSharedRunAttention } from './RunAttentionContext';
 import { useRunAttention } from './runAttention';
 import { flowGroup, FLOW_GROUPS, PULL_REQUEST_NOTE } from './flowGroups';
@@ -402,10 +403,9 @@ function stateColor(state: string): 'success' | 'informative' | 'subtle' {
 }
 
 /**
- * Workspace: the project repository, the pull requests its runs recorded, and
- * the open issues synced into the backlog. Both lists come from stored records,
- * so titles and states can be out of date. Browsing files needs reads this
- * version does not have.
+ * Workspace: the configured repository's committed files, the pull requests its
+ * runs recorded, and the open issues synced into the backlog. The latter lists
+ * come from stored records, so titles and states can be out of date.
  */
 export function WorkspacePage() {
   const styles = useStyles();
@@ -413,7 +413,8 @@ export function WorkspacePage() {
   const configuration = useProjectConfiguration(projectId);
   const pulls = useProjectPullRequests(projectId);
   const issues = useProjectIssues(projectId);
-  const repository = configuration.data?.configuration.sourceControl?.repository;
+  const sourceControl = configuration.data?.configuration.sourceControl;
+  const repository = sourceControl?.repository;
   const refresh = () => { configuration.reload(); pulls.reload(); issues.reload(); };
 
   let pullBody: ReactNode;
@@ -467,6 +468,18 @@ export function WorkspacePage() {
             : repository ? <Text><code>{repository.owner}/{repository.name}</code></Text>
               : <Text>No repository is connected. <Link to={`${projectBase(projectId)}/settings`}>Connect one in Project settings</Link>.</Text>}
       </PageSection>
+      {repository && (
+        <PageSection
+          title="Repository files"
+          description="Read committed files from a selected branch or tag. Local worktree changes and imports are not available here."
+        >
+          <WorkspaceRepositoryBrowser
+            projectId={projectId}
+            repository={repository}
+            authMode={sourceControl?.authMode}
+          />
+        </PageSection>
+      )}
       <PageSection title="Pull requests" description="Pull requests that runs in this project opened or reused, newest first.">
         {pullBody}
       </PageSection>
@@ -474,7 +487,7 @@ export function WorkspacePage() {
         {issueBody}
       </PageSection>
       <NotInThisVersion>
-        Browsing branches and repository files is not available. A run shows its own changes in its Changes tab.
+        Uncommitted/local worktree changes and repository imports are not available. A run shows its own changes in its Changes tab.
       </NotInThisVersion>
     </>
   );

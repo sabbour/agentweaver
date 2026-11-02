@@ -413,6 +413,23 @@ IDs server-side.
 The browser lifecycle, user-level selection APIs, and callbacks are not exposed
 as first-party MCP tools. Run-bound repository operations in the finite OpenAPI
 catalog remain available as ordinary MCP tools and require `tenantSelector`.
+The Workspace's configured-repository browser uses these Gateway reads:
+
+| Method and path | Contract |
+| --- | --- |
+| `GET /api/v1/projects/{projectId}/source-control/refs?cursor=` | Lists up to 100 configured-repository branches and tags. Each ref includes its resolved commit SHA and default-branch marker; `nextCursor` is opaque to callers. |
+| `GET /api/v1/projects/{projectId}/source-control/tree?ref={commitSha}` | Reads a recursive tree pinned to a full commit SHA. Symbolic links and submodules are identified but not viewable. Truncated or oversized trees fail instead of returning partial results. |
+| `GET /api/v1/projects/{projectId}/source-control/files/{path}?ref={commitSha}` | Reads one regular file at that commit. Relative paths reject traversal and encoded path separators; content is limited to 1 MiB. Binary files are identified with null text content. |
+
+These requests require the current project read authority and
+`X-Agentweaver-Team-Sync-Selection`, a short-lived repository selection code
+issued by the existing Identity Repo App flow. The owner checks that the code,
+configured repository, and GitHub App connection match; it obtains only
+repository `contents:read` authority and checks the current project authority
+after the read before returning data. Secret-auth mode does not provide this
+browser. Responses are no-store; unavailable or revoked authority is not
+replaced with another repository, credential, or local filesystem read.
+
 Run-produced files are available through the Source Control output-capture
 operations: capture, list, read, diff, and file. They read pinned, immutable
 captures; no raw filesystem Gateway proxy is part of this contract.

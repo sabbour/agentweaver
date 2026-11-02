@@ -88,6 +88,9 @@ import type {
   ProjectTeamSyncCommitCommand,
   ProjectTeamSyncCommitResult,
   ProjectTeamSyncStatus,
+  SourceControlWorkspaceFile,
+  SourceControlWorkspaceRefsPage,
+  SourceControlWorkspaceTree,
   SkillAssignmentRequest,
   SkillContentCandidateRequest,
   SkillContentInventoryPage,
@@ -880,6 +883,60 @@ export class AgentweaverGatewayClient {
         headers: { 'X-Agentweaver-Team-Sync-Selection': selectionCode },
         body: JSON.stringify(command),
       },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Lists one bounded page of refs from the configured repository using a Broker selection code. */
+  listWorkspaceRepositoryRefs(
+    token: string,
+    projectId: string,
+    selectionCode: string,
+    cursor?: string | null,
+    tenantSelector?: string | null,
+  ): Promise<SourceControlWorkspaceRefsPage> {
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'source-control', 'refs')}${query}`,
+      { headers: { 'X-Agentweaver-Team-Sync-Selection': selectionCode } },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads a recursive tree pinned to the commit SHA supplied by a refs response. */
+  readWorkspaceRepositoryTree(
+    token: string,
+    projectId: string,
+    selectionCode: string,
+    commitSha: string,
+    tenantSelector?: string | null,
+  ): Promise<SourceControlWorkspaceTree> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'source-control', 'tree')}?ref=${encodeURIComponent(commitSha)}`,
+      { headers: { 'X-Agentweaver-Team-Sync-Selection': selectionCode } },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads one regular file from the exact selected commit, encoding each path segment independently. */
+  readWorkspaceRepositoryFile(
+    token: string,
+    projectId: string,
+    path: string,
+    selectionCode: string,
+    commitSha: string,
+    tenantSelector?: string | null,
+  ): Promise<SourceControlWorkspaceFile> {
+    const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'source-control', 'files')}/${encodedPath}?ref=${encodeURIComponent(commitSha)}`,
+      { headers: { 'X-Agentweaver-Team-Sync-Selection': selectionCode } },
       this.baseUrl,
       tenantSelector,
     );

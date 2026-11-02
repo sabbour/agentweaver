@@ -189,7 +189,7 @@ Each row says what works and what is still missing. The missing parts link to
 | Board | **Backlog**, **Ready**, **Active**, and **Done** columns with counts, summary strip, zoom, Intake, title and description edits, queue state, queue order, send all to Ready, archive, and prerequisite controls. | A task delete control, backlog settings, decompose, and the Human Review and Problems columns. |
 | Flow | Project task notifications, **Needs input** including dismissed gates, **Task stages**, and **Open**, **Working**, and **Done** run groups. | The live agent graph for the project and current provider-side PR state per run. |
 | Workflows | **Active workflow** and grouped **Referenced workflows** rich-list cards, with **View blueprints** inline assignments. **Use platform default** clears a saved default; **Refresh** and **Open Project settings** work. | Workflow catalog and definitions, validity, graph, edit, run, generate, sync, schedule and event triggers, and choosing a different workflow as the default. |
-| Workspace | **Repository** from configuration, **Pull requests** that runs opened or reused, and **Issues** synced into the backlog. | Branches: `GET /api/v1/projects/{projectId}/source-control/refs`; file tree: `GET /api/v1/projects/{projectId}/source-control/tree?ref=`; file content: `GET /api/v1/projects/{projectId}/source-control/files/{path}?ref=`. |
+| Workspace | **Repository** from configuration, committed files from a selected branch or tag when the configured GitHub App connection can read it, **Pull requests** that runs opened or reused, and **Issues** synced into the backlog. | Uncommitted/local worktree changes and repository imports are not available. |
 | Observability | Metric tiles, **Activity** chart, run totals, model and agent usage, and **Recent runs**. | Per-run traces and response-duration percentiles. |
 | Diagnostics | **Areas that are not ready** from the platform component report, and **Failed runs**. | Service self-checks and project diagnostic reports. |
 | Heartbeat | Seven-day metric tiles and **Active and blocked runs**. | Heartbeat records for each service process. |
@@ -265,6 +265,15 @@ Each row records a remaining endpoint or UI gap. A route marked available is
 in the Gateway catalog and uses the Orchestrator owner. The web client does not
 work around missing routes.
 
+Configured-repository Workspace reads are now available through
+`GET /api/v1/projects/{projectId}/source-control/refs`,
+`GET /api/v1/projects/{projectId}/source-control/tree?ref={commitSha}`, and
+`GET /api/v1/projects/{projectId}/source-control/files/{path}?ref={commitSha}`.
+They use the configured repository, current project read authority, and its
+GitHub App connection; the tree and file are pinned to an immutable commit.
+This is separate from the produced-run file browser on Run Changes. Local
+worktree edits and repository import remain unavailable.
+
 | Gap | 0.x endpoint | Missing v1 method and path | Plan |
 | --- | --- | --- | --- |
 | Board task position | `POST /api/projects/{p}/backlog/reorder` | Available: `PUT /api/v1/projects/{projectId}/backlog/tasks/{taskId}/position` | Queue positions are stored and revision-checked. Earlier and later actions target the neighboring visible task in the full state queue. |
@@ -304,9 +313,6 @@ work around missing routes.
 | Workflow run | `POST /api/projects/{p}/workflows/{id}/run` | `POST /api/v1/projects/{projectId}/workflows/{workflowId}/runs` | Start a run with that workflow. |
 | Default workflow | `PUT /api/projects/{p}/workflows/default` | Available: `PUT /api/v1/projects/{projectId}/configuration` saves `defaultWorkflowId` | The Workflows page can clear a saved default. Choosing a different workflow needs the catalog route above. |
 | Task workflow override | `PUT /api/projects/{p}/backlog/tasks/{id}/workflow-override` | `PUT /api/v1/projects/{projectId}/backlog/tasks/{taskId}/workflow` | Store a workflow choice on a task; add it to the card editor. |
-| Workspace refs | `GET /api/projects/{p}/workspace/refs` | `GET /api/v1/projects/{projectId}/source-control/refs` | Return branches and tags; add a branch picker on Workspace. |
-| Workspace tree | `GET /api/projects/{p}/workspace?ref=` | `GET /api/v1/projects/{projectId}/source-control/tree?ref=` | Return the file tree at a ref. |
-| Workspace file content | `GET /api/projects/{p}/workspace/files/{path}/content` | `GET /api/v1/projects/{projectId}/source-control/files/{path}?ref=` | Return one file; show it in a viewer. |
 | Team memory summary | `GET /api/projects/{p}/decisions`, `GET /api/projects/{p}/decisions/inbox`, `GET /api/projects/{p}/memory`, `GET /api/projects/{p}/sessions` | `GET /api/v1/projects/{projectId}/knowledge/records` plus `sessionHistoryRecordsTotal` from `GET /api/v1/projects/{projectId}/metrics` | Pending proposals use `kind=proposal&state=pending`; decision and active-memory totals use the other supported project-wide search filters. These count Knowledge proposals, not legacy inbox entries. The v1 summary counts records in accepted run-history trees; this is not a literal legacy SessionContext handoff total. The per-run history endpoint remains `GET /api/v1/projects/{projectId}/runs/{runId}/history/sessions`. |
 | Agent history | `GET /api/projects/{p}/team/members/{name}/history` | `GET /api/v1/projects/{projectId}/agents/{agentId}/history` | Return recent history for one project agent; show it in the Agents drawer. |
 | Repository-backed team sync | `GET` and `POST /api/projects/{p}/team/sync` | `GET` and `POST /api/v1/projects/{projectId}/team/sync` | The Agents Sync panel loads a preview when opened, displays the hash and changed `.squad/` paths, and requires explicit commit with an optional message. The hash binds project revision, GitHub installation and repository IDs, branch head, and files. No files are mirrored automatically. Digest-checked AgentSuite export/import remains a separate portable transfer. |
