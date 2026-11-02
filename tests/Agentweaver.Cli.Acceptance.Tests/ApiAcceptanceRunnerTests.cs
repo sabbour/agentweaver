@@ -539,6 +539,8 @@ public sealed class ApiAcceptanceRunnerTests
                 Error: output);
 
             JsonObject manifest = CreateManifest(workspace, handler.GatewayOrigin, journey);
+            if (journey == "journal")
+                Assert.Empty(handler.JournalEvents);
             string inputPath = Path.Combine(workspace, "manifest.json");
             string evidencePath = Path.Combine(workspace, "evidence.jsonl");
             await File.WriteAllTextAsync(inputPath, manifest.ToJsonString());
@@ -603,6 +605,34 @@ public sealed class ApiAcceptanceRunnerTests
             {
                 Assert.Equal(1, result["observations"]?["journal"]?["eventCount"]?.GetValue<int>());
                 Assert.Equal(1, result["observations"]?["journal"]?["pageCount"]?.GetValue<int>());
+                RecordedRequest[] requests = handler.Requests.ToArray();
+                RecordedRequest seed = Assert.Single(requests, request =>
+                    request.OperationId == "sendProjectRunMessage");
+                RecordedRequest replay = Assert.Single(requests, request =>
+                    request.OperationId == "replayRunEvents");
+                JsonObject receipt = Assert.IsType<JsonObject>(handler.JournalMessageReceipt);
+                JsonObject journalEvent = Assert.Single(handler.JournalEvents);
+                JsonObject replayedEvent = Assert.IsType<JsonObject>(Assert.Single(handler.LastReplayedEvents!));
+                JsonObject identity = Assert.IsType<JsonObject>(journalEvent["identity"]);
+                Assert.Equal(receipt["messageId"]?.GetValue<string>(), journalEvent["eventId"]?.GetValue<string>());
+                Assert.Equal(receipt["messageId"]?.GetValue<string>(), replayedEvent["eventId"]?.GetValue<string>());
+                Assert.Equal(receipt["projectId"]?.GetValue<string>(), identity["projectId"]?.GetValue<string>());
+                Assert.Equal(receipt["runId"]?.GetValue<string>(), identity["runId"]?.GetValue<string>());
+                Assert.Equal(receipt["rootSessionId"]?.GetValue<string>(), identity["sessionId"]?.GetValue<string>());
+                Assert.Equal(seed.ProjectId, replay.ProjectId);
+                Assert.Equal(seed.RunId, replay.RunId);
+                Assert.Equal(1, journalEvent["position"]?.GetValue<int>());
+                Assert.Equal("Controlled P1 journal fixture event.", seed.Body?["text"]?.GetValue<string>());
+
+                int rootAcceptedIndex = Array.FindIndex(requests, request => request.OperationId == "acceptRunRoot");
+                int runReadback = Array.FindIndex(requests, request => request.OperationId == "readRunStatus");
+                int sessionReadback = Array.FindIndex(requests, request => request.OperationId == "readSessionStatus");
+                int seedIndex = Array.FindIndex(requests, request => request.OperationId == "sendProjectRunMessage");
+                int replayIndex = Array.FindIndex(requests, request => request.OperationId == "replayRunEvents");
+                Assert.True(rootAcceptedIndex < runReadback && rootAcceptedIndex < sessionReadback
+                    && runReadback < seedIndex && sessionReadback < seedIndex && seedIndex < replayIndex,
+                    $"The empty root must be read back before the owner message is accepted and replayed: " +
+                    string.Join(", ", requests.Select(request => request.OperationId)));
             }
             Assert.Contains(result["steps"]!.AsArray().OfType<JsonObject>(), step =>
                 step["id"]?.GetValue<string>() == journey &&
@@ -1216,8 +1246,12 @@ public sealed class ApiAcceptanceRunnerTests
         private string? _boardProjectName;
         private bool _boardOwner;
         private bool _boardProject;
+        private readonly List<JsonObject> _journalEvents = [];
+        public JsonArray? LastReplayedEvents { get; private set; }
         public long? LastCompactedTaskRevision { get; private set; }
         public long? LastCompactedTaskPosition { get; private set; }
+        public IReadOnlyList<JsonObject> JournalEvents => _journalEvents;
+        public JsonObject? JournalMessageReceipt { get; private set; }
 
         public AcceptanceGatewayHandler(
             JsonObject openApi,
@@ -1790,8 +1824,9 @@ public sealed class ApiAcceptanceRunnerTests
             });
         }
 
-        private HttpResponseMessage JournalMessage(string projectId, string runId, string actor) =>
-            Json(HttpStatusCode.OK, new JsonObject
+        private HttpResponseMessage JournalMessage(string projectId, string runId, string actor)
+        {
+            JsonObject receipt = new()
             {
                 ["messageId"] = "44444444-4444-4444-8444-444444444444",
                 ["ownerMessageId"] = "55555555-5555-4555-8555-555555555555",
@@ -1806,24 +1841,31 @@ public sealed class ApiAcceptanceRunnerTests
                 },
                 ["status"] = "accepted",
                 ["threadId"] = "66666666-6666-4666-8666-666666666666",
-                ["threadSequence"] = 1,
+                ["threadSequence"] = _journalEvents.Count + 1,
+            };
+            JournalMessageReceipt = (JsonObject)receipt.DeepClone();
+            _journalEvents.Add(new JsonObject
+            {
+                ["eventId"] = receipt["messageId"]!.DeepClone(),
+                ["identity"] = new JsonObject
+                {
+                    ["projectId"] = projectId,
+                    ["runId"] = runId,
+                    ["sessionId"] = _rootSessionId,
+                },
+                ["position"] = _journalEvents.Count + 1,
             });
+            return Json(HttpStatusCode.OK, receipt);
+        }
 
         private HttpResponseMessage ReplayEvents(string projectId, string runId)
         {
+            JsonArray events = new();
+            foreach (JsonObject journalEvent in _journalEvents)
+                events.Add(journalEvent.DeepClone());
             JsonObject page = new()
             {
-                ["events"] = new JsonArray(new JsonObject
-                {
-                    ["eventId"] = "77777777-7777-4777-8777-777777777777",
-                    ["identity"] = new JsonObject
-                    {
-                        ["projectId"] = projectId,
-                        ["runId"] = runId,
-                        ["sessionId"] = _rootSessionId,
-                    },
-                    ["position"] = 1,
-                }),
+                ["events"] = events,
                 ["hasMore"] = false,
                 ["nextCursor"] = "terminal-cursor",
             };
@@ -1848,6 +1890,7 @@ public sealed class ApiAcceptanceRunnerTests
                     page["events"]![0]!["identity"]!["projectId"] = "foreign-project";
                     break;
             }
+            LastReplayedEvents = (JsonArray)page["events"]!.DeepClone();
             return Json(HttpStatusCode.OK, page);
         }
 
