@@ -704,8 +704,8 @@ internal static class ApiAcceptanceBoard
     private static void RequireOwnerDenial(GatewayResponse response)
     {
         JsonObject body = response.Body as JsonObject ?? [];
-        string? code = ApiAcceptanceSupport.GetString(body, "code");
-        if (response.Status != 403 || code != "backlog_project_permission_denied")
+        string? error = ApiAcceptanceSupport.GetString(body, "error");
+        if (response.Status != 403 || error != "backlog_project_permission_denied")
             throw new InvalidOperationException($"The projects.orchestrator-only delete returned HTTP {response.Status} without backlog_project_permission_denied.");
     }
 
