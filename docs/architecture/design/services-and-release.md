@@ -1,6 +1,6 @@
 # Specification: Service ownership and release boundaries
 
-> Part of [ADR 0001: Agentweaver 1.0 platform architecture](../decisions/0001-platform-architecture.md). **Status:** Proposed.
+> Part of [ADR 0001: Agentweaver platform architecture](../decisions/0001-platform-architecture.md). **Status:** Proposed.
 
 For service authors and release maintainers. The proposed service topology and
 internal compatibility targets are separate from current source, published
@@ -22,7 +22,7 @@ established CLI/API version-compatibility policy.
 
 ## Intended behavior and requirements
 
-- Agentweaver 1.0 separates roughly ten coarse control-plane services from the AgentHost and other
+- Agentweaver separates roughly ten coarse control-plane services from the AgentHost and other
   data-plane components. It ports behavior from 0.x instead of extracting a shared database and
   process into smaller deployments.
 - Stateful services own separate Postgres schemas. Internal request/response traffic uses gRPC, edge
@@ -110,7 +110,7 @@ flowchart LR
         Source["Source Control & Merge"]
         Knowledge["Knowledge"]
         Events["Events & Sessions"]
-        Canvas["Canvas adapters (P2)"]
+        Canvas["Canvas adapters (parity and cutover)"]
     end
     subgraph Data["Data plane"]
         Host["AgentHost in Sandbox"]
@@ -159,9 +159,9 @@ flowchart LR
 | Orchestrator | Runs, Microsoft Agent Framework (MAF) workflows, session tree and coordination verbs, typed coordinator decisions, OutcomeSpec and WorkPlan, approval and question gates, immutable accepted-run Sandbox and Source Control owner bindings, source-specific merge intents and narrow action grants, pending/admitted produced-output capture proofs, checkpoints, recovery, consistency manifest, run-limit budget enforcement, and the current session/work-item/turn context and runtime-registration source. | The run journal's storage, Sandbox resource provisioning, direct cross-schema updates, complete runtime delivery, or usage accounting. |
 | Environment manager | Sandbox, Snapshots, Storage, Network Policy, and Application Hosting adapters; leases and fencing; egress verification; startup phases; retention, reclaim, application deployments, and control-plane image publication. | Viewer authentication or a workflow's publish decision. |
 | Source Control & Merge | Git workspace preparation, diff and assembly, sealed produced-run output capture and authorized history reads, merge locks, pull requests, webhooks, backlog intake, and the Source Control provider seam. | Platform-wide project identity or the Events journal and object bytes. |
-| Knowledge | Memory and session-context records, decisions and proposals, prompt composition, and Memory adapters: native PostgreSQL by default, with Cosmos and Redis in P2. | Repository files as an authoritative memory database or the Sessions journal. |
+| Knowledge | Memory and session-context records, decisions and proposals, prompt composition, and Memory adapters: native PostgreSQL by default, with Cosmos and Redis planned for parity and cutover. | Repository files as an authoritative memory database or the Sessions journal. |
 | Events & Sessions | Run journal, message contents and delivery state, immutable produced-output package bytes in Object Store, SSE fan-out, Sessions adapters, durable usage ledger, and Cost adapters. | Orchestrator workflow transitions or approval policy. |
-| Web frontend / Applications | Agentweaver's own run/chat interface, surface panel, Canvas adapters and host bridge, including A2UI and GitHub Canvas compatibility work in P2, plus MCP Apps integration. | Workflow authority, agent execution, web serving capacity, or a replacement Copilot application UX. |
+| Web frontend / Applications | Agentweaver's own run/chat interface, surface panel, Canvas adapters and host bridge, including A2UI and GitHub Canvas compatibility work for parity and cutover, plus MCP Apps integration. | Workflow authority, agent execution, web serving capacity, or a replacement Copilot application UX. |
 
 Projects & Config owns a PostgreSQL schema for configuration and authorization. It resolves the validated issuer and local subject to an active membership and current resource roles; tokens and checked tenant selectors do not grant roles. Runtime database credentials can read authority records but cannot mutate them. A separate privileged source path provisions memberships and roles and revokes them with revision checks, immutable audit, and a last-Owner invariant. Privileged resource services obtain fresh, effective caller permissions from `GET /api/authorization/context` for each operation; they do not maintain separate membership/role records, caches, or authorization pins. The Orchestrator supplies a trusted, revisioned run-selection context; the service checks project and platform revisions, resolves project model settings before platform defaults without fallback from an unavailable explicit setting, resolves provider candidates through the provider catalog contract, and enforces egress and run-limit narrowing. The returned immutable snapshot records candidates and selection revisions, not provisioned resources or authorization. Consumers pin final resource identity and negotiated capabilities only after provisioning.
 
@@ -202,7 +202,7 @@ latest root decision, confirmed item and current authority before returning its 
 metadata; a stale decision or gate produces a conflict. This metadata path does not provide an
 AgentHost scheduler or complete runtime delivery.
 
-The current v1 source includes `Agentweaver.EventsAndSessions` and
+The source includes `Agentweaver.EventsAndSessions` and
 `Agentweaver.Orchestrator` hosts. Events & Sessions provides the PostgreSQL run
 journal, ordered replay across sessions, durable session-provider pins, and addressed-message
 delivery state. The Orchestrator owns root/child session relationships, current Projects &
@@ -233,9 +233,9 @@ The Gateway and Identity boundary makes viewer authorization independent of the 
 Hosting](applications-and-surfaces.md#application-hosting) provider. Web and CLI callers
 use core APIs and current owner authorization. Remote MCP requirements remain
 external integrations: catalog and outbound mediation belong at the Tool & MCP
-gateway, while rendering belongs in web. Agentweaver 1.x has no product MCP server.
+gateway, while rendering belongs in web. Agentweaver has no product MCP server.
 These requirements are parity inputs, not a reason to create a second UI.
-P1 frontend work retains most of the existing Agentweaver UI and adapts its API wiring; redesign
+Core frontend work retains most of the existing Agentweaver UI and adapts its API wiring; redesign
 requires an explicit user request.
 
 ### Data plane
@@ -272,7 +272,7 @@ The default registry is configuration rather than a provider seam.
 Cilium on AKS enforces the default network policy at Layer 3/4 with fully qualified domain name
 (FQDN) handling. That alone cannot
 make all public-address HTTPS egress FQDN-only. The platform's own Tool & MCP gateway is the cutover
-default for L7 model/MCP/A2A controls; an alternative gateway remains a P3 option. AGT decisions and
+default for L7 model/MCP/A2A controls; an alternative gateway remains an optional post-cutover evaluation. AGT decisions and
 record-before-transmit for outbound calls stay in core even when an L7 provider audits them. See [Network Policy
 enforcement](provider-seams.md#enforcement-and-readiness).
 The owner network policies allow Gateway-to-AgentHost HTTPS on port 8443 and
@@ -374,7 +374,7 @@ provide a durable authority.
 The [Identity broker](../../specs/identity-broker.md) supplies native
 .NET/OpenIddict authentication, owned PostgreSQL stores, authenticated consent,
 code/PKCE, permanent grants, resource audiences, and refresh-token handling.
-The P0 broker composition adds `POST /secrets/redeem`, which requires an
+The foundation broker composition adds `POST /secrets/redeem`, which requires an
 OpenIddict-validated bearer for the configured audience and exactly one `sub`,
 `project_id`, and `run_id` claim. Request data contains only a run-bound
 purpose and exact SecretRef; caller identity is never accepted from a body or
@@ -408,7 +408,7 @@ coarse ownership; they do not split an EF transaction into several network calls
 atomic.
 
 Synchronous internal gRPC calls answer bounded commands and queries. HTTP is the public-facing path
-for browser, CLI, and MCP ingress through the Gateway/BFF. A response means the receiving service
+for browser and native CLI callers through the Gateway/BFF. A response means the receiving service
 accepted or completed the stated operation; it does not imply downstream asynchronous effects have
 completed. Long-running operations expose status instead of holding a transaction across services.
 
@@ -464,7 +464,7 @@ neither a webhook nor a metric becomes the sole evidence of completion.
 
 ### Monorepo and build boundaries
 
-The blank-slate 1.0 monorepo keeps a `services/<name>` home for each independently deployable
+The blank-slate monorepo keeps a `services/<name>` home for each independently deployable
 service, with its Dockerfile, chart, and service version. Shared .NET contracts live in versioned
 `Agentweaver.Abstractions`; in-repo provider adapters are separate packages. Package changesets and
 CI path filters limit unrelated builds without weakening integration checks on the tested release
@@ -481,8 +481,8 @@ the same release composition. A hosted application is output of a workflow, not 
 image. Provider sidecars may have their own compatible versions, but none reintroduces a single
 repository-wide `VERSION` as authority over every service.
 
-The P0 CI path is cloud-only. Tests use fakes and Testcontainers Postgres; integration deploys an
-exact source SHA to AKS and runs native CLI/API and UI persona harnesses from the end of P1. A successful
+The foundation CI path is cloud-only. Tests use fakes and Testcontainers Postgres; integration deploys an
+exact source SHA to AKS and runs native CLI/API and UI persona harnesses from the end of core delivery. A successful
 package build does not replace a validated deployment of the exact integrated candidate.
 
 ### Independently versioned services
@@ -591,17 +591,17 @@ or negotiation requirement.
 
 ## Rollout and compatibility
 
-- **P0 — foundation:** Establish service layout and cloud-only CI, separate Postgres schemas,
+- **Foundation:** Establish service layout and cloud-only CI, separate Postgres schemas,
   outbox, Azure Blob Object Store, Identity and Key Vault with workload identity, OpenTelemetry to
   Azure Monitor, provider resolution and pinning, conformance kit, and the first platform release
   manifest.
-- **P1 — core and defaults:** Deliver Orchestrator, Projects & Config, Gateway/BFF and web, MCP
-  server, Knowledge, Events & Sessions journal and message delivery, Source Control & Merge,
+- **Core execution and defaults:** Deliver Orchestrator, Projects & Config, Gateway/BFF and web,
+  Knowledge, Events & Sessions journal and message delivery, Source Control & Merge,
   Environment manager, AgentHost, and default Azure/AKS adapters, including the Copilot cost
   ledger. Instrument
   AgentHost startup phases to expose slow image pulls, and reclaim abandoned sandboxes. At the end of
-  P1, start persona harnesses against exact-SHA AKS deployments.
-- **P2 — parity and cutover:** Complete suspend/resume, guardrails, the Tool & MCP gateway, MCP
+  core delivery, start persona harnesses against exact-SHA AKS deployments.
+- **Parity and cutover:** Complete suspend/resume, guardrails, the Tool & MCP gateway, MCP
   catalog and remote MCP, Azure BYOK
   pricing and budgets, Cosmos and Redis Memory providers, provider options,
   image publication,
@@ -609,7 +609,7 @@ or negotiation requirement.
   research and reverse engineering, applications and surfaces, release tooling informed by
   delivery-simplification evidence, the parity map, and both supported
   harnesses before cutover. Elastic SAN and additional hosting adapters are outside this scope.
-- **P3 — after cutover:** Evaluate optional providers and data-plane alternatives, including an
+- **After cutover:** Evaluate optional providers and data-plane alternatives, including an
   alternative L7 gateway and Container Apps Sandboxes, against the existing service contracts
   rather than adding a second core.
 
@@ -620,13 +620,13 @@ or negotiation requirement.
 - [R16](../decisions/0001-platform-architecture.md#risk-register): Public-address HTTPS cannot be
   made FQDN-only by Cilium alone; model, MCP, and A2A egress uses the L7 gateway.
 - [R17](../decisions/0001-platform-architecture.md#risk-register): Agentweaver's Tool & MCP gateway is the
-  default L7 implementation; an alternative is optional in P3.
+  default L7 implementation; an alternative is optional after cutover.
 - [R21](../decisions/0001-platform-architecture.md#risk-register): Cutover preserves both histories
   without force-pushing and keeps the 0.x patch line.
 - [R22](../decisions/0001-platform-architecture.md#risk-register): A declared parity cut line bounds
   the moving 0.x target while allowing 0.x to continue shipping.
 - [R23](../decisions/0001-platform-architecture.md#risk-register): Exact-SHA AKS native CLI/API and UI harness
-  validation begins by the end of P1 and gates cutover.
+  validation begins by the end of core delivery and gates cutover.
 - [R24](../decisions/0001-platform-architecture.md#risk-register): Hosting providers never replace
   Gateway/Identity viewer authorization. Built-in AKS is the only planned hosting implementation;
   Container Apps Sandboxes is later Sandbox work.

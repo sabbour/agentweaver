@@ -1,10 +1,10 @@
 # Specification: Application stages and typed surfaces
 
-> Part of [ADR 0001: Agentweaver 1.0 platform architecture](../decisions/0001-platform-architecture.md). **Status:** Proposed.
+> Part of [ADR 0001: Agentweaver platform architecture](../decisions/0001-platform-architecture.md). **Status:** Proposed.
 
 For contributors to application lifecycle, viewer authorization, and rendering.
 This remains a proposal. It does not expose a callable Canvas API or expand
-current v1.1 requirements.
+the approved delivery scope.
 
 ## Problem and goals
 
@@ -28,7 +28,7 @@ separate from exposing Agentweaver itself through MCP.
   preview so the sandbox can be released rather than retained for viewers.
 - Application Hosting serves durable web `preview` and `published` revisions through
   the built-in Azure Kubernetes Service (AKS) runtime. No other hosting adapters are planned for now.
-- The separate Canvas provider renders interactive content. P2 includes A2UI
+- The separate Canvas provider renders interactive content. The parity and cutover scope includes A2UI
   (Agent-to-User Interface) and GitHub Canvas compatibility research and reverse engineering.
 - Publication is an owner-authorized workflow gate for an exact verified revision. Viewers
   authenticate at the Gateway/Identity edge, regardless of the hosting provider.
@@ -201,9 +201,9 @@ not a separate provider seam. Canvas renders content; it does not operate web ho
 
 ### Provider profiles
 
-| Provider | Profile and responsibility | Phase |
+| Provider | Profile and responsibility | Delivery scope |
 | --- | --- | --- |
-| Built-in AKS serving runtime | Default generated-web provider. It runs the verified artifact on Agentweaver-managed capacity, separate from the AgentHost pool, under fixed launch, readiness, deadline, resource, isolation, and network policies. | P2 |
+| Built-in AKS serving runtime | Default generated-web provider. It runs the verified artifact on Agentweaver-managed capacity, separate from the AgentHost pool, under fixed launch, readiness, deadline, resource, isolation, and network policies. | Parity and cutover |
 
 This is the only Application Hosting implementation in the current plan.
 Image-backed, owner-managed external, and Container Apps hosting adapters are removed
@@ -237,7 +237,7 @@ record.
 
 ## Canvas provider
 
-Canvas is a separate P2 provider seam beside Application Hosting.
+Canvas is a separate provider seam planned for parity and cutover beside Application Hosting.
 Application Hosting runs web output on serving capacity. Canvas renders versioned
 interactive content inside Agentweaver's existing surface panel.
 It does not run AgentHost or require a separate application server.
@@ -249,10 +249,10 @@ version, format version, and negotiated capabilities to the content revision.
 Changing the renderer requires an explicit new binding, not an outage fallback.
 The current source catalog does not yet implement this contract.
 
-| Canvas adapter | Responsibility | Phase |
+| Canvas adapter | Responsibility | Delivery scope |
 | --- | --- | --- |
-| A2UI | Render declarative packages using a pinned specification and component catalog. Forward typed actions to the existing core gates. | P2 |
-| GitHub Canvas-compatible | Map the researched experimental declaration, action, and lifecycle subset. A portable content format and browser bridge are not established. The adapter implementation is separate work. | P2 |
+| A2UI | Render declarative packages using a pinned specification and component catalog. Forward typed actions to the existing core gates. | Parity and cutover |
+| GitHub Canvas-compatible | Map the researched experimental declaration, action, and lifecycle subset. A portable content format and browser bridge are not established. The adapter implementation is separate work. | Parity and cutover |
 
 GitHub Canvas is not a public standard. Compatibility work belongs inside its adapter,
 not in Agentweaver's core action protocol or a replacement UI.
@@ -341,8 +341,9 @@ asset, and browser-bridge contract remains a blocker; this narrower subset does 
 
 Implementation requires the admitted research, the Canvas C1 contract and owner-state slice,
 the retained-web and Gateway core action contracts. Historical first-party MCP
-operations are not part of the supported 1.x product surface.
-It does not wait for the whole bundle epic, all P1, A2UI, Memory adapters, or P3.
+operations are not part of the supported product surface.
+It does not wait for the whole bundle epic, all core delivery, A2UI, Memory adapters,
+or optional post-cutover work.
 The [planned acceptance cases](../../guide/testing.md#planned-github-canvas-adapter-acceptance)
 remain unexecuted. Integrated exact-SHA AKS acceptance requires separate target,
 access, cost, and owned-cleanup approval; research and documentation checks supply none.
@@ -364,7 +365,8 @@ flowchart LR
 Agentweaver retains its own run page, topology, approvals, and chat. Beside a run or chat it adds a
 canvas-like **surface panel**: an instance of a typed view that a user or agent may open and act
 upon. Canvas adapters provide rendering and host compatibility without replacing the
-existing UI. The contract for surface actions remains Agentweaver's own and is exposed over MCP.
+existing UI. Agentweaver owns the surface-action contract; Canvas adapters do not
+establish a product MCP transport for it.
 
 A surface instance has a kind, instance ID, open input, and a set of typed actions. The panel
 displays context without granting more authority than the actor has in the associated session. A
@@ -392,7 +394,7 @@ Both can use the same Canvas adapter without conflating those lifecycles.
 ### Historical agent-facing MCP proposal
 
 The original platform proposal named the following MCP tools. They are retained
-here to explain the earlier action vocabulary, not as supported 1.x tools or a
+here to explain the earlier action vocabulary, not as supported tools or a
 requirement to implement a product MCP server. The current supported-surface
 boundary excludes that server; any future API for these actions needs its own
 explicit contract.
@@ -421,7 +423,7 @@ MCP Apps (SEP-1865) provides `ui://` resources and the host bridge for MCP-serve
 UI. Agentweaver hosts those resources in its own surface panel; UI-originated tool calls use the
 same policy and audit path as agent calls. The earlier proposal to expose
 Agentweaver surfaces to other hosts through a first-party MCP server is outside
-the supported 1.x surface boundary.
+the supported surface boundary.
 
 These are standards where standards exist. GitHub Canvas reverse engineering does not
 turn its protocol into a standard. Surface instances, input and action schemas, and
@@ -528,7 +530,7 @@ Core's existing Orchestrator module owns durable instance revisions and action r
 Projects owns installed declarations and configuration references.
 Events & Sessions supplies ordered metadata, audit linkage, and authorized reconnect cursors.
 Object Store retains verified content bytes; its references do not grant access.
-Gateway/BFF and MCP expose owner projections and commands.
+Gateway/BFF exposes owner projections and commands.
 The browser owns presentation state, not accepted backend state.
 
 Reopening an instance with identical accepted input focuses it.
@@ -575,7 +577,7 @@ Keyboard navigation, labels, focus restoration, and status announcements are acc
 
 ```mermaid
 flowchart LR
-    Clients["Agent, retained web, or MCP caller"] --> Core["Existing Core surface commands"]
+    Clients["Agent or retained web client"] --> Core["Existing Core surface commands"]
     Core --> Authority["Current Projects, Identity, and Policy checks"]
     Core --> State["Core instance revisions and action receipts"]
     Core --> Contract["Planned ICanvasProvider"]
@@ -648,29 +650,29 @@ These are proposed criteria, not completed product journeys.
 Installed agent applications follow a separate
 [post-core extension](../decisions/0001-platform-architecture.md#installed-agent-applications---planned-post-core-extension).
 They do not change existing core scope or its completion gate.
-Canvas C1-C5 belongs to P2 after its applicable foundations.
+Canvas C1-C5 belongs to parity and cutover after its applicable foundations.
 
-- **P0 — foundation:** Define versioned application, revision, deployment, hosting capability, and
+- **Foundation:** Define versioned application, revision, deployment, hosting capability, and
   surface contracts alongside the platform's identity, secrets, and provider catalog. Establish the
   outbox and artifact records used for durable handoff.
-- **P1 — core:** Build the Gateway/BFF, Identity, Environment manager, Orchestrator, and web
+- **Core execution:** Build the Gateway/BFF, Identity, Environment manager, Orchestrator, and web
   foundations; sandbox retention and reclaim free abandoned capacity, and startup-phase
-  observability exposes slow AgentHost starts. At the end of P1, persona harnesses
+  observability exposes slow AgentHost starts. At the end of core delivery, persona harnesses
   start against exact-SHA AKS deployments.
-- **P2 — parity and cutover:** Deliver `live`/`preview`/`published`, built-in AKS
+- **Parity and cutover:** Deliver `live`/`preview`/`published`, built-in AKS
   Application Hosting, Canvas with A2UI and GitHub Canvas compatibility research and
   reverse engineering, verified publish gate, image publication, project-owned previews, and the application/A2UI/MCP
   App/built-in surface panel. The image-backed and owner-managed hosting adapters
   remain explicitly deferred.
-- **P3 — after cutover:** Container Apps Sandboxes is separate Sandbox work, not a
+- **After cutover:** Container Apps Sandboxes is separate Sandbox work, not a
   hosting adapter. The historical product-MCP exposure proposal is outside the
-  supported 1.x boundary.
+  supported surface boundary.
 
 ### Canvas provider delivery and milestone placement
 
 Bundle slices B1-B5 and Canvas slices C1-C5 are post-core proposals, not a promise
 of availability in an already versioned release.
-P1 keeps its original scope.
+Core delivery keeps its original scope.
 The 0.x canvas and renderer backlog item is historical product backlog, and the
 Squad workflow canvas is development tooling.
 Neither proves a v1 product Canvas implementation.
@@ -683,12 +685,12 @@ These are original acceptance slices, not accepted source or deployed evidence:
 | C2: Native views, A2UI, and retained web panel | Web, Gateway/BFF, Core; C1 and applicable native/web paths. | Agent/web discovery/open/describe/action/close, built-in artifact/progress and typed form, pinned A2UI catalog, refresh/reconnect, truthful readiness/failure, and keyboard/accessibility checks |
 | C3: MCP Apps protocol integration | Tool & MCP gateway, web bridge, Identity/Policy, Core; C1 and approved remote connection/enforcement. | Exact `ui://` revision, sandbox/CSP/origin checks, schema-valid bridge, no credential leakage or direct provider effects, stale/revoked connection rejection, and explicit unsupported-resource errors |
 | C4: Bundled Canvas lifecycle | Bundle B1-B4 owners and selected supported C2/C3 profile; verified content delivery and fresh authority. | Inventory/schema/reference validation, immutable host bytes, no adapter registration or implicit execution, effective-ID isolation, old-instance affinity, upgrade, drain, and retention-safe uninstall |
-| C5: Integrated P2 acceptance | Acceptance coordinator with C1-C4 source and separately approved deployment authority. | Exact-SHA AKS native CLI/API and UI journeys for native/A2UI and external MCP Apps profiles, browser restart, action response loss, revocation, renderer failure, bundle upgrade, and owned cleanup |
+| C5: Integrated acceptance | Acceptance coordinator with C1-C4 source and separately approved deployment authority. | Exact-SHA AKS native CLI/API and UI journeys for native/A2UI and external MCP Apps profiles, browser restart, action response loss, revocation, renderer failure, bundle upgrade, and owned cleanup |
 
-C1-C3 elaborate P2 surfaces; C4 adds bundle integration.
+C1-C3 elaborate parity and cutover surfaces; C4 adds bundle integration.
 The specification does not complete C1 or the Canvas work.
 The GitHub Canvas adapter remains separate work with its bounded dependencies,
-not a prerequisite on the whole bundle epic, all P1, or other Memory providers.
+not a prerequisite on the whole bundle epic, all core delivery, or other Memory providers.
 Live acceptance requires separate target/access/cost/cleanup approval.
 
 ## Related risks
