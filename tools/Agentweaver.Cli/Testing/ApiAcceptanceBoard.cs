@@ -614,7 +614,7 @@ internal static class ApiAcceptanceBoard
             string taskProjectId = ApiAcceptanceSupport.GetString(reference, "projectId") ?? "";
             string taskId = ApiAcceptanceSupport.GetString(reference, "taskId") ?? "";
             if (taskProjectId != projectId || !ApiAcceptanceSupport.IsUuid(taskId)
-                || ReadLong(item, "revision") is not > 0
+                || ReadLong(item, "revision") is not >= 0
                 || ApiAcceptanceSupport.GetString(item, "state") is not ("backlog" or "ready" or "claimed")
                 || item["isArchived"] is not JsonValue archived || !archived.TryGetValue<bool>(out bool isArchived)
                 || item["isAutomationInvocationPending"] is not JsonValue pending || !pending.TryGetValue<bool>(out bool isPending)
