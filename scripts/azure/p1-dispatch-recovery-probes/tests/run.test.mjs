@@ -185,9 +185,13 @@ test('missing live inputs keep both required acceptance slots blocked', async ()
   assert.ok(usageReceipt.requiredFacts.some(fact =>
     fact.includes('later priced totals advance')));
   assert.match(numeric.reason, /existing Host reader can verify persisted zero-limit and hard-credit no-send receipts/);
-  assert.match(numeric.reason, /MaxPromptTokens is rejected before SDK setup/);
+  assert.match(numeric.reason, /MaxPromptTokens is resolved against SDK model capacity/);
+  assert.doesNotMatch(numeric.reason, /MaxPromptTokens is rejected before SDK setup/);
   assert.match(numeric.evidence.sourceGates[0].detail, /Workflow-bound MaxToolCalls/);
-  assert.match(numeric.evidence.sourceGates[0].detail, /MaxPromptTokens remains unsupported before SDK setup/);
+  assert.match(numeric.evidence.sourceGates[0].detail,
+    /MaxPromptTokens is accepted within its configured range and resolved against native SDK model capacity/);
+  assert.doesNotMatch(numeric.evidence.sourceGates[0].detail,
+    /MaxPromptTokens remains unsupported before SDK setup/);
   assert.match(numeric.evidence.sourceGates[2].detail, /one durable soft-limit warning/);
   assert.match(numeric.evidence.sourceGates[2].detail, /not an all-usage-final claim/);
   const restart = result.probes[1];

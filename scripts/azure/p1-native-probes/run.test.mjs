@@ -1732,6 +1732,35 @@ test('four native probes pass with injected production-shaped reads, mutations, 
   assert.equal(serialized.includes('private-owner-b'), false);
 });
 
+test('only the independently bound read-only readiness probe passes when mutation journeys are not authorized', async () => {
+  const input = createInput();
+  const harness = successDependencies(input);
+  harness.dependencies.journeyAuthorizer.authorize = async request => {
+    harness.authorizations.push(request);
+    return { allowed: false };
+  };
+
+  const result = await runP1NativeProbes(input, harness.dependencies);
+
+  assert.equal(result.kind, 'p1-native-acceptance');
+  assert.equal(result.overallStatus, 'blocked');
+  const probes = new Map(result.probes.map(probe => [probe.name, probe]));
+  assert.deepEqual([
+    probes.get('storage-owner-isolation').status,
+    probes.get('network-policy-datapath').status,
+    probes.get('sandbox-owner-lifecycle').status,
+    probes.get('agenthost-image-readiness').status,
+  ], ['blocked', 'blocked', 'blocked', 'passed']);
+  assert.ok(['fixture_journey_not_authorized', 'cleanup_uncertain'].includes(
+    probes.get('network-policy-datapath').code));
+  const readiness = probes.get('agenthost-image-readiness');
+  assert.ok(harness.authorizations.length > 0);
+  assert.equal(harness.calls.some(call => call.method === 'POST'), false);
+  assert.equal(readiness.status, 'passed');
+  assert.equal(readiness.cleanup.status, 'not-required');
+  assert.ok(Object.keys(readiness.evidence).length > 0);
+});
+
 test('late Sandbox lifecycle rejects a changed-label Pod using the real adapter contract', async () => {
   const input = createInput();
   const clusterServer = 'https://p1-cluster.example.test/';

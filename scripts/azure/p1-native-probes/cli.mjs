@@ -1,7 +1,9 @@
 import { open, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { validateP1NativeProbeResults } from '../../harness-shared/p1-acceptance-result.mjs';
 import { createP1NativeProcessProvider } from './process-provider.mjs';
+import { runP1NativeProbes } from './run.mjs';
 
 const USAGE = 'node scripts\\azure\\p1-native-probes\\cli.mjs --execute --input <native-input.json> --provider-module <owner-providers.mjs> --output <new-native-envelope.json>';
 const PROVIDERS = Object.freeze({
@@ -60,9 +62,10 @@ export async function loadP1NativeProviders(input, modulePath) {
   return { ...providers, fetch: globalThis.fetch, processProvider };
 }
 
-/** Keep native execution blocked until the owner authority and Pod identity contracts are joined. */
+/** Keep owner-authority failure distinct from the separate native no-send proof gap. */
 export async function runP1NativeProbeCli(argv, { stdout = process.stdout, stderr = process.stderr } = {}) {
   let output;
+  let envelope;
   let stage = 'arguments';
   let nativeAuthorityJoined = false;
   try {
@@ -83,11 +86,26 @@ export async function runP1NativeProbeCli(argv, { stdout = process.stdout, stder
       if (authority?.status === 'blocked' && authority.code === NATIVE_PROOF_GAP &&
         authority.acceptanceEvidence === false && authority.nativeNoSendProven === false) {
         nativeAuthorityJoined = true;
-        stderr.write(`Native proof gap: ${NATIVE_PROOF_GAP}; no-send, effect, cursor, and dispatch acknowledgments remain absent.\n`);
+        stderr.write(`Native proof gap: ${NATIVE_PROOF_GAP}; remaining no-send, effect, cursor, and dispatch evidence does not block independent probes with complete bindings.\n`);
       }
     }
-    // Owner observations are not native acceptance evidence; this CLI never starts the runner.
-    throw new Error('native_authority_join_unavailable');
+    if (!nativeAuthorityJoined) throw new Error('native_authority_join_unavailable');
+    stage = 'native_probe_execution';
+    envelope = await runP1NativeProbes(input, providers);
+    stage = 'native_envelope_validation';
+    validateP1NativeProbeResults([envelope]);
+    stage = 'output_write';
+    const serialized = `${JSON.stringify(envelope)}\n`;
+    try {
+      await output.writeFile(serialized);
+      await output.sync();
+    } catch {
+      stdout.write(serialized);
+      throw new Error('native_envelope_persistence_failed');
+    }
+    if (envelope.overallStatus === 'passed') return 0;
+    stderr.write(`P1 native probes ${envelope.overallStatus}; no overall acceptance pass is claimed.\n`);
+    return envelope.overallStatus === 'failed' ? 1 : 2;
   } catch {
     // Provider and filesystem errors can contain credentials or raw owner responses.
     stderr.write(`P1 native CLI blocked at ${stage}; no acceptance pass is claimed.\n`);
