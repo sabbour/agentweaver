@@ -10,6 +10,12 @@ import {
   Badge,
   Button,
   Caption1,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
   Field,
   Input,
   makeStyles,
@@ -21,8 +27,8 @@ import {
   Textarea,
   tokens,
 } from '@fluentui/react-components';
-import { ArrowSyncRegular, CheckmarkRegular, DismissRegular, EditRegular } from '@fluentui/react-icons';
-import { useCallback, useMemo, useState } from 'react';
+import { ArrowSyncRegular, CheckmarkRegular, DeleteRegular, DismissRegular, EditRegular } from '@fluentui/react-icons';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useParams } from 'react-router-dom';
 import { CaptureTaskForm } from '../components/board/CaptureTaskForm';
 import { columnAccentColor } from '../components/board/columnMeta';
@@ -39,6 +45,8 @@ import {
   setTaskPosition,
   setAllEligibleTasksReady,
   archiveTask,
+  deleteBacklogTask,
+  BoardScopeChangedError,
   addPrerequisite,
   removePrerequisite,
   isStaleRevision,
@@ -47,6 +55,7 @@ import {
   queueInsertionPosition,
   useProjectBoard,
 } from './boardData';
+import type { BoardRequestScope } from './boardData';
 import type { BoardColumn } from './boardData';
 import type { BacklogGraph, BacklogTaskSnapshot, ProjectIssueSummary } from './contracts';
 import { Loading, PageHeading } from './pageParts';
@@ -55,6 +64,14 @@ import { permissionsForProject, useAuthorizationContext } from './projectData';
 /** Route state set by Start task after it adds a task, so the Board can confirm it. */
 export interface BoardLocationState {
   capturedTaskTitle?: string;
+}
+
+interface BoardFeedback {
+  scope: BoardRequestScope;
+  notice: string | null;
+  actionError: string | null;
+  deleteError: string | null;
+  batchReadyBusy: boolean;
 }
 
 const border = (color: string) => ({
@@ -254,6 +271,7 @@ const useStyles = makeStyles({
   editFields: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   editActions: { display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: tokens.spacingHorizontalS },
   error: { color: tokens.colorPaletteRedForeground1, fontSize: tokens.fontSizeBase200, lineHeight: tokens.lineHeightBase200 },
+  deleteAction: { color: tokens.colorPaletteRedForeground1 },
 });
 
 /** Short queue label for a card, matching the 0.x card wording where the state still exists. */
@@ -275,6 +293,29 @@ function issueReference(task: BacklogTaskSnapshot, issue: ProjectIssueSummary | 
   return { text: `${link.repository.owner}/${link.repository.name}#${link.issueNumber}` };
 }
 
+function taskDeleteUnavailableMessage(
+  graph: BacklogGraph,
+  task: BacklogTaskSnapshot,
+  issue: ProjectIssueSummary | undefined,
+): string | null {
+  if (graph.dependencies.some((edge) =>
+    edge.prerequisite.taskId === task.reference.taskId && edge.task.taskId !== task.reference.taskId))
+    return 'Another task depends on this task. Remove its prerequisite link first.';
+  if (task.repositoryIssue || issue)
+    return "This task is linked to a repository issue and can't be deleted here.";
+  return null;
+}
+
+function isTaskDeletionUnavailable(error: unknown): boolean {
+  return error instanceof GatewayError
+    && error.status === 409
+    && Array.isArray(error.problem?.issues)
+    && error.problem.issues.some((issue: unknown) =>
+      !!issue && typeof issue === 'object'
+      && typeof (issue as { code?: unknown }).code === 'string'
+      && (issue as { code: string }).code.toLowerCase().replace(/[^a-z]/g, '') === 'taskdeletionunavailable');
+}
+
 /** Props for one task card. */
 interface BoardTaskCardProps {
   graph: BacklogGraph;
@@ -283,8 +324,12 @@ interface BoardTaskCardProps {
   laterPosition: number | null;
   issue: ProjectIssueSummary | undefined;
   canEdit: boolean;
+  canDelete: boolean;
+  actionsDisabled: boolean;
+  deleteInFlight: boolean;
   onSaved: (graph: BacklogGraph, message: string) => void;
   onConflict: () => void;
+  onDelete: (graph: BacklogGraph, task: BacklogTaskSnapshot, trigger: HTMLButtonElement) => void;
 }
 
 /**
@@ -292,7 +337,10 @@ interface BoardTaskCardProps {
  * and queue state. Users with edit access can update task content; queue and
  * prerequisite actions are available only while the task is unclaimed.
  */
-function BoardTaskCard({ graph, task, earlierPosition, laterPosition, issue, canEdit, onSaved, onConflict }: BoardTaskCardProps) {
+function BoardTaskCard({
+  graph, task, earlierPosition, laterPosition, issue, canEdit, canDelete, actionsDisabled, deleteInFlight,
+  onSaved, onConflict, onDelete,
+}: BoardTaskCardProps) {
   const styles = useStyles();
   const { apiCall } = useAuth();
   const [editing, setEditing] = useState(false);
@@ -304,6 +352,8 @@ function BoardTaskCard({ graph, task, earlierPosition, laterPosition, issue, can
   const prerequisites = prerequisiteTitles(graph, task.reference.taskId);
   const dependencyEdges = graph.dependencies.filter((edge) => edge.task.taskId === task.reference.taskId);
   const reference = issueReference(task, issue);
+  const deleteUnavailable = taskDeleteUnavailableMessage(graph, task, issue);
+  const disabled = busy || actionsDisabled;
   // The service rejects edits while an automation invocation is pending, so the
   // card hides the edit button then instead of offering an action that fails.
   const editable = canEdit && !task.isArchived && !task.isAutomationInvocationPending;
@@ -364,10 +414,10 @@ function BoardTaskCard({ graph, task, earlierPosition, laterPosition, issue, can
       <div className={styles.card} data-testid={`task-card-${task.reference.taskId}`}>
         <div className={styles.editFields}>
           <Field label="Title" required>
-            <Input value={title} maxLength={512} onChange={(_, value) => setTitle(value.value)} disabled={busy} />
+            <Input value={title} maxLength={512} onChange={(_, value) => setTitle(value.value)} disabled={disabled} />
           </Field>
           <Field label="Description">
-            <Textarea value={description} maxLength={65536} onChange={(_, value) => setDescription(value.value)} disabled={busy} rows={3} />
+            <Textarea value={description} maxLength={65536} onChange={(_, value) => setDescription(value.value)} disabled={disabled} rows={3} />
           </Field>
           {error && <Text className={styles.error}>{error}</Text>}
           <div className={styles.editActions}>
@@ -375,12 +425,12 @@ function BoardTaskCard({ graph, task, earlierPosition, laterPosition, issue, can
               appearance="secondary"
               size="small"
               icon={<DismissRegular />}
-              disabled={busy}
+              disabled={disabled}
               onClick={() => { setEditing(false); setError(null); }}
             >
               Cancel
             </Button>
-            <Button appearance="primary" size="small" icon={<CheckmarkRegular />} disabled={busy || !title.trim()} onClick={() => void save()}>
+            <Button appearance="primary" size="small" icon={<CheckmarkRegular />} disabled={disabled || !title.trim()} onClick={() => void save()}>
               Save
             </Button>
           </div>
@@ -394,7 +444,7 @@ function BoardTaskCard({ graph, task, earlierPosition, laterPosition, issue, can
       <div className={styles.cardHeader}>
         <Text className={styles.cardTitle}>{task.title}</Text>
         {queueEditable && (
-          <Button appearance="subtle" size="small" icon={<EditRegular />} aria-label={`Edit task ${task.title}`} onClick={startEdit} />
+          <Button appearance="subtle" size="small" icon={<EditRegular />} aria-label={`Edit task ${task.title}`} disabled={disabled} onClick={startEdit} />
         )}
       </div>
       {task.description && <Text className={styles.cardDescription}>{task.description}</Text>}
@@ -416,7 +466,7 @@ function BoardTaskCard({ graph, task, earlierPosition, laterPosition, issue, can
                   <Button
                     appearance="subtle"
                     size="small"
-                    disabled={busy}
+                    disabled={disabled}
                     aria-label={`Remove prerequisite ${title} from ${task.title}`}
                     onClick={() => void mutate(
                       () => removePrerequisite(apiCall, graph, task, edge.prerequisite.taskId),
@@ -456,7 +506,7 @@ function BoardTaskCard({ graph, task, earlierPosition, laterPosition, issue, can
               <Button
                 appearance="secondary"
                 size="small"
-                disabled={busy}
+                disabled={disabled}
                 onClick={() => void mutate(
                   () => setTaskState(apiCall, graph, task, task.state === 'ready' ? 'backlog' : 'ready'),
                   task.state === 'ready' ? 'Task moved to Backlog.' : 'Task marked Ready.',
@@ -469,7 +519,7 @@ function BoardTaskCard({ graph, task, earlierPosition, laterPosition, issue, can
               <Button
                 appearance="subtle"
                 size="small"
-                disabled={busy}
+                disabled={disabled}
                 onClick={() => void mutate(
                   () => setTaskPosition(apiCall, graph, task,
                     task.state === 'ready' ? 'ready' : 'backlog', earlierPosition),
@@ -483,7 +533,7 @@ function BoardTaskCard({ graph, task, earlierPosition, laterPosition, issue, can
               <Button
                 appearance="subtle"
                 size="small"
-                disabled={busy}
+                disabled={disabled}
                 onClick={() => void mutate(
                   () => setTaskPosition(apiCall, graph, task,
                     task.state === 'ready' ? 'ready' : 'backlog', laterPosition),
@@ -496,12 +546,31 @@ function BoardTaskCard({ graph, task, earlierPosition, laterPosition, issue, can
             <Button
               appearance="subtle"
               size="small"
-              disabled={busy}
+              disabled={disabled}
               onClick={() => void mutate(() => archiveTask(apiCall, graph, task), 'Task archived.')}
             >
               Archive
             </Button>
+            {canDelete && (
+            <Button
+              appearance="subtle"
+              size="small"
+              icon={<DeleteRegular />}
+              className={styles.deleteAction}
+              aria-label={`Delete task ${task.title}`}
+              aria-describedby={deleteUnavailable ? `delete-unavailable-${task.reference.taskId}` : undefined}
+              disabled={disabled || deleteInFlight || !!deleteUnavailable}
+              onClick={(event) => onDelete(graph, task, event.currentTarget)}
+            >
+              Delete task
+            </Button>
+            )}
           </div>
+          {canDelete && deleteUnavailable && (
+            <Caption1 id={`delete-unavailable-${task.reference.taskId}`} className={styles.meta}>
+            {deleteUnavailable}
+            </Caption1>
+          )}
           {graph.tasks.some((item) =>
             item.reference.taskId !== task.reference.taskId &&
             !item.isArchived &&
@@ -511,7 +580,7 @@ function BoardTaskCard({ graph, task, earlierPosition, laterPosition, issue, can
               <Field label="Add prerequisite" className={styles.dependencySelect}>
                 <Select
                   value={prerequisiteTaskId}
-                  disabled={busy}
+                  disabled={disabled}
                   onChange={(_, data) => setPrerequisiteTaskId(data.value)}
                 >
                   <option value="">Choose a task</option>
@@ -528,7 +597,7 @@ function BoardTaskCard({ graph, task, earlierPosition, laterPosition, issue, can
               <Button
                 appearance="secondary"
                 size="small"
-                disabled={busy || !prerequisiteTaskId}
+                disabled={disabled || !prerequisiteTaskId}
                 onClick={() => void mutate(
                   () => addPrerequisite(apiCall, graph, task, prerequisiteTaskId),
                   'Prerequisite added.',
@@ -551,12 +620,18 @@ interface BoardColumnViewProps {
   graph: BacklogGraph;
   issues: ReadonlyMap<string, ProjectIssueSummary>;
   canEdit: boolean;
+  canDelete: boolean;
+  actionsDisabled: boolean;
+  deleteInFlight: boolean;
   onSaved: (graph: BacklogGraph, message: string) => void;
   onConflict: () => void;
+  onDelete: (graph: BacklogGraph, task: BacklogTaskSnapshot, trigger: HTMLButtonElement) => void;
 }
 
 /** One column with the 0.x header: accent bar, label, count, caption and queue summary. */
-function BoardColumnView({ column, graph, issues, canEdit, onSaved, onConflict }: BoardColumnViewProps) {
+function BoardColumnView({
+  column, graph, issues, canEdit, canDelete, actionsDisabled, deleteInFlight, onSaved, onConflict, onDelete,
+}: BoardColumnViewProps) {
   const styles = useStyles();
   const accent = columnAccentColor(column.id, 0);
   const count = column.tasks.length;
@@ -595,8 +670,12 @@ function BoardColumnView({ column, graph, issues, canEdit, onSaved, onConflict }
               laterPosition={queueInsertionPosition(graph, task, column.tasks[visibleIndex + 1], 'after')}
               issue={issues.get(task.reference.taskId)}
               canEdit={canEdit}
+              canDelete={canDelete}
+              actionsDisabled={actionsDisabled}
+              deleteInFlight={deleteInFlight}
               onSaved={onSaved}
               onConflict={onConflict}
+              onDelete={onDelete}
             />
           ))}
         </div>
@@ -619,22 +698,108 @@ export function BoardPage() {
   const styles = useStyles();
   const { projectId = '' } = useParams();
   const location = useLocation();
-  const { apiCall } = useAuth();
-  // Each navigation to the Board, including the one after Start task adds a
-  // task, has a new location key. Passing it reloads the board on arrival.
-  const board = useProjectBoard(projectId, location.key);
+  const { apiCall, session, authorizationContext: confirmedAuthorization } = useAuth();
   const authorization = useAuthorizationContext();
-  const { zoom, zoomIn, zoomOut, viewportRef } = useCtrlScrollZoom();
-  const [notice, setNotice] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [batchReadyBusy, setBatchReadyBusy] = useState(false);
-  const captured = (location.state as BoardLocationState | null)?.capturedTaskTitle;
 
   // Capture and edit need write access. Until the access check loads, or if it
   // fails, the write controls stay hidden; the service still enforces access.
   const canWrite = useMemo(() => !!authorization.data
     && permissionsForProject(authorization.data, projectId).some((item) => item.permission === 'writeProjects'),
   [authorization.data, projectId]);
+  const authoritySignature = JSON.stringify(authorization.data?.effectiveAuthority ?? null);
+  const scopeSignature = JSON.stringify([
+    projectId,
+    session?.binding?.projectId ?? null,
+    session?.binding?.runId ?? null,
+    confirmedAuthorization?.membershipRevision ?? null,
+    authorization.data?.actorId ?? null,
+    authorization.data?.tenantId ?? null,
+    authorization.data?.membershipRevision ?? null,
+    authoritySignature,
+    canWrite,
+  ]);
+  const scope = useMemo<BoardRequestScope>(() => ({
+    identity: { signature: scopeSignature },
+    accessToken: session?.accessToken ?? null,
+    tenantId: confirmedAuthorization?.tenantId ?? null,
+  }), [
+    scopeSignature,
+    session?.accessToken,
+    confirmedAuthorization?.tenantId,
+  ]);
+  const currentScopeRef = useRef<object | null>(null);
+  const isScopeCurrent = useCallback((candidate: BoardRequestScope) =>
+    currentScopeRef.current === candidate.identity, []);
+  useLayoutEffect(() => {
+    currentScopeRef.current = scope.identity;
+    return () => {
+      if (currentScopeRef.current === scope.identity) currentScopeRef.current = null;
+    };
+  }, [scope.identity]);
+  // Each navigation to the Board, including the one after Start task adds a
+  // task, has a new location key. Passing it reloads the board on arrival.
+  const board = useProjectBoard(projectId, location.key, scope, isScopeCurrent);
+  const { zoom, zoomIn, zoomOut, viewportRef } = useCtrlScrollZoom();
+  const [feedback, setFeedback] = useState<BoardFeedback | null>(null);
+  const activeFeedback = feedback?.scope === scope ? feedback : null;
+  const notice = activeFeedback?.notice ?? null;
+  const actionError = activeFeedback?.actionError ?? null;
+  const deleteError = activeFeedback?.deleteError ?? null;
+  const batchReadyBusy = activeFeedback?.batchReadyBusy ?? false;
+  const updateFeedback = useCallback((updates: Partial<Omit<BoardFeedback, 'scope'>>) => {
+    if (!isScopeCurrent(scope)) return;
+    setFeedback((previous) => {
+      if (!isScopeCurrent(scope)) return previous;
+      const current = previous?.scope === scope
+        ? previous
+        : { scope, notice: null, actionError: null, deleteError: null, batchReadyBusy: false };
+      return { ...current, ...updates };
+    });
+  }, [isScopeCurrent, scope]);
+  const setNotice = useCallback((value: string | null) => updateFeedback({ notice: value }), [updateFeedback]);
+  const setActionError = useCallback((value: string | null) => updateFeedback({ actionError: value }), [updateFeedback]);
+  const setDeleteError = useCallback((value: string | null) => updateFeedback({ deleteError: value }), [updateFeedback]);
+  const setBatchReadyBusy = useCallback((value: boolean) => updateFeedback({ batchReadyBusy: value }), [updateFeedback]);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{
+    taskId: string;
+    taskTitle: string;
+    graphRevision: number;
+    taskRevision: number;
+    scope: BoardRequestScope;
+  } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ taskId: string; scope: BoardRequestScope } | null>(null);
+  const pendingDeleteRef = useRef<{ taskId: string; scope: BoardRequestScope } | null>(null);
+  const deleteTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const cancelDeleteRef = useRef<HTMLButtonElement | null>(null);
+  const boardHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const focusHeadingAfterDelete = useRef<BoardRequestScope | null>(null);
+  const captured = (location.state as BoardLocationState | null)?.capturedTaskTitle;
+  const canDelete = canWrite
+    && !!scope.accessToken
+    && !!scope.tenantId
+    && !!authorization.data?.actorId
+    && authorization.data?.tenantId === scope.tenantId
+    && authorization.data?.membershipRevision === confirmedAuthorization?.membershipRevision
+    && !session?.binding;
+  const activeConfirmation = deleteConfirmation?.scope === scope ? deleteConfirmation : null;
+  const confirmationTask = activeConfirmation && board.graph
+    ? board.graph.tasks.find((task) => task.reference.taskId === activeConfirmation.taskId)
+    : undefined;
+  const confirmationCurrent = !!activeConfirmation
+    && !!board.graph
+    && board.graph.revision === activeConfirmation.graphRevision
+    && confirmationTask?.revision === activeConfirmation.taskRevision;
+  const confirmationStale = !!activeConfirmation && !!board.graph && !confirmationCurrent;
+  const pendingForScope = pendingDelete?.scope === scope;
+  const confirmationForScope = !!activeConfirmation && confirmationCurrent && canDelete;
+
+  useLayoutEffect(() => {
+    if (confirmationForScope) cancelDeleteRef.current?.focus();
+  }, [confirmationForScope, deleteConfirmation?.scope]);
+  useLayoutEffect(() => {
+    if (!confirmationStale) return;
+    boardHeadingRef.current?.focus();
+  }, [confirmationStale]);
   const columns = useMemo(() => (board.graph ? boardColumns(board.graph) : []), [board.graph]);
   const visibleCount = columns.reduce((sum, column) => sum + column.tasks.length, 0);
   const countOf = (id: string) => columns.find((column) => column.id === id)?.tasks.length ?? 0;
@@ -643,41 +808,158 @@ export function BoardPage() {
 
   // Called by the capture form. Errors are rethrown as plain messages because the form shows `error.message`.
   const capture = useCallback(async (title: string) => {
+    const requestScope = scope;
     setNotice(null);
     try {
       const next = await captureTask(apiCall, projectId, title, graphRevision);
+      if (!isScopeCurrent(requestScope)) return;
       replaceGraph(next);
       setNotice('Task added to Backlog.');
     } catch (reason) {
       // A conflict that survived the retry means the board is stale; reload it.
-      if (isStaleRevision(reason)) reload();
+      if (isScopeCurrent(requestScope) && isStaleRevision(reason)) reload();
       throw new Error(boardErrorMessage(reason, 'capture'), { cause: reason });
     }
-  }, [apiCall, graphRevision, projectId, reload, replaceGraph]);
+  }, [apiCall, graphRevision, isScopeCurrent, projectId, reload, replaceGraph, scope, setNotice]);
 
   const onSaved = useCallback((next: BacklogGraph, message: string) => {
+    if (!isScopeCurrent(scope)) return;
     replaceGraph(next);
     setNotice(message);
     setActionError(null);
-  }, [replaceGraph]);
+  }, [isScopeCurrent, replaceGraph, scope, setActionError, setNotice]);
+
+  const onConflict = useCallback(() => {
+    if (isScopeCurrent(scope)) reload();
+  }, [isScopeCurrent, reload, scope]);
+
+  const openDeleteConfirmation = useCallback((
+    graph: BacklogGraph,
+    task: BacklogTaskSnapshot,
+    trigger: HTMLButtonElement,
+  ) => {
+    if (!canDelete || pendingDeleteRef.current?.scope === scope || !isScopeCurrent(scope)) return;
+    deleteTriggerRef.current = trigger;
+    setDeleteError(null);
+    setActionError(null);
+    setNotice(null);
+    setDeleteConfirmation({
+      taskId: task.reference.taskId,
+      taskTitle: task.title,
+      graphRevision: graph.revision,
+      taskRevision: task.revision,
+      scope,
+    });
+  }, [canDelete, isScopeCurrent, scope, setActionError, setDeleteError, setNotice]);
+
+  const closeDeleteConfirmation = useCallback(() => {
+    const current = deleteConfirmation;
+    if (!current || pendingDeleteRef.current?.scope === current.scope) return;
+    setDeleteConfirmation(null);
+    setDeleteError(null);
+    const trigger = deleteTriggerRef.current;
+    window.requestAnimationFrame(() => {
+      if (isScopeCurrent(current.scope)) trigger?.focus();
+    });
+  }, [deleteConfirmation, isScopeCurrent, setDeleteError]);
+
+  const confirmDelete = useCallback(async () => {
+    const confirmation = deleteConfirmation;
+    if (!confirmation || pendingDeleteRef.current?.scope === confirmation.scope || !canDelete
+      || !isScopeCurrent(confirmation.scope)) return;
+    const graph = board.graph;
+    const task = graph?.tasks.find((candidate) => candidate.reference.taskId === confirmation.taskId);
+    if (!graph || graph.revision !== confirmation.graphRevision || !task || task.revision !== confirmation.taskRevision) {
+      if (isScopeCurrent(confirmation.scope)) {
+        setDeleteConfirmation(null);
+        setDeleteError(null);
+        setActionError('The board changed while you were confirming. Review the task before deleting it.');
+        reload();
+      }
+      return;
+    }
+    const unavailable = taskDeleteUnavailableMessage(graph, task, board.issues.get(task.reference.taskId));
+    if (unavailable) {
+      setDeleteError(unavailable);
+      return;
+    }
+
+    const pending = { taskId: task.reference.taskId, scope: confirmation.scope };
+    pendingDeleteRef.current = pending;
+    setPendingDelete(pending);
+    setDeleteError(null);
+    setActionError(null);
+    try {
+      const next = await deleteBacklogTask(apiCall, graph, task, confirmation.scope, isScopeCurrent);
+      if (!isScopeCurrent(confirmation.scope)) return;
+      focusHeadingAfterDelete.current = confirmation.scope;
+      deleteTriggerRef.current = null;
+      replaceGraph(next);
+      setDeleteConfirmation(null);
+      setDeleteError(null);
+      setNotice('Task deleted.');
+    } catch (reason) {
+      if (!isScopeCurrent(confirmation.scope)) return;
+      const message = boardErrorMessage(reason, 'delete');
+      if (reason instanceof BoardScopeChangedError
+        || reason instanceof GatewayError && (reason.status === 404
+          || reason.status === 409 && !isTaskDeletionUnavailable(reason))) {
+        setDeleteConfirmation(null);
+        setDeleteError(null);
+        setActionError(message);
+        reload();
+      } else {
+        setDeleteError(message);
+      }
+    } finally {
+      if (pendingDeleteRef.current === pending) {
+        pendingDeleteRef.current = null;
+        setPendingDelete(null);
+      }
+    }
+  }, [
+    apiCall,
+    board.graph,
+    board.issues,
+    canDelete,
+    deleteConfirmation,
+    isScopeCurrent,
+    reload,
+    replaceGraph,
+    setActionError,
+    setDeleteError,
+    setNotice,
+  ]);
 
   const sendAllToReady = useCallback(async () => {
     if (!board.graph) return;
+    const requestScope = scope;
     setBatchReadyBusy(true);
     setActionError(null);
     try {
       onSaved(await setAllEligibleTasksReady(apiCall, board.graph), 'Eligible tasks moved to Ready.');
     } catch (reason) {
+      if (!isScopeCurrent(requestScope)) return;
       setActionError(boardErrorMessage(reason, 'mutate'));
       if (reason instanceof GatewayError && (reason.status === 409 || reason.status === 404)) reload();
     } finally {
-      setBatchReadyBusy(false);
+      if (isScopeCurrent(requestScope)) setBatchReadyBusy(false);
     }
-  }, [apiCall, board.graph, onSaved, reload]);
+  }, [apiCall, board.graph, isScopeCurrent, onSaved, reload, scope, setActionError, setBatchReadyBusy]);
+
+  useLayoutEffect(() => {
+    const expectedScope = focusHeadingAfterDelete.current;
+    if (!expectedScope) return;
+    focusHeadingAfterDelete.current = null;
+    if (isScopeCurrent(expectedScope)) boardHeadingRef.current?.focus();
+  }, [board.graph, isScopeCurrent]);
 
   const eligibleBacklogCount = board.graph?.tasks.filter((task) =>
     task.state === 'backlog' && task.lifecycle === 'open' &&
     !task.isArchived && !task.isAutomationInvocationPending).length ?? 0;
+  const confirmationBlocker = confirmationTask && board.graph
+    ? taskDeleteUnavailableMessage(board.graph, confirmationTask, board.issues.get(confirmationTask.reference.taskId))
+    : null;
   const readError = board.error;
   const forbidden = readError instanceof GatewayError && readError.status === 403;
 
@@ -687,7 +969,7 @@ export function BoardPage() {
         title="Board"
         description="Queue work and record prerequisites; a run checks live eligibility when it claims a task."
         page="Board"
-        actions={<Button appearance="secondary" icon={<ArrowSyncRegular />} disabled={board.loading} onClick={reload}>Refresh</Button>}
+        actions={<Button appearance="secondary" icon={<ArrowSyncRegular />} disabled={board.loading || pendingForScope} onClick={reload}>Refresh</Button>}
       />
 
       {/* The capture form is shown only to users who can write, and only once the board has loaded. */}
@@ -699,7 +981,7 @@ export function BoardPage() {
               <Text className={styles.sectionSubtitle}>Capture agent-executable work into Backlog.</Text>
             </div>
             <div className={styles.capture}>
-              <CaptureTaskForm projectId={projectId} capture={capture} onCaptured={() => undefined} disabled={board.loading} />
+              <CaptureTaskForm projectId={projectId} capture={capture} onCaptured={() => undefined} disabled={board.loading || pendingForScope} />
             </div>
           </div>
         </section>
@@ -710,6 +992,11 @@ export function BoardPage() {
       )}
       {notice && <MessageBar intent="success"><MessageBarBody>{notice}</MessageBarBody></MessageBar>}
       {actionError && <MessageBar intent="error"><MessageBarBody>{actionError}</MessageBarBody></MessageBar>}
+      {confirmationStale && (
+        <MessageBar intent="warning">
+          <MessageBarBody role="status">The board changed while you were confirming. Review the task before deleting it.</MessageBarBody>
+        </MessageBar>
+      )}
 
       {board.loading && !board.graph && <Loading label="Loading board" />}
 
@@ -740,7 +1027,7 @@ export function BoardPage() {
         <section className={styles.workflowSection} aria-labelledby="board-workflow-title">
           <div className={styles.sectionHeader}>
             <div className={styles.headerBlock}>
-              <Text as="h2" id="board-workflow-title" className={styles.sectionTitle}>Agent task board</Text>
+              <Text as="h2" id="board-workflow-title" className={styles.sectionTitle} tabIndex={-1} ref={boardHeadingRef}>Agent task board</Text>
               <Text className={styles.sectionSubtitle}>Tasks grouped by queue state, from intake to completion.</Text>
               <div className={styles.summaryStrip} aria-label="Board summary">
                 <Button
@@ -778,7 +1065,7 @@ export function BoardPage() {
                 <Button
                   appearance="secondary"
                   size="small"
-                  disabled={batchReadyBusy || board.loading}
+                  disabled={batchReadyBusy || board.loading || pendingForScope}
                   onClick={() => void sendAllToReady()}
                 >
                   Send all to Ready
@@ -797,8 +1084,12 @@ export function BoardPage() {
                     graph={board.graph!}
                     issues={board.issues}
                     canEdit={canWrite}
+                    canDelete={canDelete}
+                    actionsDisabled={pendingForScope}
+                    deleteInFlight={pendingForScope}
                     onSaved={onSaved}
-                    onConflict={reload}
+                    onConflict={onConflict}
+                    onDelete={openDeleteConfirmation}
                   />
                 ))}
               </div>
@@ -815,6 +1106,49 @@ export function BoardPage() {
           </div>
         </section>
       )}
+
+      <Dialog
+        open={confirmationForScope}
+        onOpenChange={(_, data) => {
+          if (!data.open && pendingDeleteRef.current?.scope !== deleteConfirmation?.scope)
+            closeDeleteConfirmation();
+        }}
+      >
+        <DialogSurface aria-describedby="board-delete-dialog-description" aria-busy={pendingForScope || undefined}>
+          <DialogBody>
+            <DialogTitle>Delete task?</DialogTitle>
+            <DialogContent>
+              <Text as="p" id="board-delete-dialog-description">
+                Delete “{confirmationTask?.title ?? deleteConfirmation?.taskTitle}”? This permanently removes the task and its prerequisite links. It does not delete a repository issue.
+              </Text>
+              {confirmationBlocker && (
+                <MessageBar intent="warning"><MessageBarBody>{confirmationBlocker}</MessageBarBody></MessageBar>
+              )}
+              {deleteError && (
+                <MessageBar intent="error"><MessageBarBody role="alert">{deleteError}</MessageBarBody></MessageBar>
+              )}
+              {pendingForScope && (
+                <MessageBar intent="info"><MessageBarBody>Deleting task… This confirmation stays open until the request finishes.</MessageBarBody></MessageBar>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" ref={cancelDeleteRef} disabled={pendingForScope} onClick={closeDeleteConfirmation}>
+                Cancel
+              </Button>
+              <Button
+                appearance="primary"
+                icon={<DeleteRegular />}
+                className={styles.deleteAction}
+                style={{ backgroundColor: tokens.colorPaletteRedBackground3 }}
+                disabled={pendingForScope || !confirmationCurrent || !!confirmationBlocker}
+                onClick={() => void confirmDelete()}
+              >
+                Delete task
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </div>
   );
 }

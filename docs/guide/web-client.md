@@ -76,7 +76,7 @@ The client uses these routes:
 | `/projects` | Browse project tiles and create a project. Creating a project does not make you its owner. |
 | `/projects/:projectId` | Read the project **Dashboard**: setup readiness, metrics, usage, recent runs, team, and quick actions. |
 | `/projects/:projectId/orchestrations` | List this project's active and finished runs and open a run. |
-| `/projects/:projectId/board` | Read the project **Board**: backlog tasks in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture a task and edit a task's title and description. |
+| `/projects/:projectId/board` | Read the project **Board**: backlog tasks in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture, edit, queue, archive, and manage prerequisites; delete eligible tasks after confirmation. |
 | `/projects/:projectId/team` | Read agents, edit an agent's role and charter, add a member, and export or import the team. |
 | `/projects/:projectId/team/cast` | Formulate a team from a goal, analyze read-only project signals, or start from a template; review a pending proposal before confirmation. |
 | `/projects/:projectId/settings?section=<key>` | Edit project settings by section, manage members, read history, and manage connections. |
@@ -144,7 +144,7 @@ Within a project, use these destinations:
 | Destination | Route | What you can do |
 | --- | --- | --- |
 | Dashboard | `/projects/:projectId` | Read setup readiness from the saved configuration, metric tiles, the **Activity** chart, run totals, model and agent usage, recent runs, and the team. Use quick actions to finish setup or open Orchestrations and Memories. |
-| Board | `/projects/:projectId/board` | Read the project backlog in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture and edit tasks, change queue state, manage prerequisites, archive tasks, and select **Refresh** to reload. |
+| Board | `/projects/:projectId/board` | Read the project backlog in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture and edit tasks, change queue state, manage prerequisites, archive or delete eligible tasks, and select **Refresh** to reload. |
 | Orchestrations | `/projects/:projectId/orchestrations` | List the project's runs in **Active** and **Recent** sections, with a status summary. Select **Refresh** to reload. |
 | Agents | `/projects/:projectId/team` | Read the **Total**, **In the team**, and **Not in the team** counts. Filter the agent tiles. Open an agent to read its ID, team position, and skills, or edit its role and charter. Use **Cast team**, **Add member**, and **Sync**. |
 | Skills | `/projects/:projectId/skills` | Browse marketplace sources, preview and import Skills, read the inventory, and assign Skills to agents. |
@@ -175,6 +175,15 @@ the repository issues synced to tasks:
   description. Use **Mark Ready** or **Move to Backlog** to change queue
   state, add or remove prerequisite links, and archive a task. These controls
   are hidden while an automation runs on the task.
+- Select **Delete task** on an eligible, unarchived **Backlog** or **Ready**
+  card to review a confirmation that names the task. Confirming removes the
+  task and its prerequisite links, not its repository issue. **Cancel** or
+  Escape makes no request. Loaded dependents and known repository-issue links
+  disable the action; the owner can still reject accepted-plan origins,
+  issue-sync receipts, or an active sync cycle that the Board snapshot does
+  not expose. A stale revision reloads the Board and requires a new
+  confirmation. This v1 action is not a claim that the mounted 0.x card had
+  the same control.
 - **Ready** records queue intent, not execution eligibility. A run checks
   current prerequisite execution and output evidence when it claims a task.
   The Board does not start a run; use **New session** to create one.
