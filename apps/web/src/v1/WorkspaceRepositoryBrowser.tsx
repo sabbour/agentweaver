@@ -199,7 +199,7 @@ export function WorkspaceRepositoryBrowser({
   }, [apiCall, gateway, issueRepositorySelection, projectId, repository]);
 
   useEffect(() => {
-    if (!repository || authMode !== 'githubApp' || !projectId) return;
+    if (!repositoryFullName || authMode !== 'githubApp' || !projectId) return;
     let active = true;
     setRefsState({
       scope,
@@ -294,7 +294,7 @@ export function WorkspaceRepositoryBrowser({
       validateFile(file, repository, selectedCommitSha, path);
       return { path: file.path, content: file.content, is_binary: file.isBinary, language: file.language };
     } catch (reason) {
-      throw new Error(workspaceError(reason));
+      throw new Error(workspaceError(reason), { cause: reason });
     }
   }, [apiCall, gateway, issueRepositorySelection, projectId, repository, selectedCommitSha]);
 
