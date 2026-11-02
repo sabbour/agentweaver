@@ -89,7 +89,7 @@ normalized to DER, duplicate certificates are removed, and the remaining bytes
 are sorted and length-prefixed before hashing with the
 `agentweaver.cluster-identity.v1\0cluster-ca\0` domain prefix. This makes the
 pin independent of PEM whitespace, certificate order, and API address. The
-Environment adapters read the projected service-account CA file; the native P1
+Environment adapters read the projected service-account CA file; the native
 process adapter reads the selected kubeconfig's CA data and applies the same
 normalization. This avoids requiring permission to read the `kube-system`
 namespace. Both paths still require HTTPS and normal TLS validation.
@@ -99,9 +99,11 @@ accepted as aliases.
 
 ## Authorization and API
 
-### P1 invocation-bound creation
+<span id="p1-invocation-bound-creation"></span>
 
-The internal P1 source path consumes Core's current invocation binding before Environment
+### Invocation-bound creation
+
+The internal invocation-bound source path consumes Core's current invocation binding before Environment
 reserves creation work. A Projects setup receipt alone is not admission to
 Environment, and a Core binding alone is not proof of a provider resource.
 Environment checks the authenticated actor and exact tenant, project, run, root
@@ -112,7 +114,7 @@ unsupported bindings are rejected rather than replaced with ordinary creation.
 These authenticated owner routes use the existing exact run-bound
 `ReadRunSelection` authority plus the current Core binding. They are not mapped
 through Gateway or MCP. Ordinary public creation still requires `WriteProjects`
-and rejects P1 input; Projects still withholds `WriteProjects` from run-bound
+and rejects invocation-bound creation input; Projects still withholds `WriteProjects` from run-bound
 tokens. The internal path does not change sign-in, claims, or role grants.
 
 | Method and internal route | Creation fact |
@@ -146,7 +148,7 @@ owner-generated operation ID, not a relabeled Pod UID.
 
 Binding and reservation fields are immutable. A pending provider link can be
 finalized once as `Completed`, `Failed`, or `Uncertain`; failed or uncertain
-links are never upgraded into P1 evidence by a later recovery or retry.
+links are never upgraded into invocation-bound creation evidence by a later recovery or retry.
 Ordinary resource recovery remains separate. Only retained completed creation
 facts can qualify for a later observation join.
 
@@ -156,7 +158,7 @@ sequenceDiagram
     participant Core
     participant Environment
     participant Provider
-    Caller->>Environment: Request P1 creation with expected binding
+    Caller->>Environment: Request invocation-bound creation with expected binding
     Environment->>Core: Authenticated current-binding read
     Core-->>Environment: Current exact run and root binding, no-store
     Note over Core,Environment: Remote reads do not hold a distributed lock
@@ -181,7 +183,7 @@ slice does not claim current-at-commit revocation across services.
 The [creation evidence reads](../reference/p1-creation-evidence.md) expose the
 retained identities through the current owner-locked runtime read path and a
 separate root-only Host consumer. Native CLI consumption remains separate.
-They do not implement that join, prove a native mount, run the P1 fixture, or
+They do not implement that join, prove a native mount, run the native execution acceptance fixture, or
 close the parent integration issue. `PodObservation` and downward-API fields
 remain configuration/control-plane observations, distinct from Host's actual
 Linux mount observation.
@@ -325,7 +327,7 @@ Incomplete configuration observations return `409` with
 retain their existing error codes.
 
 This source API is **not live evidence** and is **not an invocation-bound
-ownership receipt**. It accepts no invocation ID. Native P1 acceptance still
+ownership receipt**. It accepts no invocation ID. Native execution acceptance still
 needs a separately authoritative invocation-to-creation binding for the exact
 actor, owner, session, execution fence, and resource, plus actual Host/native
 mounted-storage and isolation observations. Joining those receipts is a

@@ -36,7 +36,7 @@ resolver path. It separates A2UI and GitHub Canvas compatibility from Applicatio
 | Layered | Network Policy | `ResolveNetworkPolicy` and `PinNetworkPolicy` support required L3/L4 and optional L7 layers. Pinning requires a matching applied intent generation. |
 | Keyed by meter source | Cost | `ResolveCost` selects one enabled provider per explicit source. `PinCost` and `VerifyCost` validate immutable Cost bindings. Projects persists candidates only. |
 | Per application | Application Hosting | Not implemented. |
-| Per canvas | Canvas (planned P2) | Not implemented in the current enum or resolver. |
+| Per canvas | Canvas (planned) | Not implemented in the current enum or resolver. |
 
 Pinning records provider identity, adapter version, options revision, resource generation, and negotiated capabilities. It does not provision a resource or enforce policy.
 
@@ -140,7 +140,7 @@ Neither candidate provisions resources. These are Memory backends, not replaceme
 for the PostgreSQL Sessions journal.
 
 Application Hosting currently plans only the built-in AKS web runtime.
-Canvas owns A2UI and GitHub Canvas compatibility work. Elastic SAN is outside P2;
+Canvas owns A2UI and GitHub Canvas compatibility work. Elastic SAN is outside this planned provider work;
 Container Apps Sandboxes is a later Sandbox evaluation, not an application host.
 
 ## GitHub Canvas research boundary

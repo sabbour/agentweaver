@@ -2,7 +2,7 @@
   "version": 2,
   "source": {
     "file": "v1-azure-foundation.json",
-    "sha256": "4971c532924de56e005995c657de235862d0b992e028e549d8ba10f7bdb9c095"
+    "sha256": "661bdda49ffc065f62e33dae67927b6181a4937a8fdc0d4de5cde8e2fb27b141"
   },
   "drawio": {
     "file": "v1-azure-foundation.drawio",
@@ -17,6 +17,6 @@
   },
   "png": {
     "file": "v1-azure-foundation.png",
-    "sha256": "de60df6456a6bb2b01d956dcae79a365b7a7e2547d93fb0251482f00ecd53d5a"
+    "sha256": "3fd108156a6f595e8fc0f776fbd906946bb19b41c3210d6a01e603ab7a36d1ce"
   }
 }

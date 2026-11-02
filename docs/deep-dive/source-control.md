@@ -184,7 +184,7 @@ do not create approval.
 
 When a run creates or reuses a pull request, the Orchestrator records the
 number, URL, provider title, state, head and base, run, and disposition. The
-reviewed P1 database plan applies migration 032, which creates the records
+reviewed PostgreSQL grant plan applies migration 032, which creates the records
 table and grants the runtime its exact read and write permissions. Before the
 maintenance run, the owner skips the write and the project list reports that
 records are unavailable. After the migration, the list reads stored records

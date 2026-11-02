@@ -198,7 +198,7 @@ Absent values preserve the legacy path. The RuntimeAction owner also rejects uns
 an action grant. Positive workflow-bound Hosted Copilot hard limits use the same prepared
 dispatch and begin checks against observed whole-run priced usage. The source
 path can record durable hard-limit denial and bounded no-send receipts, but it
-does not establish live boundary acceptance. The P1 dispatch check remains
+does not establish live boundary acceptance. The hard-limit dispatch acceptance check remains
 blocked until permitted live owner receipts prove the limit boundary,
 soft-warning deduplication, later floor advancement, and no-send result.
 
@@ -647,10 +647,10 @@ An absent profile preserves the legacy template and does not configure the new e
 
 `deploy/k8s/profiles/agenthost/runtime-config.example.yaml` is included in the root
 Kustomize installation as the source ConfigMap. It carries only the values sourced
-from the P0 Service definitions, non-secret Broker issuer, shared Events model map,
+from the foundation Service definitions, non-secret Broker issuer, shared Events model map,
 and receipt-measured AgentHost image. The immutable ConfigMap is marked incomplete:
 the exact receiver endpoint is per-Sandbox and must match its authentication
-audience, no P0 queue bound is approved, and no exact existing AgentHost TLS Secret
+audience, no AgentHost queue bound is approved, and no exact existing AgentHost TLS Secret
 name is available. Environment's optional `AgentHost` profile therefore remains
 unset; the source creates neither TLS material nor a Secret reference.
 

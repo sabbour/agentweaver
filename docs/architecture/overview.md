@@ -46,11 +46,11 @@ checks current grants and waits for a durable receipt before a protected effect;
 downstream effect-call-site wiring is not claimed.
 
 Environment uses a separate `EnvironmentMigration` connection for EF Core
-migrations. The P1 maintenance runner starts its migration Job with the
+migrations. The database maintenance runner starts its migration Job with the
 reviewed runtime grant plan; normal startup checks migration history and fails
 while a migration is pending.
 
-For P1-specific creation, Environment consumes the
+For invocation-bound creation, Environment consumes the
 [current Core invocation binding](./environment-sandbox.md#p1-invocation-bound-creation)
 before effects and retains its own operation/result link. Registration and
 provider reservation do not establish that a resource exists. The separate

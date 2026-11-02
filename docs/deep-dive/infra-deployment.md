@@ -71,13 +71,12 @@ the exact `agentweaver-pg.postgres.database.azure.com` host; the guarded root
 release apply does not include that Job or policy.
 
 The Orchestrator and Events and Sessions migrations run as Jobs from the
-`migrations/p1-postgres/` overlay under the P1 migration identity. The local
-`npm run deploy:kustomize` command runs Broker/P1 migrations, then Projects &
-Config migration, before applying the root overlay. The deployment command
-runs the P1/Broker runner with `--migrations-only`, so
-it does not apply an early service rollout or enforce the legacy image-order
-gate; the single root Kustomize apply updates workloads after all migration
-Jobs succeed. The normal standalone `npm run db:maintenance` mode retains its
+`migrations/p1-postgres/` overlay under the database migration identity. The local
+`npm run deploy:kustomize` command prepares migration Jobs for the selected
+service images and waits for them to succeed before applying the root
+workload overlay. Separately, the database maintenance runner's
+`--migrations-only` mode leaves application Deployments unchanged and skips
+the image-order gate. The normal standalone `npm run db:maintenance` mode retains its
 schema-ordering and readiness checks.
 `npm run db:maintenance:setup` prepares the identities, role assignments, and
 GitHub environment for the separate database-maintenance workflow. It also
@@ -91,7 +90,7 @@ from its runtime map because the host validates them before it enters
 settings are loaded.
 
 Orchestrator migration 032 adds Source Control pull request records. The
-reviewed P1 database plan includes the migration and its exact runtime table
+reviewed PostgreSQL grant plan includes the migration and its exact runtime table
 grant, and the maintenance Job applies and records it with the other planned
 migrations. Startup accepts a complete pre-032 schema during rollout, so the
 project pull request list returns `503 pull_request_records_unavailable` until
