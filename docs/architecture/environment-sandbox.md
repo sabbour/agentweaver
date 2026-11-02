@@ -1,13 +1,16 @@
 # Environment Sandbox leases
 
-Use this reference to understand how the unpublished v1 Environment source
-candidate reserves and checks Sandbox leases. A lease is the durable owner
-record that binds one Sandbox operation to its Environment and provider
-resource. A generation fence is a version check that prevents stale operations
-from changing newer owner state. Environment checks the Workspace attachment
-and network policy before it reports dispatch readiness. This page describes
-source behavior; it is not a deployment record or evidence that a live
-Kubernetes cluster or AgentHost runtime was tested.
+An Environment outlives a particular Sandbox placement. Its lease records
+which provider resource belongs to the current execution attempt; the workspace
+volume retains files independently. Retiring a Sandbox releases placement, not
+workspace data or the Environment itself.
+
+Environment reserves a durable lease before calling the provider and checks
+the exact workspace attachment and network policy before reporting dispatch
+readiness. Generation fences reject stale attempts instead of letting them
+change newer owner state. This page explains those v1 source contracts, not
+a live Kubernetes or AgentHost test. The [runtime deep dive](../deep-dive/environment-sandbox.md)
+connects the lifecycle, placement and recovery views.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">
@@ -830,14 +833,14 @@ remain errors.
 
 Retiring Sandbox placement does not transition the Environment to `Released`
 and does not release, delete, or erase its Workspace volume. Storage retention
-and cleanup continue through the independent Workspace lifecycle. This source slice has no
+and cleanup continue through the independent Workspace lifecycle. There is no
 background abandoned-run reaper; Core run-terminal and
 supersede evidence must be added by its owning contract before automatic
 run-status reclamation is enabled.
 
 ## Configuration
 
-For Sandbox provider selection and Environment settings, see the planned
+For Sandbox provider selection and Environment settings, see the
 [provider configuration guide](../guide/configure-providers.md) and
 [runtime configuration reference](../reference/runtime-configuration.md).
 
@@ -865,8 +868,8 @@ double-underscore names, for example
 `Kubernetes:ServiceAccountTokenFile` and
 `Kubernetes:CertificateAuthorityFile` default to the in-cluster service-account
 token and CA paths. The adapter requires trusted HTTPS and uses that service
-account for Kubernetes requests. This source change does not install RBAC or
-change cluster configuration.
+account for Kubernetes requests. Kubernetes RBAC and cluster configuration are
+separate operator prerequisites.
 
 ## Test and evidence boundary
 

@@ -1,11 +1,20 @@
 # Gateway
 
+## 1–4. Goals, constraints, context and strategy
+
 Use this page to understand how the Gateway exposes Agentweaver's owner services
-to the browser and first-party MCP server. The Gateway is a backend-for-frontend
+to browser and native CLI callers. The Gateway is a backend-for-frontend
 (BFF), not a workflow engine: the owner still decides whether a caller has
 current permission and whether a requested transition is valid.
 
-## How Gateway routes requests
+It centralizes authentication, transport bounds and route discovery without
+centralizing domain decisions. Owners remain responsible for current authority
+and valid transitions. Retained MCP compatibility code can consume the same
+OpenAPI; it is not a supported 1.x product surface.
+
+## 5. Building blocks
+
+### How Gateway routes requests
 
 Gateway authenticates the caller, selects a configured owner, forwards the
 request, and returns the owner's result. A finite route catalog maps public
@@ -26,15 +35,18 @@ Identity Broker.
 The browser callers and Broker session handling live in
 `apps/web/src/v1/api.ts` and `AuthContext.tsx`.
 
-## Understand the route boundary
+## 6. Runtime view
+
+### Understand the route boundary
 
 The route catalog declares each operation's method, owner path, operation ID,
 body behavior, and forwarding flags. Callers cannot choose an upstream URL.
 Unknown versioned paths reach the authenticated `route_not_found` fallback
 instead of an arbitrary proxy.
 
-`GET /openapi/v1.json` publishes this finite API contract. The MCP service uses
-it to build its tool catalog. Health and OpenAPI discovery are anonymous;
+`GET /openapi/v1.json` publishes this finite API contract for discovery clients.
+The retained MCP adapter also reads it to build its source tool catalog.
+Health and OpenAPI discovery are anonymous;
 product operations require authentication.
 
 `GET /agents/agentweaver.agent.md` is also anonymous. It returns the operator
@@ -63,7 +75,7 @@ Gateway preserves the owner's response status and body. In particular,
 resource, model turn, or workflow finished. Gateway has no domain database and
 does not reconstruct current state from a cached response.
 
-## Follow a catalog request
+### Follow a catalog request
 
 Before calling a product route, obtain a valid Broker bearer and use a catalog
 operation with its declared method, path, and body.
@@ -83,7 +95,7 @@ specific operations, including skill content and Knowledge import. Ordinary
 owner responses are limited to 8 MiB, and redirects are rejected. See the
 [Gateway/BFF guide](../guide/gateway.md) for operation-specific limits.
 
-## Validate owner TLS
+### Validate owner TLS
 
 Gateway uses `RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler()` for its
 internal owner clients. The handler trusts only the read-only
@@ -96,7 +108,7 @@ the Projects response's no-store header, exact contract shape, caller scope,
 and confirmed tenant context. It does not create membership or derive
 permissions from a selector.
 
-## Understand sign-in and connection flows
+### Understand sign-in and connection flows
 
 Identity Broker owns browser sign-in. Gateway's explicit BFF routes support
 GitHub Repo App, Hosted Copilot, and remote MCP connection management. These
@@ -108,7 +120,7 @@ credential. For browser requests, `Gateway:WebOrigin` identifies one exact
 HTTPS origin. The Copilot connection BFF uses a credentialed cookie policy;
 ordinary versioned API policies do not enable ambient credentials.
 
-## Follow a journal-backed event stream
+### Follow a journal-backed event stream
 
 The public SSE path reads committed Events pages rather than forwarding an
 unverified upstream stream. You need current run-bound project read access and
@@ -129,7 +141,7 @@ Reconnect resumes journal history; it does not trigger model execution. The
 configured owner timeout applies to each owner request, not to the entire
 long-lived SSE connection.
 
-## Diagnose failures
+### Diagnose failures
 
 | Condition | Gateway behavior |
 | --- | --- |
@@ -144,10 +156,39 @@ long-lived SSE connection.
 Retry or reconnect according to the owner contract. Gateway does not retry a
 mutation as a new operation or infer success after a broken connection.
 
+## 7–9. Deployment, shared concepts and decisions
+
+Gateway is a shared HTTPS service with configured owner roots, not an agent
+inside a Sandbox. Browser CORS requires one exact Web origin. Internal owner
+trust uses the backend CA; public issuer discovery uses system trust.
+The [deployment view](./infra-deployment.md) maps workloads and routing.
+
+Current project authority follows [Projects](./projects-config.md);
+[Identity](./identity-secrets.md) owns sign-in, and
+[Events](./events-sessions.md) owns the history projected into SSE.
+The [canonical decision links](./00-system-overview.md#9-architecture-decisions)
+retain their actual statuses; route presence does not establish support or
+live availability.
+
+## 10–12. Quality, risks and glossary
+
+| Context and stimulus | Response and measure | Verification state |
+| --- | --- | --- |
+| An authenticated caller requests an unknown versioned route | Return `route_not_found`; no arbitrary upstream request | Gateway route/proxy tests |
+| Projects denies read access during SSE | Stop further event disclosure and abort the stream | Controlled authorization/stream tests |
+| An owner response exceeds its bound or redirects | Return `502`, or abort an already-started response | Controlled owner-response tests; not live TLS proof |
+
+Gateway availability depends on the selected owner. Retrying a broken mutation
+connection as a new operation risks duplicate effects; callers must use the
+owner's idempotency/reconciliation contract.
+
+**Terms:** BFF means backend-for-frontend; SSE is a server-sent event stream;
+an owner result is domain status, not a Gateway inference of completion.
+
 ## Related content
 
 - [System overview](./00-system-overview.md) places Gateway in the request flow.
-- [MCP server](./mcp-server.md) explains its OpenAPI-based client.
+- [Retained MCP adapter](./mcp-server.md) explains the compatibility client.
 - [Events and sessions](./events-sessions.md) explains replay and private material.
 - [Gateway/BFF guide](../guide/gateway.md), [web client guide](../guide/web-client.md),
   [runtime configuration reference](../reference/runtime-configuration.md), and

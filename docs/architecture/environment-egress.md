@@ -1,19 +1,22 @@
 # Environment egress policies
 
-Use this reference to understand how the Environment source candidate compiles
-and verifies outbound network access (egress) for a run. Cilium is the
-Kubernetes network-policy API used to apply and read policy objects. A verified
-object does not prove that the Cilium datapath enforced its rules. This source
-candidate is not deployed, does not label or provision AgentHost Pods, and
-does not yet connect to the existing run/environment registration producer.
+Network permission is the intersection of platform policy, project narrowing
+and admitted run needs. Environment compiles that intent into Cilium policy
+and verifies the saved generation. A matching policy object is necessary
+evidence for readiness, not proof that packets were filtered.
 
-The same Environment candidate owns workspace-volume lifecycle routes and
+This page explains the v1 egress mechanism, not a live network test. Cilium
+provides the Kubernetes policy API. Pod placement and runtime registration
+are separate from compiling egress.
+
+The same Environment owner manages workspace-volume lifecycle routes and
 registers the Azure Files CSI Storage provider. This article covers only
 egress; the [foundation overview](./overview.md#workspace-volume-lifecycle)
 summarizes volume lifecycle, pinned provider bindings, and Replace cleanup.
-Neither candidate is deployed by this source change.
+See the [Environment deep dive](../deep-dive/environment-sandbox.md) for the
+combined placement path.
 
-The same owner schema now contains the current Sandbox lease source primitive.
+The same owner schema contains the Sandbox lease state.
 The placement read verifies its active lifecycle, full owner tuple, provider reference,
 lease revision, expiry, and separate provider/current fences. It rereads the lease
 after the final awaited authorization check. Profile lookup matches that exact
@@ -23,7 +26,7 @@ run-bound read-only lookup is integration work, not an egress mutation permissio
 
 ## Ownership and operation
 
-For provider selection and Environment settings, see the planned
+For provider selection and Environment settings, see the
 [provider configuration guide](../guide/configure-providers.md) and
 [runtime configuration reference](../reference/runtime-configuration.md).
 
@@ -261,9 +264,9 @@ into the owner-specific Sandbox template and checks them on the actual Pod. The
 Network provider remains responsible only for Cilium policy; it does not create
 or own Sandbox resources. See the
 [Environment Sandbox architecture](environment-sandbox.md) for that separate
-composition. This source slice does not add Kubernetes RBAC/workload identity
-or bind the existing run/environment registration producer. The host is wired
-but is not deployed by this work. Policy verification proves only that the
+composition. Kubernetes RBAC, workload identity and run/environment registration
+are separate prerequisites, not results of applying a Cilium policy.
+Policy verification proves only that the
 expected Kubernetes object was persisted and observed. Real datapath probes and
 live cluster evidence are reserved for the separate network-acceptance work;
 no probe or deployment is performed by these tests.
@@ -276,3 +279,14 @@ narrowing, stale authorization callbacks, Cilium option and capability
 negotiation, absent-policy revocation fences, and the explicit L7 limitation. The
 [testing guide](../guide/testing.md) lists the command and what the tests cannot
 prove.
+
+## Trade-offs and limits
+
+Intersecting intent prevents project settings from widening platform egress,
+but cannot express or prove application-layer mediation through the Cilium-only
+adapter. A policy generation is a control-plane observation, not an observed
+network flow. Keep L7 requirements and native datapath verification explicit.
+
+Use the [Environment runtime view](../deep-dive/environment-sandbox.md) to
+connect egress to placement and the [deployment view](../deep-dive/infra-deployment.md)
+to locate controller, network and identity prerequisites.

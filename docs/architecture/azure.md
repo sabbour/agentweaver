@@ -1,8 +1,12 @@
 # Azure foundation resources
 
-Use this reference to review the v1 Azure foundation defined in
-`infra/bicep/main.bicep`. Bicep is Azure's declarative infrastructure language;
-AKS means Azure Kubernetes Service. The template defines a dedicated network
+The Azure foundation supplies infrastructure; service owners supply product
+authority. Private networking, workload identity and separate migration
+identities constrain how owners reach their databases and backends. They do
+not replace project roles, run bindings or credential grants.
+
+`infra/bicep/main.bicep` is the v1 foundation's declarative source. AKS means
+Azure Kubernetes Service. The template defines a dedicated network
 and cluster, Entra-only PostgreSQL, and Key Vault, Blob Storage, and Azure
 Monitor resources. PostgreSQL, Key Vault, and Blob use private networking;
 Azure Monitor uses a private query path and an explicit ingestion path.
@@ -10,6 +14,10 @@ Blob creates private `platform-artifacts` and `session-material` containers.
 
 These definitions do not show that anyone deployed the resources, that private
 DNS resolves, or that a service has live access.
+
+The figures below separate static resource dependencies from ordered probe
+verification. For software-to-workload mapping and publication/rollout
+boundaries, read the [deployment deep dive](../deep-dive/infra-deployment.md).
 
 For the Broker, initial schema bootstrap is separate from runtime table access.
 The migration Job applies the canonical table grants as the migration owner,

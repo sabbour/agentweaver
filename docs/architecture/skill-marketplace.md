@@ -1,11 +1,20 @@
 # Skill marketplace sources
 
-Use this reference to understand how Projects & Config stores and browses
-project skill sources. A source points to a public GitHub repository, a
+Browsing a skill and assigning executable content are different actions.
+Projects & Config stores marketplace source settings; browse resolves public
+content, while import creates a retained project content revision. Accepted
+runs use assigned imported pins, not later bytes from a moving branch.
+
+A source points to a public GitHub repository, a
 requested Git ref such as a branch or tag, and an optional subpath. Its revision
 tracks source settings, not skill content, and does not authorize you to read
 or run a skill. Browse resolves the ref to an exact commit before it reads
 manifests.
+
+This page explains v1 source ownership and bounds. It does not establish that
+an upstream repository is available or that an AgentHost loaded the skill.
+See [Projects and configuration](../deep-dive/projects-config.md) for how
+reviewed skill pins become part of a run.
 
 Source URLs must identify a public GitHub repository over HTTPS. Marketplace
 reads are anonymous: this API does not use a caller's GitHub token and does not

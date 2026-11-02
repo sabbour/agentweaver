@@ -1,10 +1,14 @@
 # Events & Sessions journal
 
-Use this reference to understand the v1 Events & Sessions source candidate.
-An event journal stores ordered records of run activity; a project fact is a
-separate project-scoped record of an accepted effect. The unpublished
-`Agentweaver.EventsAndSessions` service implements both source boundaries, but
-it is not a deployed platform service.
+The journal answers “what committed, and in what order?” Orchestrator answers
+“what may execute next?” Keeping those questions separate lets readers replay
+history without repeating effects or approving workflow gates.
+
+`Agentweaver.EventsAndSessions` owns ordered run events, typed material
+references, addressed delivery and accounting. Project facts form a separate
+project-scoped stream of accepted effects. This page describes v1 source
+contracts, not a deployment record. The [deep dive](../deep-dive/events-sessions.md)
+connects append, replay, material and delivery paths.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">
@@ -32,18 +36,17 @@ The host binds the native PostgreSQL journal as the default and requires the ful
 `Agentweaver.Abstractions`; optional provider implementations may advertise fewer
 capabilities, but the current host does not route runs to a non-native journal.
 
-This source slice connects owner-validated addressed-message delivery to session
-turn-boundary requests. It does not implement the rest of the proposed platform:
-automatic AgentHost scheduling, a background delivery relay, gate approval decisions,
-consistency manifests, MAF checkpoints, or Gateway/UI/MCP routes.
-The broader Sessions and coordination design remains Proposed for those workflows.
+Addressed delivery connects to explicit session turn boundaries. It does not
+provide an automatic AgentHost scheduler or background delivery relay. Gate
+approval and MAF checkpoints belong to Orchestrator, not this journal.
+Gateway and browser projections are separate consumers; retained MCP code is
+not a supported product entrypoint.
 
 ## Typed session material
 
-The [session-material composition decision](session-material-composition.md)
-separates implemented foundations from the remaining retention and combined
-production-evidence work. It keeps this owner boundary and does not add a generic
-content API.
+The [session-material composition](session-material-composition.md) explains
+write-before-reference persistence, read-time retention and cleanup. It keeps
+this owner boundary and does not add a generic content API.
 
 Events owns bounded `TurnContent` and `SdkCache` material through the existing
 `IObjectStore` provider. This interface is not a general Blob API.

@@ -1,5 +1,7 @@
 # Knowledge and memory
 
+## 1–4. Goals, constraints, context and strategy
+
 Use this page to understand how Agentweaver turns Knowledge records into
 bounded context for an agent and how it records the history behind memories,
 decisions, and accepted proposals. Knowledge is not the run journal.
@@ -10,7 +12,13 @@ revisions, idempotency receipts, and accepted-effect delivery state. Changing
 the provider does not move Projects authority or the Events journal into that
 backend.
 
-## Find the implementation
+Provider-neutral operations keep context rules consistent across backends.
+The trade-off is that each operation must verify the saved provider binding
+and current Projects authority; changing a default cannot make old data move.
+
+<span id="find-the-implementation"></span>
+
+## 5. Building blocks
 
 All listed files are under `services/knowledge/Agentweaver.Knowledge/`.
 
@@ -27,7 +35,9 @@ All listed files are under `services/knowledge/Agentweaver.Knowledge/`.
 | `AcceptedEffectRelay.cs` | Receipt delivery to Events |
 | `KnowledgeTransferValidator.cs` and `KnowledgeMigrator.cs` | Transfer validation and explicit schema setup |
 
-## Check access before using records
+## 6. Runtime view
+
+### Check access before using records
 
 An agent ID selects a row; it does not prove caller identity. Knowledge obtains
 fresh `AccessPrivateKnowledge` permission from Projects & Config for the
@@ -51,7 +61,7 @@ order before paging. Each result's `accessRunId` identifies the existing run
 binding that authorizes its history read. The record's `sourceRunId`, when
 present, remains separate provenance.
 
-## Keep record history append-only
+### Keep record history append-only
 
 Updates use an expected revision and idempotency key. Edits, archive,
 supersession, approval, and restore append revisions. Restore creates an
@@ -62,7 +72,7 @@ Versioned Memory and Decision transfers preserve history. Import is bounded,
 scoped to a project and agent, and non-merging. It cannot overwrite an
 existing record head.
 
-## Select a Memory provider
+### Select a Memory provider
 
 Before using Knowledge, supply current Projects authority and an accepted
 selection that names the run's provider candidate.
@@ -87,7 +97,7 @@ trigger fallback. See the [provider configuration guide](../guide/configure-prov
 and [runtime configuration reference](../reference/runtime-configuration.md)
 for supported settings.
 
-## Compile context for an agent
+### Compile context for an agent
 
 `MemoryContextCompiler` handles three inputs:
 
@@ -111,7 +121,7 @@ The service applies its `DefaultContextTokens` ceiling and the lower accepted
 prompt-token cap when present. This retrieval budget is not a hard limit on
 every native model request.
 
-## Deliver an accepted project fact
+### Deliver an accepted project fact
 
 The selected provider commits an accepted-effect receipt and delivery intent
 with the local change. `AcceptedEffectRelay` claims the receipt, sends its ID
@@ -123,12 +133,41 @@ delivery state with the lease token.
 A transport failure, owner denial, or invalid acknowledgment leaves delivery
 pending. Retrying delivery does not recreate the accepted local change.
 
-## Diagnose Knowledge failures
+### Diagnose Knowledge failures
 
 Revoked authority blocks record access. A changed selection or provider pin
 blocks an operation rather than moving data to another backend. Revision and
 idempotency conflicts remain explicit. Context containing a foreign project
 fails instead of being filtered into a successful response.
+
+## 7–9. Deployment, shared concepts and decisions
+
+Knowledge runs as a shared HTTPS service. PostgreSQL retains service bindings;
+the selected Memory backend retains records and accepted-effect delivery state.
+Cosmos and Redis adapters require their own configured resource constraints;
+they do not provision resources. See the [deployment view](./infra-deployment.md).
+
+Authority follows [Projects](./projects-config.md), and accepted facts cross
+into [Events](./events-sessions.md) through receipt admission, not a shared
+transaction. The [canonical ADR view](./00-system-overview.md#9-architecture-decisions)
+owns decision status; a pending record never becomes an approved Decision
+merely because it was retrieved.
+
+## 10–12. Quality, risks and glossary
+
+| Context and stimulus | Response and measure | Verification state |
+| --- | --- | --- |
+| A caller searches without a run or agent selector | Use existing authorized project bindings, one global order and no new pin | Knowledge/provider discovery tests; not deployed discovery |
+| Mandatory Decisions exceed the context budget | Fail instead of dropping required context | Context-compiler tests; four characters per approximate token |
+| Events acknowledgment is lost | Keep delivery pending and retry the same accepted-effect receipt | Relay/provider tests; no cross-service atomicity claim |
+
+Approximate token budgeting is not a hard model-input measurement. The
+Knowledge owner must keep omission reasons explicit and the runtime must apply
+its separate prompt-capacity contract.
+
+**Terms:** Memory is a reusable record; Decision is governed context;
+SessionContext is run/agent context; `accessRunId` authorizes a history read
+and is distinct from `sourceRunId` provenance.
 
 ## Related content
 

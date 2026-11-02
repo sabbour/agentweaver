@@ -1,12 +1,16 @@
 # Projects & Config service
 
-Use this reference to understand how the unpublished .NET 10
-`Agentweaver.Projects.Config` source owns project lifecycle, versioned
-configuration, platform runtime defaults, and immutable run selections in the
-`projects_config` PostgreSQL schema. A run selection is the accepted snapshot
-of settings and provider candidates for one project run; it is not proof that a
-provider resource exists. Source presence is not evidence of deployment or
-release.
+Projects & Config separates editable settings from accepted execution input.
+An edit creates a configuration revision. Accepting a run freezes its exact
+inputs, while later operations still check current membership and roles.
+Neither a saved revision nor an unexpired token preserves revoked authority.
+
+The .NET 10 `Agentweaver.Projects.Config` owns project lifecycle, configuration,
+platform runtime defaults and immutable run selections in `projects_config`.
+A selection contains settings and provider candidates, not provisioned
+resources. This page describes v1 source, not a release or deployment. The
+[Projects deep dive](../deep-dive/projects-config.md) explains revision races
+and the acceptance transaction.
 
 ```mermaid
 sequenceDiagram
@@ -31,7 +35,7 @@ sequenceDiagram
 
 ## Selected runtime profile
 
-For runtime settings, see the planned
+For runtime settings, see the
 [runtime configuration reference](../reference/runtime-configuration.md).
 
 The separate source renderer under `deploy/k8s/profiles/projects-config/`
@@ -252,14 +256,15 @@ Environment separately consumes the
 [current Core invocation binding before creation](./environment-sandbox.md#p1-invocation-bound-creation)
 and retains its own operation/result identities; that local owner transaction
 does not extend the lifetime of Projects or Core authority locks.
-The P1 fixture runner is not wired to this endpoint by this change.
+This setup receipt alone does not establish that a native fixture runner used
+the endpoint or completed the journey.
 
 The hosted reasoning publication contains only supported effort names and the
 binding reference, connection, revision, and verification time. AgentHost does
 not send the hosted credential or model ID. Projects & Config returns a
 publication only for the same actor, project, connection, and model-binding
 revision, and only while it is less than 24 hours old. A delayed older
-publication cannot replace a newer value. Settings now reads current hosted
+publication cannot replace a newer value. Settings reads current hosted
 levels from AgentHost's separate live catalog route; this stored publication
 remains a non-authoritative hint. AgentHost checks every requested effort
 against the live SDK catalog when a run starts.

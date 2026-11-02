@@ -1,11 +1,16 @@
 # Identity and secret management
 
-Use this reference to understand how the Identity Broker validates sign-in,
-issues Agentweaver tokens, checks secret grants, and keeps credentials behind
-owner-controlled boundaries. OpenID Connect (OIDC) adds identity claims to the OAuth authorization
-framework. The .NET 10 `Agentweaver.Identity.Broker` source uses
-OpenIddict and owns the `identity_broker` PostgreSQL schema. It remains a
-service candidate with no published image or deployment.
+Signing in establishes who you are, not which project or credential you may
+use. Identity Broker validates upstream identity and issues Agentweaver tokens.
+Projects & Config owns current project roles; Identity checks exact
+purpose-bound grants before redeeming credentials.
+
+The .NET 10 `Agentweaver.Identity.Broker` uses OpenIddict and owns the
+`identity_broker` PostgreSQL schema. OpenID Connect (OIDC) adds identity claims
+to OAuth authorization. This page explains implemented v1 identity boundaries
+and explicitly labeled proposals, not deployment availability. The
+[Identity deep dive](../deep-dive/identity-secrets.md) follows the normal and
+revocation paths.
 
 The broker accepts an external OIDC provider. It validates the upstream issuer, signature, audience, expiry, and nonce before it creates a local user.
 
@@ -814,9 +819,9 @@ check. Read-only bootstrap verification rejects missing post-migration grants.
 See [migration history and grants](../reference/runtime-configuration#identity-broker-migration-history-and-grants)
 for the separately approved repair path.
 
-The Kubernetes source defines an HTTPS Deployment behind an HTTPS `ClusterIP`
-Service. It defines no Ingress, Gateway, or ingress controller. The source has
-not been deployed. Operators must supply the real issuer and external OIDC
+The Broker workload base defines an HTTPS Deployment behind an HTTPS `ClusterIP`
+Service. Public Gateway routing is a separate source composition; neither
+manifest establishes observed deployment. Operators must supply the real issuer and external OIDC
 authority/domain, client registrations, and credentials. They must also supply
 the approved immutable image, TLS certificate/key, signing PFX/password, and
 durable key-ring storage. Required database inputs include the approved

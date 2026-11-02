@@ -1,5 +1,7 @@
 # Agent runtime
 
+## 1–4. Goals, constraints, context and strategy
+
 Use this page to understand how AgentHost bootstraps and runs a model session
 inside a selected Sandbox. AgentHost is the execution host;
 `Agentweaver.AgentRuntime` is the shared library that creates and guards its
@@ -12,7 +14,13 @@ matches Orchestrator, Environment, and Identity.
 The current host uses `GitHub.Copilot.SDK` 1.0.18 with native runtime 1.0.97.
 Microsoft Agent Framework belongs to Orchestrator, not this model harness.
 
-## Find the runtime implementation
+The approach keeps native execution inside a selected resource while owners
+retain authority outside it. More owner checks mean more failure boundaries;
+an earlier successful bootstrap cannot authorize later work after revocation.
+
+<span id="find-the-runtime-implementation"></span>
+
+## 5. Building blocks
 
 | Source | Responsibility |
 | --- | --- |
@@ -30,7 +38,9 @@ These files are under `services/agenthost/Agentweaver.AgentHost/` and
 `packages/Agentweaver.AgentRuntime/`. Runtime registration, grant, placement,
 and owner transport contracts live in `packages/Agentweaver.Identity/`.
 
-## Check the authority boundaries
+## 6. Runtime view
+
+### Check the authority boundaries
 
 Orchestrator owns runtime registration and accepted execution binding.
 Environment owns the current Sandbox lease, resource generation, image, and
@@ -58,7 +68,7 @@ startup phase evidence and budgets before reporting runtime readiness.
 prerequisites. Authenticated `/runtime/v1/readiness` returns a current,
 noncredential receipt; it does not start the SDK or send a turn.
 
-## Bootstrap a runtime session
+### Bootstrap a runtime session
 
 Before bootstrap, AgentHost needs the current runtime registration, an accepted
 model binding, configured owner addresses, and the selected Sandbox placement.
@@ -84,7 +94,7 @@ Bootstrap failure cleans up the prepared SDK session and invalidates acquired
 credentials. An exact activation replay reuses the existing session only when
 configuration and binding match.
 
-## Run a turn
+### Run a turn
 
 Authenticated `POST /runtime/v1/a2a/message:send` accepts a bound user message
 with one text part, a nonempty message ID, the native context ID, and
@@ -112,7 +122,7 @@ The non-workflow turn path also guards the model action and commits user
 content, assistant content, and cache. Supplying a message ID does not give
 this path workflow-specific usage affinity.
 
-## Enforce tools and budgets
+### Enforce tools and budgets
 
 Native tools map to named actions such as `tool.read`, `tool.write`, and
 `exec.shell`. Permission checks bind the native session, active message, tool
@@ -133,7 +143,7 @@ context still does not fit. See the
 [provider configuration guide](../guide/configure-providers.md) for supported
 settings and provider setup.
 
-## Understand durability and recovery
+### Understand durability and recovery
 
 Turn content and SDK cache bytes use Events' typed material API. The runtime
 does not choose storage keys or treat a local file as a durable acknowledgment.
@@ -155,7 +165,7 @@ native state, and flushes the mounted workspace before returning evidence.
 Resume verifies saved configuration, cache or journal input, current
 registration, and restored workspace through the owner-controlled path.
 
-## Diagnose runtime failures
+### Diagnose runtime failures
 
 Authentication failure returns `401`; current-authority rejection returns
 `403`; invalid input returns `400`; owner, startup, and execution failures
@@ -169,6 +179,36 @@ preserving earlier authority.
 Collector executable modes are separate from model execution. They collect
 bounded BuildTest files or workspace output under trusted contracts; they do
 not create an SDK session or schedule an agent.
+
+## 7–9. Deployment, shared concepts and decisions
+
+AgentHost runs per Sandbox, not as an automatic shared scheduler. Its image
+owns the native executable; Environment supplies the placement, private state
+and workspace mounts. The [deployment view](./infra-deployment.md) describes
+the target infrastructure, not an observed running host.
+
+Authority and credential handling follow [Identity](./identity-secrets.md).
+Durable material follows [Events](./events-sessions.md), not local cache files.
+The [system decision view](./00-system-overview.md#9-architecture-decisions)
+links canonical ADRs and their statuses; the credential-less Sandbox approach
+remains a proposal, not this runtime's implemented credential path.
+
+## 10–12. Quality, risks and glossary
+
+| Context and stimulus | Response and measure | Verification state |
+| --- | --- | --- |
+| Same host receives the same message ID again | Identical content shares the result; changed content conflicts | Runtime request/deduplication tests; not cross-process exactly-once proof |
+| Placement or grant changes during a turn boundary | Current checks block another protected send | Owner/runtime controlled tests; no paid-model claim |
+| Compatible cache is unavailable | Rebuild retained authorized context or fail explicitly; do not replay effects | Recovery tests; production restore is separate |
+
+Process loss can leave uncertain external work. The runtime owner must resolve
+recorded content and usage before admitting further work; a local cache or
+readiness response cannot settle it. Native compaction is not a guarantee that
+every internal provider request stays below a hard token threshold.
+
+**Terms:** bootstrap creates a bound session; registration identifies current
+owner execution; readiness reports prerequisites. `MaxPromptTokens` is prompt
+capacity, not cumulative run usage. See the [shared glossary](./00-system-overview.md#12-glossary).
 
 ## Related content
 

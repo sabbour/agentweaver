@@ -1,14 +1,28 @@
 # Deep dives
 
-Use these articles to understand how Agentweaver v1 works across service
-boundaries. Start with the system overview, then follow the subsystem that
-interests you. The pages describe checked-in behavior; they do not imply that a
-planned feature or a deployment is available.
+Start with the [system overview](./00-system-overview.md) to understand who
+decides, who executes and who records history. Then choose the owner or failure
+path you need. These pages describe v1 source; they are not a live deployment
+inventory or evidence that every planned feature is accepted.
 
 The [architecture pages](../architecture/overview.md) explain component
 boundaries. The [reference](../reference/contracts.md) records contracts and
 endpoints. These deep dives connect those boundaries to request flow, state, and
 failure handling.
+
+## How the views fit together
+
+The system overview uses arc42's twelve complementary views: goals,
+constraints, context, strategy, building blocks, runtime, deployment,
+crosscutting concepts, decisions, quality requirements, risks and glossary.
+Subsystem pages combine the opening context views and delegate shared
+deployment/decisions to canonical pages rather than repeat a framework.
+Each expands its important runtime, failure and recovery paths.
+
+Static dependencies do not establish message order. Runtime sequences do not
+establish a deployed topology. Quality scenarios name an observable response
+and verification boundary, not an invented production SLO. ADRs retain their
+actual status in the [system decision view](./00-system-overview.md#9-architecture-decisions).
 
 ## System and orchestration
 
@@ -22,8 +36,8 @@ failure handling.
   messages, session material, and usage records work.
 - [Agent runtime](./agent-runtime.md) — Follow runtime bootstrap, SDK turns,
   tool authorization, and recovery.
-- [MCP server](./mcp-server.md) — See how Gateway operations become authenticated
-  MCP tools, and how acceptance differs from completion.
+- [Retained MCP compatibility adapter](./mcp-server.md) — Understand source
+  OpenAPI-to-tool translation, not a supported 1.x product entrypoint.
 
 ## Identity, configuration, and execution resources
 

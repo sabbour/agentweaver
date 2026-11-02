@@ -1,5 +1,7 @@
 # Infrastructure and deployment
 
+## 1. Introduction and Goals
+
 Use this page to understand the checked-in Azure and Kubernetes deployment
 paths. Infrastructure provisioning, artifact publication, and runtime rollout
 are separate operations. This page describes source and tooling; it does not
@@ -8,7 +10,28 @@ report a live rollout.
 A successful build does not prove that a cluster deployment or end-to-end
 product acceptance succeeded.
 
-## Find deployment source
+## 2. Constraints
+
+Deployment requires an explicitly approved target, operator identity and exact
+source/image selection. It does not bootstrap project roles, widen resource
+permissions or provision missing credentials. Database migration authority
+remains separate from runtime identities.
+
+## 3. Context and Scope
+
+Azure supplies infrastructure and workload identities; Kubernetes supplies
+placement and network/resource APIs; GHCR and GitHub Packages hold distinct
+artifact types. Operators authorize provisioning and rollout. A source
+manifest describes intended composition, not the state of any one environment.
+
+## 4. Solution Strategy
+
+The source separates foundation provisioning, immutable image publication and
+migration-first workload rollout. This keeps runtime identities narrow and
+rollouts reproducible, but requires prepared identity, DNS, certificates and
+database grants before workloads can become ready.
+
+## 5. Building Block View
 
 | Source | Responsibility |
 | --- | --- |
@@ -27,7 +50,7 @@ product acceptance succeeded.
 
 The Azure acceptance verifier is `scripts/azure/verify-acceptance.mjs`.
 
-## Keep source and deployment boundaries
+### Keep source and deployment boundaries
 
 - The image workflow tags each direct GHCR push with its Git commit and
   reports the registry digest.
@@ -75,7 +98,7 @@ project pull request list returns `503 pull_request_records_unavailable` until
 the Job applies the plan. See the
 [Azure tooling notes](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md).
 
-## Understand the Azure foundation
+### Understand the Azure foundation
 
 `main.bicep` is an Azure infrastructure-as-code template. It targets a
 dedicated resource group and defines:
@@ -109,7 +132,9 @@ region.
 See [Azure architecture](../architecture/azure.md) for the resource and region
 contract.
 
-## Plan and deploy from an exact commit
+## 6. Runtime View
+
+### Plan and deploy from an exact commit
 
 Before planning or deploying, use a clean checkout with a full source commit
 admitted by `origin/v1`, and select the dedicated target.
@@ -132,7 +157,9 @@ acceptance inputs are separate operations; compiling Bicep does not imply them.
 The acceptance verifier checks exact target, image, source, receipt, identity,
 and fresh Monitor evidence after the Probe Job completes.
 
-## Understand Kubernetes workload boundaries
+## 7. Deployment View
+
+### Understand Kubernetes workload boundaries
 
 The base contains namespace limits, default-deny networking, service accounts,
 and the Broker Deployment and private HTTPS Service. The Broker migration Job
@@ -151,7 +178,11 @@ The shared runtime `List` contains nine service Deployment/Service pairs.
 AgentHost is the tenth product image, but it runs per Sandbox instead of as a
 shared Deployment.
 
-## Build and publish
+That source inventory includes the retained MCP compatibility workload and
+ingress. It does not make MCP a supported 1.x product or acceptance surface.
+Gateway/API, browser and native .NET CLI remain the supported client paths.
+
+### Build and publish
 
 The v1 image workflow builds all ten images used by the root Kustomize overlay
 when service code, Docker build inputs, or component versions change. AgentHost
@@ -167,24 +198,17 @@ Packages. The native CLI archive workflow remains separate. These workflows
 do not transfer image archives or require image publication receipts or
 source-claim gates.
 
-## Deploy the Kustomize overlay
+### Migration-first workload rollout
 
-Run the workload deployment locally from an approved operator machine with an
-interactive Azure CLI identity and the intended Kubernetes context. Select
+The workload command runs locally from an approved operator machine with an
+interactive Azure CLI identity and the intended Kubernetes context. It selects
 image repositories using the operator-supplied JSON manifest documented in
 the [Kustomize guide](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md#select-images-with-a-manifest);
 omitted repositories retain their live image references. The legacy
-`--image-tag` form updates all ten images:
-
-```powershell
-az login
-az account set --subscription <approved-subscription>
-az aks get-credentials --resource-group agentweaver --name agentweaver-aks `
-  --subscription <approved-subscription>
-kubelogin convert-kubeconfig --login azurecli
-kubectl config current-context
-npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --execute
-```
+`--image-tag` form updates all ten images. Use the
+[release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md)
+for the approved operator procedure; this view explains its boundaries rather
+than duplicate login, target selection and mutation steps.
 
 The command resolves selected image references to immutable digests, runs
 only the selected services' migrations with runtime-grant reconciliation,
@@ -217,6 +241,56 @@ Projects schema, migrations, and reviewed grants in one transaction.
 
 Azure provisioning, certificates, runtime configuration, and Gateway routing
 remain separate prerequisites and are not changed by the workload rollout.
+
+## 8. Crosscutting Concepts
+
+Workload identity authenticates a process to its backend; Projects roles and
+owner grants authorize product actions. Neither replaces the other.
+TLS trust, fixed owner roots, default-deny policies and per-resource scopes
+constrain transport and resource access. Database grants remain explicit:
+startup checks do not repair them.
+
+Images, NuGet packages, native CLI archives and site output have different
+publication paths. A package version or image digest does not prove a running
+workload, complete acceptance or CLI/API compatibility.
+
+## 9. Architecture Decisions
+
+The [platform ADR](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/decisions/0001-platform-architecture.md)
+remains Proposed. [ADR 0002](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/decisions/0002-project-issue-sync-delegation.md)
+records accepted/source-implemented delegation, not deployed issue sync.
+The [services and release design](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/services-and-release.md)
+provides additional design context, not a second operational runbook.
+
+## 10. Quality Requirements
+
+| Context and stimulus | Affected block and response | Measure | Verification state |
+| --- | --- | --- | --- |
+| A selected migration fails | Deployment helper stops before root overlay apply | No workload apply after failed prerequisite Job | Controlled deployment-tool tests |
+| Runtime grant inventory differs from the reviewed plan | Migration owner rejects transactional reconciliation | No blanket/default grant substitution | Grant/migration tests; no live permission claim |
+| Operator omits an image repository from the manifest | Deployment helper preserves its live image reference | Only selected image changes | Manifest/deployment-helper tests |
+
+These are source contracts, not rollout-time or availability SLOs.
+
+## 11. Risks and Technical Debt
+
+Wrong target context can mutate the wrong workload. Operators must follow
+exact-source planning and verify the selected context rather than infer it
+from a successful render. A stopped rollout can leave migrations applied
+without updated workloads; schema compatibility and rollout recovery remain
+owner responsibilities.
+
+Source checks cannot establish private DNS, TLS handshakes, CSI flush, network
+datapath behavior or paid model execution. Those require separately approved
+environment-specific observations.
+
+## 12. Glossary
+
+- **Provisioning:** create or configure infrastructure resources.
+- **Publication:** make a package/image/archive available in its registry.
+- **Deployment:** apply software/configuration to an execution environment.
+- **Acceptance:** verify the required behavior against exact source, identity
+  and resource evidence; narrower health or read checks are not equivalent.
 
 ## Related content
 

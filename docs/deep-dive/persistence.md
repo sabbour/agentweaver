@@ -1,10 +1,18 @@
 # Persistence
 
+## 1–4. Goals, constraints, context and strategy
+
 Use this page to understand where Agentweaver stores authoritative state and
 how services deliver changes without a cross-service transaction. PostgreSQL,
 the run journal, Blob objects, and workspace volumes serve different purposes.
 
-## Understand the storage boundaries
+Local transactions keep a producer's state and delivery intent together.
+They deliberately stop at the owner boundary: a remote commit can succeed
+without its acknowledgment reaching the caller.
+
+## 5. Building blocks and state ownership
+
+### Understand the storage boundaries
 
 PostgreSQL stores service-owned state. The shared persistence package provides
 local outbox and inbox primitives; each service owns its domain schema and
@@ -26,7 +34,7 @@ transaction across services.
 
 Telemetry does not reconstruct these records.
 
-## Find the implementation
+### Find the implementation
 
 - `packages/Agentweaver.Persistence.Postgres/` contains `PostgresOutbox.cs`,
   outbox contracts, relay logic, inbox admission, and shared migrations.
@@ -37,7 +45,9 @@ Telemetry does not reconstruct these records.
 - `services/knowledge/Agentweaver.Knowledge/KnowledgeMigrator.cs` applies its
   embedded SQL migrations.
 
-## Follow an outbox message
+## 6. Runtime view
+
+### Follow an outbox message
 
 To use the shared relay, the producer must have a local transaction and the
 host must invoke the relay with an `IOutboxPublisher`. The library does not
@@ -61,7 +71,7 @@ returns no lease if the event is absent, delivered, leased, or behind another
 undelivered event. Orchestrator uses this path for synchronous owner-message
 admission.
 
-## Understand delivery guarantees
+### Understand delivery guarantees
 
 Delivery is **at least once**. Publication may complete before the publisher
 receives confirmation, or a process may stop after publishing but before it
@@ -76,7 +86,7 @@ identical event returns its saved identity and sequence. Reusing an event ID or
 idempotency key for different data raises `OutboxConflictException`. An exact
 duplicate does not consume a new committed stream position.
 
-## Store journal content and objects
+### Store journal content and objects
 
 Events & Sessions owns journal order, session identity, provider bindings, and
 object-reference retention. Its `events_sessions` schema combines shared
@@ -89,7 +99,7 @@ transaction. The object bytes are written before a specialized material
 writer commits their reference. An unreferenced object is not a committed
 journal event.
 
-## Run migrations explicitly
+### Run migrations explicitly
 
 Before migrating, use the owner's explicit maintenance path and database
 identity. Ordinary service startup verifies the schema but does not have
@@ -107,7 +117,7 @@ service startup verifies the schema, migration inventory, and owner-specific
 runtime privileges. A runtime identity does not receive migration authority
 just because its service reads the tables.
 
-## Recover from delivery failures
+### Recover from delivery failures
 
 A failed publication stays unacknowledged and can be reclaimed after its lease
 expires. Failure in one claimed stream does not stop other streams in the
@@ -117,6 +127,37 @@ is still completing externally.
 Acknowledgment checks lease expiry after acquiring the row lock. A stale or
 expired token cannot settle an event. If an inbox transaction rolls back, the
 message remains eligible for a fresh admission.
+
+## 7–9. Deployment, shared concepts and decisions
+
+The persistence package is a library in each owner host, not a database
+service or daemon. Owners use their service schemas and explicit migration
+identities; Object Store and workspace resources have different credentials
+and lifecycles. The [deployment view](./infra-deployment.md) maps those
+dependencies without claiming live access.
+
+Idempotency, fencing and current authority apply above transport delivery.
+See [Events material composition](../architecture/session-material-composition.md)
+for the non-atomic PostgreSQL/Blob path and the
+[canonical decision view](./00-system-overview.md#9-architecture-decisions)
+for actual ADR statuses.
+
+## 10–12. Quality, risks and glossary
+
+| Context and stimulus | Response and measure | Verification state |
+| --- | --- | --- |
+| Producer transaction rolls back | Neither its domain change nor outbox event commits | PostgreSQL transaction tests |
+| A worker loses its lease before acknowledgment | Reject stale/expired token; preserve reclaimable work | Outbox lease/concurrency tests |
+| Consumer receives a duplicate message | Do not repeat effects committed with the original inbox receipt | Inbox tests; external effects are outside this guarantee |
+
+A consumer that performs effects outside its inbox transaction can duplicate
+them. The consuming owner must preserve the admission check and reconcile any
+external operation separately. No production delivery-latency target is
+established by these source semantics.
+
+**Terms:** outbox is producer delivery intent; inbox is consumer admission;
+at-least-once permits redelivery; a lease authorizes one current claim, not
+permanent ownership.
 
 ## Related content
 
