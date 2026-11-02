@@ -6,16 +6,14 @@ using static OpenIddict.Server.OpenIddictServerEvents;
 namespace Agentweaver.Identity.Broker;
 
 /// <summary>
-/// Revokes every token and the underlying authorization for a given authorization ID. Used
-/// when a redeemed or revoked refresh token is presented again: the whole family is burned,
-/// not merely the already-redeemed token, since a replayed refresh token indicates the
-/// family may have leaked.
+/// Revokes every token and only the ad hoc authorization for a given authorization ID.
+/// Permanent authorizations represent reusable consent and are never revoked here.
 /// </summary>
 public sealed class RefreshTokenFamilyRevoker(
     IOpenIddictTokenManager tokens, IOpenIddictAuthorizationManager authorizations)
 {
     /// <summary>
-    /// Revokes all tokens for the authorization and then revokes the authorization record.
+    /// Revokes all tokens for the authorization and revokes its record only when it is ad hoc.
     /// Used after refresh-token replay or a failed atomic redemption race.
     /// </summary>
     public async Task RevokeAsync(string authorizationId, CancellationToken cancellationToken)
@@ -23,15 +21,16 @@ public sealed class RefreshTokenFamilyRevoker(
         await tokens.RevokeByAuthorizationIdAsync(authorizationId, cancellationToken);
 
         var authorization = await authorizations.FindByIdAsync(authorizationId, cancellationToken);
-        if (authorization is not null)
+        if (authorization is not null &&
+            await authorizations.GetTypeAsync(authorization, cancellationToken) is AuthorizationTypes.AdHoc)
             await authorizations.TryRevokeAsync(authorization, cancellationToken);
     }
 }
 
 /// <summary>
 /// Rejects a refresh token that has already been redeemed or revoked and, because presenting
-/// it again signals the family may be compromised, revokes every other token descended from
-/// the same authorization.
+/// it again signals the family may be compromised, revokes every token descended from the
+/// same authorization without revoking reusable permanent consent.
 /// </summary>
 public sealed class RefreshReplayHandler(IOpenIddictTokenManager tokens, RefreshTokenFamilyRevoker familyRevoker)
     : IOpenIddictServerHandler<ValidateTokenRequestContext>

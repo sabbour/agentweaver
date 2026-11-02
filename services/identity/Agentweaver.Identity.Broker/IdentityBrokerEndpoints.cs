@@ -153,7 +153,7 @@ public static class IdentityBrokerEndpoints
             subject: subjectClaim.Value, client: applicationId!, status: Statuses.Valid,
             type: AuthorizationTypes.Permanent, scopes: requestedScopes).ToListAsync(ct);
         if (existing.Count > 0)
-            return await SignInAsync(db, scopes, authorizations, existing[0], userId, requestedScopes,
+            return await SignInAsync(db, scopes, userId, requestedScopes,
                 runBinding, authorityKind, bindingReceipt, grantAuthority, runBindingAuthority, ct);
         // A prompt=none request cannot pause for an interactive consent decision.
         if (silent)
@@ -704,11 +704,11 @@ public static class IdentityBrokerEndpoints
     /// <summary>
     /// Builds a minimal token principal from the authenticated local user and approved
     /// scopes. Run-bound issuance requires either a fresh Projects receipt or a live secret
-    /// grant; inconsistent or absent authority evidence is denied.
+    /// grant; inconsistent or absent authority evidence is denied. OpenIddict assigns each
+    /// sign-in its own ad hoc authorization instead of reusing permanent consent.
     /// </summary>
     private static async Task<IResult> SignInAsync(
         IdentityBrokerDbContext db, IOpenIddictScopeManager scopes,
-        IOpenIddictAuthorizationManager authorizations, object authorization,
         Guid userId, ImmutableArray<string> requestedScopes, RequestedRunBinding? runBinding,
         string? authorityKind, BrokerRunBindingReceipt? bindingReceipt,
         IdentityGrantAuthority grantAuthority, BrokerRunBindingAuthority runBindingAuthority,
@@ -748,7 +748,6 @@ public static class IdentityBrokerEndpoints
         var principal = BuildMinimalPrincipal(
             userId, requestedScopes, runBinding, authorityKind, bindingReceipt);
         principal.SetResources(await scopes.ListResourcesAsync(requestedScopes, ct).ToListAsync(ct));
-        principal.SetAuthorizationId(await authorizations.GetIdAsync(authorization, ct));
         return Results.SignIn(principal, authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
 

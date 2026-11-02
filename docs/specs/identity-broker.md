@@ -64,12 +64,19 @@ Scope owners must not rely only on per-client scope permissions to protect
 internal scopes; resource servers must independently enforce current
 authorization.
 
-Issued principals carry the permanent authorization ID and resources from native scope registration.
-Resources are global scope attributes in OpenIddict, not client-supplied token audiences.
-Clients that share a scope share its operator-declared resource set.
-Refresh retains the authorization and configured audiences.
-Reference refresh tokens have no reuse grace period.
-Replay revokes the authorization and its token family.
+Saved consent is a permanent authorization used to decide whether the same client
+can continue with the requested scopes. Issued principals do not carry that
+authorization ID: each sign-in receives a separate ad hoc authorization for its
+token family. Resources come from native scope registration; they are global
+scope attributes in OpenIddict, not client-supplied token audiences. Clients that
+share a scope share its operator-declared resource set. Refresh retains the
+per-sign-in authorization and configured audiences.
+
+Reference refresh tokens have no reuse grace period. Replaying one fails and
+revokes its token family. Family revocation also revokes the per-sign-in ad hoc
+authorization, but never permanent consent. Tokens created before this change
+may still be attached to a permanent authorization; family revocation revokes
+those tokens without revoking the saved consent.
 Token exchange rejects disabled users and grants bound to another client.
 
 After validating the configured external OIDC identity, the broker maps the upstream
