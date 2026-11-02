@@ -526,6 +526,195 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Refresh_ReplayInOneSessionDoesNotRevokeAnotherSession()
+    {
+        const string requestedScopes = "openid profile email api.read offline_access";
+        var (codeA, verifierA) = await RunHappyPathAuthorizeAsync(requestedScopes);
+        var tokensA = await BrokerFlowDriver.ExchangeCodeForTokensAsync(
+            _broker, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri, codeA, verifierA);
+
+        using var sessionB = _factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            BaseAddress = new Uri("https://broker.test.local"),
+        });
+        var (verifierB, challengeB) = Pkce.Create();
+        var authorize = await BrokerFlowDriver.StartAuthorizeAsync(
+            sessionB, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri, requestedScopes,
+            challengeB, "S256", state: "session-b", prompt: "none");
+        Assert.Equal(HttpStatusCode.Redirect, authorize.StatusCode);
+
+        var external = await _fakeIdpClient.GetAsync(authorize.Headers.Location!);
+        Assert.Equal(HttpStatusCode.Redirect, external.StatusCode);
+        var callback = await sessionB.GetAsync(external.Headers.Location);
+        Assert.Equal(HttpStatusCode.Redirect, callback.StatusCode);
+        var resumed = await sessionB.GetAsync(callback.Headers.Location);
+        Assert.Equal(HttpStatusCode.Redirect, resumed.StatusCode);
+        var completed = await sessionB.GetAsync(resumed.Headers.Location);
+        Assert.Equal(HttpStatusCode.Redirect, completed.StatusCode);
+        var authorizeResult = QueryHelpers.ParseQuery(completed.Headers.Location!.Query);
+        Assert.False(authorizeResult.ContainsKey("error"));
+        var codeB = authorizeResult["code"].ToString();
+        Assert.False(string.IsNullOrWhiteSpace(codeB));
+
+        var tokensB = await BrokerFlowDriver.ExchangeCodeForTokensAsync(
+            sessionB, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri, codeB, verifierB);
+        var refreshTokenA = tokensA.GetProperty("refresh_token").GetString()!;
+        var refreshTokenB = tokensB.GetProperty("refresh_token").GetString()!;
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
+            Assert.Equal(1, await db.Users.CountAsync());
+
+            var tokenManager = scope.ServiceProvider.GetRequiredService<IOpenIddictTokenManager>();
+            var authorizations = scope.ServiceProvider.GetRequiredService<IOpenIddictAuthorizationManager>();
+            var tokenA = await tokenManager.FindByReferenceIdAsync(refreshTokenA);
+            var tokenB = await tokenManager.FindByReferenceIdAsync(refreshTokenB);
+            Assert.NotNull(tokenA);
+            Assert.NotNull(tokenB);
+            var authorizationIdA = await tokenManager.GetAuthorizationIdAsync(tokenA!);
+            var authorizationIdB = await tokenManager.GetAuthorizationIdAsync(tokenB!);
+            Assert.NotEqual(authorizationIdA, authorizationIdB);
+
+            var authorizationA = await authorizations.FindByIdAsync(authorizationIdA!);
+            var authorizationB = await authorizations.FindByIdAsync(authorizationIdB!);
+            Assert.NotNull(authorizationA);
+            Assert.NotNull(authorizationB);
+            Assert.Equal(AuthorizationTypes.AdHoc, await authorizations.GetTypeAsync(authorizationA!));
+            Assert.Equal(AuthorizationTypes.AdHoc, await authorizations.GetTypeAsync(authorizationB!));
+        }
+
+        var firstUseA = await BrokerFlowDriver.RefreshAsync(_broker,
+            IdentityBrokerWebApplicationFactory.TestClientId, refreshTokenA);
+        Assert.Equal(HttpStatusCode.OK, firstUseA.StatusCode);
+        var replayA = await BrokerFlowDriver.RefreshAsync(_broker,
+            IdentityBrokerWebApplicationFactory.TestClientId, refreshTokenA);
+        Assert.NotEqual(HttpStatusCode.OK, replayA.StatusCode);
+
+        var refreshB = await BrokerFlowDriver.RefreshAsync(sessionB,
+            IdentityBrokerWebApplicationFactory.TestClientId, refreshTokenB);
+        Assert.Equal(HttpStatusCode.OK, refreshB.StatusCode);
+    }
+
+    [Fact]
+    public async Task Refresh_LostRedemptionRaceRevokesAdHocFamilyAndPreservesSavedConsent()
+    {
+        const string requestedScopes = "openid profile email api.read offline_access";
+        var (code, verifier) = await RunHappyPathAuthorizeAsync(requestedScopes);
+        var tokens = await BrokerFlowDriver.ExchangeCodeForTokensAsync(
+            _broker, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri, code, verifier);
+        var refreshToken = tokens.GetProperty("refresh_token").GetString()!;
+
+        string sessionAuthorizationId;
+        string consentAuthorizationId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var services = scope.ServiceProvider;
+            var tokenManager = services.GetRequiredService<IOpenIddictTokenManager>();
+            var authorizations = services.GetRequiredService<IOpenIddictAuthorizationManager>();
+            var refresh = await tokenManager.FindByReferenceIdAsync(refreshToken);
+            Assert.NotNull(refresh);
+            sessionAuthorizationId = (await tokenManager.GetAuthorizationIdAsync(refresh!))!;
+            var sessionAuthorization = await authorizations.FindByIdAsync(sessionAuthorizationId);
+            Assert.NotNull(sessionAuthorization);
+            Assert.Equal(AuthorizationTypes.AdHoc,
+                await authorizations.GetTypeAsync(sessionAuthorization!));
+
+            var consent = Assert.Single(await authorizations.FindAsync(
+                subject: null, client: null, status: Statuses.Valid, type: AuthorizationTypes.Permanent,
+                scopes: null, cancellationToken: default).ToListAsync());
+            consentAuthorizationId = (await authorizations.GetIdAsync(consent))!;
+            Assert.NotEqual(consentAuthorizationId, sessionAuthorizationId);
+
+            // Exercise the deterministic family-revocation path used after a lost redemption claim.
+            await services.GetRequiredService<RefreshTokenFamilyRevoker>()
+                .RevokeAsync(sessionAuthorizationId, CancellationToken.None);
+        }
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var tokenManager = scope.ServiceProvider.GetRequiredService<IOpenIddictTokenManager>();
+            var authorizations = scope.ServiceProvider.GetRequiredService<IOpenIddictAuthorizationManager>();
+            var revokedAuthorization = await authorizations.FindByIdAsync(sessionAuthorizationId);
+            Assert.NotNull(revokedAuthorization);
+            Assert.True(await authorizations.HasStatusAsync(revokedAuthorization!, Statuses.Revoked));
+            var revokedRefresh = await tokenManager.FindByReferenceIdAsync(refreshToken);
+            Assert.NotNull(revokedRefresh);
+            Assert.True(await tokenManager.HasStatusAsync(revokedRefresh!, Statuses.Revoked));
+
+            var retainedConsent = await authorizations.FindByIdAsync(consentAuthorizationId);
+            Assert.NotNull(retainedConsent);
+            Assert.Equal(AuthorizationTypes.Permanent, await authorizations.GetTypeAsync(retainedConsent!));
+            Assert.True(await authorizations.HasStatusAsync(retainedConsent!, Statuses.Valid));
+        }
+
+        var (_, silentChallenge) = Pkce.Create();
+        var silentAuthorize = await BrokerFlowDriver.StartAuthorizeAsync(
+            _broker, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri, requestedScopes,
+            silentChallenge, "S256", state: "consent-survives-refresh-race", nonce: "silent-consent-survives",
+            prompt: "none");
+        Assert.Equal(HttpStatusCode.Redirect, silentAuthorize.StatusCode);
+        var silentResult = QueryHelpers.ParseQuery(silentAuthorize.Headers.Location!.Query);
+        Assert.False(silentResult.ContainsKey("error"));
+        Assert.False(string.IsNullOrWhiteSpace(silentResult["code"].ToString()));
+    }
+
+    [Fact]
+    public async Task Refresh_LegacyPermanentAuthorizationFamilyRevocationPreservesSavedConsent()
+    {
+        var (code, verifier) = await RunHappyPathAuthorizeAsync();
+        await BrokerFlowDriver.ExchangeCodeForTokensAsync(
+            _broker, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri, code, verifier);
+
+        string consentAuthorizationId;
+        string legacyRefreshId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var services = scope.ServiceProvider;
+            var authorizations = services.GetRequiredService<IOpenIddictAuthorizationManager>();
+            var consent = Assert.Single(await authorizations.FindAsync(
+                subject: null, client: null, status: Statuses.Valid, type: AuthorizationTypes.Permanent,
+                scopes: null, cancellationToken: default).ToListAsync());
+            consentAuthorizationId = (await authorizations.GetIdAsync(consent))!;
+            var tokenManager = services.GetRequiredService<IOpenIddictTokenManager>();
+            var legacyRefresh = await tokenManager.CreateAsync(new OpenIddictTokenDescriptor
+            {
+                ApplicationId = await authorizations.GetApplicationIdAsync(consent),
+                AuthorizationId = consentAuthorizationId,
+                CreationDate = DateTimeOffset.UtcNow,
+                ExpirationDate = DateTimeOffset.UtcNow.AddHours(1),
+                ReferenceId = "legacy-refresh-" + Guid.NewGuid().ToString("N"),
+                Status = Statuses.Valid,
+                Subject = await authorizations.GetSubjectAsync(consent),
+                Type = TokenTypeHints.RefreshToken,
+            }, CancellationToken.None);
+            legacyRefreshId = (await tokenManager.GetIdAsync(legacyRefresh))!;
+
+            await services.GetRequiredService<RefreshTokenFamilyRevoker>()
+                .RevokeAsync(consentAuthorizationId, CancellationToken.None);
+        }
+
+        using var verification = _factory.Services.CreateScope();
+        var verifyServices = verification.ServiceProvider;
+        var verifyTokens = verifyServices.GetRequiredService<IOpenIddictTokenManager>();
+        var legacyRefreshAfterRevoke = await verifyTokens.FindByIdAsync(legacyRefreshId);
+        Assert.NotNull(legacyRefreshAfterRevoke);
+        Assert.True(await verifyTokens.HasStatusAsync(legacyRefreshAfterRevoke!, Statuses.Revoked));
+        var authorizationsAfterRevoke = verifyServices.GetRequiredService<IOpenIddictAuthorizationManager>();
+        var retainedConsent = await authorizationsAfterRevoke.FindByIdAsync(consentAuthorizationId);
+        Assert.NotNull(retainedConsent);
+        Assert.Equal(AuthorizationTypes.Permanent, await authorizationsAfterRevoke.GetTypeAsync(retainedConsent!));
+        Assert.True(await authorizationsAfterRevoke.HasStatusAsync(retainedConsent!, Statuses.Valid));
+    }
+
+    [Fact]
     public async Task TokenExchange_DisabledUser_IsRejected()
     {
         var (code, verifier) = await RunHappyPathAuthorizeAsync();
@@ -664,16 +853,26 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
         var tokens = await BrokerFlowDriver.ExchangeCodeForTokensAsync(_broker,
             IdentityBrokerWebApplicationFactory.TestClientId, IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
             code, verifier);
-        string authorizationId;
+        var refreshToken = tokens.GetProperty("refresh_token").GetString()!;
+        string consentAuthorizationId;
+        string sessionAuthorizationId;
         using (var originalScope = _factory.Services.CreateScope())
         {
             var authorizations = originalScope.ServiceProvider.GetRequiredService<IOpenIddictAuthorizationManager>();
-            var authorization = Assert.Single(await authorizations.FindAsync(
+            var consent = Assert.Single(await authorizations.FindAsync(
                 subject: null, client: null, status: Statuses.Valid, type: AuthorizationTypes.Permanent,
                 scopes: null, cancellationToken: default).ToListAsync());
-            authorizationId = (await authorizations.GetIdAsync(authorization))!;
-            var storedTokens = await originalScope.ServiceProvider.GetRequiredService<IOpenIddictTokenManager>()
-                .FindByAuthorizationIdAsync(authorizationId).ToListAsync();
+            consentAuthorizationId = (await authorizations.GetIdAsync(consent))!;
+            var tokenManager = originalScope.ServiceProvider.GetRequiredService<IOpenIddictTokenManager>();
+            var refresh = await tokenManager.FindByReferenceIdAsync(refreshToken);
+            Assert.NotNull(refresh);
+            sessionAuthorizationId = (await tokenManager.GetAuthorizationIdAsync(refresh!))!;
+            Assert.NotEqual(consentAuthorizationId, sessionAuthorizationId);
+            var sessionAuthorization = await authorizations.FindByIdAsync(sessionAuthorizationId);
+            Assert.NotNull(sessionAuthorization);
+            Assert.Equal(AuthorizationTypes.AdHoc, await authorizations.GetTypeAsync(sessionAuthorization!));
+            Assert.Empty(await tokenManager.FindByAuthorizationIdAsync(consentAuthorizationId).ToListAsync());
+            var storedTokens = await tokenManager.FindByAuthorizationIdAsync(sessionAuthorizationId).ToListAsync();
             Assert.True(storedTokens.Count >= 3);
         }
 
@@ -693,9 +892,15 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
         var userCount = await db.Users.CountAsync();
         Assert.Equal(1, userCount);
         var grants = scope.ServiceProvider.GetRequiredService<IOpenIddictAuthorizationManager>();
-        Assert.NotNull(await grants.FindByIdAsync(authorizationId));
+        var retainedConsent = await grants.FindByIdAsync(consentAuthorizationId);
+        Assert.NotNull(retainedConsent);
+        Assert.Equal(AuthorizationTypes.Permanent, await grants.GetTypeAsync(retainedConsent!));
+        Assert.True(await grants.HasStatusAsync(retainedConsent!, Statuses.Valid));
+        var retainedSession = await grants.FindByIdAsync(sessionAuthorizationId);
+        Assert.NotNull(retainedSession);
+        Assert.Equal(AuthorizationTypes.AdHoc, await grants.GetTypeAsync(retainedSession!));
         var refreshed = await BrokerFlowDriver.RefreshAsync(_broker, IdentityBrokerWebApplicationFactory.TestClientId,
-            tokens.GetProperty("refresh_token").GetString()!);
+            refreshToken);
         Assert.Equal(HttpStatusCode.OK, refreshed.StatusCode);
         var (_, challenge) = Pkce.Create();
         var callback = await BrokerFlowDriver.AttemptExternalCallbackAsync(_broker, _fakeIdpClient,

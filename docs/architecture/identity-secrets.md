@@ -14,7 +14,7 @@ revocation paths.
 
 The broker accepts an external OIDC provider. It validates the upstream issuer, signature, audience, expiry, and nonce before it creates a local user.
 
-OAuth authorization codes require registered clients, exact redirect URIs, registered scopes, and S256 PKCE. Consent requires the local cookie and antiforgery token. Refresh-token replay revokes the authorization and token family.
+OAuth authorization codes require registered clients, exact redirect URIs, registered scopes, and S256 PKCE. Consent requires the local cookie and antiforgery token. Each sign-in has a separate ad hoc authorization for its token family; permanent authorizations record reusable consent and are not attached to issued tokens. Refresh-token reuse revokes its token family, but family revocation revokes only an ad hoc authorization. Permanent consent remains valid, including when legacy tokens are still attached to it.
 The native CLI consent page keeps a strict `form-action` policy that permits same-origin consent submission and only the exact callback destination validated for the registered client.
 
 The existing public `agentweaver-cli` registration may request any scope in

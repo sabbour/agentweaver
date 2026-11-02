@@ -98,9 +98,14 @@ Agentweaver token.
 5. Refresh rechecks the local account and run authority. Atomic redemption
    prevents two requests from consuming the same refresh token.
 
-Reusing a redeemed or revoked refresh token revokes its authorization and token
-family. A losing concurrent redemption also rejects the exchange and revokes
-the family.
+Each sign-in has its own ad hoc authorization for its token family; the
+permanent authorization remains the reusable consent record. OpenIddict rejects
+ordinary sequential refresh-token replay before the custom replay handler and
+revokes that session's tokens without revoking consent. A lost concurrent
+redemption claim rejects the exchange and invokes the custom family revoker,
+which revokes all family tokens and only revokes the authorization when it is
+ad hoc. Legacy tokens attached to a permanent authorization are revoked without
+revoking the saved consent.
 
 ### Redeem a secret
 
@@ -175,7 +180,7 @@ does not replace implemented Sandbox credential delivery.
 | Context and stimulus | Response and measure | Verification state |
 | --- | --- | --- |
 | Grant is revoked while the backend retrieves a secret | Post-acquisition recheck denies and invalidates the credential | Secret-authority controlled tests |
-| Two requests redeem one refresh token concurrently | Atomic winner/loser handling rejects replay and revokes the family | Broker integration tests; not live upstream SSO |
+| Refresh redemption loses its atomic claim | Reject the exchange, revoke the session token family and ad hoc authorization, and preserve permanent saved consent | Broker integration tests exercise the deterministic family-revocation path and consent reuse; not live upstream SSO |
 | Key Vault returns an exact-version credential | Lifetime is at most five minutes and no later than grant/vault expiry | Adapter/authority tests; not deployed vault access |
 
 An unexpired token can outlive a role or grant. Identity and resource owners
