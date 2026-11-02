@@ -235,7 +235,7 @@ public sealed class ProviderCatalogSnapshotTests
         Assert.Contains("Cilium on AKS is the default L3/L4/FQDN adapter", providerSeams, StringComparison.Ordinal);
         Assert.Contains("Native Postgres remains the default.", providerSeams, StringComparison.Ordinal);
         Assert.Contains(
-            "| P1 Core and defaults | Native Sessions/Memory, agent-sandbox, Azure Files, Cilium intent, AGT, GitHub, Copilot cost ledger;",
+            "| Core services and default providers | Native Sessions/Memory, agent-sandbox, Azure Files, Cilium intent, AGT, GitHub, Copilot cost ledger;",
             providerSeams,
             StringComparison.Ordinal);
         Assert.Contains(
