@@ -1799,10 +1799,11 @@ else if (route.OperationId is
             ("date", new { type = "string", format = "date" }), ("created", Int()), ("completed", Int())),
         ["ProjectMetrics"] = StrictObj(
             ["projectId", "from", "to", "activeRuns", "blockedRuns", "runsInRange", "runsTotal",
-                "completedRuns", "succeededRuns", "series"],
+                "completedRuns", "succeededRuns", "sessionHistoryRecordsTotal", "series"],
             ("projectId", Str()), ("from", Date()), ("to", Date()),
             ("activeRuns", Int()), ("blockedRuns", Int()), ("runsInRange", Int()), ("runsTotal", Int()),
-            ("completedRuns", Int()), ("succeededRuns", Int()), ("series", Arr(Ref("ProjectMetricsDay")))),
+            ("completedRuns", Int()), ("succeededRuns", Int()),
+            ("sessionHistoryRecordsTotal", NullableInt()), ("series", Arr(Ref("ProjectMetricsDay")))),
         ["ProjectUsageCost"] = StrictObj(["priceUnit", "disposition", "amount"],
             ("priceUnit", NullableStr()), ("disposition", Enum("estimate", "reconciled", "unpriced")),
             ("amount", NullableNumber())),

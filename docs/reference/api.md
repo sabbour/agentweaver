@@ -916,6 +916,7 @@ range. They still respect tenant, project, and run-bound scope.
 | `blockedRuns` | Runs whose derived state is `blocked`. | Additional v1 state detail, not a summary tile in 0.x. |
 | `runsInRange` | Runs with `created_at` in `[from,to)`. | Runs this week when callers select that week; Created total for the selected range. |
 | `runsTotal` | All accepted runs in the authorized scope. | Total run count. |
+| `sessionHistoryRecordsTotal` | The all-date count of records currently returned by each selected accepted run's root-scoped v1 session-history tree. Archived records retained in the tree count; detached subtrees leave their former root projection. `null` means at least one selected accepted run has no root or an empty tree; an authorized scope with no accepted runs returns `0`. | A v1 session-history summary, not a run count or literal 0.x handoff total. |
 | `completedRuns` | Terminal runs (`completed`, `failed`, `cancelled`, `indeterminate`) with `completed_at` in `[from,to)`. | Completed total and Done series; not the 0.x completed-task count. |
 | `succeededRuns` | Runs in `completedRuns` whose derived state is `completed`. | Numerator for v1 run success; not the 0.x agent-dependency success measure. |
 | `series[].date` | UTC calendar date, ascending, for each day intersecting the interval. | Runs over time and daily activity. |
@@ -926,6 +927,13 @@ Days with no activity have zero counts. An equal-bound interval has an empty
 series. A run created before the interval can contribute to its completion
 count. Terminal rows without `completed_at` do not contribute to completion
 metrics.
+
+`sessionHistoryRecordsTotal` ignores the selected date range. It counts only
+records in accepted project-run trees under the current tenant, project, and
+optional exact run-bound authority; unrelated coordination rows and private
+Chief of Staff conversations are excluded. The count shares the metrics
+owner's single database snapshot and is `null`, not a partial total, when any
+selected accepted run's native history tree is unavailable.
 
 These definitions map to the 0.x dashboard controls. v1 uses persisted
 owner data, not Application Insights, and cannot reproduce historic 0.x
