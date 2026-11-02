@@ -6,7 +6,7 @@ export interface ConsentScopeDescription {
 }
 
 const AGENTWEAVER_SCOPES_URL =
-  'https://sabbour.github.io/agentweaver/v1/guide/identity-scopes';
+  'https://sabbour.me/agentweaver/v1/guide/identity-scopes.html';
 
 const SCOPE_DESCRIPTIONS: Readonly<Record<string, ConsentScopeDescription>> = {
   openid: {
