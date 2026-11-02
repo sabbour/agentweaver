@@ -13,6 +13,12 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
     private const string SourceSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string SourceTree = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     private const string ProviderSource = "cccccccccccccccccccccccccccccccccccccccc";
+    private const string BoardGatewaySha = "fa4c10d40b10b5f06c6333ecfb6e6d86a6a7a8fe";
+    private const string BoardGatewayTree = "e235a0f576a26924920130c0c4bb4dbd01d4d567";
+    private const string BoardOrchestratorSha = "dddddddddddddddddddddddddddddddddddddddd";
+    private const string BoardOrchestratorTree = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    private const string BoardAuthoritySha = "1471e0b6ee4ab2a859231582ed1efa8e86693002";
+    private const string BoardAuthorityTree = "5846e8524d8d684f78d24518453a4e1348fa7bf4";
     private const string Namespace = "agentweaver";
     private const string HostImageSetting = "Environment__Sandbox__AgentSandbox__ContainerImage";
     private const string HostPlatformSetting = "Environment__Sandbox__AgentSandbox__ContainerImagePlatform";
@@ -66,12 +72,13 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
     }
 
     [Fact]
-    public void BoardImageManifestRequiresExactlyTheFourReviewedImmutableOwnerDigests()
+    public void BoardImageManifestAllowsOnlyTheOrchestratorDigestToVary()
     {
+        string orchestratorDigest = "sha256:" + new string('c', 64);
         JsonObject images = new()
         {
             ["agentweaver.gateway"] = "sha256:0fa6e9f718b06a030172deda8ee0e509871b8bd10e9e8a74c13a37cbd8780dcd",
-            ["agentweaver.orchestrator"] = "sha256:6db6d03d226a8acb9cebf1c8e806aa337ffba40201c4daad0088eb6d3f55002e",
+            ["agentweaver.orchestrator"] = orchestratorDigest,
             ["agentweaver.identity.broker"] = "sha256:d76177945cf05121120f8fbc6b4d7fe708f0c4e6adbbafbcafe449f52ce7e0b4",
             ["agentweaver.projects.config"] = "sha256:33f1af287e19ac8854952dc379e685397cda2e5068b7734dc35c83f4a32b3378",
         };
@@ -80,7 +87,7 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
             AcceptanceDeploymentEvidenceProvider.ValidateBoardImageManifest(new JsonObject { ["images"] = images.DeepClone() });
 
         Assert.Equal(4, selected.Count);
-        Assert.Equal(images["agentweaver.gateway"]!.GetValue<string>(), selected["agentweaver.gateway"]);
+        Assert.Equal(orchestratorDigest, selected["agentweaver.orchestrator"]);
         Assert.Throws<InvalidDataException>(() =>
             AcceptanceDeploymentEvidenceProvider.ValidateBoardImageManifest(new JsonObject
             {
@@ -90,6 +97,87 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
         imagesWithExtra["agentweaver.unreviewed"] = "sha256:" + new string('f', 64);
         Assert.Throws<InvalidDataException>(() =>
             AcceptanceDeploymentEvidenceProvider.ValidateBoardImageManifest(new JsonObject { ["images"] = imagesWithExtra }));
+        JsonObject changedRetainedPin = images.DeepClone().AsObject();
+        changedRetainedPin["agentweaver.gateway"] = "sha256:" + new string('f', 64);
+        Assert.Throws<InvalidDataException>(() =>
+            AcceptanceDeploymentEvidenceProvider.ValidateBoardImageManifest(new JsonObject { ["images"] = changedRetainedPin }));
+        JsonObject mutableOrchestratorTag = images.DeepClone().AsObject();
+        mutableOrchestratorTag["agentweaver.orchestrator"] = $"sha-{BoardOrchestratorSha}";
+        Assert.Throws<InvalidDataException>(() =>
+            AcceptanceDeploymentEvidenceProvider.ValidateBoardImageManifest(new JsonObject { ["images"] = mutableOrchestratorTag }));
+    }
+
+    [Fact]
+    public async Task BoardReadbackVerifiesTheSparseMixedOwnerSourcesAndExactOrchestratorPodImage()
+    {
+        RegistryFixtureSet registry = CreateBoardRegistryFixtureSet();
+        JsonObject cluster = CreateCluster(registry);
+        using var http = new HttpClient(new RegistryHandler(registry));
+        var provider = CreateProvider(http, cluster);
+
+        JsonObject evidence = await provider.ObserveServicesEquivalentAsync(
+            CreateBoardManifest(), BoardGatewaySha, BoardGatewayTree, BoardSelectedImages(registry), default);
+
+        Assert.Equal("passed", evidence["status"]?.GetValue<string>());
+        Assert.Equal(4, evidence["services"]?.AsArray().Count);
+
+        Dictionary<string, string> wrongSelection = BoardSelectedImages(registry);
+        wrongSelection["agentweaver.orchestrator"] = "sha256:" + new string('f', 64);
+        InvalidDataException selectedDigestFailure = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            provider.ObserveServicesEquivalentAsync(
+                CreateBoardManifest(), BoardGatewaySha, BoardGatewayTree, wrongSelection, default));
+        Assert.Contains("does not match the selected immutable GHCR reference", selectedDigestFailure.Message, StringComparison.Ordinal);
+
+        JsonObject pod = FindResource(cluster, "Pod", "orchestrator-pod");
+        pod["status"]!["containerStatuses"]![0]!["imageID"] = "containerd://sha256:" + new string('f', 64);
+        InvalidDataException podImageFailure = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            provider.ObserveServicesEquivalentAsync(
+                CreateBoardManifest(), BoardGatewaySha, BoardGatewayTree, BoardSelectedImages(registry), default));
+        Assert.Contains("imageID does not match", podImageFailure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task BoardReadbackRejectsOrchestratorOciSourceCommitAndTreeMismatches()
+    {
+        foreach (RegistryFixtureSet registry in new[]
+        {
+            CreateBoardRegistryFixtureSet(orchestratorSha: new string('f', 40)),
+            CreateBoardRegistryFixtureSet(orchestratorTree: new string('f', 40)),
+        })
+        {
+            using var http = new HttpClient(new RegistryHandler(registry));
+            var provider = CreateProvider(http, CreateCluster(registry));
+
+            InvalidDataException failure = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                provider.ObserveServicesEquivalentAsync(
+                    CreateBoardManifest(), BoardGatewaySha, BoardGatewayTree, BoardSelectedImages(registry), default));
+
+            Assert.Contains("not bound to the reviewed source commit and tree", failure.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task BoardOrchestratorReceiptMustMatchTheGitHubCommitAndTree()
+    {
+        JsonObject receipt = new()
+        {
+            ["sourceSha"] = BoardOrchestratorSha,
+            ["sourceTree"] = BoardOrchestratorTree,
+        };
+        using var validHttp = new HttpClient(new GitHubCommitHandler(
+            BoardOrchestratorSha, BoardOrchestratorTree));
+        var validProvider = new AcceptanceDeploymentEvidenceProvider(
+            validHttp, (_, _, _) => throw new InvalidOperationException(), (_, _) => Task.CompletedTask);
+        JsonObject verified = await validProvider.VerifyBoardOrchestratorSourceAsync(receipt, default);
+        Assert.Equal(BoardOrchestratorSha, verified["sourceSha"]?.GetValue<string>());
+        Assert.Equal(BoardOrchestratorTree, verified["sourceTree"]?.GetValue<string>());
+
+        using var mismatchedHttp = new HttpClient(new GitHubCommitHandler(
+            BoardOrchestratorSha, new string('f', 40)));
+        var mismatchedProvider = new AcceptanceDeploymentEvidenceProvider(
+            mismatchedHttp, (_, _, _) => throw new InvalidOperationException(), (_, _) => Task.CompletedTask);
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            mismatchedProvider.VerifyBoardOrchestratorSourceAsync(receipt, default));
     }
 
     [Fact]
@@ -375,6 +463,35 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
             "manifest.json",
             AppContext.BaseDirectory);
 
+    private static AcceptanceManifest CreateBoardManifest() =>
+        new(
+            new JsonObject(),
+            new JsonObject(),
+            new JsonObject
+            {
+                ["context"] = "approved-aks-context",
+                ["namespace"] = Namespace,
+                ["sourceReceipt"] = new JsonObject
+                {
+                    ["sourceSha"] = BoardGatewaySha,
+                    ["sourceTree"] = BoardGatewayTree,
+                },
+                ["orchestratorSourceReceipt"] = new JsonObject
+                {
+                    ["sourceSha"] = BoardOrchestratorSha,
+                    ["sourceTree"] = BoardOrchestratorTree,
+                },
+                ["authoritySourceReceipt"] = new JsonObject
+                {
+                    ["sourceSha"] = BoardAuthoritySha,
+                    ["sourceTree"] = BoardAuthorityTree,
+                },
+            },
+            new JsonObject(),
+            "board-delete",
+            "board-manifest.json",
+            AppContext.BaseDirectory);
+
     private static RegistryFixtureSet CreateRegistryFixtureSet()
     {
         RegistryFixtureSet fixture = new();
@@ -383,6 +500,42 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
         fixture.Add("Agentweaver.AgentHost", "agenthost");
         return fixture;
     }
+
+    private static RegistryFixtureSet CreateBoardRegistryFixtureSet(
+        string? orchestratorSha = null,
+        string? orchestratorTree = null)
+    {
+        RegistryFixtureSet fixture = new();
+        foreach ((string id, string name) in Services)
+        {
+            string sourceSha = name switch
+            {
+                "gateway" => BoardGatewaySha,
+                "orchestrator" => orchestratorSha ?? BoardOrchestratorSha,
+                "identity-broker" or "projects-config" => BoardAuthoritySha,
+                _ => SourceSha,
+            };
+            string sourceTree = name switch
+            {
+                "gateway" => BoardGatewayTree,
+                "orchestrator" => orchestratorTree ?? BoardOrchestratorTree,
+                "identity-broker" or "projects-config" => BoardAuthorityTree,
+                _ => SourceTree,
+            };
+            fixture.Add(id, name, sourceTree, sourceSha);
+        }
+        fixture.Add("Agentweaver.AgentHost", "agenthost");
+        return fixture;
+    }
+
+    private static Dictionary<string, string> BoardSelectedImages(RegistryFixtureSet registry) =>
+        new(StringComparer.Ordinal)
+        {
+            ["agentweaver.gateway"] = registry.SelectedImages["agentweaver.gateway"],
+            ["agentweaver.orchestrator"] = registry.SelectedImages["agentweaver.orchestrator"],
+            ["agentweaver.identity.broker"] = registry.SelectedImages["agentweaver.identity.broker"],
+            ["agentweaver.projects.config"] = registry.SelectedImages["agentweaver.projects.config"],
+        };
 
     private static string NewWorkspace()
     {
@@ -743,5 +896,29 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
             {
                 Content = new StringContent(value.ToJsonString(), Encoding.UTF8, "application/json"),
             });
+    }
+
+    private sealed class GitHubCommitHandler(string sourceSha, string sourceTree) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            string expectedPath = $"/repos/sabbour/agentweaver/commits/{sourceSha}";
+            if (request.RequestUri?.AbsolutePath != expectedPath)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    new JsonObject
+                    {
+                        ["sha"] = sourceSha,
+                        ["commit"] = new JsonObject { ["tree"] = new JsonObject { ["sha"] = sourceTree } },
+                    }.ToJsonString(),
+                    Encoding.UTF8,
+                    "application/json"),
+            });
+        }
     }
 }

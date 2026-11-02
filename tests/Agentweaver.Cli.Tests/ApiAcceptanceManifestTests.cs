@@ -65,6 +65,40 @@ public sealed class ApiAcceptanceManifestTests
     }
 
     [Fact]
+    public async Task BoardDeleteRequiresAnExactOrchestratorSourceReceipt()
+    {
+        JsonObject root = BoardManifest();
+        root["pins"]!.AsObject().Remove("orchestratorSourceReceipt");
+        string path = WriteManifest(root);
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(
+                () => ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task BoardDeleteRejectsAnIncompleteOrchestratorSourceReceipt()
+    {
+        JsonObject root = BoardManifest();
+        root["pins"]!["orchestratorSourceReceipt"]!["sourceTree"] = "not-a-full-git-tree";
+        string path = WriteManifest(root);
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(
+                () => ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task ExistingP1AdmissionStillRequiresActorAndAcceptsItsCurrentPlan()
     {
         JsonObject root = P1Manifest();
@@ -97,6 +131,8 @@ public sealed class ApiAcceptanceManifestTests
             ["context"] = "agentweaver-aks",
             ["namespace"] = "agentweaver",
             ["sourceReceipt"] = SourceReceipt("fa4c10d40b10b5f06c6333ecfb6e6d86a6a7a8fe", "e235a0f576a26924920130c0c4bb4dbd01d4d567"),
+            ["orchestratorSourceReceipt"] = SourceReceipt(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
             ["authoritySourceReceipt"] = SourceReceipt("1471e0b6ee4ab2a859231582ed1efa8e86693002", "5846e8524d8d684f78d24518453a4e1348fa7bf4"),
         },
         ["deploymentEvidence"] = new JsonObject

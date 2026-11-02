@@ -257,25 +257,29 @@ runner derives it from the live authorization context before writing anything;
 when supplied, it must match that context.
 
 Pins use Kubernetes `context: "agentweaver-aks"` and
-`namespace: "agentweaver"`. `sourceReceipt` must contain source SHA
-`fa4c10d40b10b5f06c6333ecfb6e6d86a6a7a8fe` and tree
-`e235a0f576a26924920130c0c4bb4dbd01d4d567`; `authoritySourceReceipt` must
-contain source SHA `1471e0b6ee4ab2a859231582ed1efa8e86693002` and tree
+`namespace: "agentweaver"`. `sourceReceipt` must contain the Gateway source
+SHA `fa4c10d40b10b5f06c6333ecfb6e6d86a6a7a8fe` and tree
+`e235a0f576a26924920130c0c4bb4dbd01d4d567`. `orchestratorSourceReceipt`
+contains the exact Orchestrator commit and tree selected for the rollout.
+`authoritySourceReceipt` must contain source SHA
+`1471e0b6ee4ab2a859231582ed1efa8e86693002` and tree
 `5846e8524d8d684f78d24518453a4e1348fa7bf4`. The image manifest must contain
 exactly these four immutable digests:
 
 | Image key | Digest |
 | --- | --- |
 | `agentweaver.gateway` | `sha256:0fa6e9f718b06a030172deda8ee0e509871b8bd10e9e8a74c13a37cbd8780dcd` |
-| `agentweaver.orchestrator` | `sha256:6db6d03d226a8acb9cebf1c8e806aa337ffba40201c4daad0088eb6d3f55002e` |
+| `agentweaver.orchestrator` | The selected immutable digest, verified against `orchestratorSourceReceipt`. |
 | `agentweaver.identity.broker` | `sha256:d76177945cf05121120f8fbc6b4d7fe708f0c4e6adbbafbcafe449f52ce7e0b4` |
 | `agentweaver.projects.config` | `sha256:33f1af287e19ac8854952dc379e685397cda2e5068b7734dc35c83f4a32b3378` |
 
-Gateway and Orchestrator are checked against `sourceReceipt`; Identity Broker
-and Projects Config are checked against `authoritySourceReceipt`. Projects
-Config returns project IDs as 32-character GUID strings; the runner retains
-the exact receipt string for every owned operation and cleanup request. The
-current CLI apphost must also carry `AgentweaverSourceSha` and
+The provider keeps Gateway pinned to `sourceReceipt`, checks Orchestrator
+against `orchestratorSourceReceipt` and its OCI source labels, and checks
+Identity Broker and Projects Config against `authoritySourceReceipt`. The
+three retained owner image digests cannot change. Projects Config returns
+project IDs as 32-character GUID strings; the runner retains the exact receipt
+string for every owned operation and cleanup request. The current CLI apphost
+must also carry `AgentweaverSourceSha` and
 `AgentweaverSourceTree` metadata. The provider verifies these owners; it does
 not rebuild or redeploy the services.
 

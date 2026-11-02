@@ -612,6 +612,12 @@ dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configura
 dotnet test tests\Agentweaver.Cli.Acceptance.Tests\Agentweaver.Cli.Acceptance.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~BoardDelete
 ```
 
+Board deployment-provider tests separately verify the mixed source receipts:
+Gateway, Orchestrator, and authority owners keep their own source identity,
+while the selected immutable Orchestrator image digest must match its OCI
+source labels and the running Pod image ID. They use controlled GitHub,
+registry, and Kubernetes responses; they do not prove a live rollout.
+
 The one-account P1 sign-in launcher also has a real browser regression that
 uses loopback redirects only. Install the Playwright test browser and run it:
 

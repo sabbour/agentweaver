@@ -959,6 +959,11 @@ public sealed class ApiAcceptanceRunnerTests
                 ["sourceSha"] = new string('a', 40),
                 ["sourceTree"] = new string('b', 40),
             },
+            ["orchestratorSourceReceipt"] = new JsonObject
+            {
+                ["sourceSha"] = new string('e', 40),
+                ["sourceTree"] = new string('f', 40),
+            },
             ["authoritySourceReceipt"] = new JsonObject
             {
                 ["sourceSha"] = new string('c', 40),

@@ -155,6 +155,12 @@ Orchestrator and Projects audiences. The owner rechecks membership and role
 revisions after acquiring the graph lock and again before committing every
 write.
 
+The Orchestrator locks the project's `backlog_projects` row before reading or
+mutating its graph. Task and dependency changes serialize through that project
+mutex and the expected graph revision; dependency rows are read under the mutex
+and changed only by insert or delete. The planned runtime role therefore needs
+no `UPDATE` privilege on `backlog_dependencies`.
+
 Capture accepts `taskId`, `expectedGraphRevision`, and `content`. Content
 contains `title`, optional `description`, `lifecycle` (`open` or `closed`,
 default `open`), and optional `repositoryIssue`. A title has 1-512 characters

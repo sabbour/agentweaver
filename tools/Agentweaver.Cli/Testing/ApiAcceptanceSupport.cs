@@ -220,7 +220,7 @@ internal static partial class ApiAcceptanceSupport
 
     private static void ValidateBoardPins(JsonObject pins)
     {
-        RequireExactKeys(pins, ["context", "namespace", "sourceReceipt", "authoritySourceReceipt"], "Board-delete pins");
+        RequireExactKeys(pins, ["context", "namespace", "sourceReceipt", "orchestratorSourceReceipt", "authoritySourceReceipt"], "Board-delete pins");
         string context = RequireString(pins, "context", "Kubernetes context");
         string namespaceName = RequireString(pins, "namespace", "Kubernetes namespace");
         if (!Regex.IsMatch(context, "^[A-Za-z0-9._:/@-]{1,128}$", RegexOptions.CultureInvariant)
@@ -228,7 +228,7 @@ internal static partial class ApiAcceptanceSupport
         {
             throw new InvalidDataException("The exact Kubernetes context or namespace is invalid.");
         }
-        foreach (string name in new[] { "sourceReceipt", "authoritySourceReceipt" })
+        foreach (string name in new[] { "sourceReceipt", "orchestratorSourceReceipt", "authoritySourceReceipt" })
         {
             JsonObject receipt = RequireObject(pins[name], $"A pinned {name} is required.");
             RequireExactKeys(receipt, ["sourceSha", "sourceTree"], $"Board-delete {name}");
