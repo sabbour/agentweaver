@@ -105,6 +105,7 @@ Source verification includes:
   command output, source metadata and an empty error stream at the application
   entrypoint, not a published executable.
 
-This is a source-verified worked example. Its executable and unit test were
-**not run for this documentation change**; it makes no release, deployed
-service, browser, provider or acceptance claim.
+This is a source-verified worked example. During local documentation validation,
+its executable and focused unit test were **not run**. CI results are recorded
+on the PR separately; this example makes no release, deployed service, browser,
+provider or acceptance claim.
