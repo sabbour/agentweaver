@@ -1,8 +1,10 @@
 # P1 creation evidence reads
 
-These source-only reads join the retained creation operations from Environment
-to the current Core P1 root binding. They do not create resources, retrofit
-legacy records, change grants, or run a native acceptance probe.
+Use this reference to understand how the source-only reads join retained
+Environment creation operations to the current Core P1 root binding. The
+contracts do not establish that the routes are deployed or that a native
+acceptance journey passed. They do not create resources, retrofit legacy
+records, or change grants.
 
 ## Environment contract
 

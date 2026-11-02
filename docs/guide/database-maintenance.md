@@ -1,10 +1,19 @@
-# Run database maintenance
+# Run v1 database maintenance
 
-Use the database maintenance runner to apply reviewed PostgreSQL migrations to
-the Azure P1 environment and bring the services onto matching images. One
-command does the whole update. A person runs it locally, and GitHub Actions runs
-the same command from a manual workflow. No step needs a hand-made pod, a manual
-tunnel, or a one-off command.
+Use the database maintenance runner to apply the reviewed PostgreSQL
+migration plan and, when selected, move the three P1 services to matching
+images. The runner is available locally and through a manual GitHub Actions
+workflow.
+
+**This is a write operation.** An execute run can apply migrations, change
+schema ownership and grants, create or update the migration identity and
+Kubernetes resources, and roll Deployments. Obtain approval for the exact
+source, target, and image digests before using `--execute`. A preflight without
+`--execute` does not apply those changes.
+
+After a failure, inspect the receipt and confirm which effects completed
+before you retry. A failure does not roll back earlier committed migrations or
+workload updates. Do not retry an uncertain effect.
 
 The runner applies these migrations, in this order:
 
@@ -40,50 +49,28 @@ as compatible between 033 and 035.
 
 ## What one run does
 
-| Step | What happens | Safe to repeat because |
+| Step | What happens | Repeat behavior and limits |
 | --- | --- | --- |
 | Source check | Requires a clean checkout whose commit is on `origin/v1`. | Read-only. |
 | Locked restore | Restores the persistence, Broker, and relay projects with `--locked-mode`. | Read-only. |
 | Plan check | Requires the committed plan file, the plan generator, and the pinned hash to agree. | Read-only. |
-| Cluster access | Checks the Azure account, gets a private kubeconfig for `agentweaver-aks`, and checks Kubernetes permissions. | Uses a temporary file that is always removed. |
-| Broker egress check | Compares the live Broker migration egress policy with the repository and reports any DNS name that differs. | Read-only. |
+| Cluster access | Checks the Azure account, gets a private kubeconfig for `agentweaver-aks`, and checks Kubernetes permissions. | Uses a temporary file that the runner removes during cleanup. |
+| Broker egress check | Compares the live Broker migration egress policy with the repository and reports any DNS name that differs. | Read-only unless you explicitly add `--reconcile-broker-egress` to an execute run. |
 | Setup check | Reads the migration identity, its federated credential, and the recorded handover. A workload identity that would need either one stops here and names the setup command. | Read-only. |
 | Service image check | In normal maintenance mode, reads running and target schema ranges and chooses deployment order. Skipped by `--migrations-only`. | Read-only. |
-| Lock | Creates the Lease `p1-db-maintenance-lock`. A second run fails here. | Released at the end of every run. |
-| Migration identity | Uses the existing identity when it and its federated credential match. Otherwise a run signed in as the PostgreSQL Entra administrator deploys `infra/bicep/p1-postgres-migration-identity.bicep`. | The deployment is declarative. |
-| ServiceAccount and egress | Applies `p1-postgres-migration` and its egress policy with server-side apply. | Server-side apply. |
-| Ownership handover | Makes the migration identity the owner of the `environment`, `orchestrator`, and `events_sessions` schemas. | Recorded in the ConfigMap `p1-db-maintenance-state`; later runs skip it. |
-| Connectivity probes | A short Job under each migration egress policy resolves the PostgreSQL name, including its private link name, and opens port 5432. It requests at least 25m CPU and 32Mi memory to satisfy the P1 namespace minimum. | Uniquely named and removed. |
-| Migration Jobs | Runs the Broker, Environment, Orchestrator, and Events & Sessions Jobs on the pinned digests, one at a time. | Migrators skip applied versions. |
+| Lock | Creates the Lease `p1-db-maintenance-lock`. A second run fails here. | The runner tries to release it during cleanup. If it remains, confirm the prior run is inactive before using `--release-lock`. |
+| Migration identity | Uses the existing identity when it and its federated credential match. Otherwise a run signed in as the PostgreSQL Entra administrator deploys `infra/bicep/p1-postgres-migration-identity.bicep`. | Check the receipt and identity readback before another execute run. |
+| ServiceAccount and egress | Applies `p1-postgres-migration` and its egress policy with server-side apply. | Check the receipt and live state before retrying an uncertain update. |
+| Ownership handover | Makes the migration identity the owner of the `environment`, `orchestrator`, and `events_sessions` schemas. | Recorded in the ConfigMap `p1-db-maintenance-state`; check the recorded handover before retrying. |
+| Connectivity probes | A short Job under each migration egress policy resolves the PostgreSQL name, including its private link name, and opens port 5432. It requests at least 25m CPU and 32Mi memory to satisfy the P1 namespace minimum. | The runner removes its uniquely named probe Jobs during cleanup. Check the receipt before starting another run. |
+| Migration Jobs | Runs the Broker, Environment, Orchestrator, and Events & Sessions Jobs on the pinned digests, one at a time. | Migrators skip applied versions. A later failure does not roll back completed migrations. |
 | Grants check | Requires one grants marker per P1 Job whose versions equal the plan exactly. | Read-only. |
-| Services | Normal maintenance mode can roll mismatched Deployments to the same digests when asked, then waits for readiness. `--migrations-only` never reads or changes application Deployments. | Matching images are not changed. |
-| Cleanup and receipt | Deletes the run's Jobs and pods, releases the lock, removes temporary files, and writes a receipt. | Runs on success and on failure. |
+| Services | Normal maintenance mode can roll mismatched Deployments to the same digests when asked, then waits for readiness. `--migrations-only` never reads or changes application Deployments. | Matching images are not changed. Check the receipt and Deployment state after a failure. |
+| Cleanup and receipt | Deletes the run's Jobs and pods, releases the lock, removes temporary files, and writes a receipt. | The runner attempts cleanup on success and failure. Verify the receipt; do not assume cleanup succeeded. |
 
 Without `--execute`, the runner stops after its mode-specific preflight. It
-prints the steps an execute run would take and changes nothing.
-
-## Automatic migration before deployment
-
-The supported v1 workload path runs migrations and Projects & Config
-runtime-grant reconciliation before applying services:
-
-```powershell
-npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --execute
-```
-
-The deployment excludes Namespace objects, runs migration Jobs first, then
-applies Kustomize and waits for nine rollouts. The one-time Projects & Config
-identity/ownership bootstrap is separate; on a guard failure, stop for
-authorized role inspection and never loosen the guard or broaden the role.
-See the [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#deploy-workloads-locally)
-for the local workload deployment procedure.
-
-A successful migration is not itself a successful deployment. The runtime
-checks its database privileges at startup, and a failed startup guard causes
-the Deployment rollout check to fail. The Projects & Config migration
-automatically reconciles runtime grants to the reviewed allow-listed plan.
-Changes to role attributes or ownership, and privileges outside that plan,
-require separate authorization.
+prints the steps an execute run would take and applies no migrations, grants,
+identity, Kubernetes resources, or workload changes.
 
 ## Before you begin
 
@@ -109,8 +96,8 @@ runtime provider settings.
 
 ### One-time setup
 
-One command sets up everything that routine runs need. Run it once per
-environment, and again at any time to check the setup:
+Run the check-only command to see which setup parts are missing. Review that
+list before using `--execute` to create the missing parts:
 
 ```powershell
 npm run db:maintenance:setup            # check only; exits 1 and lists what is missing
@@ -141,7 +128,8 @@ permissions and identity. It never removes the workflow identity, Azure
 assignments, Role, or RoleBinding, so a failed setup can be checked and safely
 rerun.
 
-Run the setup with the Azure CLI signed in as the PostgreSQL Entra
+Run the setup only after the required Azure and GitHub approvals are in place,
+with the Azure CLI signed in as the PostgreSQL Entra
 administrator, with the right to assign roles in the `agentweaver` resource
 group, and with the GitHub CLI signed in as a repository admin. This is the
 same sign-in that runs the P1 bootstrap. The command needs no prompt or
@@ -205,6 +193,25 @@ gh workflow run v1-db-maintenance.yml --ref v1 `
 ```
 
 Only one workflow run executes at a time.
+
+## Migrations during workload deployment
+
+The local workload deployment command runs the selected migration Jobs and
+Projects & Config runtime-grant reconciliation before it applies the
+namespaced workload overlay:
+
+```powershell
+npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --execute
+```
+
+The command excludes Namespace objects and checks all nine Deployment
+rollouts. A migration failure stops before the root workload apply. The
+one-time Projects & Config identity and ownership setup is a separate
+prerequisite. On a guard failure, stop for authorized role inspection; do not
+loosen the guard or broaden the role. A migration success does not prove a
+deployment success. Use the canonical
+[release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#deploy-workloads-locally)
+for the deployment procedure.
 
 ## Keep services ready
 
@@ -324,9 +331,10 @@ then applies the root Kustomize overlay without a deployment receipt gate.
 
 Every run compares the live `identity-broker-migration-egress` policy with the
 repository and prints the DNS names that differ. To restore the repository
-policy, add `--reconcile-broker-egress` to an execute run. The connectivity
-probe that follows proves the policy still reaches PostgreSQL before the Broker
-Job starts.
+policy, obtain approval for that exact policy change, then add
+`--reconcile-broker-egress` to an execute run. The connectivity probe that
+follows checks whether the policy reaches PostgreSQL before the Broker Job
+starts. It does not prove broader network access.
 
 ## Read the receipt
 
@@ -342,9 +350,12 @@ cleanup result, and the error when the run fails.
 
 ## Recover from a failed run
 
-The runner fails closed. The first failed check stops the run, and cleanup still
-runs. Read the error and the receipt, fix the cause, and run the same command
-again. Steps that already finished are skipped.
+The runner fails closed. The first failed check stops the run, and the runner
+attempts cleanup. Read the error and receipt. Confirm which steps completed and
+whether cleanup succeeded. If an external effect is uncertain, reconcile its
+state with the owning service before you retry. After the cause and state are
+clear, use the same approved image digests; migrators skip versions already
+applied.
 
 If a run stops without cleanup, for example because the machine lost power, its
 lock stays. The next run prints the holder's run ID. After you confirm that run

@@ -1,6 +1,14 @@
 # AgentSuite import and export
 
-> Agentweaver reads AgentSuite as defined by [agent-primitives/suite](https://github.com/agent-primitives/suite) commit `a09950a75359cdc7de4d3361694582613f24c732` (spec version `1.0.0-draft`). A suite with another `schemaVersion` is rejected.
+Use this reference to check what the Gateway import and export operations accept,
+retain, and reject. These source contracts do not prove that the routes are
+deployed. A remote MCP provider inside a suite is a project dependency; it does
+not make a product MCP server an Agentweaver 1.x entrypoint.
+
+Agentweaver reads AgentSuite as defined by
+[agent-primitives/suite](https://github.com/agent-primitives/suite) commit
+`a09950a75359cdc7de4d3361694582613f24c732` (spec version `1.0.0-draft`). A
+suite with another `schemaVersion` is rejected.
 
 ## Export a project team
 

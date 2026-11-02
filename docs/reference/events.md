@@ -1,9 +1,10 @@
 # Events reference
 
-Use this reference to read v1 session-journal events. It describes the envelope,
-payload kinds, replay routes, live delivery, and transactional outbox. An
-**envelope** is the owner-written record that identifies an event and contains
-its typed payload.
+Use this reference to look up the v1 session-journal envelope, payload kinds,
+replay routes, live-delivery formats, and transactional outbox fields. These
+are source contracts, not evidence that an owner service or route is deployed.
+An **envelope** is the owner-written record that identifies an event and
+contains its typed payload.
 
 For provider setup, see [Configure providers](../guide/configure-providers.md).
 For runtime settings, see

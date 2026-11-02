@@ -144,10 +144,13 @@ Kubernetes context:
    references match the approved deployment receipt. These observations
    confirm only the resources you queried.
    For public routing, verify that the managed Gateway has one programmed
-   wildcard-domain HTTPS listener and that the Broker, Web, Gateway API, and
-   MCP HTTPRoutes retain their exact hostnames, paths, and backends on it. A
-   Portal root response alone does not prove that the Broker authorization
-   route works.
+   wildcard-domain HTTPS listener and that the Broker, Web, and Gateway API
+   HTTPRoutes retain their exact hostnames, paths, and backends on it. The
+   checked-in release/Kustomize composition also includes MCP compatibility
+   resources, but their presence does not make MCP a supported 1.x product or
+   acceptance surface. Outbound remote MCP connections are separate. A Portal
+   root response alone does not prove that the Broker authorization route
+   works.
 3. Exercise one authorized Identity secret-redemption request and one denied
    request. Confirm that the authorized request follows the owner's success
    contract and the denied request is rejected. Do not log credentials or

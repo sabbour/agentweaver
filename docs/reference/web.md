@@ -1,7 +1,8 @@
-# Web app reference
+# Web client reference
 
-Use this reference to find the routes, configuration, and source boundaries for
-the active v1 Web client. The client is a React and TypeScript single-page
+Use this reference to look up the routes, configuration, and source boundaries
+of the checked-in v1 Web client. It describes source behavior; it does not prove
+that a Web deployment is available. The client is a React and TypeScript single-page
 application (SPA) built with Vite. It uses Fluent UI for controls and React Flow
 for session topology. A .NET static-file host serves the production build.
 

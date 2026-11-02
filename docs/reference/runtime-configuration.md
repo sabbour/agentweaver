@@ -91,11 +91,11 @@ port 8443 by the corresponding Cilium policies.
 - A grouped path such as `<Service>__Database__WorkloadIdentity__ClientId`
   represents that exact suffix under each service prefix named in its row.
 
-The checked-in P0 runtime snapshots contain the verified non-secret managed
-AKS hostnames, PostgreSQL endpoint and role names, workload-identity client
-IDs, and Key Vault URI. PostgreSQL bootstrap and the P1 initializer have
-succeeded and the database result has been independently verified. The nine
-shared-service runtime snapshots no longer carry the
+The checked-in P0 runtime snapshots contain non-secret managed AKS hostnames,
+the PostgreSQL endpoint and role names, workload-identity client IDs, and the
+Key Vault URI. This describes source files; it does not prove that the target
+resources exist, that bootstrap ran, or that the values are current. The nine
+shared-service runtime snapshots do not carry the
 `agentweaver.io/runtime-config-status: incomplete` or
 `agentweaver.io/runtime-config-incomplete-reason` annotations.
 
@@ -325,7 +325,13 @@ a nonempty redirect URI list, scope list, and resource list. A confidential
 client's secret belongs in `identity-broker-client-secrets`; a public client
 omits it. The Broker reconciles only these declared clients at startup.
 
-## Gateway and MCP settings
+## Gateway and retained MCP compatibility settings
+
+The checked-in release/Kustomize composition still includes MCP compatibility
+image, workload and ingress resources. Their presence does not make MCP a
+supported 1.x product or acceptance surface. Supported client paths are
+Gateway/API, browser and native .NET CLI. Outbound remote MCP connections are
+separate.
 
 | Setting | Contract |
 | --- | --- |
@@ -339,15 +345,15 @@ omits it. The Broker reconciles only these declared clients at startup.
 | `Gateway__Owners__Environment` | Optional HTTPS service root for Environment. The Remote MCP connection directory route uses it. Without it, the route returns 503 `owner_not_configured`. |
 | `Gateway__WebOrigin` | Required exact HTTPS Web origin. It must not contain a path, wildcard, credentials, query, or fragment. |
 | `Gateway__OwnerRequestTimeoutSeconds` | Optional Gateway setting. Integer from `1` through `120`; default is `15`. |
-| `Gateway__BaseAddress` | Required HTTPS Gateway service root for the MCP host. |
+| `Gateway__BaseAddress` | Required HTTPS Gateway service root for the retained MCP compatibility host. |
 
-Gateway and MCP reject owner/root addresses with credentials, queries, or
-fragments. Owner addresses identify fixed services; callers cannot override
-them.
+Gateway and the retained MCP compatibility host reject owner/root addresses
+with credentials, queries, or fragments. Owner addresses identify fixed
+services; callers cannot override them.
 
-The `mcp-runtime-config.json` map contains `Identity__Issuer`,
+The compatibility `mcp-runtime-config.json` map contains `Identity__Issuer`,
 `Identity__Audience`, and `Gateway__BaseAddress`. Its Gateway request deadline
-is fixed at 10 seconds in the MCP host; it is not a runtime setting.
+is fixed at 10 seconds in that host; it is not a runtime setting.
 
 ## Knowledge settings
 

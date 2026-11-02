@@ -1,15 +1,20 @@
 # v1 release reference
 
+Use this page to find the source of release metadata and the workflow for each
+release operation. The canonical
+[v1 release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md)
+owns the operational steps for package publication, image publication, and
+local workload deployment. Do not treat those operations as one release state.
+
+## Release metadata
+
 The tracked [`foundation.json`](https://github.com/sabbour/agentweaver/blob/v1/releases/foundation.json)
-manifest owns the current component IDs, versions, kinds, and project paths.
-Its schema is [`manifest.schema.json`](https://github.com/sabbour/agentweaver/blob/v1/releases/manifest.schema.json).
-For automatic GHCR image builds and the local Kubernetes deployment command,
-use the
-[v1 release workflow runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md).
+manifest owns component IDs, package kinds, versions, and project paths. Its
+schema is [`manifest.schema.json`](https://github.com/sabbour/agentweaver/blob/v1/releases/manifest.schema.json).
 
-## Versioning and NuGet packages
+## Package versions and publication
 
-Use the existing changeset and version-plan tools to update package versions:
+Use the existing changeset and version-plan tools:
 
 ```powershell
 npm ci
@@ -20,76 +25,65 @@ npm run release:apply
 
 Review the resulting manifest and version changes before merging. A change to
 `releases/foundation.json` on `v1` runs
-`.github/workflows/v1-release-pack.yml`, which packs `contract` and `library`
-projects and publishes their NuGet packages to GitHub Packages. It skips
-already-published package versions and does not build container images.
+`.github/workflows/v1-release-pack.yml`. The workflow packs manifest projects
+whose kind is `contract` or `library` and publishes their NuGet packages to
+GitHub Packages. It skips package versions that already exist. It does not
+publish container images.
 
-The native standalone CLI archives use the separate workflow described in
-the [CLI packaging guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/cli-dotnet/README.md).
+The standalone .NET CLI archive workflow is separate. See the
+[CLI packaging guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/cli-dotnet/README.md).
 
-## Container images
+## Container image publication
 
-The `.github/workflows/v1-integration-images.yml` workflow builds the ten image
-repositories used by `deploy/k8s/kustomization.yaml` when service code, Docker
-inputs, or the component manifest changes on `v1`. It builds the AgentHost and
-Identity Broker Dockerfiles, Web frontend and host, and seven .NET service
-containers. Images are pushed directly to GHCR as `sha-<commit>` tags; the
-workflow summary reports the resulting digests. Each image carries the exact
-source commit, Git tree, and `releases/foundation.json` component version as
-the `org.opencontainers.image.revision`, `io.agentweaver.source-tree`, and
+Changes to service code, Docker inputs, or the component manifest on `v1`
+trigger `.github/workflows/v1-integration-images.yml`. The workflow builds the
+ten image repositories used by `deploy/k8s/kustomization.yaml` and pushes
+`sha-<commit>` tags directly to GHCR. Its summary reports each image digest.
+Each image carries its source commit, Git tree, and component version in the
+`org.opencontainers.image.revision`, `io.agentweaver.source-tree`, and
 `org.opencontainers.image.version` labels.
 
-The image workflow uses standard GitHub Actions Docker and .NET container
-publishing steps. It does not transfer image archives between jobs or require
-publication receipts, source claims, or provenance checks.
+The checked-in release and Kustomize composition includes the MCP compatibility
+image, workload, and ingress resources. Their presence does not make MCP a
+supported 1.x product or acceptance surface. Supported client paths are the
+Gateway/API, browser, and native .NET CLI. Outbound remote MCP connections are
+separate.
 
-## Kubernetes deployment
+## Kubernetes workload deployment
 
-The image workflow automatically pushes all ten image repositories to GHCR as
-`sha-<commit>` tags. An operator runs the workload deployment locally from an
-approved Azure CLI and Kubernetes context. Select the repositories to update
-in the JSON image manifest described in the
-[Kustomize guide](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md#select-images-with-a-manifest);
-omitted repositories keep their live image references. The legacy
-`--image-tag` form updates all ten images.
+Image publication does not deploy workloads. The operator runs the local
+deployment command from an approved Azure CLI and Kubernetes context. The
+operator-supplied JSON image manifest selects repositories to update; omitted
+repositories keep their live image references. The legacy `--image-tag` form
+updates all ten images.
 
 ```powershell
-az login
-az account set --subscription <approved-subscription>
-az aks get-credentials --resource-group agentweaver --name agentweaver-aks `
-  --subscription <approved-subscription>
-kubelogin convert-kubeconfig --login azurecli
-kubectl config current-context
 npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --execute
 ```
 
-Confirm the selected subscription and cluster context before execution. The
-operator identity must already have the required AKS and namespace permissions;
-the command does not provision Azure resources, grant access, read Secrets, or
-manage Namespaces. It resolves selected GHCR references to digests, runs only
-the selected services' migration Jobs with runtime-grant reconciliation,
-applies the namespaced Kustomize overlay, then checks all nine Deployment
-rollouts. A migration failure prevents the root workload apply.
+The command resolves selected GHCR references to digests, runs the selected
+services' migration Jobs, applies the namespaced Kustomize overlay, and checks
+the nine Deployment rollouts. It does not provision Azure resources, grant
+access, read Secrets, or manage Namespaces. A migration failure stops before
+the root workload apply. Earlier migrations or workload updates may have
+completed if a later step fails; inspect state before retrying.
 
-Projects & Config migrations use Kubernetes Workload Identity, not a token
-Secret. The one-time setup provisions the `projects-config-migration`
-ServiceAccount annotation and the
-`agentweaver-id-projects-config-migration` identity, federated for audience
-`api://AzureADTokenExchange` and subject
-`system:serviceaccount:agentweaver:projects-config-migration`. A separate
-one-time PostgreSQL setup maps that identity to a principal with `CONNECT` and
-ownership only of the `projects_config` schema and its exact planned objects;
-it must not own the database, retain database `CREATE`, or access other
-schemas. The setup command does not change PostgreSQL ownership. The deploy
-command verifies the ServiceAccount client-ID annotation before creating any
-migration Job and fails closed if it is missing.
+The Projects & Config migration Job uses Kubernetes Workload Identity, not a
+token Secret. Its one-time identity and PostgreSQL ownership setup are separate
+prerequisites. The release runbook and
+[database maintenance guide](../guide/database-maintenance.md) describe those
+operations.
 
-The migration Job applies EF migrations, then reconciles the reviewed
-Projects & Config runtime-grant plan transactionally before workload rollout.
-Extend and review that plan when new objects need permissions; do not use
-blanket/default grants.
-Complete the other Azure, database, identity, certificate, and runtime
-configuration prerequisites in the [deployment guide](../guide/deploy-to-azure.md).
+## Evidence boundary
 
-See the [Kubernetes bundle guide](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md) for overlay
-contents and rollout commands.
+A merged source revision, published package, published image, deployed
+workload, and live user journey are different facts. Use the evidence and
+verification steps for the operation you performed. A manifest entry, image
+tag, or ready Deployment does not establish a completed user journey.
+
+## Related references
+
+- [Deploy Agentweaver to Azure](../guide/deploy-to-azure.md)
+- [Database maintenance](../guide/database-maintenance.md)
+- [Kustomize bundle](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md)
+- [v1 release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md)

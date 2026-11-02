@@ -1,31 +1,33 @@
-# MCP tools reference
+# MCP compatibility adapter reference
 
-Use this reference to discover the tools that the Agentweaver Model Context
-Protocol (MCP) host exposes from the Gateway. The host reads
-`GET /openapi/v1.json` from its configured Gateway and caches the admitted
-operations. Each tool name is `agentweaver_` followed by the OpenAPI
-`operationId`. The Gateway document defines each tool's path, parameters,
-request body, and summary.
+The checked-in release/Kustomize composition still includes MCP compatibility
+image, workload and ingress resources. Their presence does not make MCP a
+supported 1.x product or acceptance surface. Supported client paths are
+Gateway/API, browser and native .NET CLI. Outbound remote MCP connections are
+separate.
+
+This page records the retained adapter's source contract. It is not a
+connection, deployment, or acceptance procedure. Do not use `/mcp` as a
+supported 1.x client path.
 
 For route authorization and native-only operations, see the
 [HTTP API reference](./api.md). For provider setup, see
 [Configure providers](../guide/configure-providers.md). For host settings, see
 [Runtime configuration](./runtime-configuration.md).
 
-## Connect and authenticate
+## Source contract
 
-Download the v1 operator definition from the Gateway at
-`GET /agents/agentweaver.agent.md`. Save it as
-`.github/agents/agentweaver.agent.md` in a repository where you want to use it.
-The download is anonymous and returns Markdown; it is not an MCP tool.
-It does not write the file into project or run repositories automatically.
+The adapter reads `GET /openapi/v1.json` from its configured Gateway and
+caches admitted operations. Each tool name is `agentweaver_` followed by the
+OpenAPI `operationId`. The Gateway document defines each tool's path,
+parameters, request body, and summary.
 
-Before you connect, configure the absolute HTTPS Broker issuer, protected
-resource audience, and Gateway service root listed below. Obtain a valid Broker
-access token for the MCP audience. The host maps `/mcp` with the MCP SDK's
-stateless Streamable HTTP transport. It validates the token and forwards the
-same token to the configured Gateway; the MCP host does not issue another
-identity or grant.
+The Gateway also serves the v1 operator definition at
+`GET /agents/agentweaver.agent.md`. The anonymous response is Markdown and is
+not an MCP tool. It does not write the file into project or run repositories.
+The adapter maps `/mcp` with the MCP SDK's stateless Streamable HTTP
+transport. It validates the Broker bearer and forwards the same token to the
+configured Gateway; it does not issue another identity or grant.
 
 | Host configuration | Requirement |
 | --- | --- |
@@ -33,17 +35,11 @@ identity or grant.
 | `Identity:Audience` | Absolute HTTPS protected-resource audience. |
 | `Gateway:BaseAddress` | Absolute HTTPS Gateway service root, without a path. |
 
-To discover and call tools:
-
-1. Send an authenticated MCP initialize request to `/mcp`.
-2. Call `tools/list` to retrieve the exact schemas from the configured Gateway.
-3. Call a listed tool with `tools/call` and arguments that match its schema.
-
 The host derives the protected-resource metadata path from the audience path.
 For an audience ending in `/mcp`, discovery uses
 `/.well-known/oauth-protected-resource/mcp`. The metadata returns `resource` and
-`authorization_servers`. If `/mcp` returns `401`, use the metadata URI in the
-`WWW-Authenticate` challenge to identify the protected resource.
+`authorization_servers`. An unauthenticated `/mcp` request returns `401` with
+the metadata URI in the `WWW-Authenticate` challenge.
 
 `GET /health/live` and `GET /health/ready` are anonymous process checks. They do
 not validate a Gateway tool call.
@@ -62,9 +58,9 @@ The input schema rejects unknown properties. Body fields are not flattened into
 top-level tool arguments. Operations whose idempotency key belongs inside the
 owner request body retain that field inside `body`.
 
-Use `tools/list` to get the exact schema from the configured Gateway. The
-operation list on this page is an index; the live schema is authoritative for
-the configured Gateway.
+The adapter's runtime `tools/list` response uses the exact schema from its
+configured Gateway. The operation list on this page is a source index; it does
+not establish a supported service or deployed endpoint.
 
 ## Tool index
 
