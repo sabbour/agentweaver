@@ -155,6 +155,7 @@ public static class IdentityBrokerEndpoints
         if (existing.Count > 0)
             return await SignInAsync(db, scopes, authorizations, existing[0], userId, requestedScopes,
                 runBinding, authorityKind, bindingReceipt, grantAuthority, runBindingAuthority, ct);
+        // A prompt=none request cannot pause for an interactive consent decision.
         if (silent)
             return RedirectAuthorizationError(
                 request.RedirectUri!, request.State, "consent_required",
@@ -189,6 +190,7 @@ public static class IdentityBrokerEndpoints
 
             var styleNonce = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(18));
             context.Response.Headers["Cache-Control"] = "no-store";
+            // The page posts here; keep any other permitted form target tied to the registered callback.
             context.Response.Headers["Content-Security-Policy"] =
                 $"default-src 'none'; img-src 'self'; style-src 'nonce-{styleNonce}'; " +
                 $"form-action 'self' {callbackSource}; base-uri 'none'; frame-ancestors 'none'";
@@ -290,6 +292,7 @@ public static class IdentityBrokerEndpoints
 
         var hash = OpaqueHandle.Hash(handle);
         var now = timeProvider.GetUtcNow();
+        // Claim only an unbound handle; this update consumes it and binds the authenticated subject atomically.
         var claimed = await db.PendingAuthorizations
             .Where(p => p.HandleHash == hash && p.ConsumedAt == null && p.ExpiresAt > now && p.SubjectUserId == null)
             .ExecuteUpdateAsync(setters => setters
@@ -300,6 +303,7 @@ public static class IdentityBrokerEndpoints
 
         var pending = await db.PendingAuthorizations.AsNoTracking()
             .SingleAsync(p => p.HandleHash == hash, ct);
+        // Replay saved OAuth values; login cannot replace the registered callback or PKCE challenge.
         return Results.Redirect(BuildAuthorizeQuery(pending));
     }
 
@@ -325,6 +329,7 @@ public static class IdentityBrokerEndpoints
             return Results.BadRequest(new { error = Errors.InvalidRequest });
         }
         ct.ThrowIfCancellationRequested();
+        // Keep this subject's handle consumption and any approved permanent authorization in one transaction.
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var hash = OpaqueHandle.Hash(decision.ConsentHandle ?? string.Empty);
         var now = timeProvider.GetUtcNow();
@@ -369,6 +374,7 @@ public static class IdentityBrokerEndpoints
             ?? throw new InvalidOperationException("The client was removed while awaiting consent.");
         var applicationId = await applications.GetIdAsync(application, ct);
 
+        // Explicit approval, not merely displaying consent, creates the reusable OAuth authorization.
         await authorizations.CreateAsync(
             principal: BuildMinimalPrincipal(pending.SubjectUserId!.Value, approvedScopes),
             subject: pending.SubjectUserId.Value.ToString(),
@@ -407,6 +413,7 @@ public static class IdentityBrokerEndpoints
         {
             return Results.BadRequest(new { error = Errors.InvalidRequest });
         }
+        // Accept only the fields rendered by this page; no other form value belongs in the consent decision.
         if (form.Keys.Any(key => key is not ("consent_handle" or "approve" or "__RequestVerificationToken")) ||
             form["consent_handle"].Count != 1 || form["approve"].Count != 1 ||
             form["__RequestVerificationToken"].Count != 1 ||
@@ -416,6 +423,7 @@ public static class IdentityBrokerEndpoints
             !bool.TryParse(form["approve"], out var approve))
             return Results.BadRequest(new { error = Errors.InvalidRequest });
 
+        // The native form supplies no scopes; shared consent uses the saved request and normal user/antiforgery checks.
         return await ConsentAsync(context,
             new ConsentDecision(form["consent_handle"][0], approve, null),
             db, authorizations, applications, timeProvider, antiforgery, ct);
@@ -646,6 +654,7 @@ public static class IdentityBrokerEndpoints
         if (user is null || user.Disabled)
             return Forbid(Errors.InvalidGrant, "The account is disabled.");
 
+        // Run-bound code and refresh-token claims are snapshots; recheck current authority before issuing new tokens.
         if (!TryGetPrincipalRunBinding(result.Principal, out var runBinding) ||
             !BrokerRunBindingAuthority.TryReadTicket(
                 result.Principal, runBinding, out var authorityKind, out var receipt))
@@ -709,6 +718,7 @@ public static class IdentityBrokerEndpoints
         if (user.Disabled)
             return Forbid(Errors.AccessDenied, "The account is disabled.");
 
+        // Permanent OAuth consent does not keep a project/run grant active through code issuance.
         if (runBinding is not null)
         {
             if (authorityKind == BrokerRunBindingAuthority.ProjectsAuthorityKind)
