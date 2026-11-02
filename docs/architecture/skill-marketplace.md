@@ -11,7 +11,7 @@ tracks source settings, not skill content, and does not authorize you to read
 or run a skill. Browse resolves the ref to an exact commit before it reads
 manifests.
 
-This page explains v1 source ownership and bounds. It does not establish that
+This page explains source ownership and bounds. It does not establish that
 an upstream repository is available or that an AgentHost loaded the skill.
 See [Projects and configuration](../deep-dive/projects-config.md) for how
 reviewed skill pins become part of a run.
@@ -229,7 +229,7 @@ Errors use Problem Details with a stable `code`:
 | `503` | Upstream service or content storage is unavailable. |
 | `504` | Request timed out. |
 
-The checked-in v1 Gateway catalog maps suggested-marketplace definitions, source list/create/update/tombstone,
+The checked-in Gateway catalog maps suggested-marketplace definitions, source list/create/update/tombstone,
 pinned browse, selected-content preview/import, inline Skills preview/import,
 local upload packaging, project assignment, revision revocation, and
 metadata-only inventory reads to these Projects owner
@@ -247,8 +247,8 @@ digest before the imported skill can be assigned to agents in the current
 project cast. Local files, ZIP archives, and new skills use the separate
 package, preview, and import path. The API has no
 actor-safe runtime-loaded status producer; the page reports that gap instead of
-inferring runtime use from an assignment or accepted run configuration. The
-source and Gateway routes are present in v1; deployment and live availability
+inferring runtime use from an assignment or accepted run configuration. These
+routes are present in source; deployment and live availability
 are not established by this client integration.
 
 ## Validation

@@ -5,7 +5,7 @@ stores its opaque bytes. PostgreSQL records the session, ordered event,
 reference, integrity metadata and retention deadline. An uploaded object is
 not usable history until Events commits its reference.
 
-This page explains v1 source composition and recovery, not an architectural
+This page explains source composition and recovery, not an architectural
 decision record, deployment receipt or live acceptance result. Orchestrator
 retains execution fences and Microsoft Agent Framework (MAF) checkpoints;
 AgentHost produces actual turn content and SDK-supported cache material.

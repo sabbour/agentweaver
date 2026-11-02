@@ -5,7 +5,7 @@ authority. Private networking, workload identity and separate migration
 identities constrain how owners reach their databases and backends. They do
 not replace project roles, run bindings or credential grants.
 
-`infra/bicep/main.bicep` is the v1 foundation's declarative source. AKS means
+`infra/bicep/main.bicep` is the foundation's declarative source. AKS means
 Azure Kubernetes Service. The template defines a dedicated network
 and cluster, Entra-only PostgreSQL, and Key Vault, Blob Storage, and Azure
 Monitor resources. PostgreSQL, Key Vault, and Blob use private networking;
@@ -49,7 +49,7 @@ The following sequence shows the verifier's time-ordered, read-only checks after
 
 ## Region placement
 
-The intended v1 P0 placement is:
+The intended P0 placement is:
 
 | Resource | Region | Notes |
 | --- | --- | --- |

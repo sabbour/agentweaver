@@ -6,7 +6,7 @@ history without repeating effects or approving workflow gates.
 
 `Agentweaver.EventsAndSessions` owns ordered run events, typed material
 references, addressed delivery and accounting. Project facts form a separate
-project-scoped stream of accepted effects. This page describes v1 source
+project-scoped stream of accepted effects. This page describes source
 contracts, not a deployment record. The [deep dive](../deep-dive/events-sessions.md)
 connects append, replay, material and delivery paths.
 
@@ -628,7 +628,7 @@ The migration job and its database grants are not provisioned by this source can
 
 ## Events runtime input validation
 
-The complete v1 product installation, including the Events Deployment, Service,
+The complete product installation, including the Events Deployment, Service,
 ServiceAccount, runtime ConfigMap, and Cilium policy, is maintained in the root
 Kustomization at `deploy/k8s`. The static workload pins its release image through
 Kustomize; the install does not generate a Deployment or Service from a

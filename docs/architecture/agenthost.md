@@ -5,7 +5,7 @@ owns its Sandbox placement, Orchestrator owns the current execution binding, and
 Identity owns purpose-bound credential access. AgentHost checks that those
 bindings still agree before native model turns and tools.
 
-This page explains the v1 source contracts behind readiness, execution and
+This page explains the source contracts behind readiness, execution and
 recovery. It does not report a live deployment or paid model acceptance.
 AgentHost has no automatic scheduler.
 The source pins `GitHub.Copilot.SDK` 1.0.18 to native runtime 1.0.97.
@@ -680,7 +680,7 @@ Fixture configuration and TLS files use mode `0440`.
 The check provides simulated POSIX access, not live Azure Files or deployed TLS acceptance.
 The native runtime checks run locally in CI and are not uploaded as deployment proof.
 
-The v1 image workflow builds the existing Dockerfiles with standard GitHub
+The image workflow builds the existing Dockerfiles with standard GitHub
 Actions Docker and .NET container steps, then pushes each image directly to
 GHCR under its `sha-<commit>` tag. Deployment resolves those tags to immutable
 digests and applies the existing Kustomize overlay. The workflow does not

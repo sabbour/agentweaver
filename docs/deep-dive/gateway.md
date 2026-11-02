@@ -10,7 +10,7 @@ current permission and whether a requested transition is valid.
 It centralizes authentication, transport bounds and route discovery without
 centralizing domain decisions. Owners remain responsible for current authority
 and valid transitions. Retained MCP compatibility code can consume the same
-OpenAPI; it is not a supported 1.x product surface.
+OpenAPI; it is not a supported product surface.
 
 ## 5. Building blocks
 

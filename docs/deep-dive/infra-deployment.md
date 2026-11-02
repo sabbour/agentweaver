@@ -44,7 +44,7 @@ database grants before workloads can become ready.
 | `deploy/k8s/profiles/` | Separately selected runtime profiles |
 | `scripts/azure/` | Exact-source infrastructure planning and deployment |
 | `scripts/release/` | Component version planning, Kustomize image helpers, and shared registry reads |
-| `.github/workflows/v1-integration-images.yml` | Direct GHCR image builds for v1 service changes |
+| `.github/workflows/v1-integration-images.yml` | Direct GHCR image builds for service changes |
 | `.github/workflows/v1-release-pack.yml` | NuGet package publication after component version changes |
 | `scripts/release/deploy-kustomize.mjs` | Local migration-first Kustomize deployment |
 
@@ -179,12 +179,12 @@ AgentHost is the tenth product image, but it runs per Sandbox instead of as a
 shared Deployment.
 
 That source inventory includes the retained MCP compatibility workload and
-ingress. It does not make MCP a supported 1.x product or acceptance surface.
+ingress. It does not make MCP a supported product or acceptance surface.
 Gateway/API, browser and native .NET CLI remain the supported client paths.
 
 ### Build and publish
 
-The v1 image workflow builds all ten images used by the root Kustomize overlay
+The image workflow builds all ten images used by the root Kustomize overlay
 when service code, Docker build inputs, or component versions change. AgentHost
 and Identity Broker use their existing Dockerfiles and build contexts, Web
 builds its frontend and host, and the other seven images use .NET container

@@ -2,7 +2,7 @@
 
 Start with the [system overview](./00-system-overview.md) to understand who
 decides, who executes and who records history. Then choose the owner or failure
-path you need. These pages describe v1 source; they are not a live deployment
+path you need. These pages describe source; they are not a live deployment
 inventory or evidence that every planned feature is accepted.
 
 The [architecture pages](../architecture/overview.md) explain component
@@ -37,7 +37,7 @@ actual status in the [system decision view](./00-system-overview.md#9-architectu
 - [Agent runtime](./agent-runtime.md) — Follow runtime bootstrap, SDK turns,
   tool authorization, and recovery.
 - [Retained MCP compatibility adapter](./mcp-server.md) — Understand source
-  OpenAPI-to-tool translation, not a supported 1.x product entrypoint.
+  OpenAPI-to-tool translation, not a supported product entrypoint.
 
 ## Identity, configuration, and execution resources
 
