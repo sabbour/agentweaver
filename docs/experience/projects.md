@@ -81,7 +81,7 @@ and the metrics.
 
 **Prerequisites:** Permission to view the project. Capturing, editing,
 queueing, archiving, and changing prerequisites need permission to change the
-project.
+project. Deleting also requires a project token that is not bound to a run.
 
 1. Select **Board** in the project rail, or open `/projects/:projectId/board`.
    A backlog promotion notification opens the same page.
@@ -96,6 +96,13 @@ project.
 5. Use **Mark Ready** or **Move to Backlog** to change queue state. Add or
    remove prerequisites on an unclaimed task, or select **Archive** to hide it
    from the board.
+6. To permanently remove an eligible task, select **Delete task** and review
+   the confirmation. It removes the task and its prerequisite links, not a
+   linked repository issue. Cancel makes no request. Deletion is unavailable
+   when another task depends on the task or a repository issue is linked; the
+   owner can reject other restricted tasks. See
+   [Build and configure the web client](../guide/web-client.md#board-and-start-task)
+   for the full confirmation and stale-revision behavior.
 
 Each card shows the title, description, prerequisites by title, and the
 linked repository issue as `owner/name#number` with **Open** or **Closed**.
@@ -119,9 +126,12 @@ revision conflicts reload the Board and ask you to try again.
 **Expected result:** The new task appears in **Backlog**. A saved edit shows
 **Task saved.**
 
-Cards can't be dragged between columns. The Board has no bulk-ready or
-reorder controls, and no **Human Review** or **Problems** columns. Board
-actions change project backlog state; they do not start a run.
+Cards cannot be dragged between columns. Use **Move earlier** or **Move
+later** on an open Backlog or Ready task to change its position when that
+action is available. If you can change the project and eligible backlog tasks
+exist, select **Send all to Ready** to queue them together. These actions
+change project backlog state; they do not start a run. The **Human Review**
+and **Problems** columns are not available.
 
 ## Open an existing run
 
@@ -155,14 +165,14 @@ See [Runs and sessions](./runs-sessions.md) for the data the run page reads.
   project does not grant permission to change it.
 
 You can rename, archive, and restore a project in
-[Project settings](./configuration.md). The v1 browser has no controls for
+[Project settings](./configuration.md). The browser has no controls for
 project deletion or repository cloning.
 
 ## Requests
 
 The following versioned Gateway routes are in the checked-in source. The
-**Owner** column names the service that handles each route. These services
-are source candidates; the route list does not confirm deployment.
+**Owner** column names the service that handles each route. These routes do
+not confirm that the services are deployed in your environment.
 
 | Operation | Gateway request | Owner | Result |
 | --- | --- | --- | --- |
@@ -178,7 +188,10 @@ are source candidates; the route list does not confirm deployment.
 | Capture a task | `POST /api/v1/projects/{projectId}/backlog/tasks` | Orchestrator | Adds a task to Backlog with a client-chosen task ID and the expected graph revision. |
 | Edit a task | `PUT /api/v1/projects/{projectId}/backlog/tasks/{taskId}/content` | Orchestrator | Replaces the title and description with the expected graph and task revisions. |
 | Change queue state | `PUT /api/v1/projects/{projectId}/backlog/tasks/{taskId}/state` | Orchestrator | Moves an unclaimed open task between Backlog and Ready. |
+| Change position in a queue | `PUT /api/v1/projects/{projectId}/backlog/tasks/{taskId}/position` | Orchestrator | Moves an unclaimed open task earlier or later with its queue state, position, and expected graph and task revisions. |
+| Queue eligible Backlog tasks | `POST /api/v1/projects/{projectId}/backlog/ready-all` | Orchestrator | Moves all eligible Backlog tasks to Ready at the expected graph revision. |
 | Archive a task | `POST /api/v1/projects/{projectId}/backlog/tasks/{taskId}/archive` | Orchestrator | Archives a task at the expected graph and task revisions. |
+| Delete a task | `DELETE /api/v1/projects/{projectId}/backlog/tasks/{taskId}` | Orchestrator | Deletes a confirmed task with the expected graph and task revisions when owner eligibility checks pass. |
 | Add or remove a prerequisite | `PUT` or `DELETE /api/v1/projects/{projectId}/backlog/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Orchestrator | Changes a prerequisite edge with the expected graph revision. |
 | Claim eligible work | `POST /api/v1/projects/{projectId}/runs/{runId}/backlog/tasks/{taskId}/claim` | Orchestrator | Atomically binds one task to the accepted run and checks current prerequisite evidence. |
 | List synced issues | `GET /api/v1/projects/{projectId}/source-control/issues` | Orchestrator | Returns repository issues synced to backlog tasks. The Board reads every page with `state=all`. |

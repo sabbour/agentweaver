@@ -145,8 +145,8 @@ These requests go to Projects & Config with the current bearer token. The
 choices request uses the current project read authorization, accepts no query
 parameters, and returns `Cache-Control: no-store`. The app includes the tenant
 selector only when its current authorization context confirms one. The
-Projects & Config implementation is a source candidate; these paths are not
-evidence of a deployed API. See
+These paths describe checked-in source behavior; they do not confirm that the
+Projects & Config API is deployed in your environment. See
 [Projects & Config](../architecture/projects-config.md) for document and
 selection rules, and [contracts](../reference/contracts.md) for configuration
 contracts.

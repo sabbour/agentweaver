@@ -1,7 +1,15 @@
-# Read notifications across runs
+<a id="read-notifications-across-runs"></a>
 
-Notifications show pending decisions and recently created backlog tasks. The Orchestrator
-derives them from two sources:
+# Read and dismiss notifications
+
+Use notifications to find decisions that need your input or recently created
+backlog tasks across projects. You can dismiss an item for yourself; this does
+not answer a gate or change a task.
+
+The checked-in route contract describes source behavior. It does not confirm
+that the Orchestrator or Gateway is available in your environment.
+
+The Orchestrator derives notifications from two sources:
 
 - `pendingGate`: a pending decision gate that needs human input.
 - `backlogPromoted`: a confirmed work plan that was promoted into backlog tasks
@@ -11,6 +19,20 @@ The Orchestrator does not copy these items into another delivery queue. Dismissi
 a notification never resolves a gate or changes a task.
 
 ## Read pending attention
+
+### In the web app
+
+Sign in to a configured Agentweaver web app. Select the **Notifications**
+button to open the bell, or read the same list under **Needs attention** on
+**Overview**. The bell shows the pending count and refreshes while the browser
+tab is visible.
+
+Select a pending gate to open its run's **Approvals** tab. Select a backlog
+promotion to open the project's Board. Select **Dismiss** to hide an item for
+yourself; this does not answer the gate or change the task. The bell and
+**Needs attention** list share the same notifications.
+
+### Through the Gateway
 
 Call `GET /api/v1/notifications` through the Gateway with an unbound browser
 access token and optional `X-Agentweaver-Tenant` selector. You do not need to
@@ -48,13 +70,14 @@ work that still needs input. Both views use the same source.
 
 All responses use `Cache-Control: no-store`. Polling is supported. Clients
 should keep one poller for the existing bell and attention list rather than
-create another notification surface. The v1 web client polls every 30 seconds
+create another notification surface. The web client polls every 30 seconds
 while the browser tab is visible, reads up to 50 items, and shows `count` on
 the bell badge. Each item has **Dismiss**.
 
 ## Dismiss a notification
 
-Call `POST /api/v1/notifications/{notificationId}/dismiss` without a request body.
+Call `POST /api/v1/notifications/{notificationId}/dismiss` through the Gateway
+without a request body.
 The operation is idempotent and returns `204`. A dismissal belongs to the
 authenticated issuer, caller and tenant. It never affects another caller.
 A later gate with a different request ID creates a new notification.
@@ -86,8 +109,9 @@ browser memory. The sound preference uses browser storage, not server
 preferences (`aw.notifications.muted`). Approval toasts remain until handled
 or dismissed, and their source is checked again before navigation. Other
 toasts expire after 12 seconds. A transient poll failure retries next cycle
-without losing state. Dismissals are durable per caller. The v1 backend preserves that
-division: browser seen and sound state do not become gate state.
+without losing state. Dismissals are durable per caller. The Agentweaver
+backend preserves that division: browser seen and sound state do not become
+gate state.
 
 ## Backlog promotion notices
 
@@ -96,7 +120,7 @@ When a run promotes its confirmed work plan into backlog tasks, the feed shows o
 tasks that are not archived. Show it as "1 subtask created" or "{n} subtasks
 created", and link to the project board. `sessionId` is the run's root session.
 
-The v1 web client shows these items in the notification bell and **Needs
+The web client shows these items in the notification bell and **Needs
 attention** with that text and a link to the project Board. It skips an item
 that has no `promotionId` or a `taskCount` below 1.
 
@@ -110,7 +134,8 @@ The item disappears when:
 Tasks captured directly, without a promotion, never create this notice. Dismissal
 uses the same route as gates and is stored per caller.
 
-This matches the 0.x promotion source with one difference: v1 shows one notice per
-promotion instead of one per run. A v1 run promotes each work plan at most once.
+This matches the 0.x promotion source with one difference: the browser client
+shows one notice per promotion instead of one per run. A run promotes each work
+plan at most once.
 Promotions use persisted task origins rather than task creation times. This
 keeps ordinary task capture separate from work created by a confirmed plan.

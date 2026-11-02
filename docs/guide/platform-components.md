@@ -1,10 +1,13 @@
-# Platform components
+<a id="platform-components"></a>
 
+# Read platform component status
+
+Use the platform components report to see the implementation selected for
+each area, which owner reports it, and its readiness state. The report is
+read-only and describes the deployment that answered the request.
 Agentweaver splits its platform into replaceable areas, such as Sandbox,
 Memory, and Secrets. Each area has an owner service that selects one or more
-implementations. The platform components report shows, for every area, the
-implementation that's active now, the implementations that are registered,
-and whether the owner reports them as ready.
+implementations.
 
 Use this report to answer these questions:
 
@@ -24,6 +27,15 @@ The report is read-only. To change a selection, see
   revoked assignment takes effect immediately.
 
 ## Read the report
+
+### In the web app
+
+Open `/platform-settings` in the configured web app. The page shows the
+platform component report. Select **Refresh** to request a current report.
+The page is read-only and requires the same administrator assignment listed
+above.
+
+### Through the Gateway
 
 Send a `GET` request through the Gateway:
 

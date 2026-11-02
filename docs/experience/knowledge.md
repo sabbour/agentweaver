@@ -12,9 +12,9 @@ provider used for scoped changes.
 - Use a Broker token that is not bound to a run for project-wide discovery.
 - Have existing run-provider bindings in the project to discover their records.
 
-The v1 Memories page is backed by the unpublished `Agentweaver.Knowledge`
-source candidate. Its route names describe source contracts, not deployed
-service availability.
+The checked-in Memories page calls the Knowledge routes described below.
+Those source routes do not confirm that the Knowledge service is deployed in
+your environment.
 
 ## Select scope and search
 
@@ -56,10 +56,10 @@ access and each existing run binding before returning results.
 
 The **Recent project runs** panel is the reachable project-work-history entry
 point. Its newest 100 runs have direct **Session tree** and **Activity** links,
-so users can browse project sessions and addressed-message receipts without
+so users can browse project sessions and addressed-message records without
 entering run or session IDs. **Session tree** lists the sessions for that run.
 **Activity** shows its committed event journal, including addressed-message
-receipts and routing details. Current project readers can open this history even
+records and routing details. Current project readers can open this history even
 if they did not start the run. A run-bound sign-in remains limited to its own
 run. The journal does not include message text; delivery and acknowledgment
 remain owned by the message service.
@@ -125,7 +125,7 @@ overwritten.
   change.
 - The browser rejects records and mutation responses outside the selected
   project and agent.
-- v1 does not expose a single cross-run session or addressed-message feed.
+- There is no single cross-run session or addressed-message feed.
   The **Recent project runs** panel provides the run-scoped entry point instead;
   private conversation history remains separate from project work-focus
   history.

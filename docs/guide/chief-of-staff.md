@@ -1,7 +1,11 @@
 # Chief of Staff
 
-The Chief of Staff gives each user a private place to talk to Agentweaver and a
-personal list of outcomes. It has two parts:
+This page explains the checked-in Chief of Staff contracts. It does not
+confirm that the web app, Gateway, or owner services are available in your
+environment.
+
+The Chief of Staff gives each user a private place to talk to Agentweaver and
+a personal list of outcomes. It has two parts:
 
 - **Conversations**: private text chats. Each conversation is a run that the
   user started in one project they selected.
@@ -250,7 +254,7 @@ unique indexes to existing Priority links. It preserves every existing row
 and removes only the obsolete number-only index after its replacements exist.
 It runs in the migrator transaction and can block link writes while it validates
 and builds the indexes. Existing runtime table grants remain sufficient.
-Migration 033 itself does not apply or require migration 032. The reviewed P1
+Migration 033 itself does not apply or require migration 032. The reviewed
 maintenance plan applies both migrations; 032 creates the records used by the
 project pull request list, and its grant is covered by the same source-bound
 plan.
@@ -270,8 +274,9 @@ schema version. Rolling back to this compatible owner works on either shape.
 The machine-readable contract is
 `services/orchestrator/Agentweaver.Orchestrator/schema-compatibility.json`.
 Its required, optional and default-apply version lists describe this image's
-behavior. The P1 plan includes 032, 033, and 035-037, skips 017 and reserved gap 034; regenerating the plan
-changes its hash. Schema compatibility is not permission to apply the plan.
+behavior. The plan includes 032, 033, and 035-037; it skips 017 and reserved gap 034.
+Regenerating the plan changes its hash. Schema compatibility is not permission
+to apply the plan.
 
 ## Related content
 

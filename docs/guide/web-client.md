@@ -1,12 +1,19 @@
-# Use the v1 web client
+<a id="use-the-v1-web-client"></a>
 
-The v1 Web client is a React application that uses the Identity Broker for
-sign-in and the versioned Gateway for product API and event-stream requests.
-It keeps access and refresh tokens in memory. GitHub Repo App account
-authorization, repository discovery, and disconnect use cookie-authenticated
-Identity Broker endpoints directly.
+# Build and configure the web client
 
-This article describes the checked-in v1 client and its contracts. The source
+Use this guide to build the checked-in React client or understand how it
+connects to Agentweaver services. For browser tasks, start with the
+[browser task guides](../experience/README.md).
+
+The client uses the Identity Broker for sign-in and the versioned Gateway for
+product API and event-stream requests. It keeps access and refresh tokens in
+memory. GitHub Repo App account authorization, repository discovery, and
+disconnect use cookie-authenticated Identity Broker endpoints directly.
+Product MCP is not a supported client surface. Outbound Remote MCP
+connections are separate.
+
+This article describes the checked-in client and its contracts. The source
 and route manifests do not prove that the Web image, Gateway, Broker, or owner
 services are deployed or available.
 
@@ -29,12 +36,10 @@ for authorization.
 ```mermaid
 flowchart LR
   Browser[Agentweaver web client]
-  McpClient[MCP clients]
   Broker[Identity Broker]
   Portal[AKS-managed wildcard HTTPS listener with exact-host routes]
   Web[Web service]
   Gateway[Gateway / BFF]
-  Mcp[MCP service]
   Projects[Projects & Config]
   Orchestrator[Orchestrator]
   Events[Events & Sessions]
@@ -43,10 +48,6 @@ flowchart LR
 
   Browser -->|HTTPS /api/v1 and exact /openapi/v1.json| Portal
   Portal -->|/api/v1 and exact /openapi/v1.json| Gateway
-  McpClient -->|HTTPS /mcp| Portal
-  Portal -->|/mcp| Mcp
-  McpClient -->|HTTPS protected-resource metadata| Portal
-  Portal -->|/.well-known/oauth-protected-resource/mcp| Mcp
   Browser -->|HTTPS /| Portal
   Portal -->|/| Web
   Gateway -->|Live event SSE: bearer only| Events
@@ -76,12 +77,12 @@ The client uses these routes:
 | `/projects` | Browse project tiles and create a project. Creating a project does not make you its owner. |
 | `/projects/:projectId` | Read the project **Dashboard**: setup readiness, metrics, usage, recent runs, team, and quick actions. |
 | `/projects/:projectId/orchestrations` | List this project's active and finished runs and open a run. |
-| `/projects/:projectId/board` | Read the project **Board**: backlog tasks in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture, edit, queue, archive, and manage prerequisites; delete eligible tasks after confirmation. |
+| `/projects/:projectId/board` | Read the project **Board**: backlog tasks in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture, edit, reorder, queue, archive, and manage prerequisites; delete eligible tasks after confirmation. |
 | `/projects/:projectId/team` | Read agents, edit an agent's role and charter, add a member, and export or import the team. |
 | `/projects/:projectId/team/cast` | Formulate a team from a goal, analyze read-only project signals, or start from a template; review a pending proposal before confirmation. |
 | `/projects/:projectId/settings?section=<key>` | Edit project settings by section, manage members, read history, and manage connections. |
 | `/projects/:projectId/skills` | Manage Skill sources, imported revisions, and agent assignments. |
-| `/projects/:projectId/memories` | Search and manage Knowledge records and transfer bundles for a run and an agent. `/knowledge` opens the same page. |
+| `/projects/:projectId/knowledge` and `/projects/:projectId/memories` | Search and manage Knowledge records and transfer bundles for a run and an agent. |
 | `/projects/:projectId/flow` | Read project notifications, pending gates, Board counts, and runs grouped as Open, Working and Done. |
 | `/projects/:projectId/workflows` | Read **Active workflow** and grouped **Referenced workflows** cards, expand **View blueprints** to inspect assignments, clear a saved default, refresh, or open Project settings. Workflow-definition features still need Gateway routes; see the [UI parity reference](../reference/web-ui-parity.md#workflows-page-inventory). |
 | `/projects/:projectId/workspace` | Read the configured repository, pull requests that runs opened, and synced issues. |
@@ -95,9 +96,9 @@ The client uses these routes:
 
 ## Navigate the client
 
-The v1 client keeps the 0.x navigation rail, project switcher, floating content
-panel, gallery tiles, dialogs, typography, and theme. Its views use v1 service
-contracts instead of the 0.x API.
+The client keeps the 0.x navigation rail, project switcher, floating content
+panel, gallery tiles, dialogs, typography, and theme. Its views use the current
+service contracts instead of the 0.x API.
 
 The rail has **Overview**, **Projects**, and **Sessions**. The **Sessions**
 group has a **New session** button. **Overview** is the home page. It shows:
@@ -182,7 +183,7 @@ the repository issues synced to tasks:
   disable the action; the owner can still reject accepted-plan origins,
   issue-sync receipts, or an active sync cycle that the Board snapshot does
   not expose. A stale revision reloads the Board and requires a new
-  confirmation. This v1 action is not a claim that the mounted 0.x card had
+  confirmation. This action is not a claim that the mounted 0.x card had
   the same control.
 - **Ready** records queue intent, not execution eligibility. A run checks
   current prerequisite execution and output evidence when it claims a task.
@@ -190,8 +191,10 @@ the repository issues synced to tasks:
 - A write sends the revision the Board last read. If another change got there
   first, a capture retries once with the new revision. Other revision
   conflicts reload the Board and ask you to try again.
-- Cards can't be dragged between columns. Bulk-ready, reorder, **Human
-  Review**, and **Problems** controls aren't available.
+- Cards can't be dragged between columns. Use **Move earlier** and **Move
+  later** when available to change a task's position. Select **Send all to
+  Ready** to queue eligible Backlog tasks when you can change the project.
+  **Human Review** and **Problems** columns aren't available.
 - Without read access, the Board says you don't have permission to view it.
   A failed read shows the reason and **Try again**.
 
@@ -341,7 +344,7 @@ this version**, because there is no summary across projects. Unknown
 addresses show **Page not found**.
 
 See the [UI parity inventory](../reference/web-ui-parity.md) for the retained
-patterns, v1 adaptations, and remaining limits.
+patterns, adaptations, and remaining limits.
 
 The run page polls owner snapshots and replays journal pages before it opens
 the live event stream. It merges overlapping replay and live events by event
@@ -425,9 +428,8 @@ has the 0.x section icon, and **Danger zone** has a **Risk** badge.
   permission message in the panel.
 - **Repository** sets the repository owner, name, and sign-in method.
 - **Models** sets model defaults and model overrides by task.
-- **Platform components** changes the implementations the project chose for
-  each platform component, as one implementation ID or a comma-separated
-  priority order. With no project choices, platform defaults apply.
+- **Platform components** shows the platform's provider choices. Projects
+  cannot change these non-model selections.
 - **Run limits** sets limits for new runs. An empty field uses the platform
   limit.
 - **Danger zone** archives or restores the project.
@@ -448,9 +450,13 @@ default model, the form clears the saved credential and shows **Choose a
 credential for this model.** **Save changes** stays disabled until you enter
 a matching credential.
 
-Available model and provider choices are not returned through the current
-Gateway catalog. Enter existing references. The client does not substitute a
-hardcoded catalog.
+The project configuration choices endpoint returns owner-backed eligible
+model references and platform provider choices. **Platform components** stays
+read-only. When model choices are available, **Models** lists eligible
+references; when they are not, the page says so and keeps saved references
+visible instead of inventing choices. See
+[Project configuration](../experience/configuration.md) for the selection
+and save behavior.
 
 Saving adds a configuration revision. Runs that already started keep their
 settings. In **History**, enter a revision number and select **View revision**
@@ -520,8 +526,8 @@ The summary row shows project-wide pending Proposal, Decision, and active
 Memory totals from Knowledge search. The pending total counts stored proposals
 with the pending lifecycle state, not pending-trust decisions. Loading, denied,
 and failed reads never display a count of zero in place of an unknown result.
-The project-wide Sessions count is also unavailable; v1 exposes session history
-per run at `GET /api/v1/projects/{projectId}/runs/{runId}/history/sessions`.
+The project-wide Sessions count is also unavailable. The Gateway exposes session
+history per run at `GET /api/v1/projects/{projectId}/runs/{runId}/history/sessions`.
 
 - Correct or archive supported Memory and SessionContext records.
 - Restore a historical revision as a new Active+Pending revision.
@@ -586,7 +592,13 @@ run, and tenant. The owner checks the accepted run configuration and current
 authority. Status or discovery failures remain visible; the UI does not
 present them as an empty repository list or a disconnected account.
 
-## Connect a Remote MCP tool service
+<a id="connect-a-remote-mcp-tool-service"></a>
+
+## Configure a Remote MCP connection
+
+This configures an outbound connection to an external tool service. It is
+separate from an Agentweaver MCP endpoint, which is not a supported product
+surface.
 
 In project **Settings > Connections > Remote MCP**, the panel lists the
 project's saved connections, with **Load more connections** for the next page.
@@ -602,9 +614,12 @@ calculate a replacement checksum from its JSON formatting.
 
 Authorize opens the service-provided HTTPS address in a tracked popup. After
 sign-in returns, select **Load connection** to read the current result.
-A callback is not proof of success. Refresh and disconnect use the exact
-connection, credential, and configuration revisions returned by the owner.
-The browser does not collect or store provider tokens.
+A callback alone does not confirm that the owner completed authorization.
+Refresh and disconnect use the exact connection, credential, and configuration
+revisions returned by the owner.
+The browser does not collect or store provider tokens. The current surface
+manages connection configuration and status; remote discovery and tool
+execution are not available.
 
 ## Configure the client
 
@@ -678,10 +693,12 @@ administrators, the table lists every area with its selected (active)
 implementations and the other available implementations, each with its version.
 ## Understand client limitations
 
-The optional managed portal routes `/` to Web on port 8080, `/api/v1` and the
-exact `/openapi/v1.json` path to Gateway, and exact `/mcp` and protected
-resource metadata paths to MCP on port 8443. These source manifests describe
-the intended route mapping; they do not establish a running portal or backend.
+The checked-in release/Kustomize composition includes MCP compatibility image,
+workload, and ingress resources. Their presence does not make MCP a supported
+product or acceptance surface. Supported client paths are Gateway/API,
+browser, and the native .NET CLI. Outbound Remote MCP connections are
+separate. The source does not establish that any component is deployed in
+your environment.
 
 The client lists runs from the project run list, starts new sessions, and
 stops runs. You don't type a run ID. It does not expose run-root acceptance,
@@ -712,10 +729,10 @@ reports run totals without per-event model-binding details. The UI does not
 infer those identities from configuration or usage, and it does not replace
 missing measurements with zero.
 
-These 0.x features are not in this version:
+These features are not available in this version:
 
-- Dragging or reordering tasks on the **Board**. Queue state, archive, and
-  prerequisite actions are available from each card; cards can't be dragged.
+- Dragging tasks between **Board** columns. Use the card actions to change
+  queue state or order; **Send all to Ready** queues eligible backlog tasks.
 - The **Human Review** and **Problems** columns on the **Board**.
 - The count strip on **Memories**.
 - Metrics totaled across projects. **Overview** shows one project at a time.

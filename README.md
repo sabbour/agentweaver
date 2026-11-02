@@ -1,82 +1,66 @@
-# Agentweaver 1.x
+<a id="agentweaver-1x"></a>
 
-[![v1 .NET coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsabbour%2Fagentweaver%2Fbadges%2Fv1%2Fcoverage-dotnet.json)](https://github.com/sabbour/agentweaver/blob/badges/v1/coverage.md)
-[![v1 web coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsabbour%2Fagentweaver%2Fbadges%2Fv1%2Fcoverage-web.json)](https://github.com/sabbour/agentweaver/blob/badges/v1/coverage.md)
-[![v1 Node coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsabbour%2Fagentweaver%2Fbadges%2Fv1%2Fcoverage-node.json)](https://github.com/sabbour/agentweaver/blob/badges/v1/coverage.md)
+# Agentweaver
 
-Agentweaver 1.x is a rebuild of the Agentweaver platform on the `v1` branch.
-It defines provider contracts and service boundaries for agent projects,
-identity, Knowledge, run events, orchestration, environments, and user-facing
-surfaces.
+[![.NET coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsabbour%2Fagentweaver%2Fbadges%2Fv1%2Fcoverage-dotnet.json)](https://github.com/sabbour/agentweaver/blob/badges/v1/coverage.md)
+[![Web coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsabbour%2Fagentweaver%2Fbadges%2Fv1%2Fcoverage-web.json)](https://github.com/sabbour/agentweaver/blob/badges/v1/coverage.md)
+[![Node coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsabbour%2Fagentweaver%2Fbadges%2Fv1%2Fcoverage-node.json)](https://github.com/sabbour/agentweaver/blob/badges/v1/coverage.md)
 
-The repository contains implemented foundations and service candidates. A
-component in source is not necessarily selectable, published, or deployed.
-Follow the documentation's status notes before treating a route, provider, or
-Azure resource as available.
+This repository contains the Agentweaver source, contracts, and service
+implementations.
+The source does not establish that a component is published or running in a
+specific deployment.
 
-## Learn Agentweaver
+<a id="learn-agentweaver"></a>
 
-Start with the [1.x documentation](docs/index.md). The site is organized as:
+<a id="build-and-validate-the-source"></a>
 
-- **Get started:** [build the source](docs/guide/quickstart.md) and understand
-  the reusable foundation libraries.
-- **Concepts:** review [what Agentweaver can do](docs/experience/00-overview.md),
-  [the architecture](docs/architecture/overview.md), and
-  [providers and models](docs/architecture/providers-models.md).
-- **How-to:** [configure providers](docs/guide/configure-providers.md),
-  [configure Knowledge memory](docs/guide/configure-knowledge.md), and
-  [use the standalone CLI](docs/guide/cli.md) or
-  [deploy to Azure](docs/guide/deploy-to-azure.md).
-- **Release workflows:** follow the [v1 release runbook](releases/README.md)
-  for package publication, automatic GHCR image builds, and local Kubernetes
+## Start with the source
+
+Follow the [quickstart](docs/guide/quickstart.md) to restore the dependencies,
+build the source, and run local checks. You need the .NET 10 SDK and Node.js
+24. A successful build and local test run do not install or start the
+Agentweaver platform, publish packages, or deploy Kubernetes workloads.
+
+The [documentation home](docs/index.md) helps you choose a next task. If you
+already have access to a configured Agentweaver web app, use the
+[browser task guides](docs/experience/README.md). Those guides describe the
+checked-in web implementation; they do not confirm that its services are
+available in your environment.
+
+<a id="standalone-cli"></a>
+
+## Choose a task
+
+- [Build and use the foundation libraries](docs/guide/build-and-use.md) from
+  the source tree.
+- [Review provider choices and limits](docs/guide/configure-providers.md), or
+  [Knowledge memory](docs/guide/configure-knowledge.md) for a reviewed
   deployment.
-- **Reference:** find every
-  [runtime configuration setting](docs/reference/runtime-configuration.md),
-  API route, event, and release contract.
-- **Troubleshooting:** diagnose source-grounded configuration and rollout
-  failures in the [troubleshooting guide](docs/guide/troubleshooting.md).
-
-## Build and validate the source
-
-Use .NET 10 and Node.js 24 from the repository root:
-
-```powershell
-npm ci
-dotnet restore Agentweaver.slnx --locked-mode
-dotnet build Agentweaver.slnx --no-restore --configuration Release
-npm run test:release
-```
-
-These commands build source and test the release/deployment workflow
-contracts. They do not provision Azure, publish packages, or deploy
-Kubernetes workloads. See the
-[quickstart](docs/guide/quickstart.md) for local checks and the
-[deployment guide](docs/guide/deploy-to-azure.md) for the separately approved,
-operator-run Azure deployment.
-
-## Standalone CLI
-
-The source includes a self-contained .NET CLI project, but downloadable CLI
-archives are not yet available. The intended distributed executable includes
-its .NET runtime and does not require Node.js, a .NET runtime, or a source
-checkout. See the [CLI guide](docs/guide/cli.md) for the local publish command,
-target prerequisites, sign-in, API use, and acceptance workflow. Local
-publishing requires the .NET 10 SDK.
+- [Find local CLI commands](docs/guide/find-cli-commands.md); see the
+  [CLI guide](docs/guide/cli.md) for its source build and use.
+- [Deploy to Azure](docs/guide/deploy-to-azure.md) only when you have an
+  approved target and the required access.
+- Read the [architecture overview](docs/architecture/overview.md) and
+  [system overview](docs/deep-dive/00-system-overview.md) to understand the
+  source boundaries and runtime.
+- Use the [release runbook](releases/README.md) for package publication,
+  container image publication, and workload deployment. These are separate
+  operations.
 
 ## Version boundary
 
-For contributor planning, use [Plan issues and releases](docs/guide/release-planning.md).
-Scheduled issues and pull requests use version milestones; labels describe
-scope, triage and current work. Release evidence determines what shipped.
-
 Agentweaver 0.x remains a separate product line on `dev`. Read the
 [0.x documentation](https://sabbour.github.io/agentweaver/) for that product.
-The v1 branch is a separate rebuild; it does not silently upgrade or replace
-the 0.x deployment.
+This source is a separate rebuild; it does not silently upgrade or replace the
+0.x deployment.
+
+For contributor planning, see [Plan issues and releases](docs/guide/release-planning.md).
+An issue milestone describes a target. It does not show that a change shipped
+or is deployed.
 
 ## Contribute documentation
 
-Use the [documentation authoring guide](docs/authoring/README.md) to choose an
-article type, copy an original template, and review examples against source.
-It includes arc42-based architecture guidance and the current-docs audit.
-Contributors and coding agents follow the same standard.
+Use the [documentation authoring guide](docs/authoring/README.md) to choose
+the right article type and check claims against source. Its templates are
+prompts; remove sections that do not help the reader.

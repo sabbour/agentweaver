@@ -10,9 +10,9 @@ The page has a stat strip (**Assigned**, **Enabled**, **Marketplace sources**,
 and **Agents**), a toolbar with **Add skill**, **Import skill**, and **Browse marketplaces**,
 and two tabs: **Catalog** and **Assignments**.
 
-The Projects & Config implementation is an unpublished .NET service
-candidate. Its routes and current browser controls describe source behavior,
-not proof of deployment.
+The page uses Projects & Config routes from the checked-in source. Those
+routes and controls do not confirm that the service is deployed in your
+environment.
 
 ## Prerequisites
 

@@ -4,7 +4,7 @@ Use local help to find the Agentweaver CLI command groups and options before
 you configure a target. You do not need to sign in or connect to a Gateway
 to read help or version information.
 
-This procedure uses the Windows executable built from the v1 source.
+This procedure uses the Windows executable built from the checked-out source.
 
 ## Before you begin
 

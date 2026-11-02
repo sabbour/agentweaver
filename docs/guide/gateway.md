@@ -1,15 +1,17 @@
 # Use the Gateway
 
-`Agentweaver.Gateway` is the .NET HTTP entry point for the browser, CLI, and
-first-party MCP clients. It exposes a finite, versioned API and delegates
+`Agentweaver.Gateway` is the .NET HTTP entry point for the browser and native
+.NET CLI. It exposes a finite, versioned API and delegates
 requests to Projects & Config, Orchestrator, Knowledge, Events, and the
 Identity Broker. An optional per-Sandbox AgentHost owner serves live hosted
 reasoning choices. It is not an arbitrary upstream proxy: callers cannot
 choose owner URLs or supply owner identity headers.
 
-This article describes the checked-in v1 host. Source code and Kubernetes
+This article describes the checked-in host. Source code and Kubernetes
 manifests do not establish that the Gateway, its owners, or a public endpoint
-are deployed or available.
+are deployed or available. Product MCP is not a supported client surface.
+Outbound Remote MCP connections are separate; see
+[List Remote MCP connections](#list-remote-mcp-connections).
 
 ## Before you begin
 
@@ -288,8 +290,9 @@ their own run. Responses use `Cache-Control: no-store`. Reads do not change
 stored data.
 
 Read the [metrics definitions](../reference/api.md#project-metrics-and-usage)
-before comparing v1 with the 0.x dashboard. Run success uses completed runs,
-not agent dependencies. Usage retains unknown values and separate cost units.
+before comparing the current dashboard with the 0.x dashboard. Run success uses
+completed runs, not agent dependencies. Usage retains unknown values and
+separate cost units.
 These routes do not price usage or change budgets. Cross-project overview
 is out of scope.
 
@@ -387,10 +390,9 @@ automatically, or replace unrelated `.squad/` content.
 The preview hash binds the GitHub installation and numeric repository ID in
 addition to the repository name, so a rename or replacement invalidates it.
 The Sync panel loads the preview when opened, shows the hash and optional
-commit message, and refreshes the status after a commit. These user-triggered
-operations are intentionally omitted from the MCP tool catalog.
-Repository discovery and selection are direct Identity Broker browser calls,
-not Gateway BFF routes. The browser requests
+commit message, and refreshes the status after a commit. Repository sync uses
+the versioned Gateway routes listed above. Repository discovery and selection
+are direct Identity Broker browser calls, not Gateway routes. The browser requests
 `GET /auth/github/repo-app/repositories` with its local session cookie, gets an
 antiforgery token from `/auth/github/repo-app/csrf`, and posts the discovered
 `installationId` and `repositoryId` to `/auth/github/repo-app/selection` with
@@ -444,7 +446,7 @@ Reads, including `exportKnowledgeRecords`, do not require this header.
 
 The Gateway has explicit browser routes that delegate selected account
 operations to `Gateway:Owners:IdentityBrokerAddress`. They are not generic
-proxy routes and are not included in the OpenAPI or MCP tool catalog. The
+proxy routes and are not included in the OpenAPI document. The
 Repo App routes require the compatible optional producer and owner
 configuration. The Copilot routes require the Copilot producer. A missing
 owner address or incompatible audience returns an owner failure.
@@ -480,8 +482,8 @@ consumes its persisted, single-use state.
 Repo App installation uses the Broker's cookie- and antiforgery-protected
 browser endpoint. A callback alone does not prove that the installation
 succeeded; refresh Broker status and repository metadata before enabling a
-run-bound operation. Run-bound repository pinning remains an ordinary
-Gateway/MCP operation. In GitHub App mode, `pinSourceControlRepository`
+run-bound operation. Run-bound repository pinning is a Gateway API operation. In GitHub App mode,
+`pinSourceControlRepository`
 accepts an optional `selectionCode`; bodyless legacy secret-mode pin requests
 retain their existing behavior. Source Control owners validate the accepted
 run configuration and exact tenant selector.
@@ -492,43 +494,12 @@ The Gateway also delegates the Copilot connection lifecycle at
 the callback cookie. The complete route forwards that exact cookie, the
 validated bearer, and any explicitly supplied tenant selector. Gateway and
 Identity Broker audiences must already match the admitted client resource;
-the Gateway does not exchange or mint another token. These routes are not MCP
-tools.
+the Gateway does not exchange or mint another token. These routes are not part of the versioned Gateway API.
 
-## Connect an MCP client
+<a id="connect-an-mcp-client"></a>
 
-Download the operator definition from `GET /agents/agentweaver.agent.md` on the
-Gateway and save it as `.github/agents/agentweaver.agent.md` in your repository.
-This anonymous route returns `text/markdown; charset=utf-8` and is excluded from
-OpenAPI and the MCP catalog. Unlike 0.x, which wrote the definition to a local
-project folder when missing, v1 provides a download only. It does not write into
-run checkouts because that would add an unrequested file to run diffs and pull
-requests.
-
-The separate `Agentweaver.Mcp` host exposes Streamable HTTP at `POST /mcp`.
-Its `tools/list` catalog comes from the Gateway's OpenAPI document; `tools/call`
-can invoke only the finite routes and schemas in that document. SSE routes and
-unsupported request shapes are not MCP tools. Browser consent, repository
-discovery, and OAuth callbacks are not in the catalog.
-
-The MCP host validates the Identity Broker issuer, signature, token lifetime,
-and configured audience. It then forwards the original bearer token to the
-Gateway, which validates the token for its own audience before it forwards the
-request to an owner. The owner remains responsible for current authorization.
-MCP arguments cannot supply an actor or grant permission.
-
-The MCP host requires the same HTTPS `Identity:Issuer` and
-`Identity:Audience` settings, plus `Gateway:BaseAddress` as an HTTPS service
-root. Tool arguments cannot select a different Gateway URL. The host publishes
-RFC 9728 protected-resource metadata at
-`/.well-known/oauth-protected-resource/mcp`; unauthenticated `/mcp` requests
-identify that metadata endpoint so clients can discover the authorization
-server.
-
-Before dispatch, MCP validates arguments against the resolved OpenAPI schema.
-Catalog retrieval and each tool call have a 10-second deadline that includes
-reading the response body. Caller cancellation is propagated. The MCP request
-envelope can add up to 64 KiB beyond the Gateway request-body limit.
+Product MCP is not a supported client surface. Do not follow the earlier MCP
+client connection procedure.
 
 ## Read and resume run events
 
@@ -559,9 +530,9 @@ violation returns `502`; an owner request timeout returns `504`.
 
 Gateway request bodies are limited to 64 KiB by default. The Knowledge import
 endpoint accepts up to 1 MiB. Inline Skill preview and import each accept up to
-3 MiB. The MCP JSON-RPC envelope adds a separate 64 KiB allowance.
+3 MiB.
 
-The Gateway does not expose journal object-content reads in v1. It exposes
+The Gateway does not expose journal object-content reads. It exposes
 run-produced files only through the Source Control output-capture routes:
 capture, list, read, diff, and file. Each capture is a pinned, immutable copy
 of a run's workspace output, so neither the Gateway nor the retained Web client

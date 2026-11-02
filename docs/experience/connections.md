@@ -23,8 +23,8 @@ connecting one does not connect the other.
    **Advanced**, set `sourceControl.appConnectionId` to the matching Identity
    connection ID. Select **Save changes**.
 
-**Expected result:** The Broker reports the connection state. The app does not
-treat a popup callback by itself as proof of a connected account. Select
+**Expected result:** The Broker reports the connection state. A popup
+callback alone does not confirm a connected account. Select
 **Browse repositories** to load repository metadata. The response contains
 installation and repository IDs as metadata, not provider tokens.
 
@@ -96,7 +96,7 @@ not prove that a runtime loaded or used the repository.
 
 The browser uses the Repo App status, repository, and selection routes directly
 on the Broker. The Gateway also exposes connection APIs for non-UI callers.
-These route names describe source contracts, not service availability; the
-Identity Broker and Orchestrator sources are candidates. See
+These route names describe checked-in source contracts, not service
+availability in your environment. See
 [HTTP API](../reference/api.md), [Identity and secrets](../architecture/identity-secrets.md),
 and [web callback handling](../reference/web.md#authentication-flow).
