@@ -2,6 +2,23 @@
 
 Applied component version changes, newest first.
 
+## 2026-11-02T04:14:05.575Z — source `45040550f8bfecad4669d9cf92955fdb35432c66`
+
+- `Agentweaver.Abstractions`: 1.6.0 -> 1.7.0 (minor) — .changeset/environment-p1-creation-read.md, .changeset/environment-pod-configuration-observation.md, .changeset/p1-environment-binding.md, .changeset/p1-run-setup-binding.md
+- `Agentweaver.AgentHost`: 1.1.0 -> 1.1.1 (patch) — .changeset/agenthost-readiness-mount-evidence.md
+- `Agentweaver.AgentRuntime`: 1.3.1 -> 1.4.0 (minor) — .changeset/agent-runtime-inline-comments.md, .changeset/agenthost-readiness-mount-evidence.md, .changeset/environment-p1-creation-read.md, .changeset/fixed-credit-current-selector.md, .changeset/host-core-p1-root-binding-reader.md
+- `Agentweaver.Environment`: 1.3.1 -> 1.4.0 (minor) — .changeset/active-sandbox-lifetime.md, .changeset/environment-p1-creation-read.md, .changeset/environment-pod-configuration-observation.md, .changeset/p1-environment-binding.md, .changeset/root-dispatch-placement-egress.md
+- `Agentweaver.EventsAndSessions`: 1.5.1 -> 1.5.2 (patch) — .changeset/service-group-comment-clarity.md
+- `Agentweaver.Gateway`: 1.7.1 -> 1.8.0 (minor) — .changeset/p1-authority-setup-gateway.md, .changeset/p1-cli-setup-admin-scope.md, .changeset/p1-run-setup-binding.md, .changeset/p1-setup-read-transport.md, .changeset/service-group-comment-clarity.md
+- `Agentweaver.Identity`: 1.6.0 -> 1.7.0 (minor) — .changeset/agenthost-readiness-mount-evidence.md, .changeset/fixed-credit-current-selector.md, .changeset/p1-environment-binding.md, .changeset/runtime-evidence-receipts.md
+- `Agentweaver.Identity.Broker`: 1.3.0 -> 1.3.1 (patch) — .changeset/cli-registered-scope-permission.md, .changeset/native-cli-consent-build-input.md, .changeset/native-cli-consent-callback-csp.md, .changeset/native-cli-consent-ui.md, .changeset/native-model-receipt-grant.md, .changeset/quiet-cli-broker-consent.md
+- `Agentweaver.Orchestrator`: 1.7.0 -> 1.8.0 (minor) — .changeset/fixed-credit-current-selector.md, .changeset/native-host-readiness-audience.md, .changeset/orchestrator-comment-clarity.md, .changeset/p1-run-setup-binding.md, .changeset/root-dispatch-placement-egress.md, .changeset/runtime-evidence-receipts.md, .changeset/scribe-pending-knowledge-output.md, .changeset/scribe-selected-gate-checkpoints.md
+- `Agentweaver.Orchestrator.Core`: 1.4.0 -> 1.4.1 (patch) — .changeset/orchestrator-core-comment-clarity.md
+- `Agentweaver.Persistence.Postgres`: 1.2.2 -> 1.2.3 (patch) — .changeset/runtime-evidence-receipts.md
+- `Agentweaver.Projects.Config`: 1.7.2 -> 1.8.0 (minor) — .changeset/p1-authority-setup-gateway.md, .changeset/p1-cli-setup-admin-scope.md, .changeset/p1-run-setup-binding.md, .changeset/p1-setup-read-transport.md, .changeset/projects-config-automatic-runtime-grants-20261030.md, .changeset/projects-config-migration-schema-scope-20261030.md, .changeset/projects-config-owner-acl-history-20261030.md, .changeset/projects-run-binding-kustomize-config.md, .changeset/service-group-comment-clarity.md
+- `Agentweaver.Providers.Sandbox.AgentSandbox`: 1.1.4 -> 1.2.0 (minor) — .changeset/environment-pod-configuration-observation.md
+- `Agentweaver.Web`: 1.7.0 -> 1.7.1 (patch) — .changeset/copilot-bff-portal-transport.md, .changeset/overview-health-unavailable-2259.md, .changeset/web-image-build-context-fix-20261030.md, .changeset/workflows-composition-2259.md
+
 ## 2026-10-27T07:33:28.471Z — source `656d2522b0dbff7055c4dc94769768a224b28d7f`
 
 - `Agentweaver.EventsAndSessions`: 1.5.0 -> 1.5.1 (patch) — .changeset/messaging-provider-binding-row-lock.md
