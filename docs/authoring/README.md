@@ -19,6 +19,8 @@ These are repository authoring materials, not product instructions. Read the
 | Why does this work this way? | [Explanation](./templates/explanation.md) | `docs/experience/` or `docs/architecture/` |
 | Why did this fail, and what can I safely do? | [Troubleshooting](./templates/troubleshooting.md) | `docs/guide/` |
 | How is this system structured, and what are its trade-offs? | [Architecture deep dive](./templates/architecture.md) | `docs/deep-dive/` |
+| What behavior should change, and how will we know it works? | [Specification](./templates/specification.md) | `docs/specs/` |
+| Why did we choose this architectural approach? | [Architecture decision record (ADR)](./templates/adr.md) | `docs/architecture/decisions/` |
 
 A planned operation, such as a configuration update, is a how-to. Use the
 troubleshooting template when diagnosis determines the action. Do not create
@@ -88,6 +90,34 @@ is not a model; authentication is not authorization; an accepted request is
 not a completed operation. Explain unavoidable internal terms instead of
 writing “proof slot,” “gate green,” or “receipt join” as unexplained user goals.
 Do not impose a word count or simplify away a safety condition.
+
+## Specify a change or record a decision
+
+A **specification** proposes intended behavior: the problem, requirements,
+non-goals, contracts, failure/recovery rules, acceptance criteria and rollout.
+Separate the source-verified baseline from the proposal. Accepted requirements
+do not establish implementation, release or deployment. Use a descriptive
+filename under `docs/specs/`; keep planned verification distinct from results.
+
+An **ADR** records one consequential architectural choice: context, options,
+the chosen approach, rationale, consequences and status. It is not a feature
+specification or an entire architecture description. Preserve the existing
+`docs/architecture/decisions/NNNN-descriptive-decision.md` scheme and
+`ADR NNNN:` title, using the next unused four-digit number on the target branch.
+Do not renumber existing ADRs or treat Proposed as Accepted. When a new decision
+supersedes an old one, link both directions and update the old status while
+preserving its original reasoning.
+
+Use the [specification template](./templates/specification.md) and
+[ADR template](./templates/adr.md). They are new reusable authoring aids;
+the existing concrete specs and ADRs are not themselves templates. Link
+specifications, decisions and architecture views to one another rather than
+duplicate their facts. In arc42 section 9, link the canonical ADRs and their
+actual statuses—do not create a second decision log.
+
+Specs and ADRs remain repository-only materials under the existing VitePress
+exclusions. Publish verified product tasks and reference separately when the
+behavior is available; do not put proposals into user navigation.
 
 ## Tailor architecture deep dives with arc42
 
