@@ -433,8 +433,13 @@ public sealed class RuntimeContractTests
             registration.Binding.ExecutionFence, Guid.NewGuid(), "invocation-1");
         var blocker = new RuntimeReplacementComparisonBlocker(
             "blocked", request.InvocationId, "checkpoint-1", 1, "plan-1", "association-1",
-            request.DispatchId, request.ExecutionFence,
-            ["environment.replacement-lineage", "host.events.cursor-interval"]);
+            request.DispatchId, request.ExecutionFence, Guid.NewGuid(), 1,
+            registration.RuntimeInstanceId, registration.Revision,
+            null, null, null, null,
+            [
+                "environment.replacement-lineage", "host.events.cursor-interval",
+                "orchestrator.invocation-checkpoint-binding", "orchestrator.result-hash-binding"
+            ]);
 
         Assert.Equal(blocker, RuntimeReplacementComparisonContract.ValidateResult(
             blocker, registration, request));

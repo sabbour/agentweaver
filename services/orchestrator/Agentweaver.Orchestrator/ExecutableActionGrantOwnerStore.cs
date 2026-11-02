@@ -731,71 +731,153 @@ internal sealed class ExecutableActionGrantOwnerStore(
     internal async Task<RuntimeReplacementComparisonBlocker> ReadReplacementComparisonBlockerAsync(
         RuntimeRegistration registration,
         RuntimeReplacementComparisonRequest request,
+        P1InvocationBinding invocationBinding,
+        AuthorizedRunSelection selection,
         CancellationToken cancellationToken)
     {
         RuntimeReplacementComparisonContract.ValidateRequest(request);
         var binding = registration.Binding;
         if (request.RuntimeInstanceId != registration.RuntimeInstanceId ||
             request.RegistrationRevision != registration.Revision ||
-            request.ExecutionFence != binding.ExecutionFence)
+            request.ExecutionFence != binding.ExecutionFence ||
+            !Guid.TryParse(request.InvocationId, out var invocationId) ||
+            invocationId != invocationBinding.SetupInvocationId &&
+            invocationId != invocationBinding.CoreInvocationId ||
+            invocationBinding.ContractVersion != 1 ||
+            invocationBinding.ActorIssuer != binding.ActorIssuer ||
+            invocationBinding.ActorSubject != binding.ActorId ||
+            invocationBinding.TenantId != binding.TenantId ||
+            invocationBinding.ProjectId != binding.ProjectId ||
+            invocationBinding.RunId != binding.RunId ||
+            invocationBinding.AcceptedSelectionHash != binding.AcceptedSelectionHash ||
+            invocationBinding.ExecutionFence != binding.ExecutionFence ||
+            selection.Authorization.ActorId != binding.ActorId ||
+            selection.Authorization.Issuer != binding.ActorIssuer ||
+            selection.Authorization.TenantId != binding.TenantId ||
+            selection.Selection.ProjectId != binding.ProjectId ||
+            selection.Selection.RunId != binding.RunId ||
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
+                selection.Selection.Snapshot.GetRawText())) != binding.AcceptedSelectionHash)
             throw new RuntimeAuthorizationException("runtime_replacement_comparison_conflict");
+
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(
+            System.Data.IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false);
         string checkpointId;
         long checkpointRevision;
-        long fence;
         string workPlanId;
         string associationId;
+        Guid originalRuntimeInstanceId;
+        long originalRegistrationRevision;
         await using (var dispatch = new NpgsqlCommand($"""
-            SELECT d.checkpoint_id, d.checkpoint_revision, d.execution_fence,
-                d.work_plan_id, d.association_id
+            SELECT d.checkpoint_id, d.checkpoint_revision, d.work_plan_id, d.association_id,
+                d.runtime_instance_id, d.registration_revision
             FROM {_schema}.maf_execution_dispatches d
             JOIN {_schema}.accepted_runs r
               ON r.project_id = d.project_id AND r.run_id = d.run_id
             JOIN {_schema}.coordination_sessions s
               ON s.project_id = d.project_id AND s.run_id = d.run_id
                 AND s.session_id = d.child_session_id
+            JOIN {_schema}.coordination_sessions current_session
+              ON current_session.project_id = d.project_id AND current_session.run_id = d.run_id
+                AND current_session.session_id = @session
             WHERE d.project_id = @project AND d.run_id = @run AND d.dispatch_id = @dispatch
-              AND d.child_session_id = @session AND d.runtime_instance_id = @runtime
-              AND d.registration_revision = @registration AND d.execution_fence = @fence
-              AND d.accepted_selection_hash = @dispatchSelectionHash
+              AND d.root_session_id = @root AND d.execution_fence = @fence
+              AND upper(d.accepted_selection_hash) = @selectionHash
               AND r.execution_fence = @fence AND r.tenant_id = @tenant
               AND r.accepted_selection_hash = @selectionHash
               AND r.execution_state <> 'completed'
-              AND s.lifecycle_state = 'active' AND s.execution_fence = @fence
-            FOR SHARE OF d, r, s
+              AND s.root_session_id = @root AND s.execution_fence = @fence
+              AND current_session.root_session_id = @root
+              AND current_session.lifecycle_state = 'active'
+              AND current_session.execution_fence = @fence
+            ORDER BY d.dispatch_id
+            LIMIT 2
+            FOR SHARE OF d, r, s, current_session
             """, connection, transaction))
         {
             BindRuntime(dispatch, binding);
+            dispatch.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, invocationBinding.RootSessionId);
             dispatch.Parameters.AddWithValue("dispatch", NpgsqlDbType.Uuid, request.DispatchId);
-            dispatch.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, registration.RuntimeInstanceId);
-            dispatch.Parameters.AddWithValue("registration", NpgsqlDbType.Bigint, registration.Revision);
-            dispatch.Parameters.AddWithValue(
-                "dispatchSelectionHash", NpgsqlDbType.Char, binding.AcceptedSelectionHash);
             await using var reader = await dispatch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 throw new RuntimeAuthorizationException("runtime_replacement_comparison_conflict");
             checkpointId = reader.GetString(0);
             checkpointRevision = reader.GetInt64(1);
-            fence = reader.GetInt64(2);
-            workPlanId = reader.GetString(3);
-            associationId = reader.GetString(4);
+            workPlanId = reader.GetString(2);
+            associationId = reader.GetString(3);
+            originalRuntimeInstanceId = reader.GetGuid(4);
+            originalRegistrationRevision = reader.GetInt64(5);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                throw new RuntimeAuthorizationException("runtime_replacement_comparison_conflict");
         }
+
+        var checkpointBinding = new MafCheckpointBinding(
+            new(binding.ProjectId, binding.RunId, invocationBinding.RootSessionId),
+            new(invocationBinding.ActorIssuer, invocationBinding.ActorSubject),
+            binding.ExecutionFence,
+            MafExecutionCheckpointStore.CurrentSdkVersion,
+            PostgresMafCheckpointStore.ReadSelectedModelReference(selection.Selection.Snapshot),
+            null,
+            "coordinator-execution");
+        var checkpoints = new PostgresMafCheckpointStore(dataSource, options.Schema, null);
+        var latest = await checkpoints.ReadLatestCheckpointInTransactionAsync(
+            connection, transaction, checkpointBinding, cancellationToken).ConfigureAwait(false);
+        MafExecutionCheckpointSnapshot? checkpoint = null;
+        string? storedResult = null;
+        if (latest is { } saved)
+        {
+            var state = MafExecutionCheckpointContract.Deserialize(saved.Value);
+            if (state.WorkPlanId != workPlanId || state.Revision < checkpointRevision)
+                throw new RuntimeAuthorizationException("runtime_replacement_comparison_conflict");
+            checkpoint = new MafExecutionCheckpointSnapshot(saved.Info, state)
+            {
+                ParentCheckpointId = saved.ParentCheckpointId,
+                HasParentMetadata = saved.HasParentMetadata
+            };
+            checkpoint.State.Results.TryGetValue(associationId, out storedResult);
+        }
+
+        var resultBytes = storedResult is null ? null : Encoding.UTF8.GetBytes(storedResult);
+        var missing = new List<string>
+        {
+            "environment.replacement-lineage",
+            "environment.pod-observation-identity",
+            "host.events.cursor-interval",
+            "host.events.effect-receipt",
+            "host.effects.sequence-baseline",
+            "host.events.durable-acknowledgment",
+            "orchestrator.pre-post-fence-observation",
+            "orchestrator.no-duplicate-send-event-effect"
+        };
+        if (checkpoint is null)
+            missing.Add("orchestrator.invocation-checkpoint-binding");
+        if (resultBytes is null)
+            missing.Add("orchestrator.result-hash-binding");
         var blocker = new RuntimeReplacementComparisonBlocker(
-            "blocked", request.InvocationId, checkpointId, checkpointRevision, workPlanId,
-            associationId, request.DispatchId, fence,
-            [
-                "environment.replacement-lineage",
-                "environment.pod-observation-identity",
-                "host.events.cursor-interval",
-                "host.events.effect-receipt",
-                "host.effects.sequence-baseline",
-                "host.events.durable-acknowledgment",
-                "orchestrator.invocation-checkpoint-binding",
-                "orchestrator.result-hash-binding",
-                "orchestrator.pre-post-fence-observation",
-                "orchestrator.no-duplicate-send-event-effect"
-            ]);
+            "blocked",
+            request.InvocationId,
+            checkpointId,
+            checkpointRevision,
+            workPlanId,
+            associationId,
+            request.DispatchId,
+            binding.ExecutionFence,
+            originalRuntimeInstanceId,
+            originalRegistrationRevision,
+            registration.RuntimeInstanceId,
+            registration.Revision,
+            checkpoint?.Info.CheckpointId,
+            checkpoint?.State.Revision,
+            checkpoint is null
+                ? null
+                : new RuntimeExecutionCheckpointParent(
+                    checkpoint.HasParentMetadata, checkpoint.ParentCheckpointId),
+            resultBytes is null
+                ? null
+                : new RuntimeExecutionResultDigest(
+                    Convert.ToHexStringLower(SHA256.HashData(resultBytes)), resultBytes.LongLength),
+            missing);
         var result = RuntimeReplacementComparisonContract.ValidateResult(
             blocker, registration, request);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
