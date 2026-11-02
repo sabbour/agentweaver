@@ -297,6 +297,13 @@ evidence path for a new attempt. The existing P1 reservation behavior is
 unchanged. The result uses `board-acceptance-result` with
 `fullP1Status: "not-evaluated"`; it does not claim complete P1 acceptance.
 
+The `owner-denial` step passes only when the response is HTTP `403` and its
+JSON `error` field is `backlog_project_permission_denied`. The result preserves
+that exact value as `ownerIssueCode`. A generic Gateway problem with
+`code: "forbidden"` or a bodyless `403` is not an owner denial. The runner
+rereads the board and requires the authoritative graph to remain unchanged
+after the rejected delete.
+
 The image-manifest file uses the same sparse JSON contract as
 `npm run deploy:kustomize`:
 

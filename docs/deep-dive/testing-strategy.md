@@ -8,7 +8,7 @@ acceptance need different evidence. Passing one layer does not establish
 another: compiling PostgreSQL tests does not run them, and a fixture is not a
 live provider.
 
-This view explains the v1 verification architecture. Use the
+This view explains the verification architecture. Use the
 [testing guide](../guide/testing.md) for executable commands and prerequisites.
 Do not run live journeys against an unapproved target or replace a required
 PostgreSQL race with an in-memory implementation.
@@ -70,7 +70,7 @@ That access binding is not `sourceRunId` provenance or deployed discovery.
 
 ### Separate canonical acceptance from compatibility tests
 
-Canonical 1.x API acceptance runs the native .NET apphost with
+Canonical API acceptance runs the native .NET apphost with
 `agentweaver test --input <manifest> --output <new-evidence-file>`. Use the
 source-published apphost or exact extracted distribution executable for the
 question being tested. The Node `harness:p1 -- --surface api` path delegates
@@ -99,6 +99,13 @@ Harnesses keep HTTP errors, owner denials and `202 Accepted` separate from
 completion. Redaction precedes durable JSON Lines output; transient raw bodies
 are not the transcript. Token helpers check metadata/expiry; servers still
 validate signatures and current authority.
+
+The controlled Board-delete regression passes the owner-denial step only for
+HTTP `403` and an owner JSON `error` field equal to
+`backlog_project_permission_denied`; evidence retains that value as
+`ownerIssueCode`. A generic Gateway problem with `code: "forbidden"`, a
+bodyless `403`, or a changed authoritative graph is not a passing owner-denial
+result.
 
 Native evidence must join registration, invocation binding, Environment
 creation, actual Pod/mount observations and Host evidence. Registration

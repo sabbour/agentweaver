@@ -617,8 +617,14 @@ against interrupted and concurrent retries, exact compacted-task revision
 increments, the fixed stale-graph/stale-task/dependent-delete/owner-permission
 outcomes, persisted deletion readbacks, project archival, owner-grant
 revocation, cleanup failure precedence, and refusal to retry an ambiguous
-delete. Its fake Gateway and evidence provider do not prove live authorization,
-deployed source provenance, or apphost acceptance. Run the focused tests with:
+delete. An owner-denial response must be HTTP `403` with JSON
+`error` equal to `backlog_project_permission_denied`; the result preserves
+that exact value as `ownerIssueCode`. A generic Gateway problem with
+`code: "forbidden"` or a bodyless `403` does not pass the owner-denial check.
+The runner also requires the authoritative graph to remain unchanged after
+the rejected delete. Its fake Gateway and evidence provider do not prove live
+authorization, deployed source provenance, or apphost acceptance. Run the
+focused tests with:
 
 ```powershell
 dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~ApiAcceptanceManifestTests
