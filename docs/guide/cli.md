@@ -243,6 +243,56 @@ or authorized target evidence is unavailable. The manifest and evidence are
 external files; relative proof paths resolve from the manifest directory.
 
 `deploymentEvidence` contains exactly `manifestPath` and `imageManifestPath`.
+
+The separate `board-delete` journey is a narrow typed API acceptance feature,
+not full P1 acceptance. Its manifest uses `executionIntent: "execute"`,
+`journey: "board-delete"`, and `fixturePlan: {"kind":"owned-disposable-board"}`.
+The reviewed environment is fixed: `baseUrl` is
+`https://api.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io`,
+`issuer` and `audience` are both
+`https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/`, and
+`tenantId` is `72f988bf-86f1-41af-91ab-2d7cd011db47`. The Gateway and Broker
+origins are deliberately distinct. `actorId` is optional: when omitted, the
+runner derives it from the live authorization context before writing anything;
+when supplied, it must match that context.
+
+Pins use Kubernetes `context: "agentweaver-aks"` and
+`namespace: "agentweaver"`. `sourceReceipt` must contain source SHA
+`fa4c10d40b10b5f06c6333ecfb6e6d86a6a7a8fe` and tree
+`e235a0f576a26924920130c0c4bb4dbd01d4d567`; `authoritySourceReceipt` must
+contain source SHA `1471e0b6ee4ab2a859231582ed1efa8e86693002` and tree
+`5846e8524d8d684f78d24518453a4e1348fa7bf4`. The image manifest must contain
+exactly these four immutable digests:
+
+| Image key | Digest |
+| --- | --- |
+| `agentweaver.gateway` | `sha256:0fa6e9f718b06a030172deda8ee0e509871b8bd10e9e8a74c13a37cbd8780dcd` |
+| `agentweaver.orchestrator` | `sha256:6db6d03d226a8acb9cebf1c8e806aa337ffba40201c4daad0088eb6d3f55002e` |
+| `agentweaver.identity.broker` | `sha256:d76177945cf05121120f8fbc6b4d7fe708f0c4e6adbbafbcafe449f52ce7e0b4` |
+| `agentweaver.projects.config` | `sha256:33f1af287e19ac8854952dc379e685397cda2e5068b7734dc35c83f4a32b3378` |
+
+Gateway and Orchestrator are checked against `sourceReceipt`; Identity Broker
+and Projects Config are checked against `authoritySourceReceipt`. Projects
+Config returns project IDs as 32-character GUID strings; the runner retains
+the exact receipt string for every owned operation and cleanup request. The
+current CLI apphost must also carry `AgentweaverSourceSha` and
+`AgentweaverSourceTree` metadata. The provider verifies these owners; it does
+not rebuild or redeploy the services.
+
+The runner creates a uniquely named project, grants only its owner role to the
+resolved actor, exercises fixed backlog operations and expected owner conflicts,
+then verifies persisted deletion readbacks. Cleanup deletes only tasks recorded
+as owned by that invocation, archives the project, and revokes only its owner
+assignment. An uncertain mutation or cleanup result fails closed and must be
+reconciled before retry. The runner reserves the evidence path exclusively
+before deployment-provider reads or authentication. An existing unfinished
+Board reservation is not resumable because the in-memory fixture receipt ledger
+is not persisted; the runner leaves that evidence untouched and rejects the
+retry before any owner setup. Reconcile the original invocation and use a new
+evidence path for a new attempt. The existing P1 reservation behavior is
+unchanged. The result uses `board-acceptance-result` with
+`fullP1Status: "not-evaluated"`; it does not claim complete P1 acceptance.
+
 The image-manifest file uses the same sparse JSON contract as
 `npm run deploy:kustomize`:
 
@@ -280,12 +330,14 @@ envelopes:
 agentweaver test --input <manifest> --output <evidence> [--native-probe-envelope <file>] [--dispatch-recovery-envelope <file>] [--dry-run] [--interactive]
 ```
 
-The manifest's `environment` object must provide `baseUrl` (Gateway origin),
-`issuer` (Broker/OIDC issuer), `audience`, `tenantId`, and `actorId`. The runner
-builds its target from those fields and uses the `agentweaver-cli` client; it
-does not substitute target flags or environment variables. For each
-invocation, the runner creates its owned project, takes its ID from the
-`createProject` receipt, and derives the run ID from the invocation identity.
+For P1 journeys, the manifest's `environment` object must provide `baseUrl`
+(Gateway origin), `issuer` (Broker/OIDC issuer), `audience`, `tenantId`, and
+`actorId`. The runner builds its target from those fields and uses the
+`agentweaver-cli` client; it does not substitute target flags or environment
+variables. For each P1 invocation, the runner creates its owned project, takes
+its ID from the `createProject` receipt, and derives the run ID from the
+invocation identity. The `board-delete` target and input contract are separate
+and described above.
 
 Interaction is disabled by default (`InteractionPolicy.Never`). Only
 `--interactive` allows browser authorization. For a test run, the CLI first

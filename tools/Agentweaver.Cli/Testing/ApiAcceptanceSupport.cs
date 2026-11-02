@@ -122,37 +122,62 @@ internal static partial class ApiAcceptanceSupport
             throw new InvalidDataException("P1 runner input must explicitly set executionIntent to \"execute\".");
         }
 
+        string journey = RequireString(root, "journey", "supported acceptance journey");
+        bool boardDelete = journey == "board-delete";
+        if (boardDelete)
+        {
+            RequireExactKeys(root, ["executionIntent", "journey", "environment", "pins", "deploymentEvidence", "fixturePlan"], "Board-delete input");
+        }
+
         JsonObject environment = RequireObject(root["environment"], "The direct Environment target is required.");
         ValidateGatewayTarget(RequireString(environment, "baseUrl", "Gateway origin"));
-        foreach (string field in new[] { "issuer", "audience", "actorId", "tenantId" })
+        string[] requiredEnvironmentFields = boardDelete ? ["issuer", "audience", "tenantId"] : ["issuer", "audience", "actorId", "tenantId"];
+        foreach (string field in requiredEnvironmentFields)
         {
             RequireString(environment, field, $"Environment {field}");
         }
-
-        JsonObject pins = RequireObject(root["pins"], "Pinned P1 environment receipts are required.");
-        string context = RequireString(pins, "context", "Kubernetes context");
-        string namespaceName = RequireString(pins, "namespace", "Kubernetes namespace");
-        if (!Regex.IsMatch(context, "^[A-Za-z0-9._:/@-]{1,128}$", RegexOptions.CultureInvariant)
-            || !Regex.IsMatch(namespaceName, "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$", RegexOptions.CultureInvariant))
+        if (boardDelete)
         {
-            throw new InvalidDataException("The exact Kubernetes context or namespace is invalid.");
+            string[] environmentFields = environment.ContainsKey("actorId")
+                ? ["baseUrl", "issuer", "audience", "tenantId", "actorId"]
+                : ["baseUrl", "issuer", "audience", "tenantId"];
+            RequireExactKeys(environment, environmentFields, "Board-delete environment");
+            if (environment.ContainsKey("actorId"))
+                RequireString(environment, "actorId", "Environment actorId");
+            ValidateBoardTarget(environment);
         }
 
-        foreach (string name in RequiredReceiptPins)
+        JsonObject pins = RequireObject(root["pins"], boardDelete ? "Pinned Board environment receipts are required." : "Pinned P1 environment receipts are required.");
+        if (boardDelete)
         {
-            JsonObject receipt = RequireObject(pins[name], $"A pinned {name} is required.");
-            if (receipt.Count == 0)
+            ValidateBoardPins(pins);
+        }
+        else
+        {
+            string context = RequireString(pins, "context", "Kubernetes context");
+            string namespaceName = RequireString(pins, "namespace", "Kubernetes namespace");
+            if (!Regex.IsMatch(context, "^[A-Za-z0-9._:/@-]{1,128}$", RegexOptions.CultureInvariant)
+                || !Regex.IsMatch(namespaceName, "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$", RegexOptions.CultureInvariant))
             {
-                throw new InvalidDataException($"A pinned {name} is required.");
+                throw new InvalidDataException("The exact Kubernetes context or namespace is invalid.");
             }
-        }
 
-        if (pins.ContainsKey("imageReceipt"))
-        {
-            throw new InvalidDataException("Image evidence is read from the canonical GHCR manifest and Kubernetes; caller-supplied image receipts are not accepted.");
-        }
+            foreach (string name in RequiredReceiptPins)
+            {
+                JsonObject receipt = RequireObject(pins[name], $"A pinned {name} is required.");
+                if (receipt.Count == 0)
+                {
+                    throw new InvalidDataException($"A pinned {name} is required.");
+                }
+            }
 
-        ValidatePins(pins);
+            if (pins.ContainsKey("imageReceipt"))
+            {
+                throw new InvalidDataException("Image evidence is read from the canonical GHCR manifest and Kubernetes; caller-supplied image receipts are not accepted.");
+            }
+
+            ValidatePins(pins);
+        }
         JsonObject evidence = RequireObject(root["deploymentEvidence"], "Exact source deployment evidence paths are required.");
         string[] requiredPaths = ["manifestPath", "imageManifestPath"];
         RequireExactKeys(evidence, requiredPaths, "deployment evidence");
@@ -161,15 +186,55 @@ internal static partial class ApiAcceptanceSupport
             RequireString(evidence, name, $"deployment evidence {name}");
         }
 
-        string journey = RequireString(root, "journey", "supported P1 journey");
-        if (!Journeys.Contains(journey))
+        if (!boardDelete && !Journeys.Contains(journey))
         {
             throw new InvalidDataException("A supported P1 journey is required.");
         }
 
         JsonObject fixturePlan = RequireObject(root["fixturePlan"], "An explicit runner fixture plan is required.");
-        ValidateFixturePlan(fixturePlan, environment, journey, pins);
+        if (boardDelete)
+        {
+            RequireExactKeys(fixturePlan, ["kind"], "Board-delete fixture plan");
+            if (GetString(fixturePlan, "kind") != "owned-disposable-board")
+                throw new InvalidDataException("The Board-delete fixture plan must select an owned disposable board.");
+        }
+        else
+        {
+            ValidateFixturePlan(fixturePlan, environment, journey, pins);
+        }
         return new(root, environment, pins, fixturePlan, journey, fullPath, Path.GetDirectoryName(fullPath)!);
+    }
+
+    private static void ValidateBoardTarget(JsonObject environment)
+    {
+        const string gateway = "https://api.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io";
+        const string issuer = "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/";
+        if (new Uri(GetString(environment, "baseUrl")!, UriKind.Absolute).GetLeftPart(UriPartial.Authority) != gateway
+            || GetString(environment, "issuer") != issuer
+            || GetString(environment, "audience") != issuer
+            || GetString(environment, "tenantId") != "72f988bf-86f1-41af-91ab-2d7cd011db47")
+        {
+            throw new InvalidDataException("The Board-delete target must match the explicitly approved Gateway, issuer, audience, and tenant.");
+        }
+    }
+
+    private static void ValidateBoardPins(JsonObject pins)
+    {
+        RequireExactKeys(pins, ["context", "namespace", "sourceReceipt", "authoritySourceReceipt"], "Board-delete pins");
+        string context = RequireString(pins, "context", "Kubernetes context");
+        string namespaceName = RequireString(pins, "namespace", "Kubernetes namespace");
+        if (!Regex.IsMatch(context, "^[A-Za-z0-9._:/@-]{1,128}$", RegexOptions.CultureInvariant)
+            || !Regex.IsMatch(namespaceName, "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$", RegexOptions.CultureInvariant))
+        {
+            throw new InvalidDataException("The exact Kubernetes context or namespace is invalid.");
+        }
+        foreach (string name in new[] { "sourceReceipt", "authoritySourceReceipt" })
+        {
+            JsonObject receipt = RequireObject(pins[name], $"A pinned {name} is required.");
+            RequireExactKeys(receipt, ["sourceSha", "sourceTree"], $"Board-delete {name}");
+            RequireSha(GetString(receipt, "sourceSha"), "Board source receipts must pin an exact Git commit and tree.");
+            RequireSha(GetString(receipt, "sourceTree"), "Board source receipts must pin an exact Git commit and tree.");
+        }
     }
 
     public static void ValidateGatewayTarget(string value)
@@ -706,6 +771,25 @@ internal static partial class ApiAcceptanceSupport
         return result;
     }
 
+    public static JsonObject BoardResult(
+        string featureStatus,
+        JsonObject? sourceEvidence,
+        IEnumerable<JsonObject> steps,
+        JsonObject observations,
+        string? failure) => new()
+    {
+        ["kind"] = "board-acceptance-result",
+        ["schemaVersion"] = 1,
+        ["surface"] = "api",
+        ["featureStatus"] = featureStatus,
+        ["fullP1Status"] = "not-evaluated",
+        ["exitCode"] = featureStatus switch { "passed" => 0, "failed" => 1, _ => 2 },
+        ["sourceEvidence"] = sourceEvidence is null ? null : Redact(sourceEvidence),
+        ["steps"] = ToArray(steps),
+        ["observations"] = Redact(observations),
+        ["failure"] = string.IsNullOrWhiteSpace(failure) ? null : new JsonObject { ["message"] = RedactText(failure) },
+    };
+
     private static void AddSessionMaterialBlocker(JsonObject result, AcceptanceManifest? manifest)
     {
         JsonObject observations = (JsonObject)result["observations"]!;
@@ -1008,9 +1092,9 @@ internal static partial class ApiAcceptanceSupport
         await stream.FlushAsync(ct).ConfigureAwait(false);
     }
 
-    public static JsonObject SetupInvocation(string invocationId, string planHash) => new()
+    public static JsonObject SetupInvocation(string invocationId, string planHash, string kind = "p1-setup-invocation") => new()
     {
-        ["kind"] = "p1-setup-invocation",
+        ["kind"] = kind,
         ["schemaVersion"] = 2,
         ["invocationId"] = invocationId,
         ["executionPlanSha256"] = planHash,

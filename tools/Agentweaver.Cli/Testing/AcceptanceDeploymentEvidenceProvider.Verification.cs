@@ -52,6 +52,16 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
         return selected;
     }
 
+    internal static Dictionary<string, string> ValidateBoardImageManifest(JsonObject manifest)
+    {
+        JsonObject images = manifest["images"] as JsonObject
+            ?? throw new InvalidDataException("The Board canonical image manifest must contain an images object.");
+        if (manifest.Count != 1 || images.Count != BoardImageDigests.Count
+            || BoardImageDigests.Any(pair => ApiAcceptanceSupport.GetString(images, pair.Key) != pair.Value))
+            throw new InvalidDataException("Board requires the exact four immutable owner image digests from the reviewed image selection.");
+        return new Dictionary<string, string>(BoardImageDigests, StringComparer.Ordinal);
+    }
+
     private async Task<string> ResolveImageReferenceAsync(
         string repository,
         string? selectedReference,
@@ -124,47 +134,55 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
         IReadOnlyDictionary<string, string> selectedImages,
         CancellationToken ct)
     {
+        bool boardDelete = manifest.Journey == "board-delete";
         JsonObject pins = manifest.Pins;
         string context = ApiAcceptanceSupport.GetString(pins, "context")!;
         string namespaceName = ApiAcceptanceSupport.GetString(pins, "namespace")!;
         if (!IsValidContext(context) || namespaceName != "agentweaver")
             throw new InvalidDataException("The source-bound P1 runtime target is invalid.");
 
-        JsonObject providerPin = (JsonObject)pins["providerReceipt"]!;
-        if (!Matches(Sha, ApiAcceptanceSupport.GetString(providerPin, "sourceCommit")))
-            throw new InvalidDataException("The exact provider catalog ConfigMap and source commit are required.");
         JsonObject cluster = await readKubernetesObjects(context, namespaceName, ct).ConfigureAwait(false);
         JsonArray items = cluster["items"] as JsonArray
             ?? throw new InvalidDataException("Kubernetes workload evidence has no item list.");
-        JsonObject[] catalogMatches = SelectKind(items, "ConfigMap", namespaceName)
-            .Where(item => ApiAcceptanceSupport.GetString(item["metadata"] as JsonObject ?? [], "name")
-                == ApiAcceptanceSupport.GetString(providerPin, "configMapName"))
-            .ToArray();
-        if (catalogMatches.Length != 1)
-            throw new InvalidDataException("The exact provider catalog ConfigMap was not observed.");
-        JsonObject catalog = catalogMatches[0];
-        JsonObject catalogMetadata = catalog["metadata"] as JsonObject ?? [];
-        if (string.IsNullOrWhiteSpace(ApiAcceptanceSupport.GetString(catalogMetadata, "uid"))
-            || string.IsNullOrWhiteSpace(ApiAcceptanceSupport.GetString(catalogMetadata, "resourceVersion"))
-            || ApiAcceptanceSupport.GetString(catalogMetadata, "uid") != ApiAcceptanceSupport.GetString(providerPin, "uid")
-            || ApiAcceptanceSupport.GetString(catalogMetadata, "resourceVersion") != ApiAcceptanceSupport.GetString(providerPin, "resourceVersion"))
-            throw new InvalidDataException("The live provider catalog ConfigMap does not match the exact pinned resource identity.");
-        JsonObject providerEvidence = new()
+        JsonObject? providerPin = null;
+        JsonObject? providerEvidence = null;
+        if (!boardDelete)
         {
-            ["name"] = ApiAcceptanceSupport.GetString(catalogMetadata, "name"),
-            ["uid"] = ApiAcceptanceSupport.GetString(catalogMetadata, "uid"),
-            ["resourceVersion"] = ApiAcceptanceSupport.GetString(catalogMetadata, "resourceVersion"),
-            ["sourceCommit"] = ApiAcceptanceSupport.GetString(providerPin, "sourceCommit"),
-            ["sha256"] = HashJson(catalog),
-        };
+            providerPin = (JsonObject)pins["providerReceipt"]!;
+            if (!Matches(Sha, ApiAcceptanceSupport.GetString(providerPin, "sourceCommit")))
+                throw new InvalidDataException("The exact provider catalog ConfigMap and source commit are required.");
+            JsonObject[] catalogMatches = SelectKind(items, "ConfigMap", namespaceName)
+                .Where(item => ApiAcceptanceSupport.GetString(item["metadata"] as JsonObject ?? [], "name")
+                    == ApiAcceptanceSupport.GetString(providerPin, "configMapName"))
+                .ToArray();
+            if (catalogMatches.Length != 1)
+                throw new InvalidDataException("The exact provider catalog ConfigMap was not observed.");
+            JsonObject catalog = catalogMatches[0];
+            JsonObject catalogMetadata = catalog["metadata"] as JsonObject ?? [];
+            if (string.IsNullOrWhiteSpace(ApiAcceptanceSupport.GetString(catalogMetadata, "uid"))
+                || string.IsNullOrWhiteSpace(ApiAcceptanceSupport.GetString(catalogMetadata, "resourceVersion"))
+                || ApiAcceptanceSupport.GetString(catalogMetadata, "uid") != ApiAcceptanceSupport.GetString(providerPin, "uid")
+                || ApiAcceptanceSupport.GetString(catalogMetadata, "resourceVersion") != ApiAcceptanceSupport.GetString(providerPin, "resourceVersion"))
+                throw new InvalidDataException("The live provider catalog ConfigMap does not match the exact pinned resource identity.");
+            providerEvidence = new JsonObject
+            {
+                ["name"] = ApiAcceptanceSupport.GetString(catalogMetadata, "name"),
+                ["uid"] = ApiAcceptanceSupport.GetString(catalogMetadata, "uid"),
+                ["resourceVersion"] = ApiAcceptanceSupport.GetString(catalogMetadata, "resourceVersion"),
+                ["sourceCommit"] = ApiAcceptanceSupport.GetString(providerPin, "sourceCommit"),
+                ["sha256"] = HashJson(catalog),
+            };
+        }
 
         JsonObject[] services = SelectKind(items, "Service", namespaceName);
         JsonObject[] deployments = SelectKind(items, "Deployment", namespaceName);
         JsonObject[] replicaSets = SelectKind(items, "ReplicaSet", namespaceName);
         JsonObject[] pods = SelectKind(items, "Pod", namespaceName);
         JsonArray serviceImages = [];
-        foreach ((string componentId, string name) in ServiceComponents.Where(item =>
-                     item.Id != "Agentweaver.AgentHost"))
+        IEnumerable<(string Id, string Name)> observedComponents = boardDelete
+            ? BoardOwnerComponents
+            : ServiceComponents.Where(item => item.Id != "Agentweaver.AgentHost");
+        foreach ((string componentId, string name) in observedComponents)
         {
             JsonObject[] deploymentMatches = deployments.Where(item =>
                 ApiAcceptanceSupport.GetString(item["metadata"] as JsonObject ?? [], "name") == name)
@@ -183,15 +201,29 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             string imageReference = await ResolveImageReferenceAsync(
                 repository, selectedImages.GetValueOrDefault(repository), currentImage, sourceSha, ct)
                 .ConfigureAwait(false);
+            JsonObject ownerReceipt = boardDelete && componentId is "Agentweaver.Identity.Broker" or "Agentweaver.Projects.Config"
+                ? (JsonObject)pins["authoritySourceReceipt"]!
+                : pins["sourceReceipt"] as JsonObject ?? [];
+            string ownerSha = boardDelete
+                ? ApiAcceptanceSupport.GetString(ownerReceipt, "sourceSha")!
+                : sourceSha;
+            string ownerTree = boardDelete
+                ? ApiAcceptanceSupport.GetString(ownerReceipt, "sourceTree")!
+                : sourceTree;
             serviceImages.Add(new JsonObject
             {
                 ["id"] = componentId,
                 ["name"] = name,
                 ["image"] = imageReference,
-                ["buildSource"] = new JsonObject { ["sourceSha"] = sourceSha, ["sourceTree"] = sourceTree },
+                ["buildSource"] = new JsonObject { ["sourceSha"] = ownerSha, ["sourceTree"] = ownerTree },
             });
         }
 
+        string hostImageReference = "";
+        long hostPullBytes = 0;
+        JsonObject? hostRegistry = null;
+        if (!boardDelete)
+        {
         JsonObject[] environmentMatches = deployments.Where(item =>
             ApiAcceptanceSupport.GetString(item["metadata"] as JsonObject ?? [], "name") == "environment")
             .ToArray();
@@ -205,7 +237,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
         JsonArray environmentVariables = environmentContainer["env"] as JsonArray ?? [];
         string hostCurrentImage = RequireEnvironmentSetting(
             environmentVariables, "Environment__Sandbox__AgentSandbox__ContainerImage");
-        string hostImageReference = await ResolveImageReferenceAsync(
+        hostImageReference = await ResolveImageReferenceAsync(
             ComponentImageRepository("Agentweaver.AgentHost"),
             selectedImages.GetValueOrDefault(ComponentImageRepository("Agentweaver.AgentHost")),
             hostCurrentImage, sourceSha, ct).ConfigureAwait(false);
@@ -218,12 +250,13 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             || configuredHostPullBytes > 9_007_199_254_740_991L)
             throw new InvalidDataException("The live Environment configuration must contain the exact linux/amd64 AgentHost image and positive compressed-byte measurement.");
 
-        JsonObject hostRegistry = await VerifyRegistryImageAsync(
+        hostRegistry = await VerifyRegistryImageAsync(
             hostImageReference, hostImageReference, sourceSha, sourceTree, ct).ConfigureAwait(false);
-        long hostPullBytes = hostRegistry["compressedPullBytes"]?.GetValue<long>()
+        hostPullBytes = hostRegistry["compressedPullBytes"]?.GetValue<long>()
             ?? throw new InvalidDataException("GHCR did not provide AgentHost OCI descriptor sizes.");
         if (hostPullBytes != configuredHostPullBytes)
             throw new InvalidDataException("The deployed AgentHost compressed-byte setting does not match the digest-verified GHCR OCI metadata.");
+        }
 
         JsonArray observedServices = [];
         foreach (JsonObject image in serviceImages.OfType<JsonObject>())
@@ -289,14 +322,14 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             if (IdentityServices.Contains(name)
                 && ApiAcceptanceSupport.GetString(templateLabels, "azure.workload.identity/use") != "true")
                 throw new InvalidDataException($"Deployment {name} is missing its admitted workload identity label.");
-            if (name == "projects-config")
+            if (!boardDelete && name == "projects-config")
             {
                 JsonObject annotations = templateMetadata["annotations"] as JsonObject ?? [];
                 JsonObject container = containers[0]!.AsObject();
                 if (ApiAcceptanceSupport.GetString(annotations, ProviderCatalogSourceAnnotation)
-                        != ApiAcceptanceSupport.GetString(providerPin, "sourceCommit")
+                        != ApiAcceptanceSupport.GetString(providerPin!, "sourceCommit")
                     || !HasExactProviderCatalogBinding(container["envFrom"] as JsonArray,
-                        ApiAcceptanceSupport.GetString(providerPin, "configMapName")!)
+                        ApiAcceptanceSupport.GetString(providerPin!, "configMapName")!)
                     || HasProviderCatalogEnvironmentOverride(container["env"] as JsonArray))
                     throw new InvalidDataException("Projects does not bind the exact observed provider catalog source and ConfigMap.");
             }
@@ -353,7 +386,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
                     && ApiAcceptanceSupport.GetString(podLabels, "azure.workload.identity/use") != "true")
                     throw new InvalidDataException($"Pod {podName} is missing its admitted workload identity label.");
                 JsonObject applicationContainer = podContainers[0]!.AsObject();
-                if (name == "environment"
+                if (!boardDelete && name == "environment"
                     && (RequireEnvironmentSetting(
                             applicationContainer["env"] as JsonArray ?? [],
                             "Environment__Sandbox__AgentSandbox__ContainerImage") != hostImageReference
@@ -366,12 +399,12 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
                             NumberStyles.None, CultureInfo.InvariantCulture, out long podHostPullBytes)
                         || podHostPullBytes != hostPullBytes))
                     throw new InvalidDataException("The running Environment Pod does not use the digest-verified AgentHost image and compressed-byte measurement.");
-                if (name == "projects-config"
+                if (!boardDelete && name == "projects-config"
                     && (!HasExactProviderCatalogBinding(applicationContainer["envFrom"] as JsonArray,
-                            ApiAcceptanceSupport.GetString(providerPin, "configMapName")!)
+                            ApiAcceptanceSupport.GetString(providerPin!, "configMapName")!)
                         || HasProviderCatalogEnvironmentOverride(applicationContainer["env"] as JsonArray)
                         || ApiAcceptanceSupport.GetString(podAnnotations, ProviderCatalogSourceAnnotation)
-                            != ApiAcceptanceSupport.GetString(providerPin, "sourceCommit")))
+                            != ApiAcceptanceSupport.GetString(providerPin!, "sourceCommit")))
                     throw new InvalidDataException("The running Projects Pod does not bind the validated provider catalog source commit.");
 
                 JsonObject containerStatus = containerStatuses[0] as JsonObject ?? [];
@@ -423,21 +456,21 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             ["namespace"] = namespaceName,
             ["sourceSha"] = sourceSha,
             ["sourceTree"] = sourceTree,
-            ["providerCatalog"] = providerEvidence,
+            ["providerCatalog"] = providerEvidence?.DeepClone(),
             ["services"] = observedServices,
-            ["agentHostImageMeasurement"] = new JsonObject
+            ["agentHostImageMeasurement"] = boardDelete ? null : new JsonObject
             {
                 ["status"] = "passed",
                 ["image"] = hostImageReference,
-                ["digest"] = hostRegistry["platformDigest"]?.DeepClone(),
-                ["manifestDigest"] = hostRegistry["manifestDigest"]?.DeepClone(),
-                ["configDigest"] = hostRegistry["configDigest"]?.DeepClone(),
+                ["digest"] = hostRegistry?["platformDigest"]?.DeepClone(),
+                ["manifestDigest"] = hostRegistry?["manifestDigest"]?.DeepClone(),
+                ["configDigest"] = hostRegistry?["configDigest"]?.DeepClone(),
                 ["platform"] = "linux/amd64",
                 ["compressedPullBytes"] = hostPullBytes,
                 ["measurement"] = "digest-verified platform manifest plus unique config and layer descriptor sizes",
             },
             // API readbacks have no trusted native-owner source for current Sandbox runtime proof.
-            ["agentHostRuntime"] = new JsonObject
+            ["agentHostRuntime"] = boardDelete ? null : new JsonObject
             {
                 ["status"] = "blocked",
                 ["reason"] = "No exact provider-owned Sandbox lease, AgentHost Pod UID, and phase receipt was observed by the service Deployment readback.",

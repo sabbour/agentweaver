@@ -597,6 +597,21 @@ than retrying the write.
 This controlled regression does not prove distributable apphost acceptance or
 verify the production evidence providers.
 
+The first native `board-delete` API journey also has controlled Gateway
+transport regressions. They check distinct Gateway and Broker origins,
+32-character project IDs through partial-setup cleanup, exclusive reservation
+against interrupted and concurrent retries, exact compacted-task revision
+increments, the fixed stale-graph/stale-task/dependent-delete/owner-permission
+outcomes, persisted deletion readbacks, project archival, owner-grant
+revocation, cleanup failure precedence, and refusal to retry an ambiguous
+delete. Its fake Gateway and evidence provider do not prove live authorization,
+deployed source provenance, or apphost acceptance. Run the focused tests with:
+
+```powershell
+dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~ApiAcceptanceManifestTests
+dotnet test tests\Agentweaver.Cli.Acceptance.Tests\Agentweaver.Cli.Acceptance.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~BoardDelete
+```
+
 The one-account P1 sign-in launcher also has a real browser regression that
 uses loopback redirects only. Install the Playwright test browser and run it:
 

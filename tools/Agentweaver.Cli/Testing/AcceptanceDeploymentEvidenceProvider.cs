@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using System.Reflection;
 
 namespace Agentweaver.Cli;
 
@@ -17,6 +18,23 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
         "identity-broker", "events-and-sessions", "gateway", "mcp", "web",
         "orchestrator", "environment", "knowledge", "projects-config",
     ];
+    private static readonly (string Id, string Name)[] BoardOwnerComponents =
+    [
+        ("Agentweaver.Gateway", "gateway"),
+        ("Agentweaver.Orchestrator", "orchestrator"),
+        ("Agentweaver.Identity.Broker", "identity-broker"),
+        ("Agentweaver.Projects.Config", "projects-config"),
+    ];
+    private const string BoardFoundationSha = "fa4c10d40b10b5f06c6333ecfb6e6d86a6a7a8fe";
+    private const string BoardFoundationTree = "e235a0f576a26924920130c0c4bb4dbd01d4d567";
+    private const string BoardAuthoritySha = "1471e0b6ee4ab2a859231582ed1efa8e86693002";
+    private static readonly IReadOnlyDictionary<string, string> BoardImageDigests = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["agentweaver.gateway"] = "sha256:0fa6e9f718b06a030172deda8ee0e509871b8bd10e9e8a74c13a37cbd8780dcd",
+        ["agentweaver.orchestrator"] = "sha256:6db6d03d226a8acb9cebf1c8e806aa337ffba40201c4daad0088eb6d3f55002e",
+        ["agentweaver.identity.broker"] = "sha256:d76177945cf05121120f8fbc6b4d7fe708f0c4e6adbbafbcafe449f52ce7e0b4",
+        ["agentweaver.projects.config"] = "sha256:33f1af287e19ac8854952dc379e685397cda2e5068b7734dc35c83f4a32b3378",
+    };
     private static readonly (string Id, string Name)[] ServiceComponents =
     [
         ("Agentweaver.Identity.Broker", "identity-broker"),
@@ -60,6 +78,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
 
     public async Task<JsonObject> PrepareAsync(AcceptanceManifest manifest, CancellationToken ct)
     {
+        bool boardDelete = manifest.Journey == "board-delete";
         JsonObject pins = manifest.Pins;
         JsonObject deployment = (JsonObject)manifest.Root["deploymentEvidence"]!;
         JsonObject sourcePin = (JsonObject)pins["sourceReceipt"]!;
@@ -75,7 +94,23 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
         (JsonObject imageManifest, byte[] imageManifestBytes) = await ReadObjectBytesAsync(
             imageManifestFile, "The canonical GHCR image-selection manifest is missing or malformed.", ct)
             .ConfigureAwait(false);
-        Dictionary<string, string> selectedImages = ValidateImageManifest(imageManifest, sourceSha);
+        JsonObject? authorityReceipt = null;
+        JsonObject? cliSource = null;
+        Dictionary<string, string> selectedImages;
+        if (boardDelete)
+        {
+            if (sourceSha != BoardFoundationSha || sourceTree != BoardFoundationTree)
+                throw new InvalidDataException("Board Gateway and Orchestrator evidence must pin the reviewed foundation source commit and tree.");
+            authorityReceipt = (JsonObject)pins["authoritySourceReceipt"]!;
+            if (ApiAcceptanceSupport.GetString(authorityReceipt, "sourceSha") != BoardAuthoritySha)
+                throw new InvalidDataException("Board Identity Broker and Projects Config evidence must pin the reviewed v1.0.16 source commit.");
+            selectedImages = ValidateBoardImageManifest(imageManifest);
+            cliSource = ReadCliSource();
+        }
+        else
+        {
+            selectedImages = ValidateImageManifest(imageManifest, sourceSha);
+        }
 
         JsonObject commit = await GetGitHubObjectAsync($"/commits/{sourceSha}", ct).ConfigureAwait(false);
         JsonObject commitTree = (commit["commit"] as JsonObject)?["tree"] as JsonObject ?? [];
@@ -95,6 +130,9 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
             throw new InvalidDataException("The supplied foundation manifest does not match the fixed GitHub source identity.");
         }
         await ValidateProjectMetadataAsync(remoteManifest, sourceSha, ct).ConfigureAwait(false);
+        JsonObject? authorityEvidence = null;
+        if (authorityReceipt is not null)
+            authorityEvidence = await VerifyBoardAuthoritySourceAsync(authorityReceipt, ct).ConfigureAwait(false);
 
         JsonObject services = await ObserveServicesEquivalentAsync(
             manifest, sourceSha, sourceTree, selectedImages, ct).ConfigureAwait(false);
@@ -109,6 +147,8 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
                 ["sourceTree"] = sourceTree,
                 ["manifestBlobSha"] = remoteManifestHash,
             },
+            ["authoritySource"] = authorityEvidence?.DeepClone(),
+            ["cliSource"] = cliSource?.DeepClone(),
             ["imageManifest"] = new JsonObject
             {
                 ["sha256"] = ApiAcceptanceSupport.Sha256Hex(imageManifestBytes),
@@ -119,6 +159,46 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
             ["services"] = services,
             ["agentHostImageMeasurement"] = services["agentHostImageMeasurement"]?.DeepClone(),
             ["agentHostRuntime"] = services["agentHostRuntime"]?.DeepClone(),
+        };
+    }
+
+    private static JsonObject ReadCliSource()
+    {
+        Dictionary<string, string> metadata = typeof(AcceptanceDeploymentEvidenceProvider).Assembly
+            .GetCustomAttributes<AssemblyMetadataAttribute>()
+            .Where(item => item.Key is "Agentweaver.SourceSha" or "Agentweaver.SourceTree")
+            .ToDictionary(item => item.Key!, item => item.Value ?? "", StringComparer.Ordinal);
+        string sha = metadata.GetValueOrDefault("Agentweaver.SourceSha", "");
+        string tree = metadata.GetValueOrDefault("Agentweaver.SourceTree", "");
+        if (!Sha.IsMatch(sha) || !Sha.IsMatch(tree) || sha == "unbound" || tree == "unbound")
+            throw new InvalidDataException("Live Board acceptance requires a source-bound CLI apphost with AgentweaverSourceSha and AgentweaverSourceTree.");
+        return new JsonObject { ["sourceSha"] = sha, ["sourceTree"] = tree };
+    }
+
+    private async Task<JsonObject> VerifyBoardAuthoritySourceAsync(JsonObject receipt, CancellationToken ct)
+    {
+        string sourceSha = ApiAcceptanceSupport.GetString(receipt, "sourceSha")!;
+        string sourceTree = ApiAcceptanceSupport.GetString(receipt, "sourceTree")!;
+        if (sourceSha != BoardAuthoritySha || !Sha.IsMatch(sourceTree))
+            throw new InvalidDataException("The Board authority source receipt does not match the reviewed v1.0.16 commit and a full Git tree.");
+
+        JsonObject tag = await GetGitHubObjectAsync("/git/ref/tags/v1.0.16", ct).ConfigureAwait(false);
+        JsonObject tagObject = tag["object"] as JsonObject ?? [];
+        if (ApiAcceptanceSupport.GetString(tag, "ref") != "refs/tags/v1.0.16"
+            || ApiAcceptanceSupport.GetString(tagObject, "type") != "commit"
+            || ApiAcceptanceSupport.GetString(tagObject, "sha") != sourceSha)
+            throw new InvalidDataException("The retained v1.0.16 tag does not resolve directly to the pinned Board authority commit.");
+
+        JsonObject commit = await GetGitHubObjectAsync($"/git/commits/{sourceSha}", ct).ConfigureAwait(false);
+        JsonObject tree = commit["tree"] as JsonObject ?? [];
+        if (ApiAcceptanceSupport.GetString(commit, "sha") != sourceSha
+            || ApiAcceptanceSupport.GetString(tree, "sha") != sourceTree)
+            throw new InvalidDataException("GitHub does not report the exact pinned Board authority commit and tree.");
+        return new JsonObject
+        {
+            ["tag"] = "v1.0.16",
+            ["sourceSha"] = sourceSha,
+            ["sourceTree"] = sourceTree,
         };
     }
 
