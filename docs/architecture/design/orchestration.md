@@ -1087,20 +1087,20 @@ infer that no effect occurred.
 
 ## Rollout and compatibility
 
-- **P0 — Foundation:** versioned service contracts, Postgres state and outbox, Object
+- **Foundation contracts:** versioned service contracts, Postgres state and outbox, Object
   Store, policy binding, and provider pinning supply durable execution primitives.
-- **P1 — Core:** implement MAF step catalogs, grammar and WorkPlan validators,
+- **Core execution:** implement MAF step catalogs, grammar and WorkPlan validators,
   typed coordinator tools, thin prompt, executable snapshots, executor binding,
   checkpoints, run limits, child-work joins, journal, gates, and the session tree.
-  Start persona harnesses against exact-SHA AKS deployments at the end of P1 and continue them through cutover.
-- **P2 — Parity and cutover:** close the
+  Start persona harnesses against exact-SHA AKS deployments at the end of core implementation and continue them through cutover.
+- **Parity and cutover:** close the
   0.x behavior-guarantee list, complete application `live`/`preview`/`published` stages and the publish
   gate, enforce budgets and all required surface actions through the separate Canvas
   boundary, and pass native CLI/API and UI
   harnesses on an exact-SHA AKS deployment.
   A2UI and GitHub Canvas-compatible renderers do not replace MAF, validate plans,
   or approve workflow actions.
-- **P3 — After cutover:** optional provider adapters can change backing systems,
+- **After cutover:** optional provider adapters can change backing systems,
   not the step catalog, confirmation gates, or coordinator's tool authority.
 
 ## Related risks
@@ -1114,4 +1114,4 @@ infer that no effect occurred.
 - [R13](../decisions/0001-platform-architecture.md#risk-register): unmapped work needs
   a declared open step; built-in workflows provide one for implementation.
 - [R23](../decisions/0001-platform-architecture.md#risk-register): exact-SHA AKS persona
-  harnesses start at the end of P1 and must be green before cutover.
+  harnesses start at the end of core implementation and must be green before cutover.

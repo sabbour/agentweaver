@@ -1,6 +1,6 @@
 # Specification: Foundation infrastructure probe
 
-**Prerequisite:** [Dedicated Azure P0 infrastructure](azure-p0-infrastructure.md).
+**Prerequisite:** [Dedicated Azure infrastructure](azure-p0-infrastructure.md).
 **Status:** Acceptance-tool contract in source, not a live acceptance result.
 The [component manifest](../../releases/foundation.json) defines the probe version;
 that version does not prove which image ran.
@@ -174,7 +174,7 @@ FQDN egress uses both Cilium `rules.dns` inspection for the exact allowed host
 names and matching `toFQDNs` destinations. AKS requires ACNS Container Network
 Security to enforce FQDN filtering
 ([Microsoft Learn](https://learn.microsoft.com/en-us/azure/aks/how-to-apply-fqdn-filtering-policies)).
-The current v1 AKS template uses API `2024-09-01` and enables ACNS security
+The current AKS template uses API `2024-09-01` and enables ACNS security
 without enabling observability. That setting belongs to the infrastructure
 template, not to the probe. The probe does not modify AKS infrastructure or incur
 additional ACNS cost.
@@ -235,7 +235,7 @@ or a dashed UUID nonce.
 Collection requires an explicit read-only CLI option and exact Kubernetes
 context. It does not create resources, run commands inside a pod, or perform
 live reads during source validation. A source-only consumer change does not
-deploy the probe or complete the wider P0 shipping checklist.
+deploy the probe or complete the wider foundation shipping checklist.
 
 Credential-free validation includes:
 

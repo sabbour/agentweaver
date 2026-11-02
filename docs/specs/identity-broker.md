@@ -253,7 +253,7 @@ client can use the optional direct setting supplied by the operator.
 The deployment retains signing/encryption material and the protected key ring
 across restart. The HTTPS listener uses a separate operator-approved TLS
 certificate. The repository contains no certificate, password, or OAuth
-secret. P0 public client identifiers, issuers, tenant IDs, and PostgreSQL role
+secret. The foundation's public client identifiers, issuers, tenant IDs, and PostgreSQL role
 names are non-secret runtime configuration.
 Certificate rotation requires overlap with previous verification and decryption keys through a separate reviewed procedure.
 Replacing the sole certificate immediately invalidates previous encrypted tokens and cookies.
@@ -312,7 +312,7 @@ It fresh-reads the exact tenant and existing application before the write.
 It patches only public redirects and preserves all other application properties.
 An existing exact callback remains a no-op.
 Explicit Gateway placement and security-policy inputs require separate approval.
-The existing P0 namespace remains restricted.
+The existing foundation namespace remains restricted.
 Routing configuration does not prove a running Broker.
 The optional readiness gate requires trusted HTTPS and ordinary DNS for both
 health endpoints. See [the operator interface](../../scripts/azure/README.md#application-routing-source-setting).
@@ -346,7 +346,7 @@ prove that it was used against a live database.
 The installer runs this command only when both `--execute` and the separate,
 default-off `--bootstrap-identity-postgres` option are supplied. It supports
 the guarded full-foundation path and AKS-only redeployment to the exact existing
-P0 target. The Azure preflight checks the selected target and does not inspect
+foundation target. The Azure preflight checks the selected target and does not inspect
 the resource inventory or verify existing resource properties.
 For the private PostgreSQL endpoint, the installer creates a temporary TCP-only
 proxy pod and loopback-only port-forward. The operator host keeps the

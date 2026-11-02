@@ -64,5 +64,5 @@ without a new revision cannot reveal intervening changes; reads are not
 transactional with the backend. After-return revocation and erasure of copied
 immutable value strings are not guaranteed. Wire authentication, OAuth broker,
 durable store, credential delivery service and Azure deployment are separate.
-Existing v1 Secrets/KV contracts, expiry validation, test clock and cancellation
+Existing Secrets/KV contracts, expiry validation, test clock and cancellation
 patterns are reused; no new competing backend or authentication stack is added.

@@ -22,13 +22,13 @@ work does not become a v1.1 requirement through this specification.
 
 ## Intended behavior and requirements
 
-- Agentweaver 1.0 plans 16 provider seams through versioned .NET contracts; the core retains orchestration, authorization, fencing, and enforcement.
+- Agentweaver plans 16 provider seams through versioned .NET contracts; the core retains orchestration, authorization, fencing, and enforcement.
 - Providers are in-repository adapters. Azure-backed adapters are the defaults, and optional providers must meet the same contracts and isolation requirements.
 - Selection is not uniformly one-provider-per-run: seams are exclusive, ordered, platform-singleton, layered, keyed by meter source, or per application.
 - A run pins provider identity, options revision, compatible resources, and negotiated capabilities. It never pins a credential or an authorization decision.
 - A sandbox executes AgentHost; Storage holds the agent's workspace, while Object Store holds platform artifacts. Snapshots are optional and never substitute for a consistent run manifest.
 - Network egress is generated from narrowing intent; cost accounting uses a durable usage ledger rather than telemetry counters.
-- Canvas is a P2 rendering seam beside Application Hosting. The current source catalog still names 15 seams; Canvas is not implemented.
+- Canvas is a planned rendering seam beside Application Hosting. The current source catalog still names 15 seams; Canvas is not implemented.
 
 ## Today in 0.x
 
@@ -82,11 +82,11 @@ harness; changing the sandbox does not change that harness.
 
 ### Selection and cardinality
 
-P1 Environment creation keeps invocation provenance separate from provider
+Invocation-bound Environment creation keeps invocation provenance separate from provider
 selection. A current Core binding admits an owner operation, not a provider
 resource. Environment records the real operation/result identities in its own
 transaction and retains provider identity only after an actual provider result.
-See [P1 invocation-bound creation](../environment-sandbox.md#p1-invocation-bound-creation).
+See [invocation-bound creation](../environment-sandbox.md#p1-invocation-bound-creation).
 This does not change adapter selection, native mount evidence, or Host joining.
 
 Projects choose only from providers enabled in the platform catalog. Where an override is allowed,
@@ -101,7 +101,7 @@ cannot substitute another provider mid-flight because an endpoint is slow or una
 | Layered | Network Policy | One platform provider per enforcement layer: required L3/L4 and optional L7. Projects narrow egress intent, never select a provider. Pin the applied intent generation per run. |
 | Keyed by meter source | Cost | The pinned model binding determines the pricing provider; unpriced usage remains recorded. |
 | Per application | Application Hosting | Owner chooses a platform-enabled provider; pin it to each deployed revision, not to an agent run. |
-| Per canvas | Canvas (P2) | Choose an enabled renderer and pin its adapter, format version, and catalog to the canvas revision. Core retains surface lifecycle and action authorization. |
+| Per canvas | Canvas (planned) | Choose an enabled renderer and pin its adapter, format version, and catalog to the canvas revision. Core retains surface lifecycle and action authorization. |
 
 The model resolver remains a separate existing concern. Its effective Copilot or bring-your-own-key (BYOK)
 binding is pinned with the run and selects the Cost provider, but Model is not a new seam. A new run may
@@ -304,19 +304,19 @@ To see which implementation is active in each area of a running deployment, use 
 [platform components report](../../guide/platform-components.md). A test in
 `tests/Agentweaver.Providers.Tests` keeps the area list of that report in sync with this table.
 
-| Seam | Purpose | Owning service | Azure/default adapter in 1.0 | Later adapters | Cardinality |
+| Seam | Purpose | Owning service | Azure/default adapter | Later adapters | Cardinality |
 | --- | --- | --- | --- | --- | --- |
 | Sessions | Journal, playback, and optional capture | Events & Sessions | Native Postgres journal | Optional AgentSessions provider (read-only replay of verified record exports) | Exclusive authority per run |
 | Snapshots | Capture and explicitly restore environments | Environment manager | `None` at cutover; gated AKS Blob-backed pod snapshots | OpenSandbox-native; managed-runtime snapshots after Azure support | Exclusive, paired |
-| Sandbox | Provision, observe, fence, and release AgentHost environments | Environment manager | agent-sandbox on AKS | OpenSandbox; Agent Substrate after AKS proof; Container Apps Sandboxes (P3 evaluation) | Exclusive |
-| Storage | Durable agent workspace volumes and bindings | Environment manager | Azure Files CSI | Elastic SAN deferred outside P2; future agent filesystem providers | Exclusive |
-| Memory | Authoritative knowledge records and retrieval | Knowledge | Native Postgres | Cosmos and Redis source candidates (P2) | Exclusive |
+| Sandbox | Provision, observe, fence, and release AgentHost environments | Environment manager | agent-sandbox on AKS | OpenSandbox; Agent Substrate after AKS proof; post-cutover Container Apps Sandboxes evaluation | Exclusive |
+| Storage | Durable agent workspace volumes and bindings | Environment manager | Azure Files CSI | Elastic SAN deferred outside parity and cutover scope; future agent filesystem providers | Exclusive |
+| Memory | Authoritative knowledge records and retrieval | Knowledge | Native Postgres | Cosmos and Redis source candidates for parity | Exclusive |
 | Policy | Decide permitted actions through AGT | Orchestrator | AGT .NET kernel, YAML rules | —; other rule languages configure AGT, not another adapter | Platform-singleton |
 | Guardrails | Classify untrusted model inputs/results/output | Orchestrator | Azure AI Content Safety Prompt Shields for supported checks | Purview DLP; Llama Guard/Prompt Guard; NeMo Guardrails | Ordered composite |
 | Network Policy | Materialize and verify egress intent | Environment manager | Cilium L3/L4/FQDN; own Tool & MCP gateway L7 | Plain Kubernetes NetworkPolicy where sufficient; agentgateway L7 | Layered |
-| Cost | Price durable usage by meter source | Events & Sessions | Copilot AI-credit pricing; Azure BYOK pricing by P2 | Other source-specific rate cards | Keyed by meter source |
-| Application Hosting | Serve durable web preview and published revisions | Environment manager | Built-in AKS web runtime (P2) | No other implementations in the current plan | Per application |
-| Canvas | Render interactive content and supply a typed host bridge | Web frontend / Applications | A2UI renderer (P2) | GitHub Canvas compatibility research and reverse engineering (P2) | Per canvas |
+| Cost | Price durable usage by meter source | Events & Sessions | Copilot AI-credit pricing; Azure BYOK pricing by cutover | Other source-specific rate cards | Keyed by meter source |
+| Application Hosting | Serve durable web preview and published revisions | Environment manager | Built-in AKS web runtime planned for parity | No other implementations in the current plan | Per application |
+| Canvas | Render interactive content and supply a typed host bridge | Web frontend / Applications | A2UI renderer planned for parity | GitHub Canvas compatibility research and reverse engineering for parity | Per canvas |
 | Secrets | Resolve credential references for trusted callers | Identity | Azure Key Vault with workload identity | None required for cutover | Platform-singleton |
 | Source Control | Repository access, changes, PRs, and merge | Source Control & Merge | GitHub | Other Git repository and review systems | Exclusive |
 | Telemetry | Export traces, metrics, and logs | Cross-service; Events & Sessions integration | OpenTelemetry to Azure Monitor | Other OTLP exporters | Ordered composite |
@@ -383,7 +383,7 @@ isolation classes, storage backend, retention, and cross-node support. The core 
 resource and validates the same isolation class, image digest, container set, and resource shape before
 restore.
 
-The 1.0 cutover default is **no VM snapshot provider**. Suspend still fences turns, persists the Copilot
+The cutover default is **no VM snapshot provider**. Suspend still fences turns, persists the Copilot
 cache and MAF checkpoint, flushes the journal and workspace, and releases placement. Resume creates a new
 environment from those durable records. `Capture` or `Restore` without the required capability returns
 `CapabilityUnavailable`, rather than pretending that deleting a pod captured memory.
@@ -418,7 +418,7 @@ None of this is a cutover prerequisite ([R3](../decisions/0001-platform-architec
 
 ### Environment-owned Sandbox lifecycle
 
-**Owner:** Environment manager. **Cardinality:** exclusive. The current v1 source candidate adds
+**Owner:** Environment manager. **Cardinality:** exclusive. The current source candidate adds
 `Provision`, `Describe`, `ListOwned(owner)`, and `Release` provider operations and Environment routes for
 provision, inspect, explicit abandon, and reconciliation. Each Environment has a stable owner tuple and
 lifecycle fence; each Sandbox lease persists its immutable selected provider/options, operation ID, resource
@@ -499,7 +499,7 @@ The complete current behavior, configuration, API boundaries, and test limits ar
 
 ### Managed-runtime contract check
 
-Agent Substrate is a **neutrality test target**, not a required 1.0 backend. Its adapter must pass the
+Agent Substrate is a **neutrality test target**, not a required backend. Its adapter must pass the
 Sandbox conformance suite and an AKS proof with VM-level isolation before enablement. Its current snapshot
 store lacks Azure Blob: its snapshot capability stays disabled while durable snapshot data would require GCS
 or S3, with no compatibility gateway in between
@@ -520,14 +520,14 @@ present per-environment volumes do not satisfy shared RWX or existing-PVC attach
 reject those pairings. AKS availability of required certificate APIs and nested virtualization remains an
 adoption test, not an assumption.
 
-Container Apps Sandboxes is another P3 evaluation under the existing Sandbox contract,
+Container Apps Sandboxes is another post-cutover evaluation under the existing Sandbox contract,
 not an Application Hosting implementation. Before enablement, its adapter must prove
 the selected isolation, authenticated AgentHost configure/refresh and A2A channels,
 compatible workspace attachment, egress enforcement, leases, fencing, and release.
 Unsupported capabilities fail explicitly. This plan does not claim that the service
 already meets those requirements or authorize provisioning it.
-The [P3 compatibility evaluation](container-apps-sandboxes-evaluation.md) compares
-the actual microVM service, not Dynamic Sessions, with the current v1 and compatible
+The [compatibility evaluation](container-apps-sandboxes-evaluation.md) compares
+the actual microVM service, not Dynamic Sessions, with the current contracts and compatible
 0.x contracts. It records a no-go for current enablement, rejected PVC/Cilium
 pairings, and the evidence needed for any separately approved implementation.
 
@@ -631,7 +631,7 @@ Source checks do not prove live CSI durability.](../../diagrams/flagship/v1-stor
 ### Defaults, optional features, and limits
 
 The cutover Azure provider uses Azure Files CSI for RWO or RWX workspaces.
-Elastic SAN is deferred outside P2 and is not a cutover requirement. If reconsidered,
+Elastic SAN is deferred outside parity scope and is not a cutover requirement. If reconsidered,
 its RWO constraint limits it to `environment` volumes, never a substitute for a shared volume
 ([R15](../decisions/0001-platform-architecture.md#risk-register)). Future Blob-backed agent filesystem
 providers can implement the same volume contract after product readiness. A managed sandbox can bind its own
@@ -679,7 +679,7 @@ preview toolkit or remote Python service is required
 **Owner:** Orchestrator, with gates in every calling core service. **Cardinality:** platform-singleton.
 The Orchestrator Core source includes the in-process `agt.dotnet-yaml` adapter, which resolves and pins
 through the shared provider catalog. AGT's .NET kernel evaluates agent actions against platform rules and
-project rules that may only narrow the result. YAML rules are the 1.0 baseline. Other rule languages are
+project rules that may only narrow the result. YAML rules are the baseline. Other rule languages are
 configuration of the same kernel only after verified .NET parity, not an independent Policy provider
 ([R6](../decisions/0001-platform-architecture.md#risk-register)).
 
@@ -734,9 +734,11 @@ model input/output, MCP discovery, structured results, and non-text content requ
 on every check in the accepted stage pin. Permission metadata and MCP annotations are provenance only and
 never grant tool authority.
 
-### P2 runtime gate for model-turn user input
+<a id="p2-runtime-gate-for-model-turn-user-input"></a>
 
-In P2, the Orchestrator runs the ordered Guardrails checks on model-turn user input during runtime action
+### Runtime gate for model-turn user input
+
+The Orchestrator runs the ordered Guardrails checks on model-turn user input during runtime action
 admission (`/internal/runtime/actions/authorize`):
 
 1. The Orchestrator reads the ordered Guardrails selection that Projects recorded in the accepted run
@@ -764,7 +766,7 @@ unavailable classifiers, journals, or owners return HTTP 503 and fail closed. To
 concurrency behavior are unchanged: tool actions never carry content, and a 428 for an action without
 content fails with `runtime_guardrails_content_unsupported`.
 
-Prompt Shields is the only supported P2 check. The gate doesn't check tool results or MCP results yet.
+Prompt Shields is the only supported check at this user-input gate. The gate doesn't check tool results or MCP results yet.
 Those checks run at the `ToolResult` stage after the Tool & MCP gateway returns remote results to the
 Orchestrator. For configuration, see
 [Guardrails settings](../../reference/runtime-configuration.md#guardrails-settings).
@@ -881,7 +883,7 @@ allocator splits a fixed period charge by token share with exact largest-remaind
 rounding and never changes ledger rows. Events also serves represented-spend
 evidence: per-bucket run and period totals, dispatch witnesses, and a monotonic
 accounting cursor from one ledger snapshot. Other meter sources provide their own pricing.
-Sandbox compute cost is a later meter source, not part of the 1.0 model-cost
+Sandbox compute cost is a later meter source, not part of the model-cost
 contract.
 
 ### Budgets and combined data flow
@@ -1038,11 +1040,11 @@ beyond its run; Sandbox runs **the agent**. Agentweaver keeps its own UI.
 ## Canvas
 
 **Owner:** Web frontend / Applications. **Cardinality:** selected per canvas and pinned
-per canvas revision. This P2 seam is separate from Application Hosting: it renders
+per canvas revision. This planned seam is separate from Application Hosting: it renders
 interactive content within Agentweaver's surface panel rather than operating an
 application server or an agent sandbox.
 
-The planned adapters are A2UI and a GitHub Canvas-compatible adapter. P2 includes
+The planned adapters are A2UI and a GitHub Canvas-compatible adapter. The parity scope includes
 research and reverse engineering behind this boundary. The
 [GitHub Canvas research findings](applications-and-surfaces.md#github-canvas-evidence-and-versions)
 establish experimental declaration, typed-action callback, and lifecycle shapes;
@@ -1067,7 +1069,7 @@ The current source enum and resolver do not yet implement this sixteenth seam.
 ## Secrets
 
 **Owner:** Identity. **Cardinality:** platform-singleton. Azure Key Vault via AKS workload identity is the
-1.0 backend. Core and adapters exchange `SecretRef`s and purpose-bound credential requests, not secret
+backend. Core and adapters exchange `SecretRef`s and purpose-bound credential requests, not secret
 values in provider descriptors, run bindings, Postgres state, workspace files, or snapshot manifests. The
 trusted control plane redeems references and refreshes short-lived run credentials over authenticated
 channels. In the proposed credential-less mode, only trusted external consumers
@@ -1129,7 +1131,7 @@ source-control abstraction (`packages/Agentweaver.Domain`,
 `apps/Agentweaver.Api/Sandbox/RunRepositoryCredentialRegistry.cs`). The new seam is a contract redesign, not
 a claim that another forge already works.
 
-The v1 source implements the neutral contracts in `Agentweaver.Abstractions` and the
+The source implements the neutral contracts in `Agentweaver.Abstractions` and the
 `Agentweaver.SourceControl` package. Its GitHub adapter negotiates the configured physical repository,
 supports issue and pull-request operations, reads review and exact-commit merge-check evidence, and sends
 merge requests with the expected head SHA. Effective branch rules and required checks fail closed when
@@ -1261,7 +1263,7 @@ deployed:
 
 ```mermaid
 flowchart LR
-    Browser["Retained v1 browser"]
+    Browser["Retained browser"]
     Gateway["Gateway BFF"]
     Identity["Identity Broker"]
     Config["Accepted config: githubApp + appConnectionId"]
@@ -1325,7 +1327,7 @@ identities, journal positions, references, and retention decisions. The sandbox 
 container as its workspace. Storage is for agent-visible files and mount bindings; Object Store is for
 records the agent must not edit. A future agent filesystem implementation may also use Azure Blob
 internally, but that does not collapse the two authorization boundaries.
-The P0 `IObjectStore` contract uses validated relative opaque keys and caller-owned input
+The foundational `IObjectStore` contract uses validated relative opaque keys and caller-owned input
 streams; reads return caller-disposable streams and content lengths. Azure Blob implements
 atomic create-only writes (`If-None-Match: *`), read, and delete against one injected,
 platform-owned container. Missing blobs return null/false; conflicts and service errors
@@ -1372,20 +1374,20 @@ cannot replace a consistent journal, workspace, and workflow checkpoint.
 | Treat a pod deletion or SDK session cache as a full snapshot | Neither captures a consistent environment and workspace; explicit manifest validation is required. |
 | Use telemetry metrics as the usage ledger | Metrics can aggregate or disappear and cannot support accurate budgets or bill reconciliation. |
 | Require a preview provider for cutover | Optional upstream maturity and Azure Blob/isolation gates must not block journal-backed suspend/resume. |
-| Copy the local execution and database variants | 1.0 is intentionally cloud-only; their behavior has cloud-native equivalents. |
+| Copy the local execution and database variants | Agentweaver is intentionally cloud-only; their behavior has cloud-native equivalents. |
 
 <a id="phasing"></a>
 
 ## Rollout and compatibility
 
-| Phase | Provider work |
+| Delivery scope | Provider work |
 | --- | --- |
-| P0 Foundation | DI contracts, catalog/resolvers/pinning, conformance kit, Postgres schemas and outbox, Blob Object Store, Key Vault/workload identity, OpenTelemetry/Azure Monitor. |
-| P1 Core and defaults | Native Sessions/Memory, agent-sandbox, Azure Files, Cilium intent, AGT, GitHub, Copilot cost ledger; AgentHost startup phases, retention, reclaim, and run fencing. |
-| P2 Parity and cutover | Manifest-based suspend/resume, Guardrails, permission metadata, own Tool & MCP gateway and MCP catalog, Cosmos and Redis Memory providers, Azure BYOK pricing/budgets, built-in AKS Application Hosting, Canvas and A2UI with GitHub declaration/action research and a separate GitHub Canvas adapter, context ordering and cache telemetry; exact-SHA AKS persona harnesses and parity-map acceptance. Research is not implementation or interoperability. No Elastic SAN or additional hosting adapters. |
-| P3 After cutover | Gated AKS snapshot/restore; OpenSandbox, Agent Substrate, and Container Apps Sandboxes evaluation; AgentSessions write and capture support; agent filesystem providers; agentgateway. Elastic SAN has no committed delivery phase. |
+| Foundation contracts and infrastructure | DI contracts, catalog/resolvers/pinning, conformance kit, Postgres schemas and outbox, Blob Object Store, Key Vault/workload identity, OpenTelemetry/Azure Monitor. |
+| Core services and default providers | Native Sessions/Memory, agent-sandbox, Azure Files, Cilium intent, AGT, GitHub, Copilot cost ledger; AgentHost startup phases, retention, reclaim, and run fencing. |
+| Parity and cutover | Manifest-based suspend/resume, Guardrails, permission metadata, own Tool & MCP gateway and MCP catalog, Cosmos and Redis Memory providers, Azure BYOK pricing/budgets, built-in AKS Application Hosting, Canvas and A2UI with GitHub declaration/action research and a separate GitHub Canvas adapter, context ordering and cache telemetry; exact-SHA AKS persona harnesses and parity-map acceptance. Research is not implementation or interoperability. No Elastic SAN or additional hosting adapters. |
+| Optional post-cutover adapters | Gated AKS snapshot/restore; OpenSandbox, Agent Substrate, and Container Apps Sandboxes evaluation; AgentSessions write and capture support; agent filesystem providers; agentgateway. Elastic SAN has no committed delivery stage. |
 
-No P2 requirement depends on an optional P3 provider. The active 0.x line supplies behavioral parity
+No parity or cutover requirement depends on an optional post-cutover provider. The active 0.x line supplies behavioral parity
 evidence until cutover.
 
 ## Related risks
@@ -1396,11 +1398,11 @@ evidence until cutover.
 - [R4](../decisions/0001-platform-architecture.md#risk-register): the consistency manifest accounts for volume data outside snapshots.
 - [R5](../decisions/0001-platform-architecture.md#risk-register): BYOK resolution stops at platform and project scope.
 - [R6](../decisions/0001-platform-architecture.md#risk-register): AGT's .NET YAML kernel is the baseline until other rule languages reach parity.
-- [R7](../decisions/0001-platform-architecture.md#risk-register): Cosmos and Redis Memory providers target P2; optional preview libraries are not prerequisites, and AgentSessions is an optional Sessions provider.
+- [R7](../decisions/0001-platform-architecture.md#risk-register): Cosmos and Redis Memory providers are in parity scope; optional preview libraries are not prerequisites, and AgentSessions is an optional Sessions provider.
 - [R8](../decisions/0001-platform-architecture.md#risk-register): the managed-runtime adapter needs an AKS VM-isolation proof and Azure snapshot durability.
 - [R9](../decisions/0001-platform-architecture.md#risk-register): messaging uses at-least-once delivery, idempotency, and sequence numbers.
 - [R14](../decisions/0001-platform-architecture.md#risk-register): neutral volume contracts absorb upstream API changes.
-- [R15](../decisions/0001-platform-architecture.md#risk-register): Elastic SAN is deferred outside P2 and cannot substitute for shared workspace volumes.
+- [R15](../decisions/0001-platform-architecture.md#risk-register): Elastic SAN is deferred outside parity and cutover scope and cannot substitute for shared workspace volumes.
 - [R16](../decisions/0001-platform-architecture.md#risk-register): Cilium's public HTTPS/FQDN limit requires a separate L7 gate.
 - [R17](../decisions/0001-platform-architecture.md#risk-register): the own Tool & MCP gateway is the default; agentgateway is optional.
 - [R18](../decisions/0001-platform-architecture.md#risk-register): versioned credit rates preserve historical cost interpretations.

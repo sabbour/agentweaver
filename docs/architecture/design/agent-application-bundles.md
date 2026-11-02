@@ -35,8 +35,8 @@ Unsupported required content blocks activation rather than creating a new extens
 
 The [post-core plan](../decisions/0001-platform-architecture.md#installed-agent-applications---planned-post-core-extension) contains the delivery phases.
 Existing core scope, acceptance criteria, and completion gates remain unchanged.
-This extension does not add scope to P1 or to the cutover plan.
-It is not an additional P1 completion or cutover prerequisite.
+This extension does not add scope to core delivery or to the cutover plan.
+It is not an additional core-completion or cutover prerequisite.
 
 ## Contracts and boundaries
 
@@ -144,9 +144,9 @@ They define behavior to retain, not automatic package or runtime compatibility:
 | [GitHub package import](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/apps/Agentweaver.Api/Blueprints/GitHubBlueprintPackageImportService.cs) and [tests](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/tests/Agentweaver.Tests/Blueprints/GitHubBlueprintPackageImportServiceTests.cs) | Resolve a ref once, read immutable objects, reject size mismatch, symlinks, submodules, LFS pointers, truncated trees, and case collisions | Git commit/tree identities and GitHub authentication are not OCI descriptors or a portable registry protocol. |
 | [Owner package library](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/packages/Agentweaver.Domain/BlueprintPackages/OwnerBlueprintPackageLibrary.cs) and [tests](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/tests/Agentweaver.Tests/Blueprints/SqliteOwnerBlueprintPackageLibraryTests.cs) | Exact-byte retention, idempotent identical material, immutable-version conflicts, server-owned scope, and credential-free provenance | Private library deletion is not safe uninstall with active runs, dependencies, and retained audit. |
 | [Catalog reader](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/packages/Agentweaver.Squad/Catalog/CatalogReader.cs) and [embedded resources](https://github.com/sabbour/agentweaver/tree/d984e8bba4e6932eef4de69e93bc5be94868b16b/packages/Agentweaver.Squad/Catalog/Resources) | Stable agent, role, charter, workflow, and skill identities. Reserved roles remain platform-owned. | An assembly catalog is not an installed-app catalog. A bundle cannot mint roles or replace Coordinator/Scribe authority. |
-| [Executable workflow snapshots](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/apps/Agentweaver.Api/Workflows/ExecutableWorkflowSnapshots.cs) and [workflow-binding tests](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/tests/Agentweaver.Tests/Graph/RunWorkflowDefinitionBindingTests.cs) | Exact definition identity, version, bytes, digest, and explicit reload errors | Legacy YAML compatibility does not establish v1 step catalogs or platform gate authority. |
+| [Executable workflow snapshots](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/apps/Agentweaver.Api/Workflows/ExecutableWorkflowSnapshots.cs) and [workflow-binding tests](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/tests/Agentweaver.Tests/Graph/RunWorkflowDefinitionBindingTests.cs) | Exact definition identity, version, bytes, digest, and explicit reload errors | Legacy YAML compatibility does not establish current step catalogs or platform gate authority. |
 | [Skill paths](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/apps/Agentweaver.Api/Skills/SkillPaths.cs), [security tests](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/tests/Agentweaver.Tests/Skills/SkillSecurityTests.cs), and [pod-delivery test](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/tests/Agentweaver.Tests/Skills/SkillPodPerRunDeliveryTests.cs) | Traversal checks, scoped materialization, assignment behavior, and execution-location coverage | The pod-delivery test exposes an API-local pointer that the executing pod cannot read. Strict extraction and actual host delivery remain necessary. |
-| [Sandbox tools](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/packages/Agentweaver.AgentTools/SandboxToolRegistry.cs) | Tool availability depends on host capability and permission. | The direct host-shell path does not carry into cloud-only v1. |
+| [Sandbox tools](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/packages/Agentweaver.AgentTools/SandboxToolRegistry.cs) | Tool availability depends on host capability and permission. | The direct host-shell path does not carry into the cloud-only runtime. |
 | [Sandbox previews](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs), [cluster tests](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/tests/Agentweaver.Tests/SandboxPreviewServiceClusterTests.cs), and [credential-scrub tests](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/tests/Agentweaver.Tests/Preview/PreviewRunnerAuthAndScrubTests.cs) | Durable route ownership, fences, recovery, and credential scrubbing | A live sandbox preview is generated output, not an installed agent application. |
 | [AgentHost state](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/apps/Agentweaver.AgentHost/AgentHostRuntimeState.cs) and [model invocation guard](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/apps/Agentweaver.Api/Auth/RunModelInvocationGuard.cs) | One-time run configuration, in-memory purpose-bound credentials, current authority, and exact accepted-model checks | Process-local state and shared storage do not supply durable installation records. |
 | [Image publication](../../../releases/README.md) | Source-labeled GHCR images; publication and deployment are separate operations | Platform-image releases do not define app install/upgrade or publisher trust. |
@@ -156,9 +156,9 @@ A full application installer or completed canvas loader is not assumed.
 
 ### Blueprints on AgentSuite
 
-This section records the user's decisions for blueprints and maps every 0.x blueprint criterion to its v1 home.
+This section records the user's decisions for blueprints and maps every 0.x blueprint criterion to its current owner.
 It records an architecture. It doesn't waive, drop, or approve any criterion, and it doesn't resolve any row of the
-v1 parity checklist.
+parity checklist.
 
 #### Decisions
 
@@ -172,7 +172,7 @@ v1 parity checklist.
 - **Timing.** The packaged built-in blueprints ship after the AgentHost image that their build
   profiles pin is published. The built-in catalog isn't complete until they ship. This is the
   only change the user approved; it changes timing, not criteria.
-- **0.x packages.** v1 has no runtime loader for 0.x
+- **0.x packages.** Agentweaver has no runtime loader for 0.x
   `blueprint-package-v1` packages. `AgentSuiteBlueprintConverter` in Projects & Config converts 0.x blueprint JSON
   and 0.x packages to AgentSuite content at build time. It checks packages with the 0.x validator, ported without
   behavior changes to `Agentweaver.Projects.Config.BlueprintPackages`, and the 0.x contract tests run against it.
@@ -181,33 +181,35 @@ v1 parity checklist.
   default workflow, review policy, sandbox profile, and skill bindings travel with the import as the
   `ProjectAgentSuiteBlueprint` projection, because they aren't AgentSuite fields.
 - **Generated agent definition.** The `.agent.md` file is for GitHub Copilot, not AgentSuite.
-  v1 publishes it for download only and doesn't write it into run checkouts.
+  Agentweaver publishes it for download only and doesn't write it into run checkouts.
 
-#### 0.x criteria and their v1 homes
+<a id="0x-criteria-and-their-v1-homes"></a>
 
-Status values: **Kept** means v1 meets the criterion today. **Replaced** names the v1 mechanism and the criterion it
+#### 0.x criteria and their current owners
+
+Status values: **Kept** means Agentweaver meets the criterion today. **Replaced** names the current mechanism and the criterion it
 still meets. **Unclear** means the criterion isn't resolved yet; it is neither dropped nor approved.
 
-| 0.x criterion | Status | v1 home and evidence |
+| 0.x criterion | Status | Current owner and evidence |
 | --- | --- | --- |
 | The 5 built-in blueprints keep their roster, workflows, review policy, sandbox profile, and skill bindings | Kept | The catalog serves them from embedded 0.x JSON. A test proves each one passes every `Validate` rule except workflow availability. |
 | Built-ins delivered as AgentSuite packages | Unclear | The converter produces them. Golden test-only archives pass the upstream `agentsuite` validator and the AgentSuite import validator. The shipped packages wait for the published AgentHost image. |
 | Listing reports exportability with sorted, distinct, bounded 0.x codes; only exportable blueprints apply by ID | Kept | `GET /api/blueprints`. The code `blueprint_invalid` is added when a `Validate` rule fails, so the list can't report a blueprint as exportable that apply rejects. |
-| 0.x codes `role_malformed` and `charter_missing` | Unclear | v1 roles are compiled casting definitions that always carry a charter, so neither condition has a v1 source. |
+| 0.x codes `role_malformed` and `charter_missing` | Unclear | Current roles are compiled casting definitions that always carry a charter, so neither condition has a current source. |
 | Validate checks a blueprint without changing state and uses the 0.x rules | Kept | `POST /api/blueprints/validate`, with the same rules, reserved-role and collision checks. |
 | Apply stages a reviewed casting proposal; default workflow is the first; every workflow is referenced; skill bindings apply; the source blueprint is recorded; nothing changes until confirmation | Replaced | The blueprint casting-proposal route and, for AgentSuite imports, `ApplyBlueprint` on the AgentSuite import draft. Both keep the 0.x result and change nothing until a revision-fenced confirmation. Skill bindings never change a skill's `Enabled` setting, and each binding that can't apply is listed in `unresolvedSkillBindings` with `skill_not_installed`, `skill_not_pinned`, or `skill_disabled`. |
 | Inline 0.x JSON blueprint apply | Kept, replacement unclear | The inline route stays. Its planned replacement, an AgentSuite archive upload, meets the criterion only when archive import plus the projection gives the same proposal result. A unit test, for each built-in, compares `ApplyBlueprint` on an import-shaped draft with inline apply and finds the same charters, casting, workflows, skills, egress, and unresolved bindings. Both paths also reject the same unavailable workflows, so the test uses the `default` workflow, the only one registered today. A service test also imports each converted built-in through the AgentSuite import service with its projection and gets the same proposal and unresolved bindings as inline apply. |
 | A project references several workflows from one blueprint | Kept | The proposal records every blueprint workflow. |
-| Deterministic suggest from repository signals, with GitHub fallback | Unclear | Not implemented in v1. |
+| Deterministic suggest from repository signals, with GitHub fallback | Unclear | Not implemented. |
 | Generated workflow YAML | Unclear | Depends on the Orchestrator workflow library, which doesn't define these workflows yet. |
-| Restricted sandbox shell approval | Unclear | v1 maps `restricted` to empty egress narrowing. Shell approval has no v1 owner yet. |
+| Restricted sandbox shell approval | Unclear | Agentweaver maps `restricted` to empty egress narrowing. Shell approval has no current owner yet. |
 | Strict `blueprint-package-v1` rules: schema, IDs, SemVer, inventory, paths, sizes, digests, duplicate properties, invalid Unicode, traversal, self-listing manifest | Replaced | The converter input check. It uses the ported 0.x validator, and the 0.x contract tests, error strings, and golden digests run in Projects & Config. |
-| Package workflow and skill definitions | Unclear | The converter refuses them today. v1 workflows come from the Orchestrator library and skills from the project skill catalog. |
+| Package workflow and skill definitions | Unclear | The converter refuses them today. Current workflows come from the Orchestrator library and skills from the project skill catalog. |
 | GitHub import pinned to the resolved commit, with symlink, submodule, LFS, case-collision, size, and truncation checks | Unclear | Not implemented. The alternatives table below defers Git refs as the portable install contract; that isn't a drop of this criterion. |
 | Owner-scoped package library: idempotent import and immutable-version conflict | Unclear | Not implemented. Import identity belongs to the AgentSuite import service. |
 | Imported blueprints validate with the catalog rules before apply | Replaced | `ValidateBlueprint` checks the projection against the catalog rules and the imported agents. The AgentSuite import service runs it before `ApplyBlueprint`. A failure returns `400 invalid_blueprint` and stores nothing. |
-| Generation jobs and correction | Unclear | Output must be an AgentSuite package that passes the AgentSuite import validator. It needs Orchestrator generation support, which v1 doesn't have yet. |
-| Generated repository agent definition | Unclear | The planned v1 form is a download-only operator definition. Writing to the repository and handling user edits aren't implemented. |
+| Generation jobs and correction | Unclear | Output must be an AgentSuite package that passes the AgentSuite import validator. It needs Orchestrator generation support, which Agentweaver doesn't have yet. |
+| Generated repository agent definition | Unclear | The planned form is a download-only operator definition. Writing to the repository and handling user edits aren't implemented. |
 ## Manifest and content contract
 
 The proposed application schema is `agentweaver.application/1`.
@@ -393,7 +395,7 @@ The content archive contains only declared files under these package paths:
 | `skills/` | `SKILL.md` and declared supporting files |
 | `policies/` | Restrictive rules in the existing Policy owner's supported format |
 | `canvases/` | Open/action schemas and a supported surface kind or inventoried isolated web resource |
-| `workflows/` | Validated v1 step catalogs, bounds, joins, eligibility, and platform-gate references |
+| `workflows/` | Validated step catalogs, bounds, joins, eligibility, and platform-gate references |
 | `assets/` | Files required by an explicit component reference and supported loader |
 
 Portable paths use canonical slash-separated package paths, independent of the host filesystem.
@@ -821,13 +823,13 @@ not prove execution or a live deployment.
 
 This is a planned post-core extension.
 It reuses completed core contracts and leaves their accepted behavior unchanged.
-Tool/canvas content also waits for the applicable P2 gateway/surface enforcement.
+Tool/canvas content also waits for the applicable gateway and surface enforcement required for parity.
 The phase labels do not change existing core scope or the cutover gate.
 The [Canvas C1-C5 plan](applications-and-surfaces.md#canvas-provider-delivery-and-milestone-placement)
 defines the abstraction, concrete adapters, bundle integration, and exact-SHA acceptance.
 These proposed slices do not establish availability in an already versioned
 release or an approved execution schedule.
-It adds no P1 dependency or cutover prerequisite.
+It adds no core-delivery dependency or cutover prerequisite.
 
 | Slice | Existing owners and prerequisites | Acceptance |
 | --- | --- | --- |
@@ -837,7 +839,7 @@ It adds no P1 dependency or cutover prerequisite.
 | B4: Upgrade, rollback, uninstall | Projects, Orchestrator, Environment, Identity, retention owners. B2/B3 and exact owner receipts. | Old-run affinity, fresh new-run authority, pending-gate continuity, honest migration/rollback limits, drain, user-data retention, and exact cleanup or pending state |
 | B5: Interoperability and approved live acceptance | Registry/release configuration, Gateway/native CLI/web, acceptance coordinator. Separate target-specific authority. | Native referrers/404 fallback, tag mutation, missing evidence, copy/export, auth/TLS/redirect failures, and exact-SHA Azure native CLI/API and UI journeys |
 
-The current v1 source includes a pure, inert Projects.Config validator for the
+The current source includes a pure, inert Projects.Config validator for the
 application manifest. It checks raw configuration identity, manifest and
 entry-point shape, declared inventory metadata and documented bounds,
 dependency constraints against a supplied graph, and compatibility against
@@ -879,7 +881,7 @@ Source-only candidates remain distinct from deployed acceptance.
 Approved publishers/trust roots, registry access/retention, and unattended delegation need existing-owner decisions before implementation.
 Enlarged asset profiles, data migrations/purge, runtime installation, and paid/cloud acceptance need separate authority.
 This specification creates no signing key, trust root, credential, resource, or destructive operation.
-Those gaps do not change current P1 completion.
+Those gaps do not change current core-completion criteria.
 
 ## Sources
 

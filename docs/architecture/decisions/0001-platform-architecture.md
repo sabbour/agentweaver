@@ -6,7 +6,7 @@ This ADR preserves the platform rebuild proposal. Source implementation does not
 change its decision status, and acceptance of a narrower later decision does not
 accept this whole proposal.
 
-**Current supported-surface boundary:** Agentweaver 1.x uses Gateway/API, browser,
+**Current supported-surface boundary:** Agentweaver uses Gateway/API, browser,
 and the native .NET CLI. It has no supported product MCP surface. Historical
 product-MCP parity entries below are not requirements to restore that surface.
 Outbound remote MCP integrations and retained compatibility components are
@@ -98,8 +98,8 @@ The following is the proposed architecture, not a platform-wide Accepted decisio
 | UX | Keep Agentweaver's run page, topology, approvals, and chat; add a canvas-like surface panel without adopting the Copilot app's UI. |
 | Orchestration | Require step catalogs and step-snapped WorkPlans; typed coordinator proposals undergo schema, policy, and workflow validation. |
 | Applications | One application model has `live`, `preview`, and `published` stages. Application Hosting serves web applications through the built-in AKS runtime only for now. |
-| Installed agent applications | Planned P2 extension: distribute digest-pinned OCI bundles and bind them through existing owners. Installation references are not resource-bound run pins. No new service or seam beyond the separately planned Canvas seam. |
-| Canvas | A separate provider seam renders interactive content. P2 includes Agent-to-User Interface (A2UI) and GitHub Canvas compatibility research and reverse engineering. |
+| Installed agent applications | Planned post-core extension: distribute digest-pinned OCI bundles and bind them through existing owners. Installation references are not resource-bound run pins. No new service or seam beyond the separately planned Canvas seam. |
+| Canvas | A separate provider seam renders interactive content. Parity scope includes Agent-to-User Interface (A2UI) and GitHub Canvas compatibility research and reverse engineering. |
 | Surfaces | Core owns surface identity, lifecycle, and typed `surface_*` actions. Canvas adapters render declarative content without owning workflow or viewer authorization. |
 | Neutrality | Use Agentweaver vocabulary in contracts. Include a concept only when two providers need it; Azure is a default, not a contractual assumption. |
 | Services and release | Use roughly ten coarse services, owned Postgres schemas, gRPC/HTTP, and an outbox. Release per-service semver versions as one tested manifest with N-1 compatibility (the preceding contract version). |
@@ -174,7 +174,7 @@ flowchart TB
         Hosting["Application Hosting: built-in AKS"]
     end
     subgraph Presentation["Web frontend / Applications"]
-        Canvas["Canvas: A2UI and GitHub Canvas compatibility (P2)"]
+        Canvas["Canvas: planned A2UI and GitHub Canvas compatibility"]
     end
     subgraph Engine["Orchestrator and core enforcement"]
         Policy["Policy: AGT"]
@@ -184,7 +184,7 @@ flowchart TB
         Secrets["Secrets: Azure Key Vault"]
     end
     subgraph Knowledge["Knowledge"]
-        Memory["Memory: native Postgres; Cosmos and Redis in P2"]
+        Memory["Memory: native Postgres; Cosmos and Redis for parity"]
     end
     subgraph Events["Events and Sessions"]
         Sessions["Sessions: native Postgres journal"]
@@ -213,17 +213,17 @@ flowchart TB
 
 | Seam | Primary owner | Azure-first default | Later or additional adapters |
 | --- | --- | --- | --- |
-| Sessions | Events & Sessions | Native Postgres journal | Optional AgentSessions provider (read-only, P2 proof of concept) |
+| Sessions | Events & Sessions | Native Postgres journal | Optional AgentSessions provider (read-only proof of concept for parity) |
 | Snapshots | Environment manager | None until gated Azure Blob-backed AKS pod snapshot/restore capability | Compatible sandbox-native snapshots |
-| Sandbox | Environment manager | agent-sandbox on AKS | OpenSandbox; Agent Substrate after AKS proof; Container Apps Sandboxes evaluation (P3) |
-| Storage | Environment manager | Azure Files | Elastic SAN deferred outside P2; filesystem providers for agents when ready |
-| Memory | Knowledge | Native Postgres | Cosmos and Redis providers (P2), behind the same Memory contract |
+| Sandbox | Environment manager | agent-sandbox on AKS | OpenSandbox; Agent Substrate after AKS proof; post-cutover Container Apps Sandboxes evaluation |
+| Storage | Environment manager | Azure Files | Elastic SAN deferred outside parity and cutover scope; filesystem providers for agents when ready |
+| Memory | Knowledge | Native Postgres | Cosmos and Redis providers for parity, behind the same Memory contract |
 | Policy | Orchestrator/core enforcement | AGT .NET kernel with YAML rules | No second decision kernel planned |
-| Guardrails | Orchestrator/core enforcement | Azure AI Content Safety Prompt Shields (P2) | Purview DLP; other classifiers |
-| Network Policy | Environment manager | Cilium L3/L4; Agentweaver Tool & MCP gateway for L7 | Kubernetes NetworkPolicy where applicable; agentgateway (P3) |
-| Cost | Events & Sessions | Copilot AI-credit pricing | Azure BYOK (P2); priced third-party meter sources |
-| Application Hosting | Environment manager | Built-in AKS web runtime (P2) | No other implementation providers in the current plan |
-| Canvas | Web frontend / Applications | A2UI renderer (P2) | GitHub Canvas-compatible adapter research and reverse engineering (P2) |
+| Guardrails | Orchestrator/core enforcement | Azure AI Content Safety Prompt Shields for parity | Purview DLP; other classifiers |
+| Network Policy | Environment manager | Cilium L3/L4; Agentweaver Tool & MCP gateway for L7 | Kubernetes NetworkPolicy where applicable; post-cutover agentgateway evaluation |
+| Cost | Events & Sessions | Copilot AI-credit pricing | Azure BYOK for parity; priced third-party meter sources |
+| Application Hosting | Environment manager | Built-in AKS web runtime planned for parity | No other implementation providers in the current plan |
+| Canvas | Web frontend / Applications | A2UI renderer planned for parity | GitHub Canvas-compatible adapter research and reverse engineering for parity |
 | Secrets | Identity | Azure Key Vault with workload identity | None planned |
 | Source Control | Source Control & Merge | GitHub | Other source-control adapters if justified |
 | Telemetry | Platform-wide | OpenTelemetry to Azure Monitor | Other OpenTelemetry Protocol (OTLP) exporters |
@@ -237,10 +237,10 @@ state store. The [provider-seam design](../design/provider-seams.md) defines
 cardinality, contracts, pinning, conformance, and enforcement in detail.
 
 Canvas is the new rendering boundary; Surfaces remain core product logic.
-The current source catalog still names 15 seams. The P2 Canvas contract and adapters
+The current source catalog still names 15 seams. The planned Canvas contract and adapters
 are planned work, not implemented or deployed providers.
-Elastic SAN is not a P2 or cutover requirement. Cosmos and Redis join the exclusive
-Memory seam in P2 without replacing the PostgreSQL session journal.
+Elastic SAN is not a parity or cutover requirement. Cosmos and Redis join the exclusive
+Memory seam for parity without replacing the PostgreSQL session journal.
 See [PostgreSQL and Blob](../persistence-objects.md#events-and-blob-have-different-jobs)
 for the distinction between journal records and large object bytes.
 
@@ -280,7 +280,7 @@ cutover planning but does not block 0.x releases. Move unfinished work to the
 ### Cut over on evidence
 
 The gate is a complete applicable parity map plus green native CLI/API and UI persona harnesses
-against the same exact-SHA AKS deployment. Start harness runs at the end of P1,
+against the same exact-SHA AKS deployment. Start harness runs at the end of core implementation,
 not at cutover. Once parity is complete, set a cut line: later 0.x changes go
 into the 1.0 backlog rather than moving the gate forever ([R22](#risk-register)).
 
@@ -290,7 +290,7 @@ both histories without a force push: merge old `dev` into `v1` with
 fast-forward `dev` to `v1` ([R21](#risk-register)). Start 1.0 with a fresh
 installation; do not migrate 0.x data.
 
-The timeline shows active 0.x milestones feeding parity alongside 1.0 phases.
+The timeline shows active 0.x milestones feeding parity alongside rebuild dependencies.
 These milestones are roadmap inputs, not prerequisites that all must ship.
 
 ```mermaid
@@ -299,7 +299,7 @@ flowchart LR
         Fork["Fork to orphan v1"] --> V35["v0.35"] --> V36["v0.36"] --> V37["v0.37"] --> V38["v0.38"] --> V39["v0.39"]
     end
     subgraph New["1.0 on v1"]
-        P0["P0 foundation"] --> P1["P1 core"] --> P2["P2 parity"]
+        P0["Foundation contracts and infrastructure"] --> P1["Core services and default providers"] --> P2["Parity and cutover"]
     end
     Fork --> P0
     V35 --> Parity["Every post-fork change updates parity map"]
@@ -315,7 +315,7 @@ flowchart LR
     Contracts --> Gate
     Gate --> Tag["Final 0.x tag"]
     Tag --> Cutover["Join histories; fast-forward dev"]
-    Cutover --> P3["P3 later adapters"]
+    Cutover --> P3["Optional later adapters"]
 ```
 
 ## Roadmap alignment
@@ -335,9 +335,11 @@ line enter the 1.0 backlog under the listed owner.
 | v0.38 | Delivery simplification | Fresh 1.0 release tooling ([Services and release](../design/services-and-release.md)). |
 | v0.39 | Project-owned durable previews | Application `preview` stage. |
 
-## Phases
+<a id="phases"></a>
 
-**P0 foundation components.** P0 delivered libraries, validation tooling, and Azure
+## Capability dependencies and acceptance
+
+**Foundation components.** The foundation delivered libraries, validation tooling, and Azure
 infrastructure:
 
 - AKS workload-identity composition. See the
@@ -348,7 +350,7 @@ infrastructure:
   The deployment command applies the existing Kustomize overlay after migrations.
 - Azure foundation tooling: Bicep modules, a guardrail-enforced plan, deploy, and
   verify-acceptance CLI, and the Kustomize service-account layout. See the
-  [Azure P0 infrastructure specification](../../specs/azure-p0-infrastructure.md).
+  [Azure infrastructure specification](../../specs/azure-p0-infrastructure.md).
 - Trusted Identity run-grant authorization as a library. It compares exact
   bindings and the immutable grant ID, revision, and expiry before and after acquisition.
   It narrows credential metadata without reading secret values. It invalidates the grant
@@ -358,34 +360,36 @@ infrastructure:
   authenticated OAuth flows, and locked image builds. See the
   [Identity broker specification](../../specs/identity-broker.md).
 
-The phase descriptions below remain the scope authority.
+The capability descriptions below retain the original scope boundaries.
 
-**Current acceptance (2026-10-08):** P0 shipment and live acceptance are complete.
+**Recorded acceptance (2026-10-08):** Foundation shipment and live acceptance are complete.
 The recorded publication, AKS installation, authentication, Key Vault, Blob, PostgreSQL,
-telemetry, and owned-cleanup results are the P0 evidence.
-This does not prove the unfinished P1 runtime, GitHub lifecycles, or integrated journeys.
+telemetry, and owned-cleanup results are the foundation evidence.
+This does not prove the unfinished core runtime, GitHub lifecycles, or integrated journeys.
 
-| Phase | Status and evidence | Remaining before phase completion |
+| Capability scope | Status and evidence | Remaining before scope completion |
 | --- | --- | --- |
-| P0 — Foundation | **Accepted.** Source and initial artifacts are shipped. The AKS installation and exact-source live acceptance are complete, including owned cleanup. | None for the accepted P0 scope. Deleting obsolete packages is deferred and does not block acceptance. P0 grants read-only secret access. It does not include the credential-writer deployment rights that P1 needs. |
-| P1 — Core and defaults | **Incomplete.** Part of the core source is accepted. The project issue workflow and the workflow canvas are delivery tooling, not product acceptance. | Remaining core source and separately authorized exact-SHA AKS harness journeys described below. |
-| P2 — Parity and cutover | **Not delivered.** | Parity, application/surface capabilities, acceptance and cutover described below. |
-| P3 — After cutover | **Deferred and optional.** | Evaluate gated adapters only after cutover; none blocks it. |
+| Foundation contracts and infrastructure | **Accepted.** Source and initial artifacts are shipped. The AKS installation and exact-source live acceptance are complete, including owned cleanup. | None for the accepted foundation scope. Deleting obsolete packages is deferred and does not block acceptance. The foundation grants read-only secret access. It does not include the credential-writer deployment rights that core delivery needs. |
+| Core services and default providers | **Incomplete.** Part of the core source is accepted. The project issue workflow and the workflow canvas are delivery tooling, not product acceptance. | Remaining core source and separately authorized exact-SHA AKS harness journeys described below. |
+| Parity and cutover | **Not delivered.** | Parity, application/surface capabilities, acceptance and cutover described below. |
+| Optional post-cutover adapters | **Deferred and optional.** | Evaluate gated adapters only after cutover; none blocks it. |
 
-- **P0 — Foundation.** Establish cloud-only layout and CI; a platform release
+- **Foundation contracts and infrastructure.** Establish cloud-only layout and CI; a platform release
   manifest, per-service Postgres schemas and outbox, Azure Blob Object Store,
   Identity and Azure Key Vault with workload identity, OpenTelemetry to Azure
   Monitor, provider resolution, pinning, and conformance tests.
-- **P1 — Core and defaults.** Build Orchestrator step catalogs, typed decisions,
+- **Core services and default providers.** Build Orchestrator step catalogs, typed decisions,
   run limits, checkpoints, gates; the journal, session tree, tracked messages,
-  status snapshot, Knowledge records, Projects & Config, Gateway/BFF, web, MCP
-  server, and budgeted AgentHost startup. Supply native Sessions/Memory,
+  status snapshot, Knowledge records, Projects & Config, Gateway/BFF, web,
+  and budgeted AgentHost startup. The original proposal also listed a product MCP
+  server; that historical item is outside the current supported-surface boundary.
+  Supply native Sessions/Memory,
   agent-sandbox with retention/reclaim, Azure Files, Cilium egress intent,
-  AGT, GitHub, and Copilot cost. Start exact-SHA AKS harness runs at the end of P1.
-  The remaining P1 work is bounded MAF workflow execution and joins, AgentHost,
+  AGT, GitHub, and Copilot cost. Start exact-SHA AKS harness runs at the end of core implementation.
+  The remaining core work is bounded MAF workflow execution and joins, AgentHost,
   the retained web UI, and integrated native CLI/API and UI acceptance.
   Accepted source in these areas does not mean that live acceptance is complete.
-- **P2 — Parity and cutover.** Add suspend/resume with a consistency manifest,
+- **Parity and cutover.** Add suspend/resume with a consistency manifest,
   Guardrails and tool permission metadata, remote MCP catalog and gateway,
   Cosmos and Redis Memory providers,
   Azure BYOK cost and budgets, prompt ordering
@@ -399,7 +403,7 @@ This does not prove the unfinished P1 runtime, GitHub lifecycles, or integrated 
   depends on admitted findings and the Canvas C1 contract; it remains unimplemented.
   Elastic SAN and additional Application Hosting providers are outside this scope.
   Close applicable parity against these explicit dispositions, pass native CLI/API and UI harnesses, and cut over.
-- **P3 — After cutover.** Consider gated AKS pod snapshot/restore, OpenSandbox,
+- **After cutover.** Consider gated AKS pod snapshot/restore, OpenSandbox,
   Agent Substrate, [Container Apps Sandboxes](../design/container-apps-sandboxes-evaluation.md),
   AgentSessions write and capture support, filesystem providers for agents,
   and agentgateway. The historical proposal to expose Agentweaver surfaces
@@ -413,9 +417,9 @@ not only configured agents/workflows or generated application outputs.
 The specification defines portable bundles and the existing-owner host boundary.
 It does not describe an implemented installer or deployed capability.
 
-This P2 extension follows its applicable core prerequisites.
+This post-core extension follows its applicable core prerequisites.
 It leaves existing core scope, acceptance criteria, and completion gates unchanged.
-It does not widen any accepted P1 item or add a P1 prerequisite.
+It does not widen any accepted core item or add a core-delivery prerequisite.
 The bundle and Canvas slices below describe the post-core proposal, not a promise
 of availability in an already versioned release.
 The [Canvas contract](../design/applications-and-surfaces.md#canvas-provider-contract-and-adapters)
@@ -450,30 +454,30 @@ the design contains the failure mode.
 | ID | Risk | Type | Resolution |
 | --- | --- | --- | --- |
 | R1 | agentsessions adds little while the Copilot SDK owns calls. | Decided | AgentSessions is one optional Sessions provider implementation in `Agentweaver.Providers.Sessions.AgentSessions`. It verifies record hashes and serves read-only replay; no re-execution promise. The native PostgreSQL journal stays the default, and the platform runs without the provider. |
-| R2 | Filesystem providers for agents are pre-product. | Decided | Keep them off the 1.0 path; use Azure Files behind the volume contract. Elastic SAN is deferred outside P2. |
+| R2 | Filesystem providers for agents are pre-product. | Decided | Keep them off the cutover path; use Azure Files behind the volume contract. Elastic SAN is deferred outside parity and cutover scope. |
 | R3 | AKS pod snapshot/restore is pre-preview; Blob end-to-end, Kata virtual machine (VM) v2, node pinning, warm-pool restore, and latency are unproven. | Gated | Suspend works without snapshots. Adopt only after public preview, Azure Blob end-to-end success, warm-pool claim restore, and capture/restore within the AgentHost startup budget; switch to Kata v2 then. |
 | R4 | Pod snapshots exclude workspace volume data. | Mitigated | Record and validate storage generation separately in a consistency manifest. |
-| R5 | User-level BYOK expands the credential boundary. | Decided | Keep platform and project settings only in 1.0. |
+| R5 | User-level BYOK expands the credential boundary. | Decided | Keep platform and project settings only. |
 | R6 | AGT 5.0 policy language support lacks .NET parity. | Decided | Use the AGT .NET kernel with YAML rules as in 0.x; consider Rego/Cedar later without changing contracts. |
-| R7 | Optional upstream memory and session libraries are previews. | Decided | Native implementations remain defaults. Cosmos and Redis Memory providers ship in P2 behind conformance gates; AgentSessions is an optional Sessions provider, and the native journal stays the default. Its write and capture support remains P3 work. No preview library is mandatory. |
-| R8 | Agent Substrate has beta APIs, uncertain AKS viability, and no Blob snapshot store. | Gated | P3 conformance and an AKS proof of VM-level isolation; leave snapshots off until Azure Blob support. |
+| R7 | Optional upstream memory and session libraries are previews. | Decided | Native implementations remain defaults. Cosmos and Redis Memory providers are in parity scope behind conformance gates; AgentSessions is an optional Sessions provider, and the native journal stays the default. Its write and capture support remains post-cutover work. No preview library is mandatory. |
+| R8 | Agent Substrate has beta APIs, uncertain AKS viability, and no Blob snapshot store. | Gated | Require post-cutover conformance and an AKS proof of VM-level isolation; leave snapshots off until Azure Blob support. |
 | R9 | Messages cross service boundaries and may duplicate. | Decided | At-least-once outbox, idempotency keys, consumer deduplication, per-thread sequence numbers. |
 | R10 | Operator chat may need to spawn runs. | Decided | Permit spawn under run-start authorization; record the run as the chat's child. |
 | R11 | Per-run workflow generation is needed for parity. | Decided | Retain it with grammar/step-catalog validation and human confirmation before first use. |
 | R12 | WorkPlans change mid-run. | Decided | Permit bounded revisions within steps; confirm additions/removals of steps or wider scope. |
 | R13 | Strict step snapping can reject exploratory work. | Decided | Reject unmapped work unless an open step permits it; built-in workflows include an open implementation step. |
 | R14 | A proposed agent volume API may change. | Mitigated | Use Agentweaver vocabulary in contracts; let the adapter absorb provider renames. |
-| R15 | Elastic SAN is read-write-once only. | Decided | Defer the adapter outside P2. If reconsidered, limit it to `environment` volumes; Azure Files remains the workspace default. |
+| R15 | Elastic SAN is read-write-once only. | Decided | Defer the adapter outside parity and cutover scope. If reconsidered, limit it to `environment` volumes; Azure Files remains the workspace default. |
 | R16 | Cilium cannot guarantee FQDN-only HTTPS egress to public IPs. | Mitigated | Route model, MCP, and agent-to-agent traffic through the L7 gateway; document remaining limits. |
-| R17 | agentgateway per-environment policy is not the default. | Decided | Default to Agentweaver's own Tool & MCP gateway; consider agentgateway in P3. |
+| R17 | agentgateway per-environment policy is not the default. | Decided | Default to Agentweaver's own Tool & MCP gateway; consider agentgateway after cutover. |
 | R18 | Copilot AI-credit pricing changes. | Mitigated | Version the rate card and persist its version with each cost record. |
 | R19 | Azure price lag, provisioned throughput allocation, and reconciliation trail budgets. | Decided | Enforce on estimates; reconciliation corrects reports but never retroactively stops runs. |
 | R20 | The new branch needs a stable name. | Decided | Use orphan `v1`. |
 | R21 | Cutover could discard 0.x history or require a force push. | Decided | Keep the 0.x patch line. Merge old `dev` into `v1` with `git merge --allow-unrelated-histories -s ours` to keep the `v1` tree, then fast-forward `dev` to `v1`. Install 1.0 fresh. |
 | R22 | An active 0.x line keeps moving the parity target. | Decided | Set a cut line once the map is complete; later changes enter the 1.0 backlog rather than blocking cutover. |
-| R23 | Persona harness coverage could arrive too late. | Decided | Run applicable native CLI/API and UI harnesses on exact-SHA AKS deployments from the end of P1; require all applicable journeys green at cutover. Historical product-MCP acceptance is not applicable, not passed. |
-| R24 | Sandbox options, viewer auth, and application hosting can be confused. | Decided | Keep only built-in AKS Application Hosting for now. Evaluate Container Apps Sandboxes under the Sandbox seam in P3. Gateway/Identity retains viewer authorization. Defer the image-backed and owner-managed hosting adapters. |
-| R25 | A2UI versions and experimental GitHub Canvas declarations/actions can change; a portable GitHub renderer contract is not established. | Mitigated | Isolate compatibility behind the P2 Canvas seam. Pin A2UI specification/catalog and each adapter/profile/content revision; GitHub discovery is not a rendering catalog. Preserve core action authority and require executed acceptance before claiming interoperability. |
+| R23 | Persona harness coverage could arrive too late. | Decided | Run applicable native CLI/API and UI harnesses on exact-SHA AKS deployments from the end of core implementation; require all applicable journeys green at cutover. Historical product-MCP acceptance is not applicable, not passed. |
+| R24 | Sandbox options, viewer auth, and application hosting can be confused. | Decided | Keep only built-in AKS Application Hosting for now. Evaluate Container Apps Sandboxes under the Sandbox seam after cutover. Gateway/Identity retains viewer authorization. Defer the image-backed and owner-managed hosting adapters. |
+| R25 | A2UI versions and experimental GitHub Canvas declarations/actions can change; a portable GitHub renderer contract is not established. | Mitigated | Isolate compatibility behind the planned Canvas seam. Pin A2UI specification/catalog and each adapter/profile/content revision; GitHub discovery is not a rendering catalog. Preserve core action authority and require executed acceptance before claiming interoperability. |
 
 ## Consequences
 
@@ -537,7 +541,7 @@ It also compared baseline `d984e8bba4e6932eef4de69e93bc5be94868b16b`.
 The tests were inspected, not rerun.
 Neither reference is a declared final 0.x cut line.
 
-| Required journey | Released source/test evidence | v1 owner and remaining native evidence |
+| Required journey | Released source/test evidence | Current owner and remaining native evidence |
 | --- | --- | --- |
 | Revise, supersede, and archive decisions | `DecisionsEndpoints.cs`; `KnowledgeRevisionEndpointsTests.cs` | Knowledge owns this journey. Source is admitted; retained-Web journeys remain open. Preserve stale-CAS rejection, immutable history, replacement-cycle rejection, and context filtering. |
 | Import and assign skills consumed by the actual runtime | `SkillEndpoints.cs`; `SkillPromptInjectionTests.cs` | Projects & Config and Runtime own this journey. Prove exact active instructions/resources, unassigned-content denial, and explicit unavailable delivery. |
@@ -551,9 +555,11 @@ Automatic writable-file decisions-inbox, Scribe, and Squad reconciliation remain
 Do not recreate them as parity defects.
 Explicit user import/export and accepted Knowledge history remain required.
 First-party OpenAPI tools do not establish remote MCP client behavior.
-The remote MCP rows below are agreed v1 requirements, not unverified shipped 0.x parity.
+The remote MCP rows below are agreed Agentweaver requirements, not unverified shipped 0.x parity.
 
-### Agreed P2 providers, control, and release
+<a id="agreed-p2-providers-control-and-release"></a>
+
+### Agreed providers, control, and release
 
 The following owners hold the remaining agreed scope.
 A design, a passing isolated suite, or a research result does not establish implementation or interoperability.
@@ -570,13 +576,13 @@ A design, a passing isolated suite, or a research result does not establish impl
 | Azure BYOK and scoped budgets | Runtime, Events, and Orchestrator | Genuine SDK provenance, immutable dispatch-correlated accounting, explicit scoped limits, and conservative durable exposure. |
 | Product publication and cutover | Delivery and release coordinator | Closed parity, complete changesets, exact-SHA composition, live representative/feature journeys, repair-and-retest, actual publication, and authorized history-preserving cutover. |
 
-Elastic SAN and additional Application Hosting adapters are outside P2.
+Elastic SAN and additional Application Hosting adapters are outside parity and cutover scope.
 Container Apps Sandboxes belongs to the later optional
 [evaluation](../design/container-apps-sandboxes-evaluation.md).
 That evaluation is admitted as research;
 it is not a production adapter.
-Optional P3 adapters do not become P2 cutover prerequisites.
-Separately agreed P3 delivery/publication obligations are not silently dropped.
+Optional post-cutover adapters do not become cutover prerequisites.
+Separately agreed post-cutover delivery/publication obligations are not silently dropped.
 
 Release acceptance must verify the assembled preview and corrected revision, where applicable.
 Abnormal outcomes become repair issues in the release patch milestone and require corrected-SHA deployment and retesting.
@@ -592,7 +598,7 @@ Each remaining row needs source admission and behavioral evidence before parity 
 | ID | Capability | 0.x evidence | 1.0 owner | Disposition |
 | --- | --- | --- | --- | --- |
 | identity-sign-in | Sign in and carry identity | `specs/identity-access/sign-in-and-carry-identity.md`; `apps/Agentweaver.Api/Auth/` | [Services and release](../design/services-and-release.md) | Rebuild |
-| mcp-authorization | Historical 0.x product MCP client authorization | `specs/identity-access/authorize-mcp-clients.md`; `apps/Agentweaver.Mcp/` | [Services and release](../design/services-and-release.md) | Not applicable to the supported 1.x product surface; remote MCP authorization is separate |
+| mcp-authorization | Historical 0.x product MCP client authorization | `specs/identity-access/authorize-mcp-clients.md`; `apps/Agentweaver.Mcp/` | [Services and release](../design/services-and-release.md) | Not applicable to the supported product surface; remote MCP authorization is separate |
 | platform-onboarding | Setup and product tour | `specs/identity-access/complete-platform-setup-and-tour.md` | [Services and release](../design/services-and-release.md) (web) | Redesign |
 | project-lifecycle | Create, configure, and recover projects | `specs/projects-workspace/`; `apps/Agentweaver.Api/Projects/` | [Services and release](../design/services-and-release.md) | Rebuild |
 | workspace-browse | Browse project/run workspaces read-only | `specs/projects-workspace/browse-project-and-run-workspaces.md` | [Provider seams](../design/provider-seams.md) (Storage) | Redesign |
@@ -624,7 +630,7 @@ Each remaining row needs source admission and behavioral evidence before parity 
 | usage-metering | Track tokens and AI-credit usage | `specs/observability-operations/track-token-and-cost-usage.md` | [Provider seams](../design/provider-seams.md) (Cost) | Redesign: durable ledger |
 | health-operations | Inspect health, heartbeat, and cluster | `specs/observability-operations/operate-health-heartbeat-and-cluster.md` | [Services and release](../design/services-and-release.md) | Rebuild |
 | context-pressure | Accept context-budget pressure | `specs/runtime-resilience/context-budget-pressure-acceptance.md` | [Orchestration](../design/orchestration.md) | Rebuild |
-| mcp-control / project-copilot / browser-control | Historical product MCP and browser-control journeys | `specs/mcp-integrations/`; `apps/Agentweaver.Mcp/` | [Services and release](../design/services-and-release.md) | Product MCP is not applicable to supported 1.x surfaces; browser and native CLI/API journeys remain distinct |
+| mcp-control / project-copilot / browser-control | Historical product MCP and browser-control journeys | `specs/mcp-integrations/`; `apps/Agentweaver.Mcp/` | [Services and release](../design/services-and-release.md) | Product MCP is not applicable to supported surfaces; browser and native CLI/API journeys remain distinct |
 | github-app | Connect GitHub App capabilities | `specs/mcp-integrations/connect-github-app-capabilities.md` | [Provider seams](../design/provider-seams.md) (Source Control) | Rebuild |
 | unattended-settings | Manage unattended settings and diagnostics | `specs/mcp-integrations/unattended-project-settings-and-diagnostics.md` | [Services and release](../design/services-and-release.md) | Rebuild |
 | cloud-deployment | Deploy and operate on AKS/Azure | `specs/deployment-platform/self-host-agentweaver.md` | [Services and release](../design/services-and-release.md) | Redesign: fresh tooling |
