@@ -828,7 +828,7 @@ describe('v1 web project scoping', () => {
         anchor: 'projects-orchestrator',
       },
     };
-    const documentationUrl = 'https://sabbour.github.io/agentweaver/v1/guide/identity-scopes';
+    const documentationUrl = 'https://sabbour.me/agentweaver/v1/guide/identity-scopes.html';
 
     expect(screen.getByRole('heading', { name: 'Review access' })).toBeTruthy();
     expect(screen.getByText("Agentweaver's sign-in service asks to use these permissions for this app.")).toBeTruthy();
@@ -866,7 +866,7 @@ describe('v1 web project scoping', () => {
       expect(screen.getByRole('button', { name: `About ${scope}` }).getAttribute('aria-describedby'))
         .toContain(tooltips[index].id);
       expect(screen.getByRole('link', { name: `Documentation for ${scope}` }).getAttribute('href'))
-        .toBe('https://sabbour.github.io/agentweaver/v1/guide/identity-scopes#unknown-scopes');
+        .toBe('https://sabbour.me/agentweaver/v1/guide/identity-scopes.html#unknown-scopes');
     }
   });
 
