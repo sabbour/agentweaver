@@ -1349,7 +1349,7 @@ export interface ProjectMetricsDay {
   completed: number;
 }
 
-/** Orchestrator-owned current state, lifetime total, and half-open interval run metrics. */
+/** Orchestrator-owned run metrics and the all-date count of records in current accepted-run history trees. */
 export interface ProjectMetrics {
   projectId: string;
   from: string;
@@ -1360,6 +1360,7 @@ export interface ProjectMetrics {
   runsTotal: number;
   completedRuns: number;
   succeededRuns: number;
+  sessionHistoryRecordsTotal?: number | null;
   series: ProjectMetricsDay[];
 }
 

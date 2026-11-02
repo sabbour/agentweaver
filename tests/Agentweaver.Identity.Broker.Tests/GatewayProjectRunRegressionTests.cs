@@ -116,6 +116,24 @@ public sealed class GatewayProjectRunRegressionTests
         Assert.Equal("int64", properties.GetProperty("needsInputCount").GetProperty("format").GetString());
     }
 
+    [Fact]
+    public async Task ProjectMetricsOpenApiDescribesNullableSessionHistoryTotal()
+    {
+        await using var gateway = await StartAsync();
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var metrics = document.RootElement.GetProperty("components").GetProperty("schemas")
+            .GetProperty("ProjectMetrics");
+        Assert.Contains(metrics.GetProperty("required").EnumerateArray(),
+            value => value.GetString() == "sessionHistoryRecordsTotal");
+        var count = metrics.GetProperty("properties").GetProperty("sessionHistoryRecordsTotal");
+        var variants = count.GetProperty("anyOf").EnumerateArray().ToArray();
+        Assert.Equal("integer", variants[0].GetProperty("type").GetString());
+        Assert.Equal("int64", variants[0].GetProperty("format").GetString());
+        Assert.Equal("null", variants[1].GetProperty("type").GetString());
+    }
+
     [Theory]
     [InlineData("/api/v1/projects/{projectId}/runs", "createProjectRun", "201",
         "CreateProjectRunRequest", "CreateProjectRunResponse")]

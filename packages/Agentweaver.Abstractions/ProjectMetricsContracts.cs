@@ -42,7 +42,8 @@ public sealed record ProjectMetricsDay(string Date, long Created, long Completed
 public sealed record ProjectMetrics(
     string ProjectId, DateTimeOffset From, DateTimeOffset To,
     long ActiveRuns, long BlockedRuns, long RunsInRange, long RunsTotal,
-    long CompletedRuns, long SucceededRuns, IReadOnlyList<ProjectMetricsDay> Series);
+    long CompletedRuns, long SucceededRuns, long? SessionHistoryRecordsTotal,
+    IReadOnlyList<ProjectMetricsDay> Series);
 
 /// <summary>One persisted cost subtotal; amounts from different units or dispositions remain separate.</summary>
 public sealed record ProjectUsageCost(string? PriceUnit, string Disposition, decimal? Amount);

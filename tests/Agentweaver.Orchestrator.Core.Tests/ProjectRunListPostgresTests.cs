@@ -70,15 +70,173 @@ public sealed class ProjectRunListPostgresTests(CoordinationPostgresFixture fixt
         Assert.Equal((1L, 1L, 5L, 7L, 4L, 1L),
             (result.ActiveRuns, result.BlockedRuns, result.RunsInRange, result.RunsTotal,
                 result.CompletedRuns, result.SucceededRuns));
+        Assert.Equal(7, result.SessionHistoryRecordsTotal);
         Assert.Equal([new("2026-10-01", 5, 1), new ProjectMetricsDay("2026-10-02", 0, 3)], result.Series);
         var bound = await _store.ReadMetricsAsync("tenant-1", Project, old, range, default);
         Assert.Equal((1L, 0L, 1L), (bound.RunsTotal, bound.RunsInRange, bound.CompletedRuns));
-        Assert.Equal(0, (await _store.ReadMetricsAsync("tenant-2", Project, old, range, default)).RunsTotal);
+        Assert.Equal(1, bound.SessionHistoryRecordsTotal);
+        var foreignTenant = await _store.ReadMetricsAsync("tenant-2", Project, old, range, default);
+        Assert.Equal(0, foreignTenant.RunsTotal);
+        Assert.Equal(0, foreignTenant.SessionHistoryRecordsTotal);
         var empty = await _store.ReadMetricsAsync("tenant-1", "empty-project", null, range, default);
         Assert.Equal(0, empty.RunsTotal);
+        Assert.Equal(0, empty.SessionHistoryRecordsTotal);
         Assert.All(empty.Series, day => Assert.Equal((0L, 0L), (day.Created, day.Completed)));
         Assert.Empty((await _store.ReadMetricsAsync("tenant-1", Project, null,
             new(start.AddHours(1), start.AddHours(1)), default)).Series);
+    }
+
+    [Fact]
+    public async Task MetricsCountCurrentAcceptedRunHistoryTreesIndependentOfRangeAndListPage()
+    {
+        var start = DateTimeOffset.Parse("2026-10-01T00:00:00Z");
+        var firstRun = await AcceptRunAsync("tenant-1", start);
+        _ = await AcceptRunAsync("tenant-1", start.AddDays(1));
+        _ = await AcceptRunAsync("tenant-2", start);
+        _ = await AcceptRunAsync("tenant-1", start, projectId: "other-project");
+        var rootId = await ReadRootSessionIdAsync(firstRun);
+        var root = new SessionIdentity(Project, firstRun, rootId);
+        var owner = new CoordinationOwnerStore(fixture.DataSource, _schema);
+        var archivedId = "archived-" + Guid.NewGuid().ToString("N");
+        var detachedId = "detached-" + Guid.NewGuid().ToString("N");
+        var descendantId = "descendant-" + Guid.NewGuid().ToString("N");
+        var forkId = "fork-" + Guid.NewGuid().ToString("N");
+
+        await owner.RegisterChildAsync(_actor, root, archivedId, 20, 10, default);
+        await ExecuteAsync($"""
+            UPDATE "{_schema}".coordination_sessions
+            SET lifecycle_state = 'completed', turn_state = 'completed'
+            WHERE run_id = @run AND session_id = @session
+            """, firstRun, archivedId);
+        await owner.ArchiveChildAsync(
+            _actor, root, archivedId, new SessionTreeCommandRequest(1, "archive-" + Guid.NewGuid().ToString("N")), default);
+
+        await owner.RegisterChildAsync(_actor, root, detachedId, 20, 10, default);
+        await owner.RegisterChildAsync(
+            _actor, new SessionIdentity(Project, firstRun, detachedId), descendantId, 20, 10, default);
+        await InsertHistoryNodeAsync(firstRun, forkId, rootId, rootId, "child_run");
+
+        var beforeDetach = await owner.ReadProjectSessionTreeAsync("tenant-1", Project, firstRun, default);
+        Assert.Contains(beforeDetach.Nodes, node => node.Identity.SessionId == archivedId);
+        Assert.Contains(beforeDetach.Nodes, node => node.Identity.SessionId == forkId);
+        Assert.Contains(beforeDetach.Nodes, node => node.Identity.SessionId == descendantId);
+
+        await owner.DetachSessionAsync(
+            _actor, new SessionIdentity(Project, firstRun, detachedId),
+            new SessionTreeCommandRequest(1, "detach-" + Guid.NewGuid().ToString("N")), default);
+        var currentTree = await owner.ReadProjectSessionTreeAsync("tenant-1", Project, firstRun, default);
+        Assert.Contains(currentTree.Nodes, node => node.Identity.SessionId == archivedId);
+        Assert.Contains(currentTree.Nodes, node => node.Identity.SessionId == forkId);
+        Assert.DoesNotContain(currentTree.Nodes, node => node.Identity.SessionId == detachedId);
+        Assert.DoesNotContain(currentTree.Nodes, node => node.Identity.SessionId == descendantId);
+
+        var range = new ProjectMetricsRange(start, start.AddDays(2));
+        var result = await _store.ReadMetricsAsync("tenant-1", Project, null, range, default);
+        Assert.Equal(2, result.RunsTotal);
+        Assert.Equal(4L, result.SessionHistoryRecordsTotal);
+        Assert.Equal((long)currentTree.Nodes.Length + 1, result.SessionHistoryRecordsTotal);
+
+        var page = await _store.ListAsync("tenant-1", Project, null, [], null, 1, default);
+        Assert.Single(page.Items);
+        Assert.NotNull(page.NextCursor);
+        var otherRange = await _store.ReadMetricsAsync(
+            "tenant-1", Project, null, new(start.AddDays(10), start.AddDays(11)), default);
+        Assert.Equal(result.SessionHistoryRecordsTotal, otherRange.SessionHistoryRecordsTotal);
+        Assert.Equal((long)currentTree.Nodes.Length,
+            (await _store.ReadMetricsAsync("tenant-1", Project, firstRun, range, default))
+            .SessionHistoryRecordsTotal);
+        Assert.Equal(1, (await _store.ReadMetricsAsync("tenant-2", Project, null, range, default))
+            .SessionHistoryRecordsTotal);
+        Assert.Equal(1, (await _store.ReadMetricsAsync("tenant-1", "other-project", null, range, default))
+            .SessionHistoryRecordsTotal);
+        Assert.NotEqual(result.RunsTotal, result.SessionHistoryRecordsTotal);
+        Assert.NotEqual(page.Items.Length, result.SessionHistoryRecordsTotal);
+    }
+
+    [Fact]
+    public async Task MetricsReturnUnavailableWhenAnySelectedAcceptedRunHasNoNativeHistoryTree()
+    {
+        var start = DateTimeOffset.Parse("2026-10-01T00:00:00Z");
+        var missingRootRun = await AcceptRunAsync("tenant-1", start);
+        await ExecuteAsync($"""
+            DELETE FROM "{_schema}".coordination_sessions
+            WHERE run_id = @run AND parent_session_id IS NULL
+            """, missingRootRun);
+        var missingRoot = await _store.ReadMetricsAsync(
+            "tenant-1", Project, missingRootRun, new(start, start.AddDays(1)), default);
+        Assert.Equal(1, missingRoot.RunsTotal);
+        Assert.Null(missingRoot.SessionHistoryRecordsTotal);
+
+        var emptyTreeRun = await AcceptRunAsync("tenant-1", start.AddHours(1));
+        var rootId = await ReadRootSessionIdAsync(emptyTreeRun);
+        var childId = "empty-tree-" + Guid.NewGuid().ToString("N");
+        await InsertHistoryNodeAsync(emptyTreeRun, childId, rootId, rootId, "child_run");
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            UPDATE "{_schema}".coordination_sessions SET root_session_id = @child
+            WHERE project_id = @project AND run_id = @run AND session_id IN (@root, @child)
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", Project);
+            command.Parameters.AddWithValue("run", emptyTreeRun);
+            command.Parameters.AddWithValue("root", rootId);
+            command.Parameters.AddWithValue("child", childId);
+            Assert.Equal(2, await command.ExecuteNonQueryAsync());
+        }
+        var emptyTree = await _store.ReadMetricsAsync(
+            "tenant-1", Project, emptyTreeRun, new(start, start.AddDays(1)), default);
+        Assert.Null(emptyTree.SessionHistoryRecordsTotal);
+        var combined = await _store.ReadMetricsAsync(
+            "tenant-1", Project, null, new(start, start.AddDays(1)), default);
+        Assert.Null(combined.SessionHistoryRecordsTotal);
+    }
+
+    [Fact]
+    public async Task MetricsPreserveCrossAuthorReadAndBoundRunAuthorityWithoutLeakingDeniedTotals()
+    {
+        var start = DateTimeOffset.Parse("2026-10-01T00:00:00Z");
+        var firstRun = await AcceptRunAsync("tenant-1", start);
+        var secondRun = await AcceptRunAsync("tenant-1", start.AddHours(1));
+        var reader = new CoordinationActor(_actor.Issuer, Guid.NewGuid().ToString("D"));
+
+        async Task<IResult> ReadWith(ProjectsAuthorizationContext authorization, string? boundProject = null, string? boundRun = null)
+        {
+            using var http = new HttpClient(new AuthorizationHandler(authorization));
+            var projects = new ProjectsRunSelectionClient(
+                http, _options, new ReviewedRemoteToolSnapshotStore(fixture.DataSource, _schema));
+            return await ProjectRunEndpoints.ReadMetricsAsync(
+                Project, Context(boundProject, boundRun, actor: reader), projects, _store, TimeProvider.System, default);
+        }
+
+        var projectReader = await ReadWith(new ProjectsAuthorizationContext(
+            1, reader.Issuer, reader.Subject, "tenant-1", 1, null, null,
+            [new ProjectsAuthority("project", Project, [new ProjectsPermissionGrant("readProjects", 1)])]));
+        var projectMetrics = Assert.IsType<Ok<ProjectMetrics>>(projectReader).Value!;
+        Assert.Equal(2, projectMetrics.SessionHistoryRecordsTotal);
+
+        var boundReader = await ReadWith(new ProjectsAuthorizationContext(
+            1, reader.Issuer, reader.Subject, "tenant-1", 1, Project, firstRun,
+            [new ProjectsAuthority("project", Project, [new ProjectsPermissionGrant("readProjects", 1)])]),
+            Project, firstRun);
+        Assert.Equal(1, Assert.IsType<Ok<ProjectMetrics>>(boundReader).Value!.SessionHistoryRecordsTotal);
+
+        var revokedReader = await ReadWith(new ProjectsAuthorizationContext(
+            1, reader.Issuer, reader.Subject, "tenant-1", 1, null, null, []));
+        Assert.Equal(StatusCodes.Status403Forbidden,
+            Assert.IsAssignableFrom<IStatusCodeHttpResult>(revokedReader).StatusCode);
+
+        var wrongTenant = await ReadWith(new ProjectsAuthorizationContext(
+            1, reader.Issuer, reader.Subject, "tenant-2", 1, null, null,
+            [new ProjectsAuthority("project", Project, [new ProjectsPermissionGrant("readProjects", 1)])]));
+        Assert.Equal(StatusCodes.Status403Forbidden,
+            Assert.IsAssignableFrom<IStatusCodeHttpResult>(wrongTenant).StatusCode);
+
+        var wrongProject = await ReadWith(new ProjectsAuthorizationContext(
+            1, reader.Issuer, reader.Subject, "tenant-1", 1, "other-project", null,
+            [new ProjectsAuthority("project", "other-project", [new ProjectsPermissionGrant("readProjects", 1)])]),
+            "other-project");
+        Assert.Equal(StatusCodes.Status403Forbidden,
+            Assert.IsAssignableFrom<IStatusCodeHttpResult>(wrongProject).StatusCode);
     }
 
     [Fact]
@@ -402,19 +560,19 @@ public sealed class ProjectRunListPostgresTests(CoordinationPostgresFixture fixt
     }
 
     private async Task<string> AcceptRunAsync(
-        string tenant, DateTimeOffset createdAt, CoordinationActor? actor = null)
+        string tenant, DateTimeOffset createdAt, CoordinationActor? actor = null, string projectId = Project)
     {
         actor ??= _actor;
         var run = Guid.NewGuid().ToString("N");
         var snapshot = JsonSerializer.SerializeToElement(new
         {
-            projectId = Project, runId = run, projectRevision = 1,
+            projectId, runId = run, projectRevision = 1,
             projectConfigurationRevision = 1, platformRuntimeRevision = 1, contextRevision = "context-1"
         });
         var selection = new AuthorizedRunSelection(
-            new(Project, run, 1, 1, 1, "context-1", snapshot),
-            new(1, actor.Issuer, actor.Subject, tenant, 1, Project, run,
-                [new("project", Project, [new("acceptRunSelection", 1)])]));
+            new(projectId, run, 1, 1, 1, "context-1", snapshot),
+            new(1, actor.Issuer, actor.Subject, tenant, 1, projectId, run,
+                [new("project", projectId, [new("acceptRunSelection", 1)])]));
         await new CoordinationOwnerStore(fixture.DataSource, _schema).AcceptRootAsync(actor, selection, "root", default);
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand(
@@ -424,6 +582,39 @@ public sealed class ProjectRunListPostgresTests(CoordinationPostgresFixture fixt
         command.Parameters.AddWithValue("run", run);
         Assert.Equal(1, await command.ExecuteNonQueryAsync());
         return run;
+    }
+
+    private async Task<string> ReadRootSessionIdAsync(string run)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT session_id FROM "{_schema}".coordination_sessions
+            WHERE project_id = @project AND run_id = @run AND parent_session_id IS NULL
+            """, connection);
+        command.Parameters.AddWithValue("project", Project);
+        command.Parameters.AddWithValue("run", run);
+        return (string)(await command.ExecuteScalarAsync())!;
+    }
+
+    private async Task InsertHistoryNodeAsync(
+        string run, string session, string parent, string root, string nodeKind)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordination_sessions
+                (project_id, run_id, session_id, parent_session_id, root_session_id, node_kind,
+                 writer_issuer, writer_subject, execution_fence)
+            VALUES (@project, @run, @session, @parent, @root, @kind, @issuer, @subject, 1)
+            """, connection);
+        command.Parameters.AddWithValue("project", Project);
+        command.Parameters.AddWithValue("run", run);
+        command.Parameters.AddWithValue("session", session);
+        command.Parameters.AddWithValue("parent", parent);
+        command.Parameters.AddWithValue("root", root);
+        command.Parameters.AddWithValue("kind", nodeKind);
+        command.Parameters.AddWithValue("issuer", _actor.Issuer);
+        command.Parameters.AddWithValue("subject", _actor.Subject);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }
 
     private async Task InsertProjectRunRequestAsync(string run, string title, string firstMessage, string workflowId)
@@ -473,11 +664,13 @@ public sealed class ProjectRunListPostgresTests(CoordinationPostgresFixture fixt
         Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }
 
-    private async Task ExecuteAsync(string sql, string run)
+    private async Task ExecuteAsync(string sql, string run, string? session = null)
     {
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand(sql, connection);
         command.Parameters.AddWithValue("run", run);
+        if (session is not null)
+            command.Parameters.AddWithValue("session", session);
         Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }
 

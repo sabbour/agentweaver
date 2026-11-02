@@ -472,7 +472,7 @@ describe('v1 web project scoping', () => {
     mocks.listProjects.mockReset().mockResolvedValue([]);
     mocks.listProjectRuns.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, items: [], nextCursor: null }));
     // Metrics and usage start empty so the dashboard and overview render without data.
-    mocks.getProjectMetrics.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, from: '2026-01-01T00:00:00Z', to: '2026-01-31T00:00:00Z', activeRuns: 0, blockedRuns: 0, runsInRange: 0, runsTotal: 0, completedRuns: 0, succeededRuns: 0, series: [] }));
+    mocks.getProjectMetrics.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, from: '2026-01-01T00:00:00Z', to: '2026-01-31T00:00:00Z', activeRuns: 0, blockedRuns: 0, runsInRange: 0, runsTotal: 0, completedRuns: 0, succeededRuns: 0, sessionHistoryRecordsTotal: null, series: [] }));
     mocks.getProjectUsage.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, from: '2026-01-01T00:00:00Z', to: '2026-01-31T00:00:00Z', usageByModel: [], usageByAgent: [] }));
     mocks.createProject.mockReset();
     mocks.listProjectPullRequests.mockReset().mockImplementation(async (_token: string, projectId: string) => ({
@@ -2311,7 +2311,7 @@ describe('v1 web project scoping', () => {
     );
   });
 
-  it('shows filtered pending proposal, decision, and memory counts while sessions stay unavailable', async () => {
+  it('shows the v1 session-history record total beside Knowledge counts', async () => {
     mocks.ensureSession.mockResolvedValue(true);
     mocks.searchProjectKnowledge.mockImplementation(async (
       _token: string,
@@ -2321,6 +2321,19 @@ describe('v1 web project scoping', () => {
       ...knowledgePage([]),
       totalCount: options.state === 'pending' ? 4 : options.kind === 'decision' ? 3 : options.kind === 'memory' ? 2 : 0,
     }));
+    mocks.getProjectMetrics.mockResolvedValue({
+      projectId: 'p1',
+      from: '2026-01-01T00:00:00Z',
+      to: '2026-01-31T00:00:00Z',
+      activeRuns: 0,
+      blockedRuns: 0,
+      runsInRange: 0,
+      runsTotal: 2,
+      completedRuns: 0,
+      succeededRuns: 0,
+      sessionHistoryRecordsTotal: 9,
+      series: [],
+    });
     window.history.replaceState({}, '', '/projects/p1/knowledge');
 
     render(<App />);
@@ -2330,10 +2343,11 @@ describe('v1 web project scoping', () => {
       expect(within(summary).getByText('3')).toBeTruthy();
       expect(within(summary).getByText('2')).toBeTruthy();
       expect(within(summary).getByText('4')).toBeTruthy();
+      expect(within(summary).getByText('9')).toBeTruthy();
     });
-    expect(within(summary).getAllByText('Unavailable')).toHaveLength(1);
+    expect(within(summary).getByText('v1 session-history records')).toBeTruthy();
     expect(
-      within(summary).getByText("Project-wide session counts aren't available yet."),
+      within(summary).getByText(/Counts records currently returned by accepted project-run v1 history trees/),
     ).toBeTruthy();
     expect(within(summary).getByText('Pending proposals')).toBeTruthy();
     expect(mocks.searchProjectKnowledge).toHaveBeenCalledWith(
@@ -2354,6 +2368,98 @@ describe('v1 web project scoping', () => {
       expect.objectContaining({ kind: 'memory', includeInactive: false, page: 1, pageSize: 1 }),
       'tenant-1',
     );
+    expect(mocks.getProjectMetrics).toHaveBeenCalledWith(
+      'broker-token',
+      'p1',
+      {},
+      'tenant-1',
+    );
+  });
+
+  it('shows loading until an actual empty v1 history total is returned', async () => {
+    mocks.ensureSession.mockResolvedValue(true);
+    let resolveMetrics!: (value: { projectId: string; sessionHistoryRecordsTotal: number | null }) => void;
+    const pending = new Promise<{ projectId: string; sessionHistoryRecordsTotal: number | null }>((resolve) => {
+      resolveMetrics = resolve;
+    });
+    mocks.getProjectMetrics.mockReturnValue(pending);
+    mocks.searchProjectKnowledge.mockResolvedValue(knowledgePage([]));
+    window.history.replaceState({}, '', '/projects/p1/knowledge');
+
+    render(<App />);
+
+    const summary = screen.getByRole('region', { name: 'Team memory summary' });
+    expect(within(summary).getByText('v1 session-history records')).toBeTruthy();
+    expect(within(summary).getAllByText('Loading')).toHaveLength(4);
+    await act(async () => resolveMetrics({ projectId: 'p1', sessionHistoryRecordsTotal: 0 }));
+    await waitFor(() => expect(within(summary).getAllByText('0')).toHaveLength(4));
+  });
+
+  it('keeps Knowledge counts when session history is missing, denied, or unavailable', async () => {
+    mocks.ensureSession.mockResolvedValue(true);
+    mocks.searchProjectKnowledge.mockImplementation(async (
+      _token: string,
+      _projectId: string,
+      options: { kind?: string; state?: string },
+    ) => ({
+      ...knowledgePage([]),
+      totalCount: options.state === 'pending' ? 4 : options.kind === 'decision' ? 3 : 2,
+    }));
+    mocks.getProjectMetrics.mockRejectedValue(new GatewayError(403, { code: 'forbidden' }, 'Forbidden'));
+    window.history.replaceState({}, '', '/projects/p1/knowledge');
+
+    render(<App />);
+
+    const summary = screen.getByRole('region', { name: 'Team memory summary' });
+    await waitFor(() => {
+      expect(within(summary).getByText('4')).toBeTruthy();
+      expect(within(summary).getByText('3')).toBeTruthy();
+      expect(within(summary).getByText('2')).toBeTruthy();
+      expect(within(summary).getByRole('alert').textContent).toContain('403');
+    });
+    expect(within(summary).getByText('v1 session-history records')).toBeTruthy();
+    expect(within(summary).getByText('Unavailable')).toBeTruthy();
+    expect(within(summary).queryByText('0')).toBeNull();
+  });
+
+  it('treats a missing session-history field as unavailable rather than zero', async () => {
+    mocks.ensureSession.mockResolvedValue(true);
+    mocks.searchProjectKnowledge.mockResolvedValue(knowledgePage([]));
+    mocks.getProjectMetrics.mockResolvedValue({ projectId: 'p1' } as never);
+    window.history.replaceState({}, '', '/projects/p1/knowledge');
+
+    render(<App />);
+
+    const summary = screen.getByRole('region', { name: 'Team memory summary' });
+    await waitFor(() => expect(within(summary).getByText('Unavailable')).toBeTruthy());
+    expect(within(summary).getByText('v1 session-history records')).toBeTruthy();
+    expect(within(summary).getAllByText('0')).toHaveLength(3);
+  });
+
+  it('does not let an old project history response replace the current project count', async () => {
+    mocks.ensureSession.mockResolvedValue(true);
+    mocks.searchProjectKnowledge.mockResolvedValue(knowledgePage([]));
+    let resolveOld!: (value: { projectId: string; sessionHistoryRecordsTotal: number | null }) => void;
+    const oldProject = new Promise<{ projectId: string; sessionHistoryRecordsTotal: number | null }>((resolve) => {
+      resolveOld = resolve;
+    });
+    mocks.getProjectMetrics.mockImplementation((_token: string, projectId: string) => projectId === 'p1'
+      ? oldProject
+      : Promise.resolve({ projectId, sessionHistoryRecordsTotal: 2 }));
+    window.history.replaceState({}, '', '/projects/p1/knowledge');
+
+    render(<App />);
+
+    const summary = screen.getByRole('region', { name: 'Team memory summary' });
+    expect(within(summary).getAllByText('Loading')).toHaveLength(4);
+    await act(async () => {
+      window.history.pushState({}, '', '/projects/p2/knowledge');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await waitFor(() => expect(within(summary).getByText('2')).toBeTruthy());
+    await act(async () => resolveOld({ projectId: 'p1', sessionHistoryRecordsTotal: 99 }));
+    expect(within(summary).queryByText('99')).toBeNull();
+    expect(within(summary).getByText('2')).toBeTruthy();
   });
 
   it('does not show zero for pending proposals while loading or after a denied or failed read', async () => {
@@ -2368,7 +2474,7 @@ describe('v1 web project scoping', () => {
     render(<App />);
 
     const summary = screen.getByRole('region', { name: 'Team memory summary' });
-    expect(within(summary).getAllByText('Loading')).toHaveLength(3);
+    expect(within(summary).getAllByText('Loading')).toHaveLength(4);
     await act(async () => {
       pending.reject(new GatewayError(403, { code: 'forbidden' }, 'Forbidden'));
       try { await pending.promise; } catch { /* Expected denied response. */ }

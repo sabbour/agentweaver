@@ -266,12 +266,29 @@ public sealed class ProjectRunReadStore
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var command = new NpgsqlCommand($"""
             WITH runs AS MATERIALIZED (
-                SELECT r.created_at, r.completed_at, {DerivedStateSql} AS state
+                SELECT r.run_id, r.created_at, r.completed_at, {DerivedStateSql} AS state
                 FROM {_runs} r
                 LEFT JOIN {_sessions} root ON root.project_id = r.project_id AND root.run_id = r.run_id
                     AND root.parent_session_id IS NULL
                 WHERE r.tenant_id = @tenant AND r.project_id = @project
                     AND (@run::varchar IS NULL OR r.run_id = @run)
+            ), history AS MATERIALIZED (
+                SELECT accepted.run_id, root.session_id AS root_session_id,
+                    count(tree.session_id) AS record_count
+                FROM runs accepted
+                LEFT JOIN {_sessions} root ON root.project_id = @project
+                    AND root.run_id = accepted.run_id AND root.parent_session_id IS NULL
+                LEFT JOIN {_sessions} tree ON tree.project_id = @project
+                    AND tree.run_id = accepted.run_id AND tree.root_session_id = root.session_id
+                GROUP BY accepted.run_id, root.session_id
+            ), history_total AS (
+                SELECT CASE
+                    WHEN count(*) = 0 THEN 0::bigint
+                    WHEN count(*) FILTER (WHERE root_session_id IS NULL OR record_count = 0) > 0
+                        THEN NULL::bigint
+                    ELSE sum(record_count)::bigint
+                END AS session_history_records_total
+                FROM history
             ), totals AS (
                 SELECT count(*) FILTER (WHERE state = 'active') AS active,
                     count(*) FILTER (WHERE state = 'blocked') AS blocked,
@@ -291,11 +308,12 @@ public sealed class ProjectRunReadStore
                 GROUP BY 1
             )
             SELECT active, blocked, in_range, total, totals.completed, succeeded,
+                history_total.session_history_records_total,
                 COALESCE((SELECT jsonb_agg(jsonb_build_object(
                     'date', to_char(day, 'YYYY-MM-DD'), 'created', created, 'completed', completed) ORDER BY day)
                     FROM (SELECT day, sum(created)::bigint AS created, sum(completed)::bigint AS completed
                         FROM daily GROUP BY day) d), '[]'::jsonb)::text
-            FROM totals
+            FROM totals CROSS JOIN history_total
             """, connection);
         command.Parameters.AddWithValue("tenant", tenantId);
         command.Parameters.AddWithValue("project", projectId);
@@ -305,7 +323,7 @@ public sealed class ProjectRunReadStore
         command.Parameters.AddWithValue("terminal", TerminalStates.ToArray());
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
-        var days = JsonSerializer.Deserialize<ProjectMetricsDay[]>(reader.GetString(6),
+        var days = JsonSerializer.Deserialize<ProjectMetricsDay[]>(reader.GetString(7),
             new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
         var counts = days.ToDictionary(day => day.Date, StringComparer.Ordinal);
         var series = new List<ProjectMetricsDay>();
@@ -318,7 +336,8 @@ public sealed class ProjectRunReadStore
             series.Add(counts.GetValueOrDefault(date) ?? new ProjectMetricsDay(date, 0, 0));
         }
         return new(projectId, range.From, range.To, reader.GetInt64(0), reader.GetInt64(1),
-            reader.GetInt64(2), reader.GetInt64(3), reader.GetInt64(4), reader.GetInt64(5), series);
+            reader.GetInt64(2), reader.GetInt64(3), reader.GetInt64(4), reader.GetInt64(5),
+            reader.IsDBNull(6) ? null : reader.GetInt64(6), series);
     }
 
     /// <summary>Encodes the cursor version, order, query shape, and last row into an opaque URL-safe string.</summary>

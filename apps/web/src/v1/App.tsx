@@ -1435,8 +1435,15 @@ function ProjectKnowledgeMetrics({ projectId, refreshKey }: { projectId: string;
     | { key: string; status: 'error'; error: unknown }
     | null
   >(null);
+  const [historyResult, setHistoryResult] = useState<
+    | { key: string; status: 'loaded'; count: number | null | undefined }
+    | { key: string; status: 'needs-sign-in' }
+    | { key: string; status: 'error'; error: unknown }
+    | null
+  >(null);
   const requestKey = JSON.stringify([projectId, refreshKey]);
   const currentResult = result?.key === requestKey ? result : null;
+  const currentHistory = historyResult?.key === requestKey ? historyResult : null;
 
   useEffect(() => {
     let active = true;
@@ -1484,12 +1491,47 @@ function ProjectKnowledgeMetrics({ projectId, refreshKey }: { projectId: string;
     };
   }, [apiCall, ensureSession, projectId, refreshKey, requestKey]);
 
+  useEffect(() => {
+    let active = true;
+
+    void (async () => {
+      try {
+        if (!await ensureSession(null, false)) {
+          if (active) setHistoryResult({ key: requestKey, status: 'needs-sign-in' });
+          return;
+        }
+        const metrics = await apiCall(
+          (token, tenantSelector) => gatewayClient.getProjectMetrics(token, projectId, {}, tenantSelector),
+          null,
+        );
+        if (active) setHistoryResult({
+          key: requestKey,
+          status: 'loaded',
+          count: metrics.sessionHistoryRecordsTotal,
+        });
+      } catch (reason) {
+        if (active) setHistoryResult({ key: requestKey, status: 'error', error: reason });
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [apiCall, ensureSession, projectId, refreshKey, requestKey]);
+
   const countValue = (value: number | undefined) => {
     if (currentResult === null) return 'Loading';
     if (currentResult.status === 'needs-sign-in') return 'Sign in required';
     if (currentResult.status === 'error' || value === undefined) return 'Unavailable';
     return value;
   };
+  const historyCountValue = currentHistory === null
+    ? 'Loading'
+    : currentHistory.status === 'needs-sign-in'
+      ? 'Sign in required'
+      : currentHistory.status === 'error' || typeof currentHistory.count !== 'number'
+        ? 'Unavailable'
+        : currentHistory.count;
 
   return (
     <section aria-label="Team memory summary">
@@ -1497,16 +1539,22 @@ function ProjectKnowledgeMetrics({ projectId, refreshKey }: { projectId: string;
         { label: 'Pending proposals', value: countValue(currentResult?.status === 'loaded' ? currentResult.counts.pending : undefined) },
         { label: 'Decisions', value: countValue(currentResult?.status === 'loaded' ? currentResult.counts.decisions : undefined) },
         { label: 'Memories', value: countValue(currentResult?.status === 'loaded' ? currentResult.counts.memories : undefined) },
-        { label: 'Sessions', value: 'Unavailable' },
+        { label: 'v1 session-history records', value: historyCountValue },
       ]} />
       {currentResult?.status === 'error' && (
         <ErrorNotice code={errorCode(currentResult.error)}>{errorMessage(currentResult.error)}</ErrorNotice>
       )}
+      {currentHistory?.status === 'error' && (
+        <ErrorNotice code={errorCode(currentHistory.error)}>{errorMessage(currentHistory.error)}</ErrorNotice>
+      )}
       {currentResult?.status === 'needs-sign-in' && (
         <p className="v1-muted">Sign in without a run binding to load project-wide counts.</p>
       )}
+      {currentHistory?.status === 'needs-sign-in' && (
+        <p className="v1-muted">Sign in without a run binding to load project-wide session-history records.</p>
+      )}
       <p className="v1-muted">
-        Project-wide session counts aren't available yet.
+        Counts records currently returned by accepted project-run v1 history trees—not runs, legacy handoffs, all coordination rows, or private Chief of Staff conversations. Archived records retained in a tree count; detached subtrees leave their former root history.
       </p>
     </section>
   );
