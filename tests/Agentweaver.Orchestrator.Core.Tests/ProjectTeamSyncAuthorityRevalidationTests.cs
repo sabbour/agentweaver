@@ -54,6 +54,46 @@ public sealed class ProjectTeamSyncAuthorityRevalidationTests
     }
 
     [Fact]
+    public async Task WorkspaceTreeWithholdsSnapshotWhenRepositoryChangesDuringProviderRead()
+    {
+        var state = new ProjectState("readProjects");
+        var adapter = new PausingWorkspaceAdapter();
+        await using var app = await CreateAppAsync(state, new CountingTeamSyncAdapter(), adapter);
+
+        var responseTask = InvokeWorkspaceEndpointAsync(
+            app,
+            $"/api/projects/project/source-control/tree?ref={CommitSha}");
+        if (await Task.WhenAny(adapter.ReadStarted.Task, responseTask) == responseTask)
+        {
+            var early = await responseTask;
+            Assert.Fail($"The read endpoint returned early with {early.StatusCode}: {early.Body}");
+        }
+        await adapter.ReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        state.Repository = new SourceControlRepositoryIdentity("octo", "replacement");
+        adapter.ReleaseRead.TrySetResult();
+
+        var response = await responseTask;
+        Assert.Equal(StatusCodes.Status409Conflict, response.StatusCode);
+        Assert.DoesNotContain("private.txt", response.Body, StringComparison.Ordinal);
+        Assert.Contains("team_sync_project_authority_changed", response.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WorkspaceFileRejectsEncodedTraversalBeforeProviderRead()
+    {
+        var adapter = new PausingWorkspaceAdapter();
+        await using var app = await CreateAppAsync(new ProjectState("readProjects"), new CountingTeamSyncAdapter(), adapter);
+
+        var response = await InvokeWorkspaceEndpointAsync(
+            app,
+            $"/api/projects/project/source-control/files/%252e%252e/private.txt?ref={CommitSha}");
+
+        Assert.Equal(StatusCodes.Status400BadRequest, response.StatusCode);
+        Assert.Contains("workspace_path_invalid", response.Body, StringComparison.Ordinal);
+        Assert.Equal(0, adapter.Reads);
+    }
+
+    [Fact]
     public async Task CommitDoesNotUpdateBranchWhenWriteAuthorityIsRevokedInFlight()
     {
         // The final ref update must wait for a fresh write-authority check after provider preparation.
@@ -144,7 +184,8 @@ public sealed class ProjectTeamSyncAuthorityRevalidationTests
 
     private static async Task<WebApplication> CreateAppAsync(
         ProjectState state,
-        ISourceControlTeamSyncAdapter adapter)
+        ISourceControlTeamSyncAdapter adapter,
+        ISourceControlWorkspaceAdapter? workspaceAdapter = null)
     {
         // Keep owner state and provider barriers mutable so each test can change authority mid-request.
         var builder = WebApplication.CreateBuilder();
@@ -162,14 +203,29 @@ public sealed class ProjectTeamSyncAuthorityRevalidationTests
         builder.Services.AddSingleton<IProjectTeamSyncTokenClient, TestTeamSyncTokenClient>();
         builder.Services.AddSingleton(state);
         builder.Services.AddSingleton(adapter);
+        if (workspaceAdapter is not null)
+            builder.Services.AddSingleton<ISourceControlWorkspaceAdapter>(workspaceAdapter);
         builder.Services.AddSingleton(TimeProvider.System);
 
         var app = builder.Build();
         app.UseAuthentication();
         app.UseAuthorization();
         app.MapProjectTeamSyncEndpoints();
+        SourceControlEndpoints.MapProjectWorkspaceReadEndpoints(app);
         await app.StartAsync();
         return app;
+    }
+
+    private static async Task<(int StatusCode, string Body)> InvokeWorkspaceEndpointAsync(
+        WebApplication app,
+        string path)
+    {
+        using var client = app.GetTestClient();
+        using var message = new HttpRequestMessage(HttpMethod.Get, path);
+        message.Headers.Authorization = new("Bearer", "test-token");
+        message.Headers.Add(ProjectTeamSyncContract.SelectionCodeHeader, TeamSyncSelectionCode);
+        using var response = await client.SendAsync(message);
+        return ((int)response.StatusCode, await response.Content.ReadAsStringAsync());
     }
 
     private static async Task<(int StatusCode, string Body)> InvokeTeamSyncEndpointAsync(
@@ -406,6 +462,49 @@ public sealed class ProjectTeamSyncAuthorityRevalidationTests
                 request.Branch,
                 new Uri($"https://github.com/{repository.FullName}/commit/{CommitSha}"));
         }
+    }
+
+    private sealed class PausingWorkspaceAdapter : ISourceControlWorkspaceAdapter
+    {
+        public TaskCompletionSource ReadStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseRead { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Reads { get; private set; }
+
+        public Task<SourceControlWorkspaceRefsPage> ReadWorkspaceRefsAsync(
+            SourceControlRepositoryIdentity repository,
+            string defaultBranch,
+            string? cursor,
+            SecretCredential credential,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new SourceControlWorkspaceRefsPage(repository.FullName, defaultBranch, [], null));
+
+        public async Task<SourceControlWorkspaceTree> ReadWorkspaceTreeAsync(
+            SourceControlRepositoryIdentity repository,
+            string commitSha,
+            SecretCredential credential,
+            CancellationToken cancellationToken)
+        {
+            Reads++;
+            ReadStarted.TrySetResult();
+            await ReleaseRead.Task.WaitAsync(cancellationToken);
+            return new SourceControlWorkspaceTree(
+                repository.FullName,
+                commitSha,
+                commitSha,
+                [new SourceControlWorkspaceTreeNode(
+                    "private.txt", SourceControlWorkspaceEntryKind.File, 11, CommitSha)]);
+        }
+
+        public Task<SourceControlWorkspaceFile> ReadWorkspaceFileAsync(
+            SourceControlRepositoryIdentity repository,
+            string commitSha,
+            string path,
+            SecretCredential credential,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new SourceControlWorkspaceFile(
+                repository.FullName, path, commitSha, "private text", false, "plaintext", 12));
     }
 
     private sealed class UnusedSnapshotResolver : IReviewedRemoteToolSnapshotResolver

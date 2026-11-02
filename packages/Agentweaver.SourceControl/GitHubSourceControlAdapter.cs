@@ -22,7 +22,8 @@ public enum SourceControlFailureCode
     RemoteOutcomeUncertain,
     RateLimited,
     RemoteUnavailable,
-    InvalidResponse
+    InvalidResponse,
+    ResponseTooLarge
 }
 
 /// <summary>Typed Source Control failure with an optional HTTP status and inner exception.</summary>
@@ -44,7 +45,7 @@ public sealed class SourceControlOperationException(
 /// Every operation checks the pinned provider/resource/capability binding and treats uncertain writes distinctly.
 /// </summary>
 public sealed partial class GitHubSourceControlAdapter :
-    ISourceControlAdapter, ISourceControlIssueAdapter, ISourceControlTeamSyncAdapter
+    ISourceControlAdapter, ISourceControlIssueAdapter, ISourceControlTeamSyncAdapter, ISourceControlWorkspaceAdapter
 {
     /// <summary>The provider-options schema version supported by this adapter.</summary>
     public const int CurrentOptionsSchemaVersion = 1;

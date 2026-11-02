@@ -50,6 +50,12 @@ const auth = vi.hoisted(() => ({
 
 vi.mock('./AuthContext', () => ({ useAuth: () => auth }));
 
+vi.mock('./WorkspaceRepositoryBrowser', () => ({
+  WorkspaceRepositoryBrowser: ({ repository }: { repository: { owner: string; name: string } | null }) => (
+    <div aria-label="Configured repository browser">{repository ? 'Repository browser loaded' : 'No configured repository to browse.'}</div>
+  ),
+}));
+
 vi.mock('./api', async (importOriginal) => ({
   ...await importOriginal<typeof import('./api')>(),
   gatewayClient: {
@@ -516,10 +522,11 @@ describe('WorkspacePage', () => {
     expect(await screen.findByText('Issues are down')).toBeTruthy();
   });
 
-  it('names the missing file browser in plain copy', async () => {
+  it('keeps missing repository and unsupported local worktree and import behavior explicit', async () => {
     renderPage('workspace', <WorkspacePage />);
+    expect(await screen.findByText(/No repository is connected\./)).toBeTruthy();
     await screen.findByText('No run has opened a pull request yet.');
-    expectPlainNote('Browsing branches and repository files is not available.');
+    expectPlainNote('Uncommitted/local worktree changes and repository imports are not available. A run shows its own changes in its Changes tab.');
   });
 });
 

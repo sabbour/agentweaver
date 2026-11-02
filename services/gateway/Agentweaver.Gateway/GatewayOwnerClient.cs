@@ -1766,16 +1766,58 @@ public sealed partial class GatewayOwnerClient(
     {
         var result = System.Text.RegularExpressions.Regex.Replace(
             template,
-            @"\{(?<name>[A-Za-z][A-Za-z0-9]*)(?::[^}]+)?\}",
+            @"\{(?<catchAll>\*{1,2})?(?<name>[A-Za-z][A-Za-z0-9]*)(?::[^}]+)?\}",
             match =>
             {
                 var key = match.Groups["name"].Value;
                 var value = context.Request.RouteValues[key]?.ToString()
                     ?? throw new InvalidOperationException($"Missing route value '{key}'.");
+                if (match.Groups["catchAll"].Success)
+                    return ExpandWorkspaceFilePath(value, context);
                 return Uri.EscapeDataString(value);
             },
             System.Text.RegularExpressions.RegexOptions.CultureInvariant);
         return result;
+    }
+
+    private static string ExpandWorkspaceFilePath(string path, HttpContext context)
+    {
+        var requestPath = context.Request.Path.ToUriComponent();
+        if (requestPath.Contains("%2f", StringComparison.OrdinalIgnoreCase) ||
+            requestPath.Contains("%5c", StringComparison.OrdinalIgnoreCase) ||
+            !IsSafeWorkspaceFilePath(path))
+            throw new GatewayOwnerFailureException(
+                StatusCodes.Status400BadRequest,
+                "application/problem+json",
+                ProblemBody("workspace_path_invalid", StatusCodes.Status400BadRequest));
+        return string.Join('/', path.Split('/').Select(Uri.EscapeDataString));
+    }
+
+    private static bool IsSafeWorkspaceFilePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) ||
+            path.Length > 1024 ||
+            path.StartsWith('/') ||
+            path.EndsWith('/') ||
+            path.Contains('\\') ||
+            path.Any(char.IsControl) ||
+            path.Split('/').Length > 64 ||
+            path.Split('/').Any(segment => segment is "" or "." or ".."))
+            return false;
+        var candidate = path;
+        for (var depth = 0; depth < 8; depth++)
+        {
+            var decoded = Uri.UnescapeDataString(candidate);
+            if (string.Equals(decoded, candidate, StringComparison.Ordinal))
+                return true;
+            if (decoded.Count(character => character == '/') != candidate.Count(character => character == '/') ||
+                decoded.Contains('\\') ||
+                decoded.Any(char.IsControl) ||
+                decoded.Split('/').Any(segment => segment is "" or "." or ".."))
+                return false;
+            candidate = decoded;
+        }
+        return string.Equals(Uri.UnescapeDataString(candidate), candidate, StringComparison.Ordinal);
     }
 
     private Uri BuildOwnerUri(GatewayOwner owner, string pathAndQuery)

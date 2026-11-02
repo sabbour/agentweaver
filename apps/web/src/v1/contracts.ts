@@ -1593,6 +1593,49 @@ export interface ProjectTeamSyncCommitResult {
   htmlUrl: string;
 }
 
+/** One configured-repository branch or tag resolved to an immutable commit. */
+export interface SourceControlWorkspaceRef {
+  name: string;
+  kind: 'branch' | 'tag';
+  commitSha: string;
+  isDefault: boolean;
+}
+
+/** Bounded refs page for a project's configured repository. */
+export interface SourceControlWorkspaceRefsPage {
+  repository: string;
+  defaultBranch: string;
+  items: SourceControlWorkspaceRef[];
+  nextCursor: string | null;
+}
+
+/** One commit-pinned entry in a configured-repository tree. */
+export interface SourceControlWorkspaceTreeNode {
+  path: string;
+  kind: 'directory' | 'file' | 'symbolicLink' | 'submodule' | 'unsupported';
+  size: number | null;
+  blobSha: string | null;
+}
+
+/** Bounded recursive tree at an immutable repository commit. */
+export interface SourceControlWorkspaceTree {
+  repository: string;
+  reference: string;
+  commitSha: string;
+  items: SourceControlWorkspaceTreeNode[];
+}
+
+/** Text or binary content for one regular repository file, limited to 1 MiB. */
+export interface SourceControlWorkspaceFile {
+  repository: string;
+  path: string;
+  commitSha: string;
+  content: string | null;
+  isBinary: boolean;
+  language: string | null;
+  size: number;
+}
+
 /**
  * One admitted capture of the files a run session produced. Digests and byte
  * lengths describe the stored manifest, patch, and package.

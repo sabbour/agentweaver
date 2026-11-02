@@ -50,6 +50,13 @@ public static class GatewayRouteCatalog
     /// an 8 MiB diff, and 16 MiB files, so these reads exceed the default proxy limit.
     /// </summary>
     public const long SourceControlOutputMaximumResponseBytes = 64L * 1024 * 1024;
+    /// <summary>
+    /// Sixfold JSON escaping of the adapter's 8 MiB tree needs 48 MiB; reserve 8 MiB for
+    /// at most 25,000 projected nodes (320 bytes each) and envelope metadata.
+    /// </summary>
+    public const long SourceControlWorkspaceTreeMaximumResponseBytes = 56L * 1024 * 1024;
+    /// <summary>A 1 MiB UTF-8 file can expand to 6 MiB when JSON-escaped, plus bounded response metadata.</summary>
+    public const long SourceControlWorkspaceFileMaximumResponseBytes = 7L * 1024 * 1024;
 
     public static ImmutableArray<GatewayRoute> Routes { get; } = BuildRoutes();
 
@@ -329,6 +336,27 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/source-control/pull-requests", "listProjectPullRequests",
             "List pull requests recorded by project runs",
             ["state", "cursor", "pageSize"], forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/source-control/refs",
+            "/api/projects/{projectId}/source-control/refs", "listWorkspaceRepositoryRefs",
+            "List refs in the configured project repository", ["cursor"],
+            forwardTenantSelector: true,
+            forwardRequestHeaders: [ProjectTeamSyncContract.SelectionCodeHeader],
+            maximumResponseBytes: 1024 * 1024,
+            excludeFromMcp: true);
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/source-control/tree",
+            "/api/projects/{projectId}/source-control/tree", "readWorkspaceRepositoryTree",
+            "Read a commit-pinned tree from the configured project repository", ["ref"],
+            forwardTenantSelector: true,
+            forwardRequestHeaders: [ProjectTeamSyncContract.SelectionCodeHeader],
+            maximumResponseBytes: SourceControlWorkspaceTreeMaximumResponseBytes,
+            excludeFromMcp: true);
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/source-control/files/{**path}",
+            "/api/projects/{projectId}/source-control/files/{**path}", "readWorkspaceRepositoryFile",
+            "Read one regular file from a commit-pinned configured project repository", ["ref"],
+            forwardTenantSelector: true,
+            forwardRequestHeaders: [ProjectTeamSyncContract.SelectionCodeHeader],
+            maximumResponseBytes: SourceControlWorkspaceFileMaximumResponseBytes,
+            excludeFromMcp: true);
         // Each reporting owner aggregates only its own data; the Gateway remains a catalog proxy.
         Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/metrics",
             "/api/projects/{projectId}/metrics", "readProjectMetrics", "Read project run metrics",

@@ -77,6 +77,9 @@ internal static partial class GatewayOpenApi
             ["getProjectAgentSuiteAgentPolicy"] = C(null, "ProjectAgentSuiteAgentPolicy", "200"),
             ["readProjectTeamSync"] = C(null, "ProjectTeamSyncStatusResponse", "200"),
             ["commitProjectTeamSync"] = C("ProjectTeamSyncCommitCommand", "ProjectTeamSyncCommitResponse", "200"),
+            ["listWorkspaceRepositoryRefs"] = C(null, "SourceControlWorkspaceRefsPage", "200"),
+            ["readWorkspaceRepositoryTree"] = C(null, "SourceControlWorkspaceTree", "200"),
+            ["readWorkspaceRepositoryFile"] = C(null, "SourceControlWorkspaceFile", "200"),
             ["getAuthorizationContext"] = C(null, "ProjectAuthorizationContext", "200"),
             ["acceptRunSelection"] = C("AcceptRunSelectionRequest", "EffectiveRunSelection", "200"),
             ["getRunSelection"] = C(null, "EffectiveRunSelection", "200"),
@@ -903,10 +906,15 @@ else if (route.OperationId is
         operationId == "revokeProjectRoleAssignment" && name == "expectedRevision" ||
         operationId == "removeChiefOfStaffPriorityLink" && name == "expectedRevision" ||
         operationId == "browseMarketplaceSource" && name == "expectedSourceRevision" ||
-        operationId == "readSourceControlOutputCaptureFile" && name == "path";
+        operationId == "readSourceControlOutputCaptureFile" && name == "path" ||
+        (operationId is "readWorkspaceRepositoryTree" or "readWorkspaceRepositoryFile") && name == "ref";
 
     private static object QuerySchema(string operationId, string name)
     {
+        if ((operationId is "readWorkspaceRepositoryTree" or "readWorkspaceRepositoryFile") && name == "ref")
+            return new { type = "string", pattern = "^[a-fA-F0-9]{40}$" };
+        if (operationId == "listWorkspaceRepositoryRefs" && name == "cursor")
+            return new { type = "string", pattern = "^(?:[2-9]|[1-9][0-9]{1,3}|10000)$" };
         if (operationId == "listSourceControlOutputCaptures")
         {
             return name switch
@@ -1079,6 +1087,33 @@ else if (route.OperationId is
             ("message", Nullable(new { type = "string", maxLength = 200 }))),
         ["ProjectTeamSyncCommitResponse"] = StrictObj(["commitId", "branch", "htmlUrl"],
             ("commitId", Str()), ("branch", Str()), ("htmlUrl", new { type = "string", format = "uri" })),
+        ["SourceControlWorkspaceRef"] = StrictObj(
+            ["name", "kind", "commitSha", "isDefault"],
+            ("name", Str()), ("kind", Enum("branch", "tag")),
+            ("commitSha", new { type = "string", pattern = "^[a-fA-F0-9]{40}$" }),
+            ("isDefault", Bool())),
+        ["SourceControlWorkspaceRefsPage"] = StrictObj(
+            ["repository", "defaultBranch", "items", "nextCursor"],
+            ("repository", Str()), ("defaultBranch", Str()),
+            ("items", Arr(Ref("SourceControlWorkspaceRef"))),
+            ("nextCursor", NullableStr())),
+        ["SourceControlWorkspaceTreeNode"] = StrictObj(
+            ["path", "kind", "size", "blobSha"],
+            ("path", Str()),
+            ("kind", Enum("directory", "file", "symbolicLink", "submodule", "unsupported")),
+            ("size", Nullable(new { type = "integer", format = "int64", minimum = 0 })),
+            ("blobSha", Nullable(new { type = "string", pattern = "^[a-fA-F0-9]{40}$" }))),
+        ["SourceControlWorkspaceTree"] = StrictObj(
+            ["repository", "reference", "commitSha", "items"],
+            ("repository", Str()), ("reference", Str()),
+            ("commitSha", new { type = "string", pattern = "^[a-fA-F0-9]{40}$" }),
+            ("items", Arr(Ref("SourceControlWorkspaceTreeNode")))),
+        ["SourceControlWorkspaceFile"] = StrictObj(
+            ["repository", "path", "commitSha", "content", "isBinary", "language", "size"],
+            ("repository", Str()), ("path", Str()),
+            ("commitSha", new { type = "string", pattern = "^[a-fA-F0-9]{40}$" }),
+            ("content", NullableStr()), ("isBinary", Bool()), ("language", NullableStr()),
+            ("size", new { type = "integer", minimum = 0, maximum = 1048576 })),
         ["BacklogRepositoryIdentity"] = StrictObj(["owner", "name"], ("owner", Str()), ("name", Str())),
         ["BacklogRepositoryIssueLink"] = StrictObj(["providerId", "repository", "issueNumber"],
             ("providerId", Str()), ("repository", Ref("BacklogRepositoryIdentity")), ("issueNumber", Int())),
@@ -2447,7 +2482,7 @@ else if (route.OperationId is
             match => "{" + match.Groups["name"].Value + "}");
 
     [GeneratedRegex(
-        @"\{(?<name>[A-Za-z][A-Za-z0-9]*)(?::(?<constraint>[^}]+))?\}",
+        @"\{(?<catchAll>\*{1,2})?(?<name>[A-Za-z][A-Za-z0-9]*)(?::(?<constraint>[^}]+))?\}",
         RegexOptions.CultureInvariant)]
     private static partial Regex PathParameterRegex();
 }

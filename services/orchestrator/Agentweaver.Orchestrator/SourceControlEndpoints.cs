@@ -57,6 +57,7 @@ internal static partial class SourceControlEndpoints
             .WithMetadata(new RequestSizeLimitAttribute(1024 * 1024));
         // Project-scoped synchronization has its own current-authority contract.
         MapProjectTeamSyncEndpoints(app);
+        MapProjectWorkspaceReadEndpoints(app);
         app.MapGet(
                 "/internal/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/proof",
                 ReadOutputCaptureProofForEventsAsync)
@@ -64,6 +65,154 @@ internal static partial class SourceControlEndpoints
         app.MapPost("/api/source-control/github/webhook", RejectDirectGitHubWebhookAsync)
             .RequireAuthorization();
         return app;
+    }
+
+    internal static IEndpointRouteBuilder MapProjectWorkspaceReadEndpoints(IEndpointRouteBuilder app)
+    {
+        var workspace = app.MapGroup("/api/projects/{projectId}/source-control").RequireAuthorization();
+        workspace.MapGet("/refs", ReadProjectWorkspaceRefsAsync);
+        workspace.MapGet("/tree", ReadProjectWorkspaceTreeAsync);
+        workspace.MapGet("/files/{**path}", ReadProjectWorkspaceFileAsync);
+        return app;
+    }
+
+    private static Task<IResult> ReadProjectWorkspaceRefsAsync(
+        string projectId,
+        HttpContext context,
+        ProjectsRunSelectionClient projects,
+        IProjectTeamSyncTokenClient tokens,
+        [FromServices] ISourceControlWorkspaceAdapter workspaceAdapter,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            EnsureWorkspaceReadRequestHasNoBody(context);
+            var query = ProjectRunEndpoints.ReadSingleValuedQuery(context.Request.Query, ["cursor"]);
+            var selectionCode = ReadProjectTeamSyncSelectionCode(context);
+            ValidateProjectTeamSyncSelectionCode(selectionCode);
+            var (proof, defaultBranch, credential, _, _) = await MintProjectTeamSyncCredentialAsync(
+                context, projectId, selectionCode!, false,
+                projects, tokens, timeProvider, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var page = await workspaceAdapter.ReadWorkspaceRefsAsync(
+                    proof.Repository, defaultBranch, query.GetValueOrDefault("cursor"), credential, cancellationToken)
+                    .ConfigureAwait(false);
+                await RevalidateProjectTeamSyncAuthorityAsync(
+                    context, projectId, proof, false, projects, cancellationToken).ConfigureAwait(false);
+                return Results.Json(page, ProviderSelectionJsonOptions);
+            }
+            finally
+            {
+                credential.Invalidate();
+            }
+        }, cancellationToken);
+
+    private static Task<IResult> ReadProjectWorkspaceTreeAsync(
+        string projectId,
+        HttpContext context,
+        ProjectsRunSelectionClient projects,
+        IProjectTeamSyncTokenClient tokens,
+        [FromServices] ISourceControlWorkspaceAdapter workspaceAdapter,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            EnsureWorkspaceReadRequestHasNoBody(context);
+            var query = ProjectRunEndpoints.ReadSingleValuedQuery(context.Request.Query, ["ref"]);
+            if (!query.TryGetValue("ref", out var commitSha) || !IsGitSha(commitSha))
+                throw new CoordinationException("workspace_ref_invalid", StatusCodes.Status400BadRequest);
+            var selectionCode = ReadProjectTeamSyncSelectionCode(context);
+            ValidateProjectTeamSyncSelectionCode(selectionCode);
+            var (proof, _, credential, _, _) = await MintProjectTeamSyncCredentialAsync(
+                context, projectId, selectionCode!, false,
+                projects, tokens, timeProvider, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var tree = await workspaceAdapter.ReadWorkspaceTreeAsync(
+                    proof.Repository, commitSha, credential, cancellationToken).ConfigureAwait(false);
+                await RevalidateProjectTeamSyncAuthorityAsync(
+                    context, projectId, proof, false, projects, cancellationToken).ConfigureAwait(false);
+                return Results.Json(tree, ProviderSelectionJsonOptions);
+            }
+            finally
+            {
+                credential.Invalidate();
+            }
+        }, cancellationToken);
+
+    private static Task<IResult> ReadProjectWorkspaceFileAsync(
+        string projectId,
+        string path,
+        HttpContext context,
+        ProjectsRunSelectionClient projects,
+        IProjectTeamSyncTokenClient tokens,
+        [FromServices] ISourceControlWorkspaceAdapter workspaceAdapter,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            EnsureWorkspaceReadRequestHasNoBody(context);
+            if (!IsValidWorkspaceRequestPath(path))
+                throw new CoordinationException("workspace_path_invalid", StatusCodes.Status400BadRequest);
+            var query = ProjectRunEndpoints.ReadSingleValuedQuery(context.Request.Query, ["ref"]);
+            if (!query.TryGetValue("ref", out var commitSha) || !IsGitSha(commitSha))
+                throw new CoordinationException("workspace_ref_invalid", StatusCodes.Status400BadRequest);
+            var selectionCode = ReadProjectTeamSyncSelectionCode(context);
+            ValidateProjectTeamSyncSelectionCode(selectionCode);
+            var (proof, _, credential, _, _) = await MintProjectTeamSyncCredentialAsync(
+                context, projectId, selectionCode!, false,
+                projects, tokens, timeProvider, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var file = await workspaceAdapter.ReadWorkspaceFileAsync(
+                    proof.Repository, commitSha, path, credential, cancellationToken).ConfigureAwait(false);
+                await RevalidateProjectTeamSyncAuthorityAsync(
+                    context, projectId, proof, false, projects, cancellationToken).ConfigureAwait(false);
+                return Results.Json(file, ProviderSelectionJsonOptions);
+            }
+            finally
+            {
+                credential.Invalidate();
+            }
+        }, cancellationToken);
+
+    private static void EnsureWorkspaceReadRequestHasNoBody(HttpContext context)
+    {
+        if (context.Request.ContentLength is > 0 ||
+            context.Request.ContentType is not null ||
+            context.Request.Headers.ContainsKey("Transfer-Encoding"))
+            throw new CoordinationException("workspace_request_invalid", StatusCodes.Status400BadRequest);
+    }
+
+    private static bool IsValidWorkspaceRequestPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) ||
+            path.Length > 1024 ||
+            path.StartsWith('/') ||
+            path.EndsWith('/') ||
+            path.Contains('\\') ||
+            path.Any(char.IsControl) ||
+            path.Split('/').Length > 64 ||
+            path.Split('/').Any(segment => segment is "" or "." or ".."))
+            return false;
+        var candidate = path;
+        for (var depth = 0; depth < 8; depth++)
+        {
+            var decoded = Uri.UnescapeDataString(candidate);
+            if (string.Equals(decoded, candidate, StringComparison.Ordinal))
+                return true;
+            if (decoded.Count(character => character == '/') != candidate.Count(character => character == '/') ||
+                decoded.Contains('\\') ||
+                decoded.Any(char.IsControl) ||
+                decoded.Split('/').Any(segment => segment is "" or "." or ".."))
+                return false;
+            candidate = decoded;
+        }
+        return string.Equals(Uri.UnescapeDataString(candidate), candidate, StringComparison.Ordinal);
     }
 
     internal static IEndpointRouteBuilder MapProjectTeamSyncEndpoints(this IEndpointRouteBuilder app)
@@ -3084,6 +3233,7 @@ internal static partial class SourceControlEndpoints
                     SourceControlFailureCode.PullRequestMismatch or SourceControlFailureCode.InvalidBinding =>
                     StatusCodes.Status409Conflict,
                 SourceControlFailureCode.RateLimited => StatusCodes.Status429TooManyRequests,
+                SourceControlFailureCode.ResponseTooLarge => StatusCodes.Status413PayloadTooLarge,
                 SourceControlFailureCode.RemoteOutcomeUncertain or SourceControlFailureCode.RemoteUnavailable or
                     SourceControlFailureCode.InvalidResponse or SourceControlFailureCode.CapabilityUnavailable =>
                     StatusCodes.Status503ServiceUnavailable,
@@ -3158,6 +3308,7 @@ internal static partial class SourceControlEndpoints
             SourceControlFailureCode.RateLimited => "rate_limited",
             SourceControlFailureCode.RemoteUnavailable => "remote_unavailable",
             SourceControlFailureCode.InvalidResponse => "response_invalid",
+            SourceControlFailureCode.ResponseTooLarge => "response_too_large",
             _ => "unavailable"
         };
 }

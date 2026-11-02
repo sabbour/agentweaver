@@ -560,6 +560,85 @@ public sealed record ProjectTeamSyncCommitRequest(
     public override string ToString() => nameof(ProjectTeamSyncCommitRequest) + " [REDACTED]";
 }
 
+/// <summary>One branch or tag resolved to an immutable commit.</summary>
+public sealed record SourceControlWorkspaceRef(
+    string Name,
+    SourceControlWorkspaceRefKind Kind,
+    string CommitSha,
+    bool IsDefault);
+
+/// <summary>Source-control ref kind shown in the configured-repository Workspace browser.</summary>
+public enum SourceControlWorkspaceRefKind
+{
+    Branch,
+    Tag
+}
+
+/// <summary>A bounded page of refs for the project's configured repository.</summary>
+public sealed record SourceControlWorkspaceRefsPage(
+    string Repository,
+    string DefaultBranch,
+    ImmutableArray<SourceControlWorkspaceRef> Items,
+    string? NextCursor);
+
+/// <summary>One entry in a commit-pinned repository tree.</summary>
+public sealed record SourceControlWorkspaceTreeNode(
+    string Path,
+    SourceControlWorkspaceEntryKind Kind,
+    long? Size,
+    string? BlobSha);
+
+/// <summary>Entry kinds returned by the configured-repository Workspace browser.</summary>
+public enum SourceControlWorkspaceEntryKind
+{
+    Directory,
+    File,
+    SymbolicLink,
+    Submodule,
+    Unsupported
+}
+
+/// <summary>A bounded recursive repository tree pinned to one commit.</summary>
+public sealed record SourceControlWorkspaceTree(
+    string Repository,
+    string Reference,
+    string CommitSha,
+    ImmutableArray<SourceControlWorkspaceTreeNode> Items);
+
+/// <summary>Text or binary content for one regular repository file at a commit.</summary>
+public sealed record SourceControlWorkspaceFile(
+    string Repository,
+    string Path,
+    string CommitSha,
+    string? Content,
+    bool IsBinary,
+    string? Language,
+    int Size);
+
+/// <summary>Read-only operations over a project's explicitly configured repository.</summary>
+public interface ISourceControlWorkspaceAdapter
+{
+    Task<SourceControlWorkspaceRefsPage> ReadWorkspaceRefsAsync(
+        SourceControlRepositoryIdentity repository,
+        string defaultBranch,
+        string? cursor,
+        SecretCredential credential,
+        CancellationToken cancellationToken);
+
+    Task<SourceControlWorkspaceTree> ReadWorkspaceTreeAsync(
+        SourceControlRepositoryIdentity repository,
+        string commitSha,
+        SecretCredential credential,
+        CancellationToken cancellationToken);
+
+    Task<SourceControlWorkspaceFile> ReadWorkspaceFileAsync(
+        SourceControlRepositoryIdentity repository,
+        string commitSha,
+        string path,
+        SecretCredential credential,
+        CancellationToken cancellationToken);
+}
+
 /// <summary>Explicit repository-backed team-sync operations, separate from run-bound provider operations.</summary>
 public interface ISourceControlTeamSyncAdapter
 {
