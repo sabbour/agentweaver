@@ -20,6 +20,287 @@ namespace Agentweaver.Cli.Acceptance.Tests;
 
 public sealed class ApiAcceptanceRunnerTests
 {
+    [Theory]
+    [InlineData(false, false, false, 0, "passed", "cleaned")]
+    [InlineData(true, false, false, 1, "failed", "indeterminate")]
+    [InlineData(false, true, false, 1, "failed", "indeterminate")]
+    [InlineData(false, false, true, 1, "failed", "indeterminate")]
+    public async Task BoardDeleteExercisesTypedConflictPermissionDeletionAndCleanupOperations(
+        bool failCleanup,
+        bool ambiguousDelete,
+        bool preserveCompactedTaskRevision,
+        int expectedExitCode,
+        string expectedFeatureStatus,
+        string expectedCleanupState)
+    {
+        string workspace = Path.Combine(AppContext.BaseDirectory, "acceptance-work", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        try
+        {
+            await using var gateway = await GatewayOpenApiParityTests.StartGatewayAsync();
+            string gatewayAddress = gateway.Services.GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+            using var artifactClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
+            using HttpResponseMessage artifactResponse = await artifactClient.GetAsync(
+                new Uri(new Uri(gatewayAddress), "/openapi/v1.json"));
+            artifactResponse.EnsureSuccessStatusCode();
+            JsonObject openApi = JsonNode.Parse(await artifactResponse.Content.ReadAsStringAsync())!.AsObject();
+
+            var trace = new ConcurrentQueue<string>();
+            var handler = new AcceptanceGatewayHandler(openApi, trace, failCleanup,
+                ambiguousBoardDelete: ambiguousDelete, preserveCompactedTaskRevision: preserveCompactedTaskRevision);
+            handler.GatewayOrigin = new Uri("https://api.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/");
+            using var http = new HttpClient(handler);
+            var authentication = new TestAuthentication(trace);
+            var factory = new GatewayClientFactory(http, authentication);
+            var output = new StringWriter();
+            var runner = new ApiAcceptanceRunner(factory, authentication, new TestDeploymentEvidenceProvider(), output);
+            var runtime = new CliRuntimeOptions(
+                HttpClient: http,
+                GatewayClientFactory: factory,
+                Authentication: authentication,
+                AcceptanceRunner: runner,
+                Output: output,
+                Error: output);
+
+            string inputPath = Path.Combine(workspace, "manifest.json");
+            string evidencePath = Path.Combine(workspace, "evidence.jsonl");
+            await File.WriteAllTextAsync(Path.Combine(workspace, "foundation.json"), "{}");
+            await File.WriteAllTextAsync(Path.Combine(workspace, "images.json"), "{}");
+            await File.WriteAllTextAsync(inputPath, CreateBoardManifest().ToJsonString());
+
+            int exitCode = await CliApplication.RunAsync(
+                ["test", "--input", inputPath, "--output", evidencePath],
+                runtime);
+            JsonObject result = JsonNode.Parse((await File.ReadAllLinesAsync(evidencePath)).Last())!.AsObject();
+
+            Assert.True(exitCode == expectedExitCode,
+                $"Board execution failed: {result["failure"]?["message"]}; " +
+                $"operations={string.Join(",", handler.Requests.Select(request => request.OperationId))}");
+            Assert.Equal("board-acceptance-result", result["kind"]?.GetValue<string>());
+            Assert.Equal(expectedFeatureStatus, result["featureStatus"]?.GetValue<string>());
+            Assert.Equal("not-evaluated", result["fullP1Status"]?.GetValue<string>());
+            Assert.Equal(expectedCleanupState, result["observations"]?["boardFixture"]?["cleanup"]?["state"]?.GetValue<string>());
+            if (!ambiguousDelete && !preserveCompactedTaskRevision)
+                Assert.Equal(0, result["observations"]?["board"]?["finalTaskCount"]?.GetValue<int>());
+            Assert.Contains(handler.Requests, request => request.OperationId == "deleteProjectBacklogTask"
+                && request.Body?["expectedGraphRevision"]?.GetValue<long>() > 0
+                && request.Body?["expectedTaskRevision"]?.GetValue<long>() > 0);
+            if (!ambiguousDelete && !preserveCompactedTaskRevision)
+                Assert.Contains(handler.Requests, request => request.OperationId == "revokeProjectRoleAssignment");
+            else
+                Assert.Equal(5, handler.Requests.Count(request => request.OperationId == "deleteProjectBacklogTask"));
+            if (preserveCompactedTaskRevision)
+            {
+                Assert.Equal(1, handler.LastCompactedTaskRevision);
+                Assert.Equal(0, handler.LastCompactedTaskPosition);
+                Assert.DoesNotContain(handler.Requests, request => request.OperationId == "revokeProjectRoleAssignment");
+            }
+            Assert.Contains(result["steps"]!.AsArray().OfType<JsonObject>(), step =>
+                step["id"]?.GetValue<string>() == "owner-denial" && step["status"]?.GetValue<string>() == "passed");
+            Assert.Contains(handler.Requests, request => request.OperationId == "deleteProjectBacklogTask"
+                && request.Headers["Authorization"].Contains("projects.orchestrator", StringComparison.Ordinal));
+            Assert.Equal(AcceptanceGatewayHandler.BoardProjectId,
+                result["observations"]?["boardFixture"]?["projectId"]?.GetValue<string>());
+            Assert.All(handler.Requests.Where(request => request.ProjectId.Length > 0),
+                request => Assert.Equal(AcceptanceGatewayHandler.BoardProjectId, request.ProjectId));
+        }
+        finally
+        {
+            if (Directory.Exists(workspace))
+                Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BoardDeleteCleansUpPartiallyAcknowledgedThirtyTwoCharacterProjectId()
+    {
+        string workspace = Path.Combine(AppContext.BaseDirectory, "acceptance-work", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        try
+        {
+            await using var gateway = await GatewayOpenApiParityTests.StartGatewayAsync();
+            string gatewayAddress = gateway.Services.GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+            using var artifactClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
+            using HttpResponseMessage artifactResponse = await artifactClient.GetAsync(
+                new Uri(new Uri(gatewayAddress), "/openapi/v1.json"));
+            artifactResponse.EnsureSuccessStatusCode();
+            JsonObject openApi = JsonNode.Parse(await artifactResponse.Content.ReadAsStringAsync())!.AsObject();
+
+            var trace = new ConcurrentQueue<string>();
+            var handler = new AcceptanceGatewayHandler(openApi, trace, failCleanup: false, failBoardOwnerAssignment: true)
+            {
+                GatewayOrigin = new Uri("https://api.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/"),
+            };
+            using var http = new HttpClient(handler);
+            var authentication = new TestAuthentication(trace);
+            var factory = new GatewayClientFactory(http, authentication);
+            var output = new StringWriter();
+            var runner = new ApiAcceptanceRunner(factory, authentication, new TestDeploymentEvidenceProvider(), output);
+            var runtime = new CliRuntimeOptions(
+                HttpClient: http,
+                GatewayClientFactory: factory,
+                Authentication: authentication,
+                AcceptanceRunner: runner,
+                Output: output,
+                Error: output);
+
+            string inputPath = Path.Combine(workspace, "manifest.json");
+            string evidencePath = Path.Combine(workspace, "evidence.jsonl");
+            await File.WriteAllTextAsync(Path.Combine(workspace, "foundation.json"), "{}");
+            await File.WriteAllTextAsync(Path.Combine(workspace, "images.json"), "{}");
+            await File.WriteAllTextAsync(inputPath, CreateBoardManifest().ToJsonString());
+
+            int exitCode = await CliApplication.RunAsync(
+                ["test", "--input", inputPath, "--output", evidencePath],
+                runtime);
+            JsonObject result = JsonNode.Parse((await File.ReadAllLinesAsync(evidencePath)).Last())!.AsObject();
+
+            Assert.Equal(1, exitCode);
+            Assert.Equal("failed", result["featureStatus"]?.GetValue<string>());
+            Assert.Equal("cleaned", result["observations"]?["boardFixture"]?["cleanup"]?["state"]?.GetValue<string>());
+            Assert.Equal(AcceptanceGatewayHandler.BoardProjectId,
+                result["observations"]?["boardFixture"]?["projectId"]?.GetValue<string>());
+            Assert.Equal(AcceptanceGatewayHandler.BoardProjectId,
+                Assert.Single(handler.Requests, request => request.OperationId == "updateProject").ProjectId);
+            Assert.DoesNotContain(handler.Requests, request => request.OperationId == "revokeProjectRoleAssignment");
+        }
+        finally
+        {
+            if (Directory.Exists(workspace))
+                Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BoardDeleteRejectsAnInterruptedReservationBeforeProviderOrAuthentication()
+    {
+        string workspace = Path.Combine(AppContext.BaseDirectory, "acceptance-work", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        try
+        {
+            string inputPath = Path.Combine(workspace, "manifest.json");
+            string evidencePath = Path.Combine(workspace, "evidence.jsonl");
+            await File.WriteAllTextAsync(Path.Combine(workspace, "foundation.json"), "{}");
+            await File.WriteAllTextAsync(Path.Combine(workspace, "images.json"), "{}");
+            await File.WriteAllTextAsync(inputPath, CreateBoardManifest().ToJsonString());
+            JsonObject reservation = ApiAcceptanceSupport.SetupInvocation(
+                Guid.NewGuid().ToString("D"), new string('a', 64), "board-setup-invocation");
+            string originalEvidence = ApiAcceptanceSupport.EvidenceJson(reservation) + "\n";
+            await File.WriteAllTextAsync(evidencePath, originalEvidence);
+
+            var trace = new ConcurrentQueue<string>();
+            using var http = new HttpClient(new NoRequestsHandler());
+            var authentication = new TestAuthentication(trace);
+            var factory = new GatewayClientFactory(http, authentication);
+            var provider = new TestDeploymentEvidenceProvider();
+            var output = new StringWriter();
+            var runner = new ApiAcceptanceRunner(factory, authentication, provider, output);
+            var runtime = new CliRuntimeOptions(
+                HttpClient: http,
+                GatewayClientFactory: factory,
+                Authentication: authentication,
+                AcceptanceRunner: runner,
+                Output: output,
+                Error: output);
+
+            int exitCode = await CliApplication.RunAsync(
+                ["test", "--input", inputPath, "--output", evidencePath],
+                runtime);
+
+            Assert.Equal(2, exitCode);
+            Assert.Contains("reconcile", output.ToString(), StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(originalEvidence, await File.ReadAllTextAsync(evidencePath));
+            Assert.Equal(0, provider.PrepareCalls);
+            Assert.Empty(trace);
+        }
+        finally
+        {
+            if (Directory.Exists(workspace))
+                Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BoardDeleteExclusivelyAdmitsOnlyOneConcurrentInvocationForAnEvidencePath()
+    {
+        string workspace = Path.Combine(AppContext.BaseDirectory, "acceptance-work", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        try
+        {
+            await using var gateway = await GatewayOpenApiParityTests.StartGatewayAsync();
+            string gatewayAddress = gateway.Services.GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+            using var artifactClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
+            using HttpResponseMessage artifactResponse = await artifactClient.GetAsync(
+                new Uri(new Uri(gatewayAddress), "/openapi/v1.json"));
+            artifactResponse.EnsureSuccessStatusCode();
+            JsonObject openApi = JsonNode.Parse(await artifactResponse.Content.ReadAsStringAsync())!.AsObject();
+
+            var trace = new ConcurrentQueue<string>();
+            var handler = new AcceptanceGatewayHandler(openApi, trace, failCleanup: false)
+            {
+                GatewayOrigin = new Uri("https://api.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/"),
+            };
+            using var http = new HttpClient(handler);
+            var authentication = new TestAuthentication(trace);
+            var factory = new GatewayClientFactory(http, authentication);
+            var provider = new BlockingDeploymentEvidenceProvider();
+            var output = new StringWriter();
+            var runner = new ApiAcceptanceRunner(factory, authentication, provider, output);
+            var runtime = new CliRuntimeOptions(
+                HttpClient: http,
+                GatewayClientFactory: factory,
+                Authentication: authentication,
+                AcceptanceRunner: runner,
+                Output: output,
+                Error: output);
+
+            string inputPath = Path.Combine(workspace, "manifest.json");
+            string evidencePath = Path.Combine(workspace, "evidence.jsonl");
+            await File.WriteAllTextAsync(Path.Combine(workspace, "foundation.json"), "{}");
+            await File.WriteAllTextAsync(Path.Combine(workspace, "images.json"), "{}");
+            await File.WriteAllTextAsync(inputPath, CreateBoardManifest().ToJsonString());
+
+            Task<int> firstRun = CliApplication.RunAsync(
+                ["test", "--input", inputPath, "--output", evidencePath],
+                runtime);
+            await provider.Entered.WaitAsync(TimeSpan.FromSeconds(30));
+            string ownedReservation = await File.ReadAllTextAsync(evidencePath);
+            try
+            {
+                int secondExitCode = await CliApplication.RunAsync(
+                    ["test", "--input", inputPath, "--output", evidencePath],
+                    runtime);
+
+                Assert.Equal(2, secondExitCode);
+                Assert.Equal(ownedReservation, await File.ReadAllTextAsync(evidencePath));
+                Assert.Equal(1, provider.PrepareCalls);
+                Assert.Empty(handler.Requests);
+                Assert.Empty(trace);
+            }
+            finally
+            {
+                provider.Release();
+            }
+
+            Assert.Equal(0, await firstRun.WaitAsync(TimeSpan.FromSeconds(60)));
+            string[] records = await File.ReadAllLinesAsync(evidencePath);
+            JsonObject invocation = JsonNode.Parse(records[0])!.AsObject();
+            JsonObject result = JsonNode.Parse(records[^1])!.AsObject();
+            Assert.Equal("board-setup-invocation", invocation["kind"]?.GetValue<string>());
+            Assert.Equal(invocation["invocationId"]?.GetValue<string>(),
+                result["observations"]?["boardFixture"]?["invocationId"]?.GetValue<string>());
+            Assert.Single(handler.Requests, request => request.OperationId == "createProject");
+        }
+        finally
+        {
+            if (Directory.Exists(workspace))
+                Directory.Delete(workspace, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task AcceptanceInputRejectsLegacyImageReceiptsAndPublicationPaths()
     {
@@ -658,6 +939,40 @@ public sealed class ApiAcceptanceRunnerTests
         };
     }
 
+    private static JsonObject CreateBoardManifest() => new()
+    {
+        ["executionIntent"] = "execute",
+        ["journey"] = "board-delete",
+        ["environment"] = new JsonObject
+        {
+            ["baseUrl"] = "https://api.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
+            ["issuer"] = "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
+            ["audience"] = "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
+            ["tenantId"] = "72f988bf-86f1-41af-91ab-2d7cd011db47",
+        },
+        ["pins"] = new JsonObject
+        {
+            ["context"] = "board-test-context",
+            ["namespace"] = "agentweaver",
+            ["sourceReceipt"] = new JsonObject
+            {
+                ["sourceSha"] = new string('a', 40),
+                ["sourceTree"] = new string('b', 40),
+            },
+            ["authoritySourceReceipt"] = new JsonObject
+            {
+                ["sourceSha"] = new string('c', 40),
+                ["sourceTree"] = new string('d', 40),
+            },
+        },
+        ["deploymentEvidence"] = new JsonObject
+        {
+            ["manifestPath"] = "foundation.json",
+            ["imageManifestPath"] = "images.json",
+        },
+        ["fixturePlan"] = new JsonObject { ["kind"] = "owned-disposable-board" },
+    };
+
     private static async Task<WebApplication> StartAcceptanceGatewayProxyAsync(HttpMessageInvoker invoker)
     {
         var builder = WebApplication.CreateBuilder();
@@ -690,8 +1005,12 @@ public sealed class ApiAcceptanceRunnerTests
 
     private sealed class TestDeploymentEvidenceProvider : IAcceptanceDeploymentEvidenceProvider
     {
-        public Task<JsonObject> PrepareAsync(AcceptanceManifest manifest, CancellationToken ct) =>
-            Task.FromResult(new JsonObject
+        public int PrepareCalls { get; private set; }
+
+        public Task<JsonObject> PrepareAsync(AcceptanceManifest manifest, CancellationToken ct)
+        {
+            PrepareCalls++;
+            return Task.FromResult(new JsonObject
             {
                 ["source"] = new JsonObject
                 {
@@ -701,6 +1020,27 @@ public sealed class ApiAcceptanceRunnerTests
                 ["services"] = new JsonObject { ["status"] = "passed" },
                 ["agentHostImageMeasurement"] = new JsonObject { ["status"] = "passed" },
             });
+        }
+    }
+
+    private sealed class BlockingDeploymentEvidenceProvider : IAcceptanceDeploymentEvidenceProvider
+    {
+        private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _prepareCalls;
+
+        public Task Entered => _entered.Task;
+        public int PrepareCalls => Volatile.Read(ref _prepareCalls);
+
+        public void Release() => _release.TrySetResult();
+
+        public async Task<JsonObject> PrepareAsync(AcceptanceManifest manifest, CancellationToken ct)
+        {
+            Interlocked.Increment(ref _prepareCalls);
+            _entered.TrySetResult();
+            await _release.Task.WaitAsync(ct);
+            return await new TestDeploymentEvidenceProvider().PrepareAsync(manifest, ct);
+        }
     }
 
     private sealed class NoRequestsHandler : HttpMessageHandler
@@ -741,10 +1081,15 @@ public sealed class ApiAcceptanceRunnerTests
 
     private sealed class AcceptanceGatewayHandler : HttpMessageHandler
     {
+        public const string BoardProjectId = "11111111111141118111111111111111";
+        private const string P1ProjectId = "11111111-1111-4111-8111-111111111111";
         private readonly JsonObject _openApi;
         private readonly IReadOnlyDictionary<string, GatewayOperation> _operations;
         private readonly ConcurrentQueue<string> _trace;
         private readonly bool _failCleanup;
+        private readonly bool _failBoardOwnerAssignment;
+        private readonly bool _preserveCompactedTaskRevision;
+        private bool _ambiguousBoardDelete;
         private readonly string? _malformedJournalCase;
         private readonly CancellationTokenSource? _cancelOnMessage;
         private int _revokeCalls;
@@ -753,18 +1098,33 @@ public sealed class ApiAcceptanceRunnerTests
         private JsonObject? _selection;
         private JsonObject? _pendingGate;
         private long _stateVersion;
+        private readonly List<JsonObject> _boardTasks = [];
+        private readonly List<(string TaskId, string PrerequisiteId)> _boardDependencies = [];
+        private long _boardGraphRevision;
+        private long _boardProjectRevision = 1;
+        private string? _boardProjectName;
+        private bool _boardOwner;
+        private bool _boardProject;
+        public long? LastCompactedTaskRevision { get; private set; }
+        public long? LastCompactedTaskPosition { get; private set; }
 
         public AcceptanceGatewayHandler(
             JsonObject openApi,
             ConcurrentQueue<string> trace,
             bool failCleanup,
             string? malformedJournalCase = null,
-            CancellationTokenSource? cancelOnMessage = null)
+            CancellationTokenSource? cancelOnMessage = null,
+            bool ambiguousBoardDelete = false,
+            bool failBoardOwnerAssignment = false,
+            bool preserveCompactedTaskRevision = false)
         {
             _openApi = (JsonObject)openApi.DeepClone();
             _operations = GatewayContract.Parse(_openApi);
             _trace = trace;
             _failCleanup = failCleanup;
+            _failBoardOwnerAssignment = failBoardOwnerAssignment;
+            _preserveCompactedTaskRevision = preserveCompactedTaskRevision;
+            _ambiguousBoardDelete = ambiguousBoardDelete;
             _malformedJournalCase = malformedJournalCase;
             _cancelOnMessage = cancelOnMessage;
             GatewayOrigin = new Uri("http://127.0.0.1:49241/");
@@ -803,16 +1163,16 @@ public sealed class ApiAcceptanceRunnerTests
 
             if (operation.OperationId == "getAuthorizationContext")
             {
-                return Json(HttpStatusCode.OK, new JsonObject
-                {
-                    ["contractVersion"] = 1,
-                    ["issuer"] = "https://issuer.example/",
-                    ["actorId"] = actor,
-                    ["tenantId"] = tenant,
-                    ["membershipRevision"] = 1,
-                    ["boundProjectId"] = token.ElementAtOrDefault(2) is { } boundProject and not "-" ? boundProject : null,
-                    ["boundRunId"] = token.ElementAtOrDefault(3) is { } boundRun and not "-" ? boundRun : null,
-                    ["effectiveAuthority"] = token.ElementAtOrDefault(2) is { } authorizedProject and not "-"
+                JsonArray authority = _boardProject && _boardOwner && actor == "owner"
+                    ? new JsonArray(new JsonObject
+                    {
+                        ["resourceType"] = "project",
+                        ["resourceId"] = BoardProjectId,
+                        ["permissions"] = new JsonArray(
+                            new JsonObject { ["permission"] = "readProjects", ["roleRevision"] = 1 },
+                            new JsonObject { ["permission"] = "writeProjects", ["roleRevision"] = 1 }),
+                    })
+                    : token.ElementAtOrDefault(2) is { } authorizedProject and not "-"
                         ? new JsonArray(new JsonObject
                         {
                             ["resourceType"] = "project",
@@ -823,7 +1183,20 @@ public sealed class ApiAcceptanceRunnerTests
                                 ["roleRevision"] = 1,
                             }),
                         })
-                        : new JsonArray(),
+                        : new JsonArray();
+                return Json(HttpStatusCode.OK, new JsonObject
+                {
+                    ["contractVersion"] = 1,
+                    ["issuer"] = GatewayOrigin.Host.Equals(
+                        "api.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io", StringComparison.OrdinalIgnoreCase)
+                        ? "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/"
+                        : "https://issuer.example/",
+                    ["actorId"] = actor,
+                    ["tenantId"] = tenant,
+                    ["membershipRevision"] = 1,
+                    ["boundProjectId"] = token.ElementAtOrDefault(2) is { } boundProject and not "-" ? boundProject : null,
+                    ["boundRunId"] = token.ElementAtOrDefault(3) is { } boundRun and not "-" ? boundRun : null,
+                    ["effectiveAuthority"] = authority,
                 });
             }
 
@@ -850,19 +1223,23 @@ public sealed class ApiAcceptanceRunnerTests
                     || invalidBinding))
                 return Json(HttpStatusCode.Forbidden, new JsonObject { ["title"] = "Denied" }, "application/problem+json");
 
+            bool backlogOperation = operation.OperationId is "readProjectBacklog" or "captureBacklogTask"
+                or "editBacklogTaskContent" or "addProjectBacklogDependency" or "deleteProjectBacklogTask";
+            if (backlogOperation && !scopes.Contains("projects.admin", StringComparer.Ordinal)
+                && !scopes.Contains("projects.orchestrator", StringComparer.Ordinal))
+                return Json(HttpStatusCode.Forbidden, new JsonObject { ["title"] = "Denied" }, "application/problem+json");
+            if (operation.OperationId == "deleteProjectBacklogTask"
+                && scopes.Contains("projects.orchestrator", StringComparer.Ordinal))
+                return Json(HttpStatusCode.Forbidden,
+                    new JsonObject { ["code"] = "backlog_project_permission_denied" });
+
             if (actor == "denied" && operation.OperationId == "readRunStatus")
                 return Json(HttpStatusCode.Forbidden, new JsonObject { ["title"] = "Denied" }, "application/problem+json");
 
             return operation.OperationId switch
             {
-                "createProject" => Json(HttpStatusCode.Created, new JsonObject
-                {
-                    ["projectId"] = "11111111-1111-4111-8111-111111111111",
-                    ["name"] = body?["name"]?.DeepClone(),
-                    ["state"] = "active",
-                    ["revision"] = 1,
-                    ["configurationRevision"] = 1,
-                }),
+                "createProject" => CreateProject(body),
+                "getProject" => ReadProject(projectId),
                 "assignProjectRole" => Assignment(body, projectId, actor),
                 "getProjectConfiguration" => Json(HttpStatusCode.OK, new JsonObject
                 {
@@ -892,6 +1269,11 @@ public sealed class ApiAcceptanceRunnerTests
                 }),
                 "revokeProjectRoleAssignment" => Revoke(parameters, query, projectId, actor),
                 "updateProject" => UpdateProject(body, projectId),
+                "readProjectBacklog" => ReadBoard(projectId),
+                "captureBacklogTask" => CaptureBoardTask(body, projectId),
+                "editBacklogTaskContent" => EditBoardTask(body, parameters, projectId),
+                "addProjectBacklogDependency" => AddBoardDependency(body, parameters, projectId),
+                "deleteProjectBacklogTask" => DeleteBoardTask(body, parameters, projectId),
                 _ => Json(HttpStatusCode.NotFound, new JsonObject { ["error"] = operation.OperationId }),
             };
         }
@@ -1013,9 +1395,34 @@ public sealed class ApiAcceptanceRunnerTests
             ["lifecycle"] = "active",
         };
 
-        private static HttpResponseMessage Assignment(JsonObject? body, string projectId, string actor)
+        private HttpResponseMessage CreateProject(JsonObject? body)
+        {
+            string name = body?["name"]?.GetValue<string>() ?? "";
+            _boardProject = name.StartsWith("board-", StringComparison.Ordinal);
+            _boardProjectName = name;
+            _boardOwner = false;
+            _boardGraphRevision = 0;
+            _boardProjectRevision = 1;
+            _boardTasks.Clear();
+            _boardDependencies.Clear();
+            string projectId = _boardProject ? BoardProjectId : P1ProjectId;
+            return Json(HttpStatusCode.Created, new JsonObject
+            {
+                ["projectId"] = projectId,
+                ["name"] = name,
+                ["state"] = "active",
+                ["revision"] = _boardProjectRevision,
+                ["configurationRevision"] = 1,
+            });
+        }
+
+        private HttpResponseMessage Assignment(JsonObject? body, string projectId, string actor)
         {
             string role = body?["role"]?.GetValue<string>() ?? "";
+            if (_failBoardOwnerAssignment && _boardProject && role == "owner")
+                return Json(HttpStatusCode.Conflict, new JsonObject { ["title"] = "Controlled assignment rejection" });
+            if (_boardProject && projectId == BoardProjectId && role == "owner")
+                _boardOwner = actor == "owner";
             return Json(HttpStatusCode.Created, new JsonObject
             {
                 ["assignmentId"] = role == "owner"
@@ -1029,6 +1436,149 @@ public sealed class ApiAcceptanceRunnerTests
                 ["grantedBy"] = actor,
             });
         }
+
+        private HttpResponseMessage ReadProject(string projectId) =>
+            projectId == BoardProjectId && _boardProject
+                ? Json(HttpStatusCode.OK, new JsonObject
+                {
+                    ["projectId"] = BoardProjectId,
+                    ["name"] = _boardProjectName,
+                    ["state"] = "active",
+                    ["revision"] = _boardProjectRevision,
+                    ["configurationRevision"] = 1L,
+                    ["createdAt"] = "2026-11-02T00:00:00Z",
+                    ["updatedAt"] = "2026-11-02T00:00:00Z",
+                    ["effectiveRoles"] = new JsonArray(),
+                })
+                : Json(HttpStatusCode.NotFound, new JsonObject { ["title"] = "Unknown project" });
+
+        private HttpResponseMessage ReadBoard(string projectId) =>
+            projectId == BoardProjectId
+                ? Json(HttpStatusCode.OK, BoardGraph())
+                : Json(HttpStatusCode.NotFound, new JsonObject { ["title"] = "Unknown project" });
+
+        private HttpResponseMessage CaptureBoardTask(JsonObject? body, string projectId)
+        {
+            if (projectId != BoardProjectId)
+                return Json(HttpStatusCode.NotFound, new JsonObject { ["title"] = "Unknown project" });
+            long expectedGraph = body?["expectedGraphRevision"]?.GetValue<long>() ?? -1;
+            if (expectedGraph != _boardGraphRevision)
+                return BoardIssue("staleGraphRevision");
+            string taskId = body?["taskId"]?.GetValue<string>() ?? "";
+            if (_boardTasks.Any(task => task["reference"]?["taskId"]?.GetValue<string>() == taskId))
+                return BoardIssue("taskAlreadyExists");
+            JsonObject content = body?["content"] as JsonObject ?? [];
+            _boardTasks.Add(new JsonObject
+            {
+                ["reference"] = new JsonObject { ["projectId"] = projectId, ["taskId"] = taskId },
+                ["title"] = content["title"]?.DeepClone(),
+                ["description"] = content["description"]?.DeepClone(),
+                ["state"] = "backlog",
+                ["isArchived"] = false,
+                ["isAutomationInvocationPending"] = false,
+                ["revision"] = 1L,
+                ["position"] = _boardTasks.Count,
+            });
+            _boardGraphRevision++;
+            return Json(HttpStatusCode.OK, BoardGraph());
+        }
+
+        private HttpResponseMessage EditBoardTask(
+            JsonObject? body,
+            IReadOnlyDictionary<string, string> parameters,
+            string projectId)
+        {
+            JsonObject? task = FindBoardTask(parameters["taskId"]);
+            if (projectId != BoardProjectId || task is null)
+                return Json(HttpStatusCode.NotFound, new JsonObject { ["title"] = "Unknown task" });
+            if (body?["expectedGraphRevision"]?.GetValue<long>() != _boardGraphRevision)
+                return BoardIssue("staleGraphRevision");
+            if (body?["expectedTaskRevision"]?.GetValue<long>() != task["revision"]?.GetValue<long>())
+                return BoardIssue("staleTaskRevision");
+            JsonObject content = body?["content"] as JsonObject ?? [];
+            task["title"] = content["title"]?.DeepClone();
+            task["description"] = content["description"]?.DeepClone();
+            task["revision"] = task["revision"]!.GetValue<long>() + 1;
+            _boardGraphRevision++;
+            return Json(HttpStatusCode.OK, BoardGraph());
+        }
+
+        private HttpResponseMessage AddBoardDependency(
+            JsonObject? body,
+            IReadOnlyDictionary<string, string> parameters,
+            string projectId)
+        {
+            if (projectId != BoardProjectId)
+                return Json(HttpStatusCode.NotFound, new JsonObject { ["title"] = "Unknown project" });
+            if (body?["expectedGraphRevision"]?.GetValue<long>() != _boardGraphRevision)
+                return BoardIssue("staleGraphRevision");
+            string taskId = parameters["taskId"];
+            string prerequisiteId = parameters["prerequisiteTaskId"];
+            if (FindBoardTask(taskId) is null || FindBoardTask(prerequisiteId) is null)
+                return BoardIssue("taskNotFound");
+            _boardDependencies.Add((taskId, prerequisiteId));
+            _boardGraphRevision++;
+            return Json(HttpStatusCode.OK, BoardGraph());
+        }
+
+        private HttpResponseMessage DeleteBoardTask(
+            JsonObject? body,
+            IReadOnlyDictionary<string, string> parameters,
+            string projectId)
+        {
+            if (projectId != BoardProjectId)
+                return Json(HttpStatusCode.NotFound, new JsonObject { ["title"] = "Unknown project" });
+            if (body?["expectedGraphRevision"]?.GetValue<long>() != _boardGraphRevision)
+                return BoardIssue("staleGraphRevision");
+            string taskId = parameters["taskId"];
+            JsonObject? task = FindBoardTask(taskId);
+            if (task is null)
+                return BoardIssue("taskNotFound");
+            if (body?["expectedTaskRevision"]?.GetValue<long>() != task["revision"]?.GetValue<long>())
+                return BoardIssue("staleTaskRevision");
+            if (_boardDependencies.Any(edge => edge.PrerequisiteId == taskId))
+                return BoardIssue("taskHasDependents");
+            _boardTasks.Remove(task);
+            _boardDependencies.RemoveAll(edge => edge.TaskId == taskId || edge.PrerequisiteId == taskId);
+            for (int position = 0; position < _boardTasks.Count; position++)
+            {
+                if (_boardTasks[position]["position"]?.GetValue<int>() == position)
+                    continue;
+                _boardTasks[position]["position"] = position;
+                if (!_preserveCompactedTaskRevision)
+                {
+                    long revision = _boardTasks[position]["revision"]!.GetValue<long>() + 1;
+                    _boardTasks[position]["revision"] = revision;
+                }
+                LastCompactedTaskPosition = position;
+                LastCompactedTaskRevision = _boardTasks[position]["revision"]?.GetValue<long>();
+            }
+            _boardGraphRevision++;
+            if (_ambiguousBoardDelete)
+            {
+                _ambiguousBoardDelete = false;
+                return Json(HttpStatusCode.InternalServerError, new JsonObject { ["title"] = "Acknowledgement unavailable" });
+            }
+            return Json(HttpStatusCode.OK, BoardGraph());
+        }
+
+        private JsonObject BoardGraph() => new()
+        {
+            ["projectId"] = BoardProjectId,
+            ["revision"] = _boardGraphRevision,
+            ["tasks"] = new JsonArray(_boardTasks.Select(task => (JsonNode?)task.DeepClone()).ToArray()),
+            ["dependencies"] = new JsonArray(_boardDependencies.Select(edge => (JsonNode?)new JsonObject
+            {
+                ["task"] = new JsonObject { ["projectId"] = BoardProjectId, ["taskId"] = edge.TaskId },
+                ["prerequisite"] = new JsonObject { ["projectId"] = BoardProjectId, ["taskId"] = edge.PrerequisiteId },
+            }).ToArray()),
+        };
+
+        private JsonObject? FindBoardTask(string taskId) =>
+            _boardTasks.SingleOrDefault(task => task["reference"]?["taskId"]?.GetValue<string>() == taskId);
+
+        private static HttpResponseMessage BoardIssue(string code) =>
+            Json(HttpStatusCode.Conflict, new JsonObject { ["issues"] = new JsonArray(new JsonObject { ["code"] = code }) });
 
         private HttpResponseMessage ReadDecisions() =>
             Json(HttpStatusCode.OK, new JsonObject

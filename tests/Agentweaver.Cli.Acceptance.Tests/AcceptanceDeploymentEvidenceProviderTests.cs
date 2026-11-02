@@ -66,6 +66,33 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
     }
 
     [Fact]
+    public void BoardImageManifestRequiresExactlyTheFourReviewedImmutableOwnerDigests()
+    {
+        JsonObject images = new()
+        {
+            ["agentweaver.gateway"] = "sha256:0fa6e9f718b06a030172deda8ee0e509871b8bd10e9e8a74c13a37cbd8780dcd",
+            ["agentweaver.orchestrator"] = "sha256:6db6d03d226a8acb9cebf1c8e806aa337ffba40201c4daad0088eb6d3f55002e",
+            ["agentweaver.identity.broker"] = "sha256:d76177945cf05121120f8fbc6b4d7fe708f0c4e6adbbafbcafe449f52ce7e0b4",
+            ["agentweaver.projects.config"] = "sha256:33f1af287e19ac8854952dc379e685397cda2e5068b7734dc35c83f4a32b3378",
+        };
+
+        Dictionary<string, string> selected =
+            AcceptanceDeploymentEvidenceProvider.ValidateBoardImageManifest(new JsonObject { ["images"] = images.DeepClone() });
+
+        Assert.Equal(4, selected.Count);
+        Assert.Equal(images["agentweaver.gateway"]!.GetValue<string>(), selected["agentweaver.gateway"]);
+        Assert.Throws<InvalidDataException>(() =>
+            AcceptanceDeploymentEvidenceProvider.ValidateBoardImageManifest(new JsonObject
+            {
+                ["images"] = new JsonObject { ["agentweaver.gateway"] = images["agentweaver.gateway"]!.DeepClone() },
+            }));
+        JsonObject imagesWithExtra = images.DeepClone().AsObject();
+        imagesWithExtra["agentweaver.unreviewed"] = "sha256:" + new string('f', 64);
+        Assert.Throws<InvalidDataException>(() =>
+            AcceptanceDeploymentEvidenceProvider.ValidateBoardImageManifest(new JsonObject { ["images"] = imagesWithExtra }));
+    }
+
+    [Fact]
     public async Task KubernetesReadbackAcceptsSparseSourceTagSelectionAndMeasuresAgentHostFromGhcr()
     {
         RegistryFixtureSet registry = CreateRegistryFixtureSet();
