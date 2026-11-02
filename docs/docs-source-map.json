@@ -11,6 +11,8 @@
     "docs/authoring/templates/explanation.md",
     "docs/authoring/templates/troubleshooting.md",
     "docs/authoring/templates/architecture.md",
+    "docs/authoring/templates/specification.md",
+    "docs/authoring/templates/adr.md",
     "docs/guide/find-cli-commands.md",
     "docs/index.md",
     "docs/guide/quickstart.md",

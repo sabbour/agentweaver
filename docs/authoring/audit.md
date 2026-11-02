@@ -76,6 +76,15 @@ no legacy checkout was opened or modified.
 
 ## What this delivery does and does not resolve
 
+The audited snapshot contains concrete specifications under `docs/specs/` and
+two canonical ADRs: `0001-platform-architecture.md` (Proposed) and
+`0002-project-issue-sync-delegation.md` (accepted and implemented in source,
+not deployed). It does **not** contain reusable Markdown specification or ADR
+templates. This delivery adds both. Their prior art is the existing descriptive
+spec filenames, numbered ADR home/titles and explicit statuses—not a claim that
+the templates already existed. The concise context/decision/consequences of
+ADR 0002 are useful structure; the new ADR template keeps one decision per record.
+
 [Standards delivery](https://github.com/sabbour/agentweaver/issues/2506) adds the
 authoring guide, original templates, source comparison, this audit and one
 worked task. The [broader reader-doc/comment repair](https://github.com/sabbour/agentweaver/issues/2204)
