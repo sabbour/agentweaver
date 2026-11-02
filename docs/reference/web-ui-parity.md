@@ -1,9 +1,11 @@
-# Web UI parity and v1 adaptations
+# Web UI comparison and v1 adaptations
 
-The v1 Web client reuses the 0.x visual language and the 0.x interactions that
-v1 services support. It does not restore the old monolith's API, and it does not
-guess data that a service doesn't return. This page lists each 0.x surface,
-what v1 shows today, and each 0.x endpoint that still has no v1 route.
+Use this source comparison to find which 0.x Web interactions the v1 client
+implements and which routes or data remain unavailable. It describes checked-in
+source and controlled screenshots, not a deployed product or live acceptance.
+The v1 Web client reuses the 0.x visual language and interactions that v1
+services support. It does not restore the old monolith's API or guess data that
+a service does not return.
 
 The visual baseline is the 0.x web app on the `dev` branch. The v1 client keeps
 that app's shell and shared components and fills them with v1 service data.

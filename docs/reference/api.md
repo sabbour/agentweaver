@@ -12,14 +12,21 @@ For runtime settings, see [Runtime configuration](./runtime-configuration.md).
 The Gateway's `GET /openapi/v1.json` returns the versioned public schemas, which
 the [MCP tools](./mcp-tools.md) reference uses.
 
+The checked-in release/Kustomize composition still includes MCP compatibility
+image, workload and ingress resources. Their presence does not make MCP a
+supported 1.x product or acceptance surface. Supported client paths are
+Gateway/API, browser and native .NET CLI. Outbound remote MCP connections are
+separate.
+
 ## CLI operation discovery
 
 The native `agentweaver api operations`, `api describe`, and `api invoke`
 commands use the Gateway's currently served `GET /openapi/v1.json` document;
-they do not maintain a separate route inventory or apply the MCP admission
-filter. Supported public operations remain in the CLI catalog even when MCP
-does not expose them. The direct `agentweaver rest` command can address an
-uncatalogued path on the same Gateway origin, but this does not add that route
+they do not maintain a separate route inventory or apply the retained MCP
+compatibility adapter's admission filter. Supported public operations remain
+in the CLI catalog even when the adapter does not expose them. The direct
+`agentweaver rest` command can address an uncatalogued path on the same Gateway
+origin, but this does not add that route
 to the catalog or prove operation/API parity. See the [CLI guide](../guide/cli.md#make-a-direct-gateway-request).
 
 Identity Connection browser BFF routes, including `/api/connections/...`, are
@@ -32,8 +39,9 @@ commands, authorization, and current distribution status, see the
 
 These routes do not require a run. They require an authenticated project Owner
 with `api.read` and `projects.admin`; run-bound and purpose-bound tokens are
-rejected. Gateway exposes them under `/api/v1`. Generated MCP tools prefix the
-operation IDs with `agentweaver_`.
+rejected. Gateway exposes them under `/api/v1`. The retained MCP compatibility
+adapter prefixes its generated tool operation IDs with `agentweaver_`; this is
+source behavior, not a supported 1.x use path.
 
 | Gateway route | Native owner | Operation ID |
 | --- | --- | --- |

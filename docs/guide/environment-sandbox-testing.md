@@ -5,22 +5,6 @@ leases, suspend and resume, or BuildTest. Most checks use controlled owners,
 providers, and Kubernetes responses. A passing source test does not prove a
 live Kubernetes, CSI, or Cilium effect.
 
-For root-registration and dispatch-egress regressions, run:
-
-```powershell
-dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj `
-  --filter "FullyQualifiedName~PublicConfirmedPlanRevalidatesPrePlanRootRegistrationBeforeEgress|FullyQualifiedName~PlacementEgressRequiresCompletePinnedEvidenceWithoutClaimingHostReadiness" `
-  --configuration Release --verbosity quiet
-```
-
-These real-PostgreSQL cases cover pre-plan registration after public confirmation,
-verified placement egress, denied candidate/pending plans and expired leases, and
-supported child turn registration. They do not prove native child execution or a
-completed checkpoint join. Egress verification is read-only and requires fresh
-`ReadRunSelection` authority bound to the exact project and run, before and after
-provider I/O. It does not require `WriteProjects`; applying or reconciling network
-policy still does, and remains denied to run-bound tokens.
-
 ## Prerequisites
 
 Install the .NET 10 SDK selected by `global.json`. PostgreSQL-backed tests use
@@ -34,6 +18,25 @@ construction and execution.
 
 Each numbered section is an independent test procedure. Run only the sections
 that match the behavior you changed or need to verify.
+
+## Test root registration and dispatch egress
+
+Run this selection for root-registration and dispatch-egress regressions:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj `
+  --filter "FullyQualifiedName~PublicConfirmedPlanRevalidatesPrePlanRootRegistrationBeforeEgress|FullyQualifiedName~PlacementEgressRequiresCompletePinnedEvidenceWithoutClaimingHostReadiness" `
+  --configuration Release --verbosity quiet
+```
+
+These real-PostgreSQL cases cover pre-plan registration after public
+confirmation, verified placement egress, denied candidate or pending plans,
+expired leases, and supported child turn registration. They do not prove
+native child execution or a completed checkpoint join. Egress verification is
+read-only and requires fresh `ReadRunSelection` authority bound to the exact
+project and run, before and after provider I/O. It does not require
+`WriteProjects`; applying or reconciling network policy still does, and remains
+denied to run-bound tokens.
 
 The [P1 creation evidence contract](../reference/p1-creation-evidence.md) has
 separate read-only join selections:

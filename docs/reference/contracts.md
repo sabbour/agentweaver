@@ -10,6 +10,12 @@ To configure a provider, follow [Configure providers](../guide/configure-provide
 For runtime settings and deployment configuration, see
 [Runtime configuration](./runtime-configuration.md).
 
+The checked-in release/Kustomize composition still includes MCP compatibility
+image, workload and ingress resources. Their presence does not make MCP a
+supported 1.x product or acceptance surface. Supported client paths are
+Gateway/API, browser and native .NET CLI. Outbound remote MCP connections are
+separate.
+
 ## Project role display
 
 The Projects & Config owner includes `effectiveRoles` in every `ProjectSummary`
@@ -89,11 +95,13 @@ Dismissal is a separate caller record, not a decision. See
 ## Azure public routing
 
 The managed Azure Gateway uses one HTTPS listener for the wildcard managed
-domain. Broker, Web, Gateway API, and MCP HTTPRoutes attach to that listener
-with exact hostnames and their existing path and backend rules. This lets a
-Broker request remain routable when HTTP/2 reuses a Portal connection; an
-unknown hostname still has no matching route. This topology does not change
-the authentication or authorization contract of any service.
+domain. Broker, Web, Gateway API, and MCP compatibility HTTPRoutes attach to
+that listener with exact hostnames and their existing path and backend rules.
+The compatibility route does not make MCP a supported 1.x product or
+acceptance surface. This lets a Broker request remain routable when HTTP/2
+reuses a Portal connection; an unknown hostname still has no matching route.
+This topology does not change the authentication or authorization contract of
+any service.
 
 ## Provider contract
 
@@ -410,9 +418,10 @@ body preserves legacy behavior. Both modes keep the existing
 matches the opaque code against the accepted repository and stores exact provider
 IDs server-side.
 
-The browser lifecycle, user-level selection APIs, and callbacks are not exposed
-as first-party MCP tools. Run-bound repository operations in the finite OpenAPI
-catalog remain available as ordinary MCP tools and require `tenantSelector`.
+The browser lifecycle, user-level selection APIs, and callbacks are not in the
+retained MCP compatibility adapter's catalog. The adapter's source catalog
+includes run-bound repository operations, which require `tenantSelector`;
+this does not make those operations a supported MCP client surface.
 The Workspace's configured-repository browser uses these Gateway reads:
 
 | Method and path | Contract |
@@ -434,10 +443,12 @@ Run-produced files are available through the Source Control output-capture
 operations: capture, list, read, diff, and file. They read pinned, immutable
 captures; no raw filesystem Gateway proxy is part of this contract.
 
-## First-party MCP client
+## Retained first-party MCP compatibility adapter
 
-`Agentweaver.Mcp` provides a Model Context Protocol (MCP) Streamable HTTP
-endpoint at `POST /mcp`.
+The checked-in `Agentweaver.Mcp` source provides a Model Context Protocol (MCP)
+Streamable HTTP endpoint at `POST /mcp`. This compatibility adapter is not a
+supported 1.x product or acceptance surface; the details below describe its
+source contract only.
 `tools/list` reflects only compatible operations and schemas from the served
 Gateway OpenAPI catalog; `tools/call` maps to those fixed `/api/v1` Gateway routes.
 It does not accept an owner URL, identity, role, or authorization decision from

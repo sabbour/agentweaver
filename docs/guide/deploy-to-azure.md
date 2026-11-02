@@ -306,12 +306,19 @@ for identity, connection, audience, and provider settings.
 Before applying the product bundle, create or verify the resources that the
 Kustomize base intentionally does not own:
 
+The checked-in release/Kustomize composition still includes MCP compatibility
+image, workload and ingress resources. Their presence does not make MCP a
+supported 1.x product or acceptance surface. Supported client paths are
+Gateway/API, browser and native .NET CLI. Outbound remote MCP connections are
+separate.
+
 1. Create the approved Identity Broker signing Secret and durable data
    protection key-ring volume.
-2. Provide the operator-owned Gateway and MCP backend TLS Secrets and the
-   public backend CA ConfigMap. Each certificate must match the service DNS
-   name required by the manifests. AKS creates `identity-broker-tls` from a
-   managed `DefaultDomainCertificate`; do not create that Secret manually.
+2. Provide the operator-owned Gateway and MCP compatibility backend TLS
+   Secrets, plus the public backend CA ConfigMap. Each certificate must match
+   the service DNS name required by the manifests. AKS creates
+   `identity-broker-tls` from a managed `DefaultDomainCertificate`; do not
+   create that Secret manually.
 3. Resolve all required runtime ConfigMap values before applying the product
    bundle. For an existing installation, use the
    [immutable ConfigMap update procedure](../reference/runtime-configuration.md#update-an-immutable-configmap).
@@ -389,8 +396,8 @@ with `SELECT` on `identity_broker.broker_users`. The Projects & Config
 migration role cannot read the `identity_broker` schema. `Email` is optional and
 can be empty, so confirm the row by display name and creation time:
 
-A separate live login check using a second account has not been completed and
-remains pending. Installation does not depend on that check.
+This procedure does not perform or claim a separate live login check with a
+second account. Installation does not depend on that check.
 
 ```sql
 SELECT "Id", "Email", "DisplayName", "CreatedAt"
