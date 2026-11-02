@@ -1,13 +1,17 @@
 # Knowledge and memory
 
-Use this concept to understand how the unpublished .NET 10
-`Agentweaver.Knowledge` service candidate stores project memory and builds
-context for a run. Knowledge owns the memory API, context compiler, and
+Knowledge turns authorized records into bounded context. It is not the run
+journal: a Memory or Decision describes reusable knowledge, while an Events
+entry records committed activity. A pending record is not an approved decision.
+
+The .NET 10 `Agentweaver.Knowledge` service owns the memory API, context compiler, and
 immutable run-provider bindings in its PostgreSQL `knowledge` schema. The
 selected Memory provider stores records,
 revisions, idempotency receipts, and accepted-effect delivery state. Source
 presence does not prove deployment or delivery of an accepted outcome to
-Events. Project facts remain separate from the Sessions run journal.
+Events. Project facts remain separate from the Sessions run journal. The
+[Knowledge deep dive](../deep-dive/knowledge-memory.md) follows provider
+binding, context compilation and accepted-effect delivery.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'">

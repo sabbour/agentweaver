@@ -1,11 +1,19 @@
 # Providers and models
 
+## 1–4. Goals, constraints, context and strategy
+
 Use this page to understand how Agentweaver selects a provider adapter and
 binds a run to a concrete resource and model. Selecting a provider identifies
 an eligible adapter; it does not provision a resource, authorize a caller, or
 prove backend health.
 
-## Understand provider selection
+The common resolver enforces contract shape, while resource owners retain
+negotiated facts. This avoids backend-specific assumptions in callers at the
+cost of rejecting fallback when a pinned resource changes.
+
+## 5. Building blocks and seams
+
+### Understand provider selection
 
 A provider seam separates a platform contract from its backend implementation.
 A catalog descriptor advertises eligibility. The resource owner negotiates and
@@ -33,7 +41,7 @@ stores secret values.
 The current `ProviderSeam` enum contains 15 seams. Canvas appears in the
 architecture plan, not in this enum or the resolver.
 
-## Match resolution to seam cardinality
+### Match resolution to seam cardinality
 
 | Form | Seams | Resolution behavior |
 | --- | --- | --- |
@@ -54,7 +62,9 @@ implementation. Both advertise the provider-neutral `SessionsCapabilities`
 names from `Agentweaver.Abstractions`. The resolver matches the adapter
 version exactly, so both report Sessions adapter contract `1.0.0`.
 
-## Resolve and pin a resource
+## 6. Runtime view
+
+### Resolve and pin a resource
 
 Before resolving, load the enabled platform catalog and provide the accepted
 project selection and required adapter, options-schema, and capability
@@ -82,7 +92,7 @@ not widen results across projects or change the run's exclusive provider pin.
 A Source Control pull request result also carries the provider title when the
 provider returns one. After a run creates or reuses a pull request, the
 Orchestrator records it for the project pull request list. Recording begins
-only when the optional, code-only migration 032 is applied, and the title
+only when migration 032 is applied, and the title
 doesn't change merge-intent hashes.
 
 Network pinning also requires the confirmed applied-intent generation. Cost
@@ -94,7 +104,7 @@ For supported catalog settings and provider setup, see the
 [provider configuration guide](../guide/configure-providers.md) and the
 [runtime configuration reference](../reference/runtime-configuration.md).
 
-## Bind a model to native execution
+### Bind a model to native execution
 
 Projects & Config selects a project model reference or platform default from
 the accepted available references. `RuntimeModelBindingsResolver` maps that
@@ -118,7 +128,7 @@ configuration. The resulting native prompt setting controls compaction; it does
 not guarantee that every internal provider request stays below a hard
 admission threshold.
 
-## Diagnose resolution failures
+### Diagnose resolution failures
 
 Catalog and resolver failures identify invalid configuration, missing or
 disabled providers, denied overrides, incompatible versions, missing
@@ -126,6 +136,35 @@ capabilities, or pin mismatches. Owners keep these failures explicit.
 
 Changing the catalog or model map does not update an accepted resource or model
 pin in place. A backend failure does not authorize fallback.
+
+## 7–9. Deployment, shared concepts and decisions
+
+The catalog/resolver is a library, not a resource provisioner. Owner hosts load
+their registered catalogs and options; adapters use separately prepared
+backend resources. [Deployment](./infra-deployment.md) maps those resources,
+while [AgentHost](./agent-runtime.md) applies the accepted concrete model pin.
+
+Current authority remains independent of capability negotiation and pinning.
+The [provider seam design](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/provider-seams.md)
+describes the broader model; the
+[canonical ADR view](./00-system-overview.md#9-architecture-decisions) retains
+decision status. Planned Canvas is not a current enum/resolver capability.
+
+## 10–12. Quality, risks and glossary
+
+| Context and stimulus | Response and measure | Verification state |
+| --- | --- | --- |
+| Caller uses a single-provider resolver on a composite seam | Return `UnsupportedCardinality`, not the first registration | Resolver tests |
+| Catalog/options/resource generation differs from a saved pin | Fail verification; do not select a new default | Resolver and owner binding tests |
+| Accepted model reference is missing, disabled or changes mode | Reject resolution rather than choose a nearby model | Model binding tests; not paid-provider validation |
+
+Advertised capabilities can differ from negotiated resource capabilities.
+Owners must validate both before saving a pin and keep unavailable pricing or
+unknown SDK provider attribution explicit.
+
+**Terms:** seam is a contract boundary; candidate is eligible metadata;
+negotiation reports actual resource facts; pin retains those facts; model
+reference names a separate execution choice.
 
 ## Related content
 

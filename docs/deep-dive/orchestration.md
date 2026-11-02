@@ -1,5 +1,7 @@
 # Orchestration
 
+## 1–4. Goals, constraints, context and strategy
+
 Use this page to understand how the Orchestrator turns confirmed intent into
 controlled execution. The HTTP host owns durable state, including Microsoft
 Agent Framework (MAF) checkpoints, and calls other owners. Its Core library
@@ -17,7 +19,7 @@ Keep three questions separate:
 A model can propose a decision. It cannot replace typed approval, create its
 own resource pin, or mark a platform gate complete.
 
-## Find the implementation
+## 5. Building blocks and state ownership
 
 Project backlog records carry task content, an open/closed lifecycle, a typed
 repository issue link, and optimistic task and graph revisions. Content
@@ -27,7 +29,7 @@ selection and prerequisite evidence. See
 [Project backlog content](../reference/api.md#project-backlog-content) for
 the authorized routes, bounds, and lifecycle rules.
 
-## Periodic repository issue sync
+### Periodic repository issue sync
 
 The optional `IssueSyncWorker` polls due project settings every five seconds.
 It runs at most 16 due projects per poll, serially, with a database advisory
@@ -85,9 +87,10 @@ existing work to another repository.
 
 The owner routes and exact settings bounds are documented in
 [the API reference](../reference/api.md#periodic-issue-sync).
-This is code-only capability: migration 027, the Identity grant migration,
-runtime grants and dedicated service TLS profiles require separate approval
-and have not been applied or deployed.
+Migration 027, the Identity grant migration, runtime grants and dedicated
+service TLS profiles are separate prerequisites. The source contract does
+not establish that those prerequisites have been applied or that a cycle
+has run in a deployment.
 
 | Source | Responsibility |
 | --- | --- |
@@ -105,7 +108,7 @@ The endpoint and store files are under
 `services/orchestrator/Agentweaver.Orchestrator/`. Domain contracts and
 validation rules are under `services/orchestrator/Agentweaver.Orchestrator.Core/`.
 
-## List stored project issues and pull requests
+### List stored project issues and pull requests
 
 The Orchestrator serves two project lists from stored data, without a provider
 call. `ProjectIssueReadStore` reads backlog tasks that issue sync linked to a
@@ -114,13 +117,15 @@ the project's runs created or reused. `ProjectSourceControlEndpoints` checks
 Projects read authority before and after each read, so a caller that loses
 permission during the read gets `403` and no items.
 
-Pull request records come from optional, code-only migration 032. Startup and
-the default migrator don't require or apply it. Until a separately approved
-step applies it, the pull request list returns
+Pull request records require migration 032. The reviewed maintenance plan
+applies it with its exact runtime grant; startup also accepts a complete
+pre-032 schema during rollout. Before maintenance applies it, the list returns
 `503 pull_request_records_unavailable`. After that, it lists only pull requests
 recorded from that time on. See the [API reference](../reference/api.md#project-issue-and-pull-request-lists).
 
-## Understand workflows, plans, and gates
+## 6. Runtime view
+
+### Understand workflows, plans, and gates
 
 A workflow is a versioned catalog of steps. Its step mode defines who creates
 the work:
@@ -197,7 +202,7 @@ request ID, actor, and fence; exact replay returns the saved result.
 Acknowledging a message records receipt. It does not approve an outcome,
 confirm a workflow, or complete work.
 
-## Create and confirm a plan
+### Create and confirm a plan
 
 Before proposing work, the run needs an accepted Projects selection and current
 authority. The selected workflow and plan must match that run context.
@@ -226,7 +231,7 @@ Owner routes are rooted at
 public routes. Use [contracts and endpoints](../reference/contracts.md) for
 request shapes.
 
-## Dispatch ready work
+### Dispatch ready work
 
 Before dispatch, provide an explicit `actions/dispatch` request with the
 expected decision-state version and WorkPlan ID. The plan must still be
@@ -255,7 +260,7 @@ scheduler. Command-backed BuildTest delegates resource work to Environment
 while Orchestrator retains the accepted command and checkpoint. Source Control
 output and merge evidence use separate owner paths.
 
-## Promote a plan into backlog tasks
+### Promote a plan into backlog tasks
 
 Instead of dispatching a confirmed plan, the run owner can promote it into
 project backlog tasks with `POST .../backlog/promotions`. Promotion is allowed
@@ -275,7 +280,7 @@ changed. A retry with the same idempotency key returns the stored promotion.
 Tasks captured directly have no origin record. For request and response
 shapes, see [Plan promotion and task origin](../reference/api.md#plan-promotion-and-task-origin).
 
-## Enforce policy and runtime authority
+### Enforce policy and runtime authority
 
 Core's `ExecutableActionGuard` checks a current owner-issued grant before
 calling a protected operation. It evaluates policy, stores source evidence,
@@ -287,7 +292,7 @@ accepted selection, active session and work association, execution fence, and
 Environment placement before returning current runtime context. An earlier
 registration record alone does not authorize a turn.
 
-## Recover from uncertain execution
+### Recover from uncertain execution
 
 - A stale decision version or execution fence conflicts instead of applying
   work to a newer attempt.
@@ -307,7 +312,7 @@ registration record alone does not authorize a turn.
 A workflow checkpoint and native SDK cache are different recovery inputs.
 Restoring conversation context does not replay external effects.
 
-## Understand readiness evaluation
+### Understand readiness evaluation
 
 The Core backlog evaluator checks exact graph and task revisions against
 owner-projected prerequisite execution and output evidence. A dependency label
@@ -315,6 +320,41 @@ alone does not make a task ready.
 
 The schedule evaluator computes daily, weekly, and monthly occurrences in UTC.
 It is a pure function, not a hosted scheduling loop.
+
+## 7–9. Deployment, shared concepts and decisions
+
+The HTTP owner runs as a shared service over its PostgreSQL schema. Core is a
+library in that host; MAF checkpoints are owner state, not an SDK cache.
+AgentHost placement belongs to Environment and explicit dispatch reaches the
+registered runtime. See the [deployment view](./infra-deployment.md).
+
+Cross-owner calls preserve current [Projects](./projects-config.md) authority,
+[Identity](./identity-secrets.md) purposes and [Events](./events-sessions.md)
+evidence. Local checkpoints and stable operation IDs reduce duplicate logical
+work, but do not make external effects transactional.
+
+[ADR 0002](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/decisions/0002-project-issue-sync-delegation.md)
+records accepted/source-implemented issue-sync delegation, not deployment.
+The [platform ADR](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/decisions/0001-platform-architecture.md)
+remains Proposed. Neither status is inferred from this runtime inventory.
+
+## 10–12. Quality, risks and glossary
+
+| Context and stimulus | Response and measure | Verification state |
+| --- | --- | --- |
+| Dispatch restarts with a saved pending intent | Restore the same child/operation identity and reconcile result evidence | Checkpoint/owner restart tests; deployed recovery is separate |
+| Plan promotion races dispatch | Shared owner binding lock admits promotion or execution, not both | Backlog promotion/store tests |
+| RubberDuck returns `REQUEST_CHANGES` or malformed output | Keep dependents blocked; only first nonempty `PASS` can release them | Executor/dispatch tests |
+| Issue create response is lost | Recover the stable marker; unresolved outcome stays `issue_sync_create_outcome_pending` | Controlled issue-sync/store tests |
+
+A domain gate name is not an available executor. The dispatch owner must keep
+unsupported or incomplete gates visible rather than replace them with model
+work. External response loss requires reconciliation; an automatic scheduler
+or blind retry would not resolve it.
+
+**Terms:** workflow prescribes steps; WorkPlan proposes bounded work for open
+steps; gate records a typed confirmation; checkpoint retains progress; fence
+rejects an older attempt.
 
 ## Related content
 

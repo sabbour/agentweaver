@@ -1,14 +1,19 @@
 # Remote MCP connections
 
-Use this reference to understand the Environment-owned source contract for
-remote MCP (Model Context Protocol) connections. A connection stores an
-endpoint and its approved configuration; it does not by itself authorize or
-perform a remote tool call. The Environment source candidate is unpublished
-and not deployed.
+An outbound remote MCP connection records where an agent could discover tools
+and which configuration was reviewed. It is not permission to call a tool.
+Environment owns connection revisions and catalog pins; Identity owns credential
+bindings, and current execution authority remains separate.
+
+This page explains the implemented v1 Model Context Protocol (MCP) connection
+contracts and their execution limits. It does not establish a deployed remote
+call or a supported inbound product MCP server.
 
 ## Source boundary
 
-`Agentweaver.Environment` owns remote MCP connection configuration and catalog pin records. This source candidate is not published or deployed.
+`Agentweaver.Environment` owns remote MCP connection configuration and catalog
+pin records. The presence of these source contracts does not establish live
+credential delivery or protected remote execution.
 
 The Environment API stores connection state in PostgreSQL. Each create or update writes an immutable configuration revision. The connection head points to the current revision. Row revisions support compare-and-swap. Each mutation also requires an idempotency key.
 
@@ -230,7 +235,7 @@ late authority check and transport handoff.
 It supplies the reviewed HTTP method and target, not an actual emitted request.
 The receiving native transport must still check its built upstream method,
 target, and exact body bytes before a send.
-The Environment receiver now uses this helper on its built upstream request.
+The Environment receiver uses this helper on its built upstream request.
 The helper itself does not authenticate a caller, verify current owner state, prove network
 enforcement, return an acknowledgment, or permit credential use.
 Those separate checks remain required before any protected effect.

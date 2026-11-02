@@ -1,10 +1,18 @@
 # Identity and secrets
 
+## 1–4. Goals, constraints, context and strategy
+
 Use this page to understand how Agentweaver separates caller identity from
 permission to use a particular credential. An authenticated user does not
 automatically have access to every project or secret.
 
-## Distinguish identity from credential access
+The design separates upstream sign-in, current project permission and exact
+credential use. A credential request can therefore fail after authentication
+succeeds. It must not bypass revocation by relying on a previously signed token.
+
+## 5. Building blocks and trust boundaries
+
+### Distinguish identity from credential access
 
 Identity Broker is the service that signs Agentweaver tokens after upstream
 OpenID Connect (OIDC) sign-in. Projects & Config owns current project
@@ -46,7 +54,9 @@ hostname checks, the configured peer leaf pin, server-authentication purpose,
 the client certificate, and online revocation checks. Public issuer discovery
 and external OAuth providers continue to use normal system trust.
 
-## Understand token authority
+## 6. Runtime view
+
+### Understand token authority
 
 The Broker creates a local subject after validating upstream identity. It
 issues registered scopes and resource audiences, not upstream application
@@ -72,7 +82,7 @@ idempotency key. An exact retry returns its committed result. Reusing a key for
 different metadata conflicts. Revocation appends a revoked revision and
 preserves history.
 
-## Follow the sign-in flow
+### Follow the sign-in flow
 
 You need a registered client and a valid upstream OIDC sign-in to obtain an
 Agentweaver token.
@@ -92,7 +102,7 @@ Reusing a redeemed or revoked refresh token revokes its authorization and token
 family. A losing concurrent redemption also rejects the exchange and revokes
 the family.
 
-## Redeem a secret
+### Redeem a secret
 
 Before redemption, obtain a valid bearer for the bound actor, project, and run,
 and ensure an active grant covers the intended purpose and exact secret
@@ -122,7 +132,7 @@ authorization wrapper enforces run and purpose checks.
 For the supported configuration keys, see the
 [runtime configuration reference](../reference/runtime-configuration.md).
 
-## Understand runtime and connection credentials
+### Understand runtime and connection credentials
 
 Runtime credentials have separate registration and purpose checks. A bootstrap
 verifier is single-use and tied to runtime configuration. Source grants support
@@ -134,7 +144,7 @@ integrations. None grants a platform or project role. The credential-less
 sandbox gateway flow described in the architecture is a proposal, not a
 replacement for the implemented redemption paths.
 
-## Diagnose failures
+### Diagnose failures
 
 | Condition | Result |
 | --- | --- |
@@ -145,6 +155,35 @@ replacement for the implemented redemption paths.
 
 Redemption responses use `Cache-Control: no-store`. Error responses do not
 include backend diagnostics or secret bytes.
+
+## 7–9. Deployment, shared concepts and decisions
+
+Broker runs as a shared HTTPS owner with its PostgreSQL schema and configured
+OIDC/secret backends. Runtime identity reads migration history; the separate
+migration owner applies schema changes and canonical table grants.
+The [deployment view](./infra-deployment.md) describes target wiring.
+
+Projects remains the live role owner, while [AgentHost](./agent-runtime.md)
+consumes separate runtime purposes. Secret retrieval, project authority and
+network trust are complementary checks, not interchangeable evidence.
+See [canonical ADR statuses](./00-system-overview.md#9-architecture-decisions);
+the [credential-less proposal](../architecture/identity-secrets.md#credential-less-sandbox-proposal)
+does not replace implemented Sandbox credential delivery.
+
+## 10–12. Quality, risks and glossary
+
+| Context and stimulus | Response and measure | Verification state |
+| --- | --- | --- |
+| Grant is revoked while the backend retrieves a secret | Post-acquisition recheck denies and invalidates the credential | Secret-authority controlled tests |
+| Two requests redeem one refresh token concurrently | Atomic winner/loser handling rejects replay and revokes the family | Broker integration tests; not live upstream SSO |
+| Key Vault returns an exact-version credential | Lifetime is at most five minutes and no later than grant/vault expiry | Adapter/authority tests; not deployed vault access |
+
+An unexpired token can outlive a role or grant. Identity and resource owners
+must preserve rechecks and redacted errors; diagnostic backend failures must
+not disclose secret bytes.
+
+**Terms:** `SecretRef` is an exact-version reference; `SecretCredential` is an
+invalidatable in-memory value; a scope is a route permission, not a project role.
 
 ## Related content
 

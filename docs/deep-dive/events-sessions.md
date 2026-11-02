@@ -1,5 +1,7 @@
 # Events and sessions
 
+## 1–4. Goals, constraints, context and strategy
+
 Use this page to understand what Agentweaver records as durable run history
 and how that history differs from current execution state. Orchestrator owns
 the session tree, gates, execution fence, and turn state. Events & Sessions
@@ -9,7 +11,13 @@ and usage accounting.
 Replaying an event displays committed history. It does not approve a gate,
 deliver a tool call again, or restart a model.
 
-## Find the implementation
+Keeping history separate from execution lets readers reconnect without
+claiming work again. The cost is a distinct owner join: ordered journal
+entries and current Orchestrator state must agree where an operation needs both.
+
+<span id="find-the-implementation"></span>
+
+## 5. Building blocks
 
 | Source | Responsibility |
 | --- | --- |
@@ -27,7 +35,9 @@ These files are under `services/events-and-sessions/Agentweaver.EventsAndSession
 Shared journal and message contracts live in `packages/Agentweaver.Abstractions/`;
 outbox and inbox primitives live in `packages/Agentweaver.Persistence.Postgres/`.
 
-## Understand journal identity and provider pins
+## 6. Runtime view
+
+### Understand journal identity and provider pins
 
 A session identity contains project, run, and session IDs. Sessions in the same
 project/run share a monotonically advancing run position. Session replay filters
@@ -59,7 +69,7 @@ expired bytes fail rather than returning reconstructed content. Migration 010
 backfills committed references; it cannot discover older unreferenced objects
 because the Object Store contract does not list keys.
 
-## Append and replay events
+### Append and replay events
 
 Before appending, the caller needs an existing session, a valid event identity,
 and any producer-specific authority required for the material.
@@ -86,7 +96,7 @@ committed run pages, projects them, and rechecks Projects read authority before
 each emitted event.
 Neither replay path relies on a process-local event channel for durable history.
 
-## Deliver addressed messages
+### Deliver addressed messages
 
 An addressed message has a sender, recipient, thread, delivery mode, execution
 binding, and expiry. Its delivery record is separate from workflow decisions.
@@ -106,7 +116,7 @@ over queued messages, while the per-thread predicate preserves ordering.
 Acknowledgment records receipt only. The Orchestrator's separate gate operation
 decides approval. Message acceptance does not prove AgentHost executed a turn.
 
-## Read material and fork a session
+### Read material and fork a session
 
 The typed material interface accepts execution-bound content, not a
 caller-chosen Blob key or URL. Writes verify current Projects authority and
@@ -128,7 +138,7 @@ creates target session lineage under the saved provider binding. A cursor marks
 a history boundary; it does not grant permission to repeat the source session's
 effects.
 
-## Record usage and project facts
+### Record usage and project facts
 
 Usage writes consume immutable Orchestrator source receipts by reference. The
 consumer checks the source, pins Cost binding and rate-card identity,
@@ -142,7 +152,7 @@ reconciliation read priced totals through this boundary.
 Project accepted-effect facts use a separate stream. A project-level Knowledge
 change does not need a fabricated run or session identity.
 
-## Diagnose journal failures
+### Diagnose journal failures
 
 - Invalid versions, malformed cursors, and changed immutable events are rejected.
 - Missing or changed pinned providers block access instead of selecting a
@@ -154,7 +164,7 @@ change does not need a fabricated run or session identity.
 - Startup verifies the expected schema. Migration uses a separate `--migrate`
   path; serving traffic does not silently initialize the schema.
 
-## Use the optional AgentSessions provider
+### Use the optional AgentSessions provider
 
 The native PostgreSQL journal is the default Sessions provider. AgentSessions is
 one optional Sessions provider implementation in the separate
@@ -168,6 +178,35 @@ checks sequence, links, and fork lineage. The chain is unkeyed, so compare the
 verified head with a separately held head to detect truncation. See
 [Agent primitives proof of concept](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/agent-primitives.md)
 for the export format, failure codes, payload mapping, and current contract gaps.
+
+## 7–9. Deployment, shared concepts and decisions
+
+Events is a shared service backed by its PostgreSQL schema. Typed material
+adds private Blob composition through the Events workload identity; clients
+receive no Blob credentials. The [deployment view](./infra-deployment.md) and
+[material composition](../architecture/session-material-composition.md)
+describe topology, retention and cleanup separately.
+
+Current producer authority comes from Projects and Orchestrator, while
+[persistence](./persistence.md) supplies local outbox/inbox semantics.
+The [system decision view](./00-system-overview.md#9-architecture-decisions)
+links canonical ADRs; a provider capability is not an accepted architecture decision.
+
+## 10–12. Quality, risks and glossary
+
+| Context and stimulus | Response and measure | Verification state |
+| --- | --- | --- |
+| A committed event ID is retried | Same canonical content returns its saved position; changed content conflicts | Journal PostgreSQL tests |
+| A material reference expires during an object read | Deny before disclosure even if cleanup has not run | Material failure-recovery tests; controlled Object Store |
+| A message claim expires and another claimant wins | Reject the old claim owner/fence | Addressed-message store tests |
+
+Object bytes and references do not share a transaction. The Events owner must
+reconcile inventory and exact identities after uncertain writes; old
+unreferenced objects outside inventory remain undiscoverable.
+
+**Terms:** run position orders events across sessions; cursor scopes a replay
+boundary; claim fence protects message delivery; acknowledgment is receipt,
+not workflow approval.
 
 ## Related content
 

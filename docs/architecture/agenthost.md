@@ -1,13 +1,16 @@
 # AgentHost runtime architecture
 
-Use this reference to understand how the v1 AgentHost source runs model turns in
-the Sandbox selected by Environment, and what its readiness and accounting checks
-prove. A Sandbox is the selected execution environment for an agent. This
-AgentHost executable is an unpublished source candidate, not a deployed service:
-it has no automatic scheduler, live OAuth acceptance, or paid model evidence.
+AgentHost executes work; it does not decide which work is authorized. Environment
+owns its Sandbox placement, Orchestrator owns the current execution binding, and
+Identity owns purpose-bound credential access. AgentHost checks that those
+bindings still agree before native model turns and tools.
+
+This page explains the v1 source contracts behind readiness, execution and
+recovery. It does not report a live deployment or paid model acceptance.
+AgentHost has no automatic scheduler.
 The source pins `GitHub.Copilot.SDK` 1.0.18 to native runtime 1.0.97.
 Microsoft Agent Framework remains an Orchestrator dependency, not an AgentHost
-runtime. For host settings, see the planned
+runtime. For host settings, see the
 [runtime configuration reference](../reference/runtime-configuration.md).
 
 The current native SDK path consumes either a hosted access token or a

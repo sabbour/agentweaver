@@ -1,16 +1,19 @@
 # Providers and models
 
-Use this reference to understand how Agentweaver models provider choices and
-binds them to runtime resources. A provider seam is a contract boundary for
-one capability, such as Memory or Storage. An adapter implements that
-contract for a technology. The `Agentweaver.Abstractions` source currently
-defines 15 seams; a seam does not prove that its adapter or service is running.
-For configuration steps, see the planned
+Choose an adapter, negotiate a resource, then retain the binding. Those are
+three separate steps. A provider seam defines a capability such as Memory or
+Storage; an adapter implements it for a technology. Neither a catalog entry
+nor a resource pin grants authority or establishes backend health.
+
+`Agentweaver.Abstractions` defines 15 seams in v1 source. A model reference is
+not another seam: it resolves separately to an explicit native model and source
+mode. The [provider deep dive](../deep-dive/providers-models.md) explains the
+selection-to-execution path. For configuration steps, see the
 [provider configuration guide](../guide/configure-providers.md) and
 [runtime configuration reference](../reference/runtime-configuration.md).
 
 The [platform design](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/decisions/0001-platform-architecture.md#provider-seams)
-now plans 16 seams. Canvas is new P2 work, not a current enum member or implemented
+describes 16 seams. Canvas is planned work, not a current enum member or implemented
 resolver path. It separates A2UI and GitHub Canvas compatibility from Application Hosting.
 
 `ProviderDescriptor` records the seam, provider ID, adapter version, options-schema version, hosting pattern, and advertised capabilities. It contains no option values or credentials.
@@ -176,7 +179,7 @@ cross-service messaging endpoint.
 
 The Foundation Probe registers `azure-key-vault`, `azure-blob`, and `azure-monitor` descriptors for its checks. These registrations do not form a product provider catalog.
 
-Model is not a provider seam. The unpublished [AgentHost executable](agenthost.md)
+Model is not a provider seam. The [AgentHost executable](agenthost.md)
 uses the runtime library, not a new general model resolver. The library maps accepted references to actual SDK
 models through a registered connection and SDK catalog.
 This source does not declare deployed model-vendor support.
@@ -210,11 +213,12 @@ Copilot requires its supported GitHub credential path; BYOK requires an explicit
 SDK `Provider` configuration. A provider key, credential envelope, or GitHub App
 installation token must not be passed as an interchangeable Copilot `GitHubToken`.
 
-The source repair adds an explicit `SourceMode` to platform/project model
-settings. Hosted mode selects a stable Identity-owned `ConnectionId`; BYOK selects
+Platform/project model settings use an explicit `SourceMode`.
+Hosted mode selects a stable Identity-owned `ConnectionId`; BYOK selects
 an exact `CredentialReference`. Empty or unknown modes, invalid connection references,
 and mixed hosted/BYOK settings fail with standard errors.
-The Identity-owned connection lifecycle implements these contracts in source, not in a deployed service.
+The Identity-owned connection lifecycle implements these source contracts;
+that fact does not establish a deployed credential path.
 
 The accepted hosted selection and its hash remain immutable during normal token
 rotation. Each ModelSession receipt pins the current connection revision, exact secret

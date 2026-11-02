@@ -1,11 +1,19 @@
 # Projects and configuration
 
+## 1–4. Goals, constraints, context and strategy
+
 Use this page to understand how Projects & Config manages project authority,
 revisioned settings, and the immutable configuration snapshot for a run. A
 project is not a repository checkout: Environment and Source Control own the
 resources used to execute its accepted configuration.
 
-## Understand project authority and revisions
+Revisioned edits and immutable selections let a run retain its inputs while
+configuration evolves. The corresponding constraint is strict: stale edits
+conflict, and an unavailable accepted model cannot silently become another model.
+
+## 5. Building blocks and authority
+
+### Understand project authority and revisions
 
 Projects & Config stores project identity, lifecycle, team, skills, model
 selection, and provider choices. It separates editable configuration from an
@@ -45,7 +53,9 @@ The runtime database principal reads authority records but cannot mutate them.
 Setup and revocation use a separate privileged path. Ordinary service requests
 do not bootstrap membership.
 
-## Edit configuration safely
+## 6. Runtime view
+
+### Edit configuration safely
 
 Project metadata, project configuration, and platform runtime defaults have
 separate revision histories. Configuration contains typed model references,
@@ -65,7 +75,7 @@ When you update a revision, supply the expected current revision. The service
 appends a new revision and advances the head. If another writer wins first,
 your update conflicts instead of overwriting its change.
 
-## Accept a run selection
+### Accept a run selection
 
 Before acceptance, you need an active project, current Orchestrator authority,
 configured platform defaults, and the current configuration revisions. The
@@ -97,7 +107,7 @@ For supported setting names and project setup, see the
 [runtime configuration reference](../reference/runtime-configuration.md) and
 [provider configuration guide](../guide/configure-providers.md).
 
-## Review team and skill changes
+### Review team and skill changes
 
 Casting proposals stage a complete configuration draft for review. Scenario
 templates, blueprints, and manual role selections produce version-bound proposals.
@@ -119,7 +129,7 @@ assigned imported revisions, not later content from a marketplace source.
 Marketplace browsing and imported project content have different owners and
 lifetimes.
 
-## Recover from configuration errors
+### Recover from configuration errors
 
 Stale revisions, unavailable model references, invalid skill pins, and
 incompatible provider selections stop acceptance. The service does not replace
@@ -133,6 +143,35 @@ Fresh P1 operator initialization is separate: it verifies the operator can
 assume the dedicated migration owner before creating runtime roles, and runs
 Projects migrations plus reviewed runtime-grant reconciliation in one
 transaction. Runtime principals never own this schema or apply its DDL.
+
+## 7–9. Deployment, shared concepts and decisions
+
+Projects runs as a shared HTTPS owner over `projects_config`. Runtime reads
+authority records without mutating membership or applying DDL; separate
+privileged setup and migration paths perform those operations. See the
+[deployment view](./infra-deployment.md) for identity and grant prerequisites.
+
+Provider selection follows the [provider view](./providers-models.md);
+Identity tokens identify actors but do not replace Projects roles.
+The [system ADR links](./00-system-overview.md#9-architecture-decisions)
+retain actual statuses. This view does not define a new compatibility policy
+or turn an accepted configuration into a deployed resource.
+
+## 10–12. Quality, risks and glossary
+
+| Context and stimulus | Response and measure | Verification state |
+| --- | --- | --- |
+| Concurrent writers edit the same head revision | One advances; the stale request conflicts instead of overwriting | Projects PostgreSQL revision tests |
+| An identical run-selection request is retried | Return the immutable snapshot; changed input for the run conflicts | Selection transaction tests |
+| A user rejects a staged team proposal | Leave active configuration unchanged | Casting proposal tests |
+
+Legacy provider overrides remain loadable but do not drive new non-model
+selection. Clients must not present saved legacy values as eligible choices;
+the Projects owner must preserve that distinction in configuration reads.
+
+**Terms:** revision is editable-history position; selection is an immutable
+run snapshot; model eligibility is current startup-validated configuration,
+not any previously saved reference.
 
 ## Related content
 

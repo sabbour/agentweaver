@@ -1,293 +1,186 @@
 # Testing strategy
 
-Use this page to choose the smallest test that proves a behavior at its
-ownership boundary. Pure tests cover deterministic rules. PostgreSQL tests
-cover transactions and concurrency. Controlled transports cover external
-contracts. Deployed acceptance checks real source, identity, runtime, and
-cleanup.
+## 1–4. Goals, constraints, context and strategy
 
-These results are not interchangeable. Compiling a PostgreSQL test does not
-run it. A controlled browser-page test does not launch a browser. A successful
-surface journey does not prove every native execution boundary.
+Use the smallest test that observes a behavior at its ownership boundary.
+Deterministic rules, database concurrency, native SDK contracts and deployed
+acceptance need different evidence. Passing one layer does not establish
+another: compiling PostgreSQL tests does not run them, and a fixture is not a
+live provider.
 
-## Find the test suites
+This view explains the v1 verification architecture. Use the
+[testing guide](../guide/testing.md) for executable commands and prerequisites.
+Do not run live journeys against an unapproved target or replace a required
+PostgreSQL race with an in-memory implementation.
 
-| Location | Coverage |
+The strategy keeps fast pure tests near domain rules and uses the real local
+boundary where semantics depend on Git, PostgreSQL, native runtime or browser
+behavior. Controlled external transports make failures reproducible without
+claiming production credentials or service availability.
+
+## 5. Building blocks
+
+| Location | Responsibility and evidence boundary |
 | --- | --- |
-| `tests/` | .NET package and service suites |
-| `scripts/api-harness/` | Live OpenAPI discovery and controlled HTTP tests |
-| `scripts/ui-harness/` | Injected-page observation and owner receipt checks |
-| `scripts/mcp-harness/` | MCP transport, discovery, and tool-result tests |
-| `scripts/harness-shared/` | Target/auth guards, journeys, redaction, and acceptance results |
-| `apps/web/e2e/` | Playwright journeys against the built Web app with fake Broker and Gateway services, including Priority create/order, notes, conversation links, and reloads |
-| `scripts/coverage/` | Coverage collection and receipt guards |
-| `.github/workflows/v1-ci.yml` and `v1-docs-ci.yml` | Automatic source and documentation validation |
-| `.github/workflows/v1-integration-images.yml` | Direct GHCR image build and push |
-| `scripts/release/deploy-kustomize.mjs` | Local migration-first Kustomize apply and rollout checks |
+| `tests/` | .NET package/service tests; disposable PostgreSQL where transactions and locks matter |
+| `scripts/api-harness/` | OpenAPI discovery/client contracts and controlled HTTP |
+| `scripts/ui-harness/` | Injected-page observation and owner receipt contracts |
+| `scripts/mcp-harness/` | Retained compatibility transport, discovery and result tests |
+| `scripts/harness-shared/` | Target/auth guards, redaction, journeys and result contracts |
+| `tools/Agentweaver.Cli/` | Native .NET CLI API acceptance entrypoint |
+| `apps/web/e2e/` | Playwright journeys against built Web with controlled Broker/Gateway |
+| `scripts/coverage/` | Coverage execution, report validation and receipt guards |
+| `.github/workflows/v1-ci.yml` | Source validation aggregate and selected suites |
+| `.github/workflows/v1-docs-ci.yml` | Site, link, source-map and diagram checks |
+| `.github/workflows/v1-integration-images.yml` | Direct GHCR image build/publication, not acceptance |
+| `scripts/release/deploy-kustomize.mjs` | Migration-first apply and rollout checks, not product journey proof |
 
-## Choose the right test boundary
+## 6. Runtime view
 
-Ordinary tests do not require cloud credentials. Provider and identity tests
-use in-memory state, fake HTTP/Azure transports, and local hosts. Source
-Control tests use real isolated Git repositories for file behavior and
-controlled GitHub responses for remote behavior.
+### Match the stimulus to the boundary
 
-Project-wide Knowledge discovery is covered by service boundary tests and
-provider tests for project isolation and all-agent search. Web API and page
-tests check that discovery needs no run or agent in the request path and that
-records from distinct provider resources share one globally ordered page. The
-returned access run authorizes revision-history reads; it is not record
-provenance. These tests use controlled owner responses and provider stores;
-they do not prove a deployed service.
+| Contract under test | Representative stimulus and observation | Not established by that test |
+| --- | --- | --- |
+| Pure workflow/provider rules | Invalid graph, cardinality, version or capability returns structured rejection | A database commit or available backend |
+| Owner transactions | Concurrent claims, stale revisions, lost authority and restart replay against PostgreSQL | Deployed service behavior |
+| Source Control | Real isolated Git workspaces; controlled GitHub HTTP, expected heads and raw-byte HMAC | Live GitHub permission or merge approval |
+| Broker/grants | Concurrent refresh redemption, exact-purpose checks and revocation after waits | Live upstream SSO or Key Vault access |
+| AgentHost | Pinned native SDK against controlled loopback endpoint; inspect bearer/model/path and emitted evidence | Hosted Copilot or paid BYOK acceptance |
+| Browser | Built application with controlled services or injected page contract, depending on suite | Production sign-in or a different browser journey |
+| Deployment tooling | Manifest inputs, local renders and controlled transports | Actual target permissions, rollout or native resource behavior |
 
-Store suites use disposable PostgreSQL through Testcontainers, which runs
-PostgreSQL in a container. These cases require Docker-compatible container
-access. Broker browser integration uses Chromium through Playwright. Native
-AgentHost tests use separately configured native runtime or image fixtures.
+For example, RubberDuck durable tests restore checkpointed operation and
+response after restart, preserve `REQUEST_CHANGES` as failure, and reject
+changed evidence before an owner call. Pure tests alone cannot establish that
+restart behavior.
 
-Do not replace a required database case with an in-memory provider and claim
-the same evidence: row locks, advisory locks, transactional rollback, and
-lease races require PostgreSQL.
+Broker database tests reproduce SQLSTATE `42501`, exercise the canonical
+migration/grant path, reject history writes and verify that read-only checks
+do not repair grants. Projects initialization tests verify dedicated-owner
+access before writes and rollback on reconciliation failure.
 
-The Orchestrator Core suite covers RubberDuck's deterministic contract and
-recovery rules with pure tests, and exercises durable restart behavior with
-PostgreSQL. The durable cases verify that an owner retry after restart reuses
-the checkpointed operation and recorded response, that `REQUEST_CHANGES` stores
-a failed receipt and blocks Merge, and that changed recorded evidence is
-rejected before an owner call. These cases are not covered by the focused
-non-PostgreSQL test filter.
+Orchestrator store tests exercise migration 032, its first-applied coverage
+time and partial-state rejection. A complete pre-032 schema remains valid
+during rollout; the project list returns
+`503 pull_request_records_unavailable` until maintenance applies the migration.
 
-The Broker migration and bootstrap suites use disposable PostgreSQL to
-reproduce SQLSTATE `42501` on migration history, verify the production
-migration/grant path, repair a missing grant on a no-pending-migrations rerun,
-and reject history writes. They also confirm that read-only verification
-does not repair missing grants. These cases do not change live permissions.
-Foundation Probe's continuation PostgreSQL suite also exercises fresh
-Projects initialization under the dedicated owner, refusal before writes when
-the operator cannot assume it, and transaction rollback of the schema and
-temporary membership when grant reconciliation fails.
+Knowledge discovery tests verify project isolation, all-agent search, one
+global order across resources, and history access through `accessRunId`.
+That access binding is not `sourceRunId` provenance or deployed discovery.
 
-The Orchestrator store suites prove that the reviewed migration plan applies
-032 with the rest of the Core catalog, preserves its first-applied coverage
-time on replay, and rejects partial table-and-ledger state. Startup still
-accepts a complete pre-032 schema during rollout; the list returns
-`503 pull_request_records_unavailable` before the maintenance run and returns
-stored create or reuse records after it. The full owner journey in
-`CoordinationMessageIntegrationTests` checks the recorded pull request through
-the native and Gateway routes.
+### Separate canonical acceptance from compatibility tests
 
-Harnesses preserve HTTP errors, owner denials, and `202 Accepted` responses as
-distinct from completed work. They record correlation and revision/fence
-evidence. Redaction runs before durable JSON Lines output; transient raw
-bodies are not saved as the transcript.
+Canonical 1.x API acceptance runs the native .NET apphost with
+`agentweaver test --input <manifest> --output <new-evidence-file>`. Use the
+source-published apphost or exact extracted distribution executable for the
+question being tested. The Node `harness:p1 -- --surface api` path delegates
+to it through `AGENTWEAVER_CLI_PATH`; it does not fall back to a Node API runner.
 
-The P1 one-account launcher shares one fresh browser session across setup and
-API/MCP run authorization. Each surface retains its own fixture and evidence
-file. Its loopback Chrome regression checks redirect-hop callback blocking
-before the Portal can consume the code, including an invalid state and
-redirected Broker consent. Shared
-contract tests check multi-surface execution and a callback that arrives while
-navigation is still pending. These tests do not use Entra or prove live SSO.
-See [Test API, UI, and retained MCP compatibility code](../guide/testing.md#test-api-ui-and-retained-mcp-compatibility-code)
-for the commands.
+The manifest selects the target. `--interactive` explicitly permits browser
+authorization; a live journey creates and cleans up fixtures and requires a
+separately approved non-production target. Successful `--dry-run` performs no
+network/authentication/browser work and writes no evidence, even when
+`--interactive` is present. Validation failure may write a blocked result.
+See the [CLI guide](../guide/cli.md) and [testing guide](../guide/testing.md)
+for the full input, target and execution contract.
 
-Authentication helpers check supplied token metadata and expiry. Broker,
-Gateway, and resource services remain responsible for server-side signature
-validation and current owner authorization.
+The retained `/mcp` harness exercises compatibility code only. It preserves
+`isError`, validates discovery pages/cursors, and distinguishes accepted from
+completed results. It is not a supported 1.x product or acceptance surface;
+the API entrypoint rejects `--surface mcp` and `--surface api,mcp`.
 
-## Run local validation
+The UI contract uses an already-authorized page on the exact Web origin. It
+does not sign in or seed browser storage. A fake-service Web end-to-end test
+and an injected-page test must not be reported as a live UI journey.
 
-From the repository root, restore and build with the canonical commands:
+### Preserve evidence and blocked outcomes
 
-```powershell
-dotnet restore Agentweaver.slnx --locked-mode
-dotnet build Agentweaver.slnx --no-restore --configuration Release
-```
+Harnesses keep HTTP errors, owner denials and `202 Accepted` separate from
+completion. Redaction precedes durable JSON Lines output; transient raw bodies
+are not the transcript. Token helpers check metadata/expiry; servers still
+validate signatures and current authority.
 
-Then run the affected test project. For example, the
-[testing guide](../guide/testing.md) includes this Source Control suite command:
+Native evidence must join registration, invocation binding, Environment
+creation, actual Pod/mount observations and Host evidence. Registration
+`placementUid` is the SandboxClaim identity, not the actual Pod UID. A policy
+readback, readiness receipt, usage read or locator-only no-send result cannot
+replace complete turn, cursor, effect and dispatch/recovery evidence.
 
-```powershell
-dotnet test tests\Agentweaver.SourceControl.Tests\Agentweaver.SourceControl.Tests.csproj --no-build --no-restore --configuration Release
-```
+Native and dispatch-recovery envelopes preserve supplied receipts and reject
+malformed, inconsistent, duplicate or extra fields. `receiptSha256` detects
+content changes, not authorship. `passed` requires nonempty evidence; native
+cleanup must be completed or not required, and read-only recovery must report
+no created resources. Missing required evidence stays blocked.
 
-Run the controlled harness contract suites without contacting a deployed
-environment:
+Distinct-actor denial requires a genuinely distinct authorized test identity.
+Do not substitute the same user, a temporary role change or an invalid locator.
+A one-account flow does not establish full denied-actor coverage.
 
-```powershell
-npm run test:harness:api
-npm run test:harness:ui
-npm run test:harness:mcp
-```
+Artifact/source and deployment evidence remains separate from the product
+journey. Follow the [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md)
+for current publication/deployment operations; do not infer acceptance from
+their success or introduce an image archive/publication-receipt handoff.
 
-The API suite uses controlled loopback HTTP. The UI suite uses an injected-page
-contract. The MCP suite includes a real SDK connection to a controlled
-loopback JSON-RPC HTTP server. Locked dependencies live under
-`scripts\mcp-harness`.
+## 7–9. Execution environments, shared concepts and decisions
 
-## Understand API, UI, and retained MCP compatibility code
+Pure and controlled tests run locally or in CI. PostgreSQL cases require
+Docker-compatible Testcontainers; Broker browser integration requires
+Playwright Chromium; native tests require the configured pinned runtime/image.
+These dependencies are test environments, not a product deployment topology.
 
-The API client discovers `/openapi/v1.json` and invokes advertised `/api/v1`
-operations. It rejects unknown operation IDs, extra parameters, cross-origin
-requests, and redirects.
+`v1-ci.yml` reports the `foundation` aggregate across selected image, Web,
+Node and .NET jobs. Path selection limits expensive suites without turning
+skipped work into evidence. Broker method shards retain per-shard TRX
+receipts; caches hold dependencies, not mutable databases, browser contexts
+or build output. Go reference tests under `tools/agent-primitives` produce
+AgentSessions fixtures compared with the .NET verifier.
 
-The UI adapter accepts an already-authorized page on the exact Web origin. It
-observes real Gateway request/response shapes and validates tenant, actor,
-gate, and owner receipt bindings. It does not sign in or seed browser storage.
+Coverage is an artifact, not a passing-test count. .NET collection requires
+distinct Cobertura/TRX receipts and expected assemblies; Node coverage requires
+executed release-validator lines. Reports live under
+`artifacts/coverage/dotnet/` and `artifacts/coverage/node/`. Weekly
+`v1-coverage.yml` instrumentation is separate from ordinary PR/push/manual CI.
+Combined reports retain the newest passing attempt for each suite.
 
-The retained MCP adapter uses Streamable HTTP at `/mcp`. It reads all
-tool-discovery pages, rejects duplicate or foreign tools and repeated cursors,
-and checks the structured owner result. It preserves `isError`; closing the
-client does not release Environments or archive projects. This adapter is
-legacy compatibility code, not an Agentweaver 1.x MCP product or acceptance
-surface.
+Read [CI and coverage details](../guide/testing.md#understand-v1-pull-request-ci)
+for the canonical execution contract. The
+[system decision view](./00-system-overview.md#9-architecture-decisions)
+retains actual ADR statuses; tests do not accept a proposal or establish a
+CLI/API compatibility policy.
 
-The Agentweaver 1.x `npm run harness:p1` API entrypoint delegates acceptance
-to the native .NET CLI. It rejects `--surface mcp` and `--surface api,mcp`
-explicitly and never falls back to the legacy MCP runner. Required
-deployment-source, image-measurement, and native probes remain blocked until
-evidence exists.
+## 10–12. Quality, risks and glossary
 
-For one-account P1 API checks, `npm run harness:p1:signin-run -- ...` delegates
-to the .NET CLI and does not use a browser unless `--interactive` is explicit.
-The wrapper does not read or copy an existing profile or credential cache.
-The launcher does not sign in a denied actor. The input manifest must
-explicitly set `executionIntent` to `"execute"`; a missing or different value
-is rejected before the harness contacts the target. If
-`fixturePlan.deniedActor` is omitted, `valid-denied-actor-403` remains blocked
-with the missing-account reason and the API surface cannot pass. Distinct-actor
-coverage is unavailable to this one-account operator flow; no same-user
-substitute or role change is permitted. The Host-caller probe-provider gap is
-still blocked; the launcher does not supply Host-caller probe adapters.
+| Context and stimulus | Response and measure | Verification state |
+| --- | --- | --- |
+| A regression changes an offending artifact or contract | Focused assertion fails on its content, identity or state transition, not only exit code | Test-design criterion; inspect the actual assertion |
+| A job produces no expected test/coverage receipt | Guard fails rather than count an empty run as passing | CI/coverage contract tests |
+| A live acceptance prerequisite or cleanup result is missing | Preserve failed/blocked status; do not aggregate into pass | Harness/CLI result tests; complete model-dependent live acceptance is separate |
 
-The v1 UI surface remains blocked until the 0.x UI is restored onto v1. Do not target the current
-`apps/web/src/v1/App.tsx` pages with new UI selectors or page providers.
+The principal risk is overclaiming evidence. Source owners must identify the
+exact revision, executable, environment, executed suite and limitations.
+Controlled transport and fixture success do not establish native TLS, packet
+enforcement, mounted persistence or paid-provider behavior.
 
-Pass the exact native and dispatch-recovery output envelopes with
-`--native-probe-envelope` and `--dispatch-recovery-envelope`. The aggregator
-preserves every supplied receipt and blocks any missing required probe. It
-rejects malformed, inconsistent, duplicate, and extra envelope fields rather
-than silently dropping them. It also verifies each envelope's canonical
-`receiptSha256` checksum to detect changes after writing. Use output from live
-probe calls; test fixtures and scripted results are not live evidence. The
-checksum does not authenticate who wrote a file. A probe cannot claim `passed`
-with empty evidence; native passes also require completed or not-required
-cleanup, and read-only dispatch-recovery passes must report no created
-resources.
-
-The [native probe CLI contract](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/p1-native-probes/README.md#explicit-native-cli-and-provider-module)
-documents the explicit `--execute` entry point and trusted owner-provider
-module. Native CLI execution currently exits blocked at `native_authority_join`:
-the trusted owner provider now joins the authenticated Core registration and
-invocation binding, Environment creation and Pod observations, and Host
-readiness/source evidence. Its locator-only Host selector can report one
-current fixed-credit guard/no-send pair, but does not supply Host
-downward-API self-identity or the runner's broader turn, cursor, effect, and
-dispatch proof slots. Registration `placementUid` identifies the SandboxClaim
-resource, independently of the actual Pod UID. Controlled runner regressions
-reject substitution and replacement of either identity; they do not establish
-live authority, Pod identity, or acceptance. The CLI does not supply live owner
-adapters, create fixtures, sign in, or turn controlled tests into live evidence. Its
-focused suite runs without Azure or Kubernetes access:
-
-```powershell
-node --test scripts\azure\p1-native-probes\*.test.mjs
-```
-
-The P1 runner accepts published-release evidence only. It uses the exact
-`releaseTag` and source manifest, verifies the tag and immutable publication
-result against GitHub, then reads the selected namespace and verifies each live
-image digest and its source-commit and source-tree labels. This optional
-acceptance path is separate from the direct-GHCR and Kustomize deployment
-workflow, which emits no deployment receipt. Release evidence can use a newer
-clean helper checkout because the manifest and project files are read from the
-exact source commit in Git.
-
-The bootstrap path accepts only the tracked draft at its published source
-commit. It derives a digest-pinned deployment manifest from the verified
-publication receipt and records the result as `pre-acceptance`; it does not
-claim that the bootstrap command created release-acceptance evidence. The release and bootstrap inputs require `releaseTag` and hash the publication
-and current resource readbacks together. Images published without the required
-source-tree label fail this check; immutable images cannot be relabeled.
-
-Native probes cover Storage isolation, network datapath, Sandbox lifecycle,
-AgentHost readiness, numeric dispatch limits, and restart/duplicate-fence
-recovery. The dispatch-recovery reader can query existing Host no-send receipts
-and a current replacement Host recovery receipt, but it does not create a
-dispatch or replace a Host. Numeric-boundary, soft-warning, and complete
-gate/join no-duplicate receipts remain blocked until source owners expose all
-required evidence. A policy-object readback or usage query cannot replace those
-probes.
-
-## Treat coverage as an artifact
-
-`npm run coverage:dotnet` runs configured .NET suites against the Release build
-with TRX and Cobertura collection. It requires nonempty case receipts, one
-distinct coverage report per suite, and combined reports with expected
-production assemblies. It restores the repository-local report tool and writes
-under `artifacts/coverage/dotnet/`.
-
-`npm run coverage:node` runs release and Azure tooling tests with Node
-coverage. It writes LCOV and a text summary under
-`artifacts/coverage/node/` and requires executed release-validator lines. It
-does not measure every Node file or every harness. The Web package has its own
-coverage command. A missing report fails its guard; a present file alone is
-not sufficient evidence.
-
-## Understand CI boundaries
-
-`v1-ci.yml` runs on `v1` pull requests, pushes and manual dispatches. Its
-always-reported `foundation` aggregate gates independently running image,
-Web, Node and .NET jobs. Path classification selects expensive suites; release
-composition, controlled P1 journeys and CI contract checks remain mandatory.
-The image job retains source-bound Probe, Broker and AgentHost image checks,
-the pinned native runtime and isolated native prompt-capacity tests.
-
-.NET projects run concurrently, with four deterministic method shards for
-Broker, balanced by committed measured method durations, and verified
-per-shard TRX receipts. NuGet, Chromium, and exact-key
-installed web dependency caches avoid
-repeated downloads and installs, without caching mutable databases, browser contexts, or build output.
-PR, push, and manual CI runs never collect coverage. The weekly
-`v1-coverage.yml` workflow reuses the same jobs with instrumentation, combines
-the reports without a second pass, and publishes separate .NET, Web, and Node
-line-coverage badges plus one Copilot coverage-improvement issue. Each suite
-artifact is bound to its run attempt, so after a failed-jobs rerun the combined
-report uses only the newest passing attempt of each suite.
-The [testing guide](../guide/testing.md#understand-v1-pull-request-ci)
-describes path dependencies, cache invalidation, retained skip behavior and
-the measured performance acceptance criteria. Its
-[coverage section](../guide/testing.md#measure-v1-coverage-weekly) covers the
-schedule, denominators, attempt binding, and one-time Copilot token setup. Controlled journeys
-are not automatic deployed acceptance.
-
-The `go` job runs `gofmt`, `go vet`, and `go test` for the Go reference tools in
-`tools/agent-primitives`. They produce the AgentSessions fixture that the .NET verifier tests check, so CI compares both implementations on every pull request.
-
-`v1-docs-ci.yml` builds VitePress, checks links and source coverage, and
-validates diagram provenance and readability. On a `v1` push it stages a
-source-bound site artifact.
-
-The image workflow builds and pushes directly to GHCR on relevant `v1`
-changes. The package workflow publishes versioned NuGet packages separately.
-The manual deployment workflow runs migrations before applying the existing
-Kustomize overlay and waits for normal Deployment rollouts; it does not create
-or require a deployment-evidence artifact.
+**Terms:** controlled means dependencies are supplied by the test;
+integration means real participating boundaries within the named environment;
+acceptance means the specified journey and all required evidence passed.
+Compiled, executed, released, deployed and proved are separate states.
 
 ## Validate documentation changes
 
-From the repository root, run the same local checks used by docs CI:
+From the repository root, use the existing safe checks:
 
 ```powershell
 npm run docs:build
 npm run docs:check-links
+npm run docs:check-drift -- --base origin/v1
 npm run docs:check-diagrams
 npm run docs:check-flagship-diagrams
+npm run test:docs-diagrams
 ```
 
-Update affected public explanations with behavior and contract changes. Keep
-source mapping and diagrams aligned with the implemented owner boundary, not a
-proposed future service.
+These inspect site/artifact consistency, not technical correctness of every
+claim. Source review remains necessary.
 
 ## Related content
 

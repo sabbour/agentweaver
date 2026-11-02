@@ -1,15 +1,25 @@
-# MCP server
+# Retained MCP compatibility adapter
 
-Use this page to understand how Agentweaver's first-party Model Context
-Protocol (MCP) server exposes Gateway operations as product tools. The server
-does not maintain a second workflow state machine, and discovering a tool does
-not grant authority.
+## 1–4. Goals, constraints, context and strategy
 
-This inbound product server is separate from remote MCP connections used by
-agents. See the [remote MCP architecture](../architecture/remote-mcp-connections.md)
-for the outbound path.
+Agentweaver 1.x does not offer a supported product Model Context Protocol
+(MCP) server or MCP acceptance surface. Supported client paths are Gateway/API,
+browser and native .NET CLI. This page explains the retained adapter under
+`services/mcp/Agentweaver.Mcp/` so contributors can understand its boundaries;
+it is not a connection or installation procedure.
 
-## How the server exposes tools
+The checked-in release/Kustomize composition still includes MCP image,
+workload and ingress resources. Their presence does not establish supported
+product availability. This documentation does not remove or deploy them.
+
+The adapter translates finite Gateway operations without keeping another
+workflow state machine. Discovery does not grant authority. It is separate
+from [outbound remote MCP connections](../architecture/remote-mcp-connections.md)
+used by agents.
+
+## 5. Building blocks
+
+### How the adapter exposes tools
 
 An MCP client authenticates with Identity Broker. The MCP host validates the
 token and tool arguments, then forwards the same bearer to Gateway. Gateway
@@ -33,7 +43,9 @@ trusts only the read-only `service-backend-ca` mount and checks the owner
 hostname and server-authentication purpose. Broker issuer discovery continues
 to use normal system trust.
 
-## Understand discovery and inputs
+## 6. Runtime view
+
+### Understand discovery and inputs
 
 `GatewayToolCatalog` fetches `GET /openapi/v1.json`, a machine-readable OpenAPI
 description of Gateway's routes, and accepts the supported 3.1.0 shape. It
@@ -59,10 +71,11 @@ A JSON body becomes `body`; required API parameters stay required. The generated
 object schema rejects extra top-level properties. It does not accept a
 caller-selected owner URL, actor identity, or arbitrary authorization header.
 
-## Call a discovered tool
+### Retained call path
 
-Before calling a product tool, configure the MCP client with a valid Broker
-token and access to the configured HTTPS Gateway.
+In the compatibility implementation, a call requires a valid Broker bearer
+and access to the configured HTTPS Gateway. This describes the source path,
+not a supported 1.x product-use instruction.
 
 1. The client connects to authenticated `/mcp` over the stateless HTTP
    transport.
@@ -84,7 +97,7 @@ The request builder rejects absolute URLs, traversal segments, escaped path
 separators, and fragments. HTTP redirects are disabled. The MCP service never
 substitutes a service bearer for the caller.
 
-## Interpret results correctly
+### Interpret results correctly
 
 An accepted-only operation or HTTP `202` produces a message that acceptance is
 not completion. If the owner returns `accepted: false`, the tool reports an
@@ -92,7 +105,7 @@ error even when the HTTP status is successful. To learn the final state after
 an accepted operation, call the owner's read operation. The catalog does not
 expose the SSE stream as a long-running tool.
 
-## Configure authentication and transport
+### Authentication and transport contract
 
 `Identity:Issuer`, `Identity:Audience`, and `Gateway:BaseAddress` are explicit
 HTTPS settings. The Gateway address must identify the service root.
@@ -111,7 +124,7 @@ For supported settings, see the
 [runtime configuration reference](../reference/runtime-configuration.md) and
 [Gateway/BFF guide](../guide/gateway.md).
 
-## Diagnose failures
+### Failure mapping
 
 | Condition | Tool error |
 | --- | --- |
@@ -125,6 +138,34 @@ For supported settings, see the
 
 Owner HTTP errors retain their result details; they do not become fabricated
 completion.
+
+## 7–9. Deployment, shared concepts and decisions
+
+The source composition includes an MCP compatibility workload. Its health
+routes do not load Gateway's catalog or prove owner availability. The
+[deployment view](./infra-deployment.md) distinguishes checked-in resources
+from observed deployment and supported product surfaces.
+
+Bearer forwarding and fixed roots follow [Gateway](./gateway.md);
+current authority follows [Identity](./identity-secrets.md) and owner checks.
+The [canonical ADR view](./00-system-overview.md#9-architecture-decisions)
+keeps the broader platform proposal distinct from supported 1.x surfaces.
+
+## 10–12. Quality, risks and glossary
+
+| Context and stimulus | Response and measure | Verification state |
+| --- | --- | --- |
+| A tool supplies an absolute/traversal path or extra input | Reject rather than make an arbitrary Gateway request | Retained catalog/client tests |
+| Owner returns `202` or `accepted: false` | Preserve acceptance/completion distinction and owner error | Controlled tool-handler tests |
+| Catalog exceeds 2 MiB or result exceeds 8 MiB | Reject the bounded read | Compatibility contract tests; no deployed product claim |
+
+The main reader risk is mistaking retained code or ingress resources for a
+supported product. Use the native CLI for canonical API acceptance; retained
+MCP fixture success cannot replace that journey.
+
+**Terms:** inbound adapter translates client tools to Gateway; outbound
+connection lets an agent address a remote server; neither discovery nor a tool
+schema is an execution grant.
 
 ## Related content
 

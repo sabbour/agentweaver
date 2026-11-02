@@ -1,5 +1,7 @@
 # Source Control
 
+## 1–4. Goals, constraints, context and strategy
+
 Use this page to understand how a run connects its repository identity to Git
 and GitHub operations. Source Control does not decide whether a workflow has
 approval to merge.
@@ -9,7 +11,14 @@ operations, the workspace manager owns isolated file state, and Orchestrator
 owns current authorization, accepted provider pins, approval-linked intent,
 and repository merge serialization.
 
-## Find the implementation
+Explicit pins and expected heads prevent a later repository state from
+silently replacing accepted work. The trade-off is conflict handling:
+callers must refresh a changed preview or reconcile an uncertain write instead
+of overwriting it.
+
+<span id="find-the-implementation"></span>
+
+## 5. Building blocks
 
 | Source | Responsibility |
 | --- | --- |
@@ -24,7 +33,9 @@ and repository merge serialization.
 The implementation is in `packages/Agentweaver.SourceControl/` and
 `packages/Agentweaver.Abstractions/`.
 
-## Keep repository identity and credentials explicit
+## 6. Runtime view
+
+### Keep repository identity and credentials explicit
 
 The GitHub adapter negotiates the numeric repository ID, creation-based
 resource generation, and permission-derived capabilities. The owner pins that
@@ -45,7 +56,7 @@ environment rather than the clone URL.
 validates the returned permission ceiling and expiry, then invalidates the
 supplied private-key credential after the attempt.
 
-## Read and commit team files explicitly
+### Read and commit team files explicitly
 
 Project team synchronization is an explicit user action on the Agents page.
 The Gateway exposes `GET` and `POST /api/v1/projects/{projectId}/team/sync`;
@@ -96,7 +107,7 @@ files in a configured GitHub repository. AgentSuite export and import transfer
 a reviewed portable archive and verify its digest; import stages a casting
 proposal for confirmation. They do not read or write a repository.
 
-## Browse the configured repository
+### Browse the configured repository
 
 The Workspace browser reads committed files from the repository already saved
 in project configuration. Its Gateway routes are
@@ -127,7 +138,7 @@ This configured-repository view is not Run Changes' produced-output capture,
 and does not expose uncommitted local worktree changes or repository import.
 Neither it nor the existing produced-run browser writes to the repository.
 
-## Prepare and recover a workspace
+### Prepare and recover a workspace
 
 Before preparing a workspace, you need an accepted repository binding, the
 exact base commit, and an explicit credential for checkout.
@@ -154,7 +165,7 @@ inventory. Preparation verifies the saved binding before installing that
 seed. A ready prepared workspace is not reseeded. A separate output path seals
 the complete baseline and declared output bytes for owner admission.
 
-## Create pull requests and verify merge evidence
+### Create pull requests and verify merge evidence
 
 Before creating or reusing a pull request, provide the expected repository,
 branches, and head and base SHAs. The adapter reuses a pull request only when
@@ -179,7 +190,7 @@ maintenance run, the owner skips the write and the project list reports that
 records are unavailable. After the migration, the list reads stored records
 and makes no provider call.
 
-## Admit webhooks through the owner path
+### Admit webhooks through the owner path
 
 `GitHubWebhookSignatureVerifier.VerifyRawBody` verifies the `sha256=` keyed
 hash message authentication code (HMAC) over the original request bytes with
@@ -193,7 +204,7 @@ authenticated, run-bound relay before owner admission. The package does not
 provide a standalone webhook service or authorize direct unauthenticated
 GitHub delivery.
 
-## Diagnose failures and recover safely
+### Diagnose failures and recover safely
 
 Failures distinguish invalid bindings, stale revisions, permission denial,
 rate limiting, remote unavailability, and uncertain remote outcomes. An
@@ -206,6 +217,35 @@ ambient default.
 
 For supported provider setup, see the
 [provider configuration guide](../guide/configure-providers.md).
+
+## 7–9. Deployment, shared concepts and decisions
+
+There is no standalone Source Control service: Orchestrator hosts owner routes,
+and `Agentweaver.SourceControl` supplies adapters/workspace code. Environment
+owns the workspace volume; isolated Git workspaces live on that storage.
+GitHub is an external trust boundary. See [deployment](./infra-deployment.md).
+
+Credentials come from [Identity](./identity-secrets.md), approval and merge
+serialization from [Orchestrator](./orchestration.md), and retained output
+from [Events](./events-sessions.md). Provider capabilities do not authorize a
+merge. The [canonical ADR view](./00-system-overview.md#9-architecture-decisions)
+owns decision status; implementation here does not accept a broader proposal.
+
+## 10–12. Quality, risks and glossary
+
+| Context and stimulus | Response and measure | Verification state |
+| --- | --- | --- |
+| Team preview's branch head or blob IDs change before commit | Conflict before write; final branch update is non-forced | Controlled GitHub/team-sync tests |
+| Workspace directory has a foreign manifest or reparse path | Reject recovery rather than adopt the directory | Real isolated Git/workspace tests |
+| Merge response is ambiguous or head changes | Do not fabricate success or repeat an uncertain merge | Provider/owner controlled tests; not live branch protection |
+
+A remote write can succeed before transport failure. The repository owner
+must reconcile saved intent and provider state before another effect.
+`contents:write` is a capability ceiling, not workflow approval.
+
+**Terms:** repository pin identifies the resource; workspace incarnation
+identifies owned files; preview hash binds a proposed change; merge receipt
+records a provider-verified result.
 
 ## Related content
 

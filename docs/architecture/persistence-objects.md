@@ -1,11 +1,14 @@
 # PostgreSQL and Blob Storage
 
-Use this reference to understand how Agentweaver separates durable event
-delivery from large-object storage. `Agentweaver.Persistence.Postgres` stores
+PostgreSQL records authoritative state and delivery intent. Blob stores opaque
+bytes. A successful upload is not a committed event, and a delivery retry is
+not permission to repeat an external effect.
+
+`Agentweaver.Persistence.Postgres` stores
 outbox events and consumer inbox receipts in a service-owned schema. An outbox
 records work with the producer's database change; an inbox records a consumer's
 admission of that work. The library does not create domain tables or start a
-relay service. For provider selection, see the planned
+relay service. For provider selection, see the
 [provider configuration guide](../guide/configure-providers.md).
 
 The separate `Agentweaver.EventsAndSessions` service owns its `events_sessions` schema
@@ -88,9 +91,8 @@ A normal small event does not require a Blob object.
 
 ## Production session-material composition
 
-The [session-material composition decision](session-material-composition.md)
-records the production boundary, source evidence, remaining read-time retention
-gap, and independently owned implementation slices.
+The [session-material composition](session-material-composition.md) explains
+the owner boundary, persistence order, read-time retention and recovery limits.
 
 The existing foundations are the PostgreSQL journal and reference records, the
 `IObjectStore` contract, and the create-only Azure Blob adapter. The Events &
@@ -182,11 +184,14 @@ inventory locks and current reference checks. Any unexpired reference preserves
 the bytes. Journal history and reference metadata remain after byte deletion.
 Blob does not choose which run data to delete.
 
-Read-time retention is still incomplete: the material read path verifies authority,
-scope, length, and digest but does not check the recorded deadline before returning
-bytes. Content may remain readable until cleanup runs. The composition decision
-requires expiry checks before retrieval and before disclosure; it does not claim
-that this follow-up is implemented.
+Read-time retention does not depend on cleanup timing. Before retrieval,
+`ReadMaterialEventAsync` verifies each reference deadline against Events
+database time. After reading bytes, `SessionMaterialStore.ReadAsync` repeats
+that check, then performs the final current-authority check. A reference expires
+at equality with its deadline and returns `session_material_retention_expired`,
+even if another live reference retains the same key. Only the optional SDK-cache
+route maps missing or expired material to its not-found recovery path;
+authorization and integrity failures remain errors.
 
 `IObjectStore` can create, read, and delete a known key, but it cannot list
 candidate objects. Inventory makes new typed uploads discoverable after restart;

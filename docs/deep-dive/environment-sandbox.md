@@ -1,5 +1,7 @@
 # Environments, sandboxes, and volumes
 
+## 1–4. Goals, constraints, context and strategy
+
 Use this page to understand how Agentweaver manages execution resources,
 isolated runtime placement, and workspace files. An Environment is the durable
 owner of resources for a tenant, project, and run. A Sandbox lease is one
@@ -19,7 +21,13 @@ for the remote-read race, and [P1 creation evidence](../reference/p1-creation-ev
 for the authenticated retained-record read and bounded Host observation join.
 Native CLI consumption remains separate.
 
-## Find the implementation
+Recording provider attempts before effects makes uncertainty recoverable, but
+prevents treating a timeout as an empty resource slot. Placement, stored data
+and network readiness remain separate facts with separate generations.
+
+<span id="find-the-implementation"></span>
+
+## 5. Building blocks
 
 | Source | Responsibility |
 | --- | --- |
@@ -36,7 +44,9 @@ The service files are under `services/environment/Agentweaver.Environment/`.
 Provider files are under `packages/Agentweaver.Providers.Sandbox.AgentSandbox/`
 and `packages/Agentweaver.Providers.Storage.AzureFiles/`.
 
-## Understand lifecycle fences
+## 6. Runtime view
+
+### Understand lifecycle fences
 
 Different generations protect different boundaries:
 
@@ -58,7 +68,7 @@ call and a recorded outcome before owner completion. An unresolved call blocks
 release and lifecycle advancement. Timeout, cancellation, an empty provider
 list, or a terminal lease does not prove that an external effect stopped.
 
-## Provision a Sandbox
+### Provision a Sandbox
 
 Before provisioning, you need current owner authority, the accepted Sandbox
 candidate, a bound workspace, and applied network-policy evidence.
@@ -84,7 +94,7 @@ clients validate against the same CA while preserving direct-to-Pod-IP routing
 and the TLS hostname check. A zero-replica warm pool does not prestart a spare
 worker.
 
-## Compile network egress
+### Compile network egress
 
 `EgressIntentCompiler` intersects the platform baseline, project narrowing, and
 admitted run needs. It preserves destination, port, protocol, and purpose. It
@@ -101,7 +111,7 @@ generation and intent hash. Empty or revoked intent uses explicit deny-all
 rules. Readback proves the stored policy matches; it does not prove packet-level
 datapath enforcement.
 
-## Manage workspace data
+### Manage workspace data
 
 The Azure Files adapter requires the configured StorageClass, Azure Files
 Container Storage Interface (CSI) driver, approved mount options, supported
@@ -126,7 +136,7 @@ read-only collector. Native output remains retained until the verified Events
 acknowledgment permits cleanup. Environment owns execution evidence; Core owns
 workflow completion.
 
-## Reconcile uncertain operations
+### Reconcile uncertain operations
 
 Reconciliation resumes the recorded operation rather than provisioning a
 replacement. A late resource gets separate cleanup state without changing the
@@ -141,6 +151,35 @@ request is not proof that the native resource is absent.
 For supported Environment and workspace settings, see the
 [runtime configuration reference](../reference/runtime-configuration.md) and
 [provider configuration guide](../guide/configure-providers.md).
+
+## 7–9. Deployment, shared concepts and decisions
+
+Environment is a shared owner; its adapters call Kubernetes, Agent Sandbox,
+Cilium and Azure Files CSI. AgentHost runs in the selected Sandbox, with
+distinct private state and workspace mounts. The
+[deployment view](./infra-deployment.md) describes prerequisites; manifests
+do not establish a running controller, mounted data or packet enforcement.
+
+Projects owns authority, Orchestrator owns current execution and
+[Identity](./identity-secrets.md) owns runtime purposes. The
+[system ADR links](./00-system-overview.md#9-architecture-decisions) retain
+their statuses; lifecycle source is not proof of every proposed deployment.
+
+## 10–12. Quality, risks and glossary
+
+| Context and stimulus | Response and measure | Verification state |
+| --- | --- | --- |
+| Provider call times out after an attempt is recorded | Keep uncertainty durable and block unsafe release/generation advance | Owner-store and controlled-provider tests |
+| A replacement resource succeeds but old cleanup fails | Retain the new generation and exact cleanup work for retry | Volume lifecycle tests; not live CSI evidence |
+| Pod is ready but mount or policy generation differs | Do not report `ReadyForDispatch` | Sandbox observation tests |
+
+Policy readback cannot establish datapath behavior, and control-plane resource
+absence cannot establish Azure Files data erasure. Environment/provider owners
+need separately approved native observations for those claims.
+
+**Terms:** lifecycle generation protects owner transitions; resource generation
+identifies provisioned state; data generation identifies retained content;
+retirement releases placement without deleting workspace data.
 
 ## Related content
 
