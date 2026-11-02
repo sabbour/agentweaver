@@ -430,7 +430,7 @@ A failed write, revoked authority, or lost CAS must not report a new current cre
 Interrupted rotation requires an explicit recovery outcome; unreferenced versions are
 not permission for automatic cloud cleanup.
 
-This source scope is not deployed writer authority. Existing P0 Key Vault Secrets User
+This source scope is not deployed writer authority. Existing foundation Key Vault Secrets User
 assignments remain read-only and unchanged. A deployed writer needs secret SET/new-version,
 exact-version GET, and metadata rights at the actual configured credential-store scope.
 The exact supported role or custom actions and bootstrap scope must be verified with
@@ -782,8 +782,8 @@ then separately admit Git/Azure/other profiles after each profile passes the
 planned acceptance matrix.
 Unknown SDK
 compatibility is a validation item for its profile, not a broad release blocker.
-This proposal is separate from the current P1 critical path and does not reopen
-accepted native accounting or add a new P1 acceptance prerequisite.
+This proposal is separate from the current native execution critical path and does not reopen
+accepted native accounting or add a new native execution acceptance prerequisite.
 
 ### Planned acceptance matrix
 

@@ -25,31 +25,31 @@ and read-only bootstrap verification checks those grants after migration.
 See [Broker database permissions](../reference/runtime-configuration#identity-broker-migration-history-and-grants).
 These steps do not change the resource topology shown below.
 
-The Orchestrator and Events & Sessions migrations use the separate P1 migration
+The Orchestrator and Events & Sessions migrations use the separate migration
 identity. The Events & Sessions Job repeats its Sessions and Messaging settings
 from the runtime map because the host validates them before `--migrate`.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Structural Azure topology and evidence map. AKS has a public API endpoint with Kubernetes RBAC, managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault and Blob private endpoints and the in-VNet AMPLS private endpoint attach to the private-endpoint subnet, while AMPLS remains global. Blob has private platform-artifacts and session-material containers. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights; the Events & Sessions identity receives Storage Blob Data Contributor only on session-material. The separate P1 migration Jobs use their migration identity; the Events & Sessions Job mirrors its runtime Sessions and Messaging settings because the host validates them before migration. No live deployment or P0 completion is claimed." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Structural Azure topology and evidence map. AKS has a public API endpoint with Kubernetes RBAC, managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault and Blob private endpoints and the in-VNet AMPLS private endpoint attach to the private-endpoint subnet, while AMPLS remains global. Blob has private platform-artifacts and session-material containers. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights; the Events & Sessions identity receives Storage Blob Data Contributor only on session-material. The separate database migration Jobs use their migration identity; the Events & Sessions Job mirrors its runtime Sessions and Messaging settings because the host validates them before migration. No live deployment or complete foundation acceptance is claimed." />
   </a>
-  <figcaption>Structural resource and evidence dependencies. Bicep and Kustomize definitions are not a deployment record; the figure does not claim live readiness or P0 completion.</figcaption>
+  <figcaption>Structural resource and evidence dependencies. Bicep and Kustomize definitions are not a deployment record; the figure does not claim live readiness or complete foundation acceptance.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.drawio'">Open editable draw.io source</a></p>
 
-The following sequence shows the verifier's time-ordered, read-only checks after the probe Job completes. It does not launch the Job or deploy resources. The P1 PostgreSQL migration Jobs are separate; the Events & Sessions Job validates its provider settings before migration.
+The following sequence shows the verifier's time-ordered, read-only checks after the probe Job completes. It does not launch the Job or deploy resources. The PostgreSQL migration Jobs are separate; the Events & Sessions Job validates its provider settings before migration.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'" alt="After a Foundation Probe Job completes, the read-only verifier checks the source-bound registry manifest against the Job image, pod image, and pulled imageID before reading and validating the native receipt. It then queries Azure Monitor for fresh correlated evidence. Missing or mismatched evidence remains blocked. The P1 PostgreSQL migration Jobs are separate from this probe; Events & Sessions validates provider settings before running migrations." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'" alt="After a Foundation Probe Job completes, the read-only verifier checks the source-bound registry manifest against the Job image, pod image, and pulled imageID before reading and validating the native receipt. It then queries Azure Monitor for fresh correlated evidence. Missing or mismatched evidence remains blocked. The PostgreSQL migration Jobs are separate from this probe; Events & Sessions validates provider settings before running migrations." />
   </a>
-  <figcaption>Ordered acceptance evidence checks, not a deployment sequence. Only complete source-, target-, image-, identity-, receipt-, and telemetry-bound evidence sets <code>deployedAcceptance</code>; the result does not claim broader P0 readiness.</figcaption>
+  <figcaption>Ordered acceptance evidence checks, not a deployment sequence. Only complete source-, target-, image-, identity-, receipt-, and telemetry-bound evidence sets <code>deployedAcceptance</code>; the result does not claim broader foundation readiness.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.drawio'">Open editable draw.io source</a></p>
 
 ## Region placement
 
-The intended P0 placement is:
+The intended foundation placement is:
 
 | Resource | Region | Notes |
 | --- | --- | --- |
@@ -62,7 +62,7 @@ The root Bicep parameters bind that placement and the Entra administrator:
 
 | Input | Requirement |
 | --- | --- |
-| `location` | Set to `eastus2euap` for the VNet and core resources. The Bicep default is the resource-group location; reviewed P0 parameters must select the intended region. |
+| `location` | Set to `eastus2euap` for the VNet and core resources. The Bicep default is the resource-group location; reviewed foundation parameters must select the intended region. |
 | `monitorLocation` | Required; set to `eastus2` for Log Analytics and Application Insights. |
 | `postgresEntraAdminObjectId` | Required directory object ID for the PostgreSQL Entra administrator. |
 | `postgresEntraAdminPrincipalName` | Required directory principal name for that administrator. |
@@ -139,7 +139,7 @@ When `appRoutingDnsZoneResourceIds` is empty, the full-foundation template reque
 
 When the array contains custom zone IDs, the full-foundation template disables the managed default domain. It accepts one to five unique existing public or private DNS zone IDs in the exact authorized subscription. The guard rejects malformed, cross-subscription, and PrivateLink zone IDs. Public zones can be in one resource group and private zones in another; all zones of each kind must share one resource group.
 
-For an existing P0 foundation, `aks-redeploy.bicep` reads the AKS-managed
+For an existing foundation, `aks-redeploy.bicep` reads the AKS-managed
 domain and issuer through an `existing` resource reference. It does not deploy
 `Microsoft.ContainerService/managedClusters`, so the generated domain name and
 Kubernetes RBAC setting are not removed by a partial AKS update. This
@@ -158,7 +158,7 @@ The template configures the Key Vault CSI provider and secret rotation with `ena
 
 ## Limited runtime identity setup
 
-`infra/bicep/p1-runtime-identities.bicep` is separate from the P0 foundation topology.
+`infra/bicep/p1-runtime-identities.bicep` is separate from the foundation topology.
 It uses the existing resource group location and the existing AKS OIDC issuer.
 The resource group and cluster locations must match before deployment.
 Its fixed service list is Projects & Config, Environment, Knowledge,
@@ -181,11 +181,11 @@ container and its container-scoped role assignment. The operator command and
 approval boundary are documented in the
 [Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#session-material-container-repair).
 
-The P1 PostgreSQL initializer is an explicit operator action, not part of an
+The owner-service PostgreSQL initializer is an explicit operator action, not part of an
 infrastructure deployment. `scripts/azure/bootstrap-p1-postgres.mjs` checks
-the fixed target, current PostgreSQL administrator, and all five live P1
+the fixed target, current PostgreSQL administrator, and all five live runtime
 principal IDs before it starts the temporary tunnel. It runs the Identity
-Broker and P1 database stages through the same loopback-only tunnel and removes
+Broker and owner-service database stages through the same loopback-only tunnel and removes
 only its run-owned transport resources. The command creates no Azure role
 assignment and deploys no product workload. Its receipt proves operator
 initialization only, not runtime identity or deployment success.
@@ -232,7 +232,7 @@ PostgreSQL permits row locks. Their triggers still reject every row update,
 delete and table truncate. The reviewed grant plan and initializer verify
 these guards; no setup-ledger table access is added to Projects.
 Readiness accepts the complete schema before 040 for ordinary interactive
-runs. P1 request provenance and binding require 040. This source change does
+runs. Invocation-bound request provenance and binding require 040. This source change does
 not apply the migration or grants to a live database.
 Environment schema version 12 adds `environment.p1_creation_links` for
 invocation-bound creation. Its planned runtime rights are `SELECT, INSERT,
@@ -275,12 +275,14 @@ on planned non-runtime functions. It rejects unplanned views and materialized
 views, and checks their relation and column ACLs. The final grant transaction
 adds database `CONNECT` and the planned grants for those four services; it
 does not try to grant Projects & Config privileges as the operator.
-These source changes do not change the P0 Azure topology.
+These source changes do not change the Azure foundation topology.
 See the [operator initialization procedure](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-operator-initialization),
 the [initializer source limits](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal)
 and the [source-test boundary](../guide/testing).
 
-### P1 migration identity
+<span id="p1-migration-identity"></span>
+
+### Database migration identity
 
 `infra/bicep/p1-postgres-migration-identity.bicep` defines one more identity,
 `agentweaver-id-p1-postgres-migration`, federated only to the

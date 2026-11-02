@@ -636,7 +636,7 @@ JavaScript profile.
 
 `deploy/k8s/profiles/events-and-sessions/render.mjs` validates operator-selected
 runtime values before they are written to the checked-in
-`events-and-sessions-runtime-config.json`. It requires the admitted P0 database
+`events-and-sessions-runtime-config.json`. It requires the admitted foundation database
 and workload identity, Sessions resource identity and generation, Broker
 issuer/audiences, private Knowledge/Projects/Orchestrator owner addresses, a
 Blob container in `agentweaverblob`, and valid model-binding and rate-card values.

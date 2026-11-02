@@ -102,7 +102,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 
 | Route | Operation |
 | --- | --- |
-| `POST /api/p1/invocations/{invocationId}/setup` | Create or exactly replay the P1 invocation's immutable Projects setup receipt using the authenticated approved TenantAdmin. Accepts no body or query and cannot select a project ID or perform cleanup. |
+| `POST /api/p1/invocations/{invocationId}/setup` | Create or exactly replay the acceptance invocation's immutable Projects setup receipt using the authenticated approved TenantAdmin. Accepts no body or query and cannot select a project ID or perform cleanup. |
 | `GET /api/p1/invocations/{invocationId}/setup` | Read an existing invocation's setup receipt after current authority and exact readback checks. Never issues a missing receipt or creates resources. Same unbound scopes and TenantAdmin checks as issuance. |
 | `POST /api/projects` | Create an active project and its initial configuration revision. |
 | `GET /api/projects` | List projects visible through current project roles; a tenant administrator sees all projects in that tenant. |
@@ -152,10 +152,12 @@ The Identity broker validates upstream identity but does not forward upstream te
 
 Revision conflicts and a reused run ID with a different request return conflict responses. Invalid configuration and run-selection context return client errors; missing projects and inaccessible tenant-owned projects do not disclose their existence.
 
-### P1 setup receipt endpoint
+<span id="p1-setup-receipt-endpoint"></span>
+
+### Invocation setup receipt endpoint
 
 `POST /api/p1/invocations/{invocationId}/setup` is a purpose-limited source
-endpoint for the upstream P1 fixture producer. It requires the existing
+endpoint for the upstream acceptance fixture producer. It requires the existing
 authenticated unbound bearer with `api.read` and `projects.admin`, exactly one
 `X-Agentweaver-Tenant` header, and current TenantAdmin authority for the
 selected tenant. The service resolves the principal against current Projects
@@ -186,13 +188,13 @@ tables:
 
 Both new functions pin `search_path`, revoke execution from `PUBLIC`, and are
 available to the runtime only through the explicit function entries in the
-P1 PostgreSQL grant catalog. Projects migration
+owner-service PostgreSQL grant catalog. Projects migration
 `20261027142501_AddP1ProjectSetupFunctions` creates them. The service startup
 guard verifies the exact function execution rights, the PUBLIC revocation, and
 the continued absence of direct runtime access to `project_setup_operations`.
 No separate HTTP-host database identity, general table grant, cleanup
 privilege, or live grant change is part of this source change.
-Fresh P1 operator initialization creates and migrates this schema as the
+Fresh operator initialization of owner-service databases creates and migrates this schema as the
 dedicated Projects migration owner, then reconciles the reviewed runtime
 grants in the same transaction. The operator must be able to assume that role;
 the initializer checks this before creating runtime roles and fails without
@@ -211,7 +213,7 @@ consumer transaction: revocation after a read is not guaranteed to precede a
 Core commit.
 
 `GET /internal/projects/{projectId}/runs/{runId}/p1-setup/{invocationId}`
-is the narrow verifier used when Core accepts a P1 root. It requires `api.read`
+is the narrow verifier used when Core accepts an invocation-bound acceptance root. It requires `api.read`
 and `projects.orchestrator`, a token bound to the exact project and run, the
 selected tenant, a current membership, the current Orchestrator assignment and
 selection, and the original actor's current TenantAdmin grant. It calls the
@@ -676,7 +678,7 @@ Projects & Config, and Orchestrator. The ConfigMap's product-source annotation
 identifies the published source used for the snapshot; the runtime List records
 the catalog PR merge commit on all three consumer pods.
 
-The catalog registers the P1 Sessions, Memory, Sandbox, Storage, Policy, Source
+The catalog registers the Sessions, Memory, Sandbox, Storage, Policy, Source
 Control, Cost, and Cilium providers, plus the foundational Messaging provider
 whose runtime default is also defined by Events & Sessions. Cilium's
 `AdapterVersion` is `1.0.0`. Coordinator decision: adapter code version shipped
@@ -684,7 +686,7 @@ in Environment 1.0.0. Its `OptionsRevision` uses the operator-selected
 bounded label `p1-v1.0.0` (the selected-label rule). The L3/L4 layer selection
 uses the Cilium provider.
 
-The Cilium namespace is `agentweaver`, the namespace used by the P0
+The Cilium namespace is `agentweaver`, the namespace used by the foundation
 deployment policies. The checked-in `environment-agenthost-network.yaml`,
 `service-owner-network.yaml`, and `identity-broker/egress.yaml` policies define
 the endpoint selectors as the exact pair
@@ -703,7 +705,7 @@ Messaging, and Memory use exact release-source revisions:
 Sessions and Knowledge configuration readers define these defaults; the
 published contract table also records the Sessions and Messaging defaults.
 
-The remaining P1 consumers have no source default for `OptionsRevision`. Their
+The remaining provider consumers have no source default for `OptionsRevision`. Their
 catalog revision is therefore the operator-selected bounded label
 `p1-v1.0.0`, not evidence of an image, provider artifact, or deployment. The
 release runtime List sets the five consumer revisions as explicit, non-secret
