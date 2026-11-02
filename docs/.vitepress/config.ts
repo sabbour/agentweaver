@@ -124,7 +124,7 @@ export default defineConfig({
             { text: 'Orchestration', link: '/deep-dive/orchestration' },
             { text: 'Events and sessions', link: '/deep-dive/events-sessions' },
             { text: 'Agent runtime', link: '/deep-dive/agent-runtime' },
-            { text: 'MCP compatibility adapter source', link: '/deep-dive/mcp-server' },
+            { text: 'Retained MCP compatibility adapter', link: '/deep-dive/mcp-server' },
           ],
         },
         {
