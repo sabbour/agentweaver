@@ -5,7 +5,7 @@ work may run. Owner services retain decisions and current permissions. AgentHost
 runs guarded model turns in a selected Sandbox. The journal records what owners
 committed; reading that history does not run the work again.
 
-This is the whole-system view of v1 source. Its twelve sections follow arc42.
+This is the whole-system view of Agentweaver source. Its twelve sections follow arc42.
 Subsystem deep dives expand their own runtime and failure paths and link shared
 deployment, decisions and concepts here. Source support, published artifacts,
 observed deployment and completed acceptance are different states.
@@ -25,7 +25,7 @@ binding or create a credential grant.
 
 - The v1 rebuild is separate from the 0.x product on `dev`; legacy product
   behavior is not a default contract for this branch.
-- Gateway/API, the browser client and the native .NET CLI are distinct 1.x
+- Gateway/API, the browser client and the native .NET CLI are distinct
   client paths. Retained inbound MCP compatibility code is not a supported
   product MCP surface. Outbound remote MCP connections are separate.
 - Projects & Config remains the current project-authority owner. Token role
@@ -78,7 +78,7 @@ the decision records in section 9.
 | Events — `services/events-and-sessions/Agentweaver.EventsAndSessions/` | Journal order, material references, messages and accounting | Execution decisions |
 | Knowledge — `services/knowledge/Agentweaver.Knowledge/` | Authorized record operations and context composition | Run history |
 | Browser — `apps/web/src/v1/`, entry `apps/web/src/App.tsx` | User interaction with Gateway and Broker | Server-side authority |
-| Retained compatibility adapter — `services/mcp/Agentweaver.Mcp/` | Source OpenAPI-to-tool translation | A supported 1.x MCP product |
+| Retained compatibility adapter — `services/mcp/Agentweaver.Mcp/` | Source OpenAPI-to-tool translation | A supported MCP product |
 
 Source Control owner endpoints and state live in Orchestrator, not a separate
 service directory. `Agentweaver.SourceControl` provides GitHub and isolated

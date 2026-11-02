@@ -5,7 +5,7 @@ and which configuration was reviewed. It is not permission to call a tool.
 Environment owns connection revisions and catalog pins; Identity owns credential
 bindings, and current execution authority remains separate.
 
-This page explains the implemented v1 Model Context Protocol (MCP) connection
+This page explains the implemented Model Context Protocol (MCP) connection
 contracts and their execution limits. It does not establish a deployed remote
 call or a supported inbound product MCP server.
 

@@ -5,7 +5,7 @@ and admitted run needs. Environment compiles that intent into Cilium policy
 and verifies the saved generation. A matching policy object is necessary
 evidence for readiness, not proof that packets were filtered.
 
-This page explains the v1 egress mechanism, not a live network test. Cilium
+This page explains the egress mechanism, not a live network test. Cilium
 provides the Kubernetes policy API. Pod placement and runtime registration
 are separate from compiling egress.
 

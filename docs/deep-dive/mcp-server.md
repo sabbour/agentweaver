@@ -2,7 +2,7 @@
 
 ## 1–4. Goals, constraints, context and strategy
 
-Agentweaver 1.x does not offer a supported product Model Context Protocol
+Agentweaver does not offer a supported product Model Context Protocol
 (MCP) server or MCP acceptance surface. Supported client paths are Gateway/API,
 browser and native .NET CLI. This page explains the retained adapter under
 `services/mcp/Agentweaver.Mcp/` so contributors can understand its boundaries;
@@ -75,7 +75,7 @@ caller-selected owner URL, actor identity, or arbitrary authorization header.
 
 In the compatibility implementation, a call requires a valid Broker bearer
 and access to the configured HTTPS Gateway. This describes the source path,
-not a supported 1.x product-use instruction.
+not a supported product-use instruction.
 
 1. The client connects to authenticated `/mcp` over the stateless HTTP
    transport.
@@ -149,7 +149,7 @@ from observed deployment and supported product surfaces.
 Bearer forwarding and fixed roots follow [Gateway](./gateway.md);
 current authority follows [Identity](./identity-secrets.md) and owner checks.
 The [canonical ADR view](./00-system-overview.md#9-architecture-decisions)
-keeps the broader platform proposal distinct from supported 1.x surfaces.
+keeps the broader platform proposal distinct from supported surfaces.
 
 ## 10–12. Quality, risks and glossary
 

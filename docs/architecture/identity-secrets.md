@@ -7,7 +7,7 @@ purpose-bound grants before redeeming credentials.
 
 The .NET 10 `Agentweaver.Identity.Broker` uses OpenIddict and owns the
 `identity_broker` PostgreSQL schema. OpenID Connect (OIDC) adds identity claims
-to OAuth authorization. This page explains implemented v1 identity boundaries
+to OAuth authorization. This page explains implemented identity boundaries
 and explicitly labeled proposals, not deployment availability. The
 [Identity deep dive](../deep-dive/identity-secrets.md) follows the normal and
 revocation paths.

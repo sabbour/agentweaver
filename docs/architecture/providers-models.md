@@ -5,7 +5,7 @@ three separate steps. A provider seam defines a capability such as Memory or
 Storage; an adapter implements it for a technology. Neither a catalog entry
 nor a resource pin grants authority or establishes backend health.
 
-`Agentweaver.Abstractions` defines 15 seams in v1 source. A model reference is
+`Agentweaver.Abstractions` defines 15 seams in source. A model reference is
 not another seam: it resolves separately to an explicit native model and source
 mode. The [provider deep dive](../deep-dive/providers-models.md) explains the
 selection-to-execution path. For configuration steps, see the

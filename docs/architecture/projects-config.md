@@ -8,7 +8,7 @@ Neither a saved revision nor an unexpired token preserves revoked authority.
 The .NET 10 `Agentweaver.Projects.Config` owns project lifecycle, configuration,
 platform runtime defaults and immutable run selections in `projects_config`.
 A selection contains settings and provider candidates, not provisioned
-resources. This page describes v1 source, not a release or deployment. The
+resources. This page describes source, not a release or deployment. The
 [Projects deep dive](../deep-dive/projects-config.md) explains revision races
 and the acceptance transaction.
 
@@ -381,7 +381,7 @@ A blueprint is a team recipe carried over from 0.x: a roster of roles, one or mo
 - `POST /api/projects/{projectId}/casting/proposals/blueprint` takes `expectedConfigurationRevision` and either `blueprintId` or an inline `blueprint`. It creates a pending proposal; nothing changes until the proposal is confirmed. The draft casts the roster, adds a `blueprintWorkflowReferences` entry for each workflow, sets `defaultWorkflowId` to the first workflow, assigns bound skills that the project already pins to the matching agents, and, for `restricted`, sets an empty `egressNarrowing` so the project has no network egress. A built-in blueprint can be applied only when it is exportable.
 - The proposal route returns `{ proposal, unresolvedSkillBindings }`. Applying a blueprint never changes a skill's `enabled` setting. Each skill binding that doesn't take effect is listed with its `role`, `skillId`, and a `code`: `skill_not_installed` (the project has no such skill), `skill_not_pinned` (the skill has no pinned agent list), or `skill_disabled` (the agents are assigned, but the skill stays disabled). The list is sorted by role and then skill.
 
-Workflow availability comes from the workflows the v1 Orchestrator registers. Today that is only `default`, so the built-in blueprints report `workflow_unavailable` until the Orchestrator workflow library adds their workflows.
+Workflow availability comes from the workflows the Orchestrator registers. Today that is only `default`, so the built-in blueprints report `workflow_unavailable` until the Orchestrator workflow library adds their workflows.
 
 #### Blueprints as AgentSuite packages
 

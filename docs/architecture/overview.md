@@ -7,7 +7,7 @@ it does not drive execution.
 
 Use this page to identify the owner of a capability or state change. For request
 order, recovery, deployment mapping and quality scenarios, start with the
-[system deep dive](../deep-dive/00-system-overview.md). These are views of v1
+[system deep dive](../deep-dive/00-system-overview.md). These are views of
 source, not an inventory of released or running services.
 
 ## Contracts, adapters and owners
@@ -29,7 +29,7 @@ permission.
 | Events & Sessions | Ordered history, material references, addressed delivery and accounting | Replace execution state or replay effects |
 | Knowledge | Authorized records and bounded context through the selected Memory provider | Replace the run journal |
 
-Supported 1.x client paths are Gateway/API, the browser client and the native
+Supported client paths are Gateway/API, the browser client and the native
 .NET CLI. Retained inbound MCP adapter source is not a supported product MCP
 surface. [Outbound remote MCP connections](./remote-mcp-connections.md) are a
 different integration.
@@ -98,7 +98,7 @@ Source checks do not prove live provider effects or complete native accounting.
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'">
     <img :src="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'" alt="Structural view of Knowledge, Events & Sessions, Environment and Orchestrator source boundaries, shared contracts, and Azure Files, Blob and Key Vault adapters. Mapped context requires current owner authority. Public Environment run-bound enrollment remains denied; internal lookup is read-only. The journal rejects untrusted PolicyEvaluation writes. This is not a deployment topology." />
   </a>
-  <figcaption>Direct project references and adapter/resource relationships in v1 source. “Candidate” labels identify source components, not release or deployment status. The <a href="./events-sessions">Sessions journal diagram</a> shows the owner interaction; the host-composition table distinguishes probe registration IDs from adapters.</figcaption>
+  <figcaption>Direct project references and adapter/resource relationships in source. “Candidate” labels identify source components, not release or deployment status. The <a href="./events-sessions">Sessions journal diagram</a> shows the owner interaction; the host-composition table distinguishes probe registration IDs from adapters.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.drawio'">Open editable draw.io source</a></p>
 

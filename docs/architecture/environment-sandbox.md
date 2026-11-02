@@ -8,7 +8,7 @@ workspace data or the Environment itself.
 Environment reserves a durable lease before calling the provider and checks
 the exact workspace attachment and network policy before reporting dispatch
 readiness. Generation fences reject stale attempts instead of letting them
-change newer owner state. This page explains those v1 source contracts, not
+change newer owner state. This page explains those source contracts, not
 a live Kubernetes or AgentHost test. The [runtime deep dive](../deep-dive/environment-sandbox.md)
 connects the lifecycle, placement and recovery views.
 
@@ -241,7 +241,7 @@ reconciliation, but the mapped report route currently returns unavailable until
 provider identity authentication and the Core interruption command are admitted. This
 source does not claim end-to-end suspend, relocation, or resume.
 
-Both v1 placement routes use the owner-scoped `ISandboxLeaseStore.GetCurrentAsync`
+Both placement routes use the owner-scoped `ISandboxLeaseStore.GetCurrentAsync`
 callback overload under the exact active Environment owner fence. The public
 callback rechecks fresh `WriteProjects`; the internal callback rechecks fresh
 `ReadRunSelection` and the same exact project/run binding. The store retains the same transaction and owner advisory lock while the
