@@ -31,6 +31,7 @@ public sealed class ApiAcceptanceRunnerTests
     [InlineData(false, false, false, 1, "failed", "indeterminate", "fractional-revision")]
     [InlineData(false, false, false, 1, "failed", "indeterminate", "string-revision")]
     [InlineData(false, false, false, 1, "failed", "indeterminate", "malformed-task")]
+    [InlineData(false, false, false, 1, "failed", "indeterminate", "ambiguous-capture")]
     public async Task BoardDeleteExercisesTypedConflictPermissionDeletionAndCleanupOperations(
         bool failCleanup,
         bool ambiguousDelete,
@@ -56,6 +57,7 @@ public sealed class ApiAcceptanceRunnerTests
             var trace = new ConcurrentQueue<string>();
             var handler = new AcceptanceGatewayHandler(openApi, trace, failCleanup,
                 ambiguousBoardDelete: ambiguousDelete, preserveCompactedTaskRevision: preserveCompactedTaskRevision,
+                ambiguousBoardCapture: boardScenario == "ambiguous-capture",
                 failFirstBoardTaskEdit: boardScenario == "edit-rejection",
                 malformedBoardSnapshot: boardScenario is null or "edit-rejection" ? null : boardScenario);
             handler.GatewayOrigin = new Uri("https://api.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/");
@@ -99,6 +101,23 @@ public sealed class ApiAcceptanceRunnerTests
                 Assert.Contains(handler.Requests, request => request.OperationId == "revokeProjectRoleAssignment");
                 return;
             }
+            if (boardScenario == "ambiguous-capture")
+            {
+                JsonObject fixture = result["observations"]?["boardFixture"] as JsonObject ?? [];
+                Assert.Equal(AcceptanceGatewayHandler.BoardProjectId, fixture["projectId"]?.GetValue<string>());
+                Assert.Equal(1, fixture["projectAcknowledgedRevision"]?.GetValue<long>());
+                Assert.Equal("22222222-2222-4222-8222-222222222222", fixture["ownerAssignmentId"]?.GetValue<string>());
+                Assert.Equal(1, fixture["ownerAssignmentRevision"]?.GetValue<long>());
+                JsonObject attempt = Assert.Single(fixture["taskCaptureAttempts"]!.AsArray().OfType<JsonObject>());
+                string invocationId = fixture["invocationId"]!.GetValue<string>();
+                Assert.Equal(ApiAcceptanceSupport.StableUuid(invocationId, "board-task-a"), attempt["taskId"]?.GetValue<string>());
+                Assert.Equal("unknown", attempt["outcome"]?.GetValue<string>());
+                Assert.Empty(fixture["ownedTaskIds"]!.AsArray());
+                Assert.Equal(1, handler.Requests.Count(request => request.OperationId == "captureBacklogTask"));
+                Assert.DoesNotContain(handler.Requests, request => request.OperationId is
+                    "deleteProjectBacklogTask" or "updateProject" or "revokeProjectRoleAssignment");
+                return;
+            }
             if (boardScenario is not null)
             {
                 Assert.Contains(handler.Requests, request => request.OperationId == "captureBacklogTask");
@@ -130,6 +149,27 @@ public sealed class ApiAcceptanceRunnerTests
                 && request.Headers["Authorization"].Contains("projects.orchestrator", StringComparison.Ordinal));
             Assert.Equal(AcceptanceGatewayHandler.BoardProjectId,
                 result["observations"]?["boardFixture"]?["projectId"]?.GetValue<string>());
+            JsonObject successfulFixture = result["observations"]?["boardFixture"] as JsonObject ?? [];
+            Assert.Equal(1, successfulFixture["projectAcknowledgedRevision"]?.GetValue<long>());
+            Assert.Equal("22222222-2222-4222-8222-222222222222",
+                successfulFixture["ownerAssignmentId"]?.GetValue<string>());
+            Assert.Equal(1, successfulFixture["ownerAssignmentRevision"]?.GetValue<long>());
+            JsonArray attempts = successfulFixture["taskCaptureAttempts"]!.AsArray();
+            string successfulInvocationId = successfulFixture["invocationId"]!.GetValue<string>();
+            Assert.Collection(attempts,
+                attempt =>
+                {
+                    Assert.Equal(ApiAcceptanceSupport.StableUuid(successfulInvocationId, "board-task-a"), attempt?["taskId"]?.GetValue<string>());
+                    Assert.Equal("acknowledged", attempt?["outcome"]?.GetValue<string>());
+                },
+                attempt =>
+                {
+                    Assert.Equal(ApiAcceptanceSupport.StableUuid(successfulInvocationId, "board-task-b"), attempt?["taskId"]?.GetValue<string>());
+                    Assert.Equal("acknowledged", attempt?["outcome"]?.GetValue<string>());
+                });
+            Assert.Equal(2, successfulFixture["ownedTaskIds"]!.AsArray().Count);
+            if (expectedCleanupState == "cleaned")
+                Assert.Equal(2, successfulFixture["projectRevision"]?.GetValue<long>());
             Assert.All(handler.Requests.Where(request => request.ProjectId.Length > 0),
                 request => Assert.Equal(AcceptanceGatewayHandler.BoardProjectId, request.ProjectId));
         }
@@ -1122,6 +1162,7 @@ public sealed class ApiAcceptanceRunnerTests
         private readonly bool _failCleanup;
         private bool _failFirstBoardTaskEdit;
         private readonly bool _failBoardOwnerAssignment;
+        private bool _ambiguousBoardCapture;
         private readonly bool _preserveCompactedTaskRevision;
         private bool _ambiguousBoardDelete;
         private readonly string? _malformedJournalCase;
@@ -1149,6 +1190,7 @@ public sealed class ApiAcceptanceRunnerTests
             bool failCleanup,
             string? malformedJournalCase = null,
             CancellationTokenSource? cancelOnMessage = null,
+            bool ambiguousBoardCapture = false,
             bool ambiguousBoardDelete = false,
             bool failBoardOwnerAssignment = false,
             bool preserveCompactedTaskRevision = false,
@@ -1161,6 +1203,7 @@ public sealed class ApiAcceptanceRunnerTests
             _failCleanup = failCleanup;
             _failFirstBoardTaskEdit = failFirstBoardTaskEdit;
             _failBoardOwnerAssignment = failBoardOwnerAssignment;
+            _ambiguousBoardCapture = ambiguousBoardCapture;
             _preserveCompactedTaskRevision = preserveCompactedTaskRevision;
             _ambiguousBoardDelete = ambiguousBoardDelete;
             _malformedJournalCase = malformedJournalCase;
@@ -1538,6 +1581,11 @@ public sealed class ApiAcceptanceRunnerTests
             }
             _boardTasks.Add(task);
             _boardGraphRevision++;
+            if (_ambiguousBoardCapture)
+            {
+                _ambiguousBoardCapture = false;
+                return Json(HttpStatusCode.InternalServerError, new JsonObject { ["title"] = "Acknowledgement unavailable" });
+            }
             return Json(HttpStatusCode.OK, BoardGraph());
         }
 

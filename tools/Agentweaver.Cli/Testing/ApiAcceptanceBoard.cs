@@ -14,8 +14,10 @@ internal sealed class BoardFixtureState(string invocationId)
     public long? MembershipRevision { get; set; }
     public string? ProjectId { get; set; }
     public long? ProjectRevision { get; set; }
+    public long? ProjectAcknowledgedRevision { get; set; }
     public string? OwnerAssignmentId { get; set; }
     public long? OwnerAssignmentRevision { get; set; }
+    public List<string> AttemptedTaskIds { get; } = [];
     public Dictionary<string, long> OwnedTaskRevisions { get; } = new(StringComparer.Ordinal);
     public bool ProjectAcknowledged { get; set; }
     public bool OwnerAcknowledged { get; set; }
@@ -176,6 +178,7 @@ internal static class ApiAcceptanceBoard
 
         state.ProjectId = projectId;
         state.ProjectRevision = revision;
+        state.ProjectAcknowledgedRevision = revision;
         state.ProjectAcknowledged = true;
         state.MutationAcknowledged = false;
 
@@ -315,6 +318,7 @@ internal static class ApiAcceptanceBoard
         IGatewayClient api, BoardFixtureState state, BoardGraph previous, BoardCaptureBacklogTask request, CancellationToken ct)
     {
         await RequireOwnerAuthorityAsync(api, null, state, "writeProjects", ct).ConfigureAwait(false);
+        state.AttemptedTaskIds.Add(request.TaskId);
         GatewayResponse response = await MutateAsync(state,
             () => BoardGateway.CaptureTaskAsync(api, state.ProjectId!, request with { ExpectedGraphRevision = previous.Revision }, ct))
             .ConfigureAwait(false);
@@ -739,9 +743,17 @@ internal static class ApiAcceptanceBoard
         ["projectId"] = state.ProjectId,
         ["projectName"] = state.ProjectName,
         ["projectRevision"] = state.ProjectRevision,
+        ["projectAcknowledgedRevision"] = state.ProjectAcknowledgedRevision,
+        ["ownerAssignmentId"] = state.OwnerAssignmentId,
+        ["ownerAssignmentRevision"] = state.OwnerAssignmentRevision,
         ["tenantId"] = state.TenantId,
         ["actorId"] = state.ActorId,
         ["ownedTaskIds"] = new JsonArray(state.OwnedTaskRevisions.Keys.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()),
+        ["taskCaptureAttempts"] = new JsonArray(state.AttemptedTaskIds.Select(id => (JsonNode?)new JsonObject
+        {
+            ["taskId"] = id,
+            ["outcome"] = state.OwnedTaskRevisions.ContainsKey(id) ? "acknowledged" : "unknown",
+        }).ToArray()),
         ["cleanup"] = state.Cleanup?.DeepClone(),
     };
 
