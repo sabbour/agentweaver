@@ -126,11 +126,12 @@ records, sends a model turn/tool call, changes grants, or reruns P1.
 
 `RuntimeAgentHost.ConfigureAsync` supports `MaxModelTurns` and `MaxToolCalls`
 only for workflow-bound registrations, whose native sends use owner-prepared
-dispatch and begin admission. `MaxPromptTokens` is preserved through owner
-projection and registration but remains unsupported: `RuntimeContractValidation`
-rejects it with `runtime_numeric_limits_unsupported` before SDK setup, even for
-workflow-bound registrations. Unbound `MaxModelTurns` and `MaxToolCalls` are
-also rejected with that code. Positive HostedCopilot hard credit limits are
+dispatch and begin admission. `MaxPromptTokens` is accepted within its
+configured range and resolved against the native SDK model capacity; an
+unavailable capacity blocks session setup with
+`runtime_model_prompt_capacity_unavailable`. Unbound `MaxModelTurns` and
+`MaxToolCalls` are rejected with `runtime_numeric_limits_unsupported`.
+Positive HostedCopilot hard credit limits are
 supported for workflow-bound registrations through owner-prepared dispatch and
 begin admission. Unbound registrations still deny positive hard limits with
 `runtime_usage_affinity_unavailable`.
@@ -159,11 +160,12 @@ denied; do not weaken pending/indeterminate sibling checks or claim that an
 already admitted turn can be recalled.
 
 AgentHost permits `MaxModelTurns` and `MaxToolCalls` only when every constrained
-send uses the prepared-dispatch, action-grant and native-begin path.
-`MaxPromptTokens` remains unsupported before SDK setup. Existing no-resend,
-pending-accounting and sticky exhaustion rules must remain in force. Estimated
-counts, a failed dispatch response, an old pricing snapshot, or a missing
-journal event is not proof of no send.
+send uses the prepared-dispatch, action-grant and native-begin path. A configured
+`MaxPromptTokens` limit is applied using the current model's native capacity;
+unknown capacity fails session setup. Existing no-resend, pending-accounting
+and sticky exhaustion rules must remain in force. Estimated counts, a failed
+dispatch response, an old pricing snapshot, or a missing journal event is not
+proof of no send.
 
 ## Missing P1 replacement and recovery evidence
 

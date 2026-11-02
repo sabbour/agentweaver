@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { validateP1NativeProbeResults } from '../../harness-shared/p1-acceptance-result.mjs';
 import { loadP1NativeProviders } from './cli.mjs';
 
 const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
@@ -151,40 +152,50 @@ test('provider contract and load errors block without leaking raw provider failu
   }
 });
 
-test('optional owner reads cannot claim acceptance or unblock native execution', async t => {
-  for (const result of [
-    {
-      status: 'blocked', code: 'native_no_send_effect_proof_missing',
-      acceptanceEvidence: false, nativeNoSendProven: false,
-    },
-    { status: 'passed', acceptanceEvidence: true, nativeNoSendProven: true },
-  ]) {
-    const source = factory.replace('authProvider:', `nativeAuthorityProvider: {
-      async readCurrent() { return ${JSON.stringify(result)}; }
-    }, authProvider:`);
-    const f = await fixture(t, source);
-    const output = execute(f.args);
-    assert.equal(output.status, 2);
-    assert.match(output.stderr, /blocked at native_authority_join/);
-    if (result.status === 'blocked') {
-      assert.match(output.stderr, /native_no_send_effect_proof_missing/);
-      assert.doesNotMatch(output.stderr, /Missing authority proof/);
-    } else {
-      assert.match(output.stderr, /Missing authority proof/);
-    }
-    assert.equal(output.stdout, '');
-    assert.equal(await readFile(f.outputPath, 'utf8'), '');
-  }
-  const f = await fixture(t, factory.replace('authProvider:', `nativeAuthorityProvider: {
+test('a current partial owner join runs the existing probe validator without claiming missing proof', async t => {
+  const partial = {
+    status: 'blocked', code: 'native_no_send_effect_proof_missing',
+    acceptanceEvidence: false, nativeNoSendProven: false,
+  };
+  const source = factory.replace('authProvider:', `nativeAuthorityProvider: {
+    async readCurrent() { return ${JSON.stringify(partial)}; }
+  }, authProvider:`);
+  const partialRun = await fixture(t, source);
+  const output = execute(partialRun.args);
+  assert.equal(output.status, 2);
+  assert.match(output.stderr, /Native proof gap: native_no_send_effect_proof_missing/);
+  assert.match(output.stderr, /P1 native probes blocked/);
+  assert.doesNotMatch(output.stderr, /Missing authority proof/);
+  assert.equal(output.stdout, '');
+  const envelope = JSON.parse(await readFile(partialRun.outputPath, 'utf8'));
+  assert.deepEqual(validateP1NativeProbeResults([envelope]), [envelope]);
+  assert.equal(envelope.kind, 'p1-native-acceptance');
+  assert.equal(envelope.overallStatus, 'blocked');
+  assert.equal(envelope.probes.length, 4);
+  assert.ok(envelope.probes.every(probe =>
+    probe.status === 'blocked' && probe.code === 'provider_receipt_mismatch'),
+  JSON.stringify(envelope.probes.map(({ name, status, code, reason }) => ({ name, status, code, reason }))));
+
+  const fakePass = factory.replace('authProvider:', `nativeAuthorityProvider: {
+    async readCurrent() { return { status: 'passed', acceptanceEvidence: true, nativeNoSendProven: true }; }
+  }, authProvider:`);
+  const passing = await fixture(t, fakePass);
+  const rejected = execute(passing.args);
+  assert.equal(rejected.status, 2);
+  assert.match(rejected.stderr, /blocked at native_authority_join/);
+  assert.match(rejected.stderr, /Missing authority proof/);
+  assert.equal(await readFile(passing.outputPath, 'utf8'), '');
+
+  const throwing = await fixture(t, factory.replace('authProvider:', `nativeAuthorityProvider: {
     async readCurrent() { throw new Error('private-owner-response'); }
   }, authProvider:`));
-  const output = execute(f.args);
-  assert.equal(output.status, 2);
-  assert.doesNotMatch(output.stderr, /private-owner-response/);
-  assert.equal(await readFile(f.outputPath, 'utf8'), '');
+  const failed = execute(throwing.args);
+  assert.equal(failed.status, 2);
+  assert.doesNotMatch(failed.stderr, /private-owner-response/);
+  assert.equal(await readFile(throwing.outputPath, 'utf8'), '');
 });
 
-test('a joined partial result still leaves output empty and never calls auth, journey, or readiness', async t => {
+test('a joined partial result emits per-probe blockers without calling incomplete providers', async t => {
   const f = await fixture(t);
   const marker = join(f.directory, 'unexpected-provider-call');
   const source = `import { writeFileSync } from 'node:fs';
@@ -206,10 +217,12 @@ export function createP1NativeProviders() {
   await writeFile(f.providerPath, source);
   const output = execute(f.args);
   assert.equal(output.status, 2);
-  assert.match(output.stderr, /blocked at native_authority_join/);
+  assert.match(output.stderr, /P1 native probes blocked/);
   assert.match(output.stderr, /native_no_send_effect_proof_missing/);
   assert.doesNotMatch(output.stderr, /Missing authority proof/);
   assert.equal(output.stdout, '');
-  assert.equal(await readFile(f.outputPath, 'utf8'), '');
+  const envelope = JSON.parse(await readFile(f.outputPath, 'utf8'));
+  assert.equal(envelope.overallStatus, 'blocked');
+  assert.ok(envelope.probes.every(probe => probe.status === 'blocked'));
   await assert.rejects(readFile(marker), { code: 'ENOENT' });
 });

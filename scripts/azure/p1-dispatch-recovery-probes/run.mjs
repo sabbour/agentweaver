@@ -392,7 +392,7 @@ export async function runP1DispatchRecoveryProbes({
   const probes = [
     blockedProbe(
       'numeric-copilot-dispatch-boundaries',
-      'The existing Host reader can verify persisted zero-limit and hard-credit no-send receipts. The Orchestrator reader can verify persisted MaxModelTurns and MaxToolCalls denial and unchanged owner send-state receipts, but these do not prove native cursor/no-send, admitted-turn completion, or whole-run soft-warning/floor advance. MaxPromptTokens is rejected before SDK setup. Missing native-boundary, warning, and cursor-linked dispatch receipts keep this check blocked.',
+      'The existing Host reader can verify persisted zero-limit and hard-credit no-send receipts. The Orchestrator reader can verify persisted MaxModelTurns and MaxToolCalls denial and unchanged owner send-state receipts, but these do not prove native cursor/no-send, admitted-turn completion, or whole-run soft-warning/floor advance. MaxPromptTokens is resolved against SDK model capacity; unavailable native capacity blocks session setup. Missing native-boundary, warning, and cursor-linked dispatch receipts keep this check blocked.',
       liveObservationEvidence(
         numericObservations,
         [
@@ -439,7 +439,7 @@ export async function runP1DispatchRecoveryProbes({
             path: 'packages/Agentweaver.Identity/RuntimeContractValidation.cs',
             symbol: 'RequireSupportedNumericRunLimits',
             code: 'runtime_numeric_limits_unsupported',
-            detail: 'Workflow-bound MaxToolCalls uses owner-prepared dispatch and begin admission. MaxPromptTokens remains unsupported before SDK setup; unbound MaxModelTurns and MaxToolCalls are rejected.',
+            detail: 'Workflow-bound MaxToolCalls uses owner-prepared dispatch and begin admission. MaxPromptTokens is accepted within its configured range and resolved against native SDK model capacity; unavailable capacity blocks session setup. Unbound MaxModelTurns and MaxToolCalls are rejected.',
           },
           {
             path: 'packages/Agentweaver.AgentRuntime/AuthorizedRuntimeSession.cs',

@@ -191,15 +191,17 @@ These reads are not a substitute for invocation ownership or native mount eviden
 
 ## Explicit native CLI and provider module
 
-**Native execution is blocked.** After validating the module shape, the CLI
-exits 2 at `native_authority_join`. A validated owner join reports the precise
-`native_no_send_effect_proof_missing` gap; an absent or invalid owner authority
-retains the generic missing-authority diagnostic. Legacy modules never invoke
-provider methods. Modules with the optional
-`nativeAuthorityProvider.readCurrent()` perform bounded, read-only owner
-observations; the CLI invokes no auth, journey, readiness, or process method,
-never invokes the native runner, and leaves the exclusively reserved output
-empty. The reserved file is not an acceptance envelope.
+The CLI requires a current owner join before it invokes the existing
+`runP1NativeProbes` runner. A validated join may report
+`native_no_send_effect_proof_missing`; that gap does not prove no effects or
+block unrelated native probes whose own current bindings are complete. The
+runner checks shared manifest and owner-readiness prerequisites before
+execution, then preserves each probe's result independently. Missing shared
+prerequisites block all four; probe-specific authorization, observation, and
+cleanup failures remain attached to their own probe. The runner seals the
+four-probe envelope. An absent or invalid owner authority blocks before
+execution. The owner join itself is not acceptance evidence, and a passing join
+cannot bypass the runner's checks.
 
 ### Source-owned partial owner reader
 
@@ -276,11 +278,13 @@ A valid join still returns `status: "blocked"` and
 `acceptanceEvidence: false` and `nativeNoSendProven: false`. Its partial
 observation contains only joined operation IDs, provider-returned claim/Pod
 identities, and safe identifiers/hashes for the selected fixed-credit pair.
-The journey authorizer always denies and the readiness adapter throws. Even a
-fake authority result of `passed` or `acceptanceEvidence: true` cannot unblock
-the CLI. This bounded consumer does not provide live-turn, generic no-send,
-cursor-continuation, completion, child-effect, or external-effect-deduplication
-proof, the other runner proof slots, child execution, network isolation,
+The bundled journey authorizer denies and the bundled readiness adapter throws,
+so those missing capabilities remain blocked in the emitted per-probe results.
+Even a fake authority result of `passed` or `acceptanceEvidence: true` cannot
+bypass the existing runner's input, owner-readback, authorization, native
+observation, or cleanup checks. This bounded consumer does not provide
+live-turn, generic no-send, cursor-continuation, completion, child-effect, or
+external-effect-deduplication proof, child execution, network isolation,
 storage-byte isolation, or generic replacement. It makes no live acceptance
 claim.
 
@@ -326,8 +330,8 @@ these three keys, implementing the methods and return contracts in
 keys block. In particular, it cannot supply `fetch`, `processProvider`, or `now`.
 The CLI uses Node's HTTP transport, the real clock, and
 `createP1NativeProcessProvider(input.pins.context)` without process overrides.
-It never executes the runner; it does not add a pass, substitute receipts, or
-manufacture acceptance evidence.
+It invokes the existing runner after a current owner join; it does not add a
+pass, substitute receipts, or manufacture acceptance evidence.
 
 The module is executable trusted code, not sandboxed configuration. Review and
 pin its source separately. Its import and factory must be side-effect-free:
@@ -356,9 +360,10 @@ The P1 creation-binding route returns this observation alongside the exact
 creation records and full Core binding. The consumer validates those records
 against the current registration, then compares the Host's independently
 observed Pod UID and mounted workspace. This source-only read is not a runner
-ownership receipt or acceptance result. The CLI remains blocked until native
-no-send/cursor/effect/dispatch acknowledgments and the remaining runner proof
-slots are wired and validated.
+ownership receipt or acceptance result. Native no-send, cursor, effect, and
+dispatch gaps still block the related credit/replacement acceptance; they are
+not inferred from an empty journal or used to claim unrelated native-probe
+success.
 
 `workspaceAttachment` and `isolationConfigurationVerified` describe
 configuration only. They do not prove that the Host process sees the actual
