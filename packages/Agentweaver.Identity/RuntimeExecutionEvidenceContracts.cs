@@ -160,7 +160,10 @@ public static class RuntimeNumericLimitDenialReadContract
     }
 }
 
-/// <summary>Authenticated current-owner identity used to request a recovery comparison.</summary>
+/// <summary>
+/// Authenticated current-owner identity used to request a recovery comparison. InvocationId must be
+/// the accepted P1 setup invocation or its Core invocation; caller-supplied baselines are not evidence.
+/// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeReplacementComparisonRequest(
     [property: JsonRequired] Guid RuntimeInstanceId,
@@ -180,12 +183,22 @@ public sealed record RuntimeReplacementComparisonBlocker(
     [property: JsonRequired] string AssociationId,
     [property: JsonRequired] Guid DispatchId,
     [property: JsonRequired] long ExecutionFence,
+    [property: JsonRequired] Guid OriginalRuntimeInstanceId,
+    [property: JsonRequired] long OriginalRegistrationRevision,
+    [property: JsonRequired] Guid CurrentRuntimeInstanceId,
+    [property: JsonRequired] long CurrentRegistrationRevision,
+    [property: JsonRequired] string? ResultCheckpointId,
+    [property: JsonRequired] long? ResultCheckpointRevision,
+    [property: JsonRequired] RuntimeExecutionCheckpointParent? CheckpointParent,
+    [property: JsonRequired] RuntimeExecutionResultDigest? ResultDigest,
     [property: JsonRequired] IReadOnlyList<string> MissingProvenance)
 {
     /// <summary>Validates correlation identity and explicit missing-provenance reporting.</summary>
     public RuntimeReplacementComparisonBlocker Validate()
     {
         if (Status != "blocked" || DispatchId == Guid.Empty || CheckpointRevision < 1 || ExecutionFence < 1 ||
+            OriginalRuntimeInstanceId == Guid.Empty || OriginalRegistrationRevision < 1 ||
+            CurrentRuntimeInstanceId == Guid.Empty || CurrentRegistrationRevision < 1 ||
             MissingProvenance is null || MissingProvenance.Count == 0 ||
             MissingProvenance.Distinct(StringComparer.Ordinal).Count() != MissingProvenance.Count)
             throw new RuntimeAuthorizationException("runtime_replacement_comparison_invalid");
@@ -193,6 +206,21 @@ public sealed record RuntimeReplacementComparisonBlocker(
         RuntimeContractValidation.ValidateIdentifier(CheckpointId);
         RuntimeContractValidation.ValidateIdentifier(WorkPlanId);
         RuntimeContractValidation.ValidateIdentifier(AssociationId);
+        if (ResultCheckpointId is null != (ResultCheckpointRevision is null) ||
+            ResultCheckpointRevision is < 1 ||
+            ResultCheckpointId is not null && CheckpointParent is null ||
+            ResultCheckpointId is null && CheckpointParent is not null ||
+            ResultCheckpointId is null &&
+                !MissingProvenance.Contains("orchestrator.invocation-checkpoint-binding", StringComparer.Ordinal) ||
+            ResultDigest is not null && ResultCheckpointId is null ||
+            ResultDigest is null &&
+                !MissingProvenance.Contains("orchestrator.result-hash-binding", StringComparer.Ordinal) ||
+            ResultDigest is { } digest &&
+                (digest.Utf8ByteLength < 0 || digest.Sha256 is not { Length: 64 } ||
+                 !digest.Sha256.All(Uri.IsHexDigit)))
+            throw new RuntimeAuthorizationException("runtime_replacement_comparison_invalid");
+        if (CheckpointParent is not null)
+            _ = CheckpointParent.Validate();
         foreach (var missing in MissingProvenance)
             RuntimeContractValidation.ValidateIdentifier(missing);
         return this;
@@ -225,7 +253,9 @@ public static class RuntimeReplacementComparisonContract
             request.ExecutionFence != registration.Binding.ExecutionFence ||
             result.InvocationId != request.InvocationId ||
             result.DispatchId != request.DispatchId ||
-            result.ExecutionFence != request.ExecutionFence)
+            result.ExecutionFence != request.ExecutionFence ||
+            result.CurrentRuntimeInstanceId != registration.RuntimeInstanceId ||
+            result.CurrentRegistrationRevision != registration.Revision)
             throw new RuntimeAuthorizationException("runtime_replacement_comparison_conflict");
         return result.Validate();
     }

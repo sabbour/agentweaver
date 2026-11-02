@@ -1345,7 +1345,7 @@ and the exact current registration, proof, action, turn, or receipt binding.
 | POST | `/actions/verify` | Revalidate action proof. |
 | POST | `/actions/credit-denials/read` | Read action credit denial. |
 | POST | `/actions/numeric-denials/read` | Read an immutable numeric-limit denial by attempt. |
-| POST | `/execution/replacements/compare` | Return an explicit blocked replacement comparison until required Environment and Host/Events evidence is available. |
+| POST | `/execution/replacements/compare` | Validate a current owner-bound P1 invocation and read matching dispatch, checkpoint, and result facts; remain blocked until required Environment and Host/Events evidence is available. |
 | POST | `/remote-tool-results/verify` | Verify reviewed remote result proof. |
 | GET | `/sources/{runtimeInstanceId:guid}` | Read current native usage source. |
 | POST | `/sources/{runtimeInstanceId:guid}` | Save source facts. |
@@ -1358,6 +1358,15 @@ and the exact current registration, proof, action, turn, or receipt binding.
 | POST | `/credit-guards/read` | Read current credit guard. |
 | POST | `/turns/fixed-credit-denials/no-send` | Record fixed-credit no-send evidence. |
 | POST | `/turns/no-send` | Record no-send evidence. |
+
+Replacement comparison accepts only the current P1 setup or Core invocation
+stored in the Orchestrator owner binding. It rechecks current registration,
+Projects selection, and invocation authority around the read. The response may
+include the original and current runtime registrations, the stored checkpoint
+and parent metadata, and a digest of a stored result. Missing result data remains
+an explicit provenance gap. The comparison always remains blocked: these facts
+do not establish Environment replacement lineage or a Host/Events effect and
+cursor receipt, and the read writes no success receipt.
 | POST | `/turns/observations` | Save turn observation. |
 | POST | `/turns/accounting` | Record accounting acknowledgment. |
 | POST | `/turns/recorded` | Record durable turn completion evidence. |

@@ -208,20 +208,32 @@ read by attempt through `/internal/runtime/actions/numeric-denials/read`.
 Hard-credit denial and no-send receipts retain their existing contract.
 
 `/internal/runtime/execution/replacements/compare` currently returns an explicit
-blocked result and writes no success receipt. The dispatch table does not bind a
-Projects `invocationId`, and current Orchestrator code cannot prove invocation
-to checkpoint/result identity across host replacement. A successful comparison
-must wait for authenticated Environment replacement lineage (including the old
-and new Pod UIDs and its observation receipt), plus a Host/Events receipt bound
-to the same invocation, runtime registration/source/grant, dispatch, checkpoint
-revision/hash, work plan, association, result hash, and unchanged Core execution
-fence. The Host/Events receipt must include a complete before/after cursor range,
-event count/digest, and effect/send sequence revision/count/digest; cursor
-equality alone is insufficient. Orchestrator must persist the exact source
-receipt IDs/hashes and joined comparison before acknowledging the durable
-receipt ID/hash to Host. Exact retries receive the same acknowledgment; changed
-content conflicts. Until these upstream receipts and the invocation join exist,
-the comparison reports every missing provenance item and does not store success.
+blocked result and writes no success receipt. It validates `invocationId` against
+the current owner-bound P1 setup/core invocation, then resolves the requested
+dispatch only when its actor, tenant, project, run, root, selection hash, and
+execution fence match that accepted binding. It reads the stored original runtime
+registration facts and the matching checkpoint/result facts; a missing result is
+reported as missing provenance. The dispatch row still has no invocation-ID
+column, so this projection is not a per-dispatch invocation join or proof of a
+native effect. A successful comparison must wait for authenticated Environment
+replacement lineage (including the old and new Pod UIDs and its observation
+receipt), plus a Host/Events receipt bound to the same invocation, runtime
+registration/source/grant, dispatch, checkpoint revision/hash, work plan,
+association, result hash, and unchanged Core execution fence. The Host/Events
+receipt must include a complete before/after cursor range, event count/digest,
+and effect/send sequence revision/count/digest; cursor equality alone is
+insufficient. Orchestrator must persist the exact source receipt IDs/hashes and
+joined comparison before acknowledging the durable receipt ID/hash to Host.
+Exact retries receive the same acknowledgment; changed content conflicts. Until
+these upstream receipts and the invocation join exist, the comparison reports
+every missing provenance item and does not store success.
+The Host producer must capture under execution serialization using the current
+`RuntimeOwnerContext` and Observe proof plus the Environment-validated Pod
+observation, include actual mount evidence and observation time, then revalidate
+authority after waits. It must return explicit unavailable when it cannot supply
+a durable no-send/effect-sequence receipt. The Host-owned Pod identity injection
+(`AGENTWEAVER_HOST_POD_UID`) and Environment Pod observation are upstream
+dependencies, not values Orchestrator may infer.
 The Host producer must capture under execution serialization using the current
 RuntimeOwnerContext and Observe proof plus the Environment-validated Pod
 observation, include actual mount evidence and observation time, then revalidate

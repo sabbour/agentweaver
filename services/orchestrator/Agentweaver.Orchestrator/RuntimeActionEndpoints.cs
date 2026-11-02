@@ -20,7 +20,8 @@ internal sealed class RuntimeActionOwner(
     ProviderResolver resolver,
     AgtPolicyProvider policy,
     IServiceProvider services,
-    OrchestratorOptions options)
+    OrchestratorOptions options,
+    CoordinationOwnerStore? invocationBindings = null)
 {
     /// <summary>
     /// Evaluates and admits a runtime action against the current registration, selection, grant, and policy.
@@ -290,9 +291,71 @@ internal sealed class RuntimeActionOwner(
             RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
                 accepted.Selection.Snapshot.GetRawText())) != binding.AcceptedSelectionHash)
             throw new RuntimeAuthorizationException("runtime_replacement_comparison_conflict");
+        var bindingStore = invocationBindings
+            ?? throw new RuntimeAuthorizationException("p1_invocation_binding_unavailable");
+        var invocationBinding = await bindingStore.ReadCurrentP1InvocationBindingAsync(
+            new CoordinationActor(actor.Issuer, actor.Subject), accepted, cancellationToken).ConfigureAwait(false);
+        if (!Guid.TryParse(request.InvocationId, out var invocationId) ||
+            invocationId != invocationBinding.SetupInvocationId &&
+            invocationId != invocationBinding.CoreInvocationId ||
+            !MatchesReplacementInvocationBinding(binding, invocationBinding))
+            throw new RuntimeAuthorizationException("runtime_replacement_comparison_conflict");
+
         await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
-        return await grants.ReadReplacementComparisonBlockerAsync(
-            registration, request, cancellationToken).ConfigureAwait(false);
+        var currentAccepted = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+            context, binding.ProjectId, binding.RunId, cancellationToken).ConfigureAwait(false);
+        RequireSameReplacementSelection(actor, binding, accepted, currentAccepted);
+        var currentInvocationBinding = await bindingStore.ReadCurrentP1InvocationBindingAsync(
+            new CoordinationActor(actor.Issuer, actor.Subject), currentAccepted, cancellationToken).ConfigureAwait(false);
+        if (currentInvocationBinding != invocationBinding)
+            throw new RuntimeAuthorizationException("runtime_replacement_comparison_conflict");
+        await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
+        var result = await grants.ReadReplacementComparisonBlockerAsync(
+            registration, request, invocationBinding, currentAccepted, cancellationToken).ConfigureAwait(false);
+        await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
+        var finalAccepted = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+            context, binding.ProjectId, binding.RunId, cancellationToken).ConfigureAwait(false);
+        RequireSameReplacementSelection(actor, binding, accepted, finalAccepted);
+        var finalInvocationBinding = await bindingStore.ReadCurrentP1InvocationBindingAsync(
+            new CoordinationActor(actor.Issuer, actor.Subject), finalAccepted, cancellationToken).ConfigureAwait(false);
+        if (finalInvocationBinding != invocationBinding)
+            throw new RuntimeAuthorizationException("runtime_replacement_comparison_conflict");
+        await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
+        return result;
+    }
+
+    private static bool MatchesReplacementInvocationBinding(
+        RuntimeBinding runtime,
+        P1InvocationBinding invocation) =>
+        invocation.ContractVersion == 1 &&
+        invocation.ActorIssuer == runtime.ActorIssuer &&
+        invocation.ActorSubject == runtime.ActorId &&
+        invocation.TenantId == runtime.TenantId &&
+        invocation.ProjectId == runtime.ProjectId &&
+        invocation.RunId == runtime.RunId &&
+        invocation.AcceptedSelectionHash == runtime.AcceptedSelectionHash &&
+        invocation.ExecutionFence == runtime.ExecutionFence;
+
+    private static void RequireSameReplacementSelection(
+        CoordinationActor actor,
+        RuntimeBinding runtime,
+        AuthorizedRunSelection expected,
+        AuthorizedRunSelection current)
+    {
+        var selection = current.Selection;
+        if (current.Authorization.ActorId != actor.Subject ||
+            current.Authorization.Issuer != actor.Issuer ||
+            current.Authorization.TenantId != runtime.TenantId ||
+            selection.ProjectId != runtime.ProjectId ||
+            selection.RunId != runtime.RunId ||
+            selection.ProjectRevision != runtime.ProjectRevision ||
+            selection.ProjectConfigurationRevision != runtime.ProjectConfigurationRevision ||
+            selection.PlatformRuntimeRevision != runtime.PlatformRuntimeRevision ||
+            selection.ContextRevision != runtime.ContextRevision ||
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(selection.Snapshot.GetRawText())) !=
+                runtime.AcceptedSelectionHash ||
+            CoordinationOwnerStore.HashSelection(selection) != CoordinationOwnerStore.HashSelection(expected.Selection))
+            throw new RuntimeAuthorizationException("runtime_replacement_comparison_conflict");
     }
 
     /// <summary>
