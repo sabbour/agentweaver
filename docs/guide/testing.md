@@ -610,6 +610,12 @@ than retrying the write.
 This controlled regression does not prove distributable apphost acceptance or
 verify the production evidence providers.
 
+The .NET CLI acceptance transport test also starts with an empty in-memory
+journal. Its controlled Gateway handler adds an event only when it accepts
+`sendProjectRunMessage`, then returns that same event from `replayRunEvents`.
+The test checks the accepted message ID, event identity, and request order. It
+does not prove a database commit or authenticated apphost execution.
+
 The first native `board-delete` API journey also has controlled Gateway
 transport regressions. They check distinct Gateway and Broker origins,
 32-character project IDs through partial-setup cleanup, exclusive reservation
