@@ -51,13 +51,16 @@ The Web end-to-end tests use Playwright with fake Broker and Gateway services.
 They check the built app with fixture data; they do not contact deployed
 services. The Chief of Staff journey checks that Priority creation and order
 survive a reload, notes save successfully, and a conversation link created from
-Priorities is still shown after a reload.
+Priorities is still shown after a reload. The Board deletion journey checks
+keyboard confirmation, focus restoration, owner denial, and narrow-screen
+layout against fixture responses; it does not prove live owner persistence or
+authorization.
 
 Run the Web build and the focused browser journeys from the repository root:
 
 ```powershell
 npm --prefix apps/web run build
-node --test apps/web/e2e/cos.e2e.test.mjs apps/web/e2e/priority-links.e2e.test.mjs apps/web/e2e/artifact.e2e.test.mjs
+node --test apps/web/e2e/cos.e2e.test.mjs apps/web/e2e/priority-links.e2e.test.mjs apps/web/e2e/artifact.e2e.test.mjs apps/web/e2e/board-delete.e2e.test.mjs
 ```
 
 To run named project suites after the Release build, use:

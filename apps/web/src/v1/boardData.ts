@@ -4,7 +4,7 @@
  * Every call uses the unbound project session, because backlog reads and writes
  * are project-scoped and a run-bound session is rejected for issue reads.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { GatewayError, gatewayClient } from './api';
 import { useAuth } from './AuthContext';
 import type {
@@ -18,6 +18,34 @@ import type {
   ProjectIssueSummary,
 } from './contracts';
 import { errorMessage } from './errors';
+
+/** Authorization snapshot shared by one Board load or write. */
+export interface BoardRequestScope {
+  identity: object;
+  accessToken: string | null;
+  tenantId: string | null;
+}
+
+/** Checks whether a request still belongs to the currently rendered Board scope. */
+export type IsBoardScopeCurrent = (scope: BoardRequestScope) => boolean;
+
+/** A session refresh or context switch made the captured Board request stale. */
+export class BoardScopeChangedError extends Error {
+  constructor() {
+    super('The Board authorization context changed. Review the task before continuing.');
+    this.name = 'BoardScopeChangedError';
+  }
+}
+
+function assertBoardScope(
+  scope: BoardRequestScope,
+  isScopeCurrent: IsBoardScopeCurrent,
+  accessToken: string,
+  tenantId: string | null,
+): void {
+  if (!isScopeCurrent(scope) || accessToken !== scope.accessToken || tenantId !== scope.tenantId)
+    throw new BoardScopeChangedError();
+}
 
 /** Board column IDs. They match the 0.x column IDs so styles and anchors stay the same. */
 export type BoardColumnId = 'backlog' | 'ready' | 'active' | 'done';
@@ -138,14 +166,26 @@ export function isStaleRevision(error: unknown): boolean {
  * the action. 409 explains the common conflicts. Other failures keep the
  * status and message, which helps when someone reports a problem.
  */
-export function boardErrorMessage(error: unknown, action: 'read' | 'capture' | 'edit' | 'mutate'): string {
+export function boardErrorMessage(error: unknown, action: 'read' | 'capture' | 'edit' | 'mutate' | 'delete'): string {
+  if (error instanceof BoardScopeChangedError && action === 'delete')
+    return 'Your sign-in or authorization context changed. Review the board before deleting this task.';
+  if (error instanceof GatewayError && error.status === 401 && action === 'delete')
+    return 'Your sign-in may have expired. Sign in again and review the task before deleting it.';
   if (error instanceof GatewayError && error.status === 403) {
     return action === 'read'
       ? "You don't have permission to view this project's board."
+      : action === 'delete'
+        ? "You don't have permission to delete tasks in this project."
       : "You don't have permission to change tasks in this project.";
   }
   if (error instanceof GatewayError && error.status === 409) {
     const codes = backlogIssueCodes(error);
+    if (action === 'delete' && codes.includes('taskhasdependents'))
+      return 'Another task depends on this task. Remove its prerequisite link before deleting it.';
+    if (action === 'delete' && codes.includes('taskdeletionunavailable'))
+      return error.message || 'This task cannot be deleted while linked work is being preserved.';
+    if (action === 'delete' && codes.includes('tasknoteditable'))
+      return 'This task can no longer be deleted. It may be claimed, archived, or held by automation.';
     if (codes.includes('tasknoteditable'))
       return action === 'edit'
         ? 'This task can no longer be edited. It may be archived or waiting for an automation.'
@@ -155,10 +195,18 @@ export function boardErrorMessage(error: unknown, action: 'read' | 'capture' | '
     if (isStaleRevision(error))
       return 'The board changed while you were working. It has been reloaded; try again.';
   }
-  if (error instanceof GatewayError && error.status === 404 && (action === 'edit' || action === 'mutate'))
-    return 'This task no longer exists. The board has been reloaded.';
-  if (error instanceof GatewayError && error.status === 503 && action === 'mutate')
-    return 'Queue ordering is unavailable right now. Try again after the service update.';
+  if (error instanceof GatewayError && error.status === 404 && (action === 'edit' || action === 'mutate' || action === 'delete'))
+    return action === 'delete'
+      ? 'This task no longer exists. The board has been reloaded.'
+      : 'This task no longer exists. The board has been reloaded.';
+  if (error instanceof GatewayError && error.status === 503) {
+    if (action === 'delete')
+      return 'Task deletion is unavailable right now. The task has not been removed. Try again later.';
+    if (action === 'mutate')
+      return 'Queue ordering is unavailable right now. Try again after the service update.';
+  }
+  if (action === 'delete')
+    return `Task deletion failed. The task has not been removed. ${errorMessage(error)}`;
   return errorMessage(error);
 }
 
@@ -182,6 +230,8 @@ export interface ProjectBoardData {
 interface BoardState {
   /** The project this state belongs to. State for another project is ignored. */
   projectId: string;
+  /** The authorization/session context this state belongs to. */
+  scopeIdentity: object | null;
   graph: BacklogGraph | null;
   issues: ReadonlyMap<string, ProjectIssueSummary>;
   error: unknown;
@@ -198,20 +248,42 @@ const EMPTY_ISSUES: ReadonlyMap<string, ProjectIssueSummary> = new Map();
  * board, because issues only add details to cards. Responses for an older
  * project or an older reload are dropped.
  */
-export function useProjectBoard(projectId: string, reloadKey?: unknown): ProjectBoardData {
+export function useProjectBoard(
+  projectId: string,
+  reloadKey?: unknown,
+  scope?: BoardRequestScope,
+  isScopeCurrent?: IsBoardScopeCurrent,
+): ProjectBoardData {
   const { apiCall } = useAuth();
+  const requestScope = scope;
   const [state, setState] = useState<BoardState>({
-    projectId: '', graph: null, issues: EMPTY_ISSUES, error: null, issuesError: null, issuesTruncated: false, settled: false,
+    projectId: '', scopeIdentity: null, graph: null, issues: EMPTY_ISSUES, error: null, issuesError: null, issuesTruncated: false, settled: false,
   });
   // Bumped by `reload` to read again.
   const [generation, setGeneration] = useState(0);
+  const readSequence = useRef(0);
 
   useEffect(() => {
     if (!projectId) return;
+    const sequence = ++readSequence.current;
     // Cleared on cleanup so a late response for an old project or reload is dropped.
     let active = true;
+    let scopeChanged = false;
+    const read = <T,>(operation: (token: string, tenant: string | null) => Promise<T>) =>
+      apiCall((token, tenant) => {
+        if (requestScope) {
+          try {
+            if (!active) throw new BoardScopeChangedError();
+            assertBoardScope(requestScope, isScopeCurrent ?? (() => true), token, tenant);
+          } catch (reason) {
+            scopeChanged = true;
+            throw reason;
+          }
+        }
+        return operation(token, tenant);
+      }, null);
     const timer = window.setTimeout(() => {
-      const graphRead = apiCall((token, tenant) => gatewayClient.readProjectBacklog(token, projectId, tenant), null);
+      const graphRead = read((token, tenant) => gatewayClient.readProjectBacklog(token, projectId, tenant));
       // Read issue pages one after another, because each page needs the cursor of
       // the one before it. Stop at the page limit so a huge project can't stall the board.
       const issueRead = (async () => {
@@ -219,8 +291,8 @@ export function useProjectBoard(projectId: string, reloadKey?: unknown): Project
         let cursor: string | null = null;
         for (let page = 0; page < ISSUE_PAGE_LIMIT; page += 1) {
           const current: string | null = cursor;
-          const result: ProjectIssuePage = await apiCall((token, tenant) => gatewayClient.listProjectIssues(
-            token, projectId, { state: 'all', cursor: current, pageSize: ISSUE_PAGE_SIZE }, tenant), null);
+          const result: ProjectIssuePage = await read((token, tenant) => gatewayClient.listProjectIssues(
+            token, projectId, { state: 'all', cursor: current, pageSize: ISSUE_PAGE_SIZE }, tenant));
           for (const issue of result.items) byTask.set(issue.taskId, issue);
           cursor = result.nextCursor;
           if (!cursor) return { byTask, truncated: false };
@@ -228,12 +300,15 @@ export function useProjectBoard(projectId: string, reloadKey?: unknown): Project
         return { byTask, truncated: true };
       })();
       void Promise.allSettled([graphRead, issueRead]).then(([graph, issues]) => {
-        if (!active) return;
+        if (!active || sequence !== readSequence.current || scopeChanged
+          || requestScope && isScopeCurrent && !isScopeCurrent(requestScope)) return;
         setState((previous) => {
           // On a failed reload, keep the last good graph for this project and show the error with it.
-          const sameProject = previous.projectId === projectId;
+          const sameProject = previous.projectId === projectId
+            && previous.scopeIdentity === (requestScope?.identity ?? null);
           return {
             projectId,
+            scopeIdentity: requestScope?.identity ?? null,
             graph: graph.status === 'fulfilled' ? graph.value : sameProject ? previous.graph : null,
             issues: issues.status === 'fulfilled' ? issues.value.byTask : sameProject ? previous.issues : EMPTY_ISSUES,
             error: graph.status === 'rejected' ? graph.reason : null,
@@ -248,17 +323,22 @@ export function useProjectBoard(projectId: string, reloadKey?: unknown): Project
       active = false;
       window.clearTimeout(timer);
     };
-  }, [apiCall, projectId, generation, reloadKey]);
+  }, [apiCall, projectId, generation, reloadKey, requestScope, isScopeCurrent]);
 
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
   const replaceGraph = useCallback((graph: BacklogGraph) => {
-    // Accept only a graph for the current project; a late write result for another project is ignored.
-    setState((previous) => (graph.projectId === projectId
-      ? { ...previous, projectId, graph, error: null, settled: true }
+    // Accept only a graph for the current project and authorization scope.
+    if (graph.projectId !== projectId || requestScope && isScopeCurrent && !isScopeCurrent(requestScope)) return;
+    // An authoritative write wins over any earlier read in the same scope.
+    readSequence.current += 1;
+    setState((previous) => (previous.scopeIdentity === (requestScope?.identity ?? null) && graph.projectId === projectId
+      ? { ...previous, projectId, scopeIdentity: requestScope?.identity ?? null, graph, error: null, settled: true }
       : previous));
-  }, [projectId]);
+  }, [isScopeCurrent, projectId, requestScope]);
 
-  const current = state.projectId === projectId;
+  const current = state.projectId === projectId
+    && state.scopeIdentity === (requestScope?.identity ?? null)
+    && (!requestScope || !isScopeCurrent || isScopeCurrent(requestScope));
   return {
     graph: current ? state.graph : null,
     issues: current ? state.issues : EMPTY_ISSUES,
@@ -379,6 +459,26 @@ export function archiveTask(
   };
   return apiCall((token, tenant) => gatewayClient.archiveProjectBacklogTask(
     token, graph.projectId, task.reference.taskId, request, tenant), null);
+}
+
+/** Deletes one task using the graph and task revisions the user confirmed. */
+export function deleteBacklogTask(
+  apiCall: ApiCall,
+  graph: BacklogGraph,
+  task: BacklogTaskSnapshot,
+  scope: BoardRequestScope,
+  isScopeCurrent: IsBoardScopeCurrent,
+): Promise<BacklogGraph> {
+  const request: BacklogTaskRevisionRequest = {
+    expectedGraphRevision: graph.revision,
+    expectedTaskRevision: task.revision,
+  };
+  return apiCall((token, tenant) => {
+    assertBoardScope(scope, isScopeCurrent, token, tenant);
+    return gatewayClient.deleteProjectBacklogTask(
+      token, graph.projectId, task.reference.taskId, request, tenant,
+    );
+  }, null);
 }
 
 /** Adds a prerequisite edge at the graph revision the user read. */

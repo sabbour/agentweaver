@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { GatewayError } from './api';
+import { describe, expect, it, vi } from 'vitest';
+import { GatewayError, gatewayClient } from './api';
 import {
+  BoardScopeChangedError,
   boardColumnFor,
   boardColumns,
   boardErrorMessage,
+  deleteBacklogTask,
   isStaleRevision,
   newBacklogTaskId,
   prerequisiteTitles,
@@ -98,5 +100,58 @@ describe('board data', () => {
     expect(boardErrorMessage(conflict('duplicateRepositoryIssue'), 'capture')).toBe('Another task already tracks that repository issue.');
     expect(boardErrorMessage(conflict('staleGraphRevision'), 'capture')).toMatch(/board changed/);
     expect(boardErrorMessage(new GatewayError(404, {}, 'Missing'), 'edit')).toBe('This task no longer exists. The board has been reloaded.');
+  });
+
+  it('deletes only with the confirmed revisions and returns the owner graph', async () => {
+    const taskSnapshot = task('t1', { revision: 3 });
+    const observed: BacklogGraph = { projectId: 'p1', revision: 5, tasks: [taskSnapshot], dependencies: [] };
+    const authoritative: BacklogGraph = { projectId: 'p1', revision: 6, tasks: [], dependencies: [] };
+    const scope = { identity: {}, accessToken: 'session-token', tenantId: 'tenant-1' };
+    const apiCall: Parameters<typeof deleteBacklogTask>[0] = async <T,>(
+      operation: (token: string, tenant: string | null) => Promise<T>,
+    ) => operation('session-token', 'tenant-1');
+    const deletion = vi.spyOn(gatewayClient, 'deleteProjectBacklogTask').mockResolvedValue(authoritative);
+
+    try {
+      await expect(deleteBacklogTask(apiCall, observed, taskSnapshot, scope, () => true)).resolves.toBe(authoritative);
+      expect(deletion).toHaveBeenCalledWith('session-token', 'p1', 't1', {
+        expectedGraphRevision: 5,
+        expectedTaskRevision: 3,
+      }, 'tenant-1');
+    } finally {
+      deletion.mockRestore();
+    }
+  });
+
+  it('refuses deletion after a token or scope changes before gateway dispatch', async () => {
+    const observed: BacklogGraph = { projectId: 'p1', revision: 5, tasks: [task('t1')], dependencies: [] };
+    const scope = { identity: {}, accessToken: 'old-token', tenantId: 'tenant-1' };
+    const apiCall: Parameters<typeof deleteBacklogTask>[0] = async <T,>(
+      operation: (token: string, tenant: string | null) => Promise<T>,
+    ) => operation('new-token', 'tenant-1');
+    const deletion = vi.spyOn(gatewayClient, 'deleteProjectBacklogTask');
+
+    try {
+      await expect(deleteBacklogTask(apiCall, observed, observed.tasks[0], scope, () => true))
+        .rejects.toBeInstanceOf(BoardScopeChangedError);
+      expect(deletion).not.toHaveBeenCalled();
+    } finally {
+      deletion.mockRestore();
+    }
+  });
+
+  it('keeps task deletion failures distinct from queue ordering and preserves owner policy copy', () => {
+    expect(boardErrorMessage(new GatewayError(403, {}, 'Forbidden'), 'delete'))
+      .toBe("You don't have permission to delete tasks in this project.");
+    expect(boardErrorMessage(conflict('taskHasDependents'), 'delete'))
+      .toBe('Another task depends on this task. Remove its prerequisite link before deleting it.');
+    expect(boardErrorMessage(conflict('taskNotEditable'), 'delete')).not.toMatch(/closed/i);
+    expect(boardErrorMessage(new GatewayError(409, {
+      issues: [{ code: 'taskDeletionUnavailable', path: 'task', message: 'A repository receipt is still active.' }],
+    }, 'A repository receipt is still active.'), 'delete')).toBe('A repository receipt is still active.');
+    expect(boardErrorMessage(new GatewayError(409, { issues: [{ code: 'staleGraphRevision' }] }, 'Stale.'), 'delete'))
+      .toMatch(/board changed/i);
+    expect(boardErrorMessage(new GatewayError(503, {}, 'Unavailable'), 'delete'))
+      .toMatch(/Task deletion is unavailable.*task has not been removed/i);
   });
 });

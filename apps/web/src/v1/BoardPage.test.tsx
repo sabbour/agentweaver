@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GatewayError } from './api';
 import { BoardPage } from './BoardPage';
@@ -16,13 +16,26 @@ const mocks = vi.hoisted(() => ({
   archiveProjectBacklogTask: vi.fn(),
   addProjectBacklogDependency: vi.fn(),
   removeProjectBacklogDependency: vi.fn(),
+  deleteProjectBacklogTask: vi.fn(),
   getAuthorizationContext: vi.fn(),
   getProject: vi.fn(),
   apiCall: vi.fn(),
+  session: { accessToken: 'token', binding: null },
+  authorizationContext: { tenantId: 'tenant-1', membershipRevision: 1 },
+  authorizationData: null as unknown,
 }));
 
 vi.mock('./AuthContext', () => ({
-  useAuth: () => ({ session: { accessToken: 'token' }, apiCall: mocks.apiCall }),
+  useAuth: () => ({
+    session: mocks.session,
+    authorizationContext: mocks.authorizationContext,
+    apiCall: mocks.apiCall,
+  }),
+}));
+
+vi.mock('./projectData', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./projectData')>(),
+  useAuthorizationContext: () => ({ data: mocks.authorizationData, error: null, loading: false }),
 }));
 
 vi.mock('./api', async (importOriginal) => ({
@@ -36,6 +49,7 @@ vi.mock('./api', async (importOriginal) => ({
     setProjectBacklogTaskPosition: mocks.setProjectBacklogTaskPosition,
     setAllProjectBacklogTasksReady: mocks.setAllProjectBacklogTasksReady,
     archiveProjectBacklogTask: mocks.archiveProjectBacklogTask,
+    deleteProjectBacklogTask: mocks.deleteProjectBacklogTask,
     addProjectBacklogDependency: mocks.addProjectBacklogDependency,
     removeProjectBacklogDependency: mocks.removeProjectBacklogDependency,
     getAuthorizationContext: mocks.getAuthorizationContext,
@@ -59,11 +73,19 @@ function task(taskId: string, title: string, extra: Partial<BacklogTaskSnapshot>
   };
 }
 
-function graph(tasks: BacklogTaskSnapshot[], revision = 5, dependencies: BacklogGraph['dependencies'] = []): BacklogGraph {
-  return { projectId: 'p1', revision, tasks, dependencies };
+function graph(
+  tasks: BacklogTaskSnapshot[],
+  revision = 5,
+  dependencies: BacklogGraph['dependencies'] = [],
+  projectId = 'p1',
+): BacklogGraph {
+  return { projectId, revision, tasks, dependencies };
 }
 
-function context(permissions: Array<'readProjects' | 'writeProjects'>): ProjectAuthorizationContextResponse {
+function context(
+  permissions: Array<'readProjects' | 'writeProjects'>,
+  overrides: Partial<ProjectAuthorizationContextResponse> = {},
+): ProjectAuthorizationContextResponse {
   return {
     contractVersion: 1,
     issuer: 'https://broker.test',
@@ -77,23 +99,48 @@ function context(permissions: Array<'readProjects' | 'writeProjects'>): ProjectA
       resourceId: 'p1',
       permissions: permissions.map((permission) => ({ permission, roleRevision: 1 })),
     }],
+    ...overrides,
   } as ProjectAuthorizationContextResponse;
 }
 
 const issueLink = { providerId: 'github', repository: { owner: 'acme', name: 'web' }, issueNumber: 12 };
 
 function renderBoard() {
-  return render(
+  let navigateTo: (path: string) => void = () => undefined;
+  const tree = () => (
     <MemoryRouter initialEntries={['/projects/p1/board']}>
+      <NavigationProbe onNavigate={(navigate) => { navigateTo = navigate; }} />
       <Routes>
         <Route path="/projects/:projectId/board" element={<BoardPage />} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+  const result = render(tree());
+  return {
+    ...result,
+    navigate: (path: string) => act(() => navigateTo(path)),
+    rerenderBoard: () => result.rerender(tree()),
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function NavigationProbe({ onNavigate }: { onNavigate: (navigate: (path: string) => void) => void }) {
+  const navigate = useNavigate();
+  onNavigate(navigate);
+  return null;
 }
 
 beforeEach(() => {
-  mocks.apiCall.mockReset().mockImplementation((operation: (token: string, tenant: string) => Promise<unknown>) => operation('token', 'tenant-1'));
+  mocks.session = { accessToken: 'token', binding: null };
+  mocks.authorizationContext = { tenantId: 'tenant-1', membershipRevision: 1 };
+  mocks.authorizationData = context(['readProjects', 'writeProjects']);
+  mocks.apiCall.mockReset().mockImplementation((operation: (token: string, tenant: string) => Promise<unknown>) =>
+    operation(mocks.session.accessToken, mocks.authorizationContext.tenantId));
   mocks.readProjectBacklog.mockReset().mockResolvedValue(graph([]));
   mocks.listProjectIssues.mockReset().mockResolvedValue({ projectId: 'p1', items: [], nextCursor: null });
   mocks.captureBacklogTask.mockReset();
@@ -102,6 +149,7 @@ beforeEach(() => {
   mocks.setProjectBacklogTaskPosition.mockReset();
   mocks.setAllProjectBacklogTasksReady.mockReset();
   mocks.archiveProjectBacklogTask.mockReset();
+  mocks.deleteProjectBacklogTask.mockReset();
   mocks.addProjectBacklogDependency.mockReset();
   mocks.removeProjectBacklogDependency.mockReset();
   mocks.getAuthorizationContext.mockReset().mockResolvedValue(context(['readProjects', 'writeProjects']));
@@ -412,12 +460,350 @@ describe('BoardPage', () => {
   });
 
   it('shows a read-only board without capture or edit for viewers', async () => {
-    mocks.getAuthorizationContext.mockResolvedValue(context(['readProjects']));
+    mocks.authorizationData = context(['readProjects']);
     mocks.readProjectBacklog.mockResolvedValue(graph([task('t1', 'Draft spec')]));
     renderBoard();
     expect(await screen.findByText('Draft spec')).toBeTruthy();
-    await waitFor(() => expect(mocks.getAuthorizationContext).toHaveBeenCalled());
     expect(screen.queryByRole('textbox', { name: 'New task title' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Edit task Draft spec' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete task Draft spec' })).toBeNull();
+  });
+
+  it('offers delete only for eligible tasks and explains loaded blockers, including hidden dependents', async () => {
+    const graphWithTasks = graph([
+      task('eligible', 'Eligible'),
+      task('closed', 'Closed unclaimed', { lifecycle: 'closed' }),
+      task('claimed', 'Claimed', { state: 'claimed' }),
+      task('held', 'Automation held', { isAutomationInvocationPending: true }),
+      task('archived', 'Archived', { isArchived: true }),
+      task('parent', 'Has a dependent'),
+      task('dependent', 'Hidden dependent', { isArchived: true }),
+      task('linked', 'Linked issue', { repositoryIssue: issueLink }),
+    ], 5, [{
+      task: { projectId: 'p1', taskId: 'dependent' },
+      prerequisite: { projectId: 'p1', taskId: 'parent' },
+    }]);
+    mocks.readProjectBacklog.mockResolvedValue(graphWithTasks);
+    renderBoard();
+
+    expect(await screen.findByRole('button', { name: 'Delete task Eligible' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Delete task Closed unclaimed' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Delete task Claimed' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete task Automation held' })).toBeNull();
+    expect(screen.queryByText('Archived')).toBeNull();
+
+    const dependentCard = screen.getByTestId('task-card-parent');
+    expect(within(dependentCard).getByRole('button', { name: 'Delete task Has a dependent' }).hasAttribute('disabled')).toBe(true);
+    expect(within(dependentCard).getByText('Another task depends on this task. Remove its prerequisite link first.')).toBeTruthy();
+    const linkedCard = screen.getByTestId('task-card-linked');
+    expect(within(linkedCard).getByRole('button', { name: 'Delete task Linked issue' }).hasAttribute('disabled')).toBe(true);
+    expect(within(linkedCard).getByText("This task is linked to a repository issue and can't be deleted here.")).toBeTruthy();
+  });
+
+  it('cancels or escapes confirmation without a request and restores focus', async () => {
+    mocks.readProjectBacklog.mockResolvedValue(graph([task('t1', 'Draft spec')]));
+    renderBoard();
+    const card = await screen.findByTestId('task-card-t1');
+    const trigger = within(card).getByRole('button', { name: 'Delete task Draft spec' });
+
+    fireEvent.click(trigger);
+    const dialog = await screen.findByRole('dialog', { name: 'Delete task?' });
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+    await waitFor(() => expect(document.activeElement).toBe(cancel));
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Delete task?' })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(mocks.deleteProjectBacklogTask).not.toHaveBeenCalled();
+
+    fireEvent.click(trigger);
+    fireEvent.click(await within(await screen.findByRole('dialog', { name: 'Delete task?' })).findByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Delete task?' })).toBeNull());
+    expect(mocks.deleteProjectBacklogTask).not.toHaveBeenCalled();
+    expect(screen.getByTestId('task-card-t1')).toBeTruthy();
+  });
+
+  it('sends observed revisions once, keeps the task while pending, and replaces it with the owner graph', async () => {
+    const target = task('t1', 'Delete me', { revision: 3 });
+    const prerequisite = task('t2', 'Keep me', { position: 1 });
+    const initial = graph([target, prerequisite], 5, [{
+      task: target.reference,
+      prerequisite: prerequisite.reference,
+    }]);
+    const authoritative = graph([task('t2', 'Keep me', { position: 0 })], 6);
+    const response = deferred<BacklogGraph>();
+    mocks.readProjectBacklog.mockResolvedValue(initial);
+    mocks.deleteProjectBacklogTask.mockReturnValue(response.promise);
+    renderBoard();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete task Delete me' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete task?' });
+    expect(within(dialog).getByText(/Delete “Delete me”\?.*permanently removes the task and its prerequisite links/s)).toBeTruthy();
+    expect(within(dialog).getByText(/does not delete a repository issue/i)).toBeTruthy();
+    const submit = within(dialog).getByRole('button', { name: 'Delete task' });
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(mocks.deleteProjectBacklogTask).toHaveBeenCalledOnce());
+    expect(mocks.deleteProjectBacklogTask).toHaveBeenCalledWith('token', 'p1', 't1', {
+      expectedGraphRevision: 5,
+      expectedTaskRevision: 3,
+    }, 'tenant-1');
+    expect(screen.getByTestId('task-card-t1')).toBeTruthy();
+    expect(submit.hasAttribute('disabled')).toBe(true);
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: 'Delete task?' })).toBeTruthy();
+
+    await act(async () => {
+      response.resolve(authoritative);
+      await response.promise;
+    });
+    await waitFor(() => expect(screen.queryByTestId('task-card-t1')).toBeNull());
+    expect(await screen.findByText('Task deleted.')).toBeTruthy();
+    expect(screen.getByTestId('task-card-t2')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Agent task board' })).toBe(document.activeElement);
+  });
+
+  it('does not let a refresh started before deletion restore the removed task', async () => {
+    const target = task('t1', 'Delete me', { revision: 3 });
+    const initial = graph([target], 5);
+    const staleRefresh = deferred<BacklogGraph>();
+    const authoritative = graph([], 6);
+    mocks.readProjectBacklog.mockResolvedValueOnce(initial).mockReturnValueOnce(staleRefresh.promise);
+    mocks.deleteProjectBacklogTask.mockResolvedValue(authoritative);
+    renderBoard();
+
+    await screen.findByRole('button', { name: 'Delete task Delete me' });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(mocks.readProjectBacklog).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete task Delete me' }));
+    fireEvent.click(await within(await screen.findByRole('dialog', { name: 'Delete task?' }))
+      .findByRole('button', { name: 'Delete task' }));
+
+    expect(mocks.deleteProjectBacklogTask).toHaveBeenCalledWith('token', 'p1', 't1', {
+      expectedGraphRevision: 5,
+      expectedTaskRevision: 3,
+    }, 'tenant-1');
+    expect(await screen.findByText('Task deleted.')).toBeTruthy();
+    expect(screen.queryByTestId('task-card-t1')).toBeNull();
+
+    await act(async () => {
+      staleRefresh.resolve(initial);
+      await staleRefresh.promise;
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId('task-card-t1')).toBeNull();
+    expect(screen.getByText('Task deleted.')).toBeTruthy();
+  });
+
+  it.each([
+    {
+      title: 'forbidden deletion',
+      error: new GatewayError(403, {}, 'Forbidden'),
+      message: "You don't have permission to delete tasks in this project.",
+      remainsOpen: true,
+    },
+    {
+      title: 'owner deletion-unavailable rejection',
+      error: new GatewayError(409, {
+        issues: [{ code: 'taskDeletionUnavailable', path: 'task', message: 'A repository receipt is still active.' }],
+      }, 'A repository receipt is still active.'),
+      message: 'A repository receipt is still active.',
+      remainsOpen: true,
+    },
+    {
+      title: 'dependent task rejection',
+      error: new GatewayError(409, {
+        issues: [{ code: 'taskHasDependents', path: 'task', message: 'A dependent task exists.' }],
+      }, 'A dependent task exists.'),
+      message: 'Another task depends on this task. Remove its prerequisite link before deleting it.',
+      remainsOpen: false,
+    },
+    {
+      title: 'stale revision rejection',
+      error: new GatewayError(409, { issues: [{ code: 'staleGraphRevision', path: '', message: 'Stale.' }] }, 'Stale.'),
+      message: 'The board changed while you were working. It has been reloaded; try again.',
+      remainsOpen: false,
+    },
+    {
+      title: 'missing task rejection',
+      error: new GatewayError(404, {}, 'Missing'),
+      message: 'This task no longer exists. The board has been reloaded.',
+      remainsOpen: false,
+      remainsVisible: false,
+    },
+    {
+      title: 'service unavailable rejection',
+      error: new GatewayError(503, {}, 'Unavailable'),
+      message: 'Task deletion is unavailable right now. The task has not been removed. Try again later.',
+      remainsOpen: true,
+    },
+  ])('preserves task-delete error semantics for $title', async ({ error, message, remainsOpen, remainsVisible = true }) => {
+    const initial = graph([task('t1', 'Draft spec')]);
+    if (remainsVisible) mocks.readProjectBacklog.mockResolvedValue(initial);
+    else mocks.readProjectBacklog.mockResolvedValueOnce(initial).mockResolvedValue(graph([], 6));
+    mocks.deleteProjectBacklogTask.mockRejectedValue(error);
+    renderBoard();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete task Draft spec' }));
+    fireEvent.click(await within(await screen.findByRole('dialog', { name: 'Delete task?' })).findByRole('button', { name: 'Delete task' }));
+    expect((await screen.findByText(message)).textContent).toContain(message);
+    if (remainsVisible) expect(screen.getByTestId('task-card-t1')).toBeTruthy();
+    else await waitFor(() => expect(screen.queryByTestId('task-card-t1')).toBeNull());
+    expect(screen.queryByText(/Queue ordering is unavailable/)).toBeNull();
+    if (remainsOpen) expect(screen.getByRole('dialog', { name: 'Delete task?' })).toBeTruthy();
+    else expect(screen.queryByRole('dialog', { name: 'Delete task?' })).toBeNull();
+  });
+
+  it('invalidates an open confirmation when the observed graph revision changes', async () => {
+    mocks.readProjectBacklog
+      .mockResolvedValueOnce(graph([task('t1', 'Draft spec')], 5))
+      .mockResolvedValue(graph([task('t1', 'Draft spec', { revision: 2 })], 6));
+    renderBoard();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete task Draft spec' }));
+    expect(await screen.findByRole('dialog', { name: 'Delete task?' })).toBeTruthy();
+    await act(async () => {
+      screen.getByRole('button', { name: 'Refresh' }).click();
+    });
+
+    expect(await screen.findByText('The board changed while you were confirming. Review the task before deleting it.')).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'Delete task?' })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Agent task board' })));
+    expect(mocks.deleteProjectBacklogTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['session token', 'actor', 'tenant', 'membership', 'permission'])(
+    'blocks a delayed delete dispatch after a %s change',
+    async (change) => {
+      mocks.readProjectBacklog.mockResolvedValue(graph([task('t1', 'Draft spec')]));
+      const dispatchGate = deferred<void>();
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => { markStarted = resolve; });
+      mocks.deleteProjectBacklogTask.mockResolvedValue(graph([], 6));
+      const page = renderBoard();
+      const trigger = await screen.findByRole('button', { name: 'Delete task Draft spec' });
+      mocks.apiCall.mockImplementationOnce(async (operation: (token: string, tenant: string) => Promise<unknown>) => {
+        markStarted();
+        await dispatchGate.promise;
+        return operation(mocks.session.accessToken, mocks.authorizationContext.tenantId);
+      });
+
+      fireEvent.click(trigger);
+      fireEvent.click(await within(await screen.findByRole('dialog', { name: 'Delete task?' })).findByRole('button', { name: 'Delete task' }));
+      await started;
+      changeAuthorizationScope(change);
+      page.rerenderBoard();
+      await screen.findByText('Draft spec');
+
+      await act(async () => {
+        dispatchGate.resolve();
+        await dispatchGate.promise;
+      });
+      await waitFor(() => expect(mocks.deleteProjectBacklogTask).not.toHaveBeenCalled());
+      expect(screen.getByTestId('task-card-t1')).toBeTruthy();
+    },
+  );
+
+  it('blocks a delayed delete after navigating A to B to A', async () => {
+    mocks.readProjectBacklog.mockImplementation(async (_token: string, projectId: string) =>
+      graph([task('t1', 'Draft spec')], 5, [], projectId));
+    const dispatchGate = deferred<void>();
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    mocks.deleteProjectBacklogTask.mockResolvedValue(graph([], 6));
+    const page = renderBoard();
+    const trigger = await screen.findByRole('button', { name: 'Delete task Draft spec' });
+    mocks.apiCall.mockImplementationOnce(async (operation: (token: string, tenant: string) => Promise<unknown>) => {
+      markStarted();
+      await dispatchGate.promise;
+      return operation(mocks.session.accessToken, mocks.authorizationContext.tenantId);
+    });
+
+    fireEvent.click(trigger);
+    fireEvent.click(await within(await screen.findByRole('dialog', { name: 'Delete task?' })).findByRole('button', { name: 'Delete task' }));
+    await started;
+    page.navigate('/projects/p2/board');
+    await screen.findByText('Draft spec');
+    page.navigate('/projects/p1/board');
+    await screen.findByText('Draft spec');
+
+    await act(async () => {
+      dispatchGate.resolve();
+      await dispatchGate.promise;
+    });
+    await waitFor(() => expect(mocks.deleteProjectBacklogTask).not.toHaveBeenCalled());
+    expect(screen.getByTestId('task-card-t1')).toBeTruthy();
+  });
+
+  it.each(['session token', 'actor', 'tenant', 'membership', 'permission'])(
+    'ignores a late delete response after a %s change',
+    async (change) => {
+      const oldTask = task('t1', 'Draft spec');
+      mocks.readProjectBacklog
+        .mockResolvedValueOnce(graph([oldTask], 5))
+        .mockResolvedValue(graph([task('t1', 'Fresh scope task', { revision: 2 })], 6));
+      const response = deferred<BacklogGraph>();
+      mocks.deleteProjectBacklogTask.mockReturnValue(response.promise);
+      const page = renderBoard();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Delete task Draft spec' }));
+      fireEvent.click(await within(await screen.findByRole('dialog', { name: 'Delete task?' })).findByRole('button', { name: 'Delete task' }));
+      await waitFor(() => expect(mocks.deleteProjectBacklogTask).toHaveBeenCalledOnce());
+      changeAuthorizationScope(change);
+      page.rerenderBoard();
+      expect(await screen.findByText('Fresh scope task')).toBeTruthy();
+
+      await act(async () => {
+        response.resolve(graph([], 20));
+        await response.promise;
+      });
+      expect(screen.getByTestId('task-card-t1')).toBeTruthy();
+      expect(screen.getByText('Fresh scope task')).toBeTruthy();
+      expect(screen.queryByText('Task deleted.')).toBeNull();
+    },
+  );
+
+  it('drops a Board read from the previous session when a fresh scope loads', async () => {
+    const oldRead = deferred<BacklogGraph>();
+    mocks.readProjectBacklog
+      .mockImplementationOnce(() => oldRead.promise)
+      .mockResolvedValue(graph([task('t1', 'Fresh session task')], 6));
+    const page = renderBoard();
+    await waitFor(() => expect(mocks.readProjectBacklog).toHaveBeenCalledOnce());
+
+    mocks.session.accessToken = 'new-session-token';
+    page.rerenderBoard();
+    expect(await screen.findByText('Fresh session task')).toBeTruthy();
+    await act(async () => {
+      oldRead.resolve(graph([task('t2', 'Old session task')], 5));
+      await oldRead.promise;
+    });
+
+    expect(screen.getByText('Fresh session task')).toBeTruthy();
+    expect(screen.queryByText('Old session task')).toBeNull();
   });
 });
+
+function changeAuthorizationScope(change: string): void {
+  switch (change) {
+    case 'session token':
+      mocks.session.accessToken = 'new-session-token';
+      break;
+    case 'actor':
+      mocks.authorizationData = context(['readProjects', 'writeProjects'], { actorId: 'user-2' });
+      break;
+    case 'tenant':
+      mocks.authorizationContext = { tenantId: 'tenant-2', membershipRevision: 1 };
+      mocks.authorizationData = context(['readProjects', 'writeProjects'], { tenantId: 'tenant-2' });
+      break;
+    case 'membership':
+      mocks.authorizationContext = { tenantId: 'tenant-1', membershipRevision: 2 };
+      mocks.authorizationData = context(['readProjects', 'writeProjects'], { membershipRevision: 2 });
+      break;
+    case 'permission':
+      mocks.authorizationData = context(['readProjects']);
+      break;
+    default:
+      throw new Error(`Unknown test scope change: ${change}`);
+  }
+}
