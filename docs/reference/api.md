@@ -169,6 +169,8 @@ NUL character. The owner trims the title. Content replacement also requires
 `expectedTaskRevision`. Both operations return the current project graph;
 stale revisions and duplicate repository issues return `409` with typed
 backlog issues. An unchanged replacement preserves both revisions.
+The initial task revision is `0`; callers must accept and pass that value as
+`expectedTaskRevision` until an edit advances it.
 
 `repositoryIssue` contains a provider catalog ID (`providerId`), a typed
 `repository` with `owner` and `name`, and a positive `issueNumber`. Repository

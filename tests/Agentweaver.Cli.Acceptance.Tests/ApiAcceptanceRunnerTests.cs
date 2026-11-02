@@ -21,17 +21,24 @@ namespace Agentweaver.Cli.Acceptance.Tests;
 public sealed class ApiAcceptanceRunnerTests
 {
     [Theory]
-    [InlineData(false, false, false, 0, "passed", "cleaned")]
-    [InlineData(true, false, false, 1, "failed", "indeterminate")]
-    [InlineData(false, true, false, 1, "failed", "indeterminate")]
-    [InlineData(false, false, true, 1, "failed", "indeterminate")]
+    [InlineData(false, false, false, 0, "passed", "cleaned", null)]
+    [InlineData(true, false, false, 1, "failed", "indeterminate", null)]
+    [InlineData(false, true, false, 1, "failed", "indeterminate", null)]
+    [InlineData(false, false, true, 1, "failed", "indeterminate", null)]
+    [InlineData(false, false, false, 1, "failed", "cleaned", "edit-rejection")]
+    [InlineData(false, false, false, 1, "failed", "indeterminate", "negative-revision")]
+    [InlineData(false, false, false, 1, "failed", "indeterminate", "missing-revision")]
+    [InlineData(false, false, false, 1, "failed", "indeterminate", "fractional-revision")]
+    [InlineData(false, false, false, 1, "failed", "indeterminate", "string-revision")]
+    [InlineData(false, false, false, 1, "failed", "indeterminate", "malformed-task")]
     public async Task BoardDeleteExercisesTypedConflictPermissionDeletionAndCleanupOperations(
         bool failCleanup,
         bool ambiguousDelete,
         bool preserveCompactedTaskRevision,
         int expectedExitCode,
         string expectedFeatureStatus,
-        string expectedCleanupState)
+        string expectedCleanupState,
+        string? boardScenario)
     {
         string workspace = Path.Combine(AppContext.BaseDirectory, "acceptance-work", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workspace);
@@ -48,7 +55,9 @@ public sealed class ApiAcceptanceRunnerTests
 
             var trace = new ConcurrentQueue<string>();
             var handler = new AcceptanceGatewayHandler(openApi, trace, failCleanup,
-                ambiguousBoardDelete: ambiguousDelete, preserveCompactedTaskRevision: preserveCompactedTaskRevision);
+                ambiguousBoardDelete: ambiguousDelete, preserveCompactedTaskRevision: preserveCompactedTaskRevision,
+                failFirstBoardTaskEdit: boardScenario == "edit-rejection",
+                malformedBoardSnapshot: boardScenario is null or "edit-rejection" ? null : boardScenario);
             handler.GatewayOrigin = new Uri("https://api.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/");
             using var http = new HttpClient(handler);
             var authentication = new TestAuthentication(trace);
@@ -81,18 +90,37 @@ public sealed class ApiAcceptanceRunnerTests
             Assert.Equal(expectedFeatureStatus, result["featureStatus"]?.GetValue<string>());
             Assert.Equal("not-evaluated", result["fullP1Status"]?.GetValue<string>());
             Assert.Equal(expectedCleanupState, result["observations"]?["boardFixture"]?["cleanup"]?["state"]?.GetValue<string>());
+            if (boardScenario == "edit-rejection")
+            {
+                Assert.Equal(2, handler.Requests.Count(request => request.OperationId == "deleteProjectBacklogTask"
+                    && request.Body?["expectedTaskRevision"]?.GetValue<long>() == 0));
+                Assert.Equal("verified", result["observations"]?["boardFixture"]?["cleanup"]?["taskDeletion"]?.GetValue<string>());
+                Assert.Equal("archived", result["observations"]?["boardFixture"]?["cleanup"]?["projectState"]?.GetValue<string>());
+                Assert.Contains(handler.Requests, request => request.OperationId == "revokeProjectRoleAssignment");
+                return;
+            }
+            if (boardScenario is not null)
+            {
+                Assert.Contains(handler.Requests, request => request.OperationId == "captureBacklogTask");
+                Assert.Contains("invalid task snapshot", result["failure"]?["message"]?.GetValue<string>());
+                Assert.DoesNotContain(handler.Requests, request => request.OperationId is
+                    "deleteProjectBacklogTask" or "updateProject" or "revokeProjectRoleAssignment");
+                return;
+            }
             if (!ambiguousDelete && !preserveCompactedTaskRevision)
                 Assert.Equal(0, result["observations"]?["board"]?["finalTaskCount"]?.GetValue<int>());
             Assert.Contains(handler.Requests, request => request.OperationId == "deleteProjectBacklogTask"
                 && request.Body?["expectedGraphRevision"]?.GetValue<long>() > 0
-                && request.Body?["expectedTaskRevision"]?.GetValue<long>() > 0);
+                && request.Body?["expectedTaskRevision"]?.GetValue<long>() >= 0);
+            Assert.Contains(handler.Requests, request => request.OperationId == "deleteProjectBacklogTask"
+                && request.Body?["expectedTaskRevision"]?.GetValue<long>() == 0);
             if (!ambiguousDelete && !preserveCompactedTaskRevision)
                 Assert.Contains(handler.Requests, request => request.OperationId == "revokeProjectRoleAssignment");
             else
                 Assert.Equal(5, handler.Requests.Count(request => request.OperationId == "deleteProjectBacklogTask"));
             if (preserveCompactedTaskRevision)
             {
-                Assert.Equal(1, handler.LastCompactedTaskRevision);
+                Assert.Equal(0, handler.LastCompactedTaskRevision);
                 Assert.Equal(0, handler.LastCompactedTaskPosition);
                 Assert.DoesNotContain(handler.Requests, request => request.OperationId == "revokeProjectRoleAssignment");
             }
@@ -1092,10 +1120,12 @@ public sealed class ApiAcceptanceRunnerTests
         private readonly IReadOnlyDictionary<string, GatewayOperation> _operations;
         private readonly ConcurrentQueue<string> _trace;
         private readonly bool _failCleanup;
+        private bool _failFirstBoardTaskEdit;
         private readonly bool _failBoardOwnerAssignment;
         private readonly bool _preserveCompactedTaskRevision;
         private bool _ambiguousBoardDelete;
         private readonly string? _malformedJournalCase;
+        private readonly string? _malformedBoardSnapshot;
         private readonly CancellationTokenSource? _cancelOnMessage;
         private int _revokeCalls;
         private string? _rootSessionId;
@@ -1121,16 +1151,20 @@ public sealed class ApiAcceptanceRunnerTests
             CancellationTokenSource? cancelOnMessage = null,
             bool ambiguousBoardDelete = false,
             bool failBoardOwnerAssignment = false,
-            bool preserveCompactedTaskRevision = false)
+            bool preserveCompactedTaskRevision = false,
+            bool failFirstBoardTaskEdit = false,
+            string? malformedBoardSnapshot = null)
         {
             _openApi = (JsonObject)openApi.DeepClone();
             _operations = GatewayContract.Parse(_openApi);
             _trace = trace;
             _failCleanup = failCleanup;
+            _failFirstBoardTaskEdit = failFirstBoardTaskEdit;
             _failBoardOwnerAssignment = failBoardOwnerAssignment;
             _preserveCompactedTaskRevision = preserveCompactedTaskRevision;
             _ambiguousBoardDelete = ambiguousBoardDelete;
             _malformedJournalCase = malformedJournalCase;
+            _malformedBoardSnapshot = malformedBoardSnapshot;
             _cancelOnMessage = cancelOnMessage;
             GatewayOrigin = new Uri("http://127.0.0.1:49241/");
         }
@@ -1473,7 +1507,7 @@ public sealed class ApiAcceptanceRunnerTests
             if (_boardTasks.Any(task => task["reference"]?["taskId"]?.GetValue<string>() == taskId))
                 return BoardIssue("taskAlreadyExists");
             JsonObject content = body?["content"] as JsonObject ?? [];
-            _boardTasks.Add(new JsonObject
+            JsonObject task = new()
             {
                 ["reference"] = new JsonObject { ["projectId"] = projectId, ["taskId"] = taskId },
                 ["title"] = content["title"]?.DeepClone(),
@@ -1481,9 +1515,28 @@ public sealed class ApiAcceptanceRunnerTests
                 ["state"] = "backlog",
                 ["isArchived"] = false,
                 ["isAutomationInvocationPending"] = false,
-                ["revision"] = 1L,
+                ["revision"] = 0L,
                 ["position"] = _boardTasks.Count,
-            });
+            };
+            switch (_malformedBoardSnapshot)
+            {
+                case "negative-revision":
+                    task["revision"] = -1L;
+                    break;
+                case "missing-revision":
+                    task.Remove("revision");
+                    break;
+                case "fractional-revision":
+                    task["revision"] = 0.5;
+                    break;
+                case "string-revision":
+                    task["revision"] = "0";
+                    break;
+                case "malformed-task":
+                    task.Remove("reference");
+                    break;
+            }
+            _boardTasks.Add(task);
             _boardGraphRevision++;
             return Json(HttpStatusCode.OK, BoardGraph());
         }
@@ -1500,6 +1553,11 @@ public sealed class ApiAcceptanceRunnerTests
                 return BoardIssue("staleGraphRevision");
             if (body?["expectedTaskRevision"]?.GetValue<long>() != task["revision"]?.GetValue<long>())
                 return BoardIssue("staleTaskRevision");
+            if (_failFirstBoardTaskEdit)
+            {
+                _failFirstBoardTaskEdit = false;
+                return BoardIssue("controlledEditRejection");
+            }
             JsonObject content = body?["content"] as JsonObject ?? [];
             task["title"] = content["title"]?.DeepClone();
             task["description"] = content["description"]?.DeepClone();
