@@ -1,10 +1,26 @@
-# Session Material Owner Retention
+# Specification: Session material ownership and retention
+
+**Status:** Owner behavior implemented in source; controlled tests and deployed
+acceptance are separate evidence.
+
+## Problem and goals
+
+Session history needs durable references whose read deadlines remain enforceable
+even when object cleanup is delayed or another reference keeps the bytes alive.
 
 The Events owner controls both the journal references and the retention deadline for session material. Blob storage holds bytes, but having a key or finding bytes does not grant permission to read them.
 
 See the [session material composition](../session-material-composition.md) for the system boundaries and the other implementation slices.
 
-## Reading material
+## Non-goals
+
+The owner does not grant access from possession of an object key, extend an
+expired reference because another reference is live, or scan historical objects
+that have no durable inventory record.
+
+## Intended behavior and requirements
+
+### Reading material
 
 The owner resolves a material key from the exact event recorded for the requested session. It checks the event's persisted reference deadline with PostgreSQL time before returning the event to the storage reader. The deadline is expired when it is equal to or earlier than the database clock.
 
@@ -14,7 +30,9 @@ Retention belongs to each event reference, not just to the object key. A differe
 
 Turn content is required history, so an expired turn returns an explicit owner failure. SDK cache is optional recovery input, so an expired cache uses the existing not-found recovery response with a retention-specific error. Both responses are marked `no-store`. Authorization failures and damaged or mismatched bytes remain failures; they are not translated into optional-cache absence.
 
-## Writing and retrying
+## Contracts and boundaries
+
+### Writing and retrying
 
 The owner records an inventory candidate before it writes bytes. It uses a stable key derived from the owner scope, event identity, and content digest, and it never replaces existing bytes. The journal reference and its deadline commit only after the object exists and has passed verification.
 
@@ -22,7 +40,9 @@ An acknowledgment is issued only after the journal commit and the final current-
 
 Authority remains current across waits and restarts. Revocation after the object write prevents the journal commit, and a retry is denied while that authority remains revoked. A changed execution fence also makes a request carrying the old fence invalid.
 
-## Cleanup and interruption
+## Failure and recovery
+
+### Cleanup and interruption
 
 Cleanup selects expired objects and stale unreferenced uploads in bounded batches. It locks each inventory row and checks current reference deadlines before deleting bytes. A live reference preserves the bytes. The owner records the deletion tombstone only after the object-store delete returns, and it preserves the journal event and reference history.
 
@@ -30,6 +50,16 @@ If storage deletes an object but the database commit is interrupted, the next cl
 
 Historical objects without a durable inventory record remain outside automatic cleanup. The object-store interface has no listing operation, so this owner does not scan the container or guess keys.
 
-## Validation
+<a id="validation"></a>
+
+## Acceptance and validation
 
 The Events PostgreSQL tests use a disposable database and a controlled object store. They cover deadlines before, at, and after expiry; expiry during a delayed object read; an expired reference alongside a separate live reference; required-turn and optional-cache responses; object-write response loss; definite journal rollback; cancellation after commit; authority and fence changes; interrupted cleanup; and both cleanup/writer lock orders.
+
+## Rollout and compatibility
+
+Use the existing owner routes and inventory migration; do not introduce a second
+retention authority or a container-listing cleanup path. See
+[deployment validation](session-material-deployment-validation.md) for the
+separate migration and runtime identities. This document does not authorize
+running either against a live environment.

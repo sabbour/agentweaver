@@ -1,12 +1,22 @@
 # Container Apps Sandboxes: P3 compatibility evaluation
 
+**Status:** Research evaluation. No adapter or cloud acceptance is established.
+
+## Problem and goals
+
+Determine whether the documented Sandbox service can satisfy Agentweaver's
+existing isolation, storage, network, ownership, and recovery contracts without
+weakening them.
+
 **Decision:** do not enable this provider with the current v1 runtime.
 Keep it as a P3 research option behind Environment's exclusive Sandbox contract.
 The documented microVM isolation is promising, but storage, network verification,
 ownership recovery, and AgentHost integration need separate implementation and proof.
 
-This evaluation asks whether Azure Container Apps dynamic sessions can host
-Agentweaver sandboxes. It does not implement an adapter, authorize a cloud trial, or add a P1/P2 dependency.
+## Non-goals
+
+This evaluation concerns Container Apps Sandboxes, not the older Dynamic Sessions
+service. It does not implement an adapter, authorize a cloud trial, or add a P1/P2 dependency.
 It does not restore Container Apps as an Application Hosting provider.
 AKS `agent-sandbox` remains the default Sandbox; Azure Files remains the default Storage.
 Any implementation needs a separate issue and approval after these findings.
@@ -50,7 +60,9 @@ AgentHost requirements also use the admitted AgentHost source at
 [`61820d0`](https://github.com/sabbour/agentweaver/tree/61820d03caf6d5b412178795a1139538afe39eaa).
 Source admission is not evidence of a released or deployed AgentHost.
 
-## Compatibility matrix
+## Contracts and boundaries
+
+### Compatibility matrix
 
 **Documented** means the public service documentation describes a feature.
 **Unverified** means it has not been proved against Agentweaver's contract.
@@ -131,7 +143,9 @@ must not bypass that boundary.
 The missing Core terminal/superseded-owner API remains a separate dependency for
 automatic reclamation, not a flag supplied by the future adapter.
 
-## Evidence required before a future implementation is enabled
+<a id="evidence-required-before-a-future-implementation-is-enabled"></a>
+
+## Acceptance and validation
 
 The following scenarios are **unexecuted requirements**, not passing tests.
 A future, separately approved issue must scope the adapter and exact supported pairing.
@@ -152,3 +166,10 @@ single-owner Storage pairing and managed Network adapter.
 Only proved capabilities may be advertised.
 If the selected contract cannot be represented or verified, reject the selection;
 do not fall back to weaker isolation, ephemeral storage, broader egress, or a different provider.
+
+## Rollout and compatibility
+
+Any future adapter needs separate approval for its exact API/SDK, Storage, and
+Network pairing. Keep the current rejected pairings rejected until their
+contracts can be represented and verified. This evaluation changes no provider
+default and authorizes no cloud experiment.

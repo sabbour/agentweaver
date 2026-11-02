@@ -1,8 +1,26 @@
-# Provider seams
+# Specification: Provider selection and enforcement boundaries
 
 > Part of [ADR 0001: Agentweaver 1.0 platform architecture](../decisions/0001-platform-architecture.md). **Status:** Proposed.
 
-## Summary
+This specification is for service and adapter authors. It separates the existing
+provider model from later adapter proposals. A proposed adapter is not selectable
+because it appears in this document.
+
+## Problem and goals
+
+Core behavior must not depend on one provider's SDK, resource names, or deployment
+mechanics. Selection must preserve current authority and negotiated capabilities
+without silently choosing a weaker implementation.
+
+## Non-goals
+
+Provider selection does not grant access, pin credentials, replace the model
+resolver, or introduce a local product runtime. Later Canvas and optional adapter
+work does not become a v1.1 requirement through this specification.
+
+<a id="summary"></a>
+
+## Intended behavior and requirements
 
 - Agentweaver 1.0 plans 16 provider seams through versioned .NET contracts; the core retains orchestration, authorization, fencing, and enforcement.
 - Providers are in-repository adapters. Azure-backed adapters are the defaults, and optional providers must meet the same contracts and isolation requirements.
@@ -39,12 +57,14 @@ credential references rather than BYOK and GitHub credentials. GitHub-specific i
 general source-control contract exists. OpenTelemetry and Azure Monitor export telemetry; run events are
 domain state, not an OpenTelemetry substitute.
 
-## Provider model
+## Contracts and boundaries
+
+### Provider model
 
 ### Boundaries and layering
 
 The dependency direction is **clients → core services → `Agentweaver.Abstractions` → adapters → external
-systems**. The web, API, and first-party MCP client reach the core; they do not pick a provider by talking
+systems**. The web and native CLI reach the core; they do not pick a provider by talking
 to its SDK. Core services own the session tree, MAF workflows, gates, run journal, tenancy checks, and
 application publish decisions. They depend on provider-neutral interfaces and records in
 `Agentweaver.Abstractions`.
@@ -789,7 +809,7 @@ Sandbox adapters, not trusted as tenancy boundaries. No environment becomes read
 confirmed; resume re-applies and verifies it before AgentHost dispatch. The verified generation enters the
 consistency manifest.
 
-The unpublished `Agentweaver.Environment` candidate compiles typed purpose-grouped rules from the
+The `Agentweaver.Environment` source compiles typed purpose-grouped rules from the
 platform/project/run intersection, rechecks Projects & Config authorization on each operation, and uses
 Kubernetes resource-version and intent-generation fences before pinning the verified L3/L4 binding. Its
 readback proves the exact Cilium policy object only, not enforcement in the datapath.
@@ -1109,7 +1129,7 @@ source-control abstraction (`packages/Agentweaver.Domain`,
 `apps/Agentweaver.Api/Sandbox/RunRepositoryCredentialRegistry.cs`). The new seam is a contract redesign, not
 a claim that another forge already works.
 
-The unpublished v1 candidate implements the neutral contracts in `Agentweaver.Abstractions` and the
+The v1 source implements the neutral contracts in `Agentweaver.Abstractions` and the
 `Agentweaver.SourceControl` package. Its GitHub adapter negotiates the configured physical repository,
 supports issue and pull-request operations, reads review and exact-commit merge-check evidence, and sends
 merge requests with the expected head SHA. Effective branch rules and required checks fail closed when
@@ -1328,6 +1348,21 @@ file checkpoint path, `SqliteDb`, SQL Server/SQLite runtime branches, SQLite-to-
 legacy SQLite PVC migration path are also dropped. Their **cloud behaviors** are rebuilt through Azure
 volumes and Postgres-backed state, not by retaining dual local/cloud code paths.
 
+## Failure and recovery
+
+Provider loss is not permission to change a run's binding. Retain the immutable
+pin, fail unsupported capabilities explicitly, and reconcile uncertain lifecycle
+effects through the existing owner operation and fence. An optional snapshot
+cannot replace a consistent journal, workspace, and workflow checkpoint.
+
+## Acceptance and validation
+
+| Criterion | How to verify | Evidence boundary |
+| --- | --- | --- |
+| Resolve the correct cardinality and reject disallowed overrides | Provider catalog/resolver tests, including exact adapter and options versions | Source-level selection, not provisioned resources |
+| Preserve isolation, negotiated capability, and resource generation | Adapter and Environment lifecycle tests for the selected pairing | Provider-specific effects need separate authorized integration checks |
+| Recheck authority before protected effects | Owner and runtime authorization tests, including stale grants and fences | A provider pin or catalog entry is not authority |
+
 ## Alternatives considered
 
 | Option | Why not |
@@ -1339,7 +1374,9 @@ volumes and Postgres-backed state, not by retaining dual local/cloud code paths.
 | Require a preview provider for cutover | Optional upstream maturity and Azure Blob/isolation gates must not block journal-backed suspend/resume. |
 | Copy the local execution and database variants | 1.0 is intentionally cloud-only; their behavior has cloud-native equivalents. |
 
-## Phasing
+<a id="phasing"></a>
+
+## Rollout and compatibility
 
 | Phase | Provider work |
 | --- | --- |

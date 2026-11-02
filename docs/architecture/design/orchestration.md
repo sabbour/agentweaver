@@ -1,7 +1,25 @@
-# Orchestration
+# Specification: Workflow-bound orchestration
 > Part of [ADR 0001: Agentweaver 1.0 platform architecture](../decisions/0001-platform-architecture.md). **Status:** Proposed.
 
-## Summary
+For contributors who define workflow contracts, coordinate child work, or implement
+owner effects. Proposed workflow capabilities below are not claims of complete
+native execution or live acceptance.
+
+## Problem and goals
+
+Prompt guidance alone cannot enforce workflow coverage or prevent a coordinator
+from skipping a platform gate. The Orchestrator needs deterministic validation and
+durable state around model-authored work.
+
+## Non-goals
+
+This design does not add a dynamic JavaScript workflow runtime, let a model approve
+its own protected effects, or move workflow ownership to a UI or provider.
+Later-stage proposals remain outside the current v1.1 delivery scope.
+
+<a id="summary"></a>
+
+## Intended behavior and requirements
 
 - The Orchestrator owns a thin coordinator over Microsoft Agent Framework (MAF)
   workflows. The model proposes outcomes, workflow choices, and child work; code
@@ -44,7 +62,9 @@ and outcome-spec paths. 1.0 preserves the useful workflow and child-work behavio
 not the reliance on prose to enforce it. The 0.x line continues to ship during the
 1.0 rebuild.
 
-## Workflow as an executable contract
+## Contracts and boundaries
+
+### Workflow as an executable contract
 
 A workflow is the selected, versioned MAF execution definition. The project supplies
 its available workflows and a deterministic default if selection fails. The
@@ -759,7 +779,7 @@ the remote App installation. The App private key is redeemed and used for JWT si
 only inside Identity, and neither it nor an installation token is persisted. Webhook
 credentials remain separate SecretRefs.
 
-The Orchestrator's unpublished Source Control owner path begins with a server-derived
+The Orchestrator's Source Control owner path begins with a server-derived
 merge request, not model-supplied repository, branch, SHA, or grant data. It binds the
 request to the accepted `ProjectConfiguration`, exclusive Source Control provider pin,
 run selection hash and revisions, session, and execution fence, then persists those
@@ -1037,6 +1057,22 @@ research subagents can help inside a turn. They do not replace a durable child w
 item when isolation, approval, independent gate execution, or merge is required.
 Ephemeral harness subagents do not become nodes in the session tree.
 
+## Failure and recovery
+
+Reject invalid definitions and plans before dispatch. Preserve the accepted
+workflow snapshot and durable intent across retries; a changed payload is not an
+identical retry. Pending gates, stale authority, and stale fences prevent work.
+After a lost remote response, reconcile the existing owner operation rather than
+infer that no effect occurred.
+
+## Acceptance and validation
+
+| Criterion | How to verify | Evidence boundary |
+| --- | --- | --- |
+| Plans cover their declared steps without impersonating platform gates | Core catalog, fixed/open step, coverage, cardinality, and typed-decision tests | Pure validation does not execute a gate |
+| Dispatch uses current authority and an accepted workflow-bound child intent | Orchestrator owner/dispatch tests with stale selection, fence, and pending-gate cases | Controlled Host transport is not native model acceptance |
+| Retries retain operation identity and recorded outcomes | Owner checkpoint, idempotency, and response-loss tests | No claim of automatic scheduling or full recovery |
+
 ## Alternatives considered
 
 | Option | Why not |
@@ -1047,7 +1083,9 @@ Ephemeral harness subagents do not become nodes in the session tree.
 | Enforce procedure solely through a larger coordinator prompt | Reply parsing, compliance, and recovery remain ambiguous without typed transitions |
 | Run model-authored JavaScript workflows | Arbitrary script orchestration bypasses the MAF grammar, run limits, gates, and durable checkpoint contract |
 
-## Phasing
+<a id="phasing"></a>
+
+## Rollout and compatibility
 
 - **P0 — Foundation:** versioned service contracts, Postgres state and outbox, Object
   Store, policy binding, and provider pinning supply durable execution primitives.
@@ -1058,7 +1096,7 @@ Ephemeral harness subagents do not become nodes in the session tree.
 - **P2 — Parity and cutover:** close the
   0.x behavior-guarantee list, complete application `live`/`preview`/`published` stages and the publish
   gate, enforce budgets and all required surface actions through the separate Canvas
-  boundary, and pass API, UI, and MCP
+  boundary, and pass native CLI/API and UI
   harnesses on an exact-SHA AKS deployment.
   A2UI and GitHub Canvas-compatible renderers do not replace MAF, validate plans,
   or approve workflow actions.

@@ -1,11 +1,28 @@
-# Native runtime session recovery
+# Specification: Native runtime session recovery
+
+**Status:** Recovery composition implemented in source; no live restore result
+is established by this document.
+
+## Problem and goals
+
+A replacement runtime must recover authorized conversation history without
+repeating a model turn, a tool call, or another external effect.
+
+## Contracts and boundaries
 
 The runtime recovers a session from material recorded by the Events owner. The
 owner controls event order, material references, and current authorization.
 Object storage holds opaque bytes; the runtime never chooses an object key or
 reads a shared workspace to find prior state.
 
-## Reusing a native SDK cache
+## Non-goals
+
+Recovery does not select arbitrary storage keys, read a shared workspace for
+history, invent missing turns, or implement another SDK cache format.
+
+## Intended behavior and requirements
+
+### Reusing a native SDK cache
 
 The runtime uses the pinned GitHub Copilot SDK package version 1.0.18. Native
 session state is captured and restored through the SDK filesystem callbacks,
@@ -44,15 +61,27 @@ producing evidence for a partial journal. Current owner authority is checked
 again for reads and writes, so an authorization change during storage or HTTP
 work cannot become a successful acknowledgment.
 
-## Retry and verification limits
+## Failure and recovery
+
+### Retry and verification limits
 
 If a material write commits but its HTTP acknowledgment is lost, the runtime
 retries with the same event identity and bytes after refreshing its source
 authority. The owner returns the original acknowledgment instead of storing a
 second object. A retry with changed content is not equivalent.
 
+## Acceptance and validation
+
 The tests use a controlled SDK transport and object store. The owner integration
 cases use disposable PostgreSQL to verify replacement-owner reads and lost
 acknowledgments. Those cases require Docker and are left to CI when no
 Docker-compatible engine is available locally. These tests do not prove live
 Blob access, deployed runtime behavior, or paid model execution.
+
+## Rollout and compatibility
+
+Keep SDK/runtime/model compatibility checks and the current owner authorization
+path when replacing a runtime. A compatible cache is an optimization, not a
+replacement for retained required turns. The
+[session-material specification](../../specs/session-material-persistence-and-recovery.md)
+defines the shared owner/runtime contract.

@@ -1,9 +1,20 @@
-# Story: P0 Foundation Probe
+# Specification: Foundation infrastructure probe
 
 **Prerequisite:** [Dedicated Azure P0 infrastructure](azure-p0-infrastructure.md).
-**Status:** The corrected image keeps version `0.0.0`. The initial replacement and sampler-fixed replacement each require separate confirmation and a distinct permanent single-use claim. Each preserves the previous image by digest. Source and publication do not prove a successful runtime acceptance Job.
+**Status:** Acceptance-tool contract in source, not a live acceptance result.
+The [component manifest](../../releases/foundation.json) defines the probe version;
+that version does not prove which image ran.
 
-## Scope and boundaries
+## Problem and goals
+
+An operator needs to verify that the foundation adapters work together under the
+intended workload identity and network boundaries. The probe must report the
+exact operations it observed without exposing credentials or claiming a
+successful deployment from source definitions.
+
+<a id="scope-and-boundaries"></a>
+
+## Non-goals
 
 This acceptance-only .NET 10 executable composes the existing workload-identity,
 Key Vault, Blob object-store, PostgreSQL outbox/inbox, provider-resolution, and
@@ -17,12 +28,18 @@ The default invocation prints a plan and performs no resource operation:
 dotnet run --project tools\Agentweaver.FoundationProbe -- --plan
 ```
 
+## Intended behavior and requirements
+
 Execution requires both `--execute` and an explicit `--target <path>`. There is
 no latest-version lookup, credential fallback, default target, or implicit
 execution. Errors print stable codes, not connection strings, tokens, or secret
 values.
 
-## Target and source contract
+<a id="target-and-source-contract"></a>
+
+## Contracts and boundaries
+
+### Target and source contract
 
 The target file is the strict camelCase `ProbeTarget` DTO, not the raw Azure CLI
 deployment-output envelope. Unknown properties and missing required fields fail.
@@ -126,7 +143,9 @@ The final runtime receipt is camelCase and intentionally has no `kind` or
 flush succeeds. It does not claim that the Job exited successfully or that
 Azure Monitor later stored the trace.
 
-## Image and Job
+## Rollout and compatibility
+
+### Image and Job
 
 `scripts/azure/build-foundation-probe-image.mjs` requires a clean Git tree,
 derives the commit and Git tree from `HEAD`, recomputes the infrastructure
@@ -146,11 +165,10 @@ Image digest, target ConfigMap, Monitor Secret, and egress host values remain
 deployment-specific placeholders. Rendering them locally is not deployment
 authorization or evidence.
 
-The existing Linux release workflow can prepare only the sampler-fixed Probe.
-Its replacement path accepts only the pinned previous `835d5b...` manifest and
-the final admitted source SHA. See the
-[release guide](../../releases/README.md) for its explicit options and single-use
-claim. Neither source validation nor this option grants publication permission.
+Probe validation does not authorize image publication or Job deployment.
+Follow the [release guide](../../releases/README.md) for current publication and
+deployment operations. Do not apply a historical replacement-image claim or
+publication-receipt procedure to the current release workflow.
 
 FQDN egress uses both Cilium `rules.dns` inspection for the exact allowed host
 names and matching `toFQDNs` destinations. AKS requires ACNS Container Network
@@ -186,7 +204,9 @@ A retry after fixture failure verifies the exact existing non-admin principal
 and safe role attributes before it creates a missing schema.
 Different principal mappings or incompatible fixture state block the operation.
 
-## Acceptance consumer and validation
+<a id="acceptance-consumer-and-validation"></a>
+
+## Acceptance and validation
 
 The in-pod output is only one evidence source. The external acceptance consumer
 owns Job/pod identity, completion and exit code, immutable registry digest, and
@@ -231,4 +251,13 @@ node scripts\azure\build-foundation-probe-image.mjs
 The .NET suite includes a disposable local Testcontainers PostgreSQL instance.
 These commands do not provision Azure, read a live secret, deploy a Job, or
 publish an image. CI performs the local image build and Kustomize render and
-uploads the image receipt alongside its existing local-image artifacts.
+records only the local artifacts that its current workflow actually produces.
+
+## Failure and recovery
+
+Malformed target configuration, unexpected identity, an unrecorded telemetry
+activity, an unverified owned write, or unconfirmed cleanup prevents success.
+After an uncertain Blob write, inspect the exact owned key and observed ETag;
+do not delete an unowned object or retry a broader write. PostgreSQL fixture
+setup and migration remain separately authorized operations. A printed in-pod
+receipt does not replace the consumer's Job, image, exit, and Monitor checks.

@@ -13,6 +13,9 @@
     "docs/authoring/templates/architecture.md",
     "docs/authoring/templates/specification.md",
     "docs/authoring/templates/adr.md",
+    "docs/specs/native-cli-api-acceptance.md",
+    "docs/specs/session-material-persistence-and-recovery.md",
+    "docs/architecture/decisions/0003-events-owned-session-material.md",
     "docs/guide/find-cli-commands.md",
     "docs/index.md",
     "docs/guide/quickstart.md",
@@ -95,6 +98,7 @@
         "deploy/k8s/runtime-configs/identity-broker-runtime-config.json"
       ],
       "required": [
+        "docs/specs/native-cli-api-acceptance.md",
         "docs/guide/cli.md",
         "docs/guide/testing.md",
         "docs/guide/identity-scopes.md",
@@ -104,6 +108,20 @@
         "docs/guide/quickstart.md",
         "docs/index.md",
         "docs/guide/index.md"
+      ]
+    },
+    {
+      "name": "Session material persistence and recovery contract",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Abstractions/SessionMaterialContracts.cs",
+        "packages/Agentweaver.AgentRuntime/RuntimeSessionRecovery.cs",
+        "packages/Agentweaver.AgentRuntime/RuntimeSessionMaterialHttpClient.cs",
+        "packages/Agentweaver.AgentRuntime/RuntimeNativeSessionFiles.cs",
+        "services/events-and-sessions/Agentweaver.EventsAndSessions/SessionMaterial",
+        "services/events-and-sessions/Agentweaver.EventsAndSessions/SessionObjectRetention"
+      ],
+      "required": [
+        "docs/specs/session-material-persistence-and-recovery.md"
       ]
     },
     {

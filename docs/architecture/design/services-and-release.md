@@ -1,8 +1,26 @@
-# Services and release
+# Specification: Service ownership and release boundaries
 
 > Part of [ADR 0001: Agentweaver 1.0 platform architecture](../decisions/0001-platform-architecture.md). **Status:** Proposed.
 
-## Summary
+For service authors and release maintainers. The proposed service topology and
+internal compatibility targets are separate from current source, published
+versions, and a particular deployment.
+
+## Problem and goals
+
+Splitting a shared database and process into services does not by itself establish
+ownership or consistency. Each service needs a clear authority boundary, durable
+cross-service transitions, and independently identifiable release artifacts.
+
+## Non-goals
+
+This specification does not migrate 0.x data, add a product MCP server, or authorize
+publication and deployment. The proposed internal N-1 contract is not an
+established CLI/API version-compatibility policy.
+
+<a id="summary"></a>
+
+## Intended behavior and requirements
 
 - Agentweaver 1.0 separates roughly ten coarse control-plane services from the AgentHost and other
   data-plane components. It ports behavior from 0.x instead of extracting a shared database and
@@ -51,7 +69,9 @@ These are behaviors to preserve behind versioned service contracts, not a design
 section describes constraints and parity evidence rather than a migration sequence for its database
 or pods.
 
-## Service boundaries
+## Contracts and boundaries
+
+### Service boundaries
 
 The control plane owns durable identity, policy, coordination, decisions, and environment intent.
 The Gateway serves as a backend-for-frontend (BFF).
@@ -78,7 +98,7 @@ events (SSE) serve the edge, gRPC handles internal requests, and an outbox carri
 flowchart LR
     subgraph Clients["Clients"]
         Browser["Browser"]
-        Cli["CLI and MCP clients"]
+        Cli["Native CLI"]
     end
     subgraph Control["Control plane"]
         Web["Agentweaver web"]
@@ -90,7 +110,6 @@ flowchart LR
         Source["Source Control & Merge"]
         Knowledge["Knowledge"]
         Events["Events & Sessions"]
-        Mcp["First-party MCP server"]
         Canvas["Canvas adapters (P2)"]
     end
     subgraph Data["Data plane"]
@@ -107,8 +126,6 @@ flowchart LR
     Web -->|"HTTP and SSE"| Bff
     Web -->|"render interactive content"| Canvas
     Cli -->|"HTTP"| Bff
-    Cli -->|"MCP"| Mcp
-    Mcp -->|"HTTP with the validated Broker bearer"| Bff
     Bff -->|"internal gRPC"| Orch
     Bff -->|"Broker auth and Repo App BFF"| Identity
     Orch -->|"run-selection API"| Config
@@ -144,7 +161,6 @@ flowchart LR
 | Source Control & Merge | Git workspace preparation, diff and assembly, sealed produced-run output capture and authorized history reads, merge locks, pull requests, webhooks, backlog intake, and the Source Control provider seam. | Platform-wide project identity or the Events journal and object bytes. |
 | Knowledge | Memory and session-context records, decisions and proposals, prompt composition, and Memory adapters: native PostgreSQL by default, with Cosmos and Redis in P2. | Repository files as an authoritative memory database or the Sessions journal. |
 | Events & Sessions | Run journal, message contents and delivery state, immutable produced-output package bytes in Object Store, SSE fan-out, Sessions adapters, durable usage ledger, and Cost adapters. | Orchestrator workflow transitions or approval policy. |
-| First-party MCP server | Native MCP tools sourced from the Gateway's finite OpenAPI catalog; validates Broker tokens and forwards the same bearer to Gateway. | Independent authorization, caller-supplied actor identity, or a second orchestration state machine. |
 | Web frontend / Applications | Agentweaver's own run/chat interface, surface panel, Canvas adapters and host bridge, including A2UI and GitHub Canvas compatibility work in P2, plus MCP Apps integration. | Workflow authority, agent execution, web serving capacity, or a replacement Copilot application UX. |
 
 Projects & Config owns a PostgreSQL schema for configuration and authorization. It resolves the validated issuer and local subject to an active membership and current resource roles; tokens and checked tenant selectors do not grant roles. Runtime database credentials can read authority records but cannot mutate them. A separate privileged source path provisions memberships and roles and revokes them with revision checks, immutable audit, and a last-Owner invariant. Privileged resource services obtain fresh, effective caller permissions from `GET /api/authorization/context` for each operation; they do not maintain separate membership/role records, caches, or authorization pins. The Orchestrator supplies a trusted, revisioned run-selection context; the service checks project and platform revisions, resolves project model settings before platform defaults without fallback from an unavailable explicit setting, resolves provider candidates through the provider catalog contract, and enforces egress and run-limit narrowing. The returned immutable snapshot records candidates and selection revisions, not provisioned resources or authorization. Consumers pin final resource identity and negotiated capabilities only after provisioning.
@@ -154,7 +170,7 @@ existing resource; it does not create or release one. After fresh Projects autho
 and owner selection/fence checks, the immutable binding is committed in the same
 transaction as the CAS-winning plan decision and its gate, grant, and outbox state.
 
-The Source Control code is also an unpublished candidate: the Orchestrator currently
+In the current Source Control boundary, the Orchestrator
 owns run-bound repository pins, pre-approval merge intents, typed approval-linked
 merge grants, and authenticated webhook-relay admission, while
 `Agentweaver.SourceControl` supplies the GitHub adapter and isolated Git workspace
@@ -186,8 +202,8 @@ latest root decision, confirmed item and current authority before returning its 
 metadata; a stale decision or gate produces a conflict. This metadata path does not provide an
 AgentHost scheduler or complete runtime delivery.
 
-The current v1 source includes unpublished `Agentweaver.EventsAndSessions` and
-`Agentweaver.Orchestrator` host candidates. Events & Sessions provides the PostgreSQL run
+The current v1 source includes `Agentweaver.EventsAndSessions` and
+`Agentweaver.Orchestrator` hosts. Events & Sessions provides the PostgreSQL run
 journal, ordered replay across sessions, durable session-provider pins, and addressed-message
 delivery state. The Orchestrator owns root/child session relationships, current Projects &
 Config authorization checks, a durable owner message outbox, explicit turn-boundary
@@ -214,10 +230,10 @@ Gateway source and authenticated AgentHost routes exist.
 Deployment, automatic scheduling, and cloud acceptance remain separate work.
 
 The Gateway and Identity boundary makes viewer authorization independent of the chosen [Application
-Hosting](applications-and-surfaces.md#application-hosting) provider. The first-party MCP server uses
-core APIs for the same authorization path as web and CLI callers. MCP catalog and remote MCP
-requirements have owners in this split: catalog and
-outbound mediation at the Tool & MCP gateway, surface tools in the MCP server, and rendering in web.
+Hosting](applications-and-surfaces.md#application-hosting) provider. Web and CLI callers
+use core APIs and current owner authorization. Remote MCP requirements remain
+external integrations: catalog and outbound mediation belong at the Tool & MCP
+gateway, while rendering belongs in web. Agentweaver 1.x has no product MCP server.
 These requirements are parity inputs, not a reason to create a second UI.
 P1 frontend work retains most of the existing Agentweaver UI and adapts its API wiring; redesign
 requires an explicit user request.
@@ -246,8 +262,8 @@ The [AgentHost source candidate](../agenthost.md) implements the versioned HTTPS
 Environment supplies the first three startup observations under the retained lease.
 AgentHost adds its actual authenticated `configured` and `ready` timestamps.
 Missing or stale evidence fails readiness.
-The unpublished CI image receipt measures compressed OCI bytes and runs the exact pinned native runtime without a model call.
-Neither source checks nor image checks prove live AKS placement.
+Compressed OCI size and a no-model check of the exact pinned native runtime
+establish image properties, not live AKS placement.
 
 For image-backed applications, BuildKit produces isolated output, but only the trusted control plane
 publishes the approved image digest with registry credentials. No registry credential enters the run.
@@ -372,8 +388,7 @@ check; redemption separately re-reads the current grant for its exact purpose
 and SecretRef.
 The endpoint composes `AuthorizedSecretRedemption` with the existing exact-version
 Key Vault adapter configured for workload identity. Secret values are returned
-only on successful redemption and are never persisted or logged. The candidate
-remains unpublished and undeployed; local integration tests do not prove
+only on successful redemption and are never persisted or logged. Local integration tests do not prove
 workload identity, Key Vault RBAC, or Azure acceptance.
 
 The configure, refresh, and A2A contracts are versioned internal APIs, not unstructured side
@@ -467,7 +482,7 @@ image. Provider sidecars may have their own compatible versions, but none reintr
 repository-wide `VERSION` as authority over every service.
 
 The P0 CI path is cloud-only. Tests use fakes and Testcontainers Postgres; integration deploys an
-exact source SHA to AKS and runs API, UI, and MCP persona harnesses from the end of P1. A successful
+exact source SHA to AKS and runs native CLI/API and UI persona harnesses from the end of P1. A successful
 package build does not replace a validated deployment of the exact integrated candidate.
 
 ### Independently versioned services
@@ -502,18 +517,21 @@ require publication receipts, provenance claims, or deployment evidence. The
 separate package workflow packs and publishes versioned NuGet libraries and
 contracts. The standalone CLI retains its own package workflow.
 
-The manual v1 deployment workflow resolves the selected image tags to registry
-digests, runs the existing Broker/P1 and Projects & Config migrations, renders
-the existing root Kustomize overlay, applies it to the selected context and
-namespace, and waits for each shared Deployment rollout. Any migration or
-apply error stops the sequence. Deployment success is the ordinary kubectl
-rollout result; no receipt or generated proof artifact is required.
+The local deployment helper resolves selected image references to GHCR digests,
+preserves live references for omitted images, and runs migrations for the selected
+services. It renders and applies namespaced resources from the root Kustomize
+overlay, excludes Namespace objects, and waits for all nine Deployments.
+A migration failure stops before the root workload apply. Earlier migrations or
+an apply can have completed before a later failure; rollout is not atomic.
+No publication receipt or source-claim artifact is required. Follow the
+[release runbook](../../../releases/README.md) for the operator command and
+partial-failure checks.
 
 Projects & Config requires its existing approved schema-owner migration
-identity. Its runtime identity remains DDL-restricted. Until an approved
-automated identity is available, the migration runner fails before applying
-the root workload overlay. The workflow does not provision Azure resources,
-create credentials, or change database roles.
+identity. Its runtime identity remains DDL-restricted. The migration Job uses
+Kubernetes Workload Identity, and the helper fails closed if the required
+ServiceAccount annotation is missing. It does not hand a per-release token to
+the Job, provision Azure resources, create credentials, or change database roles.
 
 ### Parity and cutover
 
@@ -528,12 +546,35 @@ existing run-provider bindings. Readers can search before selecting a run or age
 record changes remain scoped to one run and agent, and project facts remain separate
 from the Sessions journal.
 
-Cutover requires a closed parity map and green API, UI, and MCP persona harnesses against one
+Cutover requires a closed applicable parity map and green native CLI/API and UI persona harnesses against one
 exact-SHA AKS deployment. Tag the final 0.x release on `dev` and keep `release/0.x` for patches.
 Preserve both histories without a force push: merge old `dev` into `v1` with
 `git merge --allow-unrelated-histories -s ours` to keep the `v1` tree, then fast-forward `dev` to
 `v1` ([R21](../decisions/0001-platform-architecture.md#risk-register)). Start 1.0 with a fresh
 installation. There is no data migration.
+
+## Failure and recovery
+
+Cross-service timeouts do not establish that a remote effect failed. Retain
+operation IDs, deduplicate owner commands, and fence stale workers. Diagnose
+partial migration or rollout state before retrying; an older image is not a
+schema rollback. The current [release runbook](../../../releases/README.md)
+separates package publication, image publication, and workload deployment.
+
+## Acceptance and validation
+
+| Criterion | How to verify | Evidence boundary |
+| --- | --- | --- |
+| Owners do not depend on cross-schema writes for a public operation | Owner integration tests and contract review | Source boundaries do not attest a deployed topology |
+| Retries and outbox delivery preserve identity and reject stale work | Owner/outbox tests with duplicate and interrupted operations | At-least-once delivery is not exactly-once remote effects |
+| Each deployed artifact can be identified independently | Manifest validation, image source/version labels, and operator readback when authorized | A NuGet publish is not an image publish or workload deployment |
+
+## Open questions and decisions
+
+The CLI/API version-compatibility policy is not established by this proposed
+internal service contract. Matching version strings alone do not prove
+compatibility. Maintainer approval is needed before adding a compatibility window
+or negotiation requirement.
 
 ## Alternatives considered
 
@@ -546,7 +587,9 @@ installation. There is no data migration.
 | Keep a single global `VERSION` | Cannot express independent service rollout and a tested composition; per-service versions and a pinned release manifest do. |
 | Treat 0.x as stopped until 1.0 lands | 0.x remains active; parity rows and an explicit cut line handle moving scope. |
 
-## Phasing
+<a id="phasing"></a>
+
+## Rollout and compatibility
 
 - **P0 — foundation:** Establish service layout and cloud-only CI, separate Postgres schemas,
   outbox, Azure Blob Object Store, Identity and Key Vault with workload identity, OpenTelemetry to
@@ -564,7 +607,7 @@ installation. There is no data migration.
   image publication,
   built-in AKS Application Hosting, Canvas with A2UI and GitHub Canvas compatibility
   research and reverse engineering, applications and surfaces, release tooling informed by
-  delivery-simplification evidence, the parity map, and all three
+  delivery-simplification evidence, the parity map, and both supported
   harnesses before cutover. Elastic SAN and additional hosting adapters are outside this scope.
 - **P3 — after cutover:** Evaluate optional providers and data-plane alternatives, including an
   alternative L7 gateway and Container Apps Sandboxes, against the existing service contracts
@@ -582,7 +625,7 @@ installation. There is no data migration.
   without force-pushing and keeps the 0.x patch line.
 - [R22](../decisions/0001-platform-architecture.md#risk-register): A declared parity cut line bounds
   the moving 0.x target while allowing 0.x to continue shipping.
-- [R23](../decisions/0001-platform-architecture.md#risk-register): Exact-SHA AKS API/UI/MCP harness
+- [R23](../decisions/0001-platform-architecture.md#risk-register): Exact-SHA AKS native CLI/API and UI harness
   validation begins by the end of P1 and gates cutover.
 - [R24](../decisions/0001-platform-architecture.md#risk-register): Hosting providers never replace
   Gateway/Identity viewer authorization. Built-in AKS is the only planned hosting implementation;

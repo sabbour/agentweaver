@@ -1,8 +1,22 @@
-# Installed agent applications
+# Specification: Installed agent application bundles
 
 > Part of [ADR 0001](../decisions/0001-platform-architecture.md). **Status:** Proposed. This is a post-core extension, not an implemented installer or runtime.
 
-## Scope
+## Problem and goals
+
+An application bundle needs portable content and an explicit host contract.
+Installing content must not grant permissions, create run-bound resources, or
+turn publisher-provided code into trusted platform extensions.
+
+## Non-goals
+
+This post-core proposal adds no installation service, model harness, registry
+protocol, or v1.1 prerequisite. It does not authorize implementation, publication,
+or live testing.
+
+<a id="scope"></a>
+
+## Intended behavior and requirements
 
 Agentweaver will host installed agent applications as well as individually configured agents and workflows.
 An application bundle can contain agents, tools, skills, restrictive policies, canvases, workflows, and required assets.
@@ -20,11 +34,13 @@ Packaged tools and scripts run only through existing host enforcement.
 Unsupported required content blocks activation rather than creating a new extension mechanism.
 
 The [post-core plan](../decisions/0001-platform-architecture.md#installed-agent-applications---planned-post-core-extension) contains the delivery phases.
-The existing nineteen-item P1 scope, acceptance criteria, counts, and completion gates remain unchanged.
+Existing core scope, acceptance criteria, and completion gates remain unchanged.
 This extension does not add scope to P1 or to the cutover plan.
 It is not an additional P1 completion or cutover prerequisite.
 
-## Product model and host boundary
+## Contracts and boundaries
+
+### Product model and host boundary
 
 | Term | Identity and lifetime |
 | --- | --- |
@@ -76,13 +92,10 @@ None uses an installation ID as a run ID or claims provider capabilities from pa
 
 ## Existing foundation and compatible reuse
 
-The preserved specification originated at `892ffde6f93243c33636b28c3c637289a50194db`.
 Provider placement and Canvas evidence follow the accepted provider-placement
 decision in [Provider seams](provider-seams.md) and the Canvas evidence in
 [Applications and surfaces](applications-and-surfaces.md#github-canvas-evidence-and-versions).
-This reconciliation uses source commit
-`e6d8d392cb3634da6243b06b1397a25973ac3615`, including the optional Cosmos Memory
-adapter.
+The source includes the optional Cosmos Memory adapter.
 Knowledge still owns Memory operations, accepted-effect receipts, and selected-backend
 delivery intent. Events owns the authoritative journal; Object Store owns referenced bytes.
 These source boundaries do not establish a deployed bundle or Canvas runtime.
@@ -136,7 +149,7 @@ They define behavior to retain, not automatic package or runtime compatibility:
 | [Sandbox tools](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/packages/Agentweaver.AgentTools/SandboxToolRegistry.cs) | Tool availability depends on host capability and permission. | The direct host-shell path does not carry into cloud-only v1. |
 | [Sandbox previews](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/apps/Agentweaver.Api/Sandbox/Preview/SandboxPreviewService.cs), [cluster tests](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/tests/Agentweaver.Tests/SandboxPreviewServiceClusterTests.cs), and [credential-scrub tests](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/tests/Agentweaver.Tests/Preview/PreviewRunnerAuthAndScrubTests.cs) | Durable route ownership, fences, recovery, and credential scrubbing | A live sandbox preview is generated output, not an installed agent application. |
 | [AgentHost state](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/apps/Agentweaver.AgentHost/AgentHostRuntimeState.cs) and [model invocation guard](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/apps/Agentweaver.Api/Auth/RunModelInvocationGuard.cs) | One-time run configuration, in-memory purpose-bound credentials, current authority, and exact accepted-model checks | Process-local state and shared storage do not supply durable installation records. |
-| [Image publication](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/.github/workflows/publish-images.yml) | Source-bound publication receipts and separation of publication from deployment | Platform-image releases do not define app install/upgrade or publisher trust. |
+| [Image publication](../../../releases/README.md) | Source-labeled GHCR images; publication and deployment are separate operations | Platform-image releases do not define app install/upgrade or publisher trust. |
 
 Compatible validation code can be reused after review.
 A full application installer or completed canvas loader is not assumed.
@@ -787,17 +800,33 @@ Registry configuration does not become a provider seam.
 | GitHub repository package | Reuse 0.x import invariants. Git refs are not the portable full-app installation contract. Conversion is separate work. |
 | Generic plugin/install service | Reject initially. Existing owners and OCI/ORAS cover the required duties without another service or extensibility framework. |
 
-## Phased implementation and acceptance
+## Failure and recovery
+
+The lifecycle states and owner operations above govern interrupted installation,
+activation, upgrade, and uninstall. Do not retry an uncertain effect under a new
+identity, activate unverified required content, or use an installation ID as a run
+grant. Publisher evidence and digest checks do not replace host-owned trust policy.
+
+## Acceptance and validation
+
+The phased criteria below remain proposed. Validate bundle integrity and trust,
+bounded extraction, current owner authority, compare-and-swap activation,
+interrupted-operation reconciliation, and owned cleanup before advertising an
+installer. A source library, rendered manifest, or installed revision alone does
+not prove execution or a live deployment.
+
+<a id="phased-implementation-and-acceptance"></a>
+
+## Rollout and compatibility
 
 This is a planned post-core extension.
 It reuses completed core contracts and leaves their accepted behavior unchanged.
 Tool/canvas content also waits for the applicable P2 gateway/surface enforcement.
-The phase labels do not change the existing P0-P3 ledger or cutover gate.
-The release backlog is `v1.0.0` P2, after applicable P1 foundations.
+The phase labels do not change existing core scope or the cutover gate.
 The [Canvas C1-C5 plan](applications-and-surfaces.md#canvas-provider-delivery-and-milestone-placement)
 defines the abstraction, concrete adapters, bundle integration, and exact-SHA acceptance.
-The bundle and Canvas plan belong to milestone `v1.0.0`.
-Separate implementation work and an execution schedule are not yet defined.
+These proposed slices do not establish availability in an already versioned
+release or an approved execution schedule.
 It adds no P1 dependency or cutover prerequisite.
 
 | Slice | Existing owners and prerequisites | Acceptance |
@@ -806,7 +835,7 @@ It adds no P1 dependency or cutover prerequisite.
 | B2: Durable installation and activation | Projects authority/active head, Orchestrator operation leadership, Object Store callers. Completed typed gates and fresh authority. | Missing inputs/references, denied activation, duplicates/conflicts, restart, lost responses, stale fences, concurrent operations, isolated staging, and one active-head CAS |
 | B3: Accepted runs and components | Orchestrator, AgentHost, Environment, Policy/Identity, Tool & MCP gateway. Real grants, negotiation, content delivery, and enforcement. | Genuine run/resource pins, lower negotiated capabilities, unavailable producers, actual host-readable content, first-use gates, revocation, credential redaction, and canvas isolation |
 | B4: Upgrade, rollback, uninstall | Projects, Orchestrator, Environment, Identity, retention owners. B2/B3 and exact owner receipts. | Old-run affinity, fresh new-run authority, pending-gate continuity, honest migration/rollback limits, drain, user-data retention, and exact cleanup or pending state |
-| B5: Interoperability and approved live acceptance | Registry/release configuration, Gateway/MCP/web, acceptance coordinator. Separate target-specific authority. | Native referrers/404 fallback, tag mutation, missing evidence, copy/export, auth/TLS/redirect failures, and exact-SHA Azure API/UI/MCP journeys |
+| B5: Interoperability and approved live acceptance | Registry/release configuration, Gateway/native CLI/web, acceptance coordinator. Separate target-specific authority. | Native referrers/404 fallback, tag mutation, missing evidence, copy/export, auth/TLS/redirect failures, and exact-SHA Azure native CLI/API and UI journeys |
 
 The current v1 source includes a pure, inert Projects.Config validator for the
 application manifest. It checks raw configuration identity, manifest and

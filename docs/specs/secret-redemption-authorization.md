@@ -1,13 +1,30 @@
-# Story: Authorize exact run-bound secret redemption
+# Specification: Run-bound secret redemption authorization
 
-**Status:** implemented CANDIDATE; not admitted, released or deployed.
+**Status:** Authorization wrapper implemented in source. Release, host composition,
+and live acceptance are separate states.
+
+## Problem and goals
+
+A backend can retrieve a secret without knowing whether the current actor may use
+that exact version for this run and purpose. The trusted host needs an
+authorization boundary that remains valid across asynchronous acquisition.
+
+## Non-goals
+
+Requests cannot create authority. This wrapper adds no authentication stack,
+credential backend, wire protocol, durable grant store, or administrator bypass.
+
+## Contracts and boundaries
 
 A trusted host composes `Agentweaver.Identity.AuthorizedSecretRedemption`
 around an existing `ISecretRedemption` backend. It supplies a cryptographically
 authenticated actor/project/run context separately from request data and an
 authoritative source of server-owned immutable grants. Requests cannot grant
 access, widen purpose/version restrictions, select an administrator bypass or
-use wildcards.
+use wildcards. See [the Broker contract](identity-broker.md) for a host that
+composes the wrapper.
+
+## Intended behavior and requirements
 
 Each redemption, including refresh, reads authority anew. Missing, null,
 ambiguous, mismatched, revoked or expired grants deny before backend access.
@@ -20,10 +37,16 @@ than silently extending access.
 `SecretCredential.LimitLifetime` narrows metadata to the earlier backend/grant
 expiry on the same object under a lock shared with invalidation and value
 access. Identity never reads `GetValue`, copies credential values or serializes
-them. Null, expired or invalidated backend results fail explicitly. Every
+them.
+
+## Failure and recovery
+
+Null, expired or invalidated backend results fail explicitly. Every
 post-acquisition error, including authority failure, lifetime-limit failure and
 cancellation after dependencies ignore the token, invalidates before rethrow.
 Operational errors are not turned into authorization success or silent denial.
+
+## Acceptance and validation
 
 Tests use controlled asynchronous completions and clocks for revocation,
 replacement/revision/expiry races, cancellation and operational failures.
@@ -32,6 +55,8 @@ contracts, shorter/equal/longer lifetime bounds, retained backend invalidation,
 concurrent monotonic narrowing and diagnostic/default JSON redaction.
 Canonical locked restore, zero-warning Release build and all-foundation
 coverage commands are in the [testing guide](../guide/testing.md).
+
+## Rollout and compatibility
 
 The host authority must advance revisions on all changes (including
 revoke/reactivate), returning coherent immutable snapshots. Identical metadata
