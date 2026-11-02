@@ -1,5 +1,17 @@
 {
   "pages": [
+    "README.md",
+    ".github/copilot-instructions.md",
+    "docs/authoring/README.md",
+    "docs/authoring/sources.md",
+    "docs/authoring/audit.md",
+    "docs/authoring/templates/tutorial.md",
+    "docs/authoring/templates/how-to.md",
+    "docs/authoring/templates/reference.md",
+    "docs/authoring/templates/explanation.md",
+    "docs/authoring/templates/troubleshooting.md",
+    "docs/authoring/templates/architecture.md",
+    "docs/guide/find-cli-commands.md",
     "docs/index.md",
     "docs/guide/quickstart.md",
     "docs/guide/cli.md",

@@ -9,6 +9,7 @@ export default defineConfig({
     'architecture/decisions/**',
     'architecture/design/**',
     'specs/**',
+    'authoring/**',
   ],
   ignoreDeadLinks: false,
   markdown: {
@@ -41,6 +42,7 @@ export default defineConfig({
             { text: 'Guides and tutorials', link: '/guide/' },
             { text: 'Quickstart: build the source', link: '/guide/quickstart' },
             { text: 'Agentweaver CLI', link: '/guide/cli' },
+            { text: 'Find CLI commands', link: '/guide/find-cli-commands' },
             { text: 'Build and use', link: '/guide/build-and-use' },
           ],
         },
