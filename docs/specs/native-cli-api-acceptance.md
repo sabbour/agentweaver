@@ -18,7 +18,7 @@ failures, and retain redacted evidence for the operations it actually attempts.
 ## Non-goals
 
 - Add an Agentweaver product MCP server or treat retained compatibility tooling
-  as a supported 1.x product surface.
+  as a supported product surface.
 - Duplicate Gateway API behavior, invent endpoints or scopes, or silently reuse
   the 0.x MCP-only registration.
 - Equate CLI/API version strings with an established compatibility policy.

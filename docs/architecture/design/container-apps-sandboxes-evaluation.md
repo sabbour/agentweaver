@@ -1,4 +1,6 @@
-# Container Apps Sandboxes: P3 compatibility evaluation
+# Container Apps Sandboxes: compatibility evaluation
+
+<a id="container-apps-sandboxes-p3-compatibility-evaluation"></a>
 
 **Status:** Research evaluation. No adapter or cloud acceptance is established.
 
@@ -8,15 +10,15 @@ Determine whether the documented Sandbox service can satisfy Agentweaver's
 existing isolation, storage, network, ownership, and recovery contracts without
 weakening them.
 
-**Decision:** do not enable this provider with the current v1 runtime.
-Keep it as a P3 research option behind Environment's exclusive Sandbox contract.
+**Decision:** do not enable this provider with the current runtime.
+Keep it as a post-cutover research option behind Environment's exclusive Sandbox contract.
 The documented microVM isolation is promising, but storage, network verification,
 ownership recovery, and AgentHost integration need separate implementation and proof.
 
 ## Non-goals
 
 This evaluation concerns Container Apps Sandboxes, not the older Dynamic Sessions
-service. It does not implement an adapter, authorize a cloud trial, or add a P1/P2 dependency.
+service. It does not implement an adapter, authorize a cloud trial, or add a core-delivery or cutover dependency.
 It does not restore Container Apps as an Application Hosting provider.
 AKS `agent-sandbox` remains the default Sandbox; Azure Files remains the default Storage.
 Any implementation needs a separate issue and approval after these findings.
@@ -51,7 +53,7 @@ versions; these examples do not establish one stable combined contract.
 | Identity and routing | [Group identity](https://sandboxes.azure.com/docs/sandboxes/identity), [VNet egress](https://sandboxes.azure.com/docs/sandboxes/sandbox/vnet), and [private ingress](https://sandboxes.azure.com/docs/sandboxes/private-endpoints): group identities, selected VNet connections, and optional Express Environment linkage. |
 | Recovery and capacity | [Snapshots](https://learn.microsoft.com/en-us/azure/container-apps/sandboxes-snapshots-state-management), [reliability](https://learn.microsoft.com/en-us/azure/reliability/reliability-container-apps-sandboxes), and [quotas](https://sandboxes.azure.com/docs/sandboxes/limits): snapshot restrictions, maintenance relocation, regional limits, and admission failures. |
 
-The v1 comparison uses the admitted Sandbox, Storage, and Network source at
+The current-contract comparison uses the admitted Sandbox, Storage, and Network source at
 [`36cc9a7`](https://github.com/sabbour/agentweaver/tree/36cc9a78251a4adca1de4584ac7a7b29c5c1c393).
 See the [Environment Sandbox guide](../environment-sandbox.md),
 [Storage design](provider-seams.md#storage), and
@@ -87,14 +89,14 @@ An unknown service guarantee is not treated as either support or an absolute ser
 
 ### Storage and Network pairings
 
-There is **no currently supported Container Apps Sandboxes pairing in v1**.
+There is **no currently supported Container Apps Sandboxes pairing**.
 The abstractions include a `FileMaterialization` protocol, but the present Environment
 and AKS Sandbox composition requires the exact PVC and Cilium observations.
 An abstract protocol name is not a compiled adapter or a successful negotiation.
 
 | Sandbox / Storage / Network choice | Disposition | Reason |
 | --- | --- | --- |
-| Current AKS `agent-sandbox` / Azure Files CSI/PVC / Cilium | Existing v1 source pairing; not live-cloud proof. | The adapters share exact Kubernetes/PVC identities and verified policy generations. This evaluation does not change it. |
+| Current AKS `agent-sandbox` / Azure Files CSI/PVC / Cilium | Existing source pairing; not live-cloud proof. | The adapters share exact Kubernetes/PVC identities and verified policy generations. This evaluation does not change it. |
 | Container Apps Sandboxes / current Azure Files CSI/PVC / Cilium | Rejected pairing. | No documented mount for the selected Kubernetes PVC UID, no Kubernetes Pod selector for Cilium, and no matching generation evidence. |
 | Container Apps Sandboxes / managed Blob or Blob BYO / current PVC or RWX requirements | Rejected pairing. | Blob is not PVC attachment. Managed Blob lacks required shared-write visibility, hardlinks, cross-directory atomic rename, and full flush semantics. BYO behavior requires independent proof. |
 | Container Apps Sandboxes / Data Disk / current PVC or shared-RWX requirements | Rejected pairing. | It is a separate single-mounted volume type, not Azure Files CSI or a shared-RWX attachment. |
@@ -133,9 +135,9 @@ Reuse the following invariants, not Kubernetes-specific transport or historical 
 | --- | --- |
 | [`CurrentSandboxBindingVerifier`](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/apps/Agentweaver.Api/Sandbox/CurrentSandboxBindingVerifier.cs) and [`CurrentSandboxBindingTests`](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/tests/Agentweaver.Tests/CurrentSandboxBindingTests.cs) | Require current lease token/generation, exact resource-owner chain, source identity, and readiness. Reject historical placements, replaced IDs, missing leases, and rotation between reads. An ACA state or label is not equivalent attestation. |
 | [`TerminalCoordinatorChildSandboxCleanup`](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/apps/Agentweaver.Api/Coordinator/TerminalCoordinatorChildSandboxCleanup.cs) and [its tests](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/tests/Agentweaver.Tests/Coordinator/TerminalCoordinatorChildSandboxCleanupTests.cs) | Reconcile all owned children/revisions after restart. Recheck parent, child, lifecycle generation, holder, and execution fence after asynchronous observation; retain active owners and previews. Stale generations, replaced holders, and reactivated parents must not release resources. |
-| [`AgentHostReaperService`](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs) and [`AgentHostReaperCredentialTests`](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/tests/Agentweaver.Tests/Preview/AgentHostReaperCredentialTests.cs) | Keep creation grace and preview retention separate from terminal execution. Retain failed credential-revocation work after placement disappears and retry it. Do not port lossy claim-name ownership or best-effort secret deletion into v1's fenced, audited owners. |
+| [`AgentHostReaperService`](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/apps/Agentweaver.Api/Sandbox/AgentHostReaperService.cs) and [`AgentHostReaperCredentialTests`](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/tests/Agentweaver.Tests/Preview/AgentHostReaperCredentialTests.cs) | Keep creation grace and preview retention separate from terminal execution. Retain failed credential-revocation work after placement disappears and retry it. Do not port lossy claim-name ownership or best-effort secret deletion into Agentweaver's fenced, audited owners. |
 
-The current v1 Environment implementation is the stronger ownership boundary:
+The current Environment implementation is the stronger ownership boundary:
 one current durable lease, immutable provider requests, authority rechecks,
 exact release receipts, and separate late-result cleanup.
 Provider auto-delete, lease age, failed credential refresh, or a stopped microVM

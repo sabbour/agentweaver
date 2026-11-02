@@ -38,7 +38,9 @@ Later-stage consistency-manifest work is not newly required for v1.1.
 - Agentweaver keeps its own run page, topology, approvals, chat, and surface panel. It
   borrows coordination primitives, not the Copilot app's UX.
 
-## Current v1 source slice
+<a id="current-v1-source-slice"></a>
+
+## Current source slice
 
 The repository contains Events & Sessions and Orchestrator implementations.
 This section describes their source contracts, not their deployment state.
@@ -325,8 +327,8 @@ calls, and messages (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`).
 0.x already persists idempotent addressed messages with claim, delivery,
 acknowledgment, expiration, and undeliverable states
 (`apps/Agentweaver.Api/Memory/AddressedMessageService.cs`).
-v1 extends that path with
-tracked acknowledgment and correlated replies; 1.0 builds on it rather than inventing
+The rebuild extends that path with
+tracked acknowledgment and correlated replies rather than inventing
 addressed delivery. Steering directives instead use a separate `SteeringDirectives` table
 (`apps/Agentweaver.Api/Coordinator/CoordinatorSteeringService.cs`). Question and tool
 approval gates have their own durable paths. Child work is tracked by dispatch and
@@ -367,7 +369,7 @@ an AgentHost turn. It can help a subsequent revision or resumed turn continue in
 same conversation. It is not a readable Agentweaver event stream, an agent workspace,
 or the workflow's step position.
 
-In 1.0 AgentHost saves it as an opaque blob in the [Object Store
+AgentHost saves it as an opaque blob in the [Object Store
 seam](provider-seams.md#object-store) at a turn boundary. The reference records the SDK
 version and the pinned model binding. Agentweaver never parses it, presents it in the
 UI, or transfers it to another provider. The MAF checkpoint refers to that blob instead
@@ -399,7 +401,7 @@ model call is bit-for-bit deterministic.
 
 Suspend/resume is a workflow transition, not a request to delete a sandbox. A manifest
 pairs its control-plane and workspace versions; no environment snapshot implicitly
-includes volume data. This protocol delivers the 1.0 suspend/resume design without requiring a VM
+includes volume data. This protocol delivers the suspend/resume design without requiring a VM
 snapshot provider at cutover.
 
 This state diagram shows a requested suspension, an optional guest snapshot, and the
@@ -526,7 +528,7 @@ command/actor/fence, it cannot mark them `Interrupted` or `Reconciled`, release 
 placement, or authorize recovery. The public source route currently fails closed.
 
 A guest-snapshot adapter is enabled only after a public-preview Azure Blob capture and
-restore, warm-pool claim restore, and startup-budget checks. It is not a 1.0 cutover
+restore, warm-pool claim restore, and startup-budget checks. It is not a cutover
 prerequisite ([R3](../decisions/0001-platform-architecture.md#risk-register)).
 
 With the 019 schema extension active, authorized Core routes fail closed while a real
@@ -663,7 +665,7 @@ Acknowledgment means "received", not "approved" or "completed". The plan gate ac
 an explicit approve/reject verb; the question gate accepts an explicit answer. This
 preserves the addressed-message distinction between receipt and decision.
 
-The current v1 source implements a minimal Orchestrator owner for accepted root and
+The current source implements a minimal Orchestrator owner for accepted root and
 child sessions, fenced turn state, pending requests, parent notifications, and a
 durable owner outbox. It synchronously validates owner messages before Events
 admission; Events commits the message, journal reference, and its outbox atomically.
@@ -718,7 +720,7 @@ selection with an unbound token. Start uses the run-bound token to accept the
 root session and deliver the saved message.
 
 The first message is a root-to-root addressed message with the idempotency key
-`{runId}:first`. v1 has only session-to-session messages, so the root session
+`{runId}:first`. Agentweaver has only session-to-session messages, so the root session
 is both sender and recipient. The owner rejects a self-addressed message unless
 its key is exactly `{runId}:first` and its payload matches the saved request
 exactly. Start's lock, connection, and downstream work share a 30-second deadline.
@@ -904,17 +906,17 @@ than replaying model or tool effects to reconstruct history.
 
 ## Rollout and compatibility
 
-- **P0 — Foundation:** native Postgres identities, service schemas and outbox, Object
+- **Journal foundations:** native Postgres identities, service schemas and outbox, Object
   Store references, and provider contracts support the journal and future manifest.
-- **P1 — Core:** journal, MAF checkpoints, cache references, session tree, addressed
+- **Core coordination:** journal, MAF checkpoints, cache references, session tree, addressed
   messages, Knowledge records, coordination verbs, status snapshot, and tracked message
   acknowledgment ship with
   the native providers. The UI and CLI read the same workflow state.
-- **P2 — Parity and cutover:** suspend/resume with manifest, explicit Squad
+- **Parity and cutover:** suspend/resume with manifest, explicit Squad
   import/export, Canvas surface messages, Cosmos and Redis Memory providers, and the 0.x parity acceptance list are verified on an
   exact-SHA AKS deployment before cutover. VM snapshots are not required.
-- **P3 — After cutover:** consider a gated AKS guest-snapshot adapter and write or
-  capture support for the optional AgentSessions provider. Cosmos and Redis are P2 Memory work, not Sessions
+- **After cutover:** consider a gated AKS guest-snapshot adapter and write or
+  capture support for the optional AgentSessions provider. Cosmos and Redis are Memory parity work, not Sessions
   providers. None changes the authoritative PostgreSQL journal or
   requires rewriting knowledge into repository files.
 

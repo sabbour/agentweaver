@@ -69,7 +69,7 @@ not shipping blockers requiring management-group policy-origin, Activity Log,
 or provider-generated metadata audits. This does not authorize changes to
 inherited policy, NSG rules, alert configuration, or external action groups.
 
-The P0 parameter example explicitly splits regions: `location` is
+The foundation parameter example explicitly splits regions: `location` is
 `eastus2euap` for the VNet, AKS, PostgreSQL, Key Vault, Blob, and subnet-bound
 private endpoints; required `monitorLocation` is `eastus2` for Log Analytics
 and Application Insights. AMPLS stays global, and its private endpoint stays in
@@ -273,7 +273,7 @@ It does not select an Istio API or install a service-mesh addon.
 The separate `--bootstrap-identity-routing` installer option is default-off.
 It requires an explicit dedicated Gateway namespace, enforcement policy, and
 upstream public application client ID. Namespace security approval remains separate.
-The P0 namespace stays restricted. An existing Gateway namespace must have
+The foundation namespace stays restricted. An existing Gateway namespace must have
 the exact approved ownership and policy labels.
 The installer never weakens an existing namespace policy.
 For an already provisioned platform, `--identity-routing-only` reuses the
@@ -288,7 +288,7 @@ the Gateway and Broker namespaces.
 The installer derives the initial `agentweaver` hostname from the certificate's status.
 It applies native v1 Gateway and HTTPRoute resources, BackendTLSPolicy,
 and exact namespace/Gateway-label ingress to the HTTPS Broker.
-The listeners admit only the P0 namespace's routes. The existing wildcard
+The listeners admit only the foundation namespace's routes. The existing wildcard
 `https` listener and Broker, Web, Gateway API, Copilot BFF, and MCP routes stay
 in place. Exact `auth` and `api` HTTPS listeners use the same managed TLS
 Secret: `auth` routes to the existing Broker Service, and `api` routes the
@@ -417,7 +417,7 @@ report. Configuration and runtime proof have separate scopes. The report passes
 only when the exact source-bound deployment and observed AKS configuration pass
 and the external consumer validates every required runtime observation. This
 source change does not run the consumer against a live target or close the full
-P0 shipping checklist.
+foundation shipping checklist.
 
 Required runtime evidence includes:
 
