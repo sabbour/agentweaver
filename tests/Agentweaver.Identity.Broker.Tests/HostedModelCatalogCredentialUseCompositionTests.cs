@@ -9,6 +9,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Xunit;
 
 namespace Agentweaver.Identity.Broker.Tests;
@@ -116,28 +118,37 @@ public sealed class HostedModelCatalogCredentialUseCompositionTests
             "IdentityBroker", "Orchestrator", true));
         Assert.True(builder.AddHostedModelCatalogCredentialUseTls());
         Assert.True(builder.AddRemoteMcpCredentialUseTls());
+        var httpsOptions = new List<HttpsConnectionAdapterOptions>();
+        KestrelEndpointComposition.AddEndpoint(builder, (_, server) =>
+            server.ConfigureHttpsDefaults(options => httpsOptions.Add(options)));
         await using var app = builder.Build();
         app.Run(context => context.Response.WriteAsync("ready"));
         await app.StartAsync();
 
-        foreach (var port in new[] { workerPort, hostedPort, remotePort })
+        Assert.Equal(3, httpsOptions.Count);
+        Assert.All(httpsOptions, options =>
         {
-            X509Certificate2? serverCertificate = null;
-            using var handler = new HttpClientHandler
-            {
-                ServerCertificateCustomValidationCallback = (_, certificate, _, _) =>
-                {
-                    serverCertificate = certificate is null ? null : new X509Certificate2(certificate);
-                    return true;
-                }
-            };
-            using var client = new HttpClient(handler);
-            await Assert.ThrowsAnyAsync<HttpRequestException>(() =>
-                client.GetAsync($"https://127.0.0.1:{port}/"));
-            Assert.NotNull(serverCertificate);
+            var serverCertificate = Assert.IsType<X509Certificate2>(options.ServerCertificate);
             Assert.Equal(tls.Options.LocalCertificateSha256,
                 Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(serverCertificate.RawData)));
-            serverCertificate.Dispose();
+            Assert.Equal(RuntimeServiceTlsIdentity.AllowedProtocols, options.SslProtocols);
+            Assert.Equal(ClientCertificateMode.RequireCertificate, options.ClientCertificateMode);
+            Assert.NotNull(options.ClientCertificateValidation);
+        });
+
+        foreach (var port in new[] { workerPort, hostedPort, remotePort })
+        {
+            using var client = new HttpClient(new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback = (_, certificate, _, _) =>
+                    certificate is not null &&
+                    string.Equals(tls.Options.LocalCertificateSha256,
+                        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                            certificate.GetRawCertData())),
+                        StringComparison.OrdinalIgnoreCase)
+            });
+            await Assert.ThrowsAnyAsync<HttpRequestException>(() =>
+                client.GetAsync($"https://127.0.0.1:{port}/"));
         }
         await app.StopAsync();
     }
