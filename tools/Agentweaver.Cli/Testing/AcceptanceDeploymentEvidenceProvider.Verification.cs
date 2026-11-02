@@ -56,10 +56,14 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
     {
         JsonObject images = manifest["images"] as JsonObject
             ?? throw new InvalidDataException("The Board canonical image manifest must contain an images object.");
-        if (manifest.Count != 1 || images.Count != BoardImageDigests.Count
-            || BoardImageDigests.Any(pair => ApiAcceptanceSupport.GetString(images, pair.Key) != pair.Value))
-            throw new InvalidDataException("Board requires the exact four immutable owner image digests from the reviewed image selection.");
-        return new Dictionary<string, string>(BoardImageDigests, StringComparer.Ordinal);
+        if (manifest.Count != 1 || images.Count != BoardRetainedImageDigests.Count + 1
+            || BoardRetainedImageDigests.Any(pair => ApiAcceptanceSupport.GetString(images, pair.Key) != pair.Value)
+            || !Matches(Digest, ApiAcceptanceSupport.GetString(images, "agentweaver.orchestrator")))
+            throw new InvalidDataException("Board requires the three retained owner digests and one immutable Orchestrator digest.");
+        return images.ToDictionary(
+            pair => pair.Key,
+            pair => ApiAcceptanceSupport.GetString(images, pair.Key)!,
+            StringComparer.Ordinal);
     }
 
     private async Task<string> ResolveImageReferenceAsync(
@@ -201,9 +205,11 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             string imageReference = await ResolveImageReferenceAsync(
                 repository, selectedImages.GetValueOrDefault(repository), currentImage, sourceSha, ct)
                 .ConfigureAwait(false);
-            JsonObject ownerReceipt = boardDelete && componentId is "Agentweaver.Identity.Broker" or "Agentweaver.Projects.Config"
-                ? (JsonObject)pins["authoritySourceReceipt"]!
-                : pins["sourceReceipt"] as JsonObject ?? [];
+            JsonObject ownerReceipt = boardDelete && componentId == "Agentweaver.Orchestrator"
+                ? (JsonObject)pins["orchestratorSourceReceipt"]!
+                : boardDelete && componentId is "Agentweaver.Identity.Broker" or "Agentweaver.Projects.Config"
+                    ? (JsonObject)pins["authoritySourceReceipt"]!
+                    : pins["sourceReceipt"] as JsonObject ?? [];
             string ownerSha = boardDelete
                 ? ApiAcceptanceSupport.GetString(ownerReceipt, "sourceSha")!
                 : sourceSha;
@@ -410,7 +416,8 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
                 JsonObject containerStatus = containerStatuses[0] as JsonObject ?? [];
                 string imageId = ApiAcceptanceSupport.GetString(containerStatus, "imageID")!;
                 JsonObject registry = await VerifyRegistryImageAsync(
-                    imageReference, imageId, buildSha, buildTree, ct).ConfigureAwait(false);
+                    imageReference, imageId, buildSha, buildTree, ct,
+                    requireSourceTree: boardDelete && componentId == "Agentweaver.Orchestrator").ConfigureAwait(false);
                 podEvidence.Add(new JsonObject
                 {
                     ["name"] = podName,
@@ -483,7 +490,8 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
         string imageId,
         string sourceSha,
         string sourceTree,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool requireSourceTree = false)
     {
         if (!TryImageReference(imageReference, out string repository, out string requestedDigest)
             || repository["ghcr.io/".Length..].Split('/').Length < 2)
@@ -548,11 +556,11 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             throw new InvalidDataException("The image config size does not match its immutable manifest descriptor.");
         JsonObject config = imageConfig["config"] as JsonObject ?? [];
         JsonObject labels = config["Labels"] as JsonObject ?? config["labels"] as JsonObject ?? [];
+        string? imageSourceTree = ApiAcceptanceSupport.GetString(labels, "io.agentweaver.source-tree");
         if (ApiAcceptanceSupport.GetString(imageConfig, "os") != "linux"
             || ApiAcceptanceSupport.GetString(imageConfig, "architecture") != "amd64"
             || ApiAcceptanceSupport.GetString(labels, "org.opencontainers.image.revision") != sourceSha
-            || ApiAcceptanceSupport.GetString(labels, "io.agentweaver.source-tree") is string imageSourceTree
-                && imageSourceTree != sourceTree)
+            || (requireSourceTree ? imageSourceTree != sourceTree : imageSourceTree is not null && imageSourceTree != sourceTree))
             throw new InvalidDataException("The running image configuration is not bound to the reviewed source commit and tree.");
 
         JsonArray layers = manifest["layers"] as JsonArray ?? [];

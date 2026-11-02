@@ -1355,7 +1355,8 @@ internal sealed class BacklogOwnerStore
     }
 
     /// <summary>
-    /// Loads the graph and optionally locks its project, task, and dependency rows for a mutation.
+    /// Loads the graph; mutations lock task rows under the project mutex.
+    /// Dependency rows need no separate lock because every graph writer holds that mutex.
     /// </summary>
     /// <returns>A validated graph, or a core issue when persisted rows cannot form a valid graph.</returns>
     private async Task<BacklogCoreResult<BacklogDependencyGraph>> ReadGraphInTransactionAsync(
@@ -1425,7 +1426,6 @@ internal sealed class BacklogOwnerStore
             FROM {_dependencies}
             WHERE project_id = @project
             ORDER BY task_id, prerequisite_task_id
-            {(lockRows ? "FOR UPDATE" : string.Empty)}
             """, connection, transaction))
         {
             readDependencies.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);

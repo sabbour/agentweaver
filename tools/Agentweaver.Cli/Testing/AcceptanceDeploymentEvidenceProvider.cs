@@ -28,10 +28,9 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
     private const string BoardFoundationSha = "fa4c10d40b10b5f06c6333ecfb6e6d86a6a7a8fe";
     private const string BoardFoundationTree = "e235a0f576a26924920130c0c4bb4dbd01d4d567";
     private const string BoardAuthoritySha = "1471e0b6ee4ab2a859231582ed1efa8e86693002";
-    private static readonly IReadOnlyDictionary<string, string> BoardImageDigests = new Dictionary<string, string>(StringComparer.Ordinal)
+    private static readonly IReadOnlyDictionary<string, string> BoardRetainedImageDigests = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         ["agentweaver.gateway"] = "sha256:0fa6e9f718b06a030172deda8ee0e509871b8bd10e9e8a74c13a37cbd8780dcd",
-        ["agentweaver.orchestrator"] = "sha256:6db6d03d226a8acb9cebf1c8e806aa337ffba40201c4daad0088eb6d3f55002e",
         ["agentweaver.identity.broker"] = "sha256:d76177945cf05121120f8fbc6b4d7fe708f0c4e6adbbafbcafe449f52ce7e0b4",
         ["agentweaver.projects.config"] = "sha256:33f1af287e19ac8854952dc379e685397cda2e5068b7734dc35c83f4a32b3378",
     };
@@ -95,6 +94,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
             imageManifestFile, "The canonical GHCR image-selection manifest is missing or malformed.", ct)
             .ConfigureAwait(false);
         JsonObject? authorityReceipt = null;
+        JsonObject? orchestratorReceipt = null;
         JsonObject? cliSource = null;
         Dictionary<string, string> selectedImages;
         if (boardDelete)
@@ -104,6 +104,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
             authorityReceipt = (JsonObject)pins["authoritySourceReceipt"]!;
             if (ApiAcceptanceSupport.GetString(authorityReceipt, "sourceSha") != BoardAuthoritySha)
                 throw new InvalidDataException("Board Identity Broker and Projects Config evidence must pin the reviewed v1.0.16 source commit.");
+            orchestratorReceipt = (JsonObject)pins["orchestratorSourceReceipt"]!;
             selectedImages = ValidateBoardImageManifest(imageManifest);
             cliSource = ReadCliSource();
         }
@@ -133,6 +134,9 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
         JsonObject? authorityEvidence = null;
         if (authorityReceipt is not null)
             authorityEvidence = await VerifyBoardAuthoritySourceAsync(authorityReceipt, ct).ConfigureAwait(false);
+        JsonObject? orchestratorEvidence = null;
+        if (orchestratorReceipt is not null)
+            orchestratorEvidence = await VerifyBoardOrchestratorSourceAsync(orchestratorReceipt, ct).ConfigureAwait(false);
 
         JsonObject services = await ObserveServicesEquivalentAsync(
             manifest, sourceSha, sourceTree, selectedImages, ct).ConfigureAwait(false);
@@ -148,6 +152,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
                 ["manifestBlobSha"] = remoteManifestHash,
             },
             ["authoritySource"] = authorityEvidence?.DeepClone(),
+            ["orchestratorSource"] = orchestratorEvidence?.DeepClone(),
             ["cliSource"] = cliSource?.DeepClone(),
             ["imageManifest"] = new JsonObject
             {
@@ -200,6 +205,21 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
             ["sourceSha"] = sourceSha,
             ["sourceTree"] = sourceTree,
         };
+    }
+
+    internal async Task<JsonObject> VerifyBoardOrchestratorSourceAsync(JsonObject receipt, CancellationToken ct)
+    {
+        string sourceSha = ApiAcceptanceSupport.GetString(receipt, "sourceSha")!;
+        string sourceTree = ApiAcceptanceSupport.GetString(receipt, "sourceTree")!;
+        if (!Sha.IsMatch(sourceSha) || !Sha.IsMatch(sourceTree))
+            throw new InvalidDataException("The Board Orchestrator receipt must pin a full Git commit and tree.");
+
+        JsonObject commit = await GetGitHubObjectAsync($"/commits/{sourceSha}", ct).ConfigureAwait(false);
+        JsonObject commitTree = (commit["commit"] as JsonObject)?["tree"] as JsonObject ?? [];
+        if (ApiAcceptanceSupport.GetString(commit, "sha") != sourceSha
+            || ApiAcceptanceSupport.GetString(commitTree, "sha") != sourceTree)
+            throw new InvalidDataException("GitHub does not report the exact pinned Board Orchestrator commit and tree.");
+        return new JsonObject { ["sourceSha"] = sourceSha, ["sourceTree"] = sourceTree };
     }
 
     private async Task<JsonObject> GetGitHubObjectAsync(string route, CancellationToken ct)
