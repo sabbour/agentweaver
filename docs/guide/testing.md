@@ -404,6 +404,19 @@ the dedicated owner receives the schema and objects, missing operator role
 assumption is rejected before writes, and a grant-reconciliation failure rolls
 back both the schema and temporary membership.
 
+## Test Broker TLS listener composition
+
+Run the focused Broker composition tests from the repository root:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --filter FullyQualifiedName~HostedModelCatalogCredentialUseCompositionTests
+```
+
+The TLS listener test checks the effective HTTPS certificate, protocol, and
+required-client-certificate settings for the IssueSync, hosted-catalog, and
+remote-MCP listeners, then confirms each rejects a request without a client
+certificate. It does not claim a successful mTLS exchange.
+
 ## Test Gateway and authenticated client paths
 
 The following Broker integration tests use a Broker-issued token and test-owned
