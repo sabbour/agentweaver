@@ -279,6 +279,8 @@ test('v1 image workflow pushes the ten existing Kustomize images directly', () =
   const overlay = readYaml('deploy/k8s/kustomization.yaml');
 
   assert.deepEqual(workflow.on.push.branches, ['v1']);
+  for (const input of ['.github/workflows/v1-integration-images.yml', 'Directory.Build.*', 'releases/foundation.json'])
+    assert.ok(workflow.on.push.paths.includes(input), input);
   assert.equal(entries.length, 10);
   assert.deepEqual(
     entries.map(({ repository }) => repository).sort(),
@@ -301,6 +303,49 @@ test('v1 image workflow pushes the ten existing Kustomize images directly', () =
   assert.equal(steps.some(({ run = '' }) => run.includes('imagetools inspect')), true);
   assert.equal(steps.some(({ uses = '' }) => /upload-artifact|download-artifact/.test(uses)), false);
   assert.equal(JSON.stringify(workflow).includes('source_sha'), false);
+
+  // Every image must carry the exact source commit, Git tree, and manifest component version.
+  const identity = steps.findIndex(({ id }) => id === 'source');
+  assert.ok(identity >= 0 && identity < steps.findIndex(({ uses = '' }) => uses === 'docker/build-push-action@v6'));
+  assert.equal(steps[identity].env.COMPONENT_ID, '${{ matrix.id }}');
+  assert.match(steps[identity].run, /git rev-parse --verify "\$\{GITHUB_SHA\}\^\{tree\}"/);
+  assert.match(steps[identity].run, /select\(\.id == \$id\) \| \.version\] \| if length == 1/);
+  assert.match(steps[identity].run, /releases\/foundation\.json/);
+  for (const output of [
+    'echo "sha=${GITHUB_SHA}"',
+    'echo "tree=${tree}"',
+    'echo "version=${version}"',
+  ]) assert.ok(steps[identity].run.includes(output), output);
+  assert.match(steps[identity].run, /\} >> "\$GITHUB_OUTPUT"/);
+  const manifest = JSON.parse(readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8'));
+  for (const { id } of entries)
+    assert.equal(manifest.components.filter(component => component.id === id).length, 1, `${id} manifest version`);
+
+  const buildProps = readFileSync(path.join(root, 'Directory.Build.props'), 'utf8');
+  for (const label of [
+    '<ContainerLabel Include="org.opencontainers.image.revision" Value="$(AgentweaverImageSourceSha)" />',
+    '<ContainerLabel Include="io.agentweaver.source-tree" Value="$(AgentweaverImageSourceTree)" />',
+    '<ContainerLabel Include="org.opencontainers.image.version" Value="$(AgentweaverImageVersion)" />',
+  ]) assert.ok(buildProps.includes(label), label);
+
+  const labels = [
+    'org.opencontainers.image.revision=${{ steps.source.outputs.sha }}',
+    'io.agentweaver.source-tree=${{ steps.source.outputs.tree }}',
+    'org.opencontainers.image.version=${{ steps.source.outputs.version }}',
+  ];
+  const dockerSteps = steps.filter(({ uses }) => uses === 'docker/build-push-action@v6');
+  assert.deepEqual(dockerSteps.map(({ if: condition }) => condition).sort(), [
+    "matrix.id == 'Agentweaver.AgentHost'", "matrix.id == 'Agentweaver.Identity.Broker'", "matrix.mode == 'web'",
+  ]);
+  for (const { with: options } of dockerSteps)
+    for (const label of labels) assert.ok(options.labels.split('\n').includes(label), label);
+  const publish = steps.find(({ run = '' }) => run.includes('PublishContainer'));
+  assert.equal(publish.if, "matrix.mode == 'dotnet'");
+  for (const property of [
+    '-p:AgentweaverImageSourceSha=${{ steps.source.outputs.sha }}',
+    '-p:AgentweaverImageSourceTree=${{ steps.source.outputs.tree }}',
+    '-p:AgentweaverImageVersion=${{ steps.source.outputs.version }}',
+  ]) assert.ok(publish.run.includes(property), property);
 });
 
 test('v1 package workflow publishes versioned NuGet packages without image receipts', () => {

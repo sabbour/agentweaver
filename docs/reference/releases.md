@@ -34,7 +34,10 @@ repositories used by `deploy/k8s/kustomization.yaml` when service code, Docker
 inputs, or the component manifest changes on `v1`. It builds the AgentHost and
 Identity Broker Dockerfiles, Web frontend and host, and seven .NET service
 containers. Images are pushed directly to GHCR as `sha-<commit>` tags; the
-workflow summary reports the resulting digests.
+workflow summary reports the resulting digests. Each image carries the exact
+source commit, Git tree, and `releases/foundation.json` component version as
+the `org.opencontainers.image.revision`, `io.agentweaver.source-tree`, and
+`org.opencontainers.image.version` labels.
 
 The image workflow uses standard GitHub Actions Docker and .NET container
 publishing steps. It does not transfer image archives between jobs or require
