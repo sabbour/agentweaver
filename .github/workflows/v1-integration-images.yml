@@ -5,6 +5,7 @@ on:
     branches:
       - v1
     paths:
+      - .github/workflows/v1-integration-images.yml
       - Directory.Build.*
       - Directory.Packages.props
       - global.json
@@ -72,6 +73,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve image source identity
+        id: source
+        env:
+          COMPONENT_ID: ${{ matrix.id }}
+        run: |
+          tree="$(git rev-parse --verify "${GITHUB_SHA}^{tree}")"
+          version="$(jq -er --arg id "$COMPONENT_ID" '[.components[] | select(.id == $id) | .version] | if length == 1 then .[0] else error("expected exactly one manifest component \($id)") end' releases/foundation.json)"
+          {
+            echo "sha=${GITHUB_SHA}"
+            echo "tree=${tree}"
+            echo "version=${version}"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
@@ -124,7 +138,9 @@ jobs:
           tags: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ github.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
+            io.agentweaver.source-tree=${{ steps.source.outputs.tree }}
+            org.opencontainers.image.version=${{ steps.source.outputs.version }}
 
       - name: Build and push Identity Broker
         if: matrix.id == 'Agentweaver.Identity.Broker'
@@ -137,7 +153,9 @@ jobs:
           tags: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ github.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
+            io.agentweaver.source-tree=${{ steps.source.outputs.tree }}
+            org.opencontainers.image.version=${{ steps.source.outputs.version }}
 
       - name: Build and push Web
         if: matrix.mode == 'web'
@@ -153,7 +171,9 @@ jobs:
             GIT_SHA=${{ github.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
+            io.agentweaver.source-tree=${{ steps.source.outputs.tree }}
+            org.opencontainers.image.version=${{ steps.source.outputs.version }}
 
       - name: Build and push .NET service
         if: matrix.mode == 'dotnet'
@@ -166,7 +186,10 @@ jobs:
           -p:ContainerRegistry=ghcr.io
           -p:ContainerRepository=sabbour/${{ matrix.repository }}
           -p:ContainerImageTag=sha-${GITHUB_SHA}
-          -p:RepositoryCommit=${GITHUB_SHA}
+          -p:RepositoryCommit=${{ steps.source.outputs.sha }}
+          -p:AgentweaverImageSourceSha=${{ steps.source.outputs.sha }}
+          -p:AgentweaverImageSourceTree=${{ steps.source.outputs.tree }}
+          -p:AgentweaverImageVersion=${{ steps.source.outputs.version }}
 
       - name: Report pushed image digest
         env:

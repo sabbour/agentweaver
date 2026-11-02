@@ -34,7 +34,10 @@ publish standalone CLI archives.
 Changes to service projects, Docker inputs, or the component manifest on `v1`
 automatically run `.github/workflows/v1-integration-images.yml` (push-triggered,
 not manual). It pushes ten images directly to GHCR as `sha-<40-character-commit>`
-tags; the workflow summary lists each digest. There are no image archives,
+tags; the workflow summary lists each digest. Every image is labeled with the
+exact source commit (`org.opencontainers.image.revision`), its Git tree
+(`io.agentweaver.source-tree`), and its `releases/foundation.json` component
+version (`org.opencontainers.image.version`). There are no image archives,
 publication receipts, or source-claim gates.
 
 ## Deploy workloads locally
