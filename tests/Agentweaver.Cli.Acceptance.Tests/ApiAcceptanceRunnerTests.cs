@@ -32,6 +32,9 @@ public sealed class ApiAcceptanceRunnerTests
     [InlineData(false, false, false, 1, "failed", "indeterminate", "string-revision")]
     [InlineData(false, false, false, 1, "failed", "indeterminate", "malformed-task")]
     [InlineData(false, false, false, 1, "failed", "indeterminate", "ambiguous-capture")]
+    [InlineData(false, false, false, 1, "failed", "cleaned", "owner-gateway-problem")]
+    [InlineData(false, false, false, 1, "failed", "cleaned", "owner-bare-403")]
+    [InlineData(false, false, false, 1, "failed", "cleaned", "owner-graph-changed")]
     public async Task BoardDeleteExercisesTypedConflictPermissionDeletionAndCleanupOperations(
         bool failCleanup,
         bool ambiguousDelete,
@@ -59,7 +62,10 @@ public sealed class ApiAcceptanceRunnerTests
                 ambiguousBoardDelete: ambiguousDelete, preserveCompactedTaskRevision: preserveCompactedTaskRevision,
                 ambiguousBoardCapture: boardScenario == "ambiguous-capture",
                 failFirstBoardTaskEdit: boardScenario == "edit-rejection",
-                malformedBoardSnapshot: boardScenario is null or "edit-rejection" ? null : boardScenario);
+                malformedBoardSnapshot: boardScenario is null or "edit-rejection"
+                    or "owner-gateway-problem" or "owner-bare-403" or "owner-graph-changed" ? null : boardScenario,
+                ownerDenialScenario: boardScenario is "owner-gateway-problem" or "owner-bare-403" or "owner-graph-changed"
+                    ? boardScenario : null);
             handler.GatewayOrigin = new Uri("https://api.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/");
             using var http = new HttpClient(handler);
             var authentication = new TestAuthentication(trace);
@@ -118,6 +124,23 @@ public sealed class ApiAcceptanceRunnerTests
                     "deleteProjectBacklogTask" or "updateProject" or "revokeProjectRoleAssignment");
                 return;
             }
+            if (boardScenario is "owner-gateway-problem" or "owner-bare-403" or "owner-graph-changed")
+            {
+                string failure = result["failure"]?["message"]?.GetValue<string>() ?? "";
+                if (boardScenario == "owner-graph-changed")
+                    Assert.Contains("A rejected backlog mutation changed the authoritative graph", failure);
+                else
+                    Assert.Contains("without backlog_project_permission_denied", failure);
+                Assert.DoesNotContain(result["steps"]!.AsArray().OfType<JsonObject>(), step =>
+                    step["id"]?.GetValue<string>() == "owner-denial" && step["status"]?.GetValue<string>() == "passed");
+                Assert.DoesNotContain(result["steps"]!.AsArray().OfType<JsonObject>(), step =>
+                    step["id"]?.GetValue<string>() is "delete-task-with-dependent-edge" or "delete-empty-board");
+                Assert.Equal(1, handler.Requests.Count(request => request.OperationId == "deleteProjectBacklogTask"
+                    && request.Headers["Authorization"].Contains("projects.orchestrator", StringComparison.Ordinal)));
+                Assert.Equal("verified", result["observations"]?["boardFixture"]?["cleanup"]?["taskDeletion"]?.GetValue<string>());
+                Assert.Equal("archived", result["observations"]?["boardFixture"]?["cleanup"]?["projectState"]?.GetValue<string>());
+                return;
+            }
             if (boardScenario is not null)
             {
                 Assert.Contains(handler.Requests, request => request.OperationId == "captureBacklogTask");
@@ -143,8 +166,19 @@ public sealed class ApiAcceptanceRunnerTests
                 Assert.Equal(0, handler.LastCompactedTaskPosition);
                 Assert.DoesNotContain(handler.Requests, request => request.OperationId == "revokeProjectRoleAssignment");
             }
-            Assert.Contains(result["steps"]!.AsArray().OfType<JsonObject>(), step =>
-                step["id"]?.GetValue<string>() == "owner-denial" && step["status"]?.GetValue<string>() == "passed");
+            JsonObject ownerDenialStep = Assert.Single(result["steps"]!.AsArray().OfType<JsonObject>(), step =>
+                step["id"]?.GetValue<string>() == "owner-denial");
+            Assert.Equal("passed", ownerDenialStep["status"]?.GetValue<string>());
+            Assert.Equal(403, ownerDenialStep["httpStatus"]?.GetValue<int>());
+            Assert.Equal("backlog_project_permission_denied", ownerDenialStep["ownerIssueCode"]?.GetValue<string>());
+            if (expectedExitCode == 0)
+            {
+                Assert.Contains(result["steps"]!.AsArray().OfType<JsonObject>(), step =>
+                    step["id"]?.GetValue<string>() == "delete-task-with-dependent-edge" && step["status"]?.GetValue<string>() == "passed");
+                Assert.Contains(result["steps"]!.AsArray().OfType<JsonObject>(), step =>
+                    step["id"]?.GetValue<string>() == "delete-empty-board" && step["status"]?.GetValue<string>() == "passed");
+                Assert.Equal("verified", result["observations"]?["boardFixture"]?["cleanup"]?["taskDeletion"]?.GetValue<string>());
+            }
             Assert.Contains(handler.Requests, request => request.OperationId == "deleteProjectBacklogTask"
                 && request.Headers["Authorization"].Contains("projects.orchestrator", StringComparison.Ordinal));
             Assert.Equal(AcceptanceGatewayHandler.BoardProjectId,
@@ -1167,6 +1201,7 @@ public sealed class ApiAcceptanceRunnerTests
         private bool _ambiguousBoardDelete;
         private readonly string? _malformedJournalCase;
         private readonly string? _malformedBoardSnapshot;
+        private readonly string? _ownerDenialScenario;
         private readonly CancellationTokenSource? _cancelOnMessage;
         private int _revokeCalls;
         private string? _rootSessionId;
@@ -1195,7 +1230,8 @@ public sealed class ApiAcceptanceRunnerTests
             bool failBoardOwnerAssignment = false,
             bool preserveCompactedTaskRevision = false,
             bool failFirstBoardTaskEdit = false,
-            string? malformedBoardSnapshot = null)
+            string? malformedBoardSnapshot = null,
+            string? ownerDenialScenario = null)
         {
             _openApi = (JsonObject)openApi.DeepClone();
             _operations = GatewayContract.Parse(_openApi);
@@ -1208,6 +1244,7 @@ public sealed class ApiAcceptanceRunnerTests
             _ambiguousBoardDelete = ambiguousBoardDelete;
             _malformedJournalCase = malformedJournalCase;
             _malformedBoardSnapshot = malformedBoardSnapshot;
+            _ownerDenialScenario = ownerDenialScenario;
             _cancelOnMessage = cancelOnMessage;
             GatewayOrigin = new Uri("http://127.0.0.1:49241/");
         }
@@ -1312,8 +1349,21 @@ public sealed class ApiAcceptanceRunnerTests
                 return Json(HttpStatusCode.Forbidden, new JsonObject { ["title"] = "Denied" }, "application/problem+json");
             if (operation.OperationId == "deleteProjectBacklogTask"
                 && scopes.Contains("projects.orchestrator", StringComparer.Ordinal))
+            {
+                if (_ownerDenialScenario == "owner-gateway-problem")
+                    return Json(HttpStatusCode.Forbidden, new JsonObject
+                    {
+                        ["title"] = "Forbidden",
+                        ["status"] = 403,
+                        ["code"] = "forbidden",
+                    }, "application/problem+json");
+                if (_ownerDenialScenario == "owner-bare-403")
+                    return new HttpResponseMessage(HttpStatusCode.Forbidden);
+                if (_ownerDenialScenario == "owner-graph-changed")
+                    _boardGraphRevision++;
                 return Json(HttpStatusCode.Forbidden,
-                    new JsonObject { ["code"] = "backlog_project_permission_denied" });
+                    new JsonObject { ["error"] = "backlog_project_permission_denied" });
+            }
 
             if (actor == "denied" && operation.OperationId == "readRunStatus")
                 return Json(HttpStatusCode.Forbidden, new JsonObject { ["title"] = "Denied" }, "application/problem+json");
