@@ -47,6 +47,11 @@ manual migration-token handoffs.
 
 ## Documentation as you go
 
+Before writing or reviewing documentation, use the shared
+[authoring guide and templates](../docs/authoring/README.md). Follow its
+reader-goal, source-fidelity, safety, and arc42 guidance; keep contributor
+evidence out of published user instructions.
+
 Update affected v1 documentation and diagrams in the same PR as each behavior,
 interface, provider, model-support, or configuration change. Run
 `npm run docs:build`, `npm run docs:check-links`, and the diagram checks.

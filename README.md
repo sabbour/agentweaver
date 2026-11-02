@@ -73,3 +73,10 @@ Agentweaver 0.x remains a separate product line on `dev`. Read the
 [0.x documentation](https://sabbour.github.io/agentweaver/) for that product.
 The v1 branch is a separate rebuild; it does not silently upgrade or replace
 the 0.x deployment.
+
+## Contribute documentation
+
+Use the [documentation authoring guide](docs/authoring/README.md) to choose an
+article type, copy an original template, and review examples against source.
+It includes arc42-based architecture guidance and the current-docs audit.
+Contributors and coding agents follow the same standard.
