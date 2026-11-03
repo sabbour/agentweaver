@@ -577,6 +577,12 @@ authenticated mutation journey through the production apphost.
 
 ## Windows archive checks
 
+The read-only host preflight preserves only inherited proxy variables for its
+PowerShell child and does not change proxy settings. A null `GetProxy` target
+means direct access; the exact fixture URI is also accepted. Any other target
+blocks the checks. `IsBypassed` is diagnostic only because .NET proxy
+implementations can report `false` for direct access.
+
 On native Windows x64, prepare the candidate from a clean committed source
 tree with `python scripts\cli-dotnet\package.py build --rid win-x64 --smoke`.
 After the approved host preflight succeeds, run the verifier against that
