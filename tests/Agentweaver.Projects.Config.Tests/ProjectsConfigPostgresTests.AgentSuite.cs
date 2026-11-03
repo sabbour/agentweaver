@@ -426,7 +426,8 @@ public sealed partial class ProjectsConfigPostgresTests
         var remainingAdmin = await SeedCallerAsync(
             db, authorityStore, "agentsuite-remaining-admin-" + suffix, tenantId, ["api.read", "projects.admin"],
             ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
-        var project = await service.CreateProjectAsync(owner, "Revoked suite owner", CancellationToken.None);
+        // Another admin creates the project so the revoked caller has no creator Owner grant.
+        var project = await service.CreateProjectAsync(remainingAdmin, "Revoked suite owner", CancellationToken.None);
         var assignment = await db.RoleAssignments.AsNoTracking()
             .SingleAsync(item =>
                 item.MembershipId == owner.MembershipId &&

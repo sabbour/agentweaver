@@ -1070,6 +1070,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
             ProjectAuthorityResourceType.Project,
             project.ProjectId,
             ProjectAuthorityRole.Owner);
+        // Keep the tenant admin tenant-scoped: drop its creator Owner grant now that other Owners exist.
+        await using (var authorityDb = CreateDbContext(projects.PrivilegedFixtureDataSource))
+        {
+            var creatorOwner = await authorityDb.RoleAssignments.AsNoTracking().SingleAsync(item =>
+                item.MembershipId == tenantAdminMembership.MembershipId &&
+                item.ResourceType == ProjectAuthorityResourceType.Project &&
+                item.ResourceId == project.ProjectId &&
+                item.Role == ProjectAuthorityRole.Owner &&
+                item.State == ProjectAuthorityRecordState.Active);
+            await RevokeRoleAsync(projects.PrivilegedFixtureDataSource, creatorOwner.AssignmentId, 1);
+        }
         await AssignRoleAsync(
             projects.PrivilegedFixtureDataSource,
             ownerMembership.MembershipId,
