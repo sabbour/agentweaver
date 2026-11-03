@@ -345,17 +345,19 @@ test('follow-up: a chat reopens from Sessions with its messages and sends one me
     await page.getByLabel('Message', { exact: true }).fill('Also check the retry budget');
     // A double click must still send one message for this one draft.
     await page.getByRole('button', { name: 'Send' }).dblclick();
-    await page.getByText('Message sent. It shows in the activity list when the agent receives it.').waitFor();
+    await page.getByText('Message accepted by the addressed-message journal.').waitFor();
+    const sentMessages = page.getByRole('list', { name: 'Messages sent from this page' });
+    await sentMessages.getByText('accepted').waitFor();
+    await sentMessages.getByText('Also check the retry budget').waitFor();
+    await sentMessages.getByText('To Coordinator').waitFor();
 
-    const messages = writes(app, 'POST', /\/projects\/p2\/runs\/run-1\/coordination\/sessions\/[^/]+\/messages$/);
+    const messages = writes(app, 'POST', /^\/api\/v1\/projects\/p2\/runs\/run-1\/messages$/);
     assert.equal(messages.length, 1, 'one message for one draft');
     assert.equal(messages[0].headers.get('authorization'), 'Bearer tok.p2.run-1');
+    assert.ok(messages[0].headers.get('idempotency-key'));
     const { body } = messages[0];
-    // The message goes to the coordinator root and carries an idempotency key,
-    // so a retry of the same draft cannot deliver it twice.
-    assert.equal(body.recipientSessionId, room.rootSessionId);
-    assert.equal(body.payload.text, 'Also check the retry budget');
-    assert.ok(body.idempotencyKey);
+    // The run-level owner defaults to the coordinator; the idempotency key is a header.
+    assert.deepEqual(body, { text: 'Also check the retry budget' });
     assert.equal(writes(app, 'POST', /^\/api\/v1\/projects\/p2\/runs$/).length, 1, 'follow-up creates no new run');
     assert.equal(app.gateway.state.conversations.length, 1);
 
