@@ -638,15 +638,14 @@ define a managed certificate, HTTPS Gateway, HTTPRoutes, and BackendTLSPolicies.
 They are not part of ordinary namespace bootstrap.
 The managed certificate supplies a wildcard domain through its status.
 The canonical Broker route uses `agentweaver` as its single-label prefix, not
-the zone root. The existing wildcard `https` listener and Broker/Portal routes
-remain in place. Exact `auth` and `api` listeners are additive aliases using
-the same managed TLS Secret; they route to the existing Broker and Gateway
-Services respectively. The Copilot BFF route remains on the Portal `https`
-listener so its browser flow stays same-origin. The aliases do not change the
-canonical Broker issuer, callback, audience, scopes, or authorization. The
-wildcard listener continues to permit HTTP/2 coalescing between the
-certificate-covered Broker and Portal hosts without creating routes for
-unknown hostnames.
+the zone root. One wildcard `https` listener serves the Broker, Portal, and
+exact-host `auth` and `api` HTTPRoutes with the same managed TLS Secret. The
+`auth` route targets the existing Broker Service; the `api` route targets the
+existing Gateway Service. The Copilot BFF route remains on the Portal host so
+its browser flow stays same-origin. The aliases do not change the canonical
+Broker issuer, callback, audience, scopes, or authorization. HTTP/2
+coalescing uses this shared listener, while exact route hostnames preserve
+host boundaries and unknown hostnames have no route.
 
 The Gateway requires a namespace policy compatible with its managed pods.
 AKS currently rejects a Gateway customization that sets a pod or container
@@ -706,12 +705,12 @@ guarded command again without `--identity-routing-certificates-only`. The full
 phase first verifies that the MCP Service is the exact private HTTPS backend,
 then applies the Gateway, Broker/auth alias, Web, Gateway API/API alias,
 same-origin Copilot BFF, and MCP HTTPRoutes, corresponding BackendTLSPolicies,
-and narrow Cilium ingress policies. The `https` listener sends `/` to Web,
+and narrow Cilium ingress policies. The single wildcard `https` listener
+sends `/` to Web,
 `/api/v1`, exact `/openapi/v1.json`, and the Copilot BFF path to Gateway, and
 exact `/mcp` plus `/.well-known/oauth-protected-resource/mcp` to MCP over
-HTTPS. The exact `auth` listener routes the Broker alias to the existing
-Broker Service; the exact `api` listener routes the Gateway API, OpenAPI,
-BFF, and Repo App paths to the existing Gateway Service.
+HTTPS. The exact-host `auth` and `api` routes attach to `https` and route to
+the existing Broker and Gateway Services, respectively.
 The full phase rejects a missing or changed MCP Service before its first
 routing write.
 Gateway and MCP backend TLS use operator-owned
@@ -796,11 +795,13 @@ After the Broker starts with the approved issuer and required runtime inputs,
 on the canonical Broker and `auth` alias, plus unauthenticated
 `/openapi/v1.json` on the `api` alias. Each request uses ordinary DNS, trusted
 HTTPS, and the Gateway's observed IP. It then opens HTTP/2 sessions to the
-observed Gateway IP in both directions, using Broker SNI with Portal authority
-and Portal SNI with Broker authority; each response must negotiate `h2` and
-return `200`. This verifies the existing route behavior when a browser
-coalesces the certificate-covered hosts. No insecure TLS, DNS override, or
-redirect following is permitted.
+each observed Gateway IP using these SNI/authority/path pairs: Broker/Portal
+`/`, Portal/Broker `/health/live`, Portal/auth
+`/.well-known/openid-configuration`, Portal/api `/openapi/v1.json`, and
+auth/Portal `/`. Each response must negotiate ALPN `h2` and return numeric
+HTTP status `200`. These probes verify routing when a browser coalesces
+certificate-covered hosts. No insecure TLS, DNS override, or redirect
+following is permitted.
 Failure prevents a successful installer receipt.
 The routing option does not create the Broker's runtime ConfigMap, signing
 Secret, key-ring PVC, OAuth registrations, or runtime Deployment.

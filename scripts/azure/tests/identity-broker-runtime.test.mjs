@@ -31,7 +31,7 @@ function object(kind, spec, status, { name = 'identity-broker', service = 'ident
 }
 function routing(host = legacyHostname, includeApplicationRoutes = false) {
   const listenerNames = includeApplicationRoutes
-    ? [['https', `*.${zone}`], ['auth', authHostname], ['api', apiHostname]]
+    ? [['https', `*.${zone}`]]
     : [['https', host]];
   const gatewayListeners = listenerNames.map(([name, listenerHost]) => ({
     name, hostname: listenerHost, protocol: 'HTTPS', port: 443,
@@ -69,11 +69,11 @@ function routing(host = legacyHostname, includeApplicationRoutes = false) {
   };
   if (includeApplicationRoutes) {
     state.authRoute = object('HTTPRoute', {
-      hostnames: [authHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'auth' }],
+      hostnames: [authHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'https' }],
       rules: [{ matches: [{ path: { type: 'PathPrefix', value: '/' } }],
         backendRefs: [{ name: 'identity-broker', port: 443 }] }],
     }, { parents: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
-      parentRef: { name: 'identity-broker', sectionName: 'auth' },
+      parentRef: { name: 'identity-broker', sectionName: 'https' },
       conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
         { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
     { name: 'identity-broker-auth', service: 'identity-broker' });
@@ -99,7 +99,7 @@ function routing(host = legacyHostname, includeApplicationRoutes = false) {
         { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
     { name: 'gateway-api', service: 'gateway' });
     state.apiHostRoute = object('HTTPRoute', {
-      hostnames: [apiHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'api' }],
+      hostnames: [apiHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'https' }],
       rules: [{ matches: [
         { path: { type: 'PathPrefix', value: '/api/v1' } },
         { path: { type: 'PathPrefix', value: '/api/connections/copilot-user/v1' } },
@@ -108,7 +108,7 @@ function routing(host = legacyHostname, includeApplicationRoutes = false) {
         { path: { type: 'Exact', value: '/openapi/v1.json' } },
       ], backendRefs: [{ name: 'gateway', port: 8443 }] }],
     }, { parents: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
-      parentRef: { name: 'identity-broker', sectionName: 'api' },
+      parentRef: { name: 'identity-broker', sectionName: 'https' },
       conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
         { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
     { name: 'gateway-api-host', service: 'gateway' });
@@ -237,7 +237,7 @@ test('post-placement alignment reads the exact Gateway namespace and leaves alig
   }), /configuration changed/);
 });
 
-test('pre-runtime hostname alignment retains additive auth and API listeners', () => {
+test('pre-runtime hostname alignment preserves the shared wildcard listener', () => {
   const state = gatewayRouting(hostname, true);
   const listeners = structuredClone(state.gateway.spec.listeners);
   const result = alignExistingP0BrokerHostname(config, {
@@ -251,7 +251,7 @@ test('pre-runtime hostname alignment retains additive auth and API listeners', (
   });
   assert.equal(result.changed, false);
   assert.deepEqual(state.gateway.spec.listeners, listeners);
-  assert.deepEqual(state.gateway.spec.listeners.map(listener => listener.name), ['https', 'auth', 'api']);
+  assert.deepEqual(state.gateway.spec.listeners.map(listener => listener.name), ['https']);
 });
 
 test('existing P0 alignment replaces only hostname fields with optimistic tests and keeps programming blocked', () => {

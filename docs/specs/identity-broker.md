@@ -300,18 +300,21 @@ immutable registry digest; the checked-in sentinel is not deployable.
 
 The separate routing candidate uses native AKS-managed Gateway API resources.
 Its managed certificate supplies the `agentweaver` hostname within the AKS
-wildcard domain, not the DNS zone root. It retains the existing wildcard
-`https` listener and Broker and Portal routes, then adds exact `auth` and `api`
-listeners with the same managed TLS Secret. The `auth` alias routes to the
-existing Broker Service; the `api` alias routes existing Gateway API, OpenAPI,
-Copilot/Remote MCP BFF, and Repo App Gateway paths to the Gateway Service.
+wildcard domain, not the DNS zone root. It uses one wildcard `https` listener
+for the Broker, Portal, and exact-host routes. The exact `auth` and `api`
+HTTPRoutes attach to that listener and use the same managed TLS Secret. The
+`auth` alias routes to the existing Broker Service; the `api` alias routes
+existing Gateway API, OpenAPI, Copilot/Remote MCP BFF, and Repo App Gateway
+paths to the Gateway Service.
 The Copilot BFF path also remains on the existing Portal `https` listener so
 the browser's cookie-backed flow stays same-origin. These are transport aliases:
 the canonical Broker issuer and `/signin-oidc` callback remain on the existing
 `agentweaver` hostname. No callback, audience, token scope, or authorization
 behavior changes. The guarded installer checks current-generation listener and
 route conditions, DNS/TLS for the aliases, and the unauthenticated API OpenAPI
-route. BackendTLSPolicy keeps HTTPS between the Gateway and Kestrel.
+route. Its optional readiness check also verifies cross-host HTTP/2 routing
+with ALPN `h2` and HTTP 200 responses. BackendTLSPolicy keeps HTTPS between
+the Gateway and Kestrel.
 It validates the backend certificate with system trust and the route hostname.
 The issuer and callback are still derived from the admitted canonical Broker
 HTTPRoute, never from the `auth` alias.
