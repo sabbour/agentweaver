@@ -459,6 +459,7 @@ $actual = @($acl.Access | ForEach-Object {
 
         with (
             patch.object(checks.subprocess, "Popen", return_value=process),
+            patch.object(checks.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, create=True),
             patch.object(checks, "process_start_ticks", return_value=456),
             patch.object(checks, "persist_journal") as persist_journal,
         ):
@@ -630,6 +631,7 @@ $actual = @($acl.Access | ForEach-Object {
                 ),
                 patch.object(checks, "reserve_loopback_port", return_value=43123),
                 patch.object(checks, "assert_no_reparse_components"),
+                patch.object(checks, "process_start_ticks", return_value=12345),
                 patch.object(checks, "credential_read", return_value=None),
                 patch.object(checks, "account_state_paths", side_effect=lambda _local, account: (
                     folder / "state",
