@@ -145,7 +145,10 @@ each Host's Sandbox provisioning, registration, TestServer startup, bootstrap,
 and `RuntimeAgentHost.ConfigureAsync`, including SDK request arrivals and
 response durations. Host and Broker liveness checks use system time; the test does not freeze their clock to
 keep a lease or registration alive. Owner authority and credential expiry checks
-remain active. Reservation and provider-operation leases, including retirement,
+remain active. The native fixture waits two seconds after provisioning before
+registering the Host. This wait keeps the controlled Pod's lease-plus-two-second
+Started timestamp from being in the future relative to the Host's system clock.
+Reservation and provider-operation leases, including retirement,
 expire after 60 seconds; a valid transition into `Active` assigns a fixed
 600-second lifetime. Runtime registration uses the exact persisted active
 expiry, and credential grants retain their existing lifetime and authority caps.
