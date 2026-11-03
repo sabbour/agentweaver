@@ -3,8 +3,8 @@
  * then the agent task board with Backlog, Ready, Active and Done columns.
  * Tasks come from the project backlog graph. Synced repository issues add the
  * issue reference and state to the cards that track them. Task content can be
- * edited in place. Queue state and prerequisite edges use revision-checked
- * owner operations; cards are not draggable.
+ * edited in place. Queue state, order and prerequisite edges use
+ * revision-checked owner operations.
  */
 import {
   Badge,
@@ -29,6 +29,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowSyncRegular, CheckmarkRegular, DeleteRegular, DismissRegular, EditRegular } from '@fluentui/react-icons';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { DragEvent } from 'react';
 import { useLocation, useParams } from 'react-router-dom';
 import { CaptureTaskForm } from '../components/board/CaptureTaskForm';
 import { columnAccentColor } from '../components/board/columnMeta';
@@ -50,7 +51,8 @@ import {
   addPrerequisite,
   removePrerequisite,
   isStaleRevision,
-  MOVE_UNAVAILABLE_COPY,
+  MOVE_GUIDANCE_COPY,
+  queueDropPosition,
   prerequisiteTitles,
   queueInsertionPosition,
   useProjectBoard,
@@ -73,6 +75,16 @@ interface BoardFeedback {
   deleteError: string | null;
   batchReadyBusy: boolean;
 }
+
+interface BoardDragSnapshot {
+  taskId: string;
+  graphRevision: number;
+  taskRevision: number;
+  scope: BoardRequestScope;
+}
+
+type QueueState = 'backlog' | 'ready';
+type QueueDropPlacement = 'before' | 'after';
 
 const border = (color: string) => ({
   borderTopWidth: '1px',
@@ -173,6 +185,10 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
   },
+  columnDropTarget: {
+    outline: `2px dashed ${tokens.colorBrandStroke1}`,
+    outlineOffset: '2px',
+  },
   columnHeader: {
     display: 'flex',
     flexDirection: 'column',
@@ -245,6 +261,8 @@ const useStyles = makeStyles({
     '@media (prefers-reduced-motion: reduce)': { transitionDuration: '0ms' },
   },
   cardHeader: { display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: tokens.spacingHorizontalXS, justifyContent: 'space-between' },
+  draggableCard: { cursor: 'grab', ':active': { cursor: 'grabbing' } },
+  draggingCard: { opacity: 0.55 },
   cardTitle: {
     flex: '1 1 auto',
     fontWeight: tokens.fontWeightSemibold,
@@ -316,6 +334,18 @@ function isTaskDeletionUnavailable(error: unknown): boolean {
       && (issue as { code: string }).code.toLowerCase().replace(/[^a-z]/g, '') === 'taskdeletionunavailable');
 }
 
+function draggedTaskId(transfer: DataTransfer): string | null {
+  const raw = transfer.getData('application/agentweaver-task');
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || !('taskId' in parsed)) return null;
+    return typeof parsed.taskId === 'string' && parsed.taskId.length > 0 ? parsed.taskId : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Props for one task card. */
 interface BoardTaskCardProps {
   graph: BacklogGraph;
@@ -326,6 +356,9 @@ interface BoardTaskCardProps {
   canEdit: boolean;
   canDelete: boolean;
   actionsDisabled: boolean;
+  dragging: boolean;
+  onDragStartTask: (task: BacklogTaskSnapshot) => boolean;
+  onDragEndTask: () => void;
   deleteInFlight: boolean;
   onSaved: (graph: BacklogGraph, message: string) => void;
   onConflict: () => void;
@@ -339,7 +372,7 @@ interface BoardTaskCardProps {
  */
 function BoardTaskCard({
   graph, task, earlierPosition, laterPosition, issue, canEdit, canDelete, actionsDisabled, deleteInFlight,
-  onSaved, onConflict, onDelete,
+  dragging, onDragStartTask, onDragEndTask, onSaved, onConflict, onDelete,
 }: BoardTaskCardProps) {
   const styles = useStyles();
   const { apiCall } = useAuth();
@@ -359,6 +392,27 @@ function BoardTaskCard({
   const editable = canEdit && !task.isArchived && !task.isAutomationInvocationPending;
   const queueEditable = editable && (task.state === 'backlog' || task.state === 'ready');
   const canChangeQueue = queueEditable && task.lifecycle === 'open';
+  const canDrag = queueEditable && task.lifecycle === 'open' && !disabled && !editing;
+  const onDragStart = (event: DragEvent<HTMLDivElement>) => {
+    if (!canDrag) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/agentweaver-task', JSON.stringify({ taskId: task.reference.taskId }));
+    event.dataTransfer.setData('text/plain', task.reference.taskId);
+    if (!onDragStartTask(task)) {
+      event.preventDefault();
+      onDragEndTask();
+    }
+  };
+  const cardProps = {
+    className: mergeClasses(styles.card, canDrag && styles.draggableCard, dragging && styles.draggingCard),
+    'data-testid': `task-card-${task.reference.taskId}`,
+    draggable: canDrag,
+    onDragStart,
+    onDragEnd: onDragEndTask,
+  };
 
   const startEdit = () => {
     // Start from the latest saved content, not from an earlier cancelled draft.
@@ -411,7 +465,7 @@ function BoardTaskCard({
 
   if (editing) {
     return (
-      <div className={styles.card} data-testid={`task-card-${task.reference.taskId}`}>
+      <div {...cardProps}>
         <div className={styles.editFields}>
           <Field label="Title" required>
             <Input value={title} maxLength={512} onChange={(_, value) => setTitle(value.value)} disabled={disabled} />
@@ -440,7 +494,7 @@ function BoardTaskCard({
   }
 
   return (
-    <div className={styles.card} data-testid={`task-card-${task.reference.taskId}`}>
+    <div {...cardProps}>
       <div className={styles.cardHeader}>
         <Text className={styles.cardTitle}>{task.title}</Text>
         {queueEditable && (
@@ -622,6 +676,15 @@ interface BoardColumnViewProps {
   canEdit: boolean;
   canDelete: boolean;
   actionsDisabled: boolean;
+  draggingTaskId: string | null;
+  onDragStartTask: (task: BacklogTaskSnapshot) => boolean;
+  onDragEndTask: () => void;
+  onDropTask: (
+    taskId: string,
+    targetState: QueueState,
+    neighborTaskId: string | null,
+    placement: QueueDropPlacement,
+  ) => void;
   deleteInFlight: boolean;
   onSaved: (graph: BacklogGraph, message: string) => void;
   onConflict: () => void;
@@ -630,18 +693,45 @@ interface BoardColumnViewProps {
 
 /** One column with the 0.x header: accent bar, label, count, caption and queue summary. */
 function BoardColumnView({
-  column, graph, issues, canEdit, canDelete, actionsDisabled, deleteInFlight, onSaved, onConflict, onDelete,
+  column, graph, issues, canEdit, canDelete, actionsDisabled, draggingTaskId, onDragStartTask, onDragEndTask,
+  onDropTask, deleteInFlight, onSaved, onConflict, onDelete,
 }: BoardColumnViewProps) {
   const styles = useStyles();
   const accent = columnAccentColor(column.id, 0);
   const count = column.tasks.length;
+  const targetState: QueueState | null = column.id === 'backlog' || column.id === 'ready' ? column.id : null;
+  const acceptsDrops = targetState !== null && canEdit && !actionsDisabled && draggingTaskId !== null;
+  const [dragOver, setDragOver] = useState(false);
+  const handleDragOver = acceptsDrops
+    ? (event: DragEvent<HTMLElement>) => {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      setDragOver(true);
+    }
+    : undefined;
+  const handleDrop = (
+    event: DragEvent<HTMLElement>,
+    neighborTaskId: string | null,
+    placement: QueueDropPlacement,
+  ) => {
+    if (!acceptsDrops || !targetState || !draggingTaskId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setDragOver(false);
+    const taskId = draggedTaskId(event.dataTransfer);
+    if (taskId !== draggingTaskId) return;
+    onDropTask(taskId, targetState, neighborTaskId, placement);
+  };
   return (
     <section
       id={`board-column-${column.id}`}
-      className={styles.column}
+      className={mergeClasses(styles.column, dragOver && styles.columnDropTarget)}
       tabIndex={-1}
       aria-label={`${column.label} column`}
       data-testid={`column-${column.id}`}
+      onDragOver={handleDragOver}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={acceptsDrops ? (event) => handleDrop(event, null, 'after') : undefined}
     >
       <div className={styles.columnHeader} style={{ borderTopColor: accent }}>
         <div className={styles.titleRow}>
@@ -661,22 +751,34 @@ function BoardColumnView({
       ) : (
         <div className={styles.cards}>
           {column.tasks.map((task, visibleIndex) => (
-            <BoardTaskCard
+            <div
               // The revision is part of the key so a saved or reloaded task resets its local draft.
               key={`${task.reference.taskId}:${task.revision}`}
-              graph={graph}
-              task={task}
-              earlierPosition={queueInsertionPosition(graph, task, column.tasks[visibleIndex - 1], 'before')}
-              laterPosition={queueInsertionPosition(graph, task, column.tasks[visibleIndex + 1], 'after')}
-              issue={issues.get(task.reference.taskId)}
-              canEdit={canEdit}
-              canDelete={canDelete}
-              actionsDisabled={actionsDisabled}
-              deleteInFlight={deleteInFlight}
-              onSaved={onSaved}
-              onConflict={onConflict}
-              onDelete={onDelete}
-            />
+              onDragOver={acceptsDrops ? handleDragOver : undefined}
+              onDrop={acceptsDrops ? (event) => {
+                const bounds = event.currentTarget.getBoundingClientRect();
+                const placement = event.clientY < bounds.top + bounds.height / 2 ? 'before' : 'after';
+                handleDrop(event, task.reference.taskId, placement);
+              } : undefined}
+            >
+              <BoardTaskCard
+                graph={graph}
+                task={task}
+                earlierPosition={queueInsertionPosition(graph, task, column.tasks[visibleIndex - 1], 'before')}
+                laterPosition={queueInsertionPosition(graph, task, column.tasks[visibleIndex + 1], 'after')}
+                issue={issues.get(task.reference.taskId)}
+                canEdit={canEdit}
+                canDelete={canDelete}
+                actionsDisabled={actionsDisabled}
+                dragging={draggingTaskId === task.reference.taskId}
+                onDragStartTask={onDragStartTask}
+                onDragEndTask={onDragEndTask}
+                deleteInFlight={deleteInFlight}
+                onSaved={onSaved}
+                onConflict={onConflict}
+                onDelete={onDelete}
+              />
+            </div>
           ))}
         </div>
       )}
@@ -769,6 +871,10 @@ export function BoardPage() {
   } | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ taskId: string; scope: BoardRequestScope } | null>(null);
   const pendingDeleteRef = useRef<{ taskId: string; scope: BoardRequestScope } | null>(null);
+  const [pendingMove, setPendingMove] = useState<{ taskId: string; scope: BoardRequestScope } | null>(null);
+  const pendingMoveRef = useRef<{ taskId: string; scope: BoardRequestScope } | null>(null);
+  const [drag, setDrag] = useState<BoardDragSnapshot | null>(null);
+  const dragRef = useRef<BoardDragSnapshot | null>(null);
   const deleteTriggerRef = useRef<HTMLButtonElement | null>(null);
   const cancelDeleteRef = useRef<HTMLButtonElement | null>(null);
   const boardHeadingRef = useRef<HTMLHeadingElement | null>(null);
@@ -791,6 +897,8 @@ export function BoardPage() {
     && confirmationTask?.revision === activeConfirmation.taskRevision;
   const confirmationStale = !!activeConfirmation && !!board.graph && !confirmationCurrent;
   const pendingForScope = pendingDelete?.scope === scope;
+  const pendingMoveForScope = pendingMove?.scope === scope;
+  const activeDrag = drag?.scope === scope ? drag : null;
   const confirmationForScope = !!activeConfirmation && confirmationCurrent && canDelete;
 
   useLayoutEffect(() => {
@@ -832,6 +940,113 @@ export function BoardPage() {
   const onConflict = useCallback(() => {
     if (isScopeCurrent(scope)) reload();
   }, [isScopeCurrent, reload, scope]);
+
+  const finishTaskDrag = useCallback(() => {
+    dragRef.current = null;
+    setDrag(null);
+  }, []);
+
+  const startTaskDrag = useCallback((task: BacklogTaskSnapshot) => {
+    const graph = board.graph;
+    const currentTask = graph?.tasks.find((candidate) => candidate.reference.taskId === task.reference.taskId);
+    if (!graph || !currentTask || !canWrite || !isScopeCurrent(scope)
+      || pendingDeleteRef.current?.scope === scope || pendingMoveRef.current || batchReadyBusy
+      || currentTask.reference.projectId !== projectId || currentTask.revision !== task.revision
+      || currentTask.isArchived || currentTask.isAutomationInvocationPending || currentTask.lifecycle !== 'open'
+      || currentTask.state !== 'backlog' && currentTask.state !== 'ready') return false;
+    const snapshot = {
+      taskId: currentTask.reference.taskId,
+      graphRevision: graph.revision,
+      taskRevision: currentTask.revision,
+      scope,
+    };
+    dragRef.current = snapshot;
+    setDrag(snapshot);
+    return true;
+  }, [batchReadyBusy, board.graph, canWrite, isScopeCurrent, projectId, scope]);
+
+  const moveTaskByDrop = useCallback(async (
+    taskId: string,
+    targetState: QueueState,
+    neighborTaskId: string | null,
+    placement: QueueDropPlacement,
+  ) => {
+    const requestScope = scope;
+    const snapshot = dragRef.current;
+    const graph = board.graph;
+    const finish = () => {
+      dragRef.current = null;
+      setDrag(null);
+    };
+    if (!snapshot || snapshot.taskId !== taskId || snapshot.scope !== requestScope
+      || !graph || !canWrite || pendingDeleteRef.current?.scope === requestScope
+      || pendingMoveRef.current || batchReadyBusy || !isScopeCurrent(requestScope)) {
+      finish();
+      return;
+    }
+
+    const task = graph.tasks.find((candidate) => candidate.reference.taskId === taskId);
+    if (!task || graph.revision !== snapshot.graphRevision || task.revision !== snapshot.taskRevision) {
+      finish();
+      setActionError('The board changed while you were dragging. It has been reloaded; try again.');
+      reload();
+      return;
+    }
+    if (task.reference.projectId !== projectId || task.isArchived || task.isAutomationInvocationPending
+      || task.lifecycle !== 'open' || task.state !== 'backlog' && task.state !== 'ready') {
+      finish();
+      return;
+    }
+
+    const position = queueDropPosition(graph, taskId, targetState, neighborTaskId, placement);
+    if (position === null) {
+      finish();
+      return;
+    }
+    const currentPosition = graph.tasks
+      .filter((candidate) => candidate.state === task.state)
+      .sort((left, right) =>
+        left.position - right.position || left.reference.taskId.localeCompare(right.reference.taskId))
+      .findIndex((candidate) => candidate.reference.taskId === taskId);
+    if (targetState === task.state && position === currentPosition) {
+      finish();
+      return;
+    }
+
+    const pending = { taskId, scope: requestScope };
+    pendingMoveRef.current = pending;
+    setPendingMove(pending);
+    finish();
+    setActionError(null);
+    setNotice(null);
+    try {
+      const next = await setTaskPosition(apiCall, graph, task, targetState, position, requestScope, isScopeCurrent);
+      if (!isScopeCurrent(requestScope)) return;
+      onSaved(next, targetState === task.state ? 'Task reordered.' : `Task moved to ${targetState === 'ready' ? 'Ready' : 'Backlog'}.`);
+    } catch (reason) {
+      if (!isScopeCurrent(requestScope)) return;
+      setActionError(boardErrorMessage(reason, 'mutate'));
+      if (reason instanceof BoardScopeChangedError
+        || reason instanceof GatewayError && (reason.status === 404 || reason.status === 409)) reload();
+    } finally {
+      if (pendingMoveRef.current === pending) {
+        pendingMoveRef.current = null;
+        if (isScopeCurrent(requestScope)) setPendingMove(null);
+      }
+    }
+  }, [
+    apiCall,
+    batchReadyBusy,
+    board.graph,
+    canWrite,
+    isScopeCurrent,
+    onSaved,
+    projectId,
+    reload,
+    scope,
+    setActionError,
+    setNotice,
+  ]);
 
   const openDeleteConfirmation = useCallback((
     graph: BacklogGraph,
@@ -969,7 +1184,7 @@ export function BoardPage() {
         title="Board"
         description="Queue work and record prerequisites; a run checks live eligibility when it claims a task."
         page="Board"
-        actions={<Button appearance="secondary" icon={<ArrowSyncRegular />} disabled={board.loading || pendingForScope} onClick={reload}>Refresh</Button>}
+        actions={<Button appearance="secondary" icon={<ArrowSyncRegular />} disabled={board.loading || pendingForScope || pendingMoveForScope} onClick={reload}>Refresh</Button>}
       />
 
       {/* The capture form is shown only to users who can write, and only once the board has loaded. */}
@@ -1058,14 +1273,14 @@ export function BoardPage() {
                   {countOf('done')} done
                 </Button>
               </div>
-              <Text className={styles.moveNote} data-testid="board-move-unavailable">{MOVE_UNAVAILABLE_COPY}</Text>
+              <Text className={styles.moveNote} data-testid="board-move-guidance">{MOVE_GUIDANCE_COPY}</Text>
             </div>
             <div className={styles.cardActions}>
               {canWrite && eligibleBacklogCount > 0 && (
                 <Button
                   appearance="secondary"
                   size="small"
-                  disabled={batchReadyBusy || board.loading || pendingForScope}
+                  disabled={batchReadyBusy || board.loading || pendingForScope || pendingMoveForScope}
                   onClick={() => void sendAllToReady()}
                 >
                   Send all to Ready
@@ -1085,7 +1300,12 @@ export function BoardPage() {
                     issues={board.issues}
                     canEdit={canWrite}
                     canDelete={canDelete}
-                    actionsDisabled={pendingForScope}
+                    actionsDisabled={pendingForScope || pendingMoveForScope || batchReadyBusy}
+                    draggingTaskId={activeDrag?.taskId ?? null}
+                    onDragStartTask={startTaskDrag}
+                    onDragEndTask={finishTaskDrag}
+                    onDropTask={(taskId, targetState, neighborTaskId, placement) =>
+                      void moveTaskByDrop(taskId, targetState, neighborTaskId, placement)}
                     deleteInFlight={pendingForScope}
                     onSaved={onSaved}
                     onConflict={onConflict}
