@@ -214,6 +214,75 @@ public sealed class ApiAcceptanceRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("project-readback-unavailable")]
+    [InlineData("assignment-readback-contradictory")]
+    public async Task SessionHistoryMetricCleanupRemainsIndeterminateUntilBothFinalReadbacksPass(string scenario)
+    {
+        string workspace = Path.Combine(AppContext.BaseDirectory, "acceptance-work", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        try
+        {
+            await using var gateway = await GatewayOpenApiParityTests.StartGatewayAsync();
+            string gatewayAddress = gateway.Services.GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+            using var artifactClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
+            using HttpResponseMessage artifactResponse = await artifactClient.GetAsync(
+                new Uri(new Uri(gatewayAddress), "/openapi/v1.json"));
+            artifactResponse.EnsureSuccessStatusCode();
+            JsonObject openApi = JsonNode.Parse(await artifactResponse.Content.ReadAsStringAsync())!.AsObject();
+            var trace = new ConcurrentQueue<string>();
+            var handler = new AcceptanceGatewayHandler(
+                openApi, trace, failCleanup: false, metricScenario: scenario)
+            {
+                GatewayOrigin = new Uri(gatewayAddress),
+            };
+            using var http = new HttpClient(handler);
+            var authentication = new TestAuthentication(trace);
+            var factory = new GatewayClientFactory(http, authentication);
+            var output = new StringWriter();
+            var runner = new ApiAcceptanceRunner(factory, authentication, new TestDeploymentEvidenceProvider(), output);
+            var runtime = new CliRuntimeOptions(
+                HttpClient: http,
+                GatewayClientFactory: factory,
+                Authentication: authentication,
+                AcceptanceRunner: runner,
+                Output: output,
+                Error: output);
+
+            string inputPath = Path.Combine(workspace, "manifest.json");
+            string evidencePath = Path.Combine(workspace, "evidence.jsonl");
+            await File.WriteAllTextAsync(inputPath,
+                CreateMetricManifest(workspace, handler.GatewayOrigin, omitSelectionContext: true).ToJsonString());
+
+            int exitCode = await CliApplication.RunAsync(
+                ["test", "--input", inputPath, "--output", evidencePath], runtime);
+            JsonObject result = JsonNode.Parse((await File.ReadAllLinesAsync(evidencePath)).Last())!.AsObject();
+            JsonObject cleanup = result["observations"]?["fixtureSetup"]?["cleanup"] as JsonObject ?? [];
+            RecordedRequest[] requests = handler.Requests.ToArray();
+
+            Assert.Equal(1, exitCode);
+            Assert.Equal("failed", result["surfaceStatus"]?.GetValue<string>());
+            Assert.Equal("indeterminate", cleanup["state"]?.GetValue<string>());
+            Assert.DoesNotContain("cleaned", cleanup["state"]?.GetValue<string>());
+            Assert.Contains(requests, request => request.OperationId == "cancelProjectRun");
+            Assert.Contains(requests, request =>
+                request.OperationId == "updateProject" && request.Body?["state"]?.GetValue<string>() == "archived");
+            Assert.Contains(requests, request => request.OperationId == "revokeProjectRoleAssignment");
+            Assert.Null(cleanup["projectReadback"]);
+            Assert.Null(cleanup["assignmentsReadback"]);
+            if (scenario == "project-readback-unavailable")
+                Assert.DoesNotContain(requests, request => request.OperationId == "listProjectRoleAssignments");
+            else
+                Assert.Contains(requests, request => request.OperationId == "listProjectRoleAssignments");
+        }
+        finally
+        {
+            if (Directory.Exists(workspace))
+                Directory.Delete(workspace, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task BoardDeleteCleansUpPartiallyAcknowledgedThirtyTwoCharacterProjectId()
     {
@@ -479,7 +548,8 @@ public sealed class ApiAcceptanceRunnerTests
                 Error: output);
             string inputPath = Path.Combine(workspace, "manifest.json");
             string evidencePath = Path.Combine(workspace, "evidence.jsonl");
-            await File.WriteAllTextAsync(inputPath, CreateManifest(workspace, new Uri("http://127.0.0.1:49241/")).ToJsonString());
+            await File.WriteAllTextAsync(inputPath, CreateMetricManifest(
+                workspace, new Uri("http://127.0.0.1:49241/"), omitSelectionContext: true).ToJsonString());
 
             int exitCode = await CliApplication.RunAsync(
                 ["test", "--input", inputPath, "--output", evidencePath, "--dry-run", "--interactive"],
@@ -587,6 +657,7 @@ public sealed class ApiAcceptanceRunnerTests
                     Assert.DoesNotContain(secret, await File.ReadAllTextAsync(evidencePath), StringComparison.Ordinal);
                 }
             }
+
             if (journey is "message" or "gate-answer" or "gate-approve" or "gate-reject")
             {
                 string receiptOperation = journey switch
@@ -1005,6 +1076,258 @@ public sealed class ApiAcceptanceRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task SessionHistoryMetricUsesOwnedRunAndVerifiesTerminalCleanup(
+        bool interactiveSelection,
+        bool wrongMetricCount)
+    {
+        string workspace = Path.Combine(AppContext.BaseDirectory, "acceptance-work", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        try
+        {
+            await using var gateway = await GatewayOpenApiParityTests.StartGatewayAsync();
+            string gatewayAddress = gateway.Services.GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+            using var artifactClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
+            using HttpResponseMessage artifactResponse = await artifactClient.GetAsync(
+                new Uri(new Uri(gatewayAddress), "/openapi/v1.json"));
+            artifactResponse.EnsureSuccessStatusCode();
+            JsonObject openApi = JsonNode.Parse(await artifactResponse.Content.ReadAsStringAsync())!.AsObject();
+
+            var trace = new ConcurrentQueue<string>();
+            var handler = new AcceptanceGatewayHandler(openApi, trace, failCleanup: false,
+                metricScenario: "metric-success", metricCount: wrongMetricCount ? 3 : 2)
+            {
+                GatewayOrigin = new Uri(gatewayAddress),
+            };
+            using var http = new HttpClient(handler);
+            var authentication = new TestAuthentication(trace);
+            var factory = new GatewayClientFactory(http, authentication);
+            var output = new StringWriter();
+            var runner = new ApiAcceptanceRunner(factory, authentication, new TestDeploymentEvidenceProvider(), output);
+            var runtime = new CliRuntimeOptions(
+                HttpClient: http,
+                GatewayClientFactory: factory,
+                Authentication: authentication,
+                AcceptanceRunner: runner,
+                Output: output,
+                Error: output);
+
+            JsonObject manifest = CreateMetricManifest(
+                workspace, handler.GatewayOrigin, omitSelectionContext: interactiveSelection);
+            string inputPath = Path.Combine(workspace, "manifest.json");
+            string evidencePath = Path.Combine(workspace, "evidence.jsonl");
+            await File.WriteAllTextAsync(inputPath, manifest.ToJsonString());
+
+            int exitCode = await CliApplication.RunAsync(
+                ["test", "--input", inputPath, "--output", evidencePath], runtime);
+            JsonObject result = JsonNode.Parse((await File.ReadAllLinesAsync(evidencePath)).Last())!.AsObject();
+            RecordedRequest[] requests = handler.Requests.ToArray();
+
+            Assert.True(exitCode == (wrongMetricCount ? 1 : 2),
+                $"Metric execution failed: {result["failure"]?["message"]}; " +
+                $"cleanup={result["observations"]?["fixtureSetup"]?["cleanup"]}; " +
+                $"operations={string.Join(",", requests.Select(request => request.OperationId))}");
+            Assert.Equal(wrongMetricCount ? "failed" : "passed", result["surfaceStatus"]?.GetValue<string>());
+            Assert.Equal(wrongMetricCount ? "failed" : "blocked", result["fullP1Status"]?.GetValue<string>());
+            Assert.Equal("cleaned", result["observations"]?["fixtureSetup"]?["cleanup"]?["state"]?.GetValue<string>());
+            if (wrongMetricCount)
+                Assert.Null(result["observations"]?["sessionHistoryMetric"]);
+            else
+                Assert.Equal(2, result["observations"]?["sessionHistoryMetric"]?["currentHistoryRecords"]?.GetValue<int>());
+
+            RecordedRequest rootRequest = Assert.Single(requests, request => request.OperationId == "acceptRunRoot");
+            JsonObject fixture = result["observations"]?["fixtureSetup"] as JsonObject ?? [];
+            JsonObject selection = fixture["selection"] as JsonObject ?? [];
+            string runId = ApiAcceptanceSupport.GetString(selection, "runId")!;
+            string rootSessionId = rootRequest.Body?["sessionId"]?.GetValue<string>()!;
+            Assert.Equal(runId, rootRequest.RunId);
+            Assert.Equal(rootSessionId, fixture["rootSessionId"]?.GetValue<string>());
+            Assert.Equal(AcceptanceGatewayHandler.MetricProjectId,
+                fixture["setup"]?["projectId"]?.GetValue<string>());
+            Assert.Equal(interactiveSelection ? "interactive-v1" : "selection-v1",
+                ApiAcceptanceSupport.GetString(selection, "contextRevision"));
+
+            if (interactiveSelection)
+            {
+                RecordedRequest create = Assert.Single(requests, request => request.OperationId == "createProjectRun");
+                Assert.Equal("Acceptance fixture request; no work is dispatched.",
+                    create.Body?["firstMessage"]?.GetValue<string>());
+                Assert.Equal(2, create.Body?.Count);
+                Assert.Equal(1, create.Body?["expectedProjectConfigRevision"]?.GetValue<long>());
+                Assert.Equal(ApiAcceptanceSupport.StableUuid(
+                    ApiAcceptanceSupport.GetString(fixture, "invocationId")!, "metric-create-run"),
+                    create.Headers["Idempotency-Key"]);
+                Assert.Equal(AcceptanceGatewayHandler.InteractiveRunId, runId);
+                Assert.Equal(AcceptanceGatewayHandler.InteractiveRootSessionId, rootSessionId);
+                Assert.DoesNotContain(requests, request => request.OperationId == "acceptRunSelection");
+                Assert.Equal(1, requests.Count(request => request.OperationId == "getRunSelection"));
+                Assert.Equal("effective", selection["snapshot"]?["selection"]?.GetValue<string>());
+                Assert.NotEqual(ApiAcceptanceSupport.StableUuid(
+                    ApiAcceptanceSupport.GetString(fixture, "invocationId")!, "run"), runId);
+                Assert.NotEqual(ApiAcceptanceSupport.StableUuid(
+                    ApiAcceptanceSupport.GetString(fixture, "invocationId")!, "root-session"), rootSessionId);
+            }
+            else
+            {
+                Assert.Single(requests, request => request.OperationId == "acceptRunSelection");
+                Assert.DoesNotContain(requests, request => request.OperationId == "createProjectRun");
+            }
+
+            Assert.DoesNotContain(requests, request => request.OperationId is
+                "startProjectRun" or "sendProjectRunMessage" or "sendMessage" or "selectWorkflow");
+            RecordedRequest cancel = Assert.Single(requests, request => request.OperationId == "cancelProjectRun");
+            Assert.Equal(runId, cancel.RunId);
+            Assert.Equal(ApiAcceptanceSupport.StableUuid(
+                ApiAcceptanceSupport.GetString(fixture, "invocationId")!, "metric-cancel-run"),
+                cancel.Headers["Idempotency-Key"]);
+            Assert.Equal("Acceptance fixture cleanup.", cancel.Body?["reason"]?.GetValue<string>());
+            string[] cancellationToken = cancel.Headers["Authorization"]["Bearer ".Length..].Split('~');
+            Assert.Equal("-", cancellationToken[2]);
+            Assert.Equal("-", cancellationToken[3]);
+            Assert.Contains("projects.orchestrator", cancellationToken[4].Split(',', StringSplitOptions.RemoveEmptyEntries));
+
+            int cancelIndex = Array.FindIndex(requests, request => request.OperationId == "cancelProjectRun");
+            int finalRunStatusIndex = Array.FindLastIndex(requests, request => request.OperationId == "readRunStatus");
+            int finalTreeIndex = Array.FindLastIndex(requests, request => request.OperationId == "readSessionTree");
+            int detachedStatusIndex = Array.FindLastIndex(requests, request =>
+                request.OperationId == "readSessionStatus"
+                && request.RunId == runId
+                && request.Headers["Authorization"]["Bearer ".Length..].Split('~').ElementAtOrDefault(2) != "-");
+            int archiveIndex = Array.FindIndex(requests, request =>
+                request.OperationId == "updateProject" && request.Body?["state"]?.GetValue<string>() == "archived");
+            Assert.True(cancelIndex >= 0 && cancelIndex < finalRunStatusIndex
+                && finalRunStatusIndex < finalTreeIndex && finalTreeIndex < detachedStatusIndex
+                && detachedStatusIndex < archiveIndex,
+                $"Cancellation, terminal readbacks, and archive order were incorrect: {string.Join(", ", requests.Select(request => request.OperationId))}");
+            RecordedRequest[] revokeRequests = requests.Where(request => request.OperationId == "revokeProjectRoleAssignment").ToArray();
+            Assert.Equal(2, revokeRequests.Length);
+            int lastRevokeIndex = Array.FindLastIndex(requests, request => request.OperationId == "revokeProjectRoleAssignment");
+            int firstRevokeIndex = Array.FindIndex(requests, request => request.OperationId == "revokeProjectRoleAssignment");
+            Assert.True(firstRevokeIndex < archiveIndex && archiveIndex < lastRevokeIndex,
+                "The Orchestrator must be revoked before archival, and Owner must remain until after archival.");
+            Assert.All(requests.Where(request =>
+                (request.OperationId is "readRunStatus" or "readSessionTree" or "readSessionStatus")
+                && request.RunId == runId && request.ProjectId.Length > 0),
+                request =>
+                {
+                    string[] token = request.Headers["Authorization"]["Bearer ".Length..].Split('~');
+                    Assert.Equal(fixture["setup"]?["projectId"]?.GetValue<string>(), token[2]);
+                    Assert.Equal(runId, token[3]);
+                    Assert.Contains("projects.orchestrator", token[4].Split(',', StringSplitOptions.RemoveEmptyEntries));
+                });
+            if (wrongMetricCount)
+                Assert.Contains("archived-inclusive, detached-exclusive", result["failure"]?["message"]?.GetValue<string>());
+
+            Assert.Equal("verified", fixture["cleanup"]?["runTerminalization"]?["acceptedRunReadback"]?.GetValue<string>());
+            Assert.Equal("verified", fixture["cleanup"]?["runTerminalization"]?["attachedHistoryReadback"]?.GetValue<string>());
+            Assert.Equal("verified", fixture["cleanup"]?["runTerminalization"]?["detachedSessionReadback"]?.GetValue<string>());
+            Assert.Equal(2, fixture["cleanup"]?["runTerminalization"]?["executionFence"]?.GetValue<long>());
+            Assert.Equal(1, fixture["cleanup"]?["runTerminalization"]?["stateVersion"]?.GetValue<long>());
+            Assert.Equal(ApiAcceptanceSupport.StableUuid(runId, "metric-detached-child"),
+                fixture["cleanup"]?["runTerminalization"]?["detachedSessionId"]?.GetValue<string>());
+            Assert.Equal("archived", fixture["cleanup"]?["projectReadback"]?.GetValue<string>());
+            Assert.Equal("empty", fixture["cleanup"]?["assignmentsReadback"]?.GetValue<string>());
+        }
+        finally
+        {
+            if (Directory.Exists(workspace))
+                Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("create-lost-response")]
+    [InlineData("selection-revision")]
+    [InlineData("selection-malformed-revision")]
+    [InlineData("selection-lost-response")]
+    [InlineData("run-auth-unavailable")]
+    [InlineData("cancel-failure")]
+    public async Task SessionHistoryMetricKeepsAmbiguousSetupOrCleanupIndeterminate(string scenario)
+    {
+        string workspace = Path.Combine(AppContext.BaseDirectory, "acceptance-work", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        try
+        {
+            await using var gateway = await GatewayOpenApiParityTests.StartGatewayAsync();
+            string gatewayAddress = gateway.Services.GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+            using var artifactClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
+            using HttpResponseMessage artifactResponse = await artifactClient.GetAsync(
+                new Uri(new Uri(gatewayAddress), "/openapi/v1.json"));
+            artifactResponse.EnsureSuccessStatusCode();
+            JsonObject openApi = JsonNode.Parse(await artifactResponse.Content.ReadAsStringAsync())!.AsObject();
+            var trace = new ConcurrentQueue<string>();
+            var handler = new AcceptanceGatewayHandler(openApi, trace, failCleanup: false, metricScenario: scenario)
+            {
+                GatewayOrigin = new Uri(gatewayAddress),
+            };
+            using var http = new HttpClient(handler);
+            var authentication = new TestAuthentication(trace,
+                failRunBoundRunId: scenario == "run-auth-unavailable"
+                    ? AcceptanceGatewayHandler.InteractiveRunId
+                    : null);
+            var factory = new GatewayClientFactory(http, authentication);
+            var output = new StringWriter();
+            var runner = new ApiAcceptanceRunner(factory, authentication, new TestDeploymentEvidenceProvider(), output);
+            var runtime = new CliRuntimeOptions(
+                HttpClient: http,
+                GatewayClientFactory: factory,
+                Authentication: authentication,
+                AcceptanceRunner: runner,
+                Output: output,
+                Error: output);
+
+            string inputPath = Path.Combine(workspace, "manifest.json");
+            string evidencePath = Path.Combine(workspace, "evidence.jsonl");
+            await File.WriteAllTextAsync(inputPath,
+                CreateMetricManifest(workspace, handler.GatewayOrigin, omitSelectionContext: true).ToJsonString());
+
+            int exitCode = await CliApplication.RunAsync(
+                ["test", "--input", inputPath, "--output", evidencePath], runtime);
+            JsonObject result = JsonNode.Parse((await File.ReadAllLinesAsync(evidencePath)).Last())!.AsObject();
+            JsonObject fixture = result["observations"]?["fixtureSetup"] as JsonObject ?? [];
+            JsonObject cleanup = fixture["cleanup"] as JsonObject ?? [];
+            RecordedRequest[] requests = handler.Requests.ToArray();
+
+            Assert.Equal(1, exitCode);
+            Assert.Equal("failed", result["surfaceStatus"]?.GetValue<string>());
+            Assert.Equal("indeterminate", cleanup["state"]?.GetValue<string>());
+            Assert.NotEqual("not-created", cleanup["state"]?.GetValue<string>());
+
+            if (scenario == "create-lost-response")
+            {
+                Assert.Single(requests, request => request.OperationId == "createProjectRun");
+                Assert.DoesNotContain(requests, request => request.OperationId == "cancelProjectRun");
+            }
+            else if (scenario is "selection-revision" or "selection-malformed-revision"
+                or "selection-lost-response" or "run-auth-unavailable")
+            {
+                Assert.Contains(requests, request => request.OperationId == "cancelProjectRun");
+                Assert.DoesNotContain(requests, request => request.OperationId is "acceptRunRoot" or "registerChild");
+                if (scenario == "run-auth-unavailable")
+                    Assert.DoesNotContain(requests, request => request.OperationId == "readRunStatus");
+            }
+            else
+            {
+                Assert.Single(requests, request => request.OperationId == "cancelProjectRun");
+                Assert.Contains(requests, request => request.OperationId == "readProjectMetrics");
+            }
+            Assert.DoesNotContain(requests, request => request.OperationId is
+                "revokeProjectRoleAssignment" or "updateProject");
+            Assert.DoesNotContain(cleanup["steps"]?.AsArray().OfType<JsonObject>() ?? [],
+                step => step["step"]?.GetValue<string>() is "archive-project" or "revoke-owner");
+        }
+        finally
+        {
+            if (Directory.Exists(workspace))
+                Directory.Delete(workspace, recursive: true);
+        }
+    }
+
     private static JsonObject CreateManifest(string workspace, Uri gateway, string journey = "message")
     {
         const string sourceSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -1069,6 +1392,16 @@ public sealed class ApiAcceptanceRunnerTests
                 ["deniedActor"] = new JsonObject { ["actorId"] = "denied", ["tenantId"] = "tenant-denied" },
             },
         };
+    }
+
+    private static JsonObject CreateMetricManifest(string workspace, Uri gateway, bool omitSelectionContext)
+    {
+        JsonObject manifest = CreateManifest(workspace, gateway, "session-history-metric");
+        JsonObject plan = manifest["fixturePlan"]!.AsObject();
+        plan.Remove("deniedActor");
+        if (omitSelectionContext)
+            plan.Remove("selectionContext");
+        return manifest;
     }
 
     private static JsonObject CreateBoardManifest() => new()
@@ -1158,6 +1491,7 @@ public sealed class ApiAcceptanceRunnerTests
                 ["agentHostImageMeasurement"] = new JsonObject { ["status"] = "passed" },
             });
         }
+
     }
 
     private sealed class BlockingDeploymentEvidenceProvider : IAcceptanceDeploymentEvidenceProvider
@@ -1186,7 +1520,9 @@ public sealed class ApiAcceptanceRunnerTests
             throw new InvalidOperationException("The dry-run path must not issue HTTP requests.");
     }
 
-    private sealed class TestAuthentication(ConcurrentQueue<string> trace) : ICliAuthentication
+    private sealed class TestAuthentication(
+        ConcurrentQueue<string> trace,
+        string? failRunBoundRunId = null) : ICliAuthentication
     {
         public Task<CliAuthStatus> LoginAsync(CliIdentity identity, CancellationToken ct) =>
             Task.FromResult(new CliAuthStatus(true, "owner", identity));
@@ -1211,6 +1547,8 @@ public sealed class ApiAcceptanceRunnerTests
             string binding = identity.ProjectId is null ? "unbound" : "project-bound";
             string scopes = string.Join(',', identity.Scopes.Order(StringComparer.Ordinal));
             trace.Enqueue($"auth:{actor}:{interaction}:{binding}:{scopes}");
+            if (failRunBoundRunId is not null && identity.RunId == failRunBoundRunId)
+                throw new InvalidOperationException("Controlled run-bound authorization failure.");
             return Task.FromResult(string.Join('~', actor, identity.Target.TenantId,
                 identity.ProjectId ?? "-", identity.RunId ?? "-", scopes));
         }
@@ -1219,6 +1557,9 @@ public sealed class ApiAcceptanceRunnerTests
     private sealed class AcceptanceGatewayHandler : HttpMessageHandler
     {
         public const string BoardProjectId = "11111111111141118111111111111111";
+        public const string MetricProjectId = "cccccccccccccccccccccccccccccccc";
+        public const string InteractiveRunId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        public const string InteractiveRootSessionId = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         private const string P1ProjectId = "11111111-1111-4111-8111-111111111111";
         private readonly JsonObject _openApi;
         private readonly IReadOnlyDictionary<string, GatewayOperation> _operations;
@@ -1233,17 +1574,35 @@ public sealed class ApiAcceptanceRunnerTests
         private readonly string? _malformedBoardSnapshot;
         private readonly string? _ownerDenialScenario;
         private readonly CancellationTokenSource? _cancelOnMessage;
+        private readonly string? _metricScenario;
+        private readonly int _metricCount;
         private int _revokeCalls;
         private string? _rootSessionId;
+        private string? _runId;
         private string? _childSessionId;
+        private string? _metricArchivedChildId;
+        private string? _metricDetachedChildId;
         private JsonObject? _selection;
         private JsonObject? _pendingGate;
         private long _stateVersion;
+        private long _executionFence;
+        private long _runStateVersion;
+        private long _rootStateVersion;
+        private long _archivedChildStateVersion;
+        private long _detachedChildStateVersion;
+        private bool _runCancelled;
+        private bool _metricArchived;
+        private bool _metricDetached;
+        private bool _metricChildCompleted;
         private readonly List<JsonObject> _boardTasks = [];
+        private readonly List<JsonObject> _assignments = [];
         private readonly List<(string TaskId, string PrerequisiteId)> _boardDependencies = [];
         private long _boardGraphRevision;
         private long _boardProjectRevision = 1;
+        private long _projectRevision = 1;
+        private string? _projectId;
         private string? _boardProjectName;
+        private bool _projectArchived;
         private bool _boardOwner;
         private bool _boardProject;
         private readonly List<JsonObject> _journalEvents = [];
@@ -1265,7 +1624,9 @@ public sealed class ApiAcceptanceRunnerTests
             bool preserveCompactedTaskRevision = false,
             bool failFirstBoardTaskEdit = false,
             string? malformedBoardSnapshot = null,
-            string? ownerDenialScenario = null)
+            string? ownerDenialScenario = null,
+            string? metricScenario = null,
+            int metricCount = 2)
         {
             _openApi = (JsonObject)openApi.DeepClone();
             _operations = GatewayContract.Parse(_openApi);
@@ -1280,6 +1641,8 @@ public sealed class ApiAcceptanceRunnerTests
             _malformedBoardSnapshot = malformedBoardSnapshot;
             _ownerDenialScenario = ownerDenialScenario;
             _cancelOnMessage = cancelOnMessage;
+            _metricScenario = metricScenario;
+            _metricCount = metricCount;
             GatewayOrigin = new Uri("http://127.0.0.1:49241/");
         }
 
@@ -1358,15 +1721,19 @@ public sealed class ApiAcceptanceRunnerTests
             {
                 "createProject" or "assignProjectRole" or "getProjectConfiguration"
                     or "revokeProjectRoleAssignment" or "updateProject" => "projects.admin",
-                "acceptRunSelection" or "getRunSelection" or "acceptRunRoot" or "readRunStatus"
+                "acceptRunSelection" or "getRunSelection" or "createProjectRun" or "cancelProjectRun"
+                    or "acceptRunRoot" or "readRunStatus"
                     or "readSessionStatus" or "registerChild" or "readSessionTree" or "readDecisions"
                     or "askQuestion" or "requestApproval" or "answerGate" or "approveGate" or "rejectGate"
-                    or "sendProjectRunMessage" or "replayRunEvents" or "sendMessage" => "projects.orchestrator",
+                    or "sendProjectRunMessage" or "replayRunEvents" or "sendMessage"
+                    or "advanceTurnBoundary" or "completeTurn" or "archiveChild" or "detachSession"
+                    or "readProjectMetrics" => "projects.orchestrator",
                 _ => null,
             };
-            bool selectionOperation = operation.OperationId is "acceptRunSelection" or "getRunSelection";
+            bool selectionOperation = operation.OperationId is "acceptRunSelection" or "getRunSelection" or "createProjectRun";
+            bool unboundRunOperation = operation.OperationId is "createProjectRun" or "cancelProjectRun";
             bool invalidBinding = requiredScope == "projects.orchestrator"
-                && (selectionOperation
+                && (selectionOperation || unboundRunOperation
                     ? token.ElementAtOrDefault(2) != "-" || token.ElementAtOrDefault(3) != "-"
                     : token.ElementAtOrDefault(2) == "-" || token.ElementAtOrDefault(3) == "-");
             if (requiredScope is not null
@@ -1407,19 +1774,27 @@ public sealed class ApiAcceptanceRunnerTests
                 "createProject" => CreateProject(body),
                 "getProject" => ReadProject(projectId),
                 "assignProjectRole" => Assignment(body, projectId, actor),
+                "listProjectRoleAssignments" => ListAssignments(projectId),
                 "getProjectConfiguration" => Json(HttpStatusCode.OK, new JsonObject
                 {
                     ["projectId"] = projectId,
                     ["revision"] = 1,
                 }),
                 "acceptRunSelection" => AcceptSelection(body, projectId, runId),
-                "getRunSelection" => Json(HttpStatusCode.OK, (JsonObject)_selection!.DeepClone()),
+                "getRunSelection" => GetRunSelection(),
+                "createProjectRun" => CreateInteractiveRun(body, projectId),
+                "cancelProjectRun" => CancelRun(projectId, runId),
                 "acceptRunRoot" => AcceptRoot(body, projectId, runId),
                 "readRunStatus" => RunStatus(projectId, runId),
                 "readSessionStatus" => SessionStatus(projectId, runId, parameters.GetValueOrDefault("sessionId") ?? ""),
                 "registerChild" => RegisterChild(body, projectId, runId),
                 "readSessionTree" => SessionTree(projectId, runId),
                 "readDecisions" => ReadDecisions(),
+                "advanceTurnBoundary" => AdvanceTurnBoundary(body, parameters.GetValueOrDefault("sessionId") ?? ""),
+                "completeTurn" => CompleteTurn(body, parameters.GetValueOrDefault("sessionId") ?? ""),
+                "archiveChild" => ArchiveChild(body, parameters),
+                "detachSession" => DetachChild(body, parameters.GetValueOrDefault("sessionId") ?? ""),
+                "readProjectMetrics" => ReadProjectMetrics(projectId),
                 "askQuestion" or "requestApproval" => CreateGate(body, actor),
                 "answerGate" or "approveGate" or "rejectGate" => ResolveGate(),
                 "sendProjectRunMessage" => JournalMessage(projectId, runId, actor),
@@ -1469,10 +1844,12 @@ public sealed class ApiAcceptanceRunnerTests
         private HttpResponseMessage AcceptSelection(JsonObject? body, string projectId, string runId)
         {
             JsonObject context = body?["context"] as JsonObject ?? [];
+            _runId = runId;
             _selection = new JsonObject
             {
                 ["projectId"] = projectId,
                 ["runId"] = runId,
+                ["projectRevision"] = 1,
                 ["projectConfigurationRevision"] = body?["expectedProjectConfigRevision"]?.DeepClone(),
                 ["platformRuntimeRevision"] = body?["expectedPlatformRuntimeRevision"]?.DeepClone(),
                 ["contextRevision"] = context["revision"]?.DeepClone(),
@@ -1480,31 +1857,119 @@ public sealed class ApiAcceptanceRunnerTests
             return Json(HttpStatusCode.OK, (JsonObject)_selection.DeepClone());
         }
 
+        private HttpResponseMessage CreateInteractiveRun(JsonObject? body, string projectId)
+        {
+            _runId = InteractiveRunId;
+            _rootSessionId = InteractiveRootSessionId;
+            _executionFence = 0;
+            _runStateVersion = 0;
+            _rootStateVersion = 0;
+            _runCancelled = false;
+            _selection = new JsonObject
+            {
+                ["projectId"] = projectId,
+                ["runId"] = _runId,
+                ["projectRevision"] = 1,
+                ["projectConfigurationRevision"] = body?["expectedProjectConfigRevision"]?.DeepClone(),
+                ["platformRuntimeRevision"] = 1,
+                ["contextRevision"] = "interactive-v1",
+                ["snapshot"] = new JsonObject { ["selection"] = "effective" },
+            };
+            if (_metricScenario == "selection-revision")
+                _selection["projectConfigurationRevision"] = 2L;
+            if (_metricScenario == "selection-malformed-revision")
+                _selection["platformRuntimeRevision"] = "1";
+            if (_metricScenario == "create-lost-response")
+                return Json(HttpStatusCode.ServiceUnavailable, new JsonObject { ["title"] = "Creation response lost" });
+            return Json(HttpStatusCode.Created, new JsonObject
+            {
+                ["runId"] = _runId,
+                ["rootSessionId"] = _rootSessionId,
+                ["state"] = "awaiting_binding",
+                ["binding"] = new JsonObject { ["projectId"] = projectId, ["runId"] = _runId },
+            });
+        }
+
+        private HttpResponseMessage GetRunSelection() =>
+            _metricScenario == "selection-lost-response"
+                ? Json(HttpStatusCode.ServiceUnavailable, new JsonObject { ["title"] = "Selection readback unavailable" })
+                : Json(HttpStatusCode.OK, (JsonObject)_selection!.DeepClone());
+
+        private HttpResponseMessage CancelRun(string projectId, string runId)
+        {
+            if (_metricScenario == "cancel-failure")
+                return Json(HttpStatusCode.ServiceUnavailable, new JsonObject { ["title"] = "Cancellation unavailable" });
+            if (_executionFence > 0 && !_runCancelled)
+            {
+                _runCancelled = true;
+                _executionFence++;
+                _runStateVersion++;
+                _rootStateVersion++;
+                _archivedChildStateVersion++;
+                _detachedChildStateVersion++;
+            }
+            return Json(HttpStatusCode.OK, new JsonObject
+            {
+                ["runId"] = runId,
+                ["state"] = "cancelled",
+                ["cancelledAt"] = "2026-11-03T17:00:00Z",
+                ["alreadyTerminal"] = false,
+            });
+        }
+
         private HttpResponseMessage AcceptRoot(JsonObject? body, string projectId, string runId)
         {
             _rootSessionId = body?["sessionId"]?.GetValue<string>();
+            _runId = runId;
+            _executionFence = 1;
+            _runStateVersion = 0;
+            _rootStateVersion = 0;
+            _runCancelled = false;
             return Json(HttpStatusCode.Created, new JsonObject
             {
                 ["projectId"] = projectId,
                 ["runId"] = runId,
                 ["rootSessionId"] = _rootSessionId,
-                ["executionFence"] = 1,
-                ["stateVersion"] = 0,
+                ["executionFence"] = _executionFence,
+                ["stateVersion"] = _rootStateVersion,
             });
         }
 
         private HttpResponseMessage RunStatus(string projectId, string runId) =>
-            Json(HttpStatusCode.OK, new JsonObject
+            _executionFence == 0
+                ? Json(HttpStatusCode.NotFound, new JsonObject { ["title"] = "No accepted run" })
+                : Json(HttpStatusCode.OK, new JsonObject
             {
                 ["projectId"] = projectId,
                 ["runId"] = runId,
                 ["rootSessionId"] = _rootSessionId,
-                ["executionFence"] = 1,
-                ["stateVersion"] = 0,
+                ["executionFence"] = _executionFence,
+                ["stateVersion"] = _runStateVersion,
+                ["executionState"] = _runCancelled ? "cancelled" : "running",
             });
 
-        private HttpResponseMessage SessionStatus(string projectId, string runId, string sessionId) =>
-            Json(HttpStatusCode.OK, new JsonObject
+        private HttpResponseMessage SessionStatus(string projectId, string runId, string sessionId)
+        {
+            if (_executionFence == 0)
+                return Json(HttpStatusCode.NotFound, new JsonObject { ["title"] = "No accepted run" });
+            string rootSessionId = sessionId == _metricDetachedChildId && _metricDetached
+                ? _metricDetachedChildId!
+                : _rootSessionId!;
+            string lifecycle = sessionId == _rootSessionId
+                ? _runCancelled ? "cancelled" : "active"
+                : sessionId == _metricArchivedChildId
+                    ? _metricArchived ? "archived" : _metricChildCompleted ? "completed" : "active"
+                    : sessionId == _metricDetachedChildId
+                        ? _runCancelled ? "cancelled" : "active"
+                        : "active";
+            long stateVersion = sessionId == _rootSessionId
+                ? _rootStateVersion
+                : sessionId == _metricArchivedChildId
+                    ? _archivedChildStateVersion
+                    : sessionId == _metricDetachedChildId
+                        ? _detachedChildStateVersion
+                        : _stateVersion;
+            return Json(HttpStatusCode.OK, new JsonObject
             {
                 ["identity"] = new JsonObject
                 {
@@ -1512,8 +1977,11 @@ public sealed class ApiAcceptanceRunnerTests
                     ["runId"] = runId,
                     ["sessionId"] = sessionId,
                 },
-                ["rootSessionId"] = _rootSessionId,
-                ["executionFence"] = 1,
+                ["rootSessionId"] = rootSessionId,
+                ["detached"] = sessionId == _metricDetachedChildId && _metricDetached,
+                ["lifecycle"] = lifecycle,
+                ["executionFence"] = _executionFence,
+                ["stateVersion"] = stateVersion,
                 ["blockers"] = _pendingGate is null
                     ? new JsonArray()
                     : new JsonArray(new JsonObject
@@ -1526,31 +1994,139 @@ public sealed class ApiAcceptanceRunnerTests
                         ["allowsFreeform"] = _pendingGate["allowsFreeform"]?.DeepClone(),
                     }),
             });
+        }
 
         private HttpResponseMessage RegisterChild(JsonObject? body, string projectId, string runId)
         {
-            _childSessionId = body?["sessionId"]?.GetValue<string>();
+            string? sessionId = body?["sessionId"]?.GetValue<string>();
+            _runId = runId;
+            if (sessionId == ApiAcceptanceSupport.StableUuid(runId, "metric-archived-child"))
+            {
+                _metricArchivedChildId = sessionId;
+                _archivedChildStateVersion = 1;
+                _metricArchived = false;
+                _metricChildCompleted = false;
+            }
+            else if (sessionId == ApiAcceptanceSupport.StableUuid(runId, "metric-detached-child"))
+            {
+                _metricDetachedChildId = sessionId;
+                _detachedChildStateVersion = 1;
+                _metricDetached = false;
+            }
+            else
+            {
+                _childSessionId = sessionId;
+            }
             return Json(HttpStatusCode.Created, new JsonObject
             {
                 ["identity"] = new JsonObject
                 {
                     ["projectId"] = projectId,
                     ["runId"] = runId,
-                    ["sessionId"] = _childSessionId,
+                    ["sessionId"] = sessionId,
                 },
             });
         }
 
-        private HttpResponseMessage SessionTree(string projectId, string runId) =>
-            Json(HttpStatusCode.OK, new JsonObject
+        private HttpResponseMessage SessionTree(string projectId, string runId)
+        {
+            JsonArray nodes = new(Node(projectId, runId, _rootSessionId!));
+            if (_metricArchivedChildId is not null)
+                nodes.Add(Node(projectId, runId, _metricArchivedChildId));
+            if (_metricDetachedChildId is not null && !_metricDetached)
+                nodes.Add(Node(projectId, runId, _metricDetachedChildId));
+            if (_childSessionId is not null)
+                nodes.Add(Node(projectId, runId, _childSessionId));
+            return Json(HttpStatusCode.OK, new JsonObject
             {
                 ["rootSessionId"] = _rootSessionId,
-                ["nodes"] = new JsonArray(
-                    Node(projectId, runId, _rootSessionId!),
-                    Node(projectId, runId, _childSessionId!)),
+                ["nodes"] = nodes,
             });
+        }
 
-        private static JsonObject Node(string projectId, string runId, string sessionId) => new()
+        private HttpResponseMessage AdvanceTurnBoundary(JsonObject? body, string sessionId)
+        {
+            if (sessionId != _metricArchivedChildId
+                || body?["executionFence"]?.GetValue<long>() != _executionFence
+                || body?["expectedStateVersion"]?.GetValue<long>() != _archivedChildStateVersion
+                || _metricArchived)
+                return Json(HttpStatusCode.Conflict, new JsonObject { ["title"] = "Stale metric child" });
+            _archivedChildStateVersion++;
+            return Json(HttpStatusCode.OK, new JsonObject
+            {
+                ["session"] = new JsonObject { ["sessionId"] = sessionId },
+                ["executionFence"] = _executionFence,
+                ["stateVersion"] = _archivedChildStateVersion,
+            });
+        }
+
+        private HttpResponseMessage CompleteTurn(JsonObject? body, string sessionId)
+        {
+            if (sessionId != _metricArchivedChildId
+                || body?["executionFence"]?.GetValue<long>() != _executionFence
+                || body?["expectedStateVersion"]?.GetValue<long>() != _archivedChildStateVersion
+                || _metricArchived)
+                return Json(HttpStatusCode.Conflict, new JsonObject { ["title"] = "Stale metric child" });
+            _archivedChildStateVersion++;
+            _metricChildCompleted = true;
+            return Json(HttpStatusCode.OK, new JsonObject
+            {
+                ["session"] = new JsonObject { ["sessionId"] = sessionId },
+                ["executionFence"] = _executionFence,
+                ["stateVersion"] = _archivedChildStateVersion,
+                ["executionState"] = "completed",
+            });
+        }
+
+        private HttpResponseMessage ArchiveChild(JsonObject? body, IReadOnlyDictionary<string, string> parameters)
+        {
+            string childSessionId = parameters.GetValueOrDefault("childSessionId") ?? "";
+            if (parameters.GetValueOrDefault("parentSessionId") != _rootSessionId
+                || childSessionId != _metricArchivedChildId
+                || body?["executionFence"]?.GetValue<long>() != _executionFence
+                || _archivedChildStateVersion < 3)
+                return Json(HttpStatusCode.Conflict, new JsonObject { ["title"] = "Metric child is not archivable" });
+            _metricArchived = true;
+            return Json(HttpStatusCode.OK, new JsonObject
+            {
+                ["command"] = "archive",
+                ["sourceSessionId"] = _rootSessionId,
+                ["targetSessionId"] = childSessionId,
+                ["state"] = "archived",
+                ["executionFence"] = _executionFence,
+            });
+        }
+
+        private HttpResponseMessage DetachChild(JsonObject? body, string sessionId)
+        {
+            if (sessionId != _metricDetachedChildId
+                || body?["executionFence"]?.GetValue<long>() != _executionFence
+                || _metricDetached)
+                return Json(HttpStatusCode.Conflict, new JsonObject { ["title"] = "Metric child is not detachable" });
+            _metricDetached = true;
+            return Json(HttpStatusCode.OK, new JsonObject
+            {
+                ["command"] = "detach",
+                ["sourceSessionId"] = sessionId,
+                ["state"] = "detached",
+                ["executionFence"] = _executionFence,
+            });
+        }
+
+        private HttpResponseMessage ReadProjectMetrics(string projectId) =>
+            projectId == _projectId && _metricArchived && _metricDetached
+                ? Json(HttpStatusCode.OK, new JsonObject
+                {
+                    ["projectId"] = projectId,
+                    ["from"] = "2000-01-01T00:00:00Z",
+                    ["to"] = "2000-01-02T00:00:00Z",
+                    ["runsInRange"] = 0,
+                    ["runsTotal"] = 1,
+                    ["sessionHistoryRecordsTotal"] = _metricCount,
+                })
+                : Json(HttpStatusCode.Conflict, new JsonObject { ["title"] = "Metric fixture is incomplete" });
+
+        private JsonObject Node(string projectId, string runId, string sessionId) => new()
         {
             ["identity"] = new JsonObject
             {
@@ -1558,7 +2134,24 @@ public sealed class ApiAcceptanceRunnerTests
                 ["runId"] = runId,
                 ["sessionId"] = sessionId,
             },
-            ["lifecycle"] = "active",
+            ["parentSessionId"] = sessionId == _rootSessionId ? null : _rootSessionId,
+            ["rootSessionId"] = _rootSessionId,
+            ["detached"] = sessionId == _metricDetachedChildId && _metricDetached,
+            ["lifecycle"] = sessionId == _rootSessionId
+                ? _runCancelled ? "cancelled" : "active"
+                : sessionId == _metricArchivedChildId && _metricArchived
+                    ? "archived"
+                    : sessionId == _metricArchivedChildId && _metricChildCompleted
+                        ? "completed"
+                        : _runCancelled ? "cancelled" : "active",
+            ["executionFence"] = _executionFence,
+            ["stateVersion"] = sessionId == _rootSessionId
+                ? _rootStateVersion
+                : sessionId == _metricArchivedChildId
+                    ? _archivedChildStateVersion
+                    : sessionId == _metricDetachedChildId
+                        ? _detachedChildStateVersion
+                        : 0L,
         };
 
         private HttpResponseMessage CreateProject(JsonObject? body)
@@ -1569,9 +2162,15 @@ public sealed class ApiAcceptanceRunnerTests
             _boardOwner = false;
             _boardGraphRevision = 0;
             _boardProjectRevision = 1;
+            _projectRevision = 1;
+            _projectArchived = false;
+            _assignments.Clear();
             _boardTasks.Clear();
             _boardDependencies.Clear();
-            string projectId = _boardProject ? BoardProjectId : P1ProjectId;
+            string projectId = _boardProject
+                ? BoardProjectId
+                : _metricScenario is not null ? MetricProjectId : P1ProjectId;
+            _projectId = projectId;
             return Json(HttpStatusCode.Created, new JsonObject
             {
                 ["projectId"] = projectId,
@@ -1589,34 +2188,77 @@ public sealed class ApiAcceptanceRunnerTests
                 return Json(HttpStatusCode.Conflict, new JsonObject { ["title"] = "Controlled assignment rejection" });
             if (_boardProject && projectId == BoardProjectId && role == "owner")
                 _boardOwner = actor == "owner";
-            return Json(HttpStatusCode.Created, new JsonObject
+            JsonObject assignment = new()
             {
                 ["assignmentId"] = role == "owner"
                     ? "22222222-2222-4222-8222-222222222222"
                     : "33333333-3333-4333-8333-333333333333",
                 ["projectId"] = projectId,
-                ["principalId"] = actor,
+                ["principalId"] = body?["principalId"]?.DeepClone(),
                 ["role"] = role,
                 ["state"] = "active",
                 ["revision"] = 1,
                 ["grantedBy"] = actor,
-            });
+            };
+            _assignments.Add((JsonObject)assignment.DeepClone());
+            return Json(HttpStatusCode.Created, assignment);
         }
 
-        private HttpResponseMessage ReadProject(string projectId) =>
-            projectId == BoardProjectId && _boardProject
+        private HttpResponseMessage ReadProject(string projectId)
+        {
+            if (_metricScenario == "project-readback-unavailable"
+                && projectId == _projectId && _projectArchived)
+                return Json(HttpStatusCode.ServiceUnavailable, new JsonObject { ["title"] = "Project readback unavailable" });
+            return projectId == BoardProjectId && _boardProject
                 ? Json(HttpStatusCode.OK, new JsonObject
                 {
                     ["projectId"] = BoardProjectId,
                     ["name"] = _boardProjectName,
-                    ["state"] = "active",
+                    ["state"] = _projectArchived ? "archived" : "active",
                     ["revision"] = _boardProjectRevision,
                     ["configurationRevision"] = 1L,
                     ["createdAt"] = "2026-11-02T00:00:00Z",
                     ["updatedAt"] = "2026-11-02T00:00:00Z",
                     ["effectiveRoles"] = new JsonArray(),
                 })
+                : projectId == _projectId
+                    ? Json(HttpStatusCode.OK, new JsonObject
+                    {
+                        ["projectId"] = _projectId,
+                        ["name"] = _boardProjectName,
+                            ["state"] = _projectArchived && _metricScenario != "project-readback-contradictory"
+                                ? "archived" : "active",
+                            ["revision"] = _projectRevision,
+                        ["configurationRevision"] = 1L,
+                        ["createdAt"] = "2026-11-03T00:00:00Z",
+                        ["updatedAt"] = "2026-11-03T00:00:00Z",
+                        ["effectiveRoles"] = new JsonArray(),
+                    })
                 : Json(HttpStatusCode.NotFound, new JsonObject { ["title"] = "Unknown project" });
+        }
+
+        private HttpResponseMessage ListAssignments(string projectId)
+        {
+            JsonArray assignments = new(_assignments
+                .Where(assignment => ApiAcceptanceSupport.GetString(assignment, "state") == "active")
+                .Select(assignment => assignment.DeepClone()).ToArray());
+            if (_metricScenario == "assignment-readback-contradictory")
+            {
+                assignments.Add(new JsonObject
+                {
+                    ["assignmentId"] = "44444444-4444-4444-8444-444444444444",
+                    ["projectId"] = projectId,
+                    ["principalId"] = "owner",
+                    ["role"] = "owner",
+                    ["state"] = "active",
+                });
+            }
+            return Json(HttpStatusCode.OK, new JsonObject
+            {
+                ["projectId"] = projectId,
+                ["assignments"] = assignments,
+            });
+        }
 
         private HttpResponseMessage ReadBoard(string projectId) =>
             projectId == BoardProjectId
@@ -1907,6 +2549,14 @@ public sealed class ApiAcceptanceRunnerTests
             string assignmentId = parameters["assignmentId"];
             string role = assignmentId.StartsWith("2222", StringComparison.Ordinal) ? "owner" : "orchestrator";
             long expectedRevision = long.Parse(query["expectedRevision"], System.Globalization.CultureInfo.InvariantCulture);
+            JsonObject? assignment = _assignments.SingleOrDefault(value =>
+                ApiAcceptanceSupport.GetString(value, "assignmentId") == assignmentId);
+            if (assignment is not null)
+            {
+                assignment["state"] = "revoked";
+                assignment["revision"] = expectedRevision + 1;
+                assignment["revokedBy"] = actor;
+            }
             return Json(HttpStatusCode.OK, new JsonObject
             {
                 ["assignmentId"] = assignmentId,
@@ -1920,15 +2570,27 @@ public sealed class ApiAcceptanceRunnerTests
             });
         }
 
-        private static HttpResponseMessage UpdateProject(JsonObject? body, string projectId) =>
-            Json(HttpStatusCode.OK, new JsonObject
+        private HttpResponseMessage UpdateProject(JsonObject? body, string projectId)
+        {
+            long expectedRevision = body?["expectedRevision"]?.GetValue<long>() ?? -1;
+            long currentRevision = _boardProject ? _boardProjectRevision : _projectRevision;
+            if (projectId != _projectId || expectedRevision != currentRevision
+                || ApiAcceptanceSupport.GetString(body ?? [], "state") != "archived")
+                return Json(HttpStatusCode.Conflict, new JsonObject { ["title"] = "Stale project revision" });
+            _projectArchived = true;
+            if (_boardProject)
+                _boardProjectRevision++;
+            else
+                _projectRevision++;
+            return Json(HttpStatusCode.OK, new JsonObject
             {
                 ["projectId"] = projectId,
                 ["name"] = body?["name"]?.DeepClone(),
                 ["state"] = "archived",
-                ["revision"] = 2,
+                ["revision"] = currentRevision + 1,
                 ["configurationRevision"] = 1,
             });
+        }
 
         private static Dictionary<string, string> ParseQuery(string query) =>
             query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)

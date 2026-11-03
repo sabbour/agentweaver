@@ -115,6 +115,75 @@ public sealed class ApiAcceptanceManifestTests
         }
     }
 
+    [Fact]
+    public async Task SessionHistoryMetricAllowsAnAbsentSelectionContext()
+    {
+        JsonObject root = SessionHistoryMetricManifest();
+        root["fixturePlan"]!.AsObject().Remove("selectionContext");
+        string path = WriteManifest(root);
+        try
+        {
+            AcceptanceManifest manifest = await ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None);
+
+            Assert.Equal("session-history-metric", manifest.Journey);
+            Assert.False(manifest.FixturePlan.ContainsKey("selectionContext"));
+            Assert.Equal(1L, manifest.FixturePlan["expectedPlatformRuntimeRevision"]?.GetValue<long>());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task SessionHistoryMetricStillRejectsExplicitNullOrMalformedSelectionContext()
+    {
+        foreach (JsonObject? context in new JsonObject?[]
+        {
+            null,
+            new JsonObject
+            {
+                ["revision"] = "selection-1",
+                ["availableModelSelectionReferences"] = new JsonArray(),
+                ["providerRequirements"] = new JsonArray(),
+                ["requiredEgress"] = new JsonArray(),
+                ["unexpected"] = true,
+            },
+        })
+        {
+            JsonObject root = SessionHistoryMetricManifest();
+            root["fixturePlan"]!["selectionContext"] = context?.DeepClone();
+            string path = WriteManifest(root);
+            try
+            {
+                await Assert.ThrowsAsync<InvalidDataException>(
+                    () => ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None));
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task SessionHistoryMetricRetainsExplicitRawSelectionContext()
+    {
+        JsonObject root = SessionHistoryMetricManifest();
+        string path = WriteManifest(root);
+        try
+        {
+            AcceptanceManifest manifest = await ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None);
+
+            Assert.Equal("selection-1", ApiAcceptanceSupport.GetString(
+                manifest.FixturePlan["selectionContext"]!.AsObject(), "revision"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     private static JsonObject BoardManifest() => new()
     {
         ["executionIntent"] = "execute",
@@ -195,6 +264,17 @@ public sealed class ApiAcceptanceManifestTests
             ["message"] = null,
         },
     };
+
+    private static JsonObject SessionHistoryMetricManifest()
+    {
+        JsonObject root = P1Manifest();
+        root["journey"] = "session-history-metric";
+        JsonObject plan = root["fixturePlan"]!.AsObject();
+        plan["gate"] = null;
+        plan["message"] = null;
+        plan.Remove("deniedActor");
+        return root;
+    }
 
     private static JsonObject SourceReceipt(string sourceSha, string sourceTree) => new()
     {

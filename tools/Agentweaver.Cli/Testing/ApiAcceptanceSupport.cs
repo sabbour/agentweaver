@@ -30,6 +30,12 @@ internal sealed class AcceptanceFixtureState(string invocationId)
     public bool SetupComplete { get; set; }
     public bool CleanupAttempted { get; set; }
     public bool VerifyCleanupReadback { get; set; }
+    public bool SelectionKnown { get; set; }
+    public bool RootAccepted { get; set; }
+    public string? RunId { get; set; }
+    public string? RootSessionId { get; set; }
+    public long? RootExecutionFence { get; set; }
+    public long? RootStateVersion { get; set; }
 }
 
 internal static partial class ApiAcceptanceSupport
@@ -281,31 +287,37 @@ internal static partial class ApiAcceptanceSupport
             throw new InvalidDataException("Runner plans cannot contain caller-supplied owner fences or fixture receipts.");
         }
 
-        string[] fixtureKeys = plan.ContainsKey("deniedActor")
-            ? ["expectedPlatformRuntimeRevision", "selectionContext", "gate", "message", "deniedActor"]
-            : ["expectedPlatformRuntimeRevision", "selectionContext", "gate", "message"];
+        bool interactiveMetric = journey == "session-history-metric" && !plan.ContainsKey("selectionContext");
+        string[] fixtureKeys = (interactiveMetric
+            ? new[] { "expectedPlatformRuntimeRevision", "gate", "message" }
+            : new[] { "expectedPlatformRuntimeRevision", "selectionContext", "gate", "message" })
+            .Concat(plan.ContainsKey("deniedActor") ? new[] { "deniedActor" } : [])
+            .ToArray();
         RequireExactKeys(plan, fixtureKeys, "runner fixture plan");
         if (!TryLong(plan["expectedPlatformRuntimeRevision"], out long revision) || revision < 1)
         {
             throw new InvalidDataException("A positive expected platform runtime revision is required in the runner fixture plan.");
         }
 
-        JsonObject context = RequireObject(plan["selectionContext"], "The run selection context is required.");
-        RequireExactKeys(context,
-            ["revision", "availableModelSelectionReferences", "providerRequirements", "requiredEgress"],
-            "run selection context");
-        RequireString(context, "revision", "run selection context revision");
-        foreach (string name in new[] { "availableModelSelectionReferences", "providerRequirements", "requiredEgress" })
+        if (!interactiveMetric)
         {
-            if (context[name] is not JsonArray array)
+            JsonObject context = RequireObject(plan["selectionContext"], "The run selection context is required.");
+            RequireExactKeys(context,
+                ["revision", "availableModelSelectionReferences", "providerRequirements", "requiredEgress"],
+                "run selection context");
+            RequireString(context, "revision", "run selection context revision");
+            foreach (string name in new[] { "availableModelSelectionReferences", "providerRequirements", "requiredEgress" })
             {
-                throw new InvalidDataException($"The run selection {name} must be an array.");
-            }
-            if (name == "availableModelSelectionReferences"
-                ? array.Any(item => item is not JsonValue value || !value.TryGetValue<string>(out string? text) || string.IsNullOrWhiteSpace(text))
-                : array.Any(item => item is not JsonObject))
-            {
-                throw new InvalidDataException("The run selection context contains an invalid reference or requirement.");
+                if (context[name] is not JsonArray array)
+                {
+                    throw new InvalidDataException($"The run selection {name} must be an array.");
+                }
+                if (name == "availableModelSelectionReferences"
+                    ? array.Any(item => item is not JsonValue value || !value.TryGetValue<string>(out string? text) || string.IsNullOrWhiteSpace(text))
+                    : array.Any(item => item is not JsonObject))
+                {
+                    throw new InvalidDataException("The run selection context contains an invalid reference or requirement.");
+                }
             }
         }
 
@@ -943,6 +955,11 @@ internal static partial class ApiAcceptanceSupport
                 }
                 : null,
             ["selection"] = state.Selection?.DeepClone(),
+            ["runId"] = state.RunId,
+            ["effectiveSelectionContextRevision"] = state.Selection?["contextRevision"]?.DeepClone(),
+            ["rootAccepted"] = state.RootAccepted,
+            ["rootExecutionFence"] = state.RootExecutionFence,
+            ["rootStateVersion"] = state.RootStateVersion,
             ["nativeFence"] = new JsonObject { ["status"] = "not-started", ["reason"] = "This setup path never invokes an Orchestrator dispatch operation." },
             ["cleanup"] = state.Cleanup?.DeepClone() ?? new JsonObject { ["state"] = "not-started" },
         };

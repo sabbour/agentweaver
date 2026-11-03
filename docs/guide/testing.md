@@ -697,6 +697,24 @@ dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configura
 dotnet test tests\Agentweaver.Cli.Acceptance.Tests\Agentweaver.Cli.Acceptance.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~BoardDelete
 ```
 
+The `session-history-metric` regressions exercise both explicit raw-context
+selection and interactive pending-run creation through the real CLI runner.
+They check server-returned identities, effective selection revisions, the
+absence of start or dispatch calls, metric counts, cancellation with an
+unbound Orchestrator client, advanced-fence run/tree/detached-session
+readbacks, and cleanup ordering before role removal. Lost create responses,
+invalid selection revisions, and failed cancellation must remain
+indeterminate and must not remove project authority. Run the focused tests
+with:
+
+```powershell
+dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~ApiAcceptanceManifestTests
+dotnet test tests\Agentweaver.Cli.Acceptance.Tests\Agentweaver.Cli.Acceptance.Tests.csproj --configuration Release --no-restore --filter "FullyQualifiedName~ApiAcceptanceRunnerTests|FullyQualifiedName~ApiAcceptanceFeatureJourneyTests"
+```
+
+These regressions use a controlled Gateway and do not prove live authorization,
+deployed source provenance, or production apphost mutation behavior.
+
 Board deployment-provider tests separately verify the mixed source receipts:
 Gateway, Orchestrator, and authority owners keep their own source identity,
 while the selected immutable Orchestrator image digest must match its OCI

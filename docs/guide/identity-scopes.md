@@ -44,9 +44,11 @@ fresh sign-in rather than retrying a possibly consumed refresh token.
 For API acceptance, interaction is off by default. Only `agentweaver test
 --interactive` allows browser authorization, and it obtains exact project/run
 authority only after the runner has set up its owned fixture and selected the
-run. Setup and run authorization must have the same actor and tenant. See the
-[CLI guide](./cli.md) for target configuration, acceptance results, and
-cleanup recovery.
+run. Setup and run authorization must have the same actor and tenant. The
+session-history metric cleanup uses an unbound Orchestrator token to cancel the
+accepted run and a run-bound token to verify its terminal state and sessions
+before project authority is removed. See the [CLI guide](./cli.md) for target
+configuration, acceptance results, and cleanup recovery.
 
 ## `openid`
 
