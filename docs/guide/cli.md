@@ -304,6 +304,33 @@ that exact value as `ownerIssueCode`. A generic Gateway problem with
 rereads the board and requires the authoritative graph to remain unchanged
 after the rejected delete.
 
+The separate `board-archived-denial` journey uses the same fixed Board
+environment and source/image pins. It archives one invocation-owned task, then
+requires deleting it to return HTTP `409` with `taskNotEditable` and an
+unchanged persisted graph. Cleanup retains that archived task in the
+invocation-owned project, archives the project, revokes its owner assignment,
+and independently reads back the archived project and empty active assignment
+list. Automation-held and claimed-task guards remain blocked without safe
+no-model fixture and cleanup paths. Distinct-actor and revoked-role checks
+remain blocked without a separate authenticated non-admin actor; TenantAdmin
+authority cannot establish those denials.
+
+The P1 `session-history-metric` journey creates a root session and two child
+history records without starting a model turn. It completes and archives one
+child, detaches the other, then reads the current session tree and
+`readProjectMetrics`. The fixture expects exactly two history records (root
+plus archived child), one accepted run, and zero runs in a date range that
+excludes that run. It independently verifies archived-project and revoked-role
+cleanup readbacks. A missing denied actor remains a blocked probe, so this
+narrow feature result is not full P1 acceptance.
+
+No native Workspace refs/tree/file journey is currently defined. The Gateway
+read operations require the short-lived Repo App selection code in
+`X-Agentweaver-Team-Sync-Selection`; do not put that code in the manifest or
+bypass the authorized Repo App selection flow. Without an approved project,
+repository, connection, and fresh selection code, Workspace acceptance is
+blocked. See the [Workspace read contract](../deep-dive/source-control.md).
+
 The image-manifest file uses the same sparse JSON contract as
 `npm run deploy:kustomize`:
 

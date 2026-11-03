@@ -19,6 +19,7 @@ internal sealed class BoardFixtureState(string invocationId)
     public long? OwnerAssignmentRevision { get; set; }
     public List<string> AttemptedTaskIds { get; } = [];
     public Dictionary<string, long> OwnedTaskRevisions { get; } = new(StringComparer.Ordinal);
+    public HashSet<string> RetainedArchivedTaskIds { get; } = new(StringComparer.Ordinal);
     public bool ProjectAcknowledged { get; set; }
     public bool OwnerAcknowledged { get; set; }
     public bool MutationInFlight { get; set; }
@@ -62,29 +63,36 @@ internal static class ApiAcceptanceBoard
                 throw new AcceptanceBlockedException("The supplied Board actorId does not match the live authorization context.");
             observations["actorId"] = actorId;
             observations["tenantId"] = ApiAcceptanceSupport.GetString(adminContext, "tenantId");
-            await RequireCapabilitiesAsync(adminApi, ct).ConfigureAwait(false);
+            await RequireCapabilitiesAsync(adminApi, manifest.Journey, ct).ConfigureAwait(false);
             await CreateOwnedProjectAsync(adminApi, state, ct).ConfigureAwait(false);
 
-            CliIdentity orchestratorIdentity = new(adminApi.Identity.Target,
-                ["openid", "api.read", "offline_access", OrchestratorScope]);
-            IGatewayClient orchestratorApi = clients.Create(orchestratorIdentity);
-            try
+            if (manifest.Journey == "board-archived-denial")
             {
-                _ = await authentication.GetBearerAsync(orchestratorIdentity, interaction, ct).ConfigureAwait(false);
+                await RunArchivedTaskDenialAsync(manifest, adminApi, state, steps, observations, ct).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            else
             {
-                throw;
-            }
-            catch
-            {
-                ApiAcceptanceSupport.AddStep(steps, "owner-denial", "blocked",
-                    ("reason", JsonValue.Create("The same actor's unbound projects.orchestrator-only credential is unavailable.")));
-                throw new AcceptanceBlockedException("The Board owner-denial credential is unavailable; the acknowledged fixture will be cleaned up.");
-            }
+                CliIdentity orchestratorIdentity = new(adminApi.Identity.Target,
+                    ["openid", "api.read", "offline_access", OrchestratorScope]);
+                IGatewayClient orchestratorApi = clients.Create(orchestratorIdentity);
+                try
+                {
+                    _ = await authentication.GetBearerAsync(orchestratorIdentity, interaction, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch
+                {
+                    ApiAcceptanceSupport.AddStep(steps, "owner-denial", "blocked",
+                        ("reason", JsonValue.Create("The same actor's unbound projects.orchestrator-only credential is unavailable.")));
+                    throw new AcceptanceBlockedException("The Board owner-denial credential is unavailable; the acknowledged fixture will be cleaned up.");
+                }
 
-            await RunDeleteJourneyAsync(manifest, adminApi, orchestratorApi, state, steps, observations, ct)
-                .ConfigureAwait(false);
+                await RunDeleteJourneyAsync(manifest, adminApi, orchestratorApi, state, steps, observations, ct)
+                    .ConfigureAwait(false);
+            }
             status = "passed";
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -132,14 +140,87 @@ internal static class ApiAcceptanceBoard
         }
 
         JsonObject fixture = Summarize(state);
-        fixture["coverage"] = new JsonObject
-        {
-            ["featureStatus"] = status,
-            ["fullP1Status"] = "not-evaluated",
-            ["deferred"] = new JsonArray("automation-held", "claimed", "archived-task-denial", "distinct-actor-denial", "revoked-role-revalidation", "UI-cancel"),
-        };
+        fixture["coverage"] = manifest.Journey == "board-archived-denial"
+            ? new JsonObject
+            {
+                ["featureStatus"] = status,
+                ["fullP1Status"] = "not-evaluated",
+                ["blocked"] = new JsonArray("automation-held", "claimed", "distinct-actor-denial", "revoked-role-revalidation"),
+            }
+            : new JsonObject
+            {
+                ["featureStatus"] = status,
+                ["fullP1Status"] = "not-evaluated",
+                ["deferred"] = new JsonArray("automation-held", "claimed", "archived-task-denial", "distinct-actor-denial", "revoked-role-revalidation", "UI-cancel"),
+            };
         observations["boardFixture"] = fixture.DeepClone();
         return new(status, failure, fixture);
+    }
+
+    private static async Task RunArchivedTaskDenialAsync(
+        AcceptanceManifest manifest,
+        IGatewayClient adminApi,
+        BoardFixtureState state,
+        List<JsonObject> steps,
+        JsonObject observations,
+        CancellationToken ct)
+    {
+        string projectId = state.ProjectId!;
+        await RequireOwnerAuthorityAsync(adminApi, manifest, state, "writeProjects", ct).ConfigureAwait(false);
+        BoardGraph graph = await ReadGraphAsync(adminApi, projectId, state, ct).ConfigureAwait(false);
+        RequireGraph(graph, projectId, []);
+
+        string taskId = ApiAcceptanceSupport.StableUuid(state.InvocationId, "board-archived-task");
+        graph = await CaptureAsync(adminApi, state, graph,
+            new(taskId, new("Archived task guard", "Invocation-owned archived-task deletion guard.")), ct)
+            .ConfigureAwait(false);
+        BoardTask captured = FindTask(graph, taskId);
+        GatewayResponse archivedResponse = await MutateAsync(state,
+            () => BoardGateway.ArchiveTaskAsync(adminApi, projectId, taskId,
+                new(graph.Revision, captured.Revision), ct)).ConfigureAwait(false);
+        BoardGraph archived = ParseGraph(RequireSuccess(archivedResponse, "archiveProjectBacklogTask"), projectId);
+        BoardTask archivedTask = FindTask(archived, taskId);
+        if (archived.Revision != graph.Revision + 1
+            || archived.Tasks.Count != 1
+            || archived.Dependencies.Count != 0
+            || archivedTask.Revision != captured.Revision + 1
+            || !archivedTask.IsArchived
+            || archivedTask.IsAutomationInvocationPending
+            || archivedTask.State != captured.State)
+            throw Indeterminate("archiveProjectBacklogTask did not return the exact invocation-owned archived task.");
+        state.OwnedTaskRevisions[taskId] = archivedTask.Revision;
+        state.RetainedArchivedTaskIds.Add(taskId);
+        state.MutationAcknowledged = false;
+
+        BoardGraph archivedReadback = await ReadGraphAsync(adminApi, projectId, state, ct).ConfigureAwait(false);
+        RequireUnchanged(archived, archivedReadback);
+        AddStep(steps, "archive-owned-task", 200, null);
+
+        GatewayResponse rejectedDelete = await DeleteAsync(adminApi, state, projectId, taskId,
+            new(archivedReadback.Revision, archivedTask.Revision), ct).ConfigureAwait(false);
+        RequireIssue(rejectedDelete, 409, "taskNotEditable", "deleteProjectBacklogTask");
+        BoardGraph afterRejectedDelete = await ReadGraphAsync(adminApi, projectId, state, ct).ConfigureAwait(false);
+        RequireUnchanged(archivedReadback, afterRejectedDelete);
+        AddStep(steps, "delete-archived-task-denied", 409, "taskNotEditable");
+
+        observations["archivedTaskGuard"] = new JsonObject
+        {
+            ["projectId"] = projectId,
+            ["taskId"] = taskId,
+            ["archiveGraphRevision"] = archived.Revision,
+            ["archiveTaskRevision"] = archivedTask.Revision,
+            ["deleteStatus"] = rejectedDelete.Status,
+            ["deleteIssueCode"] = "taskNotEditable",
+            ["persistedGraphUnchanged"] = true,
+        };
+        AddBlockedStep(steps, "automation-held-denial",
+            "No safe no-paid invocation-held fixture and independent cleanup path is available.");
+        AddBlockedStep(steps, "claimed-task-denial",
+            "No safe no-paid claim fixture and independent cleanup path is available.");
+        AddBlockedStep(steps, "distinct-actor-denial",
+            "A distinct authenticated actor is unavailable; same-actor authority cannot prove a 403.");
+        AddBlockedStep(steps, "revoked-role-revalidation",
+            "The available actor is TenantAdmin; a separate authenticated non-admin fixture actor is required to prove revoked-role denial.");
     }
 
     private static async Task CreateOwnedProjectAsync(
@@ -453,6 +534,12 @@ internal static class ApiAcceptanceBoard
                 }
                 graph = await ReadGraphAsync(api, projectId, state, ct).ConfigureAwait(false);
                 BoardTask task = FindTask(graph, candidate.TaskId);
+                if (state.RetainedArchivedTaskIds.Contains(task.TaskId))
+                {
+                    if (!task.IsArchived)
+                        throw Indeterminate("The retained invocation-owned task is no longer archived.");
+                    continue;
+                }
                 GatewayResponse deleted = await MutateAsync(state, () => BoardGateway.DeleteTaskAsync(api, projectId, task.TaskId,
                     new(graph.Revision, task.Revision), ct)).ConfigureAwait(false);
                 if (deleted.Status != 200)
@@ -489,7 +576,9 @@ internal static class ApiAcceptanceBoard
             ["projectId"] = projectId,
             ["projectState"] = "archived",
             ["projectRevision"] = archivedRevision,
-            ["taskDeletion"] = "verified",
+            ["taskDeletion"] = state.RetainedArchivedTaskIds.Count == 0 ? "verified" : "not-attempted-archived-retained",
+            ["retainedArchivedTaskIds"] = new JsonArray(state.RetainedArchivedTaskIds
+                .Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()),
         };
         if (state.OwnerAcknowledged && state.OwnerAssignmentId is not null && state.OwnerAssignmentRevision is long assignmentRevision)
         {
@@ -508,6 +597,30 @@ internal static class ApiAcceptanceBoard
             result["ownerAssignmentId"] = state.OwnerAssignmentId;
             result["ownerAssignmentRevision"] = assignmentRevision + 1;
             state.MutationAcknowledged = false;
+        }
+        if (state.RetainedArchivedTaskIds.Count != 0)
+        {
+            GatewayResponse projectResponse = await BoardGateway.ReadProjectAsync(api, projectId, ct).ConfigureAwait(false);
+            if (projectResponse.Status != 200)
+                throw BoardFailure("getProject cleanup readback", projectResponse, [200]);
+            JsonObject projectReadback = RequireBody(projectResponse, "getProject cleanup readback");
+            if (ApiAcceptanceSupport.GetString(projectReadback, "projectId") != projectId
+                || ApiAcceptanceSupport.GetString(projectReadback, "name") != state.ProjectName
+                || ApiAcceptanceSupport.GetString(projectReadback, "state") != "archived"
+                || ReadLong(projectReadback, "revision") != archivedRevision
+                || ReadLong(projectReadback, "configurationRevision") is not > 0)
+                throw Indeterminate("The independent Projects readback did not confirm the archived Board fixture.");
+
+            GatewayResponse assignmentsResponse = await BoardGateway.ListAssignmentsAsync(api, projectId, ct).ConfigureAwait(false);
+            if (assignmentsResponse.Status != 200)
+                throw BoardFailure("listProjectRoleAssignments cleanup readback", assignmentsResponse, [200]);
+            JsonObject assignments = RequireBody(assignmentsResponse, "listProjectRoleAssignments cleanup readback");
+            if (ApiAcceptanceSupport.GetString(assignments, "projectId") != projectId
+                || assignments["assignments"] is not JsonArray activeAssignments
+                || activeAssignments.Count != 0)
+                throw Indeterminate("The independent Projects readback did not confirm all Board fixture assignments were revoked.");
+            result["projectReadback"] = "archived";
+            result["assignmentsReadback"] = "empty";
         }
         return result;
     }
@@ -592,15 +705,18 @@ internal static class ApiAcceptanceBoard
     private static bool IsProjectId(string? value) =>
         ApiAcceptanceSupport.IsUuid(value) || Guid.TryParseExact(value, "N", out _);
 
-    private static async Task RequireCapabilitiesAsync(IGatewayClient api, CancellationToken ct)
+    private static async Task RequireCapabilitiesAsync(IGatewayClient api, string journey, CancellationToken ct)
     {
         IReadOnlySet<string> operations = ApiAcceptanceJourney.GetOperationIds(await api.DiscoverAsync(ct).ConfigureAwait(false));
-        string[] required =
+        List<string> required =
         [
             "getAuthorizationContext", "createProject", "getProject", "assignProjectRole", "updateProject", "revokeProjectRoleAssignment",
-            "readProjectBacklog", "captureBacklogTask", "editBacklogTaskContent", "addProjectBacklogDependency",
-            "deleteProjectBacklogTask",
+            "readProjectBacklog", "captureBacklogTask", "deleteProjectBacklogTask",
         ];
+        if (journey == "board-archived-denial")
+            required.AddRange(["archiveProjectBacklogTask", "listProjectRoleAssignments"]);
+        else
+            required.AddRange(["editBacklogTaskContent", "addProjectBacklogDependency"]);
         string[] missing = required.Where(operation => !operations.Contains(operation)).ToArray();
         if (missing.Length != 0)
             throw new AcceptanceBlockedException($"Required Board Gateway operations are missing: {string.Join(", ", missing)}.");
@@ -749,6 +865,8 @@ internal static class ApiAcceptanceBoard
         ["tenantId"] = state.TenantId,
         ["actorId"] = state.ActorId,
         ["ownedTaskIds"] = new JsonArray(state.OwnedTaskRevisions.Keys.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()),
+        ["retainedArchivedTaskIds"] = new JsonArray(state.RetainedArchivedTaskIds
+            .Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()),
         ["taskCaptureAttempts"] = new JsonArray(state.AttemptedTaskIds.Select(id => (JsonNode?)new JsonObject
         {
             ["taskId"] = id,
@@ -761,6 +879,9 @@ internal static class ApiAcceptanceBoard
         ApiAcceptanceSupport.AddStep(steps, name, "passed",
             ("httpStatus", JsonValue.Create(status)),
             ("ownerIssueCode", issueCode is null ? null : JsonValue.Create(issueCode)));
+
+    private static void AddBlockedStep(List<JsonObject> steps, string name, string reason) =>
+        ApiAcceptanceSupport.AddStep(steps, name, "blocked", ("reason", JsonValue.Create(reason)));
 
     private sealed record BoardGraph(string ProjectId, long Revision, IReadOnlyList<BoardTask> Tasks, IReadOnlyList<BoardEdge> Dependencies, JsonObject Raw);
     private sealed record BoardTask(string TaskId, long Revision, string State, bool IsArchived, bool IsAutomationInvocationPending, string Title, string? Description, long Position, JsonObject Raw);
@@ -797,6 +918,9 @@ internal static class ApiAcceptanceBoard
         public static Task<GatewayResponse> ReadBacklogAsync(IGatewayClient api, string projectId, CancellationToken ct) =>
             api.InvokeAsync("readProjectBacklog", new(ApiAcceptanceJourney.Path(("projectId", projectId))), ct);
 
+        public static Task<GatewayResponse> ListAssignmentsAsync(IGatewayClient api, string projectId, CancellationToken ct) =>
+            api.InvokeAsync("listProjectRoleAssignments", new(ApiAcceptanceJourney.Path(("projectId", projectId))), ct);
+
         public static Task<GatewayResponse> CaptureTaskAsync(IGatewayClient api, string projectId, BoardCaptureBacklogTask request, CancellationToken ct) =>
             api.InvokeAsync("captureBacklogTask", new(
                 ApiAcceptanceJourney.Path(("projectId", projectId)),
@@ -805,6 +929,15 @@ internal static class ApiAcceptanceBoard
                     ["taskId"] = request.TaskId,
                     ["content"] = ToJson(request.Content),
                     ["expectedGraphRevision"] = request.ExpectedGraphRevision,
+                }), ct);
+
+        public static Task<GatewayResponse> ArchiveTaskAsync(IGatewayClient api, string projectId, string taskId, BoardTaskRevision request, CancellationToken ct) =>
+            api.InvokeAsync("archiveProjectBacklogTask", new(
+                ApiAcceptanceJourney.Path(("projectId", projectId), ("taskId", taskId)),
+                Body: new JsonObject
+                {
+                    ["expectedGraphRevision"] = request.ExpectedGraphRevision,
+                    ["expectedTaskRevision"] = request.ExpectedTaskRevision,
                 }), ct);
 
         public static Task<GatewayResponse> EditTaskContentAsync(IGatewayClient api, string projectId, string taskId, BoardEditTaskContent request, CancellationToken ct) =>

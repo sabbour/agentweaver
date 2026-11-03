@@ -91,12 +91,15 @@ internal static class ApiAcceptanceJourney
                     await DispatchMessageAsync(api, manifest, fixture, steps, observations, idempotencyKey, ct)
                         .ConfigureAwait(false);
                     break;
+                case "session-history-metric":
+                    await RunSessionHistoryMetricAsync(api, fixture, steps, observations, ct).ConfigureAwait(false);
+                    break;
                 default:
                     throw new AcceptanceBlockedException("The selected P1 API journey is unsupported.");
             }
 
             bool missingDeniedActor = denied is null;
-            return (missingDeniedActor ? "blocked" : "passed", null);
+            return (missingDeniedActor && manifest.Journey != "session-history-metric" ? "blocked" : "passed", null);
         }
         catch (AcceptanceBlockedException error)
         {
@@ -350,6 +353,211 @@ internal static class ApiAcceptanceJourney
             ("acceptedNotDelivered", JsonValue.Create(true)));
     }
 
+    private static async Task RunSessionHistoryMetricAsync(
+        IGatewayClient api,
+        AcceptanceFixture fixture,
+        List<JsonObject> steps,
+        JsonObject observations,
+        CancellationToken ct)
+    {
+        string archivedChildId = ApiAcceptanceSupport.StableUuid(fixture.RunId, "metric-archived-child");
+        string detachedChildId = ApiAcceptanceSupport.StableUuid(fixture.RunId, "metric-detached-child");
+        foreach (string childId in new[] { archivedChildId, detachedChildId })
+        {
+            JsonObject registered = await InvokeJsonAsync(api, "registerChild",
+                Path(("projectId", fixture.ProjectId), ("runId", fixture.RunId), ("parentSessionId", fixture.RootSessionId)),
+                new JsonObject { ["sessionId"] = childId }, null, [201], ct).ConfigureAwait(false);
+            JsonObject identity = registered["identity"] as JsonObject ?? [];
+            if (ApiAcceptanceSupport.GetString(identity, "projectId") != fixture.ProjectId
+                || ApiAcceptanceSupport.GetString(identity, "runId") != fixture.RunId
+                || ApiAcceptanceSupport.GetString(identity, "sessionId") != childId)
+            {
+                throw new InvalidOperationException("The owner did not return the exact invocation-owned metric child.");
+            }
+        }
+
+        JsonObject initialTree = await ReadMetricTreeAsync(api, fixture, ct).ConfigureAwait(false);
+        RequireMetricTree(initialTree, fixture, archivedChildId, detachedChildId, archivedChildLifecycle: "active");
+
+        JsonObject childStatus = await InvokeJsonAsync(api, "readSessionStatus",
+            Path(("projectId", fixture.ProjectId), ("runId", fixture.RunId), ("sessionId", archivedChildId)),
+            null, null, [200], ct).ConfigureAwait(false);
+        RequireMetricSessionIdentity(childStatus, fixture, archivedChildId);
+        long childStateVersion = GetLong(childStatus, "stateVersion")
+            ?? throw new InvalidOperationException("The owner did not return the metric child state version.");
+        if (GetLong(childStatus, "executionFence") != fixture.ExecutionFence)
+            throw new InvalidOperationException("The metric child does not match the current run execution fence.");
+
+        JsonObject boundary = await InvokeJsonAsync(api, "advanceTurnBoundary",
+            Path(("projectId", fixture.ProjectId), ("runId", fixture.RunId), ("sessionId", archivedChildId)),
+            new JsonObject
+            {
+                ["executionFence"] = fixture.ExecutionFence,
+                ["expectedStateVersion"] = childStateVersion,
+            }, null, [200], ct).ConfigureAwait(false);
+        long boundaryVersion = GetLong(boundary, "stateVersion")
+            ?? throw new InvalidOperationException("The owner did not return the advanced metric child state version.");
+        if (GetLong(boundary, "executionFence") != fixture.ExecutionFence
+            || ApiAcceptanceSupport.GetString(boundary["session"] as JsonObject ?? [], "sessionId") != archivedChildId)
+        {
+            throw new InvalidOperationException("The turn-boundary receipt does not match the metric child and current execution fence.");
+        }
+
+        JsonObject completed = await InvokeJsonAsync(api, "completeTurn",
+            Path(("projectId", fixture.ProjectId), ("runId", fixture.RunId), ("sessionId", archivedChildId)),
+            new JsonObject
+            {
+                ["executionFence"] = fixture.ExecutionFence,
+                ["expectedStateVersion"] = boundaryVersion,
+                ["completion"] = "completed",
+            }, null, [200], ct).ConfigureAwait(false);
+        if (GetLong(completed, "executionFence") != fixture.ExecutionFence
+            || ApiAcceptanceSupport.GetString(completed["session"] as JsonObject ?? [], "sessionId") != archivedChildId
+            || ApiAcceptanceSupport.GetString(completed, "executionState") != "completed")
+        {
+            throw new InvalidOperationException("The completion receipt does not confirm the metric child turn completed under the current fence.");
+        }
+
+        JsonObject completedStatus = await InvokeJsonAsync(api, "readSessionStatus",
+            Path(("projectId", fixture.ProjectId), ("runId", fixture.RunId), ("sessionId", archivedChildId)),
+            null, null, [200], ct).ConfigureAwait(false);
+        RequireMetricSessionIdentity(completedStatus, fixture, archivedChildId);
+        if (ApiAcceptanceSupport.GetString(completedStatus, "lifecycle") != "completed"
+            || GetLong(completedStatus, "executionFence") != fixture.ExecutionFence)
+        {
+            throw new InvalidOperationException("The metric child was not independently read back in the completed lifecycle.");
+        }
+
+        JsonObject archived = await InvokeJsonAsync(api, "archiveChild",
+            Path(("projectId", fixture.ProjectId), ("runId", fixture.RunId),
+                ("parentSessionId", fixture.RootSessionId), ("childSessionId", archivedChildId)),
+            new JsonObject
+            {
+                ["executionFence"] = fixture.ExecutionFence,
+                ["idempotencyKey"] = ApiAcceptanceSupport.StableUuid(fixture.RunId, "metric-archive-child"),
+            }, null, [200], ct).ConfigureAwait(false);
+        if (ApiAcceptanceSupport.GetString(archived, "command") != "archive"
+            || ApiAcceptanceSupport.GetString(archived, "sourceSessionId") != fixture.RootSessionId
+            || ApiAcceptanceSupport.GetString(archived, "targetSessionId") != archivedChildId
+            || ApiAcceptanceSupport.GetString(archived, "state") != "archived"
+            || GetLong(archived, "executionFence") != fixture.ExecutionFence)
+        {
+            throw new InvalidOperationException("The owner did not return the exact archived metric-child receipt.");
+        }
+
+        JsonObject detached = await InvokeJsonAsync(api, "detachSession",
+            Path(("projectId", fixture.ProjectId), ("runId", fixture.RunId), ("sessionId", detachedChildId)),
+            new JsonObject
+            {
+                ["executionFence"] = fixture.ExecutionFence,
+                ["idempotencyKey"] = ApiAcceptanceSupport.StableUuid(fixture.RunId, "metric-detach-child"),
+            }, null, [200], ct).ConfigureAwait(false);
+        if (ApiAcceptanceSupport.GetString(detached, "command") != "detach"
+            || ApiAcceptanceSupport.GetString(detached, "sourceSessionId") != detachedChildId
+            || ApiAcceptanceSupport.GetString(detached, "state") != "detached"
+            || GetLong(detached, "executionFence") != fixture.ExecutionFence)
+        {
+            throw new InvalidOperationException("The owner did not return the exact detached metric-child receipt.");
+        }
+
+        JsonObject tree = await ReadMetricTreeAsync(api, fixture, ct).ConfigureAwait(false);
+        RequireMetricTree(tree, fixture, archivedChildId, detachedChildId, archivedChildLifecycle: "archived");
+        ApiAcceptanceSupport.AddStep(steps, "session-history-tree",
+            "passed",
+            ("operationId", JsonValue.Create("readSessionTree")),
+            ("currentHistoryRecords", JsonValue.Create(2)),
+            ("archivedChildIncluded", JsonValue.Create(true)),
+            ("detachedChildExcluded", JsonValue.Create(true)));
+
+        GatewayResponse metricsResponse = await api.InvokeAsync("readProjectMetrics",
+            new GatewayInvocation(
+                Path(("projectId", fixture.ProjectId)),
+                Query: new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["from"] = "2000-01-01",
+                    ["to"] = "2000-01-02",
+                    ["bucket"] = "day",
+                }), ct).ConfigureAwait(false);
+        JsonObject metrics = RequireStatusBody(metricsResponse, [200], "readProjectMetrics");
+        if (ApiAcceptanceSupport.GetString(metrics, "projectId") != fixture.ProjectId
+            || ApiAcceptanceSupport.GetString(metrics, "from") != "2000-01-01"
+            || ApiAcceptanceSupport.GetString(metrics, "to") != "2000-01-02"
+            || GetLong(metrics, "runsInRange") != 0
+            || GetLong(metrics, "runsTotal") != 1
+            || GetLong(metrics, "sessionHistoryRecordsTotal") != 2)
+        {
+            throw new InvalidOperationException("readProjectMetrics did not count the exact archived-inclusive, detached-exclusive session history independently of run range.");
+        }
+
+        observations["sessionHistoryMetric"] = new JsonObject
+        {
+            ["projectId"] = fixture.ProjectId,
+            ["runId"] = fixture.RunId,
+            ["rootSessionId"] = fixture.RootSessionId,
+            ["archivedChildId"] = archivedChildId,
+            ["detachedChildId"] = detachedChildId,
+            ["currentHistoryRecords"] = 2,
+            ["sessionHistoryRecordsTotal"] = 2,
+            ["runsTotal"] = 1,
+            ["runsInRange"] = 0,
+            ["rangeExcludedAcceptedRun"] = true,
+        };
+        ApiAcceptanceSupport.AddStep(steps, "session-history-records-total",
+            "passed",
+            ("operationId", JsonValue.Create("readProjectMetrics")),
+            ("httpStatus", JsonValue.Create(metricsResponse.Status)),
+            ("sessionHistoryRecordsTotal", JsonValue.Create(2)),
+            ("runsTotal", JsonValue.Create(1)),
+            ("runsInRange", JsonValue.Create(0)));
+    }
+
+    private static async Task<JsonObject> ReadMetricTreeAsync(
+        IGatewayClient api,
+        AcceptanceFixture fixture,
+        CancellationToken ct) =>
+        await InvokeJsonAsync(api, "readSessionTree",
+            Path(("projectId", fixture.ProjectId), ("runId", fixture.RunId), ("sessionId", fixture.RootSessionId)),
+            null, null, [200], ct).ConfigureAwait(false);
+
+    private static void RequireMetricTree(
+        JsonObject tree,
+        AcceptanceFixture fixture,
+        string archivedChildId,
+        string detachedChildId,
+        string archivedChildLifecycle)
+    {
+        JsonArray nodes = tree["nodes"] as JsonArray ?? [];
+        JsonObject[] matches(string id) => nodes.OfType<JsonObject>().Where(node =>
+            ApiAcceptanceSupport.GetString(node["identity"] as JsonObject ?? [], "sessionId") == id).ToArray();
+        JsonObject[] root = matches(fixture.RootSessionId);
+        JsonObject[] archivedChild = matches(archivedChildId);
+        if (ApiAcceptanceSupport.GetString(tree, "rootSessionId") != fixture.RootSessionId
+            || nodes.Count != (archivedChildLifecycle == "active" ? 3 : 2)
+            || root.Length != 1
+            || ApiAcceptanceSupport.GetString(root[0], "lifecycle") != "active"
+            || archivedChild.Length != 1
+            || ApiAcceptanceSupport.GetString(archivedChild[0], "lifecycle") != archivedChildLifecycle
+            || matches(detachedChildId).Length != (archivedChildLifecycle == "active" ? 1 : 0)
+            || nodes.OfType<JsonObject>().Any(node =>
+                ApiAcceptanceSupport.GetString(node["identity"] as JsonObject ?? [], "projectId") != fixture.ProjectId
+                || ApiAcceptanceSupport.GetString(node["identity"] as JsonObject ?? [], "runId") != fixture.RunId))
+        {
+            throw new InvalidOperationException("The current session history tree does not match the exact root, archived child, and detached child fixture.");
+        }
+    }
+
+    private static void RequireMetricSessionIdentity(JsonObject session, AcceptanceFixture fixture, string sessionId)
+    {
+        JsonObject identity = session["identity"] as JsonObject ?? [];
+        if (ApiAcceptanceSupport.GetString(identity, "projectId") != fixture.ProjectId
+            || ApiAcceptanceSupport.GetString(identity, "runId") != fixture.RunId
+            || ApiAcceptanceSupport.GetString(identity, "sessionId") != sessionId
+            || ApiAcceptanceSupport.GetString(session, "rootSessionId") != fixture.RootSessionId)
+        {
+            throw new InvalidOperationException("The session-status receipt does not match the exact metric fixture session.");
+        }
+    }
+
     private static void AddActionReceipt(
         JsonObject observations,
         string operation,
@@ -526,6 +734,13 @@ internal static class ApiAcceptanceJourney
         {
             required.Add("readSessionTree");
             required.Add("sendMessage");
+        }
+        else if (journey == "session-history-metric")
+        {
+            required.UnionWith([
+                "readSessionTree", "registerChild", "advanceTurnBoundary", "completeTurn",
+                "archiveChild", "detachSession", "readProjectMetrics",
+            ]);
         }
         else
         {
