@@ -575,6 +575,35 @@ controlled providers and local HTTP; that test host is not the shipped apphost
 and is not production-authentication evidence. These checks do not exercise an
 authenticated mutation journey through the production apphost.
 
+## Windows archive checks
+
+On native Windows x64, prepare the candidate from a clean committed source
+tree with `python scripts\cli-dotnet\package.py build --rid win-x64 --smoke`.
+After the approved host preflight succeeds, run the verifier against that
+candidate and its full source commit. Set `$workspace` to a new durable path
+outside every Git checkout and `$output` to a new
+`windows-controlled-archive-checks.json` path; both parent directories must
+already exist.
+
+```powershell
+$sourceCommit = (git rev-parse HEAD).Trim()
+python scripts\cli-dotnet\verify_windows_archive_checks.py `
+  --directory .\artifacts\cli\win-x64 `
+  --source-commit $sourceCommit `
+  --workspace $workspace `
+  --output $output
+```
+
+The source commit must be the full 40-character value recorded in the candidate
+receipt, and the workspace and output paths must be separate. The verifier
+uses a temporary CurrentUser root certificate
+and unique synthetic Credential Manager entries, and requires verified
+cleanup. If cleanup is unresolved, preserve the workspace and journal and use
+`--cleanup-only` with the original workspace and a new sidecar path; recovery
+does not pass the interrupted check. This sidecar is local controlled-test
+evidence only; `nativeJourneyProof` remains `not-run`, and this is not release
+evidence or issue #2449 acceptance.
+
 ## Run API acceptance with the native CLI
 
 ```powershell
