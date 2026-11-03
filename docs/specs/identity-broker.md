@@ -72,11 +72,13 @@ scope attributes in OpenIddict, not client-supplied token audiences. Clients tha
 share a scope share its operator-declared resource set. Refresh retains the
 per-sign-in authorization and configured audiences.
 
-Reference refresh tokens have no reuse grace period. Replaying one fails and
-revokes its token family. Family revocation also revokes the per-sign-in ad hoc
-authorization, but never permanent consent. Tokens created before this change
-may still be attached to a permanent authorization; family revocation revokes
-those tokens without revoking the saved consent.
+Reference refresh tokens have no reuse grace period. OpenIddict rejects ordinary
+sequential replay before the custom replay handler and revokes that sign-in's
+tokens without revoking saved consent. A failed atomic redemption claim rejects
+the exchange and invokes the custom family revoker, which revokes all tokens
+bound to the authorization and revokes the authorization only when it is ad hoc.
+Legacy tokens bound to a permanent authorization are revoked without revoking
+saved consent.
 Token exchange rejects disabled users and grants bound to another client.
 
 After validating the configured external OIDC identity, the broker maps the upstream
