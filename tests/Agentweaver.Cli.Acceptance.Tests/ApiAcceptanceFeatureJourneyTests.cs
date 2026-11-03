@@ -152,6 +152,7 @@ public sealed class ApiAcceptanceFeatureJourneyTests
         Assert.Contains("revokeProjectRoleAssignment", api.Operations);
         Assert.Contains("getProject", api.Operations);
         Assert.Contains("listProjectRoleAssignments", api.Operations);
+        Assert.DoesNotContain("assignProjectRole", api.Operations);
     }
 
     private sealed class MetricGatewayClient(
@@ -510,6 +511,7 @@ public sealed class ApiAcceptanceFeatureJourneyTests
         private JsonObject CreateProject(GatewayInvocation invocation)
         {
             _projectName = invocation.Body?["name"]?.GetValue<string>();
+            _ownerAssigned = true;
             return new JsonObject
             {
                 ["projectId"] = projectId,
@@ -546,11 +548,19 @@ public sealed class ApiAcceptanceFeatureJourneyTests
 
         private JsonObject ListAssignments()
         {
-            Assert.True(_ownerRevoked);
             return new JsonObject
             {
                 ["projectId"] = projectId,
-                ["assignments"] = new JsonArray(),
+                ["assignments"] = _ownerRevoked
+                    ? new JsonArray()
+                    : new JsonArray(new JsonObject
+                    {
+                        ["assignmentId"] = OwnerAssignmentId,
+                        ["principalId"] = ActorId,
+                        ["role"] = "owner",
+                        ["revision"] = 1L,
+                        ["createdBy"] = ActorId,
+                    }),
             };
         }
 

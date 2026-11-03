@@ -84,7 +84,7 @@ There is no separate Chief of Staff notification store or bell. See
 | Operation ID | Purpose |
 | --- | --- |
 | `listProjects` | List visible projects. |
-| `createProject` | Create a project; does not assign an Owner. |
+| `createProject` | Create a project and assign the authenticated creator active Owner authority. |
 | `getProject` | Read project metadata. |
 | `getProjectAgentHistory` | Read an agent's bounded history using current caller authority. |
 | `updateProject` | Update metadata at an expected revision. |

@@ -447,7 +447,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
             _signingCertificate.PfxPath, _signingCertificate.Password);
         await using var projects = await ProjectsConfigResourceServer.StartAsync(
-            _connectionString, new X509SecurityKey(certificate));
+            _connectionString, new X509SecurityKey(certificate), grantRoleAssignmentWrites: false);
         var backendIds = new HashSet<int>();
         for (var index = 0; index < 16; index++)
         {
@@ -466,8 +466,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
             _signingCertificate.PfxPath, _signingCertificate.Password);
         await using var projects = await ProjectsConfigResourceServer.StartAsync(
-            _connectionString, new X509SecurityKey(certificate));
-        await AssertRuntimeCannotWriteAuthorityAsync(projects.RuntimeDataSource);
+            _connectionString, new X509SecurityKey(certificate), grantRoleAssignmentWrites: true);
 
         var ownerToken = await IssueTokenAsync(
             "projects.admin",
@@ -499,12 +498,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         var project = await created.Content.ReadFromJsonAsync<ProjectSummary>(AuthorizationJsonOptions);
         Assert.NotNull(project);
 
-        var ownerAssignment = await AssignRoleAsync(
-            projects.PrivilegedFixtureDataSource,
-            ownerMembership.MembershipId,
-            ProjectAuthorityResourceType.Project,
-            project.ProjectId,
-            ProjectAuthorityRole.Owner);
+        await using var authorityDb = CreateDbContext(projects.PrivilegedFixtureDataSource);
+        var ownerAssignment = await authorityDb.RoleAssignments.AsNoTracking().SingleAsync(item =>
+            item.MembershipId == ownerMembership.MembershipId &&
+            item.ResourceType == ProjectAuthorityResourceType.Project &&
+            item.ResourceId == project.ProjectId &&
+            item.Role == ProjectAuthorityRole.Owner &&
+            item.State == ProjectAuthorityRecordState.Active);
         await AssignRoleAsync(
             projects.PrivilegedFixtureDataSource,
             ownerMembership.MembershipId,
@@ -1120,12 +1120,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
             ProjectAuthorityRole.TenantAdmin);
         var foreignProject = await CreateProjectsTestProjectAsync(
             projects.Client, foreignOwnerToken, OtherTenantId, "Foreign Knowledge project");
-        await AssignRoleAsync(
-            projects.PrivilegedFixtureDataSource,
-            foreignOwnerMembership.MembershipId,
-            ProjectAuthorityResourceType.Project,
-            foreignProject.ProjectId,
-            ProjectAuthorityRole.Owner);
         await AssignRoleAsync(
             projects.PrivilegedFixtureDataSource,
             foreignOwnerMembership.MembershipId,

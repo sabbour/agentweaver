@@ -69,9 +69,6 @@ public sealed partial class ProjectsConfigPostgresTests
         var admin = await SeedCallerAsync(db, store, subject, tenantId, scopes,
             ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
         var project = await projects.CreateProjectAsync(admin, "Role summary API", CancellationToken.None);
-        await store.AssignRoleAsync(
-            admin.MembershipId, ProjectAuthorityResourceType.Project, project.ProjectId,
-            ProjectAuthorityRole.Owner, "fixture");
 
         // Exercise the admitted service routes so the test covers HTTP serialization as well as owner values.
         using var host = await StartProjectSummaryEndpointHostAsync(fixture.DataSource);

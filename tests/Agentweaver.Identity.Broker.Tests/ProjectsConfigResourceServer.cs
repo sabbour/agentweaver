@@ -71,7 +71,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         bool usePublicWriterFixture = false,
         string? brokerRunBindingAudience = null,
         X509Certificate2? brokerRunBindingServerCertificate = null,
-        bool grantRoleAssignmentWrites = false,
+        bool grantRoleAssignmentWrites = true,
         bool useKestrel = false)
     {
         if ((brokerRunBindingAudience is null) != (brokerRunBindingServerCertificate is null))

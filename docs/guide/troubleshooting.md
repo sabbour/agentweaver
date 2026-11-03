@@ -67,7 +67,8 @@ same approved manifest and invocation ID.
 
 | Step | Status and problem code | What to check |
 | --- | --- | --- |
-| `create-project` | `403 forbidden` | The setup actor needs an unbound token with the `api.read` and `projects.admin` scopes and a current TenantAdmin assignment. |
+| `create-project` | `403 forbidden` | The setup actor needs an unbound token with the `api.read` and `projects.admin` scopes and a current TenantAdmin assignment. Stale or revoked authority is denied. |
+| `create-project` | `503 role_assignment_unavailable` | The runtime database grants for role assignments are not applied. See [Runtime authority writes](../reference/runtime-configuration.md#runtime-authority-writes). The transaction rolls back the project, configuration, Owner assignment, and audit row; do not grant other privileges as a workaround. |
 | `assign-owner`, `assign-orchestrator`, `revoke-*` | `503 role_assignment_unavailable` | The runtime database grants for role assignments are not applied. See [Runtime authority writes](../reference/runtime-configuration.md#runtime-authority-writes). No authority row changed. Do not grant other privileges as a workaround. |
 | `assign-*` | `404 principal_not_found` | The setup actor has no active membership in the selected tenant. |
 | `revoke-*` | `409 revision_conflict` | Another request changed the assignment. Reconcile it before taking another action. |

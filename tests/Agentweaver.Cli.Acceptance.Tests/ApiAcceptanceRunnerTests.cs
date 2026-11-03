@@ -271,10 +271,15 @@ public sealed class ApiAcceptanceRunnerTests
             Assert.Contains(requests, request => request.OperationId == "revokeProjectRoleAssignment");
             Assert.Null(cleanup["projectReadback"]);
             Assert.Null(cleanup["assignmentsReadback"]);
+            // Setup reads the creator Owner, so only post-archive requests prove cleanup readback behavior.
+            RecordedRequest[] cleanupReadbacks = requests
+                .SkipWhile(request => !(request.OperationId == "updateProject"
+                    && request.Body?["state"]?.GetValue<string>() == "archived"))
+                .ToArray();
             if (scenario == "project-readback-unavailable")
-                Assert.DoesNotContain(requests, request => request.OperationId == "listProjectRoleAssignments");
+                Assert.DoesNotContain(cleanupReadbacks, request => request.OperationId == "listProjectRoleAssignments");
             else
-                Assert.Contains(requests, request => request.OperationId == "listProjectRoleAssignments");
+                Assert.Contains(cleanupReadbacks, request => request.OperationId == "listProjectRoleAssignments");
         }
         finally
         {
@@ -284,7 +289,7 @@ public sealed class ApiAcceptanceRunnerTests
     }
 
     [Fact]
-    public async Task BoardDeleteCleansUpPartiallyAcknowledgedThirtyTwoCharacterProjectId()
+    public async Task BoardCreatorOwnerReadbackFailureAvoidsUnsafeCleanup()
     {
         string workspace = Path.Combine(AppContext.BaseDirectory, "acceptance-work", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workspace);
@@ -300,7 +305,7 @@ public sealed class ApiAcceptanceRunnerTests
             JsonObject openApi = JsonNode.Parse(await artifactResponse.Content.ReadAsStringAsync())!.AsObject();
 
             var trace = new ConcurrentQueue<string>();
-            var handler = new AcceptanceGatewayHandler(openApi, trace, failCleanup: false, failBoardOwnerAssignment: true)
+            var handler = new AcceptanceGatewayHandler(openApi, trace, failCleanup: false, failBoardOwnerReadback: true)
             {
                 GatewayOrigin = new Uri("https://api.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/"),
             };
@@ -330,11 +335,12 @@ public sealed class ApiAcceptanceRunnerTests
 
             Assert.Equal(1, exitCode);
             Assert.Equal("failed", result["featureStatus"]?.GetValue<string>());
-            Assert.Equal("cleaned", result["observations"]?["boardFixture"]?["cleanup"]?["state"]?.GetValue<string>());
+            Assert.Equal("indeterminate", result["observations"]?["boardFixture"]?["cleanup"]?["state"]?.GetValue<string>());
             Assert.Equal(AcceptanceGatewayHandler.BoardProjectId,
                 result["observations"]?["boardFixture"]?["projectId"]?.GetValue<string>());
-            Assert.Equal(AcceptanceGatewayHandler.BoardProjectId,
-                Assert.Single(handler.Requests, request => request.OperationId == "updateProject").ProjectId);
+            Assert.Contains(handler.Requests, request => request.OperationId == "listProjectRoleAssignments");
+            Assert.DoesNotContain(handler.Requests, request => request.OperationId == "assignProjectRole");
+            Assert.DoesNotContain(handler.Requests, request => request.OperationId == "updateProject");
             Assert.DoesNotContain(handler.Requests, request => request.OperationId == "revokeProjectRoleAssignment");
         }
         finally
@@ -1566,7 +1572,7 @@ public sealed class ApiAcceptanceRunnerTests
         private readonly ConcurrentQueue<string> _trace;
         private readonly bool _failCleanup;
         private bool _failFirstBoardTaskEdit;
-        private readonly bool _failBoardOwnerAssignment;
+        private readonly bool _failBoardOwnerReadback;
         private bool _ambiguousBoardCapture;
         private readonly bool _preserveCompactedTaskRevision;
         private bool _ambiguousBoardDelete;
@@ -1620,7 +1626,7 @@ public sealed class ApiAcceptanceRunnerTests
             CancellationTokenSource? cancelOnMessage = null,
             bool ambiguousBoardCapture = false,
             bool ambiguousBoardDelete = false,
-            bool failBoardOwnerAssignment = false,
+            bool failBoardOwnerReadback = false,
             bool preserveCompactedTaskRevision = false,
             bool failFirstBoardTaskEdit = false,
             string? malformedBoardSnapshot = null,
@@ -1633,7 +1639,7 @@ public sealed class ApiAcceptanceRunnerTests
             _trace = trace;
             _failCleanup = failCleanup;
             _failFirstBoardTaskEdit = failFirstBoardTaskEdit;
-            _failBoardOwnerAssignment = failBoardOwnerAssignment;
+            _failBoardOwnerReadback = failBoardOwnerReadback;
             _ambiguousBoardCapture = ambiguousBoardCapture;
             _preserveCompactedTaskRevision = preserveCompactedTaskRevision;
             _ambiguousBoardDelete = ambiguousBoardDelete;
@@ -1719,7 +1725,7 @@ public sealed class ApiAcceptanceRunnerTests
             string[] scopes = token.ElementAtOrDefault(4)?.Split([',', '+'], StringSplitOptions.RemoveEmptyEntries) ?? [];
             string? requiredScope = operation.OperationId switch
             {
-                "createProject" or "assignProjectRole" or "getProjectConfiguration"
+                "createProject" or "assignProjectRole" or "listProjectRoleAssignments" or "getProjectConfiguration"
                     or "revokeProjectRoleAssignment" or "updateProject" => "projects.admin",
                 "acceptRunSelection" or "getRunSelection" or "createProjectRun" or "cancelProjectRun"
                     or "acceptRunRoot" or "readRunStatus"
@@ -1771,7 +1777,7 @@ public sealed class ApiAcceptanceRunnerTests
 
             return operation.OperationId switch
             {
-                "createProject" => CreateProject(body),
+                "createProject" => CreateProject(body, actor),
                 "getProject" => ReadProject(projectId),
                 "assignProjectRole" => Assignment(body, projectId, actor),
                 "listProjectRoleAssignments" => ListAssignments(projectId),
@@ -2154,7 +2160,7 @@ public sealed class ApiAcceptanceRunnerTests
                         : 0L,
         };
 
-        private HttpResponseMessage CreateProject(JsonObject? body)
+        private HttpResponseMessage CreateProject(JsonObject? body, string actor)
         {
             string name = body?["name"]?.GetValue<string>() ?? "";
             _boardProject = name.StartsWith("board-", StringComparison.Ordinal);
@@ -2171,6 +2177,18 @@ public sealed class ApiAcceptanceRunnerTests
                 ? BoardProjectId
                 : _metricScenario is not null ? MetricProjectId : P1ProjectId;
             _projectId = projectId;
+            _assignments.Add(new JsonObject
+            {
+                ["assignmentId"] = "22222222-2222-4222-8222-222222222222",
+                ["projectId"] = projectId,
+                ["principalId"] = actor,
+                ["role"] = "owner",
+                ["state"] = "active",
+                ["revision"] = 1,
+                ["grantedBy"] = actor,
+                ["createdAt"] = "2026-11-02T00:00:00Z",
+            });
+            if (_boardProject) _boardOwner = actor == "owner";
             return Json(HttpStatusCode.Created, new JsonObject
             {
                 ["projectId"] = projectId,
@@ -2184,8 +2202,6 @@ public sealed class ApiAcceptanceRunnerTests
         private HttpResponseMessage Assignment(JsonObject? body, string projectId, string actor)
         {
             string role = body?["role"]?.GetValue<string>() ?? "";
-            if (_failBoardOwnerAssignment && _boardProject && role == "owner")
-                return Json(HttpStatusCode.Conflict, new JsonObject { ["title"] = "Controlled assignment rejection" });
             if (_boardProject && projectId == BoardProjectId && role == "owner")
                 _boardOwner = actor == "owner";
             JsonObject assignment = new()
@@ -2239,18 +2255,29 @@ public sealed class ApiAcceptanceRunnerTests
 
         private HttpResponseMessage ListAssignments(string projectId)
         {
+            if (_failBoardOwnerReadback && _boardProject)
+                return Json(HttpStatusCode.ServiceUnavailable,
+                    new JsonObject { ["title"] = "Controlled owner assignment readback failure" });
             JsonArray assignments = new(_assignments
                 .Where(assignment => ApiAcceptanceSupport.GetString(assignment, "state") == "active")
-                .Select(assignment => assignment.DeepClone()).ToArray());
-            if (_metricScenario == "assignment-readback-contradictory")
+                .Select(assignment => new JsonObject
+                {
+                    ["assignmentId"] = assignment["assignmentId"]?.DeepClone(),
+                    ["principalId"] = assignment["principalId"]?.DeepClone(),
+                    ["role"] = assignment["role"]?.DeepClone(),
+                    ["revision"] = assignment["revision"]?.DeepClone(),
+                    ["createdBy"] = assignment["grantedBy"]?.DeepClone(),
+                    ["createdAt"] = assignment["createdAt"]?.DeepClone(),
+                }).ToArray());
+            if (_metricScenario == "assignment-readback-contradictory" && _projectArchived)
             {
                 assignments.Add(new JsonObject
                 {
                     ["assignmentId"] = "44444444-4444-4444-8444-444444444444",
-                    ["projectId"] = projectId,
                     ["principalId"] = "owner",
                     ["role"] = "owner",
-                    ["state"] = "active",
+                    ["revision"] = 1L,
+                    ["createdBy"] = "owner",
                 });
             }
             return Json(HttpStatusCode.OK, new JsonObject

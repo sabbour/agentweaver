@@ -170,7 +170,7 @@ Each row says what works and what is still missing. The missing parts link to
 | Start task | Floating **Start task** button. Its dialog captures a task into the Backlog and opens the Board. | Nothing. |
 | Projects gallery | 0.x tiles with state and your access. | Nothing. |
 | Create blank project | Dialog with a project name. | Nothing. |
-| Create from GitHub | Creates the project, then saves the repository with GitHub App sign-in. | Owner grant on create (behavior limit). |
+| Create from GitHub | Creates the project, then saves the repository with GitHub App sign-in. | The creator receives Owner authority; repository setup remains a separate operation. |
 | Dashboard | Run-based status and metric tiles, saved setup checks and next actions, archived-project guidance, recent runs with direct links, Team, **Activity** chart, run totals, model usage, and per-agent usage. Unavailable values are named instead of filled with guesses. | Live project health, completed-task counts, agent leaderboard scores, and response-duration percentiles. |
 | Orchestrations | **Active** and **Recent** sections with **Load more**, a state summary, and **Refresh**. | Run delete and archive. |
 | Run page | Two-pane layout with status strip, **Run tree**, and tabs Chat, Topology, Approvals, Activity, Changes, Usage, and Run settings. **Stop run** while the run is open. | Terminal diagnostic and retry. |
@@ -324,8 +324,9 @@ worktree edits and repository import remain unavailable.
 
 These limits are not missing routes:
 
-- **Owner grant on create:** creating a project does not grant the creator
-  access, so create-from-GitHub can't always save the repository.
+- **Create-from-GitHub:** project creation grants the creator Owner authority.
+  Saving the optional repository configuration remains a separate operation
+  and can fail without undoing project creation.
 - **Effective role names:** the authorization context lists permissions, not
   role names. Tiles show access based on permissions.
 - **Project health:** there is no live status dot. The dashboard shows

@@ -74,7 +74,7 @@ The client uses these routes:
 | `/overview` | Manage personal Priorities and private conversations alongside projects, recent runs, project metrics and notifications. |
 | `/sessions` | Reopen private conversations, list runs across projects, and start a new session. `/projects/:projectId/sessions` opens the same page. |
 | `/assistant` | Start a new session: choose a project and send the first message. `/console` opens the same page. |
-| `/projects` | Browse project tiles and create a project. Creating a project does not make you its owner. |
+| `/projects` | Browse project tiles and create a project. The creator becomes its Owner. |
 | `/projects/:projectId` | Read the project **Dashboard**: setup readiness, metrics, usage, recent runs, team, and quick actions. |
 | `/projects/:projectId/orchestrations` | List this project's active and finished runs and open a run. |
 | `/projects/:projectId/board` | Read the project **Board**: backlog tasks in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture, edit, reorder, queue, archive, and manage prerequisites; delete eligible tasks after confirmation. |
@@ -136,9 +136,9 @@ not authorize actions. Select
 choose **Start from**: **Blank project** or **GitHub repository**. For a
 GitHub repository, enter `owner/name` or a `github.com` address. The client
 creates the project and then saves the repository in its configuration with
-**GitHub App** sign-in. If you don't have access to the new project yet, the
-project is kept, and a note says to add the repository in **Settings >
-Repository** later. Creating a project does not make you its owner.
+**GitHub App** sign-in. If saving the repository fails, the project is kept,
+and you can add the repository later in **Settings > Repository**. The project
+creator becomes its Owner.
 
 Within a project, use these destinations:
 

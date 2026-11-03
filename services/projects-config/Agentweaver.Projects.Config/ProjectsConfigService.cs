@@ -343,8 +343,8 @@ public sealed partial class ProjectsConfigService
         }
     }
 
-    /// <summary>Creates a project and its initial empty configuration revision for a current tenant administrator.</summary>
-    /// <exception cref="ProjectConfigException">The caller lacks current scope/role or the project name is invalid.</exception>
+    /// <summary>Creates a project, its initial configuration revision, and the creator's active Owner assignment atomically.</summary>
+    /// <exception cref="ProjectConfigException">The caller lacks current scope/role, the project name is invalid, or role-write grants are unavailable.</exception>
     public async Task<ProjectSummary> CreateProjectAsync(
         ProjectAuthorizationContext caller,
         string name,
@@ -353,7 +353,11 @@ public sealed partial class ProjectsConfigService
         caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
         caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
         caller.RequireUnboundRequest();
-        if (!await HasCurrentRoleAsync(
+        var adminGrant = caller.Grants.FirstOrDefault(grant =>
+            grant.ResourceType == ProjectAuthorityResourceType.Tenant &&
+            string.Equals(grant.ResourceId, caller.TenantId, StringComparison.Ordinal) &&
+            grant.Role == ProjectAuthorityRole.TenantAdmin);
+        if (adminGrant is null || !await HasCurrentRoleAsync(
             caller,
             ProjectAuthorityResourceType.Tenant,
             caller.TenantId,
@@ -362,9 +366,10 @@ public sealed partial class ProjectsConfigService
             throw ProjectConfigException.Forbidden();
         name = NormalizeProjectName(name);
         var now = timeProvider.GetUtcNow();
+        var projectId = Guid.NewGuid().ToString("N");
         var project = new ProjectRecord
         {
-            ProjectId = Guid.NewGuid().ToString("N"),
+            ProjectId = projectId,
             TenantId = caller.TenantId,
             CreatedByActorId = caller.ActorId,
             Name = name,
@@ -375,16 +380,64 @@ public sealed partial class ProjectsConfigService
             UpdatedAt = now,
         };
         var configuration = new ProjectConfiguration();
-        db.Projects.Add(project);
-        db.ProjectConfigurationRevisions.Add(new ProjectConfigurationRevisionRecord
+        await using (var transaction = await db.Database
+            .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false))
         {
-            ProjectId = project.ProjectId,
-            Revision = 1,
-            ConfigurationJson = Serialize(configuration),
-            UpdatedByActorId = caller.ActorId,
-            CreatedAt = now,
-        });
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await ProjectRoleAssignmentService.LockCurrentTenantAdminAsync(
+                    db, caller, adminGrant, projectId, cancellationToken).ConfigureAwait(false);
+                var membership = await db.TenantMemberships.AsNoTracking()
+                    .SingleOrDefaultAsync(item =>
+                        item.MembershipId == caller.MembershipId &&
+                        item.Issuer == caller.Issuer &&
+                        item.Subject == caller.ActorId &&
+                        item.TenantId == caller.TenantId &&
+                        item.State == ProjectAuthorityRecordState.Active &&
+                        item.Revision == caller.MembershipRevision,
+                        cancellationToken).ConfigureAwait(false)
+                    ?? throw ProjectConfigException.Forbidden();
+                var owner = new ProjectRoleAssignmentRecord
+                {
+                    AssignmentId = Guid.NewGuid(),
+                    MembershipId = membership.MembershipId,
+                    ResourceType = ProjectAuthorityResourceType.Project,
+                    ResourceId = projectId,
+                    Role = ProjectAuthorityRole.Owner,
+                    State = ProjectAuthorityRecordState.Active,
+                    Revision = 1,
+                    GrantedBy = caller.ActorId,
+                    GrantedAt = now,
+                };
+                db.Projects.Add(project);
+                db.ProjectConfigurationRevisions.Add(new ProjectConfigurationRevisionRecord
+                {
+                    ProjectId = projectId,
+                    Revision = 1,
+                    ConfigurationJson = Serialize(configuration),
+                    UpdatedByActorId = caller.ActorId,
+                    CreatedAt = now,
+                });
+                db.RoleAssignments.Add(owner);
+                db.AuthorityAudit.Add(ProjectAuthorityRules.CreateRoleAudit(
+                    membership,
+                    owner,
+                    "role_assigned",
+                    caller.ActorId,
+                    now,
+                    ProjectAuthorityRules.P1SetupInvocationId(name)));
+                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (ProjectAuthorityRules.IsPermissionDenied(exception))
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                throw new ProjectConfigException(
+                    "role_assignment_unavailable",
+                    "Project role assignment is not enabled for this deployment.",
+                    StatusCodes.Status503ServiceUnavailable);
+            }
+        }
         return await ToSummaryAsync(project, caller, cancellationToken).ConfigureAwait(false);
     }
 

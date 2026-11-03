@@ -91,6 +91,18 @@ function requireAssignment(assignment, projectId, actor, role, state, revision, 
   return assignment;
 }
 
+function requireOwnerAssignment(result, projectId, actor) {
+  const owners = result?.assignments?.filter(assignment =>
+    assignment?.principalId === actor.actorId && assignment.role === 'owner') ?? [];
+  const owner = owners[0];
+  if (result?.projectId !== projectId || owners.length !== 1
+    || !UUID.test(owner?.assignmentId ?? '') || owner.revision !== 1
+    || owner.createdBy !== actor.actorId) {
+    throw new Error('Projects Config did not return the exact creator Owner assignment receipt.');
+  }
+  return owner;
+}
+
 /** Require a project summary for the exact invocation-owned project, state, and revision. */
 function requireProject(project, invocationId, state, projectId = null, revision = null) {
   if (typeof project?.projectId !== 'string' || !project.projectId
@@ -369,7 +381,7 @@ export async function createP1Fixture(plan, {
   const rootSessionId = idFor('root-session');
   const childSessionId = plan.journey === 'message' ? idFor('child-session') : null;
 
-  /** Send one setup mutation; a failure after the request is sent makes setup indeterminate. */
+  /** A failed setup step after creation leaves the fixture indeterminate and must not be cleaned up. */
   const setupStep = async (step, send) => {
     state.setupAttempted = true;
     try {
@@ -381,7 +393,7 @@ export async function createP1Fixture(plan, {
     }
   };
 
-  /** Create the invocation-named project and grant the signed-in actor Owner, then Orchestrator. */
+  /** Create the invocation-named project, verify creator Owner, then grant Orchestrator. */
   const runSetup = async () => {
     const created = await setupStep('create-project', async () => requireProject((await invoke(
       api, 'createProject', {}, { name: state.projectName }, [201])).value, invocationId, 'active'));
@@ -397,10 +409,9 @@ export async function createP1Fixture(plan, {
       assignmentRevision: null,
       complete: false,
     };
-    const owner = await setupStep('assign-owner', async () => requireAssignment((await invoke(
-      api, 'assignProjectRole', { projectId: created.projectId },
-      { principalId: actor.actorId, role: 'owner' }, [201])).value,
-    created.projectId, actor, 'owner', 'active', 1));
+    const owner = await setupStep('read-owner-assignment', async () => requireOwnerAssignment((await invoke(
+      api, 'listProjectRoleAssignments', { projectId: created.projectId }, undefined, [200])).value,
+    created.projectId, actor));
     state.setup.ownerAssignmentId = owner.assignmentId;
     state.setup.ownerAssignmentRevision = owner.revision;
     const orchestrator = await setupStep('assign-orchestrator', async () => requireAssignment((await invoke(

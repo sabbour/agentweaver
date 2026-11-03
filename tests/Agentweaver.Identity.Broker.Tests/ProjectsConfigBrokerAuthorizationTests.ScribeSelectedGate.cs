@@ -59,8 +59,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var project = await CreateProjectsTestProjectAsync(
             projects.Client, token, TenantId, "Selected Scribe gate");
         await AssignRoleAsync(projects.PrivilegedFixtureDataSource, membership.MembershipId,
-            ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Owner);
-        await AssignRoleAsync(projects.PrivilegedFixtureDataSource, membership.MembershipId,
             ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Orchestrator);
         var selected = await AcceptKnowledgeRunSelectionAsync(
             projects, database, project, token, includeScribeChild: true);

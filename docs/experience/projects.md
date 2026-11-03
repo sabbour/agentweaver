@@ -40,13 +40,11 @@ current tenant.
 
 For **GitHub repository**, the app creates the project and then saves the
 repository in the project configuration with **GitHub App** sign-in. Saving the
-repository needs access to the new project. If you don't have access yet, the
-project is still created, and a note says to add the repository in
-**Settings > Repository** later.
+repository is a separate step. If it fails, the project remains available and
+you can add the repository later in **Settings > Repository**.
 
 **Expected result:** A message confirms the new project, and the project list
-refreshes. Creating a project does not make you its owner. If you can't open
-the project afterward, ask a tenant administrator for access.
+refreshes. You are the Owner of the project you create.
 
 ## Read the project Dashboard
 

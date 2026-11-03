@@ -362,7 +362,7 @@ authorization cache, or a grant.
 
 | Method | Native suffix | Auth | Purpose | Gateway |
 | --- | --- | --- | --- | --- |
-| POST | `/` | Admin; unbound token, TenantAdmin | Create a project without assigning an Owner. | Yes, empty suffix |
+| POST | `/` | Admin; unbound token, TenantAdmin | Create a project and atomically assign the creator active Owner authority with an audit record. Returns 403 for stale or revoked authority and 503 `role_assignment_unavailable` if database role-write grants are unavailable; failures roll back project creation. | Yes, empty suffix |
 | GET | `/` | Read; unbound token | List visible tenant projects. | Yes, empty suffix |
 | GET | `/{projectId}` | Read; exact signed run when `runId` is supplied | Read project metadata. | Yes |
 | PATCH | `/{projectId}` | Admin | Update name and lifecycle at `expectedRevision`. | Yes |

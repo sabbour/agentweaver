@@ -41,8 +41,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var project = await CreateProjectsTestProjectAsync(
             projects.Client, token, TenantId, "Scribe pending Knowledge");
         await AssignRoleAsync(projects.PrivilegedFixtureDataSource, membership.MembershipId,
-            ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Owner);
-        await AssignRoleAsync(projects.PrivilegedFixtureDataSource, membership.MembershipId,
             ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Orchestrator);
         var selection = await AcceptKnowledgeRunSelectionAsync(projects, database, project, token);
         var actor = new CoordinationActor(jwt.Issuer, subject);

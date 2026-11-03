@@ -40,8 +40,11 @@ permissions, not a substitute for those assignments.
 
 - Project reads require a current project role or tenant administrator.
 - Writes require Owner or tenant administrator authority.
-- Project creation requires an existing tenant administrator; it does not
-  automatically assign an Owner.
+- Project creation requires a current TenantAdmin assignment and atomically
+  assigns the authenticated creator an active Owner role with an audit row.
+  Stale or revoked TenantAdmin authority returns 403. If the existing
+  role-write grants are unavailable, creation returns 503 and rolls back the
+  project, configuration, Owner assignment, and audit row.
 - Platform defaults require platform administrator authority.
 - Run selection requires the project Orchestrator role and its scopes.
 

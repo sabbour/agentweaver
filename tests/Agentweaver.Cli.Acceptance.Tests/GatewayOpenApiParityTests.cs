@@ -46,6 +46,10 @@ public sealed class GatewayOpenApiParityTests
 
         JsonObject discovered = await api.DiscoverAsync(CancellationToken.None);
         Assert.True(JsonNode.DeepEquals(emitted, discovered));
+        JsonObject createProject = FindOperation(discovered, "createProject");
+        Assert.Contains("503", Assert.IsType<JsonObject>(createProject["responses"]).Select(item => item.Key));
+        Assert.Contains("role_assignment_unavailable",
+            createProject["responses"]?["503"]?["description"]?.GetValue<string>());
         ApiAcceptanceFixtureSetup.ValidateJournalMessageOperation(discovered);
 
         JsonObject mutatedBody = (JsonObject)discovered.DeepClone();
