@@ -375,6 +375,19 @@ reload or a changed profile copy fails closed. Only the replacement profile ID
 and configure endpoint differ from the source profile. Base profiles and the
 accepted model, tool, and provider selections remain unchanged.
 
+The optional global `Environment:RuntimeBootstrap:DefaultSourceProfileId`
+removes the need for an exact per-run static source entry. Static sources take
+precedence; otherwise only that default ID derives a source from the authorized
+placement and receiver configure URL. Environment derives the observation URL
+from its Orchestrator owner root and sets no MCP server. Startup requires both
+bootstrap owners and the AgentHost launch profile, and rejects invalid or
+colliding default IDs. An unset default preserves static-only behavior.
+Replacement-ID lookup and registration, readiness, Workspace, and resume reads
+reconstruct the same source and verify its hashes. A new Pod IP or UID does not
+change the source hash when the logical receiver is unchanged. Changed receiver
+or observation configuration still fails closed. Profiles contain no credentials.
+This does not add a scheduler or a new registration caller.
+
 ```mermaid
 sequenceDiagram
     participant O as Orchestrator
@@ -386,6 +399,7 @@ sequenceDiagram
     S-->>E: Exact Service, Pod, receiver URL, and fences
     E->>H: HTTPS GET /health/live (Pod IP; receiver DNS for TLS)
     H-->>E: Live health response
+    E->>E: Resolve static source, else opted-in lease-derived source
     E->>E: Persist endpoint-bound profile mapping
     E-->>O: Stable resolved profile ID
     O->>E: Re-read placement and bind Runtime registration

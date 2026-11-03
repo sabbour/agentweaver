@@ -1199,13 +1199,26 @@ Suspend before genuine native files exist fails explicitly without a cache succe
 These source contracts do not prove native TLS, PostgreSQL, mounted contents, or deployed dispatch.
 
 `Environment:RuntimeBootstrap:Profiles` configures exact owner/profile/provider
-registrations. An absent or mismatched registration returns explicit denial.
+registrations. Static source lookup takes precedence. With
+`Environment:RuntimeBootstrap:DefaultSourceProfileId` configured, the matching
+default ID can instead derive a source from the authorized Sandbox lease and
+provider-observed receiver configure endpoint. Its observation endpoint is the
+Orchestrator owner root plus `/internal/runtime/observations`; MCP is absent.
+The default requires bootstrap owner addresses and the AgentHost launch profile.
+Without that setting, or for an unknown ID, an absent registration still returns
+`runtime_delivery_unavailable`. The default never bypasses the immutable,
+actor-bound replacement or live endpoint verification.
 No caller supplies a configure URI or observation URI. Runtime bindings separately
 pin `PlacementProviderId`, `EnvironmentLifecycleGeneration`, and
 `EnvironmentLeaseRevision`; omitted legacy pins do not change stored binding JSON.
 Lease expiry bounds registration expiry and cannot be extended by enrollment replay.
 A resumed placement retains that original profile and saved resume source.
 Its new configure address is resolved from the currently verified Kubernetes Service and Pod, not another configured placement.
+Resolve, replacement-ID lookup, and bootstrap/readiness/Workspace reads use the
+same source resolver. Resume preserves the saved source binding and lease fences.
+Pod UID and IP changes do not change the source hash when the logical receiver
+and observation configuration are unchanged. Changed source configuration fails
+closed; bootstrap profiles and their hashes contain no credential material.
 
 Current Projects policy deliberately withholds `WriteProjects` from run-bound tokens.
 The public placement route still denies those tokens.

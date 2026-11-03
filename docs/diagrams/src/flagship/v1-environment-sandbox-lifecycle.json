@@ -133,6 +133,14 @@
       "arrow": "filled"
     },
     {
+      "type": "message",
+      "from": "environment",
+      "to": "environment",
+      "label": "Bootstrap source: static first, else authorized lease + global default",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
       "type": "note",
       "over": ["environment", "provider-api"],
       "label": "Dispatch readiness requires the exact PVC, VM isolation, and policy generation. This slice has no AgentHost configure handshake or Core run pin."
