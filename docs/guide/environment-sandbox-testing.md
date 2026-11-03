@@ -38,7 +38,7 @@ project and run, before and after provider I/O. It does not require
 `WriteProjects`; applying or reconciling network policy still does, and remains
 denied to run-bound tokens.
 
-The [P1 creation evidence contract](../reference/p1-creation-evidence.md) has
+The [Environment creation evidence contract](../reference/p1-creation-evidence.md) has
 separate read-only join selections:
 
 ```powershell
@@ -118,7 +118,7 @@ Cilium datapath enforcement, or a complete deployed resume.
 
 ## 3. Test Sandbox leases and BuildTest contracts
 
-The P1 creation-binding slice has a focused source selection:
+The invocation-bound Environment creation slice has a focused source selection:
 
 ```powershell
 dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj `
@@ -133,7 +133,7 @@ enrollment. The Environment CI runner requires a passing TRX result for each
 named PostgreSQL method; missing or skipped methods fail CI even when the
 assembly builds. Local compilation does not replace these executed receipts.
 These cases do not apply live migrations, create cloud resources, join Host
-mount observations, or rerun P1 acceptance.
+mount observations, or run an acceptance journey against a live environment.
 
 Run the focused Sandbox and lease tests:
 

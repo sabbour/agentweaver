@@ -1,8 +1,8 @@
-# v1 release reference
+# Release reference
 
 Use this page to find the source of release metadata and the workflow for each
 release operation. The canonical
-[v1 release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md)
+[release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md)
 owns the operational steps for package publication, image publication, and
 local workload deployment. Do not treat those operations as one release state.
 
@@ -45,7 +45,7 @@ Each image carries its source commit, Git tree, and component version in the
 
 The checked-in release and Kustomize composition includes the MCP compatibility
 image, workload, and ingress resources. Their presence does not make MCP a
-supported 1.x product or acceptance surface. Supported client paths are the
+supported product or acceptance surface. Supported client paths are the
 Gateway/API, browser, and native .NET CLI. Outbound remote MCP connections are
 separate.
 
@@ -86,4 +86,4 @@ tag, or ready Deployment does not establish a completed user journey.
 - [Deploy Agentweaver to Azure](../guide/deploy-to-azure.md)
 - [Database maintenance](../guide/database-maintenance.md)
 - [Kustomize bundle](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md)
-- [v1 release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md)
+- [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md)

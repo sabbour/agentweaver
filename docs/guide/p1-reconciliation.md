@@ -1,4 +1,6 @@
-# Reconcile an interrupted P1 run
+<span id="reconcile-an-interrupted-p1-run"></span>
+
+# Reconcile an interrupted project setup
 
 Use read-only reconciliation before attempting recovery cleanup, retrying
 setup, or starting a live journey. Keep the invocation ID from the existing
@@ -94,7 +96,7 @@ browser, contacting the target, sending writes, or creating output.
 Migration 039 validates existing audit links before it backfills them. If live
 data is inconsistent, PostgreSQL aborts the migration transaction; the new
 column, backfill, migration-history entry, and trigger changes are rolled back
-without partial writes. Resolve the inconsistency through the reviewed P1
+without partial writes. Resolve the inconsistency through the reviewed invocation setup
 setup/cleanup workflow that owns the invocation. Do not edit authority-audit
 or setup-operation rows by hand.
 

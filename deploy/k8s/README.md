@@ -46,7 +46,7 @@ runtime configuration, or external permissions.
 | `provider-catalogs/` | Projects & Config provider catalog snapshot and ConfigMap. |
 | `profiles/` | Optional runtime profiles, including the incomplete AgentHost profile. |
 | `migrations/identity-broker/` | Separate Broker migration ServiceAccount and one-shot Job. |
-| `migrations/p1-postgres/` | P1 migration resources applied by the database maintenance runner. |
+| `migrations/p1-postgres/` | PostgreSQL migration resources applied by the database maintenance runner. |
 | `routing/identity-broker/` | Portal Web route and Cilium ingress policies included by the root bundle. |
 | `acceptance/foundation-probe/` | Supplemental acceptance probe resources. |
 | `kustomization.yaml` | Root product bundle and image pins. |
@@ -164,7 +164,7 @@ manifest also works when no live Deployment refs are available. The existing
 
 Only selected images with schema migrations run migration Jobs: Broker runs
 the Broker Job; Environment, Orchestrator, and Events & Sessions each run
-their matching P1 Job; Projects & Config runs its migration Job. Web, Gateway,
+their matching migration Job; Projects & Config runs its migration Job. Web, Gateway,
 MCP, Knowledge, and AgentHost updates do not trigger these deployment
 migration Jobs. The root Kustomize bundle is still applied and all nine
 Deployment rollouts are checked.

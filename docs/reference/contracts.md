@@ -1,6 +1,6 @@
 # Contracts, endpoints, and configuration reference
 
-Use this reference to look up v1 service contracts, selected owner endpoints,
+Use this reference to look up service contracts, selected owner endpoints,
 and their implementation boundaries. A route described here may be source-only
 or conditionally mapped; read each section's status before treating a contract
 as deployed.
@@ -12,7 +12,7 @@ For runtime settings and deployment configuration, see
 
 The checked-in release/Kustomize composition still includes MCP compatibility
 image, workload and ingress resources. Their presence does not make MCP a
-supported 1.x product or acceptance surface. Supported client paths are
+supported product or acceptance surface. Supported client paths are
 Gateway/API, browser and native .NET CLI. Outbound remote MCP connections are
 separate.
 
@@ -30,7 +30,9 @@ The Web client uses these values to label project tiles and headers. The role
 labels do not authorize actions or replace permission checks. Every protected
 operation continues to check current owner authority.
 
-## P1 invocation setup receipt
+<span id="p1-invocation-setup-receipt"></span>
+
+## Invocation setup receipt
 
 The source-only `POST /api/v1/p1/invocations/{invocationId}/setup`
 (`POST /api/p1/invocations/{invocationId}/setup` on Projects & Config)
@@ -50,15 +52,17 @@ responses are `no-store`. Runtime has function `EXECUTE` rights, not direct
 access to `project_setup_operations`.
 
 The endpoint does not issue run, Environment, Sandbox, Pod, or AgentHost
-creation authorization and does not establish cross-database atomicity. P1
-tooling is not switched to this operation by this source change. See [P1
-project setup receipt](./runtime-configuration.md#p1-project-setup-receipt)
+creation authorization and does not establish cross-database atomicity. API
+acceptance tooling is not switched to this operation by this source change. See [project
+setup receipt](./runtime-configuration.md#p1-project-setup-receipt)
 for the migration, grant-catalog, and operator-command boundaries.
-Fresh P1 initialization creates and migrates the Projects schema as its
+A fresh PostgreSQL initialization creates and migrates the Projects schema as its
 dedicated owner and reconciles the reviewed runtime grants in one transaction;
 the operator's role-assumption permission is checked before any role creation.
 
-## P1 Environment creation binding
+<span id="p1-environment-creation-binding"></span>
+
+## Invocation-bound Environment creation
 
 `P1InvocationBindingExpectation` carries the expected Core and setup invocation
 IDs, setup receipt hash, accepted-selection hash, root session, and execution
@@ -97,7 +101,7 @@ Dismissal is a separate caller record, not a decision. See
 The managed Azure Gateway uses one HTTPS listener for the wildcard managed
 domain. Broker, Web, Gateway API, and MCP compatibility HTTPRoutes attach to
 that listener with exact hostnames and their existing path and backend rules.
-The compatibility route does not make MCP a supported 1.x product or
+The compatibility route does not make MCP a supported product or
 acceptance surface. This lets a Broker request remain routable when HTTP/2
 reuses a Portal connection; an unknown hostname still has no matching route.
 This topology does not change the authentication or authorization contract of
@@ -447,7 +451,7 @@ captures; no raw filesystem Gateway proxy is part of this contract.
 
 The checked-in `Agentweaver.Mcp` source provides a Model Context Protocol (MCP)
 Streamable HTTP endpoint at `POST /mcp`. This compatibility adapter is not a
-supported 1.x product or acceptance surface; the details below describe its
+supported product or acceptance surface; the details below describe its
 source contract only.
 `tools/list` reflects only compatible operations and schemas from the served
 Gateway OpenAPI catalog; `tools/call` maps to those fixed `/api/v1` Gateway routes.
@@ -767,7 +771,7 @@ issuer, subject, project/run bounds, and fresh effective project permission. The
 are service-internal contracts, not public product API routes; tenant and platform
 role claims are not required.
 
-The P1 Events & Sessions migration Job runs the executable with only `--migrate`.
+The Events & Sessions migration Job runs the executable with only `--migrate`.
 The host validates Sessions and Messaging options before entering that branch, so
 the Job repeats each option from the runtime map instead of relying on defaults.
 Orchestrator selects its migration branch before loading normal provider settings.
@@ -1065,7 +1069,7 @@ The separate UI bridge uses a same-origin popup and the opener's existing in-mem
 It validates the popup source, origin, and expected state before authenticated completion through Gateway with the actual nonce cookie.
 The return page has no anonymous credential or mutation authority and persists no browser tokens.
 The protected-store workload identity requires the separate writer's SET and exact-version GET permissions.
-This configuration does not change the read-only P0 Secrets principal or provision cloud permissions.
+This configuration does not change the read-only Secrets principal or provision cloud permissions.
 
 The routes remain mapped when this optional configuration is absent.
 They return `503` with `copilot_connection_writer_unavailable`, not a fabricated connection or a route-not-found response.
@@ -1496,7 +1500,7 @@ absolute HTTPS audience. Configuring this audience activates the private
 run-binding route. Projects & Config validates its short-lived signed Broker
 request tokens separately from public bearer tokens.
 
-For P0 deployment, the optional descriptor has exactly four fields:
+For the foundation deployment, the optional descriptor has exactly four fields:
 `projectsOwnerAddress`, `projectsAudience`,
 `projectsServerCertificateSha256`, and `projectsTrustBundleSha256`.
 Configure the corresponding existing Broker and Projects & Config runtime

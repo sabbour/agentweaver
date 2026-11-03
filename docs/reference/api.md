@@ -1,6 +1,6 @@
 # HTTP API reference
 
-Use this reference to find v1 HTTP routes, their owning services, and their
+Use this reference to find HTTP routes, their owning services, and their
 authorization requirements. An **owner service** handles an operation's
 authoritative state and authorization. A **native route** is mapped by an owner
 service; it is not public through the Gateway unless the table lists a Gateway
@@ -14,7 +14,7 @@ the [MCP tools](./mcp-tools.md) reference uses.
 
 The checked-in release/Kustomize composition still includes MCP compatibility
 image, workload and ingress resources. Their presence does not make MCP a
-supported 1.x product or acceptance surface. Supported client paths are
+supported product or acceptance surface. Supported client paths are
 Gateway/API, browser and native .NET CLI. Outbound remote MCP connections are
 separate.
 
@@ -41,7 +41,7 @@ These routes do not require a run. They require an authenticated project Owner
 with `api.read` and `projects.admin`; run-bound and purpose-bound tokens are
 rejected. Gateway exposes them under `/api/v1`. The retained MCP compatibility
 adapter prefixes its generated tool operation IDs with `agentweaver_`; this is
-source behavior, not a supported 1.x use path.
+source behavior, not a supported product use path.
 
 | Gateway route | Native owner | Operation ID |
 | --- | --- | --- |
@@ -491,7 +491,9 @@ Owner.
 > `GET /projects/{projectId}/access` route that doesn't exist. The web client
 > must use the contract on this page.
 
-### P1 invocation setup
+<span id="p1-invocation-setup"></span>
+
+### Invocation setup
 
 `POST /api/v1/p1/invocations/{invocationId}/setup` is a REST-only Gateway
 route backed by `POST /api/p1/invocations/{invocationId:guid}/setup` in Projects.
@@ -529,13 +531,15 @@ or Core invocation provenance.
 | `403` | `forbidden` | The bearer lacks the required scope/current TenantAdmin authority, the selected tenant does not match, or the read locator is unknown or belongs to another actor/tenant. |
 | `409` | `project_setup_invocation_conflict`, `project_setup_receipt_stale` | The invocation conflicts with an existing receipt or its current readback is stale. |
 
-### P1 setup authority audit
+<span id="p1-setup-authority-audit"></span>
+
+### Setup authority audit
 
 `GET /api/project-setup-invocations/{invocationId:guid}/authority-audit` is
 also available through the Gateway at
 `GET /api/v1/project-setup-invocations/{invocationId}/authority-audit`. It
 returns only authority-audit events linked to that invocation in the caller's
-selected tenant. P1 fixture role events are linked by the exact project name
+selected tenant. Invocation fixture role events are linked by the exact project name
 `p1-<invocation-id>`.
 
 The caller needs an unbound token with `api.read` and must be a current
@@ -736,14 +740,14 @@ locator, not a caller-supplied receipt, hash, run ID or Core invocation ID. The
 Gateway accepts create bodies up to 256 KiB. Responses never include the first
 message.
 
-When a P1 locator is present, Core uses the same unbound caller bearer to read
+When an invocation locator is present, Core uses the same unbound caller bearer to read
 the existing public Projects receipt before saving the request. Missing,
 foreign, revoked or stale receipts leave no request or provenance rows.
 Core saves the full verified receipt and its versioned deterministic hash
 with its own run and root IDs in the request transaction. Retries read Projects
 again and must match that immutable receipt. Projects selection is created
 after the request commits; selection failure leaves a resumable request, not
-an accepted P1 invocation.
+an accepted invocation.
 
 At bound start, Core checks current Projects selection and authority and calls
 the narrow internal Projects verifier. Core locks the saved request and commits
@@ -753,7 +757,9 @@ are retryable. Projects locks do not span the Core commit: revocation after
 the remote check can race with that commit. There is no distributed-lock or
 current-at-commit revocation guarantee.
 
-### Current P1 invocation binding
+<span id="current-p1-invocation-binding"></span>
+
+### Current invocation binding
 
 Native internal path:
 `GET /internal/projects/{projectId}/runs/{runId}/p1-invocation-binding`.
@@ -778,11 +784,11 @@ current execution fence and selection hash, and checks fresh Projects
 selection and actor authority. A missing binding returns `404`; stale evidence
 returns `409`. Historical acceptance is not current authority, and an existing
 root without a binding cannot be enrolled afterward. Environment's separate
-[P1 creation path](../architecture/environment-sandbox.md#p1-invocation-bound-creation)
+[invocation-bound creation path](../architecture/environment-sandbox.md#p1-invocation-bound-creation)
 consumes this read before its own creation effects and retains operation/result
 links in Environment owner transactions. The Core response alone is not a
 provider-resource receipt or a Host/native observation join.
-The separate [P1 creation-evidence contract](./p1-creation-evidence.md) documents
+The separate [Environment creation-evidence contract](./p1-creation-evidence.md) documents
 Environment's authenticated retained-record read and Host's invocation-specific
 `GET /runtime/v1/readiness/p1-evidence` consumer.
 
@@ -890,7 +896,7 @@ aren't recorded. Until migration 032 is applied, the route returns
 `503 pull_request_records_unavailable`, not an empty list. An empty list would
 wrongly tell a client that the project has no pull requests; the 503 says the
 records don't exist yet. Migration 032 is
-code-only: startup, the default migrator, and the P1 initializer don't apply it.
+code-only: startup, the default migrator, and the PostgreSQL initializer don't apply it.
 
 These routes are the data source for the Priority issue and pull request
 pickers. When pull request recording has not started, the picker explains that
@@ -929,12 +935,12 @@ range. They still respect tenant, project, and run-bound scope.
 | Field | v1 definition | 0.x dashboard mapping |
 | --- | --- | --- |
 | `activeRuns` | Runs whose derived state is `active`, including presenting root turns. | Active runs tile; does not include the separate active-agent count. |
-| `blockedRuns` | Runs whose derived state is `blocked`. | Additional v1 state detail, not a summary tile in 0.x. |
+| `blockedRuns` | Runs whose derived state is `blocked`. | Additional state detail, not a summary tile in 0.x. |
 | `runsInRange` | Runs with `created_at` in `[from,to)`. | Runs this week when callers select that week; Created total for the selected range. |
 | `runsTotal` | All accepted runs in the authorized scope. | Total run count. |
-| `sessionHistoryRecordsTotal` | The all-date count of records currently returned by each selected accepted run's root-scoped v1 session-history tree. Archived records retained in the tree count; detached subtrees leave their former root projection. `null` means at least one selected accepted run has no root or an empty tree; an authorized scope with no accepted runs returns `0`. | A v1 session-history summary, not a run count or literal 0.x handoff total. |
+| `sessionHistoryRecordsTotal` | The all-date count of records currently returned by each selected accepted run's root-scoped session-history tree. Archived records retained in the tree count; detached subtrees leave their former root projection. `null` means at least one selected accepted run has no root or an empty tree; an authorized scope with no accepted runs returns `0`. | A session-history summary, not a run count or literal 0.x handoff total. |
 | `completedRuns` | Terminal runs (`completed`, `failed`, `cancelled`, `indeterminate`) with `completed_at` in `[from,to)`. | Completed total and Done series; not the 0.x completed-task count. |
-| `succeededRuns` | Runs in `completedRuns` whose derived state is `completed`. | Numerator for v1 run success; not the 0.x agent-dependency success measure. |
+| `succeededRuns` | Runs in `completedRuns` whose derived state is `completed`. | Numerator for run success; not the 0.x agent-dependency success measure. |
 | `series[].date` | UTC calendar date, ascending, for each day intersecting the interval. | Runs over time and daily activity. |
 | `series[].created` | Runs created within the interval on that UTC day. | Created series. |
 | `series[].completed` | Terminal runs completed within the interval on that UTC day. | Done series. |
@@ -951,9 +957,9 @@ Chief of Staff conversations are excluded. The count shares the metrics
 owner's single database snapshot and is `null`, not a partial total, when any
 selected accepted run's native history tree is unavailable.
 
-These definitions map to the 0.x dashboard controls. v1 uses persisted
-owner data, not Application Insights, and cannot reproduce historic 0.x
-telemetry. v1 run success is `succeededRuns / completedRuns`; display it as
+These definitions map to the 0.x dashboard controls. The current implementation uses
+persisted owner data, not Application Insights, and cannot reproduce historic
+0.x telemetry. Run success is `succeededRuns / completedRuns`; display it as
 unknown when the denominator is zero. 0.x used per-agent dependency success,
 so the two percentages are not equivalent.
 
@@ -1527,7 +1533,7 @@ These are native owner routes, not Gateway or first-party MCP operations.
 
 ### Workspace volumes
 
-For P1-specific creation, use the authenticated
+For invocation-bound Environment creation, use the authenticated
 [internal Environment creation routes](../architecture/environment-sandbox.md#p1-invocation-bound-creation),
 not the public routes below. They require exact run-bound `ReadRunSelection`,
 a current Core invocation binding, and retained Environment/volume creation

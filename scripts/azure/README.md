@@ -1,8 +1,8 @@
-# Azure P0 operator tooling
+# Azure operator tooling
 
 These dependency-free tools define and inspect infrastructure.
 They do not deploy a service or prove workload identity.
-The [Azure P0 infrastructure specification](../../docs/specs/azure-p0-infrastructure.md)
+The [Azure infrastructure specification](../../docs/specs/azure-p0-infrastructure.md)
 describes source receipts, target guards, and the separate
 [Foundation Probe](../../docs/specs/foundation-probe.md) runtime gate.
 
@@ -16,7 +16,7 @@ and `issue_sync_receipts`; Identity requires exactly `SELECT, INSERT, UPDATE`
 on `identity_broker.issue_sync_grants`, and `SELECT, INSERT` only on
 `identity_broker.issue_sync_mint_audit`. No new DELETE, default privilege,
 schema CREATE or authority function EXECUTE is granted. These database grants,
-the new P1 plan hash, service TLS configuration, and live application-level
+the new migration plan hash, service TLS configuration, and live application-level
 issue-sync grant creation remain separate approval items. The Projects & Config
 runtime role receives exactly `SELECT, INSERT, UPDATE` on
 `casting_generation_requests`; this grant is included in the same reviewed plan.
@@ -39,8 +39,8 @@ DELETE. It is an **unapplied code-only migration**.
 
 Orchestrator migration `032_source_control_pull_request_records.sql` adds the
 `source_control_pull_requests` table for the project pull request list. It
-requires migration 012 and is part of the reviewed Core catalog and default P1
-maintenance plan. The source-bound plan hash covers migration 032 and its exact `SELECT, INSERT,
+requires migration 012 and is part of the reviewed Core catalog and default database maintenance
+plan. The source-bound plan hash covers migration 032 and its exact `SELECT, INSERT,
 UPDATE` grant on
 `orchestrator.source_control_pull_requests`. The Orchestrator migration Job
 applies it in catalog order and verifies the complete ledger and table. Startup still
@@ -189,7 +189,9 @@ existing canonical grants without a new Broker image, but it reconciles all
 listed table grants and uses temporary cluster resources. Neither path is
 authorized by a successful source test or by merging a pull request.
 
-## Limited P1 runtime identities
+<span id="limited-p1-runtime-identities"></span>
+
+## Limited service runtime identities
 
 `infra/bicep/p1-runtime-identities.bicep` is separate from the full foundation deployment.
 It uses the existing resource group location and the `agentweaver-aks` OIDC issuer.
@@ -235,7 +237,9 @@ This command is an operator procedure, not a command run by local source checks
 or by merging a pull request. The template requires the storage account and
 identity to exist before deployment.
 
-### P1 PostgreSQL initialization and migration plan
+<span id="p1-postgresql-initialization-and-migration-plan"></span>
+
+### PostgreSQL initialization and migration plan
 
 The recorded continuation receipt uses plan hash
 `a056bf074940b858b7eb05c78c7e96e2e6663d5b7ea291d99997eaccbbf073c8`.
@@ -366,7 +370,7 @@ migration and workflow identities, runs the schema ownership handover, and
 configures the GitHub environment, then applies and checks the workflow
 identity's namespace-scoped Kubernetes Role and RoleBinding. It creates no
 custom Azure role definition. Without `--execute` it only checks. After the
-handover, the operator no longer owns the P1 schemas, and the two modes below
+handover, the operator no longer owns the migration schemas, and the two modes below
 fail their ownership checks.
 
 Use these modes for a database that is already initialized. Neither needs a
@@ -396,7 +400,7 @@ apply every missing catalog version. Before any write, the mode checks:
 
 - the five runtime roles, object-ID mappings, and operator memberships;
 - each runtime role's exact database `CONNECT`;
-- each P1 service schema's operator ownership and ACL, plus the Projects & Config
+- each service schema's operator ownership and ACL, plus the Projects & Config
   dedicated-owner and reviewed runtime-grant contract;
 - that every existing relation is planned, owned by its expected schema owner, and within its
   planned runtime privileges;
@@ -460,10 +464,10 @@ role-assignment audit rows, and only a count of other active PlatformAdmins.
 Do not retry if an assignment is missing its matching audit evidence or the
 inspection result is incomplete or ambiguous.
 
-`npm run platform:runtime-defaults` signs in through the P1 browser helper with
+`npm run platform:runtime-defaults` signs in through the browser helper with
 `P1_SETUP_SCOPES`, reads `/api/v1/platform/runtime-defaults`, and compares it
 with the reviewed `deploy/k8s/runtime-configs/platform-runtime-defaults.json`.
-Pass the selected `environment.tenantId` from the P1 harness manifest with
+Pass the selected `environment.tenantId` from the acceptance harness manifest with
 `--tenant`; every API request carries it in `X-Agentweaver-Tenant`.
 The default invocation is read-only. Add `--execute` to write differing
 reviewed defaults with the current expected revision. If the current defaults
@@ -649,7 +653,7 @@ AKS currently rejects a Gateway customization that sets a pod or container
 security context. Its published
 [customization allow list](https://learn.microsoft.com/azure/aks/istio-gateway-api#deployment-customization-allow-list-fields)
 does not include these fields.
-A managed pod without an explicit seccomp profile cannot satisfy the P0
+A managed pod without an explicit seccomp profile cannot satisfy the
 namespace's `restricted` policy.
 This incompatibility blocks routing acceptance.
 The source does not authorize a policy downgrade or a change to managed
@@ -664,7 +668,7 @@ The policy must be `restricted` or `baseline`. Neither value is a default.
 These flags do not constitute approval.
 An existing namespace must have matching ownership and policy labels.
 The installer refuses to change its policy.
-The P0 namespace retains restricted enforcement, audit, and warning labels.
+The namespace retains restricted enforcement, audit, and warning labels.
 
 For a fresh product install, run the certificate-only stage before the
 manual v1 Kustomize deployment workflow. It creates the approved Gateway
@@ -824,7 +828,7 @@ An existing compatible Secret with no PVC permits creation of the missing PVC.
 This operation never rotates credentials or deletes state.
 
 The default-off `--align-existing-identity-broker-hostname` option changes only
-hostname fields on the existing owned P0 Gateway, HTTPRoute, and BackendTLSPolicy.
+hostname fields on the existing owned Gateway, HTTPRoute, and BackendTLSPolicy.
 The hostname comes from the available native DefaultDomainCertificate.
 UID and resource-version tests prevent overwriting a concurrent change.
 Certificate references, namespaces, route attachment, backend ports, policies,
@@ -936,7 +940,7 @@ role assignments, Private Endpoints, or Private DNS links.
 
 The reviewed JSON parameters bind the existing PostgreSQL Entra administrator
 object ID, name, and supported type (`User`, `Group`, or `ServicePrincipal`);
-they do not require a new group. The P0 example keeps `location` for VNet/AKS/
+they do not require a new group. The example keeps `location` for VNet/AKS/
 PostgreSQL and subnet-bound resources separate from required
 `monitorLocation` for Log Analytics and Application Insights.
 The selected deployment's source SHA, Git tree, and infrastructure hash are
@@ -968,7 +972,7 @@ object ID. Service-identity permissions and the existing subnet Network
 Contributor assignment remain scoped to their required resources.
 
 The AKS-only template reads the issuer URL and managed routing-domain state
-from the deployed cluster without PUTting AKS. It updates the three P0
+from the deployed cluster without PUTting AKS. It updates the three existing
 workload-identity federated credentials and preserves
 their ServiceAccount subjects and `api://AzureADTokenExchange` audience. Its
 source-bound receipt covers only the federation refresh and is not a full-foundation
@@ -981,7 +985,7 @@ node scripts\azure\deploy.mjs --resource-group agentweaver --parameters infra\bi
 ```
 
 The default template is `infra\bicep\main.bicep` for a full-foundation
-deployment. To refresh workload-identity federation in an existing P0 foundation, select the
+deployment. To refresh workload-identity federation in an existing foundation deployment, select the
 dedicated template and parameter file explicitly:
 
 ```powershell
@@ -1015,7 +1019,7 @@ kubeconfig or applies Kubernetes manifests.
 Initial Identity PostgreSQL setup has a separate default-off
 `--bootstrap-identity-postgres` option. It is available after either an
 approved full foundation deployment or an AKS-only redeployment to the exact
-existing P0 target.
+existing foundation target.
 The bootstrap uses the reviewed PostgreSQL host and administrator inputs and
 reads the two Identity Broker principal IDs required by database setup. It
 does not re-read PostgreSQL server or Entra administrator properties. After
@@ -1033,10 +1037,12 @@ create a public route, app registration, secret, or Azure role assignment.
 Ordinary `--execute` does not run this initializer. A failed bootstrap or
 transport cleanup is reported and is not converted into a successful receipt.
 
-### P1 PostgreSQL operator initialization
+<span id="p1-postgresql-operator-initialization"></span>
+
+### PostgreSQL operator initialization
 
 `bootstrap-p1-postgres.mjs` initializes the `agentweaver` database on the
-existing PostgreSQL server after the five P1 runtime identities and the
+existing PostgreSQL server after the five service runtime identities and the
 Identity Broker identities exist.
 Without `--execute`, it prints the source-bound target and role plan without
 calling Azure. Execution requires the exact reviewed Core merge SHA:
@@ -1054,31 +1060,32 @@ match the reviewed source SHA. Before opening a tunnel, it checks the selected
 account and dedicated resource group, validates the approved PostgreSQL Entra
 administrator inputs, and reads the two Identity Broker principal IDs required
 by database bootstrap. It does not re-read PostgreSQL server or administrator
-metadata or refresh the five P1 plan IDs from Azure. It then runs the Identity
-Broker bootstrap and P1 initializer through one temporary loopback-only
-PostgreSQL tunnel. The tunnel remains open through both database stages, and
+metadata, or refresh the five service principal IDs in the reviewed plan from
+Azure. It then runs the Identity Broker bootstrap and database initializer
+through one temporary loopback-only PostgreSQL tunnel. The tunnel remains open
+through both database stages, and
 the owned Pod, ConfigMap, port-forward, isolated kubeconfig, proxy files, and
-temporary files are removed by the operator script's cleanup path. The P1
+temporary files are removed by the operator script's cleanup path. The bootstrap
 receipt remains under the source checkout's `Temp` directory for audit.
 
 This command initializes PostgreSQL only. It does not deploy Bicep or product
 workloads and creates no Azure role assignment or other Azure access grant.
 It requires the operator's existing AKS access and PostgreSQL Entra
 administrator authority; stop if either permission is unavailable rather than
-creating a grant. The P1 receipt records operator initialization only, not
+creating a grant. The receipt records operator initialization only, not
 runtime identity or deployment proof. The initializer reads back its planned
 roles and grants before commit; perform a separate read-only catalog check
 before treating the setup as ready.
 
 For the plan and migration requirements used by this command, see
-[P1 PostgreSQL initialization and migration plan](#p1-postgresql-initialization-and-migration-plan).
+[PostgreSQL initialization and migration plan](#p1-postgresql-initialization-and-migration-plan).
 
 The TCP proxy accepts `--key-vault <host>` only when the host exactly matches
 the URI configured by `IdentityBroker__SecretRedemption__VaultUri`. The URI
 comes from the reviewed Bicep `keyVaultName` parameter; the proxy does not
 contain a compiled-in vault name. It relays TCP from port 8443 to that host on
 port 443.
-The loopback forward requires port 15443 and the P0 namespace.
+The loopback forward requires port 15443 and the target namespace.
 The PostgreSQL argument and port 5432 remain unchanged.
 The proxy receives encrypted TLS bytes, not an operator credential.
 The local SDK must keep the real vault URI, SNI, and system certificate validation.
@@ -1159,8 +1166,8 @@ This optional collector reports configuration and probe evidence separately.
 The report passes only when every required check passes; otherwise the command
 exits 1. This source-only consumer was validated with fake transports and local
 fixtures. It does not perform live Azure, Kubernetes, or registry reads during
-source validation, and it does not deploy, publish, or close the full P0
-shipping checklist. It is supplemental, not the P0 shipping smoke-test gate.
+source validation, and it does not deploy, publish, or complete the foundation
+release checklist. It is supplemental, not the required foundation smoke test.
 The required practical checks are documented in [Azure acceptance](../../docs/guide/azure-acceptance.md).
 The observed ACNS/Cilium settings are configuration evidence only; the consumer
 does not claim that a Cilium policy is effectively enforced.

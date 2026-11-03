@@ -1,7 +1,7 @@
 # Web client reference
 
 Use this reference to look up the routes, configuration, and source boundaries
-of the checked-in v1 Web client. It describes source behavior; it does not prove
+of the checked-in Web client. It describes source behavior; it does not prove
 that a Web deployment is available. The client is a React and TypeScript single-page
 application (SPA) built with Vite. It uses Fluent UI for controls and React Flow
 for session topology. A .NET static-file host serves the production build.
@@ -33,7 +33,7 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/RunOutputCaptures.tsx` | **Produced files** on the run Changes tab: saved file sets and their patches. |
 | `src/v1/RemoteMcpOAuthCallbackPage.tsx` | Remote MCP OAuth popup return handling. |
 | `src/v1/RemoteMcpConnectionPanel.tsx` | Remote MCP saved connection list, connection status, sign-in, refresh, and disconnect in project settings. |
-| `src/v1/RetainedShell.tsx` | 0.x rail, project switcher, breadcrumbs, notification bell, and persona menu filled with Gateway projects and the Broker session. The v1 rail also links to the Chief of Staff section on Overview. |
+| `src/v1/RetainedShell.tsx` | 0.x rail, project switcher, breadcrumbs, notification bell, and persona menu filled with Gateway projects and the Broker session. The rail also links to the Chief of Staff section on Overview. |
 | `src/v1/OverviewPage.tsx` | Cross-project home: Chief of Staff (Priorities, New chat, and My conversations), operations summary, recent projects, metrics for one selected project, recent runs, and items that need input. |
 | `src/v1/SessionsPage.tsx` | Runs across all visible projects, newest first, with **Load more** and **New session**. |
 | `src/v1/NewSessionPage.tsx`, `src/v1/pendingRun.ts` | New session: create a run, sign in silently for that run, and start it. The pending run is kept in session storage across the sign-in. |
@@ -125,7 +125,7 @@ files return `404`, not the SPA fallback.
 
 The host can inject public browser settings at runtime; build-time Vite values
 provide the fallback. Use the runtime configuration reference for deployment
-procedures and setting sources. The table below documents the values the v1
+procedures and setting sources. The table below documents the values the
 client reads.
 
 `src/v1/config.ts` reads decoded

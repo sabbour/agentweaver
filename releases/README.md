@@ -1,4 +1,4 @@
-# Agentweaver v1 releases
+# Agentweaver releases
 
 `foundation.json` is the authoritative list of component IDs, package kinds,
 versions, and project paths. Its schema is in `manifest.schema.json`.

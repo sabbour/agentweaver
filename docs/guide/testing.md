@@ -192,11 +192,11 @@ source identity alongside the test output. Match a result to the exact source
 SHA, pull request head, workflow run, and attempt. A compiled test or a green
 run from an older revision is not evidence that the current revision passed.
 
-## Understand v1 pull request CI
+## Understand pull request CI
 
 The `v1 foundation CI` workflow keeps the required `foundation` check as an
 always-reported aggregate. It fails if any selected job fails, is cancelled,
-or is unexpectedly skipped. Release composition validation, controlled P1
+or is unexpectedly skipped. Release composition validation, controlled API
 journeys, CI/coverage guards, and issue-to-merge contracts still run on every
 candidate. `v1-docs-ci.yml` remains the separate documentation check.
 
@@ -245,7 +245,7 @@ for the image provenance checks.
 
 Pull request, push, and manual `v1 foundation CI` runs never collect
 coverage. Coverage is a separate weekly measurement; see
-[Measure v1 coverage weekly](#measure-v1-coverage-weekly). Local
+[Measure coverage weekly](#measure-coverage-weekly). Local
 `npm run coverage:dotnet` retains its full sequential diagnostic behavior.
 Only superseded runs for the same PR are cancelled; pushes and manual runs
 have independent concurrency groups.
@@ -286,7 +286,7 @@ not exceed 20 minutes, and the longest Broker shard must not exceed 8 minutes.
 Use completed run results to verify these targets. A configuration change
 alone does not prove performance acceptance.
 
-## Measure v1 coverage weekly
+## Measure coverage weekly
 
 The `v1 coverage` workflow (`.github/workflows/v1-coverage.yml`) measures
 coverage once a week. It calls `v1-ci.yml` with `collect_coverage: true`, so
@@ -652,13 +652,13 @@ wrapper/process contract; it does not launch the runtime acceptance apphost or
 retain a second Node API client. Use the native apphost command above for API
 acceptance. The retained MCP adapter tests use a pinned SDK and loopback
 JSON-RPC server; they are legacy
-compatibility tests, not a supported Agentweaver 1.x MCP product or acceptance
+compatibility tests, not a supported Agentweaver MCP product or acceptance
 surface. The UI tests use injected page doubles, not a browser. These tests
 check fixture creation, selected surface calls, cleanup outcomes, and refusal
 of unverified ownership claims. They do not prove live owner behavior, native
 model execution, or deployment.
 
-The retained controlled P1 journal regression starts with an empty in-memory event
+The retained controlled journal regression starts with an empty in-memory event
 journal. Fixture setup discovers and invokes the Gateway
 `sendProjectRunMessage` operation with its run-bound token and an
 invocation-scoped `Idempotency-Key`, then checks the exact accepted receipt
@@ -703,7 +703,7 @@ while the selected immutable Orchestrator image digest must match its OCI
 source labels and the running Pod image ID. They use controlled GitHub,
 registry, and Kubernetes responses; they do not prove a live rollout.
 
-The one-account P1 sign-in launcher also has a real browser regression that
+The one-account API acceptance sign-in launcher also has a real browser regression that
 uses loopback redirects only. Install the Playwright test browser and run it:
 
 ```powershell
@@ -722,16 +722,16 @@ attached until the page closes, including when sign-in fails or is cancelled.
 The shared contract tests delay the abort acknowledgement to check this
 ordering without depending on browser timing.
 It renders Broker consent when that response arrives through a redirect.
-The 1.x harness entrypoints reject `--surface mcp` and `--surface api,mcp`
+The harness entrypoints reject `--surface mcp` and `--surface api,mcp`
 explicitly and never route those selections to the legacy runner. Use
-`--surface api` for 1.x P1 acceptance. Retained MCP adapter and UI browser
+`--surface api` for API acceptance. Retained MCP adapter and UI browser
 tests remain local compatibility checks; they do not sign in to Entra, use an
 existing profile or credential cache, or prove live SSO. Each token request closes
 only its authorization page, keeping the shared browser alive until the
 launcher finishes.
 CI runs both the harness contract suite and this browser regression.
 
-The P1 product journey does not require publication receipts, source claims,
+API acceptance does not require publication receipts, source claims,
 image measurements, or local OCI archives. The harness still requires the
 selected environment, current provider/runtime/storage inputs, owned fixtures,
 and independently produced native/recovery evidence. See

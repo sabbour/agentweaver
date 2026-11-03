@@ -3,7 +3,7 @@
 Use this reference to check what the Gateway import and export operations accept,
 retain, and reject. These source contracts do not prove that the routes are
 deployed. A remote MCP provider inside a suite is a project dependency; it does
-not make a product MCP server an Agentweaver 1.x entrypoint.
+not make a product MCP server an Agentweaver entrypoint.
 
 Agentweaver reads AgentSuite as defined by
 [agent-primitives/suite](https://github.com/agent-primitives/suite) commit
