@@ -145,7 +145,7 @@ Within a project, use these destinations:
 | Destination | Route | What you can do |
 | --- | --- | --- |
 | Dashboard | `/projects/:projectId` | Read setup readiness from the saved configuration, metric tiles, the **Activity** chart, run totals, model and agent usage, recent runs, and the team. Use quick actions to finish setup or open Orchestrations and Memories. |
-| Board | `/projects/:projectId/board` | Read the project backlog in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture and edit tasks, change queue state, manage prerequisites, archive or delete eligible tasks, and select **Refresh** to reload. |
+| Board | `/projects/:projectId/board` | Read the project backlog in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture and edit tasks, drag open tasks within or between **Backlog** and **Ready**, change queue state and order, manage prerequisites, archive or delete eligible tasks, and select **Refresh** to reload. |
 | Orchestrations | `/projects/:projectId/orchestrations` | List the project's runs in **Active** and **Recent** sections, with a status summary. Select **Refresh** to reload. |
 | Agents | `/projects/:projectId/team` | Read the **Total**, **In the team**, and **Not in the team** counts. Filter the agent tiles. Open an agent to read its ID, team position, and skills, or edit its role and charter. Use **Cast team**, **Add member**, and **Sync**. |
 | Skills | `/projects/:projectId/skills` | Browse marketplace sources, preview and import Skills, read the inventory, and assign Skills to agents. |
@@ -188,13 +188,16 @@ the repository issues synced to tasks:
 - **Ready** records queue intent, not execution eligibility. A run checks
   current prerequisite execution and output evidence when it claims a task.
   The Board does not start a run; use **New session** to create one.
+- Drag open, editable tasks within or between **Backlog** and **Ready** when
+  their card isn't being edited. The **Active** and **Done** columns do not
+  accept drops. **Move earlier**, **Move later**, and the queue-state buttons
+  remain available as keyboard alternatives.
 - A write sends the revision the Board last read. If another change got there
   first, a capture retries once with the new revision. Other revision
   conflicts reload the Board and ask you to try again.
-- Cards can't be dragged between columns. Use **Move earlier** and **Move
-  later** when available to change a task's position. Select **Send all to
-  Ready** to queue eligible Backlog tasks when you can change the project.
-  **Human Review** and **Problems** columns aren't available.
+- Select **Send all to Ready** to queue eligible Backlog tasks when you can
+  change the project. **Human Review** and **Problems** columns aren't
+  available.
 - Without read access, the Board says you don't have permission to view it.
   A failed read shows the reason and **Try again**.
 
@@ -731,8 +734,6 @@ missing measurements with zero.
 
 These features are not available in this version:
 
-- Dragging tasks between **Board** columns. Use the card actions to change
-  queue state or order; **Send all to Ready** queues eligible backlog tasks.
 - The **Human Review** and **Problems** columns on the **Board**.
 - The count strip on **Memories**.
 - Metrics totaled across projects. **Overview** shows one project at a time.

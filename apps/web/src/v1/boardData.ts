@@ -66,8 +66,8 @@ export const BOARD_COLUMNS: ReadonlyArray<Omit<BoardColumn, 'tasks'>> = [
   { id: 'done', label: 'Done', description: 'Tasks whose work, or whose linked issue, is closed.' },
 ];
 
-/** Plain copy shown where 0.x let users drag tasks between columns. */
-export const MOVE_UNAVAILABLE_COPY = 'Drag and drop is unavailable. Use task actions to change queue and order.';
+/** Board move guidance; card actions remain available to keyboard users. */
+export const MOVE_GUIDANCE_COPY = 'Drag cards within or between Backlog and Ready, or use task actions to change queue and order.';
 
 /** Issue pages read per board load. 100 issues per page keeps one load to at most 1000 issues. */
 const ISSUE_PAGE_SIZE = 100;
@@ -114,6 +114,23 @@ export function queueInsertionPosition(
       left.position - right.position || left.reference.taskId.localeCompare(right.reference.taskId));
   const neighborIndex = queue.findIndex((candidate) =>
     candidate.reference.taskId === neighbor.reference.taskId);
+  return neighborIndex < 0 ? null : neighborIndex + (placement === 'after' ? 1 : 0);
+}
+
+/** Finds a drop position in the target queue after excluding the moved task. */
+export function queueDropPosition(
+  graph: BacklogGraph,
+  taskId: string,
+  targetState: Exclude<BacklogTaskState, 'claimed'>,
+  neighborTaskId: string | null,
+  placement: 'before' | 'after',
+): number | null {
+  const queue = graph.tasks
+    .filter((task) => task.state === targetState && task.reference.taskId !== taskId)
+    .sort((left, right) =>
+      left.position - right.position || left.reference.taskId.localeCompare(right.reference.taskId));
+  if (neighborTaskId === null) return queue.length;
+  const neighborIndex = queue.findIndex((task) => task.reference.taskId === neighborTaskId);
   return neighborIndex < 0 ? null : neighborIndex + (placement === 'after' ? 1 : 0);
 }
 
@@ -331,9 +348,11 @@ export function useProjectBoard(
     if (graph.projectId !== projectId || requestScope && isScopeCurrent && !isScopeCurrent(requestScope)) return;
     // An authoritative write wins over any earlier read in the same scope.
     readSequence.current += 1;
-    setState((previous) => (previous.scopeIdentity === (requestScope?.identity ?? null) && graph.projectId === projectId
-      ? { ...previous, projectId, scopeIdentity: requestScope?.identity ?? null, graph, error: null, settled: true }
-      : previous));
+    setState((previous) => {
+      if (previous.scopeIdentity !== (requestScope?.identity ?? null) || graph.projectId !== projectId) return previous;
+      if (previous.graph && previous.graph.revision > graph.revision) return previous;
+      return { ...previous, projectId, scopeIdentity: requestScope?.identity ?? null, graph, error: null, settled: true };
+    });
   }, [isScopeCurrent, projectId, requestScope]);
 
   const current = state.projectId === projectId
@@ -419,23 +438,28 @@ export function setTaskState(
     }, tenant), null);
 }
 
-    /** Places one task within its current queue using both observed revisions. */
-    export function setTaskPosition(
-      apiCall: ApiCall,
-      graph: BacklogGraph,
-      task: BacklogTaskSnapshot,
-      state: Exclude<BacklogTaskState, 'claimed'>,
-      position: number,
-    ): Promise<BacklogGraph> {
-      const request: SetBacklogTaskPositionRequest = {
-        state,
-        position,
-        expectedGraphRevision: graph.revision,
-        expectedTaskRevision: task.revision,
-      };
-      return apiCall((token, tenant) => gatewayClient.setProjectBacklogTaskPosition(
-        token, graph.projectId, task.reference.taskId, request, tenant), null);
-    }
+/** Places one task in a backlog or ready queue using both observed revisions. */
+export function setTaskPosition(
+  apiCall: ApiCall,
+  graph: BacklogGraph,
+  task: BacklogTaskSnapshot,
+  state: Exclude<BacklogTaskState, 'claimed'>,
+  position: number,
+  scope?: BoardRequestScope,
+  isScopeCurrent?: IsBoardScopeCurrent,
+): Promise<BacklogGraph> {
+  const request: SetBacklogTaskPositionRequest = {
+    state,
+    position,
+    expectedGraphRevision: graph.revision,
+    expectedTaskRevision: task.revision,
+  };
+  return apiCall((token, tenant) => {
+    if (scope && isScopeCurrent) assertBoardScope(scope, isScopeCurrent, token, tenant);
+    return gatewayClient.setProjectBacklogTaskPosition(
+      token, graph.projectId, task.reference.taskId, request, tenant);
+  }, null);
+}
 
     /** Moves all eligible Backlog tasks to Ready at the graph revision the user read. */
     export function setAllEligibleTasksReady(

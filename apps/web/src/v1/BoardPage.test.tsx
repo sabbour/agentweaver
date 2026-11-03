@@ -129,6 +129,16 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function dragTransfer() {
+  const values = new Map<string, string>();
+  return {
+    effectAllowed: 'none',
+    dropEffect: 'none',
+    setData: (type: string, value: string) => values.set(type, value),
+    getData: (type: string) => values.get(type) ?? '',
+  } as unknown as DataTransfer;
+}
+
 function NavigationProbe({ onNavigate }: { onNavigate: (navigate: (path: string) => void) => void }) {
   const navigate = useNavigate();
   onNavigate(navigate);
@@ -185,9 +195,13 @@ describe('BoardPage', () => {
     expect(within(screen.getByTestId('column-done')).getByText('Old work')).toBeTruthy();
     expect(screen.queryByText('Archived work')).toBeNull();
     expect(screen.getByTestId('count-backlog').textContent).toBe('1');
-    // Queue actions are available on cards; drag and drop remains unavailable.
-    expect(screen.getByTestId('board-move-unavailable').textContent).toBe('Drag and drop is unavailable. Use task actions to change queue and order.');
-    expect(document.querySelector('[draggable="true"]')).toBeNull();
+    expect(screen.getByTestId('board-move-guidance').textContent).toBe(
+      'Drag cards within or between Backlog and Ready, or use task actions to change queue and order.',
+    );
+    expect(screen.getByTestId('task-card-t1').getAttribute('draggable')).toBe('true');
+    expect(screen.getByTestId('task-card-t2').getAttribute('draggable')).toBe('true');
+    expect(screen.getByTestId('task-card-t3').getAttribute('draggable')).toBe('false');
+    expect(screen.getByTestId('task-card-t4').getAttribute('draggable')).toBe('false');
     expect(within(screen.getByTestId('task-card-t3')).queryByRole('button', { name: 'Mark Ready' })).toBeNull();
     expect(mocks.listProjectIssues).toHaveBeenCalledWith('token', 'p1', { state: 'all', cursor: null, pageSize: 100 }, 'tenant-1');
   });
@@ -219,6 +233,136 @@ describe('BoardPage', () => {
     ));
     expect(await screen.findByText('Eligible tasks moved to Ready.')).toBeTruthy();
     expect(within(screen.getByTestId('column-ready')).getByTestId('task-card-t1')).toBeTruthy();
+  });
+
+  it('moves a dragged Backlog task after a Ready task using the observed revisions', async () => {
+    const backlogTask = task('t1', 'Backlog task', { position: 0 });
+    const readyTask = task('t2', 'Ready task', { state: 'ready', position: 0 });
+    mocks.readProjectBacklog.mockResolvedValue(graph([backlogTask, readyTask], 5));
+    mocks.setProjectBacklogTaskPosition.mockResolvedValue(graph([
+      task('t2', 'Ready task', { state: 'ready', position: 0 }),
+      task('t1', 'Backlog task', { state: 'ready', position: 1 }),
+    ], 6));
+    renderBoard();
+
+    const transfer = dragTransfer();
+    fireEvent.dragStart(await screen.findByTestId('task-card-t1'), { dataTransfer: transfer });
+    fireEvent.dragOver(await screen.findByTestId('task-card-t2'), { dataTransfer: transfer });
+    fireEvent.drop(screen.getByTestId('task-card-t2'), { clientY: 100, dataTransfer: transfer });
+
+    await waitFor(() => expect(mocks.setProjectBacklogTaskPosition).toHaveBeenCalledWith(
+      'token', 'p1', 't1',
+      { state: 'ready', position: 1, expectedGraphRevision: 5, expectedTaskRevision: 1 },
+      'tenant-1',
+    ));
+    expect(await screen.findByText('Task moved to Ready.')).toBeTruthy();
+    expect(within(screen.getByTestId('column-ready')).getByTestId('task-card-t1')).toBeTruthy();
+  });
+
+  it('keeps task drafts intact by disabling drag while the card is being edited', async () => {
+    mocks.readProjectBacklog.mockResolvedValue(graph([task('t1', 'Backlog task', { description: 'Saved description' })]));
+    renderBoard();
+
+    const card = await screen.findByTestId('task-card-t1');
+    fireEvent.click(within(card).getByRole('button', { name: 'Edit task Backlog task' }));
+    const title = within(card).getByRole('textbox', { name: 'Title' }) as HTMLInputElement;
+    const description = within(card).getByRole('textbox', { name: 'Description' }) as HTMLTextAreaElement;
+    fireEvent.change(title, { target: { value: 'Unsaved title draft' } });
+    fireEvent.change(description, { target: { value: 'Unsaved description draft' } });
+
+    expect(card.getAttribute('draggable')).toBe('false');
+    const transfer = dragTransfer();
+    fireEvent.dragStart(card, { dataTransfer: transfer });
+    fireEvent.dragOver(screen.getByTestId('column-ready'), { dataTransfer: transfer });
+    fireEvent.drop(screen.getByTestId('column-ready'), { dataTransfer: transfer });
+
+    expect(within(card).getByRole('textbox', { name: 'Title' })).toHaveProperty('value', 'Unsaved title draft');
+    expect(within(card).getByRole('textbox', { name: 'Description' })).toHaveProperty('value', 'Unsaved description draft');
+    expect(mocks.setProjectBacklogTaskPosition).not.toHaveBeenCalled();
+  });
+
+  it('does not replace a newer capture graph with a delayed move response', async () => {
+    const backlogTask = task('t1', 'Backlog task', { position: 0 });
+    const readyTask = task('t2', 'Ready task', { state: 'ready', position: 0 });
+    const movedGraph = graph([
+      readyTask,
+      task('t1', 'Backlog task', { state: 'ready', position: 1 }),
+    ], 6);
+    const capturedGraph = graph([
+      ...movedGraph.tasks,
+      task('t3', 'Captured work'),
+    ], 7);
+    const delayedMove = deferred<BacklogGraph>();
+    mocks.readProjectBacklog
+      .mockResolvedValueOnce(graph([backlogTask, readyTask], 5))
+      .mockResolvedValueOnce(movedGraph);
+    mocks.setProjectBacklogTaskPosition.mockReturnValue(delayedMove.promise);
+    mocks.captureBacklogTask
+      .mockRejectedValueOnce(new GatewayError(409, {
+        issues: [{ code: 'staleGraphRevision', path: '', message: 'Stale.' }],
+      }, 'Stale.'))
+      .mockResolvedValueOnce(capturedGraph);
+    renderBoard();
+
+    const transfer = dragTransfer();
+    fireEvent.dragStart(await screen.findByTestId('task-card-t1'), { dataTransfer: transfer });
+    fireEvent.dragOver(screen.getByTestId('column-ready'), { dataTransfer: transfer });
+    fireEvent.drop(screen.getByTestId('column-ready'), { dataTransfer: transfer });
+    await waitFor(() => expect(mocks.setProjectBacklogTaskPosition).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'New task title' }), { target: { value: 'Captured work' } });
+    fireEvent.click(within(screen.getByRole('region', { name: 'Intake' })).getByRole('button', { name: 'Add' }));
+    expect(await screen.findByTestId('task-card-t3')).toBeTruthy();
+    expect(mocks.captureBacklogTask).toHaveBeenCalledTimes(2);
+    expect(mocks.captureBacklogTask.mock.calls[0][2].expectedGraphRevision).toBe(5);
+    expect(mocks.captureBacklogTask.mock.calls[1][2].expectedGraphRevision).toBe(6);
+
+    await act(async () => {
+      delayedMove.resolve(movedGraph);
+      await delayedMove.promise;
+    });
+
+    expect(screen.getByTestId('task-card-t3')).toBeTruthy();
+    expect(screen.getByTestId('count-backlog').textContent).toBe('1');
+  });
+
+  it('reorders a dragged task within Backlog using the observed revisions', async () => {
+    const first = task('t1', 'First task', { position: 0 });
+    const second = task('t2', 'Second task', { position: 1 });
+    mocks.readProjectBacklog.mockResolvedValue(graph([first, second], 5));
+    mocks.setProjectBacklogTaskPosition.mockResolvedValue(graph([
+      task('t2', 'Second task', { position: 0 }),
+      task('t1', 'First task', { position: 1 }),
+    ], 6));
+    renderBoard();
+
+    const transfer = dragTransfer();
+    fireEvent.dragStart(await screen.findByTestId('task-card-t1'), { dataTransfer: transfer });
+    fireEvent.dragOver(await screen.findByTestId('task-card-t2'), { dataTransfer: transfer });
+    fireEvent.drop(screen.getByTestId('task-card-t2'), { clientY: 100, dataTransfer: transfer });
+
+    await waitFor(() => expect(mocks.setProjectBacklogTaskPosition).toHaveBeenCalledWith(
+      'token', 'p1', 't1',
+      { state: 'backlog', position: 1, expectedGraphRevision: 5, expectedTaskRevision: 1 },
+      'tenant-1',
+    ));
+    expect(await screen.findByText('Task reordered.')).toBeTruthy();
+  });
+
+  it('does not send a drag drop into the owner-controlled Active column', async () => {
+    mocks.readProjectBacklog.mockResolvedValue(graph([
+      task('t1', 'Backlog task'),
+      task('t2', 'Active task', { state: 'claimed' }),
+    ], 5));
+    renderBoard();
+
+    const transfer = dragTransfer();
+    fireEvent.dragStart(await screen.findByTestId('task-card-t1'), { dataTransfer: transfer });
+    fireEvent.dragOver(screen.getByTestId('column-active'), { dataTransfer: transfer });
+    fireEvent.drop(screen.getByTestId('column-active'), { dataTransfer: transfer });
+    fireEvent.dragEnd(screen.getByTestId('task-card-t1'), { dataTransfer: transfer });
+
+    expect(mocks.setProjectBacklogTaskPosition).not.toHaveBeenCalled();
   });
 
   it('computes insertion indexes when a state change leaves a position gap', async () => {
