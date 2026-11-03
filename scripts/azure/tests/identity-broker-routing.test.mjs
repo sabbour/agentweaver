@@ -103,14 +103,10 @@ function snapshot() {
       { domain: '*.test.eastus2.aksapp.io', conditions: conditions('Available') }),
     gateway: object('Gateway', gatewayNamespace, {
       gatewayClassName: 'approuting-istio',
-      listeners: [
-        managedListener('https', wildcardHostname),
-        managedListener('auth', authHostname),
-        managedListener('api', apiHostname),
-      ],
+      listeners: [managedListener('https', wildcardHostname)],
     }, {
       conditions: conditions('Accepted', 'Programmed'), addresses: [{ type: 'IPAddress', value: '203.0.113.10' }],
-      listeners: ['https', 'auth', 'api'].map(name => ({
+      listeners: ['https'].map(name => ({
         name, conditions: conditions('Accepted', 'Programmed', 'ResolvedRefs'),
       })),
     }),
@@ -127,7 +123,7 @@ function snapshot() {
     }, { ancestors: [{ controllerName: controller,
       ancestorRef: { name: 'identity-broker', namespace: gatewayNamespace },
       conditions: conditions('Accepted', 'ResolvedRefs') }] }),
-    authRoute: managedRoute('identity-broker-auth', 'identity-broker', authHostname, 'auth',
+    authRoute: managedRoute('identity-broker-auth', 'identity-broker', authHostname, 'https',
       [{ type: 'PathPrefix', value: '/' }], 'identity-broker', 443),
     webRoute: object('HTTPRoute', p0, {
       hostnames: [portalHostname],
@@ -148,7 +144,7 @@ function snapshot() {
     }, { parents: [{ controllerName: controller,
       parentRef: { name: 'identity-broker', namespace: gatewayNamespace, sectionName: 'https' },
       conditions: conditions('Accepted', 'ResolvedRefs') }] }, { name: 'gateway-api', service: 'gateway' }),
-    apiHostRoute: managedRoute('gateway-api-host', 'gateway', apiHostname, 'api', [
+    apiHostRoute: managedRoute('gateway-api-host', 'gateway', apiHostname, 'https', [
       { type: 'PathPrefix', value: '/api/v1' },
       { type: 'PathPrefix', value: '/api/connections/copilot-user/v1' },
       { type: 'PathPrefix', value: '/api/connections/remote-mcp/v1' },
@@ -342,13 +338,11 @@ test('issuer and native signin callback come from the programmed exact managed H
   assert.deepEqual(native.gateway.spec.listeners.map(({ name, hostname: listenerHostname }) =>
     ({ name, hostname: listenerHostname })), [
     { name: 'https', hostname: wildcardHostname },
-    { name: 'auth', hostname: authHostname },
-    { name: 'api', hostname: apiHostname },
   ]);
   for (const [route, routeHostname, sectionName] of [
     [native.route, hostname], [native.webRoute, portalHostname],
-    [native.authRoute, authHostname, 'auth'], [native.apiRoute, portalHostname, 'https'],
-    [native.apiHostRoute, apiHostname, 'api'], [native.copilotBffRoute, portalHostname, 'https'],
+    [native.authRoute, authHostname, 'https'], [native.apiRoute, portalHostname, 'https'],
+    [native.apiHostRoute, apiHostname, 'https'], [native.copilotBffRoute, portalHostname, 'https'],
     [native.mcpRoute, portalHostname, 'https'],
   ]) {
     assert.deepEqual(route.spec.hostnames, [routeHostname]);
@@ -492,8 +486,10 @@ test('missing, stale, unprogrammed, cross-target, or unsafe native evidence neve
     value => { value.gateway.spec.gatewayClassName = 'istio'; },
     value => { value.gateway.spec.listeners[0].hostname = hostname; },
     value => { value.gateway.spec.listeners.pop(); },
-    value => { value.gateway.spec.listeners[1].hostname = portalHostname; },
-    value => { value.authRoute.spec.parentRefs[0].sectionName = 'https'; },
+    value => { value.gateway.spec.listeners.push(managedListener('auth', authHostname)); },
+    value => { value.gateway.spec.listeners.push(managedListener('api', apiHostname)); },
+    value => { value.authRoute.spec.parentRefs[0].sectionName = 'auth'; },
+    value => { value.apiHostRoute.spec.parentRefs[0].sectionName = 'api'; },
     value => { value.apiHostRoute.spec.rules[0].matches[1].path.value = '/'; },
     value => { value.copilotBffRoute.spec.hostnames = [apiHostname]; },
     value => { value.route.apiVersion = 'networking.istio.io/v1'; },
@@ -629,6 +625,9 @@ test('readiness proves DNS, trusted HTTPS aliases, API routing, and HTTP/2 cross
   assert.deepEqual(http2Calls, [
     ['203.0.113.10', hostname, portalHostname, '/'],
     ['203.0.113.10', portalHostname, hostname, '/health/live'],
+    ['203.0.113.10', portalHostname, authHostname, '/.well-known/openid-configuration'],
+    ['203.0.113.10', portalHostname, apiHostname, '/openapi/v1.json'],
+    ['203.0.113.10', authHostname, portalHostname, '/'],
   ]);
   for (const result of [ok('Healthy\n200\n203.0.113.20'), ok('Redirect\n302\n203.0.113.10'),
     { status: 60, stdout: '', stderr: 'certificate validation failed' }]) {
@@ -636,7 +635,8 @@ test('readiness proves DNS, trusted HTTPS aliases, API routing, and HTTP/2 cross
       execCurl: () => result,
     }), /DNS\/TLS verification failed/);
   }
-  for (const response of [{ alpn: 'h2', status: 404 }, { alpn: 'h2', status: 421 }, { alpn: 'http/1.1', status: 200 }]) {
+  for (const response of [{ alpn: 'h2', status: 404 }, { alpn: 'h2', status: 421 },
+    { alpn: 'h2', status: '200' }, { alpn: 'http/1.1', status: 200 }]) {
     assert.throws(() => verifyIdentityBrokerReadiness(deriveIdentityRouting(snapshot()), {
       execCurl: () => ok('Healthy\n200\n203.0.113.10'),
       execHttp2: () => ok(JSON.stringify(response)),
@@ -651,8 +651,6 @@ test('production JSON projections preserve the native long DNS hostname and exis
   native.gatewayCertificate.status.domain = observedDomain;
   native.brokerCertificate.status.domain = observedDomain;
   native.gateway.spec.listeners[0].hostname = `*.${observedDomain.slice(2)}`;
-  native.gateway.spec.listeners[1].hostname = `auth.${observedDomain.slice(2)}`;
-  native.gateway.spec.listeners[2].hostname = `api.${observedDomain.slice(2)}`;
   native.route.spec.hostnames = [observedHost];
   native.backendPolicy.spec.validation.hostname = observedHost;
   native.authRoute.spec.hostnames = [`auth.${observedDomain.slice(2)}`];
@@ -825,14 +823,19 @@ test('guarded bootstrap uses normal user kubeconfig, managed certificates in bot
   assert.deepEqual(parse(gateway).spec.listeners.map(({ name, hostname: listenerHost }) =>
     ({ name, hostname: listenerHost })), [
     { name: 'https', hostname: wildcardHostname },
-    { name: 'auth', hostname: authHostname },
-    { name: 'api', hostname: apiHostname },
   ]);
   assert.doesNotMatch(gateway, /name: portal/);
+  const waits = calls.map(call => kubectlCommand(call.args)).filter(command => command[0] === 'wait');
+  const listenerWaits = waits.filter(command => command.includes('gateway/identity-broker') &&
+    command.some(value => value.includes('.status.listeners')));
+  assert.equal(listenerWaits.length, 6);
+  assert.ok(listenerWaits.every(command => command.some(value => value.includes('name=="https"'))));
+  assert.ok(waits.some(command => command.includes('httproute/identity-broker-auth')));
+  assert.ok(waits.some(command => command.includes('httproute/gateway-api-host')));
   const authRoute = applies.find(text => text.includes('name: identity-broker-auth'));
   assert.ok(authRoute);
   assert.ok(authRoute.includes(`- ${authHostname}`));
-  assert.match(authRoute, /sectionName: auth/);
+  assert.match(authRoute, /sectionName: https/);
   const webPolicy = applies.find(text => text.includes('name: web-gateway-ingress'));
   assert.ok(webPolicy);
   assert.ok(webPolicy.includes('agentweaver.io/service: web'));
@@ -855,7 +858,7 @@ test('guarded bootstrap uses normal user kubeconfig, managed certificates in bot
   const apiHostRoute = applies.find(text => text.includes('name: gateway-api-host'));
   assert.ok(apiHostRoute);
   assert.ok(apiHostRoute.includes(`- ${apiHostname}`));
-  assert.match(apiHostRoute, /sectionName: api/);
+  assert.match(apiHostRoute, /sectionName: https/);
   assert.match(apiHostRoute, /value: \/api\/connections\/copilot-user\/v1/);
   const copilotBffRoute = applies.find(text => text.includes('name: gateway-copilot-bff'));
   assert.ok(copilotBffRoute);

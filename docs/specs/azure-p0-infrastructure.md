@@ -288,22 +288,23 @@ the Gateway and Broker namespaces.
 The installer derives the initial `agentweaver` hostname from the certificate's status.
 It applies native v1 Gateway and HTTPRoute resources, BackendTLSPolicy,
 and exact namespace/Gateway-label ingress to the HTTPS Broker.
-The listeners admit only the foundation namespace's routes. The existing wildcard
-`https` listener and Broker, Web, Gateway API, Copilot BFF, and MCP routes stay
-in place. Exact `auth` and `api` HTTPS listeners use the same managed TLS
-Secret: `auth` routes to the existing Broker Service, and `api` routes the
-existing Gateway API, OpenAPI, Copilot/Remote MCP BFF, and Repo App Gateway
-paths to the Gateway Service. The Portal Copilot BFF route stays on `https` to
-preserve the same-origin browser flow. Each route retains its exact hostname,
-path, and backend; the wildcard listener continues to support HTTP/2
-coalescing between the canonical Broker and Portal origins, and unknown hosts
-have no matching route.
+The listener admits only the foundation namespace's routes. The existing
+wildcard `https` listener and Broker, Web, Gateway API, Copilot BFF, and MCP
+routes stay in place. Exact-host `auth` and `api` HTTPRoutes attach to that
+listener and use its managed TLS Secret: `auth` routes to the existing Broker
+Service, and `api` routes the existing Gateway API, OpenAPI, Copilot/Remote
+MCP BFF, and Repo App Gateway paths to the Gateway Service. The Portal Copilot
+BFF route stays on `https` to preserve the same-origin browser flow. Each
+route retains its exact hostname, path, and backend; the wildcard listener
+continues to support HTTP/2
+coalescing across these origins without changing exact-host route boundaries.
+Unknown hosts have no matching route.
 
 The shared listener routes `/` to Web, `/api/v1` and exact
 `/openapi/v1.json` to Gateway, the Copilot BFF path to Gateway, and exact
 `/mcp` plus the protected-resource metadata path to MCP over verified backend
-HTTPS. The API alias keeps those Gateway and BFF paths available on its exact
-host. The `auth` alias is not an issuer or callback migration: the issuer and
+HTTPS. The exact-host API alias keeps those Gateway and BFF paths available.
+The `auth` alias is not an issuer or callback migration: the issuer and
 `/signin-oidc` callback remain derived from the canonical `agentweaver` Broker
 HTTPRoute. Gateway and MCP use operator-owned leaf certificates for their
 exact service DNS names, signed by the public CA certificate in the
@@ -321,8 +322,10 @@ and object IDs at the write boundary.
 It patches only the fresh public redirect list.
 An existing exact callback remains a no-op.
 Permission errors never trigger grants, application creation, or client-secret creation.
-The optional readiness check requires ordinary DNS and trusted HTTPS responses
-from both Broker health endpoints at the Gateway's observed IP.
+The optional readiness check requires ordinary DNS, trusted HTTPS responses,
+and HTTP/2 cross-host probes at every observed Gateway IP. It reports routing
+transport readiness, not browser acceptance. Each HTTP/2 response must use
+ALPN `h2` and return numeric status `200`.
 Routing configuration alone reports `runtimeVerified: false`.
 It is not evidence of deployed acceptance.
 

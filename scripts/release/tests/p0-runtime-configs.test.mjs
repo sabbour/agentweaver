@@ -288,8 +288,6 @@ test('Portal routing keeps the shared managed-domain listener and exact service 
   assert.equal(gatewaySource.metadata.namespace, 'agentweaver-gateway');
   assert.deepEqual(gatewaySource.spec.listeners.map(({ name, hostname }) => ({ name, hostname })), [
     { name: 'https', hostname: 'CHANGEME-MANAGED-WILDCARD-HOST' },
-    { name: 'auth', hostname: 'CHANGEME-AUTH-HOST' },
-    { name: 'api', hostname: 'CHANGEME-API-HOST' },
   ]);
 });
 

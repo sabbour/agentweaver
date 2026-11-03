@@ -96,22 +96,23 @@ addon or an Istio API requirement.
 The root Kustomize bundle supplies the exact-host Portal Web HTTPRoute, which
 references the shared `https` listener but does not create the Gateway or
 listener. The separate default-off routing installer uses native managed
-certificates, the existing wildcard `https` listener, and exact `auth` and
-`api` HTTPS alias listeners using the same managed TLS Secret. It requires
-explicit approved Gateway namespace and security-policy inputs. The product
-namespace remains restricted.
+certificates, one wildcard `https` listener, and exact-host `auth` and `api`
+HTTPRoutes attached to that listener. The routes use the same managed TLS
+Secret through the listener. The installer requires explicit approved Gateway
+namespace and security-policy inputs. The product namespace remains restricted.
 
 The existing Broker, Web, Gateway API, Copilot BFF, and MCP routes remain on
 the `https` listener and retain their exact hosts, paths, and backends. The
 Copilot BFF route stays on the Portal host so its browser flow remains
-same-origin. The `auth` listener routes its exact host to the existing Broker
-Service; the `api` listener routes existing Gateway API, OpenAPI, Copilot/
-Remote MCP BFF, and Repo App Gateway paths to the existing Gateway Service.
+same-origin. The exact `auth` HTTPRoute sends its host to the existing Broker
+Service; the exact `api` HTTPRoute sends the existing Gateway API, OpenAPI,
+Copilot/Remote MCP BFF, and Repo App Gateway paths to the existing Gateway
+Service.
 The Broker issuer and callback remain on the canonical `agentweaver` route;
 the aliases do not change issuer, audience, callback registration, token
 scopes, or authorization. The wildcard listener still supports HTTP/2
-connection coalescing between the Broker and Portal origins, while unmatched
-hosts have no route.
+connection coalescing across these origins while exact HTTPRoute hostnames
+preserve host boundaries. Unmatched hosts have no route.
 
 The shared listener routes `/` to Web, `/api/v1` and exact
 `/openapi/v1.json` to Gateway, the Copilot BFF path to Gateway, and exact
@@ -123,7 +124,9 @@ traffic. The issuer comes from the admitted canonical Broker route hostname.
 Public callback changes default to read-only append/no-op plans.
 An append requires separate explicit registration and exact-URI confirmation.
 The installer fresh-reads the selected application and preserves all other properties.
-Only the optional ordinary-DNS and trusted-HTTPS health checks prove Broker readiness.
+The optional readiness operation checks ordinary DNS, trusted HTTPS, and
+HTTP/2 cross-host routing at each observed Gateway IP. It verifies transport
+readiness, not browser sign-in.
 See [the operator interface](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#application-routing-source-setting).
 
 Separate default-off installer operations create initial Broker signing
