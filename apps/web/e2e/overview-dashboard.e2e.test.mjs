@@ -147,8 +147,12 @@ test('Overview and project dashboard make only versioned, existing Gateway reads
       '/api/v1/notifications', '/api/v1/chief-of-staff/priorities',
       '/api/v1/chief-of-staff/conversations',
     ]);
+    const webHost = new URL(server.origin).host;
+    const versionReads = requests.filter(({ path }) => path === '/api/version');
+    assert.ok(versionReads.length > 0, 'the shell reads its same-origin Web build identity');
+    assert.deepEqual(versionReads.filter(({ method, host }) => method !== 'GET' || host !== webHost), []);
     assert.deepEqual(requests.filter(({ method, path, host }) =>
-      method !== 'GET' || !published.has(path) || host !== new URL(server.origin).host), []);
+      path !== '/api/version' && (method !== 'GET' || !published.has(path) || host !== webHost)), []);
   } finally {
     await app.close();
   }

@@ -269,6 +269,21 @@ export function runRoom({ projectId, runId, gate = null, turns = [] }) {
         room.decisions = { ...room.decisions, stateVersion: room.decisions.stateVersion + 1, pendingGate: null };
         return json(200, { decisionId: 'decision-1', stateVersion: room.decisions.stateVersion, accepted: true, executionFence: 1, issues: [] });
       }
+      if (rest === '/messages') {
+        const requestBody = JSON.parse(url.body);
+        return json(200, {
+          ownerMessageId: '00000000-0000-4000-8000-000000000001',
+          messageId: '00000000-0000-4000-8000-000000000002',
+          threadId: '00000000-0000-4000-8000-000000000003',
+          threadSequence: 1,
+          projectId,
+          runId,
+          rootSessionId,
+          recipientSessionId: requestBody.targetSessionId ?? rootSessionId,
+          status: 'accepted',
+          sender: { issuer: 'https://issuer.test', subject: 'user-1' },
+        });
+      }
       if (/\/coordination\/sessions\/[^/]+\/messages$/.test(rest)) {
         return json(200, { ownerMessageId: `message-${room.writes.length}`, recipientSessionId: rootSessionId, status: 'accepted' });
       }
