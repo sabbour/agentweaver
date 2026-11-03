@@ -2976,14 +2976,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             ProjectAuthorityResourceType.Tenant,
             tenantId,
             ProjectAuthorityRole.TenantAdmin);
-        var project = await service.CreateProjectAsync(caller, "Revoked casting owner", CancellationToken.None);
-        var proposal = await service.CreateCastingProposalAsync(
-            caller,
-            project.ProjectId,
-            project.ConfigurationRevision,
-            CastingConfiguration("agent-revoked", "Should not confirm"),
-            CancellationToken.None);
-        _ = await SeedCallerAsync(
+        var remainingAdmin = await SeedCallerAsync(
             db,
             authorityStore,
             "remaining-casting-admin-" + suffix,
@@ -2992,6 +2985,14 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             ProjectAuthorityResourceType.Tenant,
             tenantId,
             ProjectAuthorityRole.TenantAdmin);
+        // Another admin creates the project so the revoked caller has no creator Owner grant.
+        var project = await service.CreateProjectAsync(remainingAdmin, "Revoked casting owner", CancellationToken.None);
+        var proposal = await service.CreateCastingProposalAsync(
+            caller,
+            project.ProjectId,
+            project.ConfigurationRevision,
+            CastingConfiguration("agent-revoked", "Should not confirm"),
+            CancellationToken.None);
         var currentAssignment = await db.RoleAssignments.AsNoTracking()
             .SingleAsync(item =>
                 item.MembershipId == caller.MembershipId &&
@@ -3038,7 +3039,17 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             ProjectAuthorityResourceType.Tenant,
             tenantId,
             ProjectAuthorityRole.TenantAdmin);
-        var project = await ownerService.CreateProjectAsync(owner, "Runtime casting locks", CancellationToken.None);
+        var creator = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "runtime-casting-creator-" + suffix,
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        // Another admin creates the project so the revoked caller has no creator Owner grant.
+        var project = await ownerService.CreateProjectAsync(creator, "Runtime casting locks", CancellationToken.None);
         var initial = await ownerService.UpdateProjectConfigurationAsync(
             owner, project.ProjectId, project.ConfigurationRevision,
             CastingConfiguration("agent-initial", "Initial"), CancellationToken.None);
