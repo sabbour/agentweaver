@@ -47,7 +47,7 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
         string? invocationId = null;
         string? actorId = null;
         bool invocationReserved = false;
-        bool boardDelete = false;
+        bool boardAcceptance = false;
 
         try
         {
@@ -65,15 +65,15 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
             }
 
             manifest = await ApiAcceptanceSupport.ReadManifestAsync(inputPath, ct).ConfigureAwait(false);
-            boardDelete = manifest.Journey == "board-delete";
+            boardAcceptance = manifest.Journey is "board-delete" or "board-archived-denial";
             if (OutputOverwritesInput(options, manifest, inputPath, outputPath))
             {
                 outputPath = null;
                 throw new InvalidDataException("The evidence output path must not replace a P1 input or deployment artifact.");
             }
-            if (boardDelete && (options.NativeProbeEnvelopePath is not null || options.DispatchRecoveryEnvelopePath is not null))
+            if (boardAcceptance && (options.NativeProbeEnvelopePath is not null || options.DispatchRecoveryEnvelopePath is not null))
                 throw new InvalidDataException("Board acceptance does not accept P1 native or recovery probe envelopes.");
-            nativeProbes = boardDelete
+            nativeProbes = boardAcceptance
                 ? []
                 : await ReadNativeProbesAsync(options, inputPath, outputPath, ct).ConfigureAwait(false);
             IReadOnlyDictionary<string, string> proofHashes = await ReadProofHashesAsync(manifest, outputPath, ct).ConfigureAwait(false);
@@ -81,16 +81,16 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
 
             if (options.DryRun)
             {
-                await _output.WriteLineAsync(boardDelete
+                await _output.WriteLineAsync(boardAcceptance
                     ? "Dry run only: Board inputs and proof files are valid. No network request, sign-in, evidence file, project, or assignment was created."
                     : "Dry run only: P1 inputs and proof files are valid. No network request, sign-in, evidence file, project, or assignment was created.")
                     .ConfigureAwait(false);
                 return 0;
             }
 
-            if (boardDelete)
+            if (boardAcceptance)
             {
-                invocationId = await ReserveInvocationAsync(outputPath, planHash, boardDelete, ct).ConfigureAwait(false);
+                invocationId = await ReserveInvocationAsync(outputPath, planHash, boardAcceptance, ct).ConfigureAwait(false);
                 invocationReserved = true;
             }
 
@@ -99,9 +99,9 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                 ("sourceSha", JsonValue.Create(ApiAcceptanceSupport.GetString(sourceEvidence["source"] as JsonObject ?? [], "sourceSha"))),
                 ("sourceTree", JsonValue.Create(ApiAcceptanceSupport.GetString(sourceEvidence["source"] as JsonObject ?? [], "sourceTree"))));
 
-            if (!boardDelete)
+            if (!boardAcceptance)
             {
-                invocationId = await ReserveInvocationAsync(outputPath, planHash, boardDelete, ct).ConfigureAwait(false);
+                invocationId = await ReserveInvocationAsync(outputPath, planHash, boardAcceptance, ct).ConfigureAwait(false);
                 invocationReserved = true;
             }
             string activeInvocationId = invocationId
@@ -128,7 +128,7 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                 throw new AcceptanceBlockedException("Unbound Broker authorization for fixture setup and cleanup is unavailable.");
             }
 
-            if (boardDelete)
+            if (boardAcceptance)
             {
                 BoardExecutionResult board = await ApiAcceptanceBoard.RunAsync(
                     manifest, activeInvocationId, setupApi, _clients, _authentication, options.Interaction, steps, observations, ct)
@@ -188,7 +188,7 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             fixtureState ??= null;
-            failure = boardDelete ? "The Board acceptance run was cancelled." : "The P1 acceptance run was cancelled.";
+            failure = boardAcceptance ? "The Board acceptance run was cancelled." : "The P1 acceptance run was cancelled.";
             surfaceStatus = "failed";
         }
         catch (AcceptanceFixtureSetupException error)
@@ -237,7 +237,7 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                 fixtureState, fixture?.RootSessionId, fixture?.SessionId, fixture?.ExecutionFence);
         }
 
-        JsonObject result = boardDelete
+        JsonObject result = boardAcceptance
             ? ApiAcceptanceSupport.BoardResult(surfaceStatus, sourceEvidence, steps, observations, failure)
             : ApiAcceptanceSupport.Result(surfaceStatus, sourceEvidence, steps, observations, failure, nativeProbes, manifest);
         // An uncertain setup or cleanup receipt takes precedence over a passed or merely blocked journey result.
@@ -260,7 +260,7 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
             try
             {
                 using CancellationTokenSource persistenceTimeout = new(TimeSpan.FromSeconds(10));
-                if (boardDelete)
+                if (boardAcceptance)
                     await ApiAcceptanceSupport.AppendEvidenceAsync(outputPath, result, persistenceTimeout.Token).ConfigureAwait(false);
                 else
                     await AppendResultAsync(outputPath, result, persistenceTimeout.Token).ConfigureAwait(false);
@@ -396,12 +396,12 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
         return inputs.Contains(outputIdentity);
     }
 
-    private static async Task<string> ReserveInvocationAsync(string outputPath, string planHash, bool boardDelete, CancellationToken ct)
+    private static async Task<string> ReserveInvocationAsync(string outputPath, string planHash, bool boardAcceptance, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         string invocationId = Guid.NewGuid().ToString("D");
-        string invocationKind = boardDelete ? "board-setup-invocation" : "p1-setup-invocation";
-        string resultKind = boardDelete ? "board-acceptance-result" : "p1-acceptance-result";
+        string invocationKind = boardAcceptance ? "board-setup-invocation" : "p1-setup-invocation";
+        string resultKind = boardAcceptance ? "board-acceptance-result" : "p1-acceptance-result";
         JsonObject record = ApiAcceptanceSupport.SetupInvocation(invocationId, planHash, invocationKind);
         try
         {
@@ -442,7 +442,7 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
             if (existingId is null || !ApiAcceptanceSupport.IsUuid(existingId)
                 || records.Any(item => ApiAcceptanceSupport.GetString(item, "kind") == resultKind))
                 throw new InvalidDataException("The existing P1 evidence output is not an unfinished invocation that can be resumed.");
-            if (boardDelete)
+            if (boardAcceptance)
                 throw new InvalidDataException("The existing Board evidence output contains an unfinished invocation; reconcile it before retrying.");
             if (records.Any(item => ApiAcceptanceSupport.GetString(item, "kind") == "p1-ui-action-started"))
                 throw new InvalidDataException("The existing P1 evidence output may contain an attempted UI write; reconcile its owner state before taking further action.");

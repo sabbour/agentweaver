@@ -29,12 +29,13 @@ internal sealed class AcceptanceFixtureState(string invocationId)
     public bool SetupIndeterminate { get; set; }
     public bool SetupComplete { get; set; }
     public bool CleanupAttempted { get; set; }
+    public bool VerifyCleanupReadback { get; set; }
 }
 
 internal static partial class ApiAcceptanceSupport
 {
     private static readonly HashSet<string> Journeys =
-        ["gate-answer", "gate-approve", "gate-reject", "message", "journal"];
+        ["gate-answer", "gate-approve", "gate-reject", "message", "journal", "session-history-metric"];
 
     private static readonly string[] RequiredReceiptPins =
         ["providerReceipt", "runtimeReceipt", "storageReceipt", "sourceReceipt"];
@@ -123,20 +124,20 @@ internal static partial class ApiAcceptanceSupport
         }
 
         string journey = RequireString(root, "journey", "supported acceptance journey");
-        bool boardDelete = journey == "board-delete";
-        if (boardDelete)
+        bool boardAcceptance = journey is "board-delete" or "board-archived-denial";
+        if (boardAcceptance)
         {
-            RequireExactKeys(root, ["executionIntent", "journey", "environment", "pins", "deploymentEvidence", "fixturePlan"], "Board-delete input");
+            RequireExactKeys(root, ["executionIntent", "journey", "environment", "pins", "deploymentEvidence", "fixturePlan"], "Board input");
         }
 
         JsonObject environment = RequireObject(root["environment"], "The direct Environment target is required.");
         ValidateGatewayTarget(RequireString(environment, "baseUrl", "Gateway origin"));
-        string[] requiredEnvironmentFields = boardDelete ? ["issuer", "audience", "tenantId"] : ["issuer", "audience", "actorId", "tenantId"];
+        string[] requiredEnvironmentFields = boardAcceptance ? ["issuer", "audience", "tenantId"] : ["issuer", "audience", "actorId", "tenantId"];
         foreach (string field in requiredEnvironmentFields)
         {
             RequireString(environment, field, $"Environment {field}");
         }
-        if (boardDelete)
+        if (boardAcceptance)
         {
             string[] environmentFields = environment.ContainsKey("actorId")
                 ? ["baseUrl", "issuer", "audience", "tenantId", "actorId"]
@@ -147,8 +148,8 @@ internal static partial class ApiAcceptanceSupport
             ValidateBoardTarget(environment);
         }
 
-        JsonObject pins = RequireObject(root["pins"], boardDelete ? "Pinned Board environment receipts are required." : "Pinned P1 environment receipts are required.");
-        if (boardDelete)
+        JsonObject pins = RequireObject(root["pins"], boardAcceptance ? "Pinned Board environment receipts are required." : "Pinned P1 environment receipts are required.");
+        if (boardAcceptance)
         {
             ValidateBoardPins(pins);
         }
@@ -186,15 +187,15 @@ internal static partial class ApiAcceptanceSupport
             RequireString(evidence, name, $"deployment evidence {name}");
         }
 
-        if (!boardDelete && !Journeys.Contains(journey))
+        if (!boardAcceptance && !Journeys.Contains(journey))
         {
             throw new InvalidDataException("A supported P1 journey is required.");
         }
 
         JsonObject fixturePlan = RequireObject(root["fixturePlan"], "An explicit runner fixture plan is required.");
-        if (boardDelete)
+        if (boardAcceptance)
         {
-            RequireExactKeys(fixturePlan, ["kind"], "Board-delete fixture plan");
+            RequireExactKeys(fixturePlan, ["kind"], "Board fixture plan");
             if (GetString(fixturePlan, "kind") != "owned-disposable-board")
                 throw new InvalidDataException("The Board-delete fixture plan must select an owned disposable board.");
         }

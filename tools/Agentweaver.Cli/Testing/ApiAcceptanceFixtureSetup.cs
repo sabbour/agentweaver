@@ -23,6 +23,7 @@ internal static class ApiAcceptanceFixtureSetup
         CancellationToken ct)
     {
         AcceptanceFixtureState state = new(invocationId);
+        state.VerifyCleanupReadback = manifest.Journey == "session-history-metric";
         JsonObject environment = manifest.Environment;
         try
         {
@@ -349,7 +350,7 @@ internal static class ApiAcceptanceFixtureSetup
             ApiAcceptanceSupport.GetString(setup, "ownerAssignmentId")!,
             actorId, "owner", GetLong(setup, "ownerAssignmentRevision")!.Value);
 
-        return state.Cleanup = new JsonObject
+        JsonObject cleanup = new()
         {
             ["invocationId"] = state.InvocationId,
             ["state"] = "cleaned",
@@ -363,6 +364,32 @@ internal static class ApiAcceptanceFixtureSetup
             ["ownerAssignmentId"] = revokeOwner["assignmentId"]?.DeepClone(),
             ["ownerAssignmentRevision"] = GetLong(revokeOwner, "revision"),
         };
+        if (state.VerifyCleanupReadback)
+        {
+            JsonObject project = await CallJsonAsync(setupApi, "getProject",
+                new GatewayInvocation(Path(("projectId", projectId))), [200], ct).ConfigureAwait(false);
+            if (ApiAcceptanceSupport.GetString(project, "projectId") != projectId
+                || ApiAcceptanceSupport.GetString(project, "name") != state.ProjectName
+                || ApiAcceptanceSupport.GetString(project, "state") != "archived"
+                || GetLong(project, "revision") != GetLong(archived, "revision")
+                || GetLong(project, "configurationRevision") != GetLong(archived, "configurationRevision"))
+            {
+                throw new InvalidOperationException("The independent Projects readback did not confirm the archived P1 metric fixture.");
+            }
+
+            JsonObject assignments = await CallJsonAsync(setupApi, "listProjectRoleAssignments",
+                new GatewayInvocation(Path(("projectId", projectId))), [200], ct).ConfigureAwait(false);
+            if (ApiAcceptanceSupport.GetString(assignments, "projectId") != projectId
+                || assignments["assignments"] is not JsonArray activeAssignments
+                || activeAssignments.Count != 0)
+            {
+                throw new InvalidOperationException("The independent Projects readback did not confirm that all P1 metric fixture assignments were revoked.");
+            }
+            cleanup["projectReadback"] = "archived";
+            cleanup["assignmentsReadback"] = "empty";
+        }
+
+        return state.Cleanup = cleanup;
     }
 
     private static async Task<(string RequestId, JsonObject Receipt, long StateVersion)> CreateGateAsync(
@@ -510,6 +537,13 @@ internal static class ApiAcceptanceFixtureSetup
         ];
         if (journey == "journal") required.AddRange(["sendProjectRunMessage", "replayRunEvents"]);
         if (journey == "message") required.AddRange(["registerChild", "sendMessage"]);
+        if (journey == "session-history-metric")
+        {
+            required.AddRange([
+                "registerChild", "advanceTurnBoundary", "completeTurn", "archiveChild",
+                "detachSession", "readProjectMetrics", "getProject", "listProjectRoleAssignments",
+            ]);
+        }
         if (journey.StartsWith("gate-", StringComparison.Ordinal))
         {
             required.Add(journey == "gate-answer" ? "askQuestion" : "requestApproval");
