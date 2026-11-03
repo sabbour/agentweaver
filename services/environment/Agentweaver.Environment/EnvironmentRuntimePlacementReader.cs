@@ -242,13 +242,15 @@ public sealed class EnvironmentRuntimePlacementReader(
 
                 EnvironmentRuntimeBootstrapProfileReplacement? sourceReplacement = null;
                 EnvironmentRuntimeBootstrapProfileRegistration? sourceRegistration;
-                if (!profiles.TryResolveSource(owner, sourceProfileId, out sourceRegistration))
+                if (!profiles.TryResolveSource(
+                    owner, sourceProfileId, placement.Resource, runtimeEndpoint, out sourceRegistration))
                 {
                     sourceReplacement = await replacements.ReadAsync(owner, sourceProfileId, token)
                         .ConfigureAwait(false);
                     if (sourceReplacement is not null &&
                         (!sourceReplacement.MatchesOwnerContext(ownerContext) ||
-                         !profiles.TryResolveSource(owner, sourceReplacement.SourceProfileId, out sourceRegistration) ||
+                         !profiles.TryResolveSource(owner, sourceReplacement.SourceProfileId,
+                             placement.Resource, runtimeEndpoint, out sourceRegistration) ||
                          !sourceReplacement.MatchesSourceProfile(sourceRegistration!, sourceProfileId)))
                         throw new RuntimeAuthorizationException("runtime_bootstrap_profile_replacement_conflict");
                 }
@@ -384,7 +386,7 @@ public sealed class EnvironmentRuntimePlacementReader(
             throw new RuntimeAuthorizationException("runtime_owner_context_stale");
     }
 
-    private async Task<EnvironmentRuntimeBootstrapContext> ProjectBootstrapProfileAsync(
+    internal async Task<EnvironmentRuntimeBootstrapContext> ProjectBootstrapProfileAsync(
         EnvironmentSandboxPlacementProjectionV1 placement,
         string profileId,
         EnvironmentRuntimeBootstrapProfileRegistry profiles,
@@ -406,7 +408,8 @@ public sealed class EnvironmentRuntimePlacementReader(
             ? replacement.MatchesOwnerContext(ownerContext)
             : sourceBinding is not null && replacement.MatchesRuntimeBinding(sourceBinding);
         if (!identityMatches ||
-            !profiles.TryResolveSource(target.Owner, replacement.SourceProfileId, out var sourceRegistration) ||
+            !profiles.TryResolveSource(target.Owner, replacement.SourceProfileId,
+                target.Resource, target.RuntimeEndpoint, out var sourceRegistration) ||
             !replacement.MatchesSourceProfile(sourceRegistration!, profileId))
             throw new RuntimeAuthorizationException("runtime_bootstrap_profile_replacement_conflict");
 

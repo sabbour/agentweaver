@@ -215,6 +215,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(environment.Lease.ProvisionedResource!.Resource.ProviderId,
             registration.Binding.PlacementProviderId);
         Assert.Equal(environment.Lease.ProvisionedResource.Resource.ResourceId, registration.Binding.PlacementUid);
+        Assert.StartsWith("runtime-profile.r.", registration.Binding.ProfileId);
+        var resolvedProfile = await environment.ReadReplacementAsync(registration.Binding.ProfileId);
+        Assert.NotNull(resolvedProfile);
+        Assert.Equal(registration.Binding.ProfileId, resolvedProfile.Registration.Profile.ProfileId);
+        Assert.Equal(environment.Lease.ProvisionedResource.Resource, resolvedProfile.Registration.Placement);
+        Assert.Equal(environmentOwner, resolvedProfile.Registration.Owner);
         using var discovered = await SendAsync(
             client, HttpMethod.Get, enrollmentPath, runToken, [owner.TenantId]);
         await AssertStatusAsync(discovered, HttpStatusCode.OK);
@@ -1997,6 +2003,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     {
         public SandboxLeaseSnapshot Lease { get; } = lease;
         public HttpMessageHandler CreateHandler() => host.GetTestServer().CreateHandler();
+        public Task<EnvironmentRuntimeBootstrapProfileReplacement?> ReadReplacementAsync(string profileId) =>
+            new EnvironmentRuntimeBootstrapProfileReplacementStore(dataSource, TimeProvider.System)
+                .ReadAsync(Lease.Fence.Owner, profileId, CancellationToken.None);
 
         public void ExpireCurrentLease() =>
             readTime.Current = Lease.LeaseExpiresAt!.Value.AddSeconds(1);
@@ -2193,9 +2202,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     lease.OperationId, lease.Fence, provisioned, true, default,
                     provisionAttempt.Attempt.AttemptId);
                 leaseTimeProvider.AdvanceTo(leaseCreatedAt.AddSeconds(2));
-                var profile = new EnvironmentRuntimeBootstrapProfile(
-                    "runtime-profile", new(configureEndpoint),
-                    new("https://orchestrator.test/internal/runtime/observations"));
                 host = await new HostBuilder().ConfigureWebHost(web =>
                 {
                     web.UseTestServer();
@@ -2215,7 +2221,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         services.AddHttpClient<EnvironmentRuntimeEndpointVerifier>()
                             .ConfigurePrimaryHttpMessageHandler(() => new RuntimeEndpointHealthTransport());
                         services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(
-                            [new(owner, profile, provisioned.Resource)]));
+                            [], "runtime-profile", new("https://orchestrator.test/")));
                         services.AddSingleton(new EnvironmentRuntimeBootstrapDeliveryOptions(
                             new("https://orchestrator.test/"), new("https://broker.test/")));
                         services.AddHttpClient<EnvironmentRuntimeBootstrapDelivery>()

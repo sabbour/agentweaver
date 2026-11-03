@@ -3,16 +3,81 @@ using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
 using Agentweaver.Identity;
+using Agentweaver.Providers.Sandbox.AgentSandbox;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace Agentweaver.Environment.Tests;
 
-public sealed class EnvironmentRuntimeBootstrapProfileRegistryTests
+public sealed partial class EnvironmentRuntimeBootstrapProfileRegistryTests
 {
+    [Theory]
+    [InlineData("")]
+    [InlineData("invalid id")]
+    [InlineData("agenthost-v1")]
+    public void DefaultSourceRejectsInvalidIdsAndAnyStaticIdCollision(string id)
+    {
+        var (_, source, _, _, _, _) = CreateReplacement();
+        Assert.Throws<ArgumentException>(() =>
+            new EnvironmentRuntimeBootstrapProfileRegistry([source], id, new("https://orchestrator.test/")));
+    }
+
+    [Theory]
+    [InlineData(null, true, true, true)]
+    [InlineData(null, false, false, true)]
+    [InlineData("agenthost-default", true, true, true)]
+    [InlineData("agenthost-default", false, true, false)]
+    [InlineData("agenthost-default", true, false, false)]
+    [InlineData("agenthost-default", false, false, false)]
+    public void StartupRequiresBootstrapOwnersAndAnAgentHostLaunchProfile(
+        string? defaultId, bool bootstrap, bool agentHost, bool valid)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Environment:RuntimeBootstrap:DefaultSourceProfileId"] = defaultId,
+            ["Environment:RuntimeBootstrap:OrchestratorOwnerAddress"] = bootstrap ? "https://orchestrator.test/" : null,
+            ["Environment:RuntimeBootstrap:BrokerOwnerAddress"] = bootstrap ? "https://broker.test/" : null
+        }).Build();
+        var options = new AgentSandboxOptions(2, "options", "agentweaver", "azure-files",
+            "runtime@sha256:" + new string('a', 64), "linux/amd64", 1,
+            "kata", "kata", "1", "1Gi", 1, 1, new(1, 1, 1, 1, 1, 1))
+        {
+            AgentHost = agentHost ? new("runtime-config", "runtime-tls") : null
+        };
+        if (valid)
+            Assert.NotNull(Program.ReadRuntimeBootstrapProfiles(configuration, options));
+        else
+            Assert.Throws<InvalidOperationException>(() => Program.ReadRuntimeBootstrapProfiles(configuration, options));
+    }
+
+    [Fact]
+    public void SourceResolutionPreservesStaticProfilesAndFailsClosedWithoutTheOptInOrEndpoint()
+    {
+        var (_, source, _, placement, endpoint, _) = CreateReplacement();
+        var registry = new EnvironmentRuntimeBootstrapProfileRegistry([source],
+            "agenthost-default", new("https://orchestrator.test/"));
+        Assert.True(registry.TryResolveSource(source.Owner, source.Profile.ProfileId,
+            placement.Resource, endpoint, out var configured));
+        Assert.Equal(source, configured);
+        Assert.True(registry.TryResolveSource(source.Owner, "agenthost-default",
+            placement.Resource, endpoint, out var derived));
+        Assert.Equal(placement.Resource, derived!.Placement);
+        Assert.Equal(endpoint.ReceiverConfigureEndpoint, derived.Profile.ConfigureEndpoint);
+        Assert.Equal(new Uri("https://orchestrator.test/internal/runtime/observations"), derived.Profile.ObservationEndpoint);
+        Assert.Null(derived.Profile.McpServer);
+        Assert.False(registry.TryResolveSource(source.Owner, "agenthost-default", placement.Resource, null, out _));
+        Assert.False(registry.TryResolveSource(source.Owner, "unknown", placement.Resource, endpoint, out _));
+        Assert.False(new EnvironmentRuntimeBootstrapProfileRegistry([]).TryResolveSource(
+            source.Owner, "agenthost-default", placement.Resource, endpoint, out _));
+        Assert.False(registry.TryResolve(source.Owner, "agenthost-default", placement.Resource, out _));
+        Assert.Throws<ArgumentException>(() => new EnvironmentRuntimeBootstrapProfileRegistry(
+            [], new string('a', 257), new("https://orchestrator.test/")));
+    }
+
     [Fact]
     public void ResolveRequiresExactEnvironmentOwnerAndCurrentSandboxResource()
     {

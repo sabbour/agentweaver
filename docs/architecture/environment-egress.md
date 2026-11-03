@@ -240,8 +240,13 @@ sequenceDiagram
 ### Runtime bootstrap profiles
 
 The separate runtime bootstrap profile registry belongs to Environment. A
-profile identifies fixed HTTPS configure and observation endpoints for an exact
+static profile identifies HTTPS configure and observation endpoints for an exact
 tenant, project, run, Environment, and Sandbox resource UID/generation.
+The optional global `Environment:RuntimeBootstrap:DefaultSourceProfileId`
+also permits a source derived from the authorized lease and observed receiver
+configure URL, with the Orchestrator owner `/internal/runtime/observations`.
+Static source lookup takes precedence. Both paths require the existing immutable
+replacement and its actor, selection, hash, endpoint, and lease checks.
 Unknown profiles or a different placement fail explicitly.
 
 The runtime profile route uses the canonical `EnvironmentSandboxManager` placement reader.

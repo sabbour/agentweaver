@@ -8,6 +8,15 @@ bindings still agree before native model turns and tools.
 This page explains the source contracts behind readiness, execution and
 recovery. It does not report a live deployment or paid model acceptance.
 AgentHost has no automatic scheduler.
+Environment can resolve a bootstrap source without a per-run static profile when
+its global `Environment:RuntimeBootstrap:DefaultSourceProfileId` is configured.
+It derives the source only from the authorized Sandbox lease, the observed
+receiver configure URL, and its Orchestrator observation URL. Static sources
+remain supported. Registration and readiness recheck the same source hash,
+actor, accepted selection, exact resource, endpoint, fences, and lease expiry.
+Resume can change Pod IP and UID without changing that source hash when the
+logical receiver is unchanged. This source resolution neither selects a new
+registration caller nor carries credential material.
 The source pins `GitHub.Copilot.SDK` 1.0.18 to native runtime 1.0.97.
 Microsoft Agent Framework remains an Orchestrator dependency, not an AgentHost
 runtime. For host settings, see the

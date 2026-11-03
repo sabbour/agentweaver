@@ -707,6 +707,19 @@ are not stored in the two runtime ConfigMaps:
 | `Environment:NetworkPolicy:Cilium:OptionsRevision` | Required nonempty, non-whitespace revision with no default. Match the catalog registration. |
 | `Environment:Storage:AzureFiles:OptionsRevision` | Required 1-128 character token using ASCII letters, digits, `.`, `_`, `-`, or `:`. Match the catalog registration. |
 
+`Environment:RuntimeBootstrap:DefaultSourceProfileId` is an optional global
+bootstrap setting (environment-variable form:
+`Environment__RuntimeBootstrap__DefaultSourceProfileId`). It has no default.
+When present, it must contain 1-256 ASCII letters, digits, `.`, `_`, `-`, or `:`,
+and must not equal any static `Environment:RuntimeBootstrap:Profiles` ID.
+Startup fails if either bootstrap owner address or the AgentHost launch profile
+is missing. Configure this setting together with the reviewed AgentHost ConfigMap
+and TLS Secret names, not as a per-run profile entry.
+The matching ID derives a source from the authorized Sandbox lease, the observed
+receiver configure URL, and the Orchestrator owner `/internal/runtime/observations`.
+Static sources remain supported. An unset default preserves static-only behavior.
+No credential values belong in this setting or in bootstrap profiles.
+
 The `environment-cilium-config.json` ConfigMap has one data key,
 `appsettings.Production.json`. That value is nested JSON for
 `Environment:NetworkPolicy:Cilium`; do not flatten it into environment

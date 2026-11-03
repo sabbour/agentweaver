@@ -125,9 +125,7 @@ builder.Services.AddScoped<IEnvironmentLifecycleProducer, EnvironmentLifecyclePr
 builder.Services.AddScoped<EnvironmentLifecycleManager>();
 builder.Services.AddScoped<EnvironmentRuntimePlacementReader>();
 builder.Services.AddScoped<EnvironmentP1CreationReader>();
-builder.Services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(
-    builder.Configuration.GetSection("Environment:RuntimeBootstrap:Profiles")
-        .Get<EnvironmentRuntimeBootstrapProfileRegistration[]>() ?? []));
+builder.Services.AddSingleton(ReadRuntimeBootstrapProfiles(builder.Configuration, sandboxOptions));
 // The direct-Pod transport keeps the TLS hostname while connecting to the validated Pod IP.
 builder.Services.AddHttpClient<EnvironmentRuntimeEndpointVerifier>(client =>
     client.Timeout = TimeSpan.FromSeconds(10))
@@ -472,6 +470,26 @@ public partial class Program
         // IConfiguration treats colons in JSON property names as path separators.
         foreach (var child in children)
             AddCiliumLabel(labels, child, $"{key}:{child.Key}");
+    }
+
+    /// <summary>Reads static profiles and validates the optional lease-derived source before startup.</summary>
+    public static EnvironmentRuntimeBootstrapProfileRegistry ReadRuntimeBootstrapProfiles(
+        IConfiguration configuration, AgentSandboxOptions sandboxOptions)
+    {
+        var section = configuration.GetSection("Environment:RuntimeBootstrap");
+        var defaultId = section["DefaultSourceProfileId"];
+        Uri? orchestrator = null;
+        if (defaultId is not null)
+        {
+            if (sandboxOptions.AgentHost is null)
+                throw new InvalidOperationException("The default Runtime source requires the AgentHost launch profile.");
+            orchestrator = RuntimeOwnerHttpTransport.RequireOwnerAddress(new Uri(
+                Required(section["OrchestratorOwnerAddress"], "Environment:RuntimeBootstrap:OrchestratorOwnerAddress")));
+            _ = RuntimeOwnerHttpTransport.RequireOwnerAddress(new Uri(
+                Required(section["BrokerOwnerAddress"], "Environment:RuntimeBootstrap:BrokerOwnerAddress")));
+        }
+        return new(section.GetSection("Profiles").Get<EnvironmentRuntimeBootstrapProfileRegistration[]>() ?? [],
+            defaultId, orchestrator);
     }
 
     /// <summary>Reads and validates the complete AgentSandbox provider configuration, including startup budgets.</summary>

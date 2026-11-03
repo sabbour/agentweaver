@@ -173,10 +173,14 @@ public sealed record EnvironmentRuntimeBootstrapProfileReplacement(
 public sealed class EnvironmentRuntimeBootstrapProfileRegistry
 {
     private readonly ImmutableDictionary<OwnerProfileKey, EnvironmentRuntimeBootstrapProfileRegistration> _registrations;
+    private readonly string? _defaultSourceProfileId;
+    private readonly Uri? _observationEndpoint;
 
     /// <summary>Validates all profile registrations and rejects duplicate owner/profile keys.</summary>
     public EnvironmentRuntimeBootstrapProfileRegistry(
-        IEnumerable<EnvironmentRuntimeBootstrapProfileRegistration> registrations)
+        IEnumerable<EnvironmentRuntimeBootstrapProfileRegistration> registrations,
+        string? defaultSourceProfileId = null,
+        Uri? orchestratorOwnerAddress = null)
     {
         ArgumentNullException.ThrowIfNull(registrations);
         var builder = ImmutableDictionary.CreateBuilder<OwnerProfileKey, EnvironmentRuntimeBootstrapProfileRegistration>();
@@ -191,6 +195,17 @@ public sealed class EnvironmentRuntimeBootstrapProfileRegistry
                     nameof(registrations));
         }
         _registrations = builder.ToImmutable();
+        if (defaultSourceProfileId is not null)
+        {
+            if (!EnvironmentRuntimeBootstrapProfile.IsIdentifier(defaultSourceProfileId) ||
+                _registrations.Values.Any(value => value.Profile.ProfileId == defaultSourceProfileId))
+                throw new ArgumentException("The default Runtime source profile ID is invalid or collides with a static profile.");
+            _observationEndpoint = new Uri(
+                RuntimeOwnerHttpTransport.RequireOwnerAddress(orchestratorOwnerAddress
+                    ?? throw new ArgumentException("The default Runtime source requires an Orchestrator owner address.")),
+                "/internal/runtime/observations");
+        }
+        _defaultSourceProfileId = defaultSourceProfileId;
     }
 
     /// <summary>Returns the profile only when it is registered for the exact current placement.</summary>
@@ -242,6 +257,25 @@ public sealed class EnvironmentRuntimeBootstrapProfileRegistry
             return false;
         }
         return _registrations.TryGetValue(OwnerProfileKey.From(owner, profileId), out registration);
+    }
+
+    /// <summary>Resolves a static source first, or derives the opted-in source from an authorized placement endpoint.</summary>
+    internal bool TryResolveSource(
+        EnvironmentOwnerIdentity owner,
+        string profileId,
+        ProviderResourceRef placement,
+        SandboxRuntimeHttpsEndpoint? runtimeEndpoint,
+        out EnvironmentRuntimeBootstrapProfileRegistration? registration)
+    {
+        if (TryResolveSource(owner, profileId, out registration))
+            return true;
+        if (_defaultSourceProfileId is null || profileId != _defaultSourceProfileId ||
+            runtimeEndpoint?.ReceiverConfigureEndpoint is not { } configureEndpoint)
+            return false;
+        _ = runtimeEndpoint.ValidateForConfigureEndpoint(configureEndpoint);
+        registration = new EnvironmentRuntimeBootstrapProfileRegistration(
+            owner, new(profileId, configureEndpoint, _observationEndpoint!), placement).Validate();
+        return true;
     }
 
     private static RuntimeAuthorizationException Unavailable() =>
