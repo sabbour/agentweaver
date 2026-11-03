@@ -2,8 +2,31 @@
 
 This reference describes the non-secret ConfigMap keys in
 `deploy/k8s/runtime-configs/*.json` and the provider options that validate
-them. It covers the v1 source contract; it does not turn a source candidate
+them. It covers the source contract; it does not turn a source candidate
 into a deployed or selectable provider.
+
+## Find a setting
+
+| Setting area | Lookup |
+| --- | --- |
+| OpenPullRequest executor | [Owner base address](#openpullrequest-workflow-executor) |
+| Scribe executor | [Owner base address](#scribe-workflow-executor) |
+| Periodic issue sync | [Service TLS profiles and listeners](#optional-periodic-issue-sync-service-channels) |
+| Hosted model catalog | [AgentHost certificate pin](#hosted-model-catalog-publication) |
+| Configuration rules | [Key names, snapshots, and Secret boundaries](#configuration-rules) |
+| PostgreSQL and workload identity | [Connection strings and identity settings](#postgresql-connection-and-workload-identity) |
+| Identity Broker | [Broker settings](#identity-broker-settings) |
+| Gateway and retained MCP compatibility | [Gateway settings](#gateway-and-retained-mcp-compatibility-settings) |
+| Knowledge | [Knowledge settings](#knowledge-settings) |
+| Projects & Config | [Projects settings](#projects-config-settings) |
+| Platform component report | [Report settings](#platform-component-report-settings) |
+| Orchestrator | [Orchestrator settings](#orchestrator-settings) |
+| Guardrails | [Guardrails settings](#guardrails-settings) |
+| Events & Sessions | [Events settings](#events-sessions-settings) |
+| Environment | [Environment settings](#environment-settings) |
+| Web | [Web settings](#web-settings) |
+| Provider options | [Options not fully represented in runtime maps](#provider-option-classes-not-fully-represented-in-runtime-maps) |
+| Azure values | [Common values](#obtain-common-azure-values) and [values Azure CLI does not return](#find-values-that-azure-cli-does-not-return) |
 
 ## OpenPullRequest workflow executor
 
@@ -91,7 +114,7 @@ port 8443 by the corresponding Cilium policies.
 - A grouped path such as `<Service>__Database__WorkloadIdentity__ClientId`
   represents that exact suffix under each service prefix named in its row.
 
-The checked-in P0 runtime snapshots contain non-secret managed AKS hostnames,
+The checked-in runtime snapshots contain non-secret managed AKS hostnames,
 the PostgreSQL endpoint and role names, workload-identity client IDs, and the
 Key Vault URI. This describes source files; it does not prove that the target
 resources exist, that bootstrap ran, or that the values are current. The nine
@@ -121,63 +144,9 @@ selection, see [Configure providers](../guide/configure-providers.md).
 
 ## Update an immutable ConfigMap
 
-Most checked-in runtime ConfigMaps, including `knowledge-runtime-config`, set
-`immutable` to `true`. Kubernetes rejects changes to an immutable ConfigMap's
-data. Editing its JSON source and applying the bundle does not update the live
-ConfigMap. A Deployment also does not restart automatically when a referenced
-ConfigMap changes.
-
-For a first installation, resolve and review all settings before applying the
-bundle. For an existing installation, use the manual maintenance procedure:
-
-1. Update the reviewed JSON source and render the complete bundle. Confirm the
-   rendered ConfigMap has the expected name, namespace, data, and
-   `immutable: true`.
-2. Stop every workload that references the map and wait until its Pods have
-   terminated. Kubelet caches immutable ConfigMap data for about one minute by
-   default; wait at least 70 seconds after the last Pod terminates before
-   replacing the map.
-3. Delete only the exact ConfigMap being replaced. For example:
-
-   ```powershell
-   kubectl delete configmap knowledge-runtime-config -n agentweaver
-   ```
-
-4. Recreate it from the rendered bundle:
-
-   ```powershell
-   kubectl apply -k deploy\k8s
-   ```
-
-5. Restore the workload and wait for its rollout:
-
-   ```powershell
-   kubectl scale deployment/knowledge --replicas=<original-count> -n agentweaver
-   kubectl rollout status deployment/knowledge -n agentweaver
-   ```
-
-The local `deploy:kustomize` helper follows this stop/wait/cache-expiry
-procedure for `projects-config-runtime-config`. It records the existing
-replica count on `deployment/projects-config`, waits for that Deployment's
-Pods to terminate, waits 70 seconds, replaces only the named ConfigMap, then
-restores the replica count before applying workloads and checking rollouts.
-If replacement, apply, or rollout fails, the recovery annotation remains;
-rerun the same deployment command to resume. If the ConfigMap is absent, the
-helper leaves the Deployment stopped until the retry recreates it. Do not
-clear the annotation manually. Other immutable ConfigMaps, including
-`knowledge-runtime-config`, still require the manual procedure above.
-
-Kubelet caches immutable ConfigMap data per node and does not watch it for
-changes. If a pod that references the ConfigMap keeps running on a node while
-you delete and recreate the ConfigMap under the same name, new pods on that
-node can still receive the old values. A `rollout restart` does not clear this
-cache. A short interval without the map is expected while workloads are
-stopped. Do not use a broad delete or remove the `immutable` setting to bypass
-the replacement process.
-
-`events-and-sessions-runtime-config` is mutable in the checked-in profile.
-Apply its reviewed data with the bundle, then restart the Events & Sessions
-Deployment so the process reads the new environment.
+Most checked-in runtime ConfigMaps are immutable. For the existing-installation
+procedure and its limits, see
+[Replace an immutable runtime ConfigMap](../guide/deploy-to-azure.md#replace-an-immutable-runtime-configmap).
 
 ## PostgreSQL connection and workload identity
 
@@ -240,7 +209,9 @@ grants without a manual `GRANT`. Rerunning an older migration image does not.
 The guarded operator bootstrap can also apply the canonical grant file after
 migration; it changes all listed table grants, not just history access.
 
-### P1 migration Job settings
+<span id="p1-migration-job-settings"></span>
+
+### PostgreSQL migration Job settings
 
 The [database maintenance runner](../guide/database-maintenance.md) runs the
 Environment, Orchestrator, and Events & Sessions images with `--migrate` as Kubernetes Jobs.
@@ -329,7 +300,7 @@ omits it. The Broker reconciles only these declared clients at startup.
 
 The checked-in release/Kustomize composition still includes MCP compatibility
 image, workload and ingress resources. Their presence does not make MCP a
-supported 1.x product or acceptance surface. Supported client paths are
+supported product or acceptance surface. Supported client paths are
 Gateway/API, browser and native .NET CLI. Outbound remote MCP connections are
 separate.
 
@@ -477,7 +448,7 @@ the database grant:
   who, what, or where an assignment applies, and can't write tenant
   memberships or tenant-level roles.
 
-The runtime principal needs these grants, which the reviewed P1 PostgreSQL
+The runtime principal needs these grants, which the reviewed PostgreSQL
 plan includes:
 
 | Grant | Purpose |
@@ -498,10 +469,12 @@ step. At startup, the service accepts either no authority write grants or
 exactly this set. It fails closed on a partial set or any other write
 privilege on authority tables, including `DELETE`.
 
-### P1 project setup receipt
+<span id="p1-project-setup-receipt"></span>
+
+### Project setup receipt
 
 `POST /api/p1/invocations/{invocationId:guid}/setup` uses the existing
-authenticated P1 actor, tenant header, OAuth scopes, and current TenantAdmin
+authenticated invocation actor, tenant header, OAuth scopes, and current TenantAdmin
 authorization. It accepts no body or query parameters. The Projects service
 resolves actor, membership, and assignment revisions from its normal
 authorization owner; request data cannot supply a project ID or authority
@@ -527,18 +500,18 @@ revocation. The source change does not install grants or change a deployed
 identity.
 
 The standalone `--privileged-project-setup` operator command remains a
-separate path and is not used by this endpoint or by the P1 fixture runner.
+separate path and is not used by this endpoint or by the invocation fixture runner.
 Its operator-specific configuration is not part of the standard Projects
 runtime profile. Don't reuse migration credentials or change Broker trust as a
 workaround for an unavailable operator-only path. See
-[Diagnose an indeterminate P1 project setup](../guide/troubleshooting.md#diagnose-an-indeterminate-p1-project-setup)
+[Diagnose interrupted project setup](../guide/troubleshooting.md#diagnose-an-indeterminate-p1-project-setup)
 for reconciliation guidance.
 
 The path invocation ID is a Projects setup correlation key; this endpoint does
 not validate it against Orchestrator invocation/checkpoint authority. The setup
 receipt proves only the local Projects transaction. It is not
 Environment/Sandbox creation authorization or proof, and does not establish
-cross-database atomicity. The P1 fixture runner is not wired to this endpoint
+cross-database atomicity. The invocation fixture runner is not wired to this endpoint
 by this source change.
 
 The provider catalog is supplied separately with the
@@ -598,7 +571,7 @@ evaluation is not itself an action grant.
 
 The Orchestrator registers the Azure AI Content Safety Prompt Shields check
 only when the `Guardrails__PromptShields` section exists. Prompt Shields is the
-only supported Guardrails check in P2. It runs on model-turn user input.
+only supported Guardrails check. It runs on model-turn user input.
 
 | Setting | Contract |
 | --- | --- |
@@ -779,9 +752,9 @@ The `web-runtime-config.json` map contains:
 
 | Setting | Contract |
 | --- | --- |
-| `VITE_GATEWAY_URL` | Gateway base path or absolute URL ending in `/api/v1`. The checked-in P0 profile uses the dedicated `https://api.<managed-domain>/api/v1` listener; the Gateway CORS policy must allow the exact Portal origin. Keep the Copilot BFF client on its Portal-relative route. |
+| `VITE_GATEWAY_URL` | Gateway base path or absolute URL ending in `/api/v1`. The checked-in profile uses the dedicated `https://api.<managed-domain>/api/v1` listener; the Gateway CORS policy must allow the exact Portal origin. Keep the Copilot BFF client on its Portal-relative route. |
 | `VITE_IDENTITY_BROKER_URL` | Required HTTPS Broker transport URL used for OAuth. It may use the `auth.<managed-domain>` route alias independently of the stable OIDC issuer. |
-| `VITE_IDENTITY_BROKER_ISSUER` | Explicit OIDC issuer, which must exactly match Gateway and Broker configuration. Do not derive or change it merely because the Broker transport uses an alias; this P0 profile retains `https://agentweaver.<managed-domain>/`. |
+| `VITE_IDENTITY_BROKER_ISSUER` | Explicit OIDC issuer, which must exactly match Gateway and Broker configuration. Do not derive or change it merely because the Broker transport uses an alias; this profile retains `https://agentweaver.<managed-domain>/`. |
 | `VITE_OAUTH_CLIENT_ID` | Required ID of the explicitly registered public Web client. Do not reuse an acceptance-only client in production. |
 | `VITE_OAUTH_SCOPES` | Required space-separated scopes registered for that client. |
 

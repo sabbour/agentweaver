@@ -1,11 +1,11 @@
-# Tutorial: deploy Agentweaver to Azure
+# Deploy Agentweaver to Azure
 
-In this tutorial, you prepare the Azure foundation, bootstrap PostgreSQL and
+Use this how-to to prepare the Azure foundation, bootstrap PostgreSQL and
 workload identities, install the reviewed Kubernetes resources, and verify
 the workloads. The commands can change Azure and cluster state. Run them only
 for a separately approved target.
 
-Agentweaver 1.x source includes Bicep templates and a Kustomize installation.
+Agentweaver source includes Bicep templates and a Kustomize installation.
 The repository does not contain a deployable production parameter file, TLS
 certificates, credentials, or an approval for a live target. Replace every
 placeholder with a reviewed value before running a write command.
@@ -20,7 +20,7 @@ You need:
 - Azure CLI, the Bicep extension, `kubectl`, and `kubelogin` ([AKS
   authentication guidance](https://learn.microsoft.com/azure/aks/kubelogin-authentication)),
   plus Node.js 24, npm, and the .NET 10 SDK.
-- A clean checkout at the exact v1 source commit approved for deployment.
+- A clean checkout at the exact source commit approved for deployment.
 - A reviewed, Git-tracked Bicep parameter file under
   `infra/bicep/parameters/`. The checked-in examples contain placeholders and
   cannot run.
@@ -99,7 +99,7 @@ subscription and tenant, enabled account, dedicated resource group, configured
 Key Vault name, exact source, and Bicep inputs. It does not enumerate existing
 resources or compare their properties after deployment. Use the full-foundation
 template only for an approved initial deployment into an empty managed-resource
-target. For an existing P0 cluster, the AKS-only template refreshes the three
+target. For an existing foundation cluster, the AKS-only template refreshes the three
 workload-identity federated credentials without PUTting AKS; its what-if must
 not contain a managed-cluster change. Review the what-if output before execution.
 The top-level what-if does not show resources inside the nested workload-identity
@@ -215,12 +215,12 @@ The guarded PostgreSQL bootstrap in step 4 creates only the Identity Broker
 runtime and migration roles. It does not create the Projects & Config,
 Environment, Knowledge, Events & Sessions, or Orchestrator runtime identities
 and their ServiceAccount federations. Those five identities use the separate
-P1 runtime-identity template. The current guarded installer does not deploy
+service runtime-identity template. The current guarded installer does not deploy
 that template, and the repository does not provide a guarded command for it.
 Do not apply it with a direct `az deployment` command. Before you install the
 product bundle, require a separately approved process to provision these
 identities and federations. If that process is not available, stop here. See
-[Limited P1 runtime identities](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#limited-p1-runtime-identities).
+[Limited service runtime identities](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#limited-p1-runtime-identities).
 Do not apply that template with an unguarded command.
 
 Before you install the product bundle, confirm that the five identities are
@@ -233,7 +233,7 @@ that container or grant, use the separately approved
 [focused repair procedure](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#session-material-container-repair);
 do not redeploy the full foundation to repair these resources.
 Orchestrator migration 023 adds interactive run requests and cancellation
-receipts. The reviewed P1 plan includes that migration and grants
+receipts. The reviewed PostgreSQL maintenance plan includes that migration and grants
 `SELECT, INSERT, UPDATE` on `project_run_requests` and `SELECT, INSERT` on
 `project_run_cancellations`. Migration 023 changes the execution-state CHECK
 constraint on `accepted_runs`, which scans the whole table. The ALTER takes an
@@ -271,12 +271,12 @@ The first command prints the fixed target and planned roles without contacting
 Azure. The execution command checks the selected account and dedicated resource
 group, validates the approved PostgreSQL Entra administrator inputs, and reads
 the two Identity Broker principal IDs needed for database bootstrap. The five
-P1 principal IDs come from the reviewed plan and are not refreshed from Azure.
-The command then runs the Identity Broker and P1 database stages through one
+service principal IDs come from the reviewed plan and are not refreshed from Azure.
+The command then runs the Identity Broker and database initialization stages through one
 temporary loopback tunnel. It requires a clean checkout at the reviewed
 `origin/v1` source. The operator must already have the required AKS access and
 PostgreSQL Entra administrator authority; the command creates no Azure role
-assignments, access grants, or product workloads. Keep the P1 receipt and
+assignments, access grants, or product workloads. Keep the bootstrap receipt and
 verify the database and roles with read-only catalog queries before installing
 the product bundle. The Broker runtime identity does not own the schema. If
 the identity or database setup is not approved or complete, stop before
@@ -308,7 +308,7 @@ Kustomize base intentionally does not own:
 
 The checked-in release/Kustomize composition still includes MCP compatibility
 image, workload and ingress resources. Their presence does not make MCP a
-supported 1.x product or acceptance surface. Supported client paths are
+supported product or acceptance surface. Supported client paths are
 Gateway/API, browser and native .NET CLI. Outbound remote MCP connections are
 separate.
 
@@ -321,7 +321,7 @@ separate.
    create that Secret manually.
 3. Resolve all required runtime ConfigMap values before applying the product
    bundle. For an existing installation, use the
-   [immutable ConfigMap update procedure](../reference/runtime-configuration.md#update-an-immutable-configmap).
+   [immutable ConfigMap update procedure](#replace-an-immutable-runtime-configmap).
    The Projects & Config map includes only the approved privileged-setup
    issuer, tenant, and subject. Review the exact values in the
    [runtime configuration reference](../reference/runtime-configuration.md#projects-config-settings);
@@ -340,9 +340,9 @@ and private keys out of ConfigMaps and command-line arguments. For a fresh
 install, complete the certificate-only routing stage below so AKS creates the
 managed `identity-broker-tls` Secret before deploying the workloads.
 
-## 7. Run the v1 deployment
+## 7. Run the deployment
 
-Use the [v1 release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#deploy-workloads-locally)
+Use the [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#deploy-workloads-locally)
 for local execution, monitoring, recovery, and context verification. Complete
 the one-time identity and PostgreSQL ownership prerequisites before running
 the local command; it runs migrations and grants before applying workloads.
@@ -594,10 +594,10 @@ replace this path with ad hoc database queries or `kubectl exec`.
 
 After the bootstrap succeeds, write the reviewed defaults in
 `deploy/k8s/runtime-configs/platform-runtime-defaults.json` through the public
-Gateway API. The script opens the existing P1 browser sign-in flow and requests
+Gateway API. The script opens the existing browser sign-in flow for invocation setup and requests
 the `P1_SETUP_SCOPES`, including `api.read` and `projects.admin`. Review and
 approve the scopes for the signed-in PlatformAdmin. Tokens remain in memory
-and are never displayed. Pass the tenant ID from the P1 harness manifest's
+and are never displayed. Pass the tenant ID from the harness manifest's
 `environment.tenantId` field with `--tenant`; the script sends it as
 `X-Agentweaver-Tenant` on every API request.
 
@@ -627,7 +627,7 @@ npm run platform:runtime-defaults -- `
 ```
 
 Run selection is ready only after the script confirms a configured platform
-revision and exact defaults readback. Before rerunning the P1 harness, set
+revision and exact defaults readback. Before rerunning the acceptance harness, set
 `fixturePlan.expectedPlatformRuntimeRevision` in its manifest to the verified
 revision reported by the script. A stale expected revision still causes run
 selection to return `409`.
@@ -659,6 +659,78 @@ are programmed for the approved hostnames derived from `<managed-domain>`. A
 rendered manifest, healthy pod, routing receipt, or `202 Accepted` response
 does not prove a complete user workflow, a successful asynchronous effect, or
 release acceptance.
+
+## Replace an immutable runtime ConfigMap
+
+Most checked-in runtime ConfigMaps, including `knowledge-runtime-config`, set
+`immutable` to `true`. Kubernetes rejects changes to an immutable ConfigMap's
+data. Editing its JSON source and applying the bundle does not update the live
+ConfigMap. A Deployment also does not restart automatically when a referenced
+ConfigMap changes.
+
+For a first installation, resolve and review all settings before applying the
+bundle. For an existing installation, use this manual maintenance procedure
+only when the deployment tooling does not provide a guarded replacement for
+the map. These steps stop dependent workloads and briefly remove the ConfigMap;
+plan for the resulting interruption. Do not remove `immutable` to bypass the
+replacement process.
+
+1. Update the reviewed JSON source and render the complete bundle. Confirm the
+   rendered ConfigMap has the expected name, namespace, data, and
+   `immutable: true`.
+2. Record the original replica count for each workload that references the
+   map. Stop every such workload and wait until its Pods have terminated.
+   Kubelet caches immutable ConfigMap data for about one minute by default;
+   wait at least 70 seconds after the last Pod terminates before replacing the
+   map.
+3. Delete only the exact ConfigMap being replaced. For example:
+
+   ```powershell
+   kubectl delete configmap knowledge-runtime-config -n agentweaver
+   ```
+
+4. Recreate it from the rendered bundle:
+
+   ```powershell
+   kubectl apply -k deploy\k8s
+   ```
+
+5. Restore each workload to its recorded replica count and wait for its
+   rollout. For example, replace `<original-count>` with the count recorded
+   before stopping the `knowledge` Deployment:
+
+   ```powershell
+   kubectl scale deployment/knowledge --replicas=<original-count> -n agentweaver
+   kubectl rollout status deployment/knowledge -n agentweaver
+   ```
+
+The local `deploy:kustomize` helper follows this stop/wait/cache-expiry
+procedure for `projects-config-runtime-config`. It records the existing
+replica count on `deployment/projects-config`, waits for that Deployment's
+Pods to terminate, waits 70 seconds, replaces only the named ConfigMap, then
+restores the replica count before applying workloads and checking rollouts.
+If replacement, apply, or rollout fails, the recovery annotation remains;
+rerun the same deployment command to resume. If the ConfigMap is absent, the
+helper leaves the Deployment stopped until the retry recreates it. Do not
+clear the annotation manually. Other immutable ConfigMaps, including
+`knowledge-runtime-config`, still require the manual procedure above.
+
+Kubelet caches immutable ConfigMap data per node and does not watch it for
+changes. If a pod that references the ConfigMap keeps running on a node while
+you delete and recreate the ConfigMap under the same name, new pods on that
+node can still receive the old values. A `rollout restart` does not clear this
+cache. A short interval without the map is expected while workloads are
+stopped. Do not use a broad delete.
+
+`events-and-sessions-runtime-config` is mutable in the checked-in profile.
+Apply its reviewed data with the bundle, then restart the Events & Sessions
+Deployment so the process reads the new environment.
+
+## Teardown boundary
+
+This how-to does not define or verify a teardown procedure. Do not infer from
+the deployment steps that deleting a resource group, cluster, or shared
+resource is safe.
 
 ## Related information
 

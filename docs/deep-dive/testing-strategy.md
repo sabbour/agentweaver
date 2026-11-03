@@ -86,7 +86,7 @@ for the full input, target and execution contract.
 
 The retained `/mcp` harness exercises compatibility code only. It preserves
 `isError`, validates discovery pages/cursors, and distinguishes accepted from
-completed results. It is not a supported 1.x product or acceptance surface;
+completed results. It is not a supported product or acceptance surface;
 the API entrypoint rejects `--surface mcp` and `--surface api,mcp`.
 
 The UI contract uses an already-authorized page on the exact Web origin. It
@@ -149,7 +149,7 @@ executed release-validator lines. Reports live under
 `v1-coverage.yml` instrumentation is separate from ordinary PR/push/manual CI.
 Combined reports retain the newest passing attempt for each suite.
 
-Read [CI and coverage details](../guide/testing.md#understand-v1-pull-request-ci)
+Read [CI and coverage details](../guide/testing.md#understand-pull-request-ci)
 for the canonical execution contract. The
 [system decision view](./00-system-overview.md#9-architecture-decisions)
 retains actual ADR statuses; tests do not accept a proposal or establish a

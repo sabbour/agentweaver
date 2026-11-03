@@ -1,8 +1,10 @@
-# P1 creation evidence reads
+<span id="p1-creation-evidence-reads"></span>
+
+# Environment creation evidence reads
 
 Use this reference to understand how the source-only reads join retained
-Environment creation operations to the current Core P1 root binding. The
-contracts do not establish that the routes are deployed or that a native
+Environment creation operations to the current Core root invocation binding.
+The contracts do not establish that the routes are deployed or that a native
 acceptance journey passed. They do not create resources, retrofit legacy
 records, or change grants.
 
@@ -13,10 +15,10 @@ records, or change grants.
 The route uses the existing runtime-profile read authorization: authenticated
 Environment audience, exact project/run token bindings, fresh `ReadRunSelection`,
 current Core owner context, current profile and placement, and an active owner
-fence. The read executes inside the placement's owner lock. Core's P1 binding is
-read before and after the database read, and current owner context and authority
-are rechecked before the response is accepted. A child session cannot use its
-parent's root binding.
+fence. The read executes inside the placement's owner lock. Core's root
+invocation binding is read before and after the database read, and current
+owner context and authority are rechecked before the response is accepted. A
+child session cannot use its parent's root binding.
 
 The response is `EnvironmentP1CreationBinding` with these JSON fields:
 
@@ -74,14 +76,14 @@ readiness. Host authorization failures retain the existing safe `403` mapping;
 unavailable owner reads return `503`.
 
 Ordinary `/runtime/v1/readiness`, `/health/ready`, and
-`/runtime/v1/readiness/evidence` are unchanged. They do not require P1 creation
+`/runtime/v1/readiness/evidence` are unchanged. They do not require invocation-specific creation
 records and must not be relabeled as invocation-specific acceptance.
 
 ## Scoped downstream consumer
 
 The source-owned consumer in
 `scripts/azure/p1-native-probes/owner-providers.mjs` reads the Environment
-creation-binding route before Host, validates the Host P1-evidence envelope
+creation-binding route before Host, validates the Host evidence envelope
 against that creation read, reads Environment creation again, then rechecks the
 Core root binding and complete Runtime registration. It requires the
 authenticated owner response to carry `Cache-Control: no-store`; responses are
@@ -115,7 +117,7 @@ This slice does not provide the native no-send, cursor, effect, or dispatch
 acknowledgments or the remaining runner proof slots. It does not demonstrate
 child execution, network datapath enforcement, storage-byte isolation, generic
 replacement, or live acceptance. Controlled fixtures validate contract
-handling only; no live owner, database, cluster, or P1 run is used.
+handling only; no live owner, database, cluster, or acceptance run is used.
 
 ## Evidence limits
 

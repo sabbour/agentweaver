@@ -63,7 +63,7 @@ Azure, apply SQL, create identities, execute an operator bootstrap, or prove a
 running service. Confirm the migration egress policy renders the approved
 PostgreSQL FQDN and TCP 5432 rule without a `CHANGEME` host.
 
-The P1 overlay contains the Orchestrator and Events & Sessions migration Jobs.
+The PostgreSQL migration overlay contains the Orchestrator and Events & Sessions Jobs.
 The Events & Sessions Job repeats its runtime Sessions and Messaging settings
 because the host validates them before it enters `--migrate`.
 
@@ -147,7 +147,7 @@ Kubernetes context:
    wildcard-domain HTTPS listener and that the Broker, Web, and Gateway API
    HTTPRoutes retain their exact hostnames, paths, and backends on it. The
    checked-in release/Kustomize composition also includes MCP compatibility
-   resources, but their presence does not make MCP a supported 1.x product or
+   resources, but their presence does not make MCP a supported product or
    acceptance surface. Outbound remote MCP connections are separate. A Portal
    root response alone does not prove that the Broker authorization route
    works.

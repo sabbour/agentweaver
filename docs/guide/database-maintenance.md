@@ -1,8 +1,9 @@
-# Run v1 database maintenance
+# Run database maintenance
 
 Use the database maintenance runner to apply the reviewed PostgreSQL
-migration plan and, when selected, move the three P1 services to matching
-images. The runner is available locally and through a manual GitHub Actions
+migration plan and, when selected, update the Environment, Orchestrator, and
+Events & Sessions workloads to matching images. The runner is available locally
+and through a manual GitHub Actions
 workflow.
 
 **This is a write operation.** An execute run can apply migrations, change
@@ -62,9 +63,9 @@ as compatible between 033 and 035.
 | Migration identity | Uses the existing identity when it and its federated credential match. Otherwise a run signed in as the PostgreSQL Entra administrator deploys `infra/bicep/p1-postgres-migration-identity.bicep`. | Check the receipt and identity readback before another execute run. |
 | ServiceAccount and egress | Applies `p1-postgres-migration` and its egress policy with server-side apply. | Check the receipt and live state before retrying an uncertain update. |
 | Ownership handover | Makes the migration identity the owner of the `environment`, `orchestrator`, and `events_sessions` schemas. | Recorded in the ConfigMap `p1-db-maintenance-state`; check the recorded handover before retrying. |
-| Connectivity probes | A short Job under each migration egress policy resolves the PostgreSQL name, including its private link name, and opens port 5432. It requests at least 25m CPU and 32Mi memory to satisfy the P1 namespace minimum. | The runner removes its uniquely named probe Jobs during cleanup. Check the receipt before starting another run. |
+| Connectivity probes | A short Job under each migration egress policy resolves the PostgreSQL name, including its private link name, and opens port 5432. It requests at least 25m CPU and 32Mi memory to satisfy the namespace resource minimum. | The runner removes its uniquely named probe Jobs during cleanup. Check the receipt before starting another run. |
 | Migration Jobs | Runs the Broker, Environment, Orchestrator, and Events & Sessions Jobs on the pinned digests, one at a time. | Migrators skip applied versions. A later failure does not roll back completed migrations. |
-| Grants check | Requires one grants marker per P1 Job whose versions equal the plan exactly. | Read-only. |
+| Grants check | Requires one grants marker from each Environment, Orchestrator, and Events & Sessions migration Job, with versions that match the plan exactly. The Identity Broker Job is exempt; successful completion indicates that its migration succeeded. | Read-only. |
 | Services | Normal maintenance mode can roll mismatched Deployments to the same digests when asked, then waits for readiness. `--migrations-only` never reads or changes application Deployments. | Matching images are not changed. Check the receipt and Deployment state after a failure. |
 | Cleanup and receipt | Deletes the run's Jobs and pods, releases the lock, removes temporary files, and writes a receipt. | The runner attempts cleanup on success and failure. Verify the receipt; do not assume cleanup succeeded. |
 
@@ -85,9 +86,11 @@ You need:
   Environment, Events & Sessions, and for the Identity Broker if it has new
   migrations. Read them from the release's runtime manifest.
 
-The P1 migration Jobs require images built from source that prints the grants
-marker. Older images fail the grants check after they migrate. Use
-`--apps-only` to move services onto an older release.
+The Environment, Orchestrator, and Events & Sessions migration Jobs require
+images built from source that prints the grants marker. Older images fail the
+grants check after they migrate. The Identity Broker Job does not print that
+marker; successful completion indicates that its migration succeeded. Use `--apps-only` to
+move services onto an older release.
 
 The Events & Sessions Job also sets the full Sessions and Messaging provider
 configuration from its runtime map. The host validates those settings before
@@ -109,7 +112,7 @@ writes a receipt:
 
 | Part | What it creates |
 | --- | --- |
-| P1 migration identity | The identity, its federated credential, its ServiceAccount and egress policy, and the schema ownership handover. It reuses the runner in `--prepare-only` mode, with the same preflight, lock, cleanup, and receipt. |
+| PostgreSQL migration identity | The identity, its federated credential, its ServiceAccount and egress policy, and the schema ownership handover. It reuses the runner in `--prepare-only` mode, with the same preflight, lock, cleanup, and receipt. |
 | Workflow identity | `infra/bicep/db-maintenance-ci-identity.bicep` creates `agentweaver-id-db-maintenance`, its federated credential for `v1-db-maintenance`, Reader on the resource group, and AKS Cluster User on the cluster. Setup applies a Kubernetes Role and RoleBinding in the `agentweaver` namespace. |
 | GitHub environment | The environment `v1-db-maintenance`, limited to the `v1` branch, and its variable `AZURE_DB_MAINTENANCE_CLIENT_ID`. |
 
@@ -132,11 +135,11 @@ Run the setup only after the required Azure and GitHub approvals are in place,
 with the Azure CLI signed in as the PostgreSQL Entra
 administrator, with the right to assign roles in the `agentweaver` resource
 group, and with the GitHub CLI signed in as a repository admin. This is the
-same sign-in that runs the P1 bootstrap. The command needs no prompt or
+same sign-in that runs the PostgreSQL bootstrap. The command needs no prompt or
 decision, so it runs the same from a terminal, a script, or an agent session
 that already has that sign-in.
 
-The setup needs that sign-in because of the ownership handover. The P1 schemas
+The setup needs that sign-in because of the ownership handover. The migration schemas
 start out owned by the Entra administrator's database role. PostgreSQL lets
 only a member of the owning role give objects away, and Azure Database for
 PostgreSQL has no superuser. Only the Entra administrator can also create the
@@ -323,8 +326,8 @@ npm run db:maintenance -- --execute --apps-only `
 Only the container image changes. The runner never creates a Deployment, and it
 fails if one is missing.
 
-Apps-only maintenance updates only the selected P1 Deployments. For the full
-v1 workload set, use `npm run deploy:kustomize`; it runs migrations first and
+Apps-only maintenance updates only the selected application Deployments. For the full
+workload set, use `npm run deploy:kustomize`; it runs migrations first and
 then applies the root Kustomize overlay without a deployment receipt gate.
 
 ## Reconcile Broker egress drift
@@ -369,19 +372,19 @@ npm run db:maintenance -- --release-lock <run-id>
 
 - Apply Core migration 017 or any version outside the reviewed plan.
 - Reset, reinitialize, or drop a database, schema, or role.
-- Create Azure role assignments or change identities other than the P1
+- Create Azure role assignments or change identities other than the PostgreSQL
   migration identity. Only the setup command assigns roles, and only the ones
   in its template.
 - Change any Deployment setting other than the service image.
 
 These changes need their own review.
 
-After the ownership handover, the operator no longer owns the P1 schemas.
+After the ownership handover, the operator no longer owns the migration schemas.
 `--apply-pending-migrations` of `bootstrap-p1-postgres.mjs` is limited to
-operator-owned P1 schemas, so use this runner for later P1 migrations instead.
+operator-owned migration schemas, so use this runner for later migrations instead.
 Its read-only `--inspect` mode reports live ownership and grants without
 changing them. Projects & Config runtime grants are reconciled by its
-dedicated-owner migration Job after EF migrations; the P1 operator initializer
+dedicated-owner migration Job after EF migrations; the PostgreSQL operator initializer
 does not grant access in that schema.
 
 ## Related information

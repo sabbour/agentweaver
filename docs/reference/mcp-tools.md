@@ -2,13 +2,13 @@
 
 The checked-in release/Kustomize composition still includes MCP compatibility
 image, workload and ingress resources. Their presence does not make MCP a
-supported 1.x product or acceptance surface. Supported client paths are
+supported product or acceptance surface. Supported client paths are
 Gateway/API, browser and native .NET CLI. Outbound remote MCP connections are
 separate.
 
 This page records the retained adapter's source contract. It is not a
 connection, deployment, or acceptance procedure. Do not use `/mcp` as a
-supported 1.x client path.
+supported client path.
 
 For route authorization and native-only operations, see the
 [HTTP API reference](./api.md). For provider setup, see
@@ -22,7 +22,7 @@ caches admitted operations. Each tool name is `agentweaver_` followed by the
 OpenAPI `operationId`. The Gateway document defines each tool's path,
 parameters, request body, and summary.
 
-The Gateway also serves the v1 operator definition at
+The Gateway also serves the operator definition at
 `GET /agents/agentweaver.agent.md`. The anonymous response is Markdown and is
 not an MCP tool. It does not write the file into project or run repositories.
 The adapter maps `/mcp` with the MCP SDK's stateless Streamable HTTP

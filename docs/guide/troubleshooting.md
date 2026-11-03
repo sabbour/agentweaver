@@ -1,4 +1,4 @@
-# Troubleshoot Agentweaver 1.x
+# Troubleshoot Agentweaver
 
 Use this guide to identify the owner of a configuration or deployment failure.
 Start with read-only checks. Apply a remedy only when the observed state matches
@@ -7,7 +7,7 @@ does not prove that a workload or request completed.
 
 ## Before you investigate
 
-Use the v1 source, the approved Kubernetes context, and read access to the
+Use the current source, the approved Kubernetes context, and read access to the
 affected namespace. Confirm the context before querying the cluster:
 
 ```powershell
@@ -53,14 +53,16 @@ credentials, private keys, or secret values.
 4. Compare the deployed image and ConfigMap source with the approved release
    evidence and [runtime configuration reference](../reference/runtime-configuration.md).
 
-## Diagnose an indeterminate P1 project setup
+<span id="diagnose-an-indeterminate-p1-project-setup"></span>
 
-The P1 acceptance harness records an invocation ID and creates a project named
+## Diagnose interrupted project setup
+
+The API acceptance harness records an invocation ID and creates a project named
 `p1-<invocation-id>`. If setup or cleanup is interrupted, keep the same
 invocation ID. Do not retry setup or start another journey until you have
 reconciled the existing invocation.
 
-Use the read-only [P1 reconciliation guide](./p1-reconciliation.md) with the
+Use the read-only [project setup reconciliation guide](./p1-reconciliation.md) with the
 same approved manifest and invocation ID.
 
 | Step | Status and problem code | What to check |
@@ -96,7 +98,7 @@ fixture, performs cleanup, or starts another journey.
 Migration 039 validates existing authority-audit links before it backfills
 invocation IDs. A live inconsistency aborts the PostgreSQL transaction without
 partial writes, so the migration-history entry and append-only trigger remain
-unchanged. Resolve the inconsistency through the reviewed P1 setup and cleanup
+unchanged. Resolve the inconsistency through the reviewed setup and cleanup
 workflow that owns the invocation. Do not repair audit or setup-operation rows
 by hand.
 

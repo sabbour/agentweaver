@@ -1,6 +1,6 @@
 # Agentweaver CLI
 
-The Agentweaver 1.x CLI is a native .NET 10 executable named `agentweaver`.
+The Agentweaver CLI is a native .NET 10 executable named `agentweaver`.
 Its source project is version `1.0.0`. Downloadable archives are not yet
 available: archive preparation is separate from release publication, so do not
 treat a CI candidate as a published download.
@@ -148,7 +148,7 @@ bearer tokens or project-authorization headers. When an operation advertises
 `X-Agentweaver-Project-Authorization`, the CLI obtains the separate,
 unbound `projects.admin` authorization for the same actor and tenant.
 
-The P1 setup receipt operations are `createP1InvocationSetup` (POST) and
+The invocation setup receipt operations are `createP1InvocationSetup` (POST) and
 `readP1InvocationSetup` (GET), both on
 `/api/v1/p1/invocations/{invocationId}/setup`. They use the separate unbound
 `api.read` plus `projects.admin` identity and still require current TenantAdmin
@@ -160,7 +160,7 @@ agentweaver api invoke createP1InvocationSetup --path invocationId=<INVOCATION_I
 agentweaver api invoke readP1InvocationSetup --path invocationId=<INVOCATION_ID> --scope projects.admin
 ```
 
-The create operation mutates the owned P1 fixture; use it only in an approved
+The create operation mutates the owned project fixture; use it only in an approved
 setup context. These individual calls do not replace the native
 `agentweaver test --input <manifest>` acceptance journey. The operations remain
 excluded from MCP.
@@ -242,14 +242,14 @@ The production evidence provider verifies the committed source manifest, the
 canonical GHCR image selection, and Kubernetes service readbacks. A non-dry-run
 needs the exact external source manifest and image manifest, and may change API
 state during fixture setup and cleanup; do not use it against production.
-Full P1 acceptance remains blocked when required native/session-material proof
+Full API acceptance remains blocked when required native/session-material proof
 or authorized target evidence is unavailable. The manifest and evidence are
 external files; relative proof paths resolve from the manifest directory.
 
 `deploymentEvidence` contains exactly `manifestPath` and `imageManifestPath`.
 
 The separate `board-delete` journey is a narrow typed API acceptance feature,
-not full P1 acceptance. Its manifest uses `executionIntent: "execute"`,
+not a complete API acceptance run. Its manifest uses `executionIntent: "execute"`,
 `journey: "board-delete"`, and `fixturePlan: {"kind":"owned-disposable-board"}`.
 The reviewed environment is fixed: `baseUrl` is
 `https://api.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io`,
@@ -297,9 +297,9 @@ before deployment-provider reads or authentication. An existing unfinished
 Board reservation is not resumable because the in-memory fixture receipt ledger
 is not persisted; the runner leaves that evidence untouched and rejects the
 retry before any owner setup. Reconcile the original invocation and use a new
-evidence path for a new attempt. The existing P1 reservation behavior is
+evidence path for a new attempt. The existing full-journey reservation behavior is
 unchanged. The result uses `board-acceptance-result` with
-`fullP1Status: "not-evaluated"`; it does not claim complete P1 acceptance.
+`fullP1Status: "not-evaluated"`; it does not claim complete API acceptance.
 
 The `owner-denial` step passes only when the response is HTTP `403` and its
 JSON `error` field is `backlog_project_permission_denied`. The result preserves
@@ -372,11 +372,11 @@ envelopes:
 agentweaver test --input <manifest> --output <evidence> [--native-probe-envelope <file>] [--dispatch-recovery-envelope <file>] [--dry-run] [--interactive]
 ```
 
-For P1 journeys, the manifest's `environment` object must provide `baseUrl`
+For API acceptance journeys, the manifest's `environment` object must provide `baseUrl`
 (Gateway origin), `issuer` (Broker/OIDC issuer), `audience`, `tenantId`, and
 `actorId`. The runner builds its target from those fields and uses the
 `agentweaver-cli` client; it does not substitute target flags or environment
-variables. For each P1 invocation, the runner creates its owned project, takes
+variables. For each acceptance invocation, the runner creates its owned project, takes
 its ID from the `createProject` receipt, and derives the run ID from the
 invocation identity. The `board-delete` target and input contract are separate
 and described above.
