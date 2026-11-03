@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Agentweaver.Cli;
 using Xunit;
@@ -80,6 +82,14 @@ public sealed class ApiAcceptanceFeatureJourneyTests
         int archive = api.Calls.FindIndex(call => call.Operation == "archiveChild");
         int detach = api.Calls.FindIndex(call => call.Operation == "detachSession");
         Assert.True(advance >= 0 && advance < complete && complete < archive && archive < detach);
+        int[] childStatusReads = api.Calls
+            .Select((call, index) => (call, index))
+            .Where(item => item.call.Operation == "readSessionStatus"
+                && item.call.Invocation.PathParameters?["sessionId"] == api.ArchivedChildId)
+            .Select(item => item.index)
+            .ToArray();
+        Assert.Equal(3, childStatusReads.Length);
+        Assert.True(advance < childStatusReads[1] && childStatusReads[1] < complete && complete < childStatusReads[2]);
         Assert.Equal("completed", api.Calls[complete].Invocation.Body?["completion"]?.GetValue<string>());
         Assert.Equal(executionFence, api.Calls[archive].Invocation.Body?["executionFence"]?.GetValue<long>());
         Assert.Equal(executionFence, api.Calls[detach].Invocation.Body?["executionFence"]?.GetValue<long>());
@@ -153,11 +163,13 @@ public sealed class ApiAcceptanceFeatureJourneyTests
     {
         private readonly bool[] _registered = new bool[2];
         private bool _turnCompleted;
+        private long _archivedChildStateVersion = 1;
         private bool _archived;
         private bool _detached;
 
         private readonly string _archivedChildId = ApiAcceptanceSupport.StableUuid(runId, "metric-archived-child");
         private readonly string _detachedChildId = ApiAcceptanceSupport.StableUuid(runId, "metric-detached-child");
+        public string ArchivedChildId => _archivedChildId;
         public CliIdentity Identity { get; } = new(
             new CliTarget(
                 new Uri("https://gateway.example/"),
@@ -210,12 +222,7 @@ public sealed class ApiAcceptanceFeatureJourneyTests
                     ["stateVersion"] = 1L,
                 },
                 "registerChild" => RegisterChild(invocation),
-                "advanceTurnBoundary" => new JsonObject
-                {
-                    ["session"] = new JsonObject { ["sessionId"] = _archivedChildId },
-                    ["stateVersion"] = 2L,
-                    ["executionFence"] = executionFence,
-                },
+                "advanceTurnBoundary" => AdvanceTurnBoundary(),
                 "completeTurn" => CompleteTurn(),
                 "archiveChild" => ArchiveChild(),
                 "detachSession" => DetachChild(),
@@ -259,7 +266,7 @@ public sealed class ApiAcceptanceFeatureJourneyTests
             },
             ["rootSessionId"] = rootSessionId,
             ["executionFence"] = executionFence,
-            ["stateVersion"] = sessionId == _archivedChildId && _turnCompleted ? 3L : 1L,
+            ["stateVersion"] = sessionId == _archivedChildId ? _archivedChildStateVersion : 1L,
             ["lifecycle"] = sessionId == _archivedChildId && _turnCompleted ? "completed" : "active",
         };
 
@@ -282,15 +289,27 @@ public sealed class ApiAcceptanceFeatureJourneyTests
             };
         }
 
-        private JsonObject CompleteTurn()
+        private JsonObject AdvanceTurnBoundary()
         {
-            _turnCompleted = true;
+            _archivedChildStateVersion += 2;
             return new JsonObject
             {
                 ["session"] = new JsonObject { ["sessionId"] = _archivedChildId },
-                ["executionFence"] = executionFence,
+                ["stateVersion"] = _archivedChildStateVersion,
+                ["executionFence"] = 0L,
+            };
+        }
+
+        private JsonObject CompleteTurn()
+        {
+            _turnCompleted = true;
+            _archivedChildStateVersion++;
+            return new JsonObject
+            {
+                ["session"] = new JsonObject { ["sessionId"] = _archivedChildId },
+                ["executionFence"] = 0L,
                 ["executionState"] = "completed",
-                ["stateVersion"] = 3L,
+                ["stateVersion"] = _archivedChildStateVersion,
             };
         }
 
@@ -344,15 +363,26 @@ public sealed class ApiAcceptanceFeatureJourneyTests
             ["lifecycle"] = lifecycle,
         };
 
-        private JsonObject Metrics(GatewayInvocation invocation) => new()
+        private JsonObject Metrics(GatewayInvocation invocation)
         {
-            ["projectId"] = projectId,
-            ["from"] = invocation.Query?["from"],
-            ["to"] = invocation.Query?["to"],
-            ["runsInRange"] = 0L,
-            ["runsTotal"] = 1L,
-            ["sessionHistoryRecordsTotal"] = (long)metricCount,
-        };
+            DateTimeOffset from = DateTimeOffset.Parse(
+                invocation.Query?["from"] ?? throw new InvalidOperationException("The metrics request omitted from."),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal);
+            DateTimeOffset to = DateTimeOffset.Parse(
+                invocation.Query?["to"] ?? throw new InvalidOperationException("The metrics request omitted to."),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal);
+            return new JsonObject
+            {
+                ["projectId"] = projectId,
+                ["from"] = JsonSerializer.SerializeToNode(from),
+                ["to"] = JsonSerializer.SerializeToNode(to),
+                ["runsInRange"] = 0L,
+                ["runsTotal"] = 1L,
+                ["sessionHistoryRecordsTotal"] = (long)metricCount,
+            };
+        }
     }
 
     private sealed class ArchivedBoardGatewayClient(string projectId) : IGatewayClient
