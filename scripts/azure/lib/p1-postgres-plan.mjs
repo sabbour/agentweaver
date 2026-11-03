@@ -310,8 +310,8 @@ export function buildP1PostgresPlan() {
     // 032 adds pull-request records; 033 extends Priority links; 036 and 037 reuse the trigger from 021.
     // 035 adds a position column to backlog_tasks and requires its runtime DELETE grant.
     // 038 adds the retry-safe Source Control pull-request operation ledger; 039 adds runtime evidence receipts;
-    // 040 adds P1 request provenance and invocation bindings.
-    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40],
+    // 040 adds P1 request provenance and invocation bindings; 041 adds numeric-limit no-send receipts.
+    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41],
     // Bind each owner migration catalog into the reviewed plan hash.
     environmentVersions: Array.from({ length: 12 }, (_, index) => index + 1),
     eventsVersions: Array.from({ length: 11 }, (_, index) => index + 1),
