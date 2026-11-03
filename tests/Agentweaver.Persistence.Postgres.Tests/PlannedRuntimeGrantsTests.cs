@@ -10,7 +10,7 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 public sealed class PlannedRuntimeGrantsTests
 {
     private const string ReviewedPlanSha256 = "1973105970f256033d2b9bd94374eed90b500d39a8c282bb37b93a294ebd62b6";
-    private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38, 39, 40];
+    private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38, 39, 40, 41];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 11)];
     private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 12)];
 
@@ -35,6 +35,7 @@ public sealed class PlannedRuntimeGrantsTests
         Assert.Contains(38, core.Versions);
         Assert.Contains(39, core.Versions);
         Assert.Contains(40, core.Versions);
+        Assert.Contains(41, core.Versions);
         Assert.DoesNotContain(34, core.Versions);
         Assert.Contains(35, core.Versions);
         Assert.NotEmpty(core.Tables);
