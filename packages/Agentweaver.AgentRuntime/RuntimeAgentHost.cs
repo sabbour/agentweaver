@@ -1547,7 +1547,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                             _material!,
                             turn.Token,
                             pending.MessageId,
-                            pending.Request.Message.Metadata.ReadOnlyToolsOnly)
+                            pending.Request.Message.Metadata.ReadOnlyToolsOnly,
+                            _usageSource)
                             .ConfigureAwait(false);
                     await session.FlushUsageAsync(turn.Token).ConfigureAwait(false);
                     RequireAvailable();

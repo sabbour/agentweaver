@@ -50,6 +50,8 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
     public string? EffectiveReasoningEffort { get; set; }
     public Func<CancellationToken, Task>? BeforeModelCatalogResponse { get; set; }
     public bool IncompleteNativeEventRange { get; set; }
+    public bool AdvanceNativeEventCursorOnRead { get; set; }
+    public string? NativeEventCursorStatusOverride { get; set; }
     public Action? BeforeEffectiveModelResponse { get; set; }
     public Func<CancellationToken, Task>? BeforeStatusResponse { get; set; }
     public bool EmitUsageAfterCreate { get; set; } = true;
@@ -105,7 +107,9 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
         {
             await WriteAsync(new
             {
-                jsonrpc = "2.0", id, method,
+                jsonrpc = "2.0",
+                id,
+                method,
                 @params = parameters
             });
             sent = true;
@@ -163,14 +167,19 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                 sessionId = _sessionId,
                 @event = new
                 {
-                    type = "permission.requested", id = Guid.NewGuid(), timestamp = DateTimeOffset.UtcNow,
-                    parentId = (Guid?)null, agentId = (string?)null,
+                    type = "permission.requested",
+                    id = Guid.NewGuid(),
+                    timestamp = DateTimeOffset.UtcNow,
+                    parentId = (Guid?)null,
+                    agentId = (string?)null,
                     data = new
                     {
                         requestId = "read-permission",
                         permissionRequest = new
                         {
-                            kind = "read", intention = "Read the workspace file.", path = "/workspace/readme.txt"
+                            kind = "read",
+                            intention = "Read the workspace file.",
+                            path = "/workspace/readme.txt"
                         }
                     }
                 }
@@ -393,8 +402,8 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                                 var page = _durableEvents.Skip(offset).Take(maximum).ToArray();
                                 result = new
                                 {
-                                    cursor = $"controlled-cursor-{offset + page.Length}",
-                                    cursorStatus = "ok",
+                                    cursor = $"controlled-cursor-{offset + page.Length + (AdvanceNativeEventCursorOnRead ? 1 : 0)}",
+                                    cursorStatus = NativeEventCursorStatusOverride ?? "ok",
                                     events = page,
                                     hasMore = IncompleteNativeEventRange ||
                                         offset + page.Length < _durableEvents.Count
@@ -542,8 +551,12 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                 sessionId = _sessionId,
                 @event = new
                 {
-                    type, id, timestamp = DateTimeOffset.UtcNow,
-                    parentId = (Guid?)null, agentId = (string?)null, data
+                    type,
+                    id,
+                    timestamp = DateTimeOffset.UtcNow,
+                    parentId = (Guid?)null,
+                    agentId = (string?)null,
+                    data
                 }
             }
         });

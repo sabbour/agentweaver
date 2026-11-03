@@ -88,7 +88,8 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
     /// <exception cref="RuntimeAuthorizationException">The turn lacks action authority or the session is stale.</exception>
     public async Task<string> SendTurnAsync(
         string prompt, RuntimeSessionMaterialHttpClient material, CancellationToken cancellationToken,
-        Guid? userEventId = null, bool readOnlyToolsOnly = false)
+        Guid? userEventId = null, bool readOnlyToolsOnly = false,
+        RuntimeUsageSourceHttpClient? usageSource = null)
     {
         if (Registration.Binding.WorkflowStepId is not null)
             throw new RuntimeAuthorizationException("runtime_native_turn_admission_required");
@@ -118,11 +119,44 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
                 .ConfigureAwait(false);
             var coordinatorRoot = Registration.Binding.AgentId == RuntimeActionContract.CoordinatorRootStepId &&
                 Registration.Binding.WorkflowStepId is null;
+            RuntimeNumericLimitSourceSnapshot? numericLimitSource = null;
+            string? nativeCursor = null;
+            RuntimeActionRequest? rootModelAction = null;
+            if (coordinatorRoot && Registration.Binding.MaxModelTurns is not null)
+            {
+                if (usageSource is null)
+                    throw new RuntimeAuthorizationException("runtime_usage_source_unavailable");
+                await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+                numericLimitSource = CaptureNumericLimitSourceSnapshot();
+                nativeCursor = await _session.CaptureNativeEventCursorAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+                RequireNumericLimitSourceSnapshot(numericLimitSource);
+                rootModelAction = new RuntimeActionRequest(
+                    1, Registration.RuntimeInstanceId, Registration.Revision,
+                    Registration.Binding.ExecutionFence, turnId, "model.turn",
+                    RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(prompt)))
+                {
+                    DispatchId = turnId
+                };
+            }
             // Bind a coordinator turn to its persisted generation message for owner admission.
-            await _actions.RequireAsync(
-                Registration, "model.turn", turnId, System.Text.Encoding.UTF8.GetBytes(prompt),
-                RequireCurrentAsync, cancellationToken,
-                dispatchId: coordinatorRoot ? turnId : null).ConfigureAwait(false);
+            try
+            {
+                await _actions.RequireAsync(
+                    Registration, "model.turn", turnId, System.Text.Encoding.UTF8.GetBytes(prompt),
+                    RequireCurrentAsync, cancellationToken,
+                    dispatchId: coordinatorRoot ? turnId : null).ConfigureAwait(false);
+            }
+            catch (RuntimeAuthorizationException exception) when (
+                numericLimitSource is not null &&
+                exception.Code == "runtime_model_turn_limit_exhausted")
+            {
+                await RecordRootNumericLimitNoSendAsync(
+                    usageSource!, rootModelAction!, turnId, numericLimitSource, nativeCursor!, cancellationToken)
+                    .ConfigureAwait(false);
+                throw;
+            }
             // Preserve the A2A caller's read-only restriction through the authorized runtime wrapper.
             var answer = await _session.SendTurnAsync(
                 prompt, cancellationToken, userEventId, readOnlyToolsOnly).ConfigureAwait(false);
@@ -172,6 +206,89 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         // Deriving the response event ID from the request lets a restarted host replay one recorded turn.
         var material = System.Text.Encoding.UTF8.GetBytes($"agentweaver:a2a:assistant:{messageId:N}");
         return new Guid(System.Security.Cryptography.SHA256.HashData(material).AsSpan(0, 16));
+    }
+
+    private sealed record RuntimeNumericLimitSourceSnapshot(
+        Guid GrantId, long GrantRevision, string RegistrationHash, string SourceHash, string SdkSessionIdHash);
+
+    private RuntimeNumericLimitSourceSnapshot CaptureNumericLimitSourceSnapshot()
+    {
+        var grant = SourceGrant;
+        return new(grant.GrantId, grant.Revision,
+            RuntimeContractValidation.RegistrationHash(Registration),
+            RuntimeUsageSourceReceiptContract.HashSource(Registration, Facts),
+            RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(Facts.SdkSessionId)));
+    }
+
+    private void RequireNumericLimitSourceSnapshot(RuntimeNumericLimitSourceSnapshot expected)
+    {
+        var current = CaptureNumericLimitSourceSnapshot();
+        if (current != expected)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_conflict");
+    }
+
+    private async Task RecordRootNumericLimitNoSendAsync(
+        RuntimeUsageSourceHttpClient source,
+        RuntimeActionRequest action,
+        Guid turnId,
+        RuntimeNumericLimitSourceSnapshot sourceSnapshot,
+        string nativeCursor,
+        CancellationToken cancellationToken)
+    {
+        await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+        RequireNumericLimitSourceSnapshot(sourceSnapshot);
+        var denial = await source.ReadNumericLimitDenialAsync(this, turnId, cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_not_found");
+        await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+        RequireNumericLimitSourceSnapshot(sourceSnapshot);
+        if (denial.LimitKind != RuntimeNumericLimitKind.ModelTurns ||
+            denial.RuntimeInstanceId != Registration.RuntimeInstanceId ||
+            denial.RegistrationRevision != Registration.Revision ||
+            denial.SourceRegistrationRevision != Registration.Revision ||
+            denial.SourceGrantId != sourceSnapshot.GrantId ||
+            denial.SourceHash != sourceSnapshot.SourceHash ||
+            denial.RootSessionId != Registration.Binding.SessionId ||
+            denial.SessionId != Registration.Binding.SessionId ||
+            denial.ExecutionFence != Registration.Binding.ExecutionFence ||
+            denial.AcceptedSelectionHash != Registration.Binding.AcceptedSelectionHash ||
+            denial.AcceptedLimit != Registration.Binding.MaxModelTurns ||
+            denial.AttemptId != turnId || denial.DispatchId != turnId ||
+            denial.RequestHash != RuntimeActionContract.Hash(action) ||
+            denial.SendStateBeforeHash != denial.SendStateAfterHash)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_conflict");
+
+        var range = await _session.RequireNoNativeEventsSinceAsync(nativeCursor, cancellationToken)
+            .ConfigureAwait(false);
+        await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+        RequireNumericLimitSourceSnapshot(sourceSnapshot);
+        if (!range.IsComplete || range.ObservedEventCount != 0 ||
+            range.BeforeCursorHash != range.AfterCursorHash)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_invalid");
+
+        var evidence = RuntimeNumericLimitNativeNoSendReceipt.Seal(new(
+            1, RuntimeNumericLimitNativeNoSendIdentity.ReceiptId(
+                denial.ProjectId, denial.RunId, turnId, denial.ReceiptId),
+            denial.ProjectId, denial.RunId, denial.RootSessionId, denial.SessionId,
+            Registration.RuntimeInstanceId, Registration.Revision, Registration.Binding.ExecutionFence,
+            turnId, turnId, RuntimeActionContract.Hash(action), denial.ReceiptId,
+            denial.CanonicalPayloadHash, sourceSnapshot.RegistrationHash, sourceSnapshot.SourceHash,
+            sourceSnapshot.GrantId, sourceSnapshot.GrantRevision, sourceSnapshot.SdkSessionIdHash,
+            range.BeforeCursorHash, range.AfterCursorHash, range.ObservedEventCount, range.IsComplete,
+            _timeProvider.GetUtcNow(), string.Empty));
+        RuntimeNumericLimitNativeNoSendContract.ValidatePair(evidence, denial, Registration, action);
+        await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+        RequireNumericLimitSourceSnapshot(sourceSnapshot);
+        var stored = await source.RecordNumericLimitNativeNoSendAsync(
+            this, action, denial, evidence, cancellationToken).ConfigureAwait(false);
+        await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+        RequireNumericLimitSourceSnapshot(sourceSnapshot);
+        if (stored with
+        {
+            RecordedAt = evidence.RecordedAt,
+            CanonicalPayloadHash = evidence.CanonicalPayloadHash
+        } != evidence)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_conflict");
     }
 
     /// <summary>Rejects hosted Copilot hard-credit limits that cannot be tied to a workflow-step turn.</summary>

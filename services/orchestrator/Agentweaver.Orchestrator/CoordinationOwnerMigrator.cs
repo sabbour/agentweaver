@@ -21,7 +21,8 @@ public static class CoordinationOwnerMigrator
         // Version 035 adds queue ordering; 036 and 037 use the row-lock trigger introduced in 021.
         // Version 038 adds the Source Control pull-request operation ledger; 039 adds runtime evidence receipts.
         // Version 040 adds immutable P1 run-request provenance and accepted invocation bindings.
-        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40])];
+        // Version 041 extends the immutable runtime-evidence kind allowlist.
+        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41])];
 
     /// <summary>
     /// Applies the supported embedded migrations in order under a schema-scoped PostgreSQL lock.
@@ -69,7 +70,7 @@ public static class CoordinationOwnerMigrator
         // Fail on any version this build doesn't know, or on a version whose prerequisite is missing.
         // Optional owner features remain compatible with their complete pre-migration shapes
         // until the reviewed maintenance plan applies them.
-        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33 or 35 or 36 or 37 or 38 or 39 or 40)) ||
+        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33 or 35 or 36 or 37 or 38 or 39 or 40 or 41)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -115,7 +116,8 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(37) && !applied.Contains(21)) ||
             (applied.Contains(38) && !applied.Contains(12)) ||
             (applied.Contains(39) && !applied.Contains(15)) ||
-            (applied.Contains(40) && !applied.Contains(23)))
+            (applied.Contains(40) && !applied.Contains(23)) ||
+            (applied.Contains(41) && !applied.Contains(39)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
         // Apply every catalog version that is not yet recorded, in catalog order. Operator tooling relies on
         // this: it can only cap what runs by checking that the catalog itself ends at the approved version.
@@ -164,6 +166,7 @@ public static class CoordinationOwnerMigrator
                 38 => "source_control_pull_request_operations",
                 39 => "runtime_execution_evidence",
                 40 => "p1_run_request_provenance",
+                41 => "runtime_numeric_native_no_send",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
             var filename = version == 10 ? $"{migrationName}.sql" : $"{version:000}_{migrationName}.sql";
@@ -222,7 +225,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -537,6 +540,71 @@ public static class CoordinationOwnerMigrator
                                   AND tgtype = 27)
                               OR (tgname IN ('p1_run_request_provenance_no_truncate',
                                   'p1_invocation_bindings_no_truncate') AND tgtype = 34))) = 4))
+                ,
+                -- 041 only extends the immutable receipt-kind allowlist; it keeps the original keys,
+                -- foreign key, JSON checks, and both mutation guards unchanged.
+                (
+                    (
+                        (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 41) = 0
+                        AND (
+                            (
+                                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 39) = 0
+                                AND to_regclass(@runtimeEvidenceReceipts) IS NULL
+                            )
+                            OR (
+                                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 39) = 1
+                                AND to_regclass(@runtimeEvidenceReceipts) IS NOT NULL
+                                AND EXISTS (SELECT 1 FROM pg_constraint
+                                    WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
+                                      AND conname = 'maf_runtime_evidence_receipts_receipt_kind_check'
+                                      AND contype = 'c' AND convalidated
+                                      AND pg_get_constraintdef(oid) = @runtimeEvidenceLegacyKindCheck)
+                                AND (SELECT count(*) FROM pg_constraint
+                                    WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
+                                      AND contype = 'c' AND convalidated) = 9
+                                AND EXISTS (SELECT 1 FROM pg_constraint
+                                    WHERE conrelid = to_regclass(@runtimeEvidenceReceipts) AND contype = 'p'
+                                      AND pg_get_constraintdef(oid) =
+                                          'PRIMARY KEY (project_id, run_id, receipt_id)')
+                                AND EXISTS (SELECT 1 FROM pg_constraint
+                                    WHERE conrelid = to_regclass(@runtimeEvidenceReceipts) AND contype = 'u'
+                                      AND pg_get_constraintdef(oid) =
+                                          'UNIQUE (project_id, run_id, receipt_kind, attempt_id)')
+                                AND EXISTS (SELECT 1 FROM pg_constraint
+                                    WHERE conrelid = to_regclass(@runtimeEvidenceReceipts) AND contype = 'f'
+                                      AND confrelid = to_regclass(@runs) AND convalidated
+                                      AND pg_get_constraintdef(oid) LIKE
+                                          'FOREIGN KEY (project_id, run_id) REFERENCES %(project_id, run_id)')
+                            )
+                        )
+                    )
+                    OR (
+                        (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 41) = 1
+                        AND (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 39) = 1
+                        AND to_regclass(@runtimeEvidenceReceipts) IS NOT NULL
+                        AND EXISTS (SELECT 1 FROM pg_constraint
+                            WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
+                              AND conname = 'maf_runtime_evidence_receipts_receipt_kind_check'
+                              AND contype = 'c' AND convalidated
+                              AND pg_get_constraintdef(oid) = @runtimeEvidenceNativeKindCheck)
+                        AND (SELECT count(*) FROM pg_constraint
+                            WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
+                              AND contype = 'c' AND convalidated) = 9
+                        AND EXISTS (SELECT 1 FROM pg_constraint
+                            WHERE conrelid = to_regclass(@runtimeEvidenceReceipts) AND contype = 'p'
+                              AND pg_get_constraintdef(oid) =
+                                  'PRIMARY KEY (project_id, run_id, receipt_id)')
+                        AND EXISTS (SELECT 1 FROM pg_constraint
+                            WHERE conrelid = to_regclass(@runtimeEvidenceReceipts) AND contype = 'u'
+                              AND pg_get_constraintdef(oid) =
+                                  'UNIQUE (project_id, run_id, receipt_kind, attempt_id)')
+                        AND EXISTS (SELECT 1 FROM pg_constraint
+                            WHERE conrelid = to_regclass(@runtimeEvidenceReceipts) AND contype = 'f'
+                              AND confrelid = to_regclass(@runs) AND convalidated
+                              AND pg_get_constraintdef(oid) LIKE
+                                  'FOREIGN KEY (project_id, run_id) REFERENCES %(project_id, run_id)')
+                    )
+                )
             """, connection);
         command.Parameters.AddWithValue(
             "runListIndex", NpgsqlDbType.Text, $"{schema}.ix_accepted_runs_project_created");
@@ -628,6 +696,10 @@ public static class CoordinationOwnerMigrator
             $"{schema}.maf_runtime_evidence_receipts");
         command.Parameters.AddWithValue("runtimeEvidenceMutationFunction", NpgsqlDbType.Text,
             $"{schema}.reject_maf_runtime_evidence_mutation()");
+        command.Parameters.AddWithValue("runtimeEvidenceLegacyKindCheck", NpgsqlDbType.Text,
+            "CHECK (((receipt_kind)::text = ANY ((ARRAY['numeric-limit-denial'::character varying, 'replacement-comparison'::character varying])::text[])))");
+        command.Parameters.AddWithValue("runtimeEvidenceNativeKindCheck", NpgsqlDbType.Text,
+            "CHECK (((receipt_kind)::text = ANY ((ARRAY['numeric-limit-denial'::character varying, 'replacement-comparison'::character varying, 'numeric-limit-native-no-send'::character varying])::text[])))");
         command.Parameters.AddWithValue("p1RunRequestProvenance", NpgsqlDbType.Text,
             $"{schema}.p1_run_request_provenance");
         command.Parameters.AddWithValue("p1InvocationBindings", NpgsqlDbType.Text,
@@ -685,7 +757,7 @@ public static class CoordinationOwnerMigrator
             // checks, the six version 030 checks, and the two version 031 checks precede the
             // optional-033, optional-032, optional-036, optional-035, optional-037, and optional-038 shape checks.
             // A partial apply never counts as ready.
-            Enumerable.Range(57, 51).Any(column => !reader.GetBoolean(column)))
+            Enumerable.Range(57, 52).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }

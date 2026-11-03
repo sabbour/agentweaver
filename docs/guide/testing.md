@@ -360,6 +360,31 @@ creates or updates the issue, logs a warning, and comments on the issue that
 Copilot was not assigned. If the secret is present but assignment fails, the
 job fails.
 
+## Test coordinator-root numeric-limit no-send evidence
+
+Run the focused Host, contract, PostgreSQL owner, and migration cases:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --filter FullyQualifiedName~CoordinatorRootNumericTurnDenial
+dotnet test tests\Agentweaver.Identity.Tests\Agentweaver.Identity.Tests.csproj --filter FullyQualifiedName~NativeNoSendCompanion
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --filter "FullyQualifiedName~CoordinatorRootAdmissionEnforcesAcceptedModelAndToolBudgets|FullyQualifiedName~RuntimeNumericNoSendMigration"
+```
+
+The controlled Host tests exercise the actual coordinator-root dispatch branch:
+the persisted message ID is the action attempt, cursor capture precedes root
+authorization, and empty-range failures do not produce a companion or call
+native `Send`. The HTTP-path regression preserves only the exact, bounded
+no-store numeric-limit error from an Orchestrator `403`; unrelated or malformed
+forbidden responses remain generic denials without a companion. Contract tests
+reject changed or incomplete pairs. The
+PostgreSQL owner test posts through the authenticated internal route, reads the
+stored original and companion together, and checks exact retry and immutability.
+The migration test verifies the forward ledger-kind change and append-only
+guards. These tests use controlled SDK peers and disposable PostgreSQL; they
+do not prove a deployed numeric boundary, restart recovery, or duplicate-send
+prevention. Child pre-dispatch and in-turn tool denials remain explicitly
+partial.
+
 ## Run focused database checks
 
 Run the Broker migration/grant and read-only bootstrap regressions against

@@ -114,6 +114,168 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Fact]
+    public async Task CoordinatorRootNumericTurnDenialRecordsTheExactNoSendCompanionBeforeReturningTheDenial()
+    {
+        await using var fixture = new HostFixture(maxModelTurns: 1, coordinatorRoot: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var readiness = await fixture.ConfigureAsync(timeout.Token);
+        var proof = fixture.Proof(readiness);
+        var message = fixture.Message(proof);
+        var tailsBefore = fixture.Sdk.Requests.Count(request => request.Method == "session.eventLog.tail");
+        var readsBefore = fixture.Sdk.Requests.Count(request => request.Method == "session.eventLog.read");
+        RuntimeActionRequest? deniedAction = null;
+        fixture.ActionGrantOwner = (action, _) =>
+        {
+            deniedAction = action;
+            Assert.Equal(message.Message.MessageId, action.EventId);
+            Assert.Equal(message.Message.MessageId, action.DispatchId);
+            Assert.Equal(tailsBefore + 1,
+                fixture.Sdk.Requests.Count(request => request.Method == "session.eventLog.tail"));
+            Assert.Equal(readsBefore,
+                fixture.Sdk.Requests.Count(request => request.Method == "session.eventLog.read"));
+            fixture.NumericLimitDenialReceipt = fixture.CreateNumericLimitDenialReceipt(
+                action.EventId, proof, RuntimeActionContract.Hash(action));
+            throw new RuntimeAuthorizationException("runtime_model_turn_limit_exhausted");
+        };
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+
+        Assert.Equal("runtime_model_turn_limit_exhausted", failure.Code);
+        Assert.NotNull(deniedAction);
+        var record = Assert.Single(fixture.NumericLimitNativeNoSendEvidence);
+        var companion = Assert.Single(fixture.NumericLimitNativeNoSendReceipts);
+        Assert.Equal(deniedAction, record.Action);
+        Assert.Equal(companion, record.Evidence);
+        RuntimeNumericLimitNativeNoSendContract.ValidatePair(
+            companion, fixture.NumericLimitDenialReceipt!, fixture.Registration, deniedAction);
+        Assert.Equal(0, companion.ObservedEventCount);
+        Assert.Equal(tailsBefore + 1,
+            fixture.Sdk.Requests.Count(request => request.Method == "session.eventLog.tail"));
+        Assert.Equal(readsBefore + 1,
+            fixture.Sdk.Requests.Count(request => request.Method == "session.eventLog.read"));
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.Single(fixture.Material, material =>
+            material.Kind == SessionMaterialKind.TurnContent && material.Role == "user" &&
+            material.EventId == message.Message.MessageId);
+        Assert.DoesNotContain(fixture.Material, material =>
+            material.Kind == SessionMaterialKind.TurnContent && material.Role == "assistant");
+        Assert.DoesNotContain(fixture.Material, material => material.Kind == SessionMaterialKind.SdkCache);
+    }
+
+    [Fact]
+    public async Task CoordinatorRootNumericTurnDenialFromOrchestratorHttpResponseRecordsTheExactNoSendCompanion()
+    {
+        await using var fixture = new HostFixture(maxModelTurns: 1, coordinatorRoot: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var readiness = await fixture.ConfigureAsync(timeout.Token);
+        var proof = fixture.Proof(readiness);
+        var message = fixture.Message(proof);
+        var tailsBefore = fixture.Sdk.Requests.Count(request => request.Method == "session.eventLog.tail");
+        var readsBefore = fixture.Sdk.Requests.Count(request => request.Method == "session.eventLog.read");
+        RuntimeActionRequest? deniedAction = null;
+        fixture.ActionGrantOwner = (action, _) =>
+        {
+            deniedAction = action;
+            fixture.NumericLimitDenialReceipt = fixture.CreateNumericLimitDenialReceipt(
+                action.EventId, proof, RuntimeActionContract.Hash(action));
+            return Task.CompletedTask;
+        };
+        fixture.ActionGrantHttpErrorJson = """{"error":"runtime_model_turn_limit_exhausted"}""";
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+
+        Assert.Equal("runtime_model_turn_limit_exhausted", failure.Code);
+        Assert.NotNull(deniedAction);
+        Assert.Equal(message.Message.MessageId, deniedAction.EventId);
+        Assert.Equal(message.Message.MessageId, deniedAction.DispatchId);
+        var record = Assert.Single(fixture.NumericLimitNativeNoSendEvidence);
+        var companion = Assert.Single(fixture.NumericLimitNativeNoSendReceipts);
+        Assert.Equal(deniedAction, record.Action);
+        Assert.Equal(companion, record.Evidence);
+        RuntimeNumericLimitNativeNoSendContract.ValidatePair(
+            companion, fixture.NumericLimitDenialReceipt!, fixture.Registration, deniedAction);
+        Assert.Equal(0, companion.ObservedEventCount);
+        Assert.Equal(tailsBefore + 1,
+            fixture.Sdk.Requests.Count(request => request.Method == "session.eventLog.tail"));
+        Assert.Equal(readsBefore + 1,
+            fixture.Sdk.Requests.Count(request => request.Method == "session.eventLog.read"));
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+    }
+
+    [Theory]
+    [InlineData("""{"error":"runtime_owner_denied"}""")]
+    [InlineData("""{"error":"runtime_model_turn_limit_exhausted","detail":"untrusted"}""")]
+    [InlineData("[]")]
+    [InlineData("null")]
+    [InlineData("42")]
+    public async Task CoordinatorRootNumericTurnDenialDoesNotTrustUnrelatedOrInvalidForbiddenBody(string errorJson)
+    {
+        await using var fixture = new HostFixture(maxModelTurns: 1, coordinatorRoot: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var readiness = await fixture.ConfigureAsync(timeout.Token);
+        var message = fixture.Message(fixture.Proof(readiness));
+        var tailsBefore = fixture.Sdk.Requests.Count(request => request.Method == "session.eventLog.tail");
+        var readsBefore = fixture.Sdk.Requests.Count(request => request.Method == "session.eventLog.read");
+        fixture.ActionGrantHttpErrorJson = errorJson;
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+
+        Assert.Equal("runtime_owner_denied", failure.Code);
+        Assert.Empty(fixture.NumericLimitNativeNoSendEvidence);
+        Assert.Empty(fixture.NumericLimitNativeNoSendReceipts);
+        Assert.Equal(tailsBefore + 1,
+            fixture.Sdk.Requests.Count(request => request.Method == "session.eventLog.tail"));
+        Assert.Equal(readsBefore,
+            fixture.Sdk.Requests.Count(request => request.Method == "session.eventLog.read"));
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+    }
+
+    [Theory]
+    [InlineData("advanced")]
+    [InlineData("events")]
+    [InlineData("expired")]
+    [InlineData("invalid")]
+    [InlineData("more")]
+    public async Task CoordinatorRootNumericTurnDenialFailsClosedWhenTheNativeRangeIsNotEmptyAndComplete(
+        string rangeFault)
+    {
+        await using var fixture = new HostFixture(maxModelTurns: 1, coordinatorRoot: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var readiness = await fixture.ConfigureAsync(timeout.Token);
+        var proof = fixture.Proof(readiness);
+        var message = fixture.Message(proof);
+        fixture.Sdk.AdvanceNativeEventCursorOnRead = rangeFault == "advanced";
+        fixture.Sdk.IncompleteNativeEventRange = rangeFault == "more";
+        fixture.Sdk.NativeEventCursorStatusOverride = rangeFault switch
+        {
+            "expired" => "expired",
+            "invalid" => "invalid",
+            _ => null
+        };
+        fixture.ActionGrantOwner = async (action, _) =>
+        {
+            fixture.NumericLimitDenialReceipt = fixture.CreateNumericLimitDenialReceipt(
+                action.EventId, proof, RuntimeActionContract.Hash(action));
+            if (rangeFault == "events")
+                await fixture.Sdk.EmitUsageAsync(fixture.Sdk.UsageData());
+            throw new RuntimeAuthorizationException("runtime_model_turn_limit_exhausted");
+        };
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+
+        Assert.Equal("runtime_native_turn_no_send_invalid", failure.Code);
+        Assert.Empty(fixture.NumericLimitNativeNoSendEvidence);
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.Single(fixture.Material, material =>
+            material.Kind == SessionMaterialKind.TurnContent && material.Role == "user" &&
+            material.EventId == message.Message.MessageId);
+    }
+
+    [Fact]
     public async Task RecordedA2ATurnReplayReturnsAssistantMaterialWithoutAnotherModelCall()
     {
         await using var fixture = new HostFixture(coordinatorRoot: true);
@@ -1116,7 +1278,8 @@ public sealed class RuntimeAgentHostTests
         await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
             fixture.Host.SendAsync(fixture.Message(proof with
             {
-                SourceGrantRevision = 2, Purpose = RuntimeCredentialPurpose.Configure
+                SourceGrantRevision = 2,
+                Purpose = RuntimeCredentialPurpose.Configure
             }), fixture.Actor, timeout.Token));
         fixture.Registration = fixture.Registration with { Revision = 2 };
         Assert.Equal("runtime_registration_stale",
@@ -2549,24 +2712,30 @@ public sealed class RuntimeAgentHostTests
             "image" => context with
             {
                 Observation = context.Observation with
-                { StartupPhases = context.Observation.StartupPhases.SetItem(1,
+                {
+                    StartupPhases = context.Observation.StartupPhases.SetItem(1,
                     new(SandboxStartupPhase.ImageReady, 1, context.Observation.StartupPhases[1].ObservedAt,
-                        "sha256:" + new string('b', 64), fixture.Image.CompressedPullBytes)) }
+                        "sha256:" + new string('b', 64), fixture.Image.CompressedPullBytes))
+                }
             },
             "bytes" => context with
             {
                 Observation = context.Observation with
-                { StartupPhases = context.Observation.StartupPhases.SetItem(1,
+                {
+                    StartupPhases = context.Observation.StartupPhases.SetItem(1,
                     new(SandboxStartupPhase.ImageReady, 1, context.Observation.StartupPhases[1].ObservedAt,
-                        fixture.Image.Digest, fixture.Image.CompressedPullBytes + 1)) }
+                        fixture.Image.Digest, fixture.Image.CompressedPullBytes + 1))
+                }
             },
             "phase" => context with
             { Observation = context.Observation with { StartupPhases = context.Observation.StartupPhases.RemoveAt(0) } },
             "future" => context with
             {
                 Observation = context.Observation with
-                { StartupPhases = context.Observation.StartupPhases.SetItem(2,
-                    new(SandboxStartupPhase.Started, 1, fixture.Time.GetUtcNow().AddSeconds(1))) }
+                {
+                    StartupPhases = context.Observation.StartupPhases.SetItem(2,
+                    new(SandboxStartupPhase.Started, 1, fixture.Time.GetUtcNow().AddSeconds(1)))
+                }
             },
             "state" => context with { Observation = context.Observation with { State = (SandboxObservedState)99 } },
             "budget" => context with { StartupBudgets = context.StartupBudgets with { TotalSeconds = 1 } },
@@ -2740,8 +2909,11 @@ public sealed class RuntimeAgentHostTests
         fixture.P1Creation = fault switch
         {
             "foreign-binding" => creation with { Binding = creation.Binding with { CoreInvocationId = Guid.NewGuid() } },
-            "stale-resource" => creation with { SandboxProvision = creation.SandboxProvision with
-                { ProviderResource = creation.SandboxProvision.ProviderResource! with { Generation = 2 } } },
+            "stale-resource" => creation with
+            {
+                SandboxProvision = creation.SandboxProvision with
+                { ProviderResource = creation.SandboxProvision.ProviderResource! with { Generation = 2 } }
+            },
             "pod-replaced" => creation with { PodObservation = creation.PodObservation with { PodUid = "replacement" } },
             _ => creation
         };
@@ -3073,6 +3245,8 @@ public sealed class RuntimeAgentHostTests
         private readonly ConcurrentDictionary<
             (Guid DispatchId, RuntimeCreditLimitDenialStage Stage), RuntimeNativeTurnNoSendReceipt>
             _nativeNoSendRecords = new();
+        private readonly ConcurrentDictionary<Guid, RuntimeNumericLimitNativeNoSendReceipt>
+            _numericLimitNativeNoSendRecords = new();
         private Func<CancellationToken, Task>? _beforeNextRegistrationRead;
         public ConcurrentQueue<Guid> HostedCatalogCredentialRequests { get; } = new();
         public int PodObservationReads => Volatile.Read(ref _podObservationReads);
@@ -3119,8 +3293,10 @@ public sealed class RuntimeAgentHostTests
                             : Registration.Binding.AgentId,
                         ExecutionFence = executionFence,
                         ConfigureEndpoint = new("https://runtime.test/runtime/v1/configure"),
-                        PlacementProviderId = "sandbox-test", EnvironmentLifecycleGeneration = 1,
-                        EnvironmentLeaseRevision = 1, Image = Image,
+                        PlacementProviderId = "sandbox-test",
+                        EnvironmentLifecycleGeneration = 1,
+                        EnvironmentLeaseRevision = 1,
+                        Image = Image,
                         ModelSourceMode = sourceMode,
                         ModelCredentialReference = sourceMode == ModelSourceMode.Byok
                             ? new SecretRef("accepted-model-key", "v1") : null,
@@ -3138,7 +3314,9 @@ public sealed class RuntimeAgentHostTests
             }
             Sdk = new()
             {
-                EmitUsageAfterCreate = false, ExpectedAvailableToolsCount = 7, PersistNativeSessionState = true,
+                EmitUsageAfterCreate = false,
+                ExpectedAvailableToolsCount = 7,
+                PersistNativeSessionState = true,
                 EmitNativeCompletionReceipt = workflowBound,
                 Byok = sourceMode == ModelSourceMode.Byok
             };
@@ -3175,10 +3353,14 @@ public sealed class RuntimeAgentHostTests
                 ModelCredentialReference = b.ModelCredentialReference,
                 ModelBindingPin = b.ModelBindingPin,
                 ReasoningEffort = b.ReasoningEffort,
-                ModelSourceMode = b.ModelSourceMode, ModelConnectionId = b.ModelConnectionId,
-                ModelConnectionScope = b.ModelConnectionScope, WorkflowStepId = b.WorkflowStepId,
-                MaxModelTurns = b.MaxModelTurns, MaxToolCalls = b.MaxToolCalls,
-                MaxPromptTokens = b.MaxPromptTokens, CopilotHardCreditLimit = b.CopilotHardCreditLimit
+                ModelSourceMode = b.ModelSourceMode,
+                ModelConnectionId = b.ModelConnectionId,
+                ModelConnectionScope = b.ModelConnectionScope,
+                WorkflowStepId = b.WorkflowStepId,
+                MaxModelTurns = b.MaxModelTurns,
+                MaxToolCalls = b.MaxToolCalls,
+                MaxPromptTokens = b.MaxPromptTokens,
+                CopilotHardCreditLimit = b.CopilotHardCreditLimit
             };
             var placement = new EnvironmentRuntimeBootstrapContext(1, b.TenantId, b.ProjectId, b.RunId, b.EnvironmentId,
                 1, b.EnvironmentCurrentFencingGeneration, b.EnvironmentProviderFencingGeneration, 1, Registration.ExpiresAt,
@@ -3245,6 +3427,7 @@ public sealed class RuntimeAgentHostTests
         public ConcurrentQueue<SessionMaterialWriteRequest> Material { get; } = new();
         public ConcurrentQueue<RuntimeActionRequest> ModelTurnActions { get; } = new();
         public Func<RuntimeActionRequest, CancellationToken, Task>? ActionGrantOwner { get; set; }
+        public string? ActionGrantHttpErrorJson { get; set; }
         public ConcurrentQueue<string> NativePathEvents { get; } = new();
         public ImmutableArray<SessionEventEnvelope> SessionEvents { get; private set; } = [];
         public int PositionIncrement { get; set; } = 1;
@@ -3258,6 +3441,12 @@ public sealed class RuntimeAgentHostTests
         public ConcurrentQueue<RuntimeNativeTurnNoSendEvidenceRequest> NativeNoSendEvidence { get; } = new();
         public ConcurrentQueue<RuntimeFixedCreditGuardReceipt> FixedCreditGuards { get; } = new();
         public ConcurrentQueue<RuntimeFixedCreditNoSendReceipt> FixedCreditNoSendEvidence { get; } = new();
+        public ConcurrentQueue<RuntimeNumericLimitNativeNoSendRecordRequest>
+            NumericLimitNativeNoSendEvidence
+        { get; } = new();
+        public ConcurrentQueue<RuntimeNumericLimitNativeNoSendReceipt>
+            NumericLimitNativeNoSendReceipts
+        { get; } = new();
         public ConcurrentQueue<string> FixedCreditPathEvents { get; } = new();
         public ConcurrentQueue<string> FixedCreditReadCalls { get; } = new();
         public ConcurrentQueue<string> FixedCreditSelectionCalls { get; } = new();
@@ -3461,17 +3650,18 @@ public sealed class RuntimeAgentHostTests
         public RuntimeHostSessionProof Proof(RuntimeHostReadinessReceipt ready) =>
             new(1, Configure.Registration, ready.SourceGrant.GrantId, ready.SourceGrant.Revision, RuntimeCredentialPurpose.Observe);
         public RuntimeNumericLimitDenialReceipt CreateNumericLimitDenialReceipt(
-            Guid attemptId, RuntimeHostSessionProof proof)
+            Guid attemptId, RuntimeHostSessionProof proof, string? requestHash = null)
         {
             var sourceHash = RuntimeUsageSourceReceiptContract.HashSource(Registration, _facts!);
             var sendStateHash = RuntimeContractValidation.Hash("unchanged-send-state"u8);
             return RuntimeNumericLimitDenialReceipt.Seal(new(
                 1, Guid.NewGuid(), Registration.Binding.ProjectId, Registration.Binding.RunId,
-                "root-session", Registration.Binding.SessionId, Registration.RuntimeInstanceId,
+                Registration.Binding.SessionId, Registration.Binding.SessionId, Registration.RuntimeInstanceId,
                 Registration.Revision, Registration.Revision, proof.SourceGrantId, sourceHash,
                 attemptId, "1", Registration.Binding.ExecutionFence, Registration.Binding.AcceptedSelectionHash,
                 1, RuntimeNumericLimitKind.ModelTurns, 1, 1, attemptId,
-                RuntimeContractValidation.Hash("request"u8), null, null, null, null, null, null, null,
+                requestHash ?? RuntimeContractValidation.Hash("request"u8),
+                attemptId, null, null, null, null, null, null,
                 sendStateHash, sendStateHash, Time.GetUtcNow(), string.Empty));
         }
         public RuntimeHostSuspendRequest SuspendRequest(RuntimeHostSessionProof proof, long phaseVersion = 1)
@@ -3561,8 +3751,10 @@ public sealed class RuntimeAgentHostTests
                 {
                     options.TokenValidationParameters = new()
                     {
-                        ValidIssuer = "https://broker.test/", ValidAudience = "runtime-host",
-                        IssuerSigningKey = _key, ClockSkew = TimeSpan.Zero,
+                        ValidIssuer = "https://broker.test/",
+                        ValidAudience = "runtime-host",
+                        IssuerSigningKey = _key,
+                        ClockSkew = TimeSpan.Zero,
                         ValidAlgorithms = [SecurityAlgorithms.HmacSha256]
                     };
                 });
@@ -3690,7 +3882,36 @@ public sealed class RuntimeAgentHostTests
                 Assert.Equal(Registration.Revision, read.RegistrationRevision);
                 Assert.Equal(Registration.Binding.ExecutionFence, read.ExecutionFence);
                 Assert.Equal(NumericLimitDenialReceipt?.AttemptId ?? read.AttemptId, read.AttemptId);
-                return Response(request, new RuntimeNumericLimitDenialReadResult(NumericLimitDenialReceipt));
+                _numericLimitNativeNoSendRecords.TryGetValue(read.AttemptId, out var companion);
+                return Response(request, new RuntimeNumericLimitDenialReadResult(
+                    NumericLimitDenialReceipt, companion));
+            }
+            if (path == "/internal/runtime/turns/numeric-limit-denials/no-send")
+            {
+                var record = await ReadAsync<RuntimeNumericLimitNativeNoSendRecordRequest>(request, token);
+                var grant = Grant(_source, RuntimeCredentialPurpose.Observe, revision: _sourceRevision);
+                var sourceReceipt = new RuntimeSdkSourceReceipt(
+                    Registration.RuntimeInstanceId, Registration.Revision, grant.GrantId, _facts!,
+                    RuntimeUsageSourceReceiptContract.HashSource(Registration, _facts!), Time.GetUtcNow());
+                Assert.Equal(RuntimeCredentialPurpose.Observe, record.Authorization.Purpose);
+                Assert.Equal(_sourceRevision, record.Authorization.Revision);
+                RuntimeNumericLimitNativeNoSendContract.ValidatePair(
+                    record.Evidence, NumericLimitDenialReceipt!, Registration, record.Action);
+                Assert.Equal(grant.GrantId, record.Evidence.SourceGrantId);
+                Assert.Equal(grant.Revision, record.Evidence.SourceGrantRevision);
+                Assert.Equal(sourceReceipt.CanonicalPayloadHash, record.Evidence.SourceHash);
+                var stored = _numericLimitNativeNoSendRecords.GetOrAdd(
+                    record.Evidence.AttemptId, record.Evidence);
+                if (stored with
+                {
+                    RecordedAt = record.Evidence.RecordedAt,
+                    CanonicalPayloadHash = record.Evidence.CanonicalPayloadHash
+                } != record.Evidence)
+                    throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_conflict");
+                NumericLimitNativeNoSendEvidence.Enqueue(record);
+                NumericLimitNativeNoSendReceipts.Enqueue(stored);
+                NativePathEvents.Enqueue("numeric-limit-no-send");
+                return Response(request, stored);
             }
             if (path == "/internal/runtime/suspend/require-current")
             {
@@ -3744,7 +3965,8 @@ public sealed class RuntimeAgentHostTests
                     binding.ModelSelectionReference!, binding.ModelCredentialReference ?? new("copilot-user", "v1"),
                     RuntimeSecretPurposes.ModelSession, Configure.Registration.ExpiresAt)
                 {
-                    SourceMode = binding.ModelSourceMode, ConnectionId = binding.ModelConnectionId,
+                    SourceMode = binding.ModelSourceMode,
+                    ConnectionId = binding.ModelConnectionId,
                     ConnectionRevision = byok ? null : 1,
                     CredentialKind = byok ? RuntimeModelCredentialKind.ByokKey : RuntimeModelCredentialKind.GitHubUserAccess
                 };
@@ -3763,6 +3985,8 @@ public sealed class RuntimeAgentHostTests
                     {
                         if (ActionGrantOwner is { } actionGrantOwner)
                             await actionGrantOwner(action, token);
+                        if (ActionGrantHttpErrorJson is { } errorJson)
+                            return JsonResponse(request, errorJson, HttpStatusCode.Forbidden);
                         ModelTurnActions.Enqueue(action);
                         NativePathEvents.Enqueue("action-authorize");
                     }
@@ -4238,11 +4462,13 @@ public sealed class RuntimeAgentHostTests
             HttpStatusCode status = HttpStatusCode.OK) =>
             new(status)
             {
-                RequestMessage = request, Content = JsonContent.Create(body, options: Json),
+                RequestMessage = request,
+                Content = JsonContent.Create(body, options: Json),
                 Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
             };
-        private static HttpResponseMessage JsonResponse(HttpRequestMessage request, string json) =>
-            new(HttpStatusCode.OK)
+        private static HttpResponseMessage JsonResponse(
+            HttpRequestMessage request, string json, HttpStatusCode status = HttpStatusCode.OK) =>
+            new(status)
             {
                 RequestMessage = request,
                 Content = new StringContent(json, Encoding.UTF8, "application/json"),
