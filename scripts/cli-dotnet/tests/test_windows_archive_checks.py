@@ -249,6 +249,201 @@ class WindowsArchiveCleanupTests(unittest.TestCase):
             shutil.rmtree(folder, ignore_errors=True)
 
 
+class WindowsArchivePreflightTests(unittest.TestCase):
+    port = 43123
+
+    def _profile(self, proxy_target=None, proxy_bypassed=False, ps_major=7):
+        return {
+            "sid": "S-1-5-21-1-2-3-1001",
+            "localAppData": "C:\\Users\\fixture\\AppData\\Local",
+            "userProfile": "C:\\Users\\fixture",
+            "appData": "C:\\Users\\fixture\\AppData\\Roaming",
+            "systemRoot": "C:\\Windows",
+            "psMajor": ps_major,
+            "proxyBypassed": proxy_bypassed,
+            "proxyTarget": proxy_target,
+        }
+
+    def _expected_profile(self, payload):
+        output = payload if isinstance(payload, str) else json.dumps(payload)
+        with patch.object(checks, "run_powershell", return_value=output) as run_powershell:
+            profile = checks.expected_profile(Path("pwsh.exe"), self.port)
+        run_powershell.assert_called_once_with(
+            Path("pwsh.exe"),
+            checks.PREFLIGHT_SCRIPT,
+            {"ARCHIVE_FIXTURE_URI": f"https://127.0.0.1:{self.port}/"},
+            timeout=5,
+            preserve_proxy_env=True,
+        )
+        return profile
+
+    def test_expected_profile_accepts_direct_and_fixture_echo_for_either_diagnostic(self):
+        fixture_uri = f"https://127.0.0.1:{self.port}/"
+        for proxy_bypassed in (False, True):
+            for proxy_target in (None, fixture_uri):
+                with self.subTest(proxy_bypassed=proxy_bypassed, proxy_target=proxy_target):
+                    profile = self._expected_profile(
+                        self._profile(proxy_target=proxy_target, proxy_bypassed=proxy_bypassed)
+                    )
+                    self.assertIs(profile["proxyBypassed"], proxy_bypassed)
+                    self.assertEqual(profile["proxyTarget"], proxy_target)
+
+    def test_expected_profile_blocks_redirects_and_invalid_metadata(self):
+        invalid_targets = (
+            f"http://127.0.0.1:{self.port}/",
+            f"https://localhost:{self.port}/",
+            f"https://127.0.0.1:{self.port + 1}/",
+            f"https://127.0.0.1:{self.port}/other",
+            f"https://127.0.0.1:{self.port}/?query",
+            f"https://127.0.0.1:{self.port}/#fragment",
+            "",
+            7,
+            [],
+        )
+        invalid_profiles = [
+            ("malformed JSON", "{"),
+            ("non-object JSON", "[]"),
+            ("missing target", {key: value for key, value in self._profile().items() if key != "proxyTarget"}),
+            ("missing bypass diagnostic", {key: value for key, value in self._profile().items() if key != "proxyBypassed"}),
+            ("non-boolean bypass diagnostic", self._profile(proxy_bypassed=1)),
+            ("missing version", {key: value for key, value in self._profile().items() if key != "psMajor"}),
+            ("malformed version", self._profile(ps_major="7")),
+            ("boolean version", self._profile(ps_major=True)),
+            ("fractional version", self._profile(ps_major=7.0)),
+            ("old version", self._profile(ps_major=6)),
+        ]
+        invalid_profiles.extend(
+            (
+                f"redirect target {index}, bypassed={proxy_bypassed}",
+                self._profile(proxy_target=target, proxy_bypassed=proxy_bypassed),
+            )
+            for index, target in enumerate(invalid_targets)
+            for proxy_bypassed in (False, True)
+        )
+
+        for name, payload in invalid_profiles:
+            with self.subTest(name=name), self.assertRaises(checks.BlockedError):
+                self._expected_profile(payload)
+
+    def test_expected_profile_preserves_only_inherited_proxy_inputs(self):
+        proxy_names = {
+            "hTtP_PrOxY": "http://proxy.example.invalid:1234",
+            "https_proxy": "",
+            "ALL_PROXY": "socks5://proxy.example.invalid:1080",
+            "no_Proxy": "127.0.0.1",
+        }
+        sanitized = {
+            "PATH": "",
+            "NO_PROXY": "127.0.0.1,localhost",
+            "no_proxy": "127.0.0.1,localhost",
+            "SANITIZED_VALUE": "retained",
+        }
+        profile_json = json.dumps(self._profile())
+        process = SimpleNamespace(
+            pid=8124,
+            returncode=0,
+            poll=lambda: 0,
+            communicate=lambda timeout=None: (profile_json, ""),
+        )
+        inherited = {**proxy_names, "UNRELATED_ENV": "not inherited"}
+        with (
+            patch.object(checks.os, "environ", inherited),
+            patch.object(checks, "powershell_env", return_value=sanitized),
+            patch.object(checks.subprocess, "Popen", return_value=process) as popen,
+            patch.object(checks.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, create=True),
+        ):
+            profile = checks.expected_profile(Path("pwsh.exe"), self.port)
+
+        child_env = popen.call_args.kwargs["env"]
+        self.assertEqual(profile["proxyTarget"], None)
+        self.assertEqual({name: child_env[name] for name in proxy_names}, proxy_names)
+        self.assertNotIn("UNRELATED_ENV", child_env)
+        self.assertEqual(child_env["SANITIZED_VALUE"], "retained")
+        self.assertEqual(child_env["PATH"], "")
+
+        process = SimpleNamespace(
+            pid=8125,
+            returncode=0,
+            poll=lambda: 0,
+            communicate=lambda timeout=None: (profile_json, ""),
+        )
+        with (
+            patch.object(checks.os, "environ", {"UNRELATED_ENV": "not inherited"}),
+            patch.object(checks, "powershell_env", return_value=sanitized),
+            patch.object(checks.subprocess, "Popen", return_value=process) as popen,
+            patch.object(checks.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, create=True),
+        ):
+            checks.expected_profile(Path("pwsh.exe"), self.port)
+
+        child_env = popen.call_args.kwargs["env"]
+        self.assertNotIn("NO_PROXY", child_env)
+        self.assertNotIn("no_proxy", child_env)
+        self.assertNotIn("UNRELATED_ENV", child_env)
+
+    def test_run_powershell_default_environment_does_not_inherit_proxy_inputs(self):
+        process = ExitedProcess()
+        sanitized = {"PATH": "", "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"}
+        with (
+            patch.object(checks.os, "environ", {"HTTP_PROXY": "http://proxy.example.invalid"}),
+            patch.object(checks, "powershell_env", return_value=sanitized),
+            patch.object(checks.subprocess, "Popen", return_value=process) as popen,
+            patch.object(checks.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, create=True),
+        ):
+            checks.run_powershell(Path("pwsh.exe"), "safe command")
+
+        self.assertEqual(popen.call_args.kwargs["env"], sanitized)
+
+    def test_preflight_script_emits_one_explicit_nullable_proxy_target(self):
+        self.assertEqual(checks.PREFLIGHT_SCRIPT.count("$proxy.GetProxy($uri)"), 1)
+        self.assertIn("$proxyTargetUri = $null", checks.PREFLIGHT_SCRIPT)
+        self.assertIn("proxyTarget = $proxyTargetUri", checks.PREFLIGHT_SCRIPT)
+        self.assertIn("$proxy.IsBypassed($uri)", checks.PREFLIGHT_SCRIPT)
+
+    def test_preflight_does_not_reject_false_bypass_diagnostic_again(self):
+        folder = Path(__file__).resolve().parent / f".archive-preflight-{uuid.uuid4().hex}"
+        folder.mkdir()
+        output_dir = folder / "output"
+        output_dir.mkdir()
+        workspace = folder / "workspace"
+        directory = folder / "candidate"
+        source = folder / "source"
+        powershell = folder / "pwsh.exe"
+        try:
+            with (
+                patch.object(checks.os, "name", "nt"),
+                patch.object(checks, "Path", type(folder)),
+                patch.object(checks.package, "runtime_rid", return_value="win-x64"),
+                patch.object(checks.ctypes, "sizeof", return_value=8),
+                patch.object(checks, "verify_windows_path", side_effect=lambda path, **_kwargs: path),
+                patch.object(
+                    checks,
+                    "check_candidate",
+                    return_value=(
+                        {},
+                        directory / "candidate.zip",
+                        directory / "candidate.receipt.json",
+                        "b" * 40,
+                    ),
+                ),
+                patch.object(checks, "git_worktree_roots", return_value=[]),
+                patch.object(checks, "reject_source_checkout_path"),
+                patch.object(checks, "assert_no_reparse_components"),
+                patch.object(checks, "expected_profile", return_value={"proxyBypassed": False}),
+                patch.object(checks, "powershell_executable", return_value=powershell),
+                patch.object(checks, "credential_read", return_value="occupied"),
+            ):
+                with self.assertRaisesRegex(checks.BlockedError, "Credential Manager"):
+                    checks.preflight(
+                        source,
+                        "a" * 40,
+                        directory,
+                        workspace,
+                        output_dir / checks.SIDECAR_NAME,
+                    )
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+
 class WindowsArchiveRegressionTests(unittest.TestCase):
     def _powershell(self):
         if os.name != "nt":

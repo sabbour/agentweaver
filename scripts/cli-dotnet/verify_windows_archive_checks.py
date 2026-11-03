@@ -481,7 +481,9 @@ $root.Close()
 $uri = [Uri]$env:ARCHIVE_FIXTURE_URI
 $proxy = [System.Net.Http.HttpClient]::DefaultProxy
 $proxyBypassed = $proxy.IsBypassed($uri)
-$proxyTarget = $proxy.GetProxy($uri).AbsoluteUri
+$proxyTarget = $proxy.GetProxy($uri)
+$proxyTargetUri = $null
+if ($null -ne $proxyTarget) { $proxyTargetUri = $proxyTarget.AbsoluteUri }
 $output = [ordered]@{
   sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
   psMajor = $PSVersionTable.PSVersion.Major
@@ -495,7 +497,7 @@ $output = [ordered]@{
   userDomain = [Environment]::GetEnvironmentVariable('USERDOMAIN')
   computerName = [Environment]::GetEnvironmentVariable('COMPUTERNAME')
   proxyBypassed = $proxyBypassed
-  proxyTarget = $proxyTarget
+  proxyTarget = $proxyTargetUri
 }
 $output | ConvertTo-Json -Compress
 """
@@ -683,8 +685,21 @@ def run_powershell(
     context: dict[str, Any] | None = None,
     persist_identity: bool = True,
     role: str = "powershell-helper",
+    preserve_proxy_env: bool = False,
 ) -> str:
     environment = powershell_env(workspace)
+    if preserve_proxy_env:
+        proxy_names = {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
+        environment = {
+            name: value
+            for name, value in environment.items()
+            if name.casefold() not in proxy_names
+        }
+        environment.update(
+            (name, value)
+            for name, value in os.environ.items()
+            if name.casefold() in proxy_names
+        )
     environment.update(extra_env or {})
     process: subprocess.Popen[str] | None = None
     identity: dict[str, Any] | None = None
@@ -1611,20 +1626,27 @@ def run_controlled_sequence(context: dict[str, Any], gateway: str, issuer: str, 
 
 
 def expected_profile(executable: Path, port: int) -> dict[str, Any]:
-    environment = powershell_env()
-    environment["ARCHIVE_FIXTURE_URI"] = f"https://127.0.0.1:{port}/"
-    output = run_powershell(executable, PREFLIGHT_SCRIPT, {"ARCHIVE_FIXTURE_URI": environment["ARCHIVE_FIXTURE_URI"]}, timeout=5)
+    fixture_uri = f"https://127.0.0.1:{port}/"
+    output = run_powershell(
+        executable,
+        PREFLIGHT_SCRIPT,
+        {"ARCHIVE_FIXTURE_URI": fixture_uri},
+        timeout=5,
+        preserve_proxy_env=True,
+    )
     try:
         profile = json.loads(output)
     except json.JSONDecodeError as error:
         raise BlockedError("Windows profile or proxy preflight returned invalid metadata.") from error
     if not isinstance(profile, dict):
         raise BlockedError("Windows profile preflight returned invalid metadata.")
-    if profile.get("psMajor", 0) < 7:
+    if type(profile.get("psMajor")) is not int or profile["psMajor"] < 7:
         raise BlockedError("PowerShell 7 or later is required for ephemeral .NET certificate support.")
-    if profile.get("proxyBypassed") is not True:
-        raise BlockedError("The current system proxy does not bypass the loopback fixture; no proxy settings were changed.")
-    if profile.get("proxyTarget") != f"https://127.0.0.1:{port}/":
+    if type(profile.get("proxyBypassed")) is not bool:
+        raise BlockedError("Windows profile preflight returned invalid proxy diagnostics.")
+    if "proxyTarget" not in profile:
+        raise BlockedError("Windows profile preflight did not report a proxy target.")
+    if profile["proxyTarget"] is not None and profile["proxyTarget"] != fixture_uri:
         raise BlockedError("The configured system proxy would redirect loopback fixture traffic.")
     for key in ("sid", "localAppData", "userProfile", "appData", "systemRoot"):
         if not isinstance(profile.get(key), str) or not profile[key]:
@@ -2113,8 +2135,6 @@ def preflight(root: Path, source_commit: str, directory: Path, workspace: Path, 
     if output.exists() or output.is_symlink():
         raise BlockedError("The sidecar output path must be new.")
     profile = expected_profile(powershell_executable(), reserve_loopback_port())
-    if not profile["proxyBypassed"]:
-        raise BlockedError("The configured proxy does not bypass loopback.")
     account = account_key(
         "https://127.0.0.1:1/",
         "agentweaver-cli",
