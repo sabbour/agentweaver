@@ -944,6 +944,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         startupBudgets: new AgentSandboxStartupBudgets(30, 30, 30, 60, 30, 120));
                         var leaseCreatedAt = childEnvironment.Lease.CreatedAt
                             ?? throw new InvalidOperationException("The native Sandbox lease has no creation timestamp.");
+                // The controlled Pod starts at lease + 2s; Host validates evidence against system time.
+                await Task.Delay(TimeSpan.FromSeconds(2), token);
                         TraceNativeStage(failures,
                             $"Host {environmentId} Sandbox provisioned; phaseElapsed={phaseElapsed.Elapsed}, " +
                     $"hostElapsed={hostElapsed.Elapsed}, leaseCreatedAt={childEnvironment.Lease.CreatedAt:O}, " +
