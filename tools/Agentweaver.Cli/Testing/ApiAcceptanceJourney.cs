@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
@@ -397,10 +398,21 @@ internal static class ApiAcceptanceJourney
             }, null, [200], ct).ConfigureAwait(false);
         long boundaryVersion = GetLong(boundary, "stateVersion")
             ?? throw new InvalidOperationException("The owner did not return the advanced metric child state version.");
-        if (GetLong(boundary, "executionFence") != fixture.ExecutionFence
+        if (boundaryVersion <= childStateVersion
             || ApiAcceptanceSupport.GetString(boundary["session"] as JsonObject ?? [], "sessionId") != archivedChildId)
         {
-            throw new InvalidOperationException("The turn-boundary receipt does not match the metric child and current execution fence.");
+            throw new InvalidOperationException("The turn-boundary receipt does not match the metric child or advance its state version.");
+        }
+
+        JsonObject boundaryStatus = await InvokeJsonAsync(api, "readSessionStatus",
+            Path(("projectId", fixture.ProjectId), ("runId", fixture.RunId), ("sessionId", archivedChildId)),
+            null, null, [200], ct).ConfigureAwait(false);
+        RequireMetricSessionIdentity(boundaryStatus, fixture, archivedChildId);
+        if (GetLong(boundaryStatus, "executionFence") != fixture.ExecutionFence
+            || GetLong(boundaryStatus, "stateVersion") != boundaryVersion
+            || ApiAcceptanceSupport.GetString(boundaryStatus, "lifecycle") != "active")
+        {
+            throw new InvalidOperationException("The metric child current status does not confirm the accepted turn-boundary fence and state version.");
         }
 
         JsonObject completed = await InvokeJsonAsync(api, "completeTurn",
@@ -411,11 +423,13 @@ internal static class ApiAcceptanceJourney
                 ["expectedStateVersion"] = boundaryVersion,
                 ["completion"] = "completed",
             }, null, [200], ct).ConfigureAwait(false);
-        if (GetLong(completed, "executionFence") != fixture.ExecutionFence
+        long completedVersion = GetLong(completed, "stateVersion")
+            ?? throw new InvalidOperationException("The owner did not return the completed metric child state version.");
+        if (completedVersion <= boundaryVersion
             || ApiAcceptanceSupport.GetString(completed["session"] as JsonObject ?? [], "sessionId") != archivedChildId
             || ApiAcceptanceSupport.GetString(completed, "executionState") != "completed")
         {
-            throw new InvalidOperationException("The completion receipt does not confirm the metric child turn completed under the current fence.");
+            throw new InvalidOperationException("The completion receipt does not confirm the metric child turn and advance its state version.");
         }
 
         JsonObject completedStatus = await InvokeJsonAsync(api, "readSessionStatus",
@@ -423,9 +437,10 @@ internal static class ApiAcceptanceJourney
             null, null, [200], ct).ConfigureAwait(false);
         RequireMetricSessionIdentity(completedStatus, fixture, archivedChildId);
         if (ApiAcceptanceSupport.GetString(completedStatus, "lifecycle") != "completed"
-            || GetLong(completedStatus, "executionFence") != fixture.ExecutionFence)
+            || GetLong(completedStatus, "executionFence") != fixture.ExecutionFence
+            || GetLong(completedStatus, "stateVersion") != completedVersion)
         {
-            throw new InvalidOperationException("The metric child was not independently read back in the completed lifecycle.");
+            throw new InvalidOperationException("The metric child was not independently read back in the completed lifecycle under the current fence.");
         }
 
         JsonObject archived = await InvokeJsonAsync(api, "archiveChild",
@@ -479,9 +494,11 @@ internal static class ApiAcceptanceJourney
                     ["bucket"] = "day",
                 }), ct).ConfigureAwait(false);
         JsonObject metrics = RequireStatusBody(metricsResponse, [200], "readProjectMetrics");
+        DateTimeOffset metricFrom = new(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        DateTimeOffset metricTo = new(2000, 1, 2, 0, 0, 0, TimeSpan.Zero);
         if (ApiAcceptanceSupport.GetString(metrics, "projectId") != fixture.ProjectId
-            || ApiAcceptanceSupport.GetString(metrics, "from") != "2000-01-01"
-            || ApiAcceptanceSupport.GetString(metrics, "to") != "2000-01-02"
+            || !MetricInstantMatches(metrics, "from", metricFrom)
+            || !MetricInstantMatches(metrics, "to", metricTo)
             || GetLong(metrics, "runsInRange") != 0
             || GetLong(metrics, "runsTotal") != 1
             || GetLong(metrics, "sessionHistoryRecordsTotal") != 2)
@@ -509,6 +526,20 @@ internal static class ApiAcceptanceJourney
             ("sessionHistoryRecordsTotal", JsonValue.Create(2)),
             ("runsTotal", JsonValue.Create(1)),
             ("runsInRange", JsonValue.Create(0)));
+    }
+
+    private static bool MetricInstantMatches(JsonObject metrics, string property, DateTimeOffset expected)
+    {
+        string? value = ApiAcceptanceSupport.GetString(metrics, property);
+        return value is not null
+            && DateTimeOffset.TryParseExact(
+                value,
+                ["yyyy-MM-dd'T'HH:mm:ssK", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK"],
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out DateTimeOffset actual)
+            && (value.EndsWith('Z') || value.Length >= 6 && value[^6] is '+' or '-')
+            && actual == expected;
     }
 
     private static async Task<JsonObject> ReadMetricTreeAsync(
