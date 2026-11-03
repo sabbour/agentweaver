@@ -139,7 +139,7 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
             else
             {
                 // Fixture setup starts tenant-scoped; it obtains run-bound authorization only after selection readback.
-                (fixture, IGatewayClient runApi, IGatewayClient? deniedApi, fixtureState) =
+                (fixture, IGatewayClient runApi, IGatewayClient cancellationApi, IGatewayClient? deniedApi, fixtureState) =
                     await ApiAcceptanceFixtureSetup.CreateAsync(
                         manifest, activeInvocationId, setupApi, _clients, _authentication, options.Interaction, ct)
                         .ConfigureAwait(false);
@@ -166,7 +166,8 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                 {
                     try
                     {
-                        await ApiAcceptanceFixtureSetup.CleanupAsync(setupApi, fixtureState, actorId!, CancellationToken.None)
+                        await ApiAcceptanceFixtureSetup.CleanupAsync(
+                            setupApi, cancellationApi, runApi, fixtureState, actorId!, CancellationToken.None)
                             .ConfigureAwait(false);
                         observations["cleanup"] = fixtureState.Cleanup?.DeepClone();
                     }
@@ -210,7 +211,12 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                     IGatewayClient cleanupApi = _clients.Create(cleanupIdentity);
                     _ = await _authentication.GetBearerAsync(cleanupIdentity, options.Interaction, CancellationToken.None)
                         .ConfigureAwait(false);
-                    await ApiAcceptanceFixtureSetup.CleanupAsync(cleanupApi, fixtureState, actorId, CancellationToken.None).ConfigureAwait(false);
+                    (IGatewayClient? cancellationApi, IGatewayClient? runApi) =
+                        await ApiAcceptanceFixtureSetup.CreateCleanupClientsAsync(
+                            manifest, fixtureState, _clients, _authentication, options.Interaction, CancellationToken.None)
+                            .ConfigureAwait(false);
+                    await ApiAcceptanceFixtureSetup.CleanupAsync(
+                        cleanupApi, cancellationApi, runApi, fixtureState, actorId, CancellationToken.None).ConfigureAwait(false);
                     observations["cleanup"] = fixtureState.Cleanup?.DeepClone();
                 }
                 catch

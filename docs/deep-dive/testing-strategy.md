@@ -107,6 +107,15 @@ HTTP `403` and an owner JSON `error` field equal to
 bodyless `403`, or a changed authoritative graph is not a passing owner-denial
 result.
 
+The controlled `session-history-metric` regressions cover both raw-context
+selection and interactive pending-run creation through the CLI runner. They
+check server-returned identities and selection revisions, forbid start and
+dispatch operations, and verify cancellation, advanced-fence retained-session
+readbacks, and project cleanup order. Lost create responses, malformed
+selection revisions, and failed cancellation must remain indeterminate rather
+than report the fixture absent or cleaned. These local tests do not establish
+live authorization or deployed owner behavior.
+
 Native evidence must join registration, invocation binding, Environment
 creation, actual Pod/mount observations and Host evidence. Registration
 `placementUid` is the SandboxClaim identity, not the actual Pod UID. A policy

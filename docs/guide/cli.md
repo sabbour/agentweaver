@@ -319,14 +319,26 @@ no-model fixture and cleanup paths. Distinct-actor and revoked-role checks
 remain blocked without a separate authenticated non-admin actor; TenantAdmin
 authority cannot establish those denials.
 
-The P1 `session-history-metric` journey creates a root session and two child
-history records without starting a model turn. It completes and archives one
-child, detaches the other, then reads the current session tree and
-`readProjectMetrics`. The fixture expects exactly two history records (root
-plus archived child), one accepted run, and zero runs in a date range that
-excludes that run. It independently verifies archived-project and revoked-role
-cleanup readbacks. A missing denied actor remains a blocked probe, so this
-narrow feature result is not full P1 acceptance.
+The P1 `session-history-metric` journey creates two child history records
+without starting a model turn. It completes and archives one child, detaches
+the other, then reads the current session tree and `readProjectMetrics`. The
+fixture expects exactly two history records (root plus archived child), one
+accepted run, and zero runs in a date range that excludes that run.
+
+For this journey only, omit `selectionContext` from `fixturePlan` to create a
+real pending interactive run. The CLI uses the server-returned run and root
+session IDs and reads back the effective selection. Its benign `firstMessage`
+does not start the run or dispatch work. Root acceptance still uses normal
+runtime admission and budget checks; it is not a zero-cost or admission-free
+path. Supplying `selectionContext` keeps the explicit raw-context selection
+path. Both paths cancel the accepted run before removing authority, then
+independently verify the terminal run, retained session tree, and detached
+session at the advanced fence. Cleanup archives the project before the final
+Owner revocation and reads back the archived project and empty assignment list.
+An uncertain create, selection, cancellation, or readback remains
+indeterminate; the CLI does not claim that the fixture was never created or
+cleaned. A missing denied actor remains a blocked probe, so this narrow feature
+result is not full P1 acceptance.
 
 No native Workspace refs/tree/file journey is currently defined. The Gateway
 read operations require the short-lived Repo App selection code in

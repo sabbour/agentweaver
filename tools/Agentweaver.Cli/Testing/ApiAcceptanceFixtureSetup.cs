@@ -13,7 +13,7 @@ internal static class ApiAcceptanceFixtureSetup
 {
     private static readonly Regex ProblemCode = new("^[a-z][a-z0-9_]{0,63}$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-    public static async Task<(AcceptanceFixture Fixture, IGatewayClient RunApi, IGatewayClient? DeniedApi, AcceptanceFixtureState State)> CreateAsync(
+    public static async Task<(AcceptanceFixture Fixture, IGatewayClient RunApi, IGatewayClient CancellationApi, IGatewayClient? DeniedApi, AcceptanceFixtureState State)> CreateAsync(
         AcceptanceManifest manifest,
         string invocationId,
         IGatewayClient setupApi,
@@ -28,7 +28,7 @@ internal static class ApiAcceptanceFixtureSetup
         try
         {
             JsonObject openApi = await setupApi.DiscoverAsync(ct).ConfigureAwait(false);
-            EnsureSetupCapabilities(openApi, manifest.Journey);
+            EnsureSetupCapabilities(openApi, manifest);
             JsonObject setupContext = await ApiAcceptanceJourney.ValidateAuthContextAsync(setupApi, ct).ConfigureAwait(false);
             ApiAcceptanceJourney.ValidateAuthContext(setupContext, manifest);
 
@@ -85,20 +85,12 @@ internal static class ApiAcceptanceFixtureSetup
                 throw new InvalidOperationException("The current project configuration revision does not match setup.");
             }
 
-            string runId = ApiAcceptanceSupport.StableUuid(invocationId, "run");
-            string rootSessionId = ApiAcceptanceSupport.StableUuid(invocationId, "root-session");
-            string? childSessionId = manifest.Journey == "message"
-                ? ApiAcceptanceSupport.StableUuid(invocationId, "child-session")
-                : null;
+            long projectRevision = GetLong(created, "revision")
+                ?? throw new InvalidOperationException("The current project revision is invalid.");
+            bool interactiveMetric = manifest.Journey == "session-history-metric"
+                && !manifest.FixturePlan.ContainsKey("selectionContext");
             long expectedPlatformRevision = GetLong(manifest.FixturePlan, "expectedPlatformRuntimeRevision")
                 ?? throw new InvalidDataException("A positive expected platform runtime revision is required in the runner fixture plan.");
-            JsonObject selectionContext = (JsonObject)manifest.FixturePlan["selectionContext"]!;
-            JsonObject selectionRequest = new()
-            {
-                ["expectedProjectConfigRevision"] = configurationRevision,
-                ["expectedPlatformRuntimeRevision"] = expectedPlatformRevision,
-                ["context"] = selectionContext.DeepClone(),
-            };
             CliTarget target = new(
                 new Uri(ApiAcceptanceSupport.GetString(environment, "baseUrl")!, UriKind.Absolute),
                 new Uri(ApiAcceptanceSupport.GetString(environment, "issuer")!, UriKind.Absolute),
@@ -121,17 +113,88 @@ internal static class ApiAcceptanceFixtureSetup
             }
 
             IGatewayClient selectionApi = clients.Create(selectionIdentity);
-            JsonObject acceptedSelection = await CallJsonAsync(selectionApi, "acceptRunSelection",
-                new GatewayInvocation(
-                    Path(("projectId", projectId), ("runId", runId)),
-                    Body: selectionRequest), [200], ct).ConfigureAwait(false);
-            state.Selection = acceptedSelection.DeepClone() as JsonObject;
-            JsonObject observedSelection = await CallJsonAsync(selectionApi, "getRunSelection",
-                new GatewayInvocation(Path(("projectId", projectId), ("runId", runId))), [200], ct).ConfigureAwait(false);
-            RequireSelection(acceptedSelection, projectId, runId, configurationRevision, expectedPlatformRevision,
-                ApiAcceptanceSupport.GetString(selectionContext, "revision")!);
-            RequireSelection(observedSelection, projectId, runId, configurationRevision, expectedPlatformRevision,
-                ApiAcceptanceSupport.GetString(selectionContext, "revision")!);
+            string runId;
+            string rootSessionId;
+            JsonObject observedSelection;
+            if (interactiveMetric)
+            {
+                JsonObject createdRun = await MutatingSetupStepAsync(state, "create-interactive-run", selectionApi,
+                    "createProjectRun",
+                    new GatewayInvocation(
+                        Path(("projectId", projectId)),
+                        Body: new JsonObject
+                        {
+                            ["firstMessage"] = "Acceptance fixture request; no work is dispatched.",
+                            ["expectedProjectConfigRevision"] = configurationRevision,
+                        },
+                        Headers: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                        {
+                            ["Idempotency-Key"] = ApiAcceptanceSupport.StableUuid(invocationId, "metric-create-run"),
+                        }), [201], ct).ConfigureAwait(false);
+                (runId, rootSessionId) = RequireInteractiveRun(createdRun, projectId);
+                state.RunId = runId;
+                state.RootSessionId = rootSessionId;
+                state.SelectionKnown = true;
+                state.Setup["runId"] = runId;
+                state.Setup["rootSessionId"] = rootSessionId;
+                try
+                {
+                    observedSelection = await CallJsonAsync(selectionApi, "getRunSelection",
+                        new GatewayInvocation(Path(("projectId", projectId), ("runId", runId))), [200], ct)
+                        .ConfigureAwait(false);
+                    RequireSelection(observedSelection, projectId, runId, configurationRevision,
+                        expectedPlatformRevision, "interactive-v1", projectRevision);
+                }
+                catch
+                {
+                    state.SetupIndeterminate = true;
+                    throw;
+                }
+            }
+            else
+            {
+                runId = ApiAcceptanceSupport.StableUuid(invocationId, "run");
+                rootSessionId = ApiAcceptanceSupport.StableUuid(invocationId, "root-session");
+                state.RunId = runId;
+                state.RootSessionId = rootSessionId;
+                state.Setup["runId"] = runId;
+                state.Setup["rootSessionId"] = rootSessionId;
+                JsonObject selectionContext = (JsonObject)manifest.FixturePlan["selectionContext"]!;
+                JsonObject selectionRequest = new()
+                {
+                    ["expectedProjectConfigRevision"] = configurationRevision,
+                    ["expectedPlatformRuntimeRevision"] = expectedPlatformRevision,
+                    ["context"] = selectionContext.DeepClone(),
+                };
+                JsonObject acceptedSelection = await MutatingSetupStepAsync(state, "accept-run-selection", selectionApi,
+                    "acceptRunSelection",
+                    new GatewayInvocation(
+                        Path(("projectId", projectId), ("runId", runId)),
+                        Body: selectionRequest), [200], ct).ConfigureAwait(false);
+                state.SelectionKnown = true;
+                try
+                {
+                        observedSelection = await CallJsonAsync(selectionApi, "getRunSelection",
+                            new GatewayInvocation(Path(("projectId", projectId), ("runId", runId))), [200], ct)
+                            .ConfigureAwait(false);
+                    RequireSelection(acceptedSelection, projectId, runId, configurationRevision,
+                        expectedPlatformRevision, ApiAcceptanceSupport.GetString(selectionContext, "revision")!,
+                        projectRevision);
+                    RequireSelection(observedSelection, projectId, runId, configurationRevision,
+                        expectedPlatformRevision, ApiAcceptanceSupport.GetString(selectionContext, "revision")!,
+                        projectRevision);
+                }
+                catch
+                {
+                    state.SetupIndeterminate = true;
+                    throw;
+                }
+            }
+            state.Selection = observedSelection.DeepClone() as JsonObject;
+
+            string? childSessionId = manifest.Journey == "message"
+                ? ApiAcceptanceSupport.StableUuid(invocationId, "child-session")
+                : null;
 
             CliIdentity runIdentity = new(target,
                 ["openid", "api.read", "offline_access", "projects.orchestrator"],
@@ -165,19 +228,41 @@ internal static class ApiAcceptanceFixtureSetup
                 ValidateJournalMessageOperation(openApi);
             }
 
-            string rootId = ApiAcceptanceSupport.StableUuid(invocationId, "root-session");
-            JsonObject rootReceipt = await CallJsonAsync(runApi, "acceptRunRoot",
+            string rootId = rootSessionId;
+            JsonObject rootReceipt = await MutatingSetupStepAsync(state, "accept-run-root", runApi, "acceptRunRoot",
                 new GatewayInvocation(
                     Path(("projectId", projectId), ("runId", runId)),
                     Body: new JsonObject { ["sessionId"] = rootId }), [201], ct).ConfigureAwait(false);
-            RequireRoot(rootReceipt, projectId, runId, rootId);
+            state.RootExecutionFence = GetLong(rootReceipt, "executionFence");
+            state.RootStateVersion = GetLong(rootReceipt, "stateVersion");
+            state.Setup["rootExecutionFence"] = state.RootExecutionFence;
+            state.Setup["rootStateVersion"] = state.RootStateVersion;
+            try
+            {
+                RequireRoot(rootReceipt, projectId, runId, rootId);
+            }
+            catch
+            {
+                state.SetupIndeterminate = true;
+                throw;
+            }
+            state.RootAccepted = true;
             long fence = GetLong(rootReceipt, "executionFence")!.Value;
             long stateVersion = GetLong(rootReceipt, "stateVersion")!.Value;
-            JsonObject rootStatus = await CallJsonAsync(runApi, "readRunStatus",
-                new GatewayInvocation(Path(("projectId", projectId), ("runId", runId))), [200], ct).ConfigureAwait(false);
-            JsonObject sessionStatus = await CallJsonAsync(runApi, "readSessionStatus",
-                new GatewayInvocation(Path(("projectId", projectId), ("runId", runId), ("sessionId", rootId))), [200], ct).ConfigureAwait(false);
-            RequireRootReadback(rootStatus, sessionStatus, projectId, runId, rootId, fence);
+            try
+            {
+                JsonObject rootStatus = await CallJsonAsync(runApi, "readRunStatus",
+                    new GatewayInvocation(Path(("projectId", projectId), ("runId", runId))), [200], ct).ConfigureAwait(false);
+                JsonObject sessionStatus = await CallJsonAsync(runApi, "readSessionStatus",
+                    new GatewayInvocation(Path(("projectId", projectId), ("runId", runId), ("sessionId", rootId))), [200], ct).ConfigureAwait(false);
+                RequireRootReadback(rootStatus, sessionStatus, projectId, runId, rootId, fence);
+            }
+            catch
+            {
+                if (state.VerifyCleanupReadback)
+                    state.SetupIndeterminate = true;
+                throw;
+            }
 
             if (manifest.Journey == "journal")
             {
@@ -230,8 +315,8 @@ internal static class ApiAcceptanceFixtureSetup
                 projectId, runId, rootId, rootId, fence, currentStateVersion,
                 gateRequestId, childSessionId, rootReceipt, projectReceipt,
                 ownerAssignment, orchestratorAssignment,
-                acceptedSelection, gateReceipt);
-            return (fixture, runApi, await CreateDeniedClientAsync(
+                observedSelection, gateReceipt);
+            return (fixture, runApi, selectionApi, await CreateDeniedClientAsync(
                 manifest, target, clients, authentication, interaction, projectId, runId, ct).ConfigureAwait(false), state);
         }
         catch (OperationCanceledException error) when (ct.IsCancellationRequested)
@@ -279,6 +364,8 @@ internal static class ApiAcceptanceFixtureSetup
 
     public static async Task<JsonObject> CleanupAsync(
         IGatewayClient setupApi,
+        IGatewayClient? cancellationApi,
+        IGatewayClient? runApi,
         AcceptanceFixtureState state,
         string actorId,
         CancellationToken ct)
@@ -291,7 +378,8 @@ internal static class ApiAcceptanceFixtureSetup
                 ["state"] = "not-created",
             };
         }
-        if (state.SetupIndeterminate || !state.SetupComplete || state.Setup is null)
+        if ((!state.VerifyCleanupReadback && state.SetupIndeterminate)
+            || !state.SetupComplete || state.Setup is null)
         {
             return state.Cleanup = new JsonObject
             {
@@ -311,9 +399,26 @@ internal static class ApiAcceptanceFixtureSetup
             ["state"] = "indeterminate",
             ["reason"] = "Cleanup was attempted, but not every cleanup receipt was verified.",
         };
+        if (state.VerifyCleanupReadback)
+            state.Cleanup["steps"] = new JsonArray();
 
         JsonObject setup = state.Setup;
         string projectId = ApiAcceptanceSupport.GetString(setup, "projectId")!;
+        if (state.VerifyCleanupReadback)
+        {
+            if (!state.SelectionKnown || state.RunId is null || state.RootSessionId is null)
+            {
+                state.Cleanup["reason"] = "The metric run selection or server identity is not acknowledged; reconcile before removing project authority.";
+                return state.Cleanup;
+            }
+            if (cancellationApi is null)
+            {
+                state.Cleanup["reason"] = "The metric fixture lacks its unbound cancellation client.";
+                return state.Cleanup;
+            }
+            await VerifyMetricRunCleanupAsync(cancellationApi, runApi, state, projectId, ct).ConfigureAwait(false);
+        }
+
         JsonObject revokeOrchestrator = await CleanupStepAsync(state, "revoke-orchestrator",
             setupApi, "revokeProjectRoleAssignment",
             new GatewayInvocation(
@@ -350,24 +455,24 @@ internal static class ApiAcceptanceFixtureSetup
             ApiAcceptanceSupport.GetString(setup, "ownerAssignmentId")!,
             actorId, "owner", GetLong(setup, "ownerAssignmentRevision")!.Value);
 
-        JsonObject cleanup = new()
-        {
-            ["invocationId"] = state.InvocationId,
-            ["state"] = "cleaned",
-            ["tenantId"] = setup["tenantId"]?.DeepClone(),
-            ["projectId"] = projectId,
-            ["projectRevision"] = GetLong(archived, "revision"),
-            ["projectState"] = "archived",
-            ["projectConfigurationRevision"] = setup["projectConfigurationRevision"]?.DeepClone(),
-            ["assignmentId"] = revokeOrchestrator["assignmentId"]?.DeepClone(),
-            ["assignmentRevision"] = GetLong(revokeOrchestrator, "revision"),
-            ["ownerAssignmentId"] = revokeOwner["assignmentId"]?.DeepClone(),
-            ["ownerAssignmentRevision"] = GetLong(revokeOwner, "revision"),
-        };
+        JsonObject cleanup = state.Cleanup;
+        cleanup["state"] = state.VerifyCleanupReadback || state.SetupIndeterminate ? "indeterminate" : "cleaned";
+        cleanup["tenantId"] = setup["tenantId"]?.DeepClone();
+        cleanup["projectId"] = projectId;
+        cleanup["projectRevision"] = GetLong(archived, "revision");
+        cleanup["projectState"] = "archived";
+        cleanup["projectConfigurationRevision"] = setup["projectConfigurationRevision"]?.DeepClone();
+        cleanup["assignmentId"] = revokeOrchestrator["assignmentId"]?.DeepClone();
+        cleanup["assignmentRevision"] = GetLong(revokeOrchestrator, "revision");
+        cleanup["ownerAssignmentId"] = revokeOwner["assignmentId"]?.DeepClone();
+        cleanup["ownerAssignmentRevision"] = GetLong(revokeOwner, "revision");
+        if (state.SetupIndeterminate)
+            cleanup["reason"] = "Acknowledged project state was contained, but an earlier setup write remains ambiguous.";
         if (state.VerifyCleanupReadback)
         {
-            JsonObject project = await CallJsonAsync(setupApi, "getProject",
-                new GatewayInvocation(Path(("projectId", projectId))), [200], ct).ConfigureAwait(false);
+            JsonObject project = await CleanupStepAsync(state, "read-archived-project",
+                setupApi, "getProject",
+                new GatewayInvocation(Path(("projectId", projectId))), ct).ConfigureAwait(false);
             if (ApiAcceptanceSupport.GetString(project, "projectId") != projectId
                 || ApiAcceptanceSupport.GetString(project, "name") != state.ProjectName
                 || ApiAcceptanceSupport.GetString(project, "state") != "archived"
@@ -377,8 +482,9 @@ internal static class ApiAcceptanceFixtureSetup
                 throw new InvalidOperationException("The independent Projects readback did not confirm the archived P1 metric fixture.");
             }
 
-            JsonObject assignments = await CallJsonAsync(setupApi, "listProjectRoleAssignments",
-                new GatewayInvocation(Path(("projectId", projectId))), [200], ct).ConfigureAwait(false);
+            JsonObject assignments = await CleanupStepAsync(state, "read-project-assignments",
+                setupApi, "listProjectRoleAssignments",
+                new GatewayInvocation(Path(("projectId", projectId))), ct).ConfigureAwait(false);
             if (ApiAcceptanceSupport.GetString(assignments, "projectId") != projectId
                 || assignments["assignments"] is not JsonArray activeAssignments
                 || activeAssignments.Count != 0)
@@ -387,9 +493,162 @@ internal static class ApiAcceptanceFixtureSetup
             }
             cleanup["projectReadback"] = "archived";
             cleanup["assignmentsReadback"] = "empty";
+            cleanup["state"] = state.SetupIndeterminate ? "indeterminate" : "cleaned";
         }
 
         return state.Cleanup = cleanup;
+    }
+
+    public static async Task<(IGatewayClient? CancellationApi, IGatewayClient? RunApi)> CreateCleanupClientsAsync(
+        AcceptanceManifest manifest,
+        AcceptanceFixtureState state,
+        IGatewayClientFactory clients,
+        ICliAuthentication authentication,
+        InteractionPolicy interaction,
+        CancellationToken ct)
+    {
+        if (!state.VerifyCleanupReadback || !state.SelectionKnown || state.RunId is null || state.Setup is null)
+            return (null, null);
+
+        CliTarget target = new(
+            new Uri(ApiAcceptanceSupport.GetString(manifest.Environment, "baseUrl")!, UriKind.Absolute),
+            new Uri(ApiAcceptanceSupport.GetString(manifest.Environment, "issuer")!, UriKind.Absolute),
+            "agentweaver-cli",
+            ApiAcceptanceSupport.GetString(manifest.Environment, "audience")!,
+            ApiAcceptanceSupport.GetString(manifest.Environment, "tenantId")!);
+        CliIdentity cancellationIdentity = new(target,
+            ["openid", "api.read", "offline_access", "projects.orchestrator"]);
+        CliIdentity runIdentity = new(target,
+            ["openid", "api.read", "offline_access", "projects.orchestrator"],
+            ApiAcceptanceSupport.GetString(state.Setup, "projectId"),
+            state.RunId);
+        _ = await authentication.GetBearerAsync(cancellationIdentity, interaction, ct).ConfigureAwait(false);
+        IGatewayClient cancellationApi = clients.Create(cancellationIdentity);
+        try
+        {
+            _ = await authentication.GetBearerAsync(runIdentity, interaction, ct).ConfigureAwait(false);
+            return (cancellationApi, clients.Create(runIdentity));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return (cancellationApi, null);
+        }
+    }
+
+    private static async Task VerifyMetricRunCleanupAsync(
+        IGatewayClient cancellationApi,
+        IGatewayClient? runApi,
+        AcceptanceFixtureState state,
+        string projectId,
+        CancellationToken ct)
+    {
+        string runId = state.RunId!;
+        string rootSessionId = state.RootSessionId!;
+        string cancellationKey = ApiAcceptanceSupport.StableUuid(state.InvocationId, "metric-cancel-run");
+        JsonObject cancellation = await CleanupStepAsync(state, "cancel-accepted-run", cancellationApi,
+            "cancelProjectRun",
+            new GatewayInvocation(
+                Path(("projectId", projectId), ("runId", runId)),
+                Body: new JsonObject { ["reason"] = "Acceptance fixture cleanup." },
+                Headers: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["Idempotency-Key"] = cancellationKey,
+                }), ct).ConfigureAwait(false);
+        if (ApiAcceptanceSupport.GetString(cancellation, "runId") != runId
+            || ApiAcceptanceSupport.GetString(cancellation, "state") != "cancelled"
+            || cancellation["alreadyTerminal"]?.GetValue<bool>() != false
+            || !DateTimeOffset.TryParse(ApiAcceptanceSupport.GetString(cancellation, "cancelledAt"),
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind,
+                out DateTimeOffset cancelledAt)
+            || cancelledAt == default)
+        {
+            throw new InvalidOperationException("The Orchestrator did not return the exact non-terminal metric run cancellation receipt.");
+        }
+
+        if (runApi is null)
+            throw new InvalidOperationException("The metric run was cancelled, but run-bound authorization is unavailable for independent terminal readback.");
+
+        long expectedFence = (state.RootExecutionFence
+            ?? throw new InvalidOperationException("The metric root admission did not acknowledge its execution fence.")) + 1;
+        long expectedStateVersion = (state.RootStateVersion
+            ?? throw new InvalidOperationException("The metric root admission did not acknowledge its state version.")) + 1;
+        JsonObject runStatus = await CleanupStepAsync(state, "read-cancelled-run",
+            runApi, "readRunStatus",
+            new GatewayInvocation(Path(("projectId", projectId), ("runId", runId))), ct).ConfigureAwait(false);
+        if (ApiAcceptanceSupport.GetString(runStatus, "projectId") != projectId
+            || ApiAcceptanceSupport.GetString(runStatus, "runId") != runId
+            || ApiAcceptanceSupport.GetString(runStatus, "rootSessionId") != rootSessionId
+            || ApiAcceptanceSupport.GetString(runStatus, "executionState") != "cancelled"
+            || GetLong(runStatus, "executionFence") != expectedFence
+            || GetLong(runStatus, "stateVersion") != expectedStateVersion)
+        {
+            throw new InvalidOperationException("The independent accepted-run readback did not confirm cancellation at the advanced execution fence and state version.");
+        }
+
+        string archivedChildId = ApiAcceptanceSupport.StableUuid(runId, "metric-archived-child");
+        string detachedChildId = ApiAcceptanceSupport.StableUuid(runId, "metric-detached-child");
+        JsonObject tree = await CleanupStepAsync(state, "read-cancelled-session-tree",
+            runApi, "readSessionTree",
+            new GatewayInvocation(Path(("projectId", projectId), ("runId", runId), ("sessionId", rootSessionId))),
+            ct).ConfigureAwait(false);
+        JsonArray nodes = tree["nodes"] as JsonArray ?? [];
+        JsonObject[] rootNodes = nodes.OfType<JsonObject>().Where(node =>
+            ApiAcceptanceSupport.GetString(node["identity"] as JsonObject ?? [], "sessionId") == rootSessionId).ToArray();
+        JsonObject[] archivedNodes = nodes.OfType<JsonObject>().Where(node =>
+            ApiAcceptanceSupport.GetString(node["identity"] as JsonObject ?? [], "sessionId") == archivedChildId).ToArray();
+        if (ApiAcceptanceSupport.GetString(tree, "rootSessionId") != rootSessionId
+            || nodes.Count != 2
+            || rootNodes.Length != 1
+            || archivedNodes.Length != 1
+            || nodes.OfType<JsonObject>().Any(node =>
+                ApiAcceptanceSupport.GetString(node["identity"] as JsonObject ?? [], "projectId") != projectId
+                || ApiAcceptanceSupport.GetString(node["identity"] as JsonObject ?? [], "runId") != runId
+                || ApiAcceptanceSupport.GetString(node, "rootSessionId") != rootSessionId
+                || node["detached"]?.GetValue<bool>() != false
+                || GetLong(node, "executionFence") != expectedFence)
+            || ApiAcceptanceSupport.GetString(rootNodes[0], "lifecycle") != "cancelled"
+            || ApiAcceptanceSupport.GetString(archivedNodes[0], "lifecycle") != "archived"
+            || nodes.OfType<JsonObject>().Any(node =>
+                ApiAcceptanceSupport.GetString(node["identity"] as JsonObject ?? [], "sessionId") == detachedChildId))
+        {
+            throw new InvalidOperationException("The retained metric session tree did not confirm the cancelled root, archived child, detached-child exclusion, and new run fence.");
+        }
+
+        JsonObject detachedStatus = await CleanupStepAsync(state, "read-detached-session",
+            runApi, "readSessionStatus",
+            new GatewayInvocation(Path(("projectId", projectId), ("runId", runId), ("sessionId", detachedChildId))),
+            ct).ConfigureAwait(false);
+        JsonObject detachedIdentity = detachedStatus["identity"] as JsonObject ?? [];
+        if (ApiAcceptanceSupport.GetString(detachedIdentity, "projectId") != projectId
+            || ApiAcceptanceSupport.GetString(detachedIdentity, "runId") != runId
+            || ApiAcceptanceSupport.GetString(detachedIdentity, "sessionId") != detachedChildId
+            || ApiAcceptanceSupport.GetString(detachedStatus, "rootSessionId") != detachedChildId
+            || detachedStatus["detached"]?.GetValue<bool>() != true
+            || ApiAcceptanceSupport.GetString(detachedStatus, "lifecycle") != "cancelled"
+            || GetLong(detachedStatus, "executionFence") != expectedFence)
+        {
+            throw new InvalidOperationException("The independent detached-session readback did not confirm retained cancellation at the new run fence.");
+        }
+
+        state.Cleanup!["runTerminalization"] = new JsonObject
+        {
+            ["runId"] = runId,
+            ["state"] = "cancelled",
+            ["cancelledAt"] = cancelledAt,
+            ["alreadyTerminal"] = false,
+            ["executionFence"] = expectedFence,
+            ["stateVersion"] = expectedStateVersion,
+            ["acceptedRunReadback"] = "verified",
+            ["attachedHistoryReadback"] = "verified",
+            ["detachedSessionReadback"] = "verified",
+            ["detachedSessionId"] = detachedChildId,
+            ["detachedSessionRootId"] = detachedChildId,
+        };
     }
 
     private static async Task<(string RequestId, JsonObject Receipt, long StateVersion)> CreateGateAsync(
@@ -526,15 +785,20 @@ internal static class ApiAcceptanceFixtureSetup
             && gate["resolvesOutcomeClarification"]?.GetValue<bool>() == false;
     }
 
-    private static void EnsureSetupCapabilities(JsonObject openApi, string journey)
+    private static void EnsureSetupCapabilities(JsonObject openApi, AcceptanceManifest manifest)
     {
+        string journey = manifest.Journey;
+        bool interactiveMetric = journey == "session-history-metric"
+            && !manifest.FixturePlan.ContainsKey("selectionContext");
         IReadOnlySet<string> operations = ApiAcceptanceJourney.GetOperationIds(openApi);
         List<string> required =
         [
             "getAuthorizationContext", "createProject", "assignProjectRole", "getProjectConfiguration",
-            "acceptRunSelection", "getRunSelection", "acceptRunRoot", "readRunStatus", "readSessionStatus",
+            "getRunSelection", "acceptRunRoot", "readRunStatus", "readSessionStatus",
             "readSessionTree", "readDecisions", "revokeProjectRoleAssignment", "updateProject",
         ];
+        if (!interactiveMetric)
+            required.Add("acceptRunSelection");
         if (journey == "journal") required.AddRange(["sendProjectRunMessage", "replayRunEvents"]);
         if (journey == "message") required.AddRange(["registerChild", "sendMessage"]);
         if (journey == "session-history-metric")
@@ -542,7 +806,10 @@ internal static class ApiAcceptanceFixtureSetup
             required.AddRange([
                 "registerChild", "advanceTurnBoundary", "completeTurn", "archiveChild",
                 "detachSession", "readProjectMetrics", "getProject", "listProjectRoleAssignments",
+                "cancelProjectRun",
             ]);
+            if (interactiveMetric)
+                required.Add("createProjectRun");
         }
         if (journey.StartsWith("gate-", StringComparison.Ordinal))
         {
@@ -557,6 +824,50 @@ internal static class ApiAcceptanceFixtureSetup
         if (journey == "journal")
         {
             ValidateJournalMessageOperation(openApi);
+        }
+        if (interactiveMetric)
+            ValidateProjectRunOperation(openApi, "createProjectRun");
+        if (journey == "session-history-metric")
+            ValidateProjectRunOperation(openApi, "cancelProjectRun");
+    }
+
+    private static void ValidateProjectRunOperation(JsonObject openApi, string operationId)
+    {
+        string expectedPath = operationId switch
+        {
+            "createProjectRun" => "/api/v1/projects/{projectId}/runs",
+            "cancelProjectRun" => "/api/v1/projects/{projectId}/runs/{runId}/cancel",
+            _ => throw new ArgumentOutOfRangeException(nameof(operationId)),
+        };
+        JsonObject paths = openApi["paths"] as JsonObject ?? [];
+        JsonObject? match = paths.SelectMany(path => (path.Value as JsonObject ?? [])
+                .Select(operation => (Path: path.Key, Method: operation.Key, Value: operation.Value as JsonObject)))
+            .Where(item => ApiAcceptanceSupport.GetString(item.Value ?? [], "operationId") == operationId)
+            .Select(item => new JsonObject
+            {
+                ["path"] = item.Path,
+                ["method"] = item.Method,
+                ["operation"] = item.Value?.DeepClone(),
+            }).FirstOrDefault();
+        JsonObject? operationObject = match?["operation"] as JsonObject;
+        string? actualPath = ApiAcceptanceSupport.GetString(match ?? [], "path");
+        JsonArray pathParameters = actualPath is null
+            ? []
+            : (paths[actualPath] as JsonObject)?["parameters"] as JsonArray ?? [];
+        JsonArray operationParameters = operationObject?["parameters"] as JsonArray ?? [];
+        bool idempotencyRequired = pathParameters.OfType<JsonObject>()
+            .Concat(operationParameters.OfType<JsonObject>())
+            .Any(parameter =>
+                ApiAcceptanceSupport.GetString(parameter, "in") == "header"
+                && ApiAcceptanceSupport.GetString(parameter, "name")?.Equals("Idempotency-Key", StringComparison.OrdinalIgnoreCase) == true
+                && parameter["required"]?.GetValue<bool>() == true);
+        if (ApiAcceptanceSupport.GetString(match ?? [], "path") != expectedPath
+            || ApiAcceptanceSupport.GetString(match ?? [], "method") != "post"
+            || ApiAcceptanceSupport.GetString(operationObject ?? [], "x-agentweaver-owner") != "Orchestrator"
+            || operationObject?["requestBody"]?["required"]?.GetValue<bool>() != true
+            || !idempotencyRequired)
+        {
+            throw new AcceptanceBlockedException($"The discovered Gateway {operationId} operation does not expose its required idempotent Orchestrator contract.");
         }
     }
 
@@ -647,13 +958,40 @@ internal static class ApiAcceptanceFixtureSetup
         }
     }
 
-    private static void RequireSelection(JsonObject selection, string projectId, string runId, long projectRevision, long platformRevision, string contextRevision)
+    private static (string RunId, string RootSessionId) RequireInteractiveRun(JsonObject run, string projectId)
+    {
+        string? runId = ApiAcceptanceSupport.GetString(run, "runId");
+        string? rootSessionId = ApiAcceptanceSupport.GetString(run, "rootSessionId");
+        JsonObject binding = run["binding"] as JsonObject ?? [];
+        if (!IsRunIdentity(runId)
+            || !IsRunIdentity(rootSessionId)
+            || ApiAcceptanceSupport.GetString(run, "state") != "awaiting_binding"
+            || ApiAcceptanceSupport.GetString(binding, "projectId") != projectId
+            || ApiAcceptanceSupport.GetString(binding, "runId") != runId)
+        {
+            throw new InvalidOperationException("Projects did not return the exact pending interactive run identity and binding.");
+        }
+        return (runId!, rootSessionId!);
+    }
+
+    private static bool IsRunIdentity(string? value) =>
+        ApiAcceptanceSupport.IsUuid(value) || Guid.TryParseExact(value, "N", out _);
+
+    private static void RequireSelection(
+        JsonObject selection,
+        string projectId,
+        string runId,
+        long configurationRevision,
+        long platformRevision,
+        string contextRevision,
+        long? expectedProjectRevision = null)
     {
         if (ApiAcceptanceSupport.GetString(selection, "projectId") != projectId
             || ApiAcceptanceSupport.GetString(selection, "runId") != runId
-            || GetLong(selection, "projectConfigurationRevision") != projectRevision
+            || GetLong(selection, "projectConfigurationRevision") != configurationRevision
             || GetLong(selection, "platformRuntimeRevision") != platformRevision
-            || ApiAcceptanceSupport.GetString(selection, "contextRevision") != contextRevision)
+            || ApiAcceptanceSupport.GetString(selection, "contextRevision") != contextRevision
+            || expectedProjectRevision is not null && GetLong(selection, "projectRevision") != expectedProjectRevision)
         {
             throw new InvalidOperationException("The owner selection readback does not match the exact fixture project, run, and revisions.");
         }
@@ -828,8 +1166,10 @@ internal static class ApiAcceptanceFixtureSetup
             {
                 throw HttpFailure(step, operation, response);
             }
-            return response.Body as JsonObject
+            JsonObject receipt = response.Body as JsonObject
                 ?? throw new InvalidOperationException($"The live {operation} operation returned no JSON object.");
+            RecordMetricCleanupStep(state, step, operation, "passed", receipt);
+            return receipt;
         }
         catch (Exception error)
         {
@@ -853,8 +1193,79 @@ internal static class ApiAcceptanceFixtureSetup
                     ["problemCode"] = null,
                 });
             }
+            RecordMetricCleanupStep(state, step, operation, "failed");
             throw;
         }
+    }
+
+    private static void RecordMetricCleanupStep(
+        AcceptanceFixtureState state,
+        string step,
+        string operation,
+        string status,
+        JsonObject? receipt = null)
+    {
+        if (!state.VerifyCleanupReadback || state.Cleanup is null)
+            return;
+        JsonObject? summary = receipt is null ? null : operation switch
+        {
+            "cancelProjectRun" => new JsonObject
+            {
+                ["runId"] = receipt["runId"]?.DeepClone(),
+                ["state"] = receipt["state"]?.DeepClone(),
+                ["cancelledAt"] = receipt["cancelledAt"]?.DeepClone(),
+                ["alreadyTerminal"] = receipt["alreadyTerminal"]?.DeepClone(),
+            },
+            "readRunStatus" => new JsonObject
+            {
+                ["projectId"] = receipt["projectId"]?.DeepClone(),
+                ["runId"] = receipt["runId"]?.DeepClone(),
+                ["rootSessionId"] = receipt["rootSessionId"]?.DeepClone(),
+                ["executionState"] = receipt["executionState"]?.DeepClone(),
+                ["executionFence"] = receipt["executionFence"]?.DeepClone(),
+                ["stateVersion"] = receipt["stateVersion"]?.DeepClone(),
+            },
+            "readSessionTree" => new JsonObject
+            {
+                ["rootSessionId"] = receipt["rootSessionId"]?.DeepClone(),
+                ["nodeCount"] = (receipt["nodes"] as JsonArray)?.Count,
+            },
+            "readSessionStatus" => new JsonObject
+            {
+                ["identity"] = receipt["identity"]?.DeepClone(),
+                ["rootSessionId"] = receipt["rootSessionId"]?.DeepClone(),
+                ["detached"] = receipt["detached"]?.DeepClone(),
+                ["lifecycle"] = receipt["lifecycle"]?.DeepClone(),
+                ["executionFence"] = receipt["executionFence"]?.DeepClone(),
+            },
+            "getProject" => new JsonObject
+            {
+                ["projectId"] = receipt["projectId"]?.DeepClone(),
+                ["state"] = receipt["state"]?.DeepClone(),
+                ["revision"] = receipt["revision"]?.DeepClone(),
+            },
+            "listProjectRoleAssignments" => new JsonObject
+            {
+                ["projectId"] = receipt["projectId"]?.DeepClone(),
+                ["activeAssignmentCount"] = (receipt["assignments"] as JsonArray)?.Count,
+            },
+            _ => new JsonObject
+            {
+                ["projectId"] = receipt["projectId"]?.DeepClone(),
+                ["assignmentId"] = receipt["assignmentId"]?.DeepClone(),
+                ["state"] = receipt["state"]?.DeepClone(),
+                ["revision"] = receipt["revision"]?.DeepClone(),
+            },
+        };
+        JsonArray steps = state.Cleanup["steps"] as JsonArray ?? [];
+        steps.Add(new JsonObject
+        {
+            ["step"] = step,
+            ["operationId"] = operation,
+            ["status"] = status,
+            ["receipt"] = summary,
+        });
+        state.Cleanup["steps"] = steps;
     }
 
     private sealed class AcceptanceHttpException(int status, string? problemCode, string message) : Exception(message)

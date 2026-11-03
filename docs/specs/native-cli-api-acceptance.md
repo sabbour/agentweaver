@@ -73,6 +73,28 @@ target flags or take its target from environment variables.
   Keep denied-actor checks, current authority, fixture ownership, and cleanup
   visible rather than inferring them from setup success.
 
+### Session-history metric fixture
+
+Only the `session-history-metric` journey may omit `fixturePlan.selectionContext`.
+That absence selects interactive pending-run creation; explicit `null` or a
+malformed selection context remains invalid. The CLI uses an idempotency key
+for `createProjectRun`, accepts only the returned run and root-session IDs,
+reads the effective selection, and admits the root with its run-bound
+Orchestrator client. Its benign first message does not start the run or dispatch
+work. Root admission retains normal runtime and budget checks; it is not a
+zero-cost or admission-free path. Supplying a selection context keeps the
+existing explicit selection path.
+
+Both paths verify the archived-inclusive, detached-exclusive metric, then cancel
+the accepted run through an unbound Orchestrator client. Before removing project
+authority, the CLI independently verifies the cancelled run, retained root and
+archived child, and detached child at the advanced execution fence. It revokes
+the Orchestrator assignment, archives the project, revokes Owner last, and
+independently reads back the archived project and empty assignment list.
+Uncertain creation, selection, cancellation, or terminal readback remains
+indeterminate and blocks authority removal; a cancellation receipt alone does
+not prove cleanup.
+
 ## Contracts and boundaries
 
 The native runner uses the existing Gateway client and Broker authentication.
