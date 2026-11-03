@@ -100,9 +100,9 @@ run. The app reads current tenant context from
 `GET /api/v1/authorization/context`; it does not infer a tenant from an ID in
 the browser URL.
 
-Creating a project does not make you its owner. A tenant administrator grants
-project access. In **Project settings > Access**, a tenant administrator can
-add and remove project members when the service supports role changes.
+The creator becomes the Owner of a new project. In **Project settings >
+Access**, a tenant administrator can add and remove project members when the
+service supports role changes.
 
 ## Read state before you act
 

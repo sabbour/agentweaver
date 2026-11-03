@@ -190,8 +190,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await AssertStatusAsync(created, HttpStatusCode.Created);
         var project = await created.Content.ReadFromJsonAsync<ProjectSummary>(CoordinationJsonOptions);
         Assert.NotNull(project);
-        await AssignRoleAsync(projects.PrivilegedFixtureDataSource, membership.MembershipId,
-            ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Owner);
         await RevokeRoleAsync(projects.PrivilegedFixtureDataSource, tenantRole.AssignmentId, tenantRole.Revision);
         using var transport = new ControlledCopilotConnection();
         using var hostedCatalogTls = new HostedModelCatalogCredentialTlsTestSupport();

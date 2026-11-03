@@ -23,6 +23,12 @@ public sealed partial class ProjectsConfigPostgresTests
         var admin = await SeedCallerAsync(db, store, "role-api-admin-" + suffix, tenantId, adminScopes,
             ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
         var project = await projects.CreateProjectAsync(admin, "Role API rules", CancellationToken.None);
+        var creatorOwner = await db.RoleAssignments.AsNoTracking().SingleAsync(item =>
+            item.MembershipId == admin.MembershipId &&
+            item.ResourceType == ProjectAuthorityResourceType.Project &&
+            item.ResourceId == project.ProjectId &&
+            item.Role == ProjectAuthorityRole.Owner &&
+            item.State == ProjectAuthorityRecordState.Active);
         var other = await projects.CreateProjectAsync(admin, "Role API other", CancellationToken.None);
         var ownerSubject = "role-api-owner-" + suffix;
         var memberSubject = "role-api-member-" + suffix;
@@ -46,11 +52,15 @@ public sealed partial class ProjectsConfigPostgresTests
         // A project Owner can read the active assignments; a member with no project role cannot.
         var ownerList = await roles.ListAsync(ownerCaller, project.ProjectId, CancellationToken.None);
         Assert.Equal(project.ProjectId, ownerList.ProjectId);
-        var listedOwner = Assert.Single(ownerList.Assignments);
+        Assert.Equal(2, ownerList.Assignments.Count);
+        var listedOwner = Assert.Single(ownerList.Assignments, item => item.AssignmentId == owner.AssignmentId);
         Assert.Equal(owner.AssignmentId, listedOwner.AssignmentId);
         Assert.Equal(ownerSubject, listedOwner.PrincipalId);
         Assert.Equal(ProjectAuthorityRole.Owner, listedOwner.Role);
         Assert.Equal("role-api-admin-" + suffix, listedOwner.CreatedBy);
+        var listedCreatorOwner = Assert.Single(
+            ownerList.Assignments, item => item.AssignmentId == creatorOwner.AssignmentId);
+        Assert.Equal("role-api-admin-" + suffix, listedCreatorOwner.PrincipalId);
         var memberCaller = await ResolveCallerAsync(db, memberSubject, tenantId, ["api.read"]);
         Assert.Equal(StatusCodes.Status403Forbidden, (await Assert.ThrowsAsync<ProjectConfigException>(() =>
             roles.ListAsync(memberCaller, project.ProjectId, CancellationToken.None))).StatusCode);
@@ -71,10 +81,6 @@ public sealed partial class ProjectsConfigPostgresTests
             admin, other.ProjectId, owner.AssignmentId, owner.Revision, CancellationToken.None));
         Assert.Equal(StatusCodes.Status404NotFound, foreign.StatusCode);
 
-        var lastOwner = await Assert.ThrowsAsync<ProjectConfigException>(() => roles.RevokeAsync(
-            admin, project.ProjectId, owner.AssignmentId, owner.Revision, CancellationToken.None));
-        Assert.Equal("last_project_owner", lastOwner.Code);
-
         var orchestrator = await roles.AssignAsync(admin, project.ProjectId,
             new AssignProjectRoleRequest { PrincipalId = memberSubject, Role = ProjectAuthorityRole.Orchestrator },
             CancellationToken.None);
@@ -88,6 +94,13 @@ public sealed partial class ProjectsConfigPostgresTests
             admin, project.ProjectId, orchestrator.AssignmentId, revokedOrchestrator.Revision, CancellationToken.None));
         Assert.Equal(StatusCodes.Status409Conflict, repeated.StatusCode);
 
+        var revokedAdditionalOwner = await roles.RevokeAsync(
+            admin, project.ProjectId, owner.AssignmentId, owner.Revision, CancellationToken.None);
+        Assert.Equal(ProjectAuthorityRecordState.Revoked, revokedAdditionalOwner.State);
+        var lastOwner = await Assert.ThrowsAsync<ProjectConfigException>(() => roles.RevokeAsync(
+            admin, project.ProjectId, creatorOwner.AssignmentId, creatorOwner.Revision, CancellationToken.None));
+        Assert.Equal("last_project_owner", lastOwner.Code);
+
         var current = await projects.GetProjectAsync(admin, project.ProjectId, CancellationToken.None);
         await projects.UpdateProjectAsync(admin, project.ProjectId, current.Revision, current.Name,
             ProjectLifecycleState.Archived, CancellationToken.None);
@@ -98,11 +111,11 @@ public sealed partial class ProjectsConfigPostgresTests
             CancellationToken.None));
         Assert.Equal("project_archived", archivedAssign.Code);
 
-        // After archive, a tenant admin can revoke the last Owner so cleanup leaves no active project roles.
-        var revokedOwner = await roles.RevokeAsync(
-            admin, project.ProjectId, owner.AssignmentId, owner.Revision, CancellationToken.None);
-        Assert.Equal(ProjectAuthorityRecordState.Revoked, revokedOwner.State);
-        Assert.Equal(2, revokedOwner.Revision);
+        // After archive, a tenant admin can revoke the creator's last Owner assignment.
+        var revokedCreatorOwner = await roles.RevokeAsync(
+            admin, project.ProjectId, creatorOwner.AssignmentId, creatorOwner.Revision, CancellationToken.None);
+        Assert.Equal(ProjectAuthorityRecordState.Revoked, revokedCreatorOwner.State);
+        Assert.Equal(2, revokedCreatorOwner.Revision);
 
         var audit = await db.AuthorityAudit.AsNoTracking()
             .Where(item => item.ResourceId == project.ProjectId)
@@ -112,8 +125,10 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal(
             [
                 "role_assigned:Owner:1",
+                "role_assigned:Owner:1",
                 "role_assigned:Orchestrator:1",
                 "role_revoked:Orchestrator:2",
+                "role_revoked:Owner:2",
                 "role_revoked:Owner:2",
             ],
             audit);
@@ -139,13 +154,16 @@ public sealed partial class ProjectsConfigPostgresTests
             ProjectAuthorityResourceType.Tenant, tenantA, ProjectAuthorityRole.TenantAdmin);
         var projectA = await projects.CreateProjectAsync(adminA, "Role display A", CancellationToken.None);
         var projectAOther = await projects.CreateProjectAsync(adminA, "Role display A other", CancellationToken.None);
+        var projectOwnerAssignment = await db.RoleAssignments.AsNoTracking().SingleAsync(item =>
+            item.MembershipId == adminA.MembershipId &&
+            item.ResourceType == ProjectAuthorityResourceType.Project &&
+            item.ResourceId == projectA.ProjectId &&
+            item.Role == ProjectAuthorityRole.Owner &&
+            item.State == ProjectAuthorityRecordState.Active);
         var adminB = await SeedCallerAsync(db, store, subject, tenantB, scopes,
             ProjectAuthorityResourceType.Tenant, tenantB, ProjectAuthorityRole.TenantAdmin);
         var projectB = await projects.CreateProjectAsync(adminB, "Role display B", CancellationToken.None);
 
-        var projectOwnerAssignment = await store.AssignRoleAsync(
-            adminA.MembershipId, ProjectAuthorityResourceType.Project, projectA.ProjectId,
-            ProjectAuthorityRole.Owner, "fixture");
         await store.AssignRoleAsync(
             adminA.MembershipId, ProjectAuthorityResourceType.Project, projectAOther.ProjectId,
             ProjectAuthorityRole.Orchestrator, "fixture");
@@ -227,6 +245,128 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
+    public async Task CreatingProjectAtomicallyAssignsOwnerToCreatorAndAuditsTheExactGrant()
+    {
+        await using var db = CreateDbContext();
+        var store = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var projects = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var roles = new ProjectRoleAssignmentService(
+            new PooledDbContextFactory<ProjectsConfigDbContext>(CreateDbContextOptions()), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "project-create-owner-" + suffix;
+        var creator = await SeedCallerAsync(db, store, "project-create-creator-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant, tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var otherAdmin = await SeedCallerAsync(db, store, "project-create-admin-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant, tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var existingProject = await projects.CreateProjectAsync(
+            otherAdmin, "Created by another administrator", CancellationToken.None);
+
+        var created = await projects.CreateProjectAsync(creator, "Created by the caller", CancellationToken.None);
+        var assignments = await roles.ListAsync(creator, created.ProjectId, CancellationToken.None);
+        var owner = Assert.Single(assignments.Assignments);
+        Assert.Equal(creator.ActorId, owner.PrincipalId);
+        Assert.Equal(ProjectAuthorityRole.Owner, owner.Role);
+        Assert.Equal(1, owner.Revision);
+        Assert.Equal(creator.ActorId, owner.CreatedBy);
+
+        var summary = await projects.GetProjectAsync(creator, created.ProjectId, CancellationToken.None);
+        Assert.Contains(summary.EffectiveRoles, role =>
+            role.ResourceType == ProjectAuthorityResourceType.Project &&
+            role.ResourceId == created.ProjectId &&
+            role.Role == ProjectAuthorityRole.Owner);
+        var otherAdminSummary = await projects.GetProjectAsync(otherAdmin, created.ProjectId, CancellationToken.None);
+        Assert.DoesNotContain(otherAdminSummary.EffectiveRoles, role =>
+            role.ResourceType == ProjectAuthorityResourceType.Project &&
+            role.ResourceId == created.ProjectId &&
+            role.Role == ProjectAuthorityRole.Owner);
+        var existingAssignments = await roles.ListAsync(creator, existingProject.ProjectId, CancellationToken.None);
+        Assert.Equal(otherAdmin.ActorId, Assert.Single(existingAssignments.Assignments).PrincipalId);
+
+        var audit = await db.AuthorityAudit.AsNoTracking().SingleAsync(item =>
+            item.ResourceId == created.ProjectId &&
+            item.ResourceType == ProjectAuthorityResourceType.Project &&
+            item.Role == ProjectAuthorityRole.Owner);
+        Assert.Equal("role_assigned", audit.EventType);
+        Assert.Equal(creator.MembershipId, audit.MembershipId);
+        Assert.Equal(owner.AssignmentId, audit.AssignmentId);
+        Assert.Equal(1, audit.Revision);
+        Assert.Equal(creator.ActorId, audit.Actor);
+        Assert.Null(audit.InvocationId);
+    }
+
+    [Fact]
+    public async Task CreatingProjectRejectsARevokedTenantAdminAndPersistsNothing()
+    {
+        await using var db = CreateDbContext();
+        var store = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var projects = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "project-create-revoked-admin-" + suffix;
+        var creator = await SeedCallerAsync(db, store, "project-create-revoked-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant, tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var grant = await db.RoleAssignments.AsNoTracking().SingleAsync(item =>
+            item.MembershipId == creator.MembershipId &&
+            item.ResourceType == ProjectAuthorityResourceType.Tenant &&
+            item.Role == ProjectAuthorityRole.TenantAdmin &&
+            item.State == ProjectAuthorityRecordState.Active);
+        await store.RevokeRoleAssignmentAsync(grant.AssignmentId, grant.Revision, "fixture");
+
+        var before = await CountTenantProjectDataAsync(db, tenantId);
+        var forbidden = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            projects.CreateProjectAsync(creator, "Revoked administrator project", CancellationToken.None));
+
+        Assert.Equal(StatusCodes.Status403Forbidden, forbidden.StatusCode);
+        Assert.Equal(before, await CountTenantProjectDataAsync(db, tenantId));
+    }
+
+    [Fact]
+    public async Task CreatingProjectRejectsAStaleTenantAdminGrantAndPersistsNothing()
+    {
+        await using var db = CreateDbContext();
+        var store = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var projects = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "project-create-stale-admin-" + suffix;
+        var creator = await SeedCallerAsync(db, store, "project-create-stale-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant, tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var grant = await db.RoleAssignments.AsNoTracking().SingleAsync(item =>
+            item.MembershipId == creator.MembershipId &&
+            item.ResourceType == ProjectAuthorityResourceType.Tenant &&
+            item.Role == ProjectAuthorityRole.TenantAdmin &&
+            item.State == ProjectAuthorityRecordState.Active);
+        await store.RevokeRoleAssignmentAsync(grant.AssignmentId, grant.Revision, "fixture");
+        await store.AssignRoleAsync(
+            creator.MembershipId, ProjectAuthorityResourceType.Tenant, tenantId,
+            ProjectAuthorityRole.TenantAdmin, "fixture");
+
+        var before = await CountTenantProjectDataAsync(db, tenantId);
+        var forbidden = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            projects.CreateProjectAsync(creator, "Stale administrator project", CancellationToken.None));
+
+        Assert.Equal(StatusCodes.Status403Forbidden, forbidden.StatusCode);
+        Assert.Equal(before, await CountTenantProjectDataAsync(db, tenantId));
+    }
+
+    private static async Task<(int Projects, int Configurations, int ProjectRoles, int Audits)> CountTenantProjectDataAsync(
+        ProjectsConfigDbContext db,
+        string tenantId)
+    {
+        var projectIds = db.Projects.AsNoTracking()
+            .Where(item => item.TenantId == tenantId)
+            .Select(item => item.ProjectId);
+        return (
+            await db.Projects.CountAsync(item => item.TenantId == tenantId),
+            await db.ProjectConfigurationRevisions.CountAsync(item => projectIds.Contains(item.ProjectId)),
+            await db.RoleAssignments.CountAsync(item =>
+                item.ResourceType == ProjectAuthorityResourceType.Project && projectIds.Contains(item.ResourceId)),
+            await db.AuthorityAudit.CountAsync(item => item.TenantId == tenantId));
+    }
+
+    [Fact]
     public async Task RoleAssignmentApiRejectsInvalidInputBeforeWriting()
     {
         await using var db = CreateDbContext();
@@ -262,7 +402,11 @@ public sealed partial class ProjectsConfigPostgresTests
         var badRevision = await Assert.ThrowsAsync<ProjectConfigException>(() => roles.RevokeAsync(
             admin, project.ProjectId, Guid.NewGuid(), 0, CancellationToken.None));
         Assert.Equal("invalid_expected_revision", badRevision.Code);
-        Assert.False(await db.RoleAssignments.AnyAsync(item => item.ResourceId == project.ProjectId));
+        var creatorOwner = Assert.Single(await db.RoleAssignments.AsNoTracking()
+            .Where(item => item.ResourceId == project.ProjectId).ToListAsync());
+        Assert.Equal(admin.MembershipId, creatorOwner.MembershipId);
+        Assert.Equal(ProjectAuthorityRole.Owner, creatorOwner.Role);
+        Assert.Equal(1, creatorOwner.Revision);
     }
 
     [Fact]

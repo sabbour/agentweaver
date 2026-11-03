@@ -1715,12 +1715,12 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             .CreateProjectAsync(tenantAdmin, "Authority test project", CancellationToken.None);
         var secondOwnerMembershipId = await SeedMembershipAsync(
             authorityStore, $"second-owner-{Guid.NewGuid():N}", tenantId);
-        var firstOwnerAssignment = await authorityStore.AssignRoleAsync(
-            tenantAdmin.MembershipId,
-            ProjectAuthorityResourceType.Project,
-            project.ProjectId,
-            ProjectAuthorityRole.Owner,
-            "fixture");
+        var firstOwnerAssignment = await context.RoleAssignments.AsNoTracking().SingleAsync(item =>
+            item.MembershipId == tenantAdmin.MembershipId &&
+            item.ResourceType == ProjectAuthorityResourceType.Project &&
+            item.ResourceId == project.ProjectId &&
+            item.Role == ProjectAuthorityRole.Owner &&
+            item.State == ProjectAuthorityRecordState.Active);
         var secondOwnerAssignment = await authorityStore.AssignRoleAsync(
             secondOwnerMembershipId,
             ProjectAuthorityResourceType.Project,

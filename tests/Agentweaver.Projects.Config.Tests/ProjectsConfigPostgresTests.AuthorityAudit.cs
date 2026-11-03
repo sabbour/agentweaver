@@ -29,15 +29,8 @@ public sealed partial class ProjectsConfigPostgresTests
         var project = await projects.CreateProjectAsync(
             admin, $"p1-{invocationId:D}", CancellationToken.None);
 
-        var owner = await roles.AssignAsync(
-            admin,
-            project.ProjectId,
-            new AssignProjectRoleRequest
-            {
-                PrincipalId = admin.ActorId,
-                Role = ProjectAuthorityRole.Owner,
-            },
-            CancellationToken.None);
+        var owner = Assert.Single((await roles.ListAsync(admin, project.ProjectId, CancellationToken.None))
+            .Assignments, assignment => assignment.Role == ProjectAuthorityRole.Owner);
         var orchestrator = await roles.AssignAsync(
             admin,
             project.ProjectId,

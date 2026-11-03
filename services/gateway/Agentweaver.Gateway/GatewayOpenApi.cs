@@ -386,6 +386,9 @@ internal static partial class GatewayOpenApi
                             }
                             : null);
         }
+        if (route.OperationId == "createProject")
+            responses["503"] = ProblemResponse(
+                "The creator Owner assignment is unavailable (role_assignment_unavailable); project and initial configuration creation are rolled back.");
         if (route.OperationId is "captureBacklogTask" or "editBacklogTaskContent" or
             "setAllProjectBacklogTasksReady" or "setProjectBacklogTaskPosition" or
             "setProjectBacklogTaskState" or "archiveProjectBacklogTask" or "deleteProjectBacklogTask" or

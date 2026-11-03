@@ -596,6 +596,7 @@ describe('v1 web project scoping', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
     expect(await screen.findByRole('dialog')).toBeTruthy();
     expect(screen.getByLabelText('Project name')).toBeTruthy();
+    expect(screen.getByText('You become the owner when you create a project.')).toBeTruthy();
   });
 
   it('creates a project from a GitHub repository and saves the repository in its configuration', async () => {
@@ -625,20 +626,19 @@ describe('v1 web project scoping', () => {
     );
   });
 
-  it('keeps a new project when its repository cannot be saved yet', async () => {
-    mocks.createProject.mockResolvedValue(projectSummary('p9', 'No access yet'));
-    // The project is created, but its configuration cannot be read yet, as
-    // when the new grant has not reached the configuration owner.
-    mocks.getProjectConfiguration.mockRejectedValue(new GatewayError(403, { code: 'forbidden' }, 'Forbidden'));
+  it('keeps a new project when its optional repository setup fails', async () => {
+    mocks.createProject.mockResolvedValue(projectSummary('p9', 'Repository unavailable'));
+    // The project remains created when the optional configuration read fails.
+    mocks.getProjectConfiguration.mockRejectedValue(new GatewayError(503, { code: 'unavailable' }, 'Unavailable'));
     window.history.replaceState({}, '', '/projects');
     render(<App />);
     fireEvent.click(await screen.findByRole('button', { name: 'Create project' }));
-    fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'No access yet' } });
+    fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'Repository unavailable' } });
     fireEvent.click(screen.getByRole('radio', { name: 'GitHub repository' }));
     fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'octo/agentweaver' } });
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Create project' }));
 
-    await screen.findByText(/The repository was not saved\. Add it in Settings > Repository after you have access\./);
+    await screen.findByText(/The repository was not saved\. Add it later in Settings > Repository\./);
     // The project is kept, and no configuration write is tried without a current revision.
     expect(mocks.updateProjectConfiguration).not.toHaveBeenCalled();
   });

@@ -1365,11 +1365,14 @@ the sole active PlatformAdmin; any other active PlatformAdmin stops the
 command. Normal host startup never runs it.
 
 The runtime database principal is read-only on authority tables, with one
-exception. The project role-assignment API can insert project role
-assignments, mark them revoked, and insert matching `authority_audit` rows.
-The API, not the database grant, enforces who can make these changes: only a
-caller with the current TenantAdmin role, checked in the same serializable
-transaction as the change. The runtime principal can't delete authority rows
+exception. Authorized Projects & Config operations can insert project role
+assignments and matching `authority_audit` rows; the role-assignment API can
+also mark assignments revoked. Project creation grants its authenticated
+creator active Owner authority in the same transaction as the project and
+initial configuration. The APIs, not the database grant, enforce who can make
+these changes: project creation rechecks current TenantAdmin authority in a
+Read Committed transaction, while role assignment and revocation recheck it in
+a serializable transaction. The runtime principal can't delete authority rows
 or write tenant memberships and tenant-level roles. See
 [Runtime authority writes](runtime-configuration.md#runtime-authority-writes)
 for the exact grants and [Project role assignments](api.md#project-role-assignments)

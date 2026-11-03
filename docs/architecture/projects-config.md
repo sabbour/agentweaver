@@ -12,6 +12,29 @@ resources. This page describes source, not a release or deployment. The
 [Projects deep dive](../deep-dive/projects-config.md) explains revision races
 and the acceptance transaction.
 
+## Project creation authority
+
+Creating a project also makes its authenticated creator an active Owner. The
+service rechecks the exact TenantAdmin grant and active membership inside a
+Read Committed transaction. The project, initial configuration, Owner
+assignment, and `role_assigned` audit row commit together.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Caller
+    participant Projects as Projects & Config
+    participant DB as PostgreSQL
+    Caller->>Projects: POST /api/projects (unbound TenantAdmin)
+    Projects->>Projects: Validate scopes and current TenantAdmin snapshot
+    Projects->>DB: Begin Read Committed; lock exact TenantAdmin grant
+    DB-->>Projects: Recheck active membership and exact grant revision
+    Projects->>DB: Insert project, configuration revision, Owner, and audit
+    DB-->>Projects: Commit all records
+    Projects-->>Caller: 201 project summary
+    Note over Projects,DB: A stale or revoked grant returns 403; missing role-write grants return 503 and roll back all records.
+```
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -87,12 +110,16 @@ database. A tenant selector can choose among existing memberships but cannot
 create authority. Any signed tenant assertion must agree with the selected
 membership. Project reads require an assigned Owner, Contributor, or Viewer
 role (or tenant administrator). Project writes require Owner or tenant
-administrator. Project creation requires an existing tenant administrator and
-does not auto-assign an Owner. Platform defaults require an assigned platform
-administrator. Run-selection reads and accepts require an assigned project
-Orchestrator role and matching signed project/run bindings when present. Every
-privileged request rechecks current membership and role state. Revocation takes
-effect without refreshing the broker token.
+administrator. Project creation requires a current TenantAdmin and atomically
+assigns the authenticated creator an active Owner role with an audit row.
+Stale or revoked TenantAdmin authority returns 403. If the existing role-write
+database grants are unavailable, creation returns 503 `role_assignment_unavailable`
+and rolls back the project, configuration, Owner assignment, and audit row.
+Platform defaults require an assigned platform administrator. Run-selection
+reads and accepts require an assigned project Orchestrator role and matching
+signed project/run bindings when present. Every privileged request rechecks
+current membership and role state. Revocation takes effect without refreshing
+the broker token.
 
 Knowledge project-wide search requires direct project `ReadRunSelection`
 authority with an unbound Broker token. Knowledge uses it to verify existing

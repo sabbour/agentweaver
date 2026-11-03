@@ -49,15 +49,10 @@ internal static class ApiAcceptanceFixtureSetup
                 ["complete"] = false,
             };
 
-            JsonObject owner = await MutatingSetupStepAsync(state, "assign-owner", setupApi, "assignProjectRole",
-                new GatewayInvocation(
-                    Path(("projectId", projectId)),
-                    Body: new JsonObject
-                    {
-                        ["principalId"] = ApiAcceptanceSupport.GetString(environment, "actorId"),
-                        ["role"] = "owner",
-                    }), [201], ct).ConfigureAwait(false);
-            RequireAssignment(owner, projectId, environment, "owner", "active", 1);
+            JsonObject assignments = await MutatingSetupStepAsync(state, "read-owner-assignment",
+                setupApi, "listProjectRoleAssignments",
+                new GatewayInvocation(Path(("projectId", projectId))), [200], ct).ConfigureAwait(false);
+            JsonObject owner = RequireOwnerAssignment(assignments, projectId, environment);
             state.Setup["ownerAssignmentId"] = ApiAcceptanceSupport.GetString(owner, "assignmentId");
             state.Setup["ownerAssignmentRevision"] = GetLong(owner, "revision");
 
@@ -793,7 +788,7 @@ internal static class ApiAcceptanceFixtureSetup
         IReadOnlySet<string> operations = ApiAcceptanceJourney.GetOperationIds(openApi);
         List<string> required =
         [
-            "getAuthorizationContext", "createProject", "assignProjectRole", "getProjectConfiguration",
+            "getAuthorizationContext", "createProject", "assignProjectRole", "listProjectRoleAssignments", "getProjectConfiguration",
             "getRunSelection", "acceptRunRoot", "readRunStatus", "readSessionStatus",
             "readSessionTree", "readDecisions", "revokeProjectRoleAssignment", "updateProject",
         ];
@@ -928,6 +923,24 @@ internal static class ApiAcceptanceFixtureSetup
         {
             throw new InvalidOperationException($"Projects Config did not return the exact {state} {role} assignment receipt.");
         }
+    }
+
+    private static JsonObject RequireOwnerAssignment(JsonObject assignments, string projectId, JsonObject environment)
+    {
+        JsonObject[] owners = (assignments["assignments"] as JsonArray ?? [])
+            .OfType<JsonObject>()
+            .Where(item => ApiAcceptanceSupport.GetString(item, "principalId") == ApiAcceptanceSupport.GetString(environment, "actorId")
+                && ApiAcceptanceSupport.GetString(item, "role") == "owner")
+            .ToArray();
+        if (ApiAcceptanceSupport.GetString(assignments, "projectId") != projectId
+            || owners.Length != 1
+            || !ApiAcceptanceSupport.IsUuid(ApiAcceptanceSupport.GetString(owners[0], "assignmentId"))
+            || GetLong(owners[0], "revision") != 1
+            || ApiAcceptanceSupport.GetString(owners[0], "createdBy") != ApiAcceptanceSupport.GetString(environment, "actorId"))
+        {
+            throw new InvalidOperationException("Projects Config did not return the exact creator Owner assignment receipt.");
+        }
+        return owners[0];
     }
 
     private static void RequireRevokedAssignment(JsonObject value, string projectId, string assignmentId, string actorId, string role, long expectedRevision)

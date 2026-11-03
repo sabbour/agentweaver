@@ -41,7 +41,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var path = $"/api/projects/{project.ProjectId}/role-assignments";
 
         using (var self = await PostRoleAsync(projects.Client, path, adminToken, adminSubject, "owner"))
-            Assert.Equal(HttpStatusCode.Created, self.StatusCode);
+            await AssertProblemAsync(self, HttpStatusCode.Conflict, "role_assignment_exists");
 
         using var created = await PostRoleAsync(projects.Client, path, adminToken, memberSubject, "orchestrator");
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
@@ -144,12 +144,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     }
 
     [Fact]
-    public async Task ProjectRoleAssignmentReturnsUnavailableWithoutRuntimeGrants()
+    public async Task ProjectCreationReturnsUnavailableAndRollsBackWithoutRuntimeGrants()
     {
         using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
             _signingCertificate.PfxPath, _signingCertificate.Password);
         await using var projects = await ProjectsConfigResourceServer.StartAsync(
-            _connectionString, new X509SecurityKey(certificate));
+            _connectionString, new X509SecurityKey(certificate), grantRoleAssignmentWrites: false);
         var adminToken = await IssueTokenAsync("projects.admin", [TenantId], "role-api-ungranted", null, null, []);
         var adminSubject = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(adminToken).Claims, "sub");
         var adminMembership = await AddMembershipAsync(projects.PrivilegedFixtureDataSource, adminSubject, TenantId);
@@ -159,18 +159,38 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ProjectAuthorityResourceType.Tenant,
             TenantId,
             ProjectAuthorityRole.TenantAdmin);
-        var project = await CreateProjectsTestProjectAsync(projects.Client, adminToken, TenantId, "Role API ungranted");
-
-        using var response = await PostRoleAsync(
-            projects.Client, $"/api/projects/{project.ProjectId}/role-assignments", adminToken, adminSubject, "owner");
-
+        using var createRequest = new HttpRequestMessage(HttpMethod.Post, "/api/projects/")
+        {
+            Content = JsonContent.Create(new CreateProjectRequest { Name = "Role API ungranted" }),
+        };
+        AddBearerAndTenant(createRequest, adminToken, TenantId);
+        using var response = await projects.Client.SendAsync(createRequest);
         await AssertProblemAsync(response, HttpStatusCode.ServiceUnavailable, "role_assignment_unavailable");
-        // Listing needs only the existing read grants.
-        using var list = await SendAsync(
-            projects.Client, HttpMethod.Get, $"/api/projects/{project.ProjectId}/role-assignments", adminToken, [TenantId]);
-        Assert.Equal(HttpStatusCode.OK, list.StatusCode);
-        using var listBody = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
-        Assert.Equal(0, listBody.RootElement.GetProperty("assignments").GetArrayLength());
+        await using var connection = await projects.PrivilegedFixtureDataSource.OpenConnectionAsync();
+        await using var rollback = new NpgsqlCommand("""
+            SELECT
+              (SELECT count(*) FROM projects_config.projects WHERE tenant_id = @tenant_id),
+              (SELECT count(*)
+                 FROM projects_config.project_configuration_revisions AS configuration
+                 JOIN projects_config.projects AS project USING (project_id)
+                WHERE project.tenant_id = @tenant_id),
+              (SELECT count(*)
+                 FROM projects_config.project_role_assignments AS assignment
+                 JOIN projects_config.projects AS project
+                   ON project.project_id = assignment.resource_id
+                WHERE project.tenant_id = @tenant_id
+                  AND assignment.resource_type = 'Project'),
+              (SELECT count(*)
+                 FROM projects_config.authority_audit
+                WHERE tenant_id = @tenant_id AND resource_type = 'Project')
+            """, connection);
+        rollback.Parameters.AddWithValue("tenant_id", TenantId);
+        await using var rows = await rollback.ExecuteReaderAsync();
+        Assert.True(await rows.ReadAsync());
+        Assert.Equal(0L, rows.GetInt64(0));
+        Assert.Equal(0L, rows.GetInt64(1));
+        Assert.Equal(0L, rows.GetInt64(2));
+        Assert.Equal(0L, rows.GetInt64(3));
         await AssertRuntimeCannotWriteAuthorityAsync(projects.RuntimeDataSource);
     }
 

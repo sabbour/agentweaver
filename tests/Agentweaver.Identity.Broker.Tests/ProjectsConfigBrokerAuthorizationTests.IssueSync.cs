@@ -3,6 +3,7 @@ extern alias ProjectsConfig;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Microsoft.IdentityModel.Tokens;
 using ProjectsConfig::Agentweaver.Projects.Config;
@@ -27,21 +28,42 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var project = await CreateProjectsTestProjectAsync(projects.Client, token, TenantId, "Issue sync");
         var ownerPath = $"/api/projects/{project.ProjectId}/issue-sync-owner";
         var repositoryPath = $"/api/projects/{project.ProjectId}/issue-sync-authority";
+        var roleAssignmentsPath = $"/api/projects/{project.ProjectId}/role-assignments";
+        var tenantAdminToken = await IssueTokenAsync(
+            "projects.admin", [TenantId], "issue-sync-tenant-admin", null, null, []);
+        var tenantAdminSubject = SingleClaim(
+            new JwtSecurityTokenHandler().ReadJwtToken(tenantAdminToken).Claims, "sub");
+        var tenantAdminMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, tenantAdminSubject, TenantId);
+        await AssignRoleAsync(projects.PrivilegedFixtureDataSource, tenantAdminMembership.MembershipId,
+            ProjectAuthorityResourceType.Tenant, TenantId, ProjectAuthorityRole.TenantAdmin);
 
-        using (var tenantAdminOnly = await SendAsync(projects.Client, HttpMethod.Get, ownerPath, token, [TenantId]))
+        using (var tenantAdminOnly = await SendAsync(
+            projects.Client, HttpMethod.Get, ownerPath, tenantAdminToken, [TenantId]))
             Assert.Equal(HttpStatusCode.Forbidden, tenantAdminOnly.StatusCode);
         using (var adminRevocation = await SendAsync(projects.Client, HttpMethod.Get,
-            $"/api/projects/{project.ProjectId}/issue-sync-grant-revocation", token, [TenantId]))
+            $"/api/projects/{project.ProjectId}/issue-sync-grant-revocation", tenantAdminToken, [TenantId]))
         {
             Assert.Equal(HttpStatusCode.OK, adminRevocation.StatusCode);
             Assert.Contains("\"isAdministrator\":true", await adminRevocation.Content.ReadAsStringAsync());
         }
-        var assignment = await AssignRoleAsync(projects.PrivilegedFixtureDataSource, membership.MembershipId,
-            ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Owner);
         using (var owner = await SendAsync(projects.Client, HttpMethod.Get, ownerPath, token, [TenantId]))
         {
             Assert.Equal(HttpStatusCode.OK, owner.StatusCode);
             Assert.Equal("no-store", owner.Headers.CacheControl?.ToString());
+        }
+        Guid ownerAssignmentId;
+        using (var listed = await SendAsync(
+            projects.Client, HttpMethod.Get, roleAssignmentsPath, token, [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, listed.StatusCode);
+            using var document = JsonDocument.Parse(await listed.Content.ReadAsStringAsync());
+            var assignment = Assert.Single(document.RootElement.GetProperty("assignments").EnumerateArray(),
+                item => item.GetProperty("principalId").GetString() == subject &&
+                    item.GetProperty("role").GetString() == "owner");
+            ownerAssignmentId = assignment.GetProperty("assignmentId").GetGuid();
+            Assert.Equal(1, assignment.GetProperty("revision").GetInt64());
+            Assert.Equal(subject, assignment.GetProperty("createdBy").GetString());
         }
         using (var disconnected = await SendAsync(projects.Client, HttpMethod.Get, repositoryPath, token, [TenantId]))
         {
@@ -56,7 +78,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             projects.PrivilegedFixtureDataSource, Guid.NewGuid().ToString("D"), TenantId);
         await AssignRoleAsync(projects.PrivilegedFixtureDataSource, replacement.MembershipId,
             ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Owner);
-        await RevokeRoleAsync(projects.PrivilegedFixtureDataSource, assignment.AssignmentId, 1);
+        await RevokeRoleAsync(projects.PrivilegedFixtureDataSource, ownerAssignmentId, 1);
         using var revoked = await SendAsync(projects.Client, HttpMethod.Get, ownerPath, token, [TenantId]);
         Assert.Equal(HttpStatusCode.Forbidden, revoked.StatusCode);
     }

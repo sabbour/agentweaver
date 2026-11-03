@@ -199,9 +199,8 @@ function parseRepository(value: string): { owner: string; name: string } | null 
 
 /**
  * Lists the owner's projects and creates new ones. "GitHub repository" creates
- * the project, then saves the repository in its configuration. That second
- * write needs access to the new project, so a caller without a grant gets the
- * project without the repository and a note to add it later.
+ * the project, then saves the repository in its configuration. If that second
+ * write fails, the created project remains available without the repository.
  */
 function ProjectsPage() {
   const { apiCall } = useAuth();
@@ -273,9 +272,8 @@ function ProjectsPage() {
           }, null);
           message += ` It uses ${repository.owner}/${repository.name}.`;
         } catch {
-          // Most often the creator has no grant on the new project yet.
           // Keep the project and tell the user how to add the repository later.
-          message += ` The repository was not saved. Add it in Settings > Repository after you have access.`;
+          message += ` The repository was not saved. Add it later in Settings > Repository.`;
         }
       }
       // Reset the form, close the dialog, and reload so the new tile appears.
@@ -345,7 +343,7 @@ function ProjectsPage() {
             <Button appearance="primary" type="submit" disabled={createDisabled}>
               {busy ? 'Creating…' : 'Create project'}
             </Button>
-            <p className="v1-muted">Creating a project does not make you its owner. If you can't open it afterward, ask a tenant administrator for access.</p>
+            <p className="v1-muted">You become the owner when you create a project.</p>
             <Button appearance="transparent" onClick={() => setCreateOpen(false)}>Cancel</Button>
           </form>
       </AppDialog>

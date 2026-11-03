@@ -311,7 +311,7 @@ public sealed class ProjectRoleAssignmentService(
     /// Share-locks the caller's membership and authority through the definer function, then confirms
     /// that the exact TenantAdmin assignment from the request snapshot is still active at the same revision.
     /// </summary>
-    private static async Task LockCurrentTenantAdminAsync(
+    internal static async Task LockCurrentTenantAdminAsync(
         ProjectsConfigDbContext db,
         ProjectAuthorizationContext caller,
         ProjectAuthorizationGrant adminGrant,

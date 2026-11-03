@@ -42,6 +42,7 @@ function apiFor({
     createProject: 'POST',
     updateProject: 'PATCH',
     assignProjectRole: 'POST',
+    listProjectRoleAssignments: 'GET',
     revokeProjectRoleAssignment: 'DELETE',
     getProjectConfiguration: 'GET',
     getPlatformRuntimeDefaults: 'GET',
@@ -67,6 +68,7 @@ function apiFor({
     createProject: '/api/v1/projects',
     updateProject: '/api/v1/projects/{projectId}',
     assignProjectRole: '/api/v1/projects/{projectId}/role-assignments',
+    listProjectRoleAssignments: '/api/v1/projects/{projectId}/role-assignments',
     revokeProjectRoleAssignment: '/api/v1/projects/{projectId}/role-assignments/{assignmentId}',
     getProjectConfiguration: '/api/v1/projects/{projectId}/configuration',
     getPlatformRuntimeDefaults: '/api/v1/platform/runtime-defaults',
@@ -164,6 +166,14 @@ function apiFor({
       switch (operationId) {
         case 'createProject':
           project = { projectId, name: body.name, state: 'active', revision: 1 };
+          assignments.set(OWNER_ASSIGNMENT_ID, {
+            assignmentId: OWNER_ASSIGNMENT_ID,
+            projectId,
+            principalId: actorId,
+            role: 'owner',
+            state: 'active',
+            revision: 1,
+          });
           return result(201, projectView());
         case 'updateProject':
           if (pathParameters.projectId !== project?.projectId || body.expectedRevision !== project.revision) {
@@ -183,6 +193,19 @@ function apiFor({
           assignments.set(assignment.assignmentId, assignment);
           return result(201, assignmentView(assignment));
         }
+        case 'listProjectRoleAssignments':
+          return result(200, {
+            projectId: pathParameters.projectId,
+            assignments: [...assignments.values()]
+              .filter(assignment => assignment.state === 'active')
+              .map(assignment => ({
+                assignmentId: assignment.assignmentId,
+                principalId: assignment.principalId,
+                role: assignment.role,
+                revision: assignment.revision,
+                createdBy: actorId,
+              })),
+          });
         case 'revokeProjectRoleAssignment': {
           const assignment = assignments.get(pathParameters.assignmentId);
           if (!assignment || assignment.state !== 'active' || query?.expectedRevision !== assignment.revision) {
@@ -654,7 +677,7 @@ test('fixture setup and cleanup use only the public Projects API with the setup 
   const setupApi = apiFor();
   const setupInvoke = setupApi.invoke.bind(setupApi);
   setupApi.invoke = async (operationId, options) => {
-    if (['createProject', 'assignProjectRole', 'revokeProjectRoleAssignment', 'updateProject']
+    if (['createProject', 'listProjectRoleAssignments', 'assignProjectRole', 'revokeProjectRoleAssignment', 'updateProject']
       .includes(operationId)) {
       events.push(`${operationId}${options.body?.role ? `:${options.body.role}` : ''}`
         + `${options.body?.state ? `:${options.body.state}` : ''}`);
@@ -702,10 +725,7 @@ test('fixture setup and cleanup use only the public Projects API with the setup 
   const create = setupApi.calls.find(call => call.operationId === 'createProject');
   assert.deepEqual(create.body, { name: p1FixtureProjectName(INVOCATION_ID) });
   assert.deepEqual(setupApi.calls.filter(call => call.operationId === 'assignProjectRole')
-    .map(call => call.body), [
-    { principalId: ACTOR_ID, role: 'owner' },
-    { principalId: ACTOR_ID, role: 'orchestrator' },
-  ]);
+    .map(call => call.body), [{ principalId: ACTOR_ID, role: 'orchestrator' }]);
   const cleanup = await fixture.cleanup();
   assert.equal(cleanup.state, 'cleaned');
   assert.equal(cleanup.projectState, 'archived');
@@ -715,7 +735,7 @@ test('fixture setup and cleanup use only the public Projects API with the setup 
   assert.equal(cleanup.ownerAssignmentId, OWNER_ASSIGNMENT_ID);
   assert.equal(cleanup.ownerAssignmentRevision, 2);
   assert.deepEqual(events, [
-    'createProject', 'assignProjectRole:owner', 'assignProjectRole:orchestrator', 'identity',
+    'createProject', 'listProjectRoleAssignments', 'assignProjectRole:orchestrator', 'identity',
     'revokeProjectRoleAssignment', 'updateProject:archived', 'revokeProjectRoleAssignment',
   ]);
   assert.deepEqual(setupApi.calls.filter(call => call.operationId === 'revokeProjectRoleAssignment')
@@ -981,7 +1001,7 @@ test('same-invocation fixtures reach the selected API, MCP, and UI gate and mess
 
 const SETUP_STEPS = [
   ['createProject', 'create-project', 'createProject'],
-  ['assignProjectRole:owner', 'assign-owner', 'assignProjectRole'],
+  ['listProjectRoleAssignments', 'read-owner-assignment', 'listProjectRoleAssignments'],
   ['assignProjectRole:orchestrator', 'assign-orchestrator', 'assignProjectRole'],
 ];
 for (const [failureKey, step, operationId] of SETUP_STEPS) {
@@ -992,7 +1012,9 @@ for (const [failureKey, step, operationId] of SETUP_STEPS) {
           ? { status: 403, body: { code: 'forbidden', detail: 'controlled-secret-token' } }
           : mode === 'transport'
             ? () => { throw new Error('controlled transport failure'); }
-            : result => result(201, { projectId: 'other-project', detail: 'controlled-secret-token' }),
+            : result => result(operationId === 'listProjectRoleAssignments' ? 200 : 201, {
+              projectId: 'other-project', detail: 'controlled-secret-token',
+            }),
       };
       const api = apiFor({ failures });
       let setupError;

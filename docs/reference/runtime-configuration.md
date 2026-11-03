@@ -436,13 +436,18 @@ can't read its tables and fails at startup. See
 ### Runtime authority writes
 
 The runtime database principal can write project role assignments only
-through the project role-assignment API. The API enforces the boundary, not
+through authorized Projects & Config operations. The project-creation API
+creates an active Owner assignment for the authenticated creator in the same
+transaction as the project and initial configuration. The role-assignment API
+handles later assignment and revocation. The APIs enforce the boundary, not
 the database grant:
 
-- Only a current tenant admin can assign or revoke a project role. The
-  request needs an unbound token with the `api.read` and `projects.admin`
-  scopes. The service rechecks the caller's exact TenantAdmin assignment and
-  revision in the same serializable transaction as the change.
+- Only a current TenantAdmin can create a project, assign a role, or revoke a
+  project role. Each request needs an unbound token with the `api.read` and
+  `projects.admin` scopes. Project creation rechecks the exact TenantAdmin
+  assignment and active membership in a Read Committed transaction. Role
+  assignment and revocation recheck the caller's exact TenantAdmin assignment
+  and revision in a serializable transaction.
 - Each change writes one `authority_audit` row in the same transaction.
 - The runtime principal can't delete assignment or audit rows, can't change
   who, what, or where an assignment applies, and can't write tenant
@@ -461,13 +466,15 @@ The Projects & Config grants step applies them with the other planned
 runtime grants, both during the deployment's Projects & Config migration and
 when an operator runs it on its own. See
 [Applying the Projects & Config runtime grants](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#applying-the-projects--config-runtime-grants).
-Until they're applied, assign and revoke requests return `503` with the
-`role_assignment_unavailable` problem code, and no authority row changes.
-Listing assignments needs only the existing read grants. The service checks
-privileges on each request, so it doesn't need a restart after the grants
-step. At startup, the service accepts either no authority write grants or
-exactly this set. It fails closed on a partial set or any other write
-privilege on authority tables, including `DELETE`.
+Until they're applied, project creation, assignment, and revocation requests
+return `503` with the `role_assignment_unavailable` problem code. Project
+creation rolls back its project, configuration, Owner assignment, and audit
+row; other failed writes leave no authority change. Listing assignments needs
+only the existing read grants. The service checks privileges on each request,
+so it doesn't need a restart after the grants step. At startup, the service
+accepts either no authority write grants or exactly this set. It fails closed
+on a partial set or any other write privilege on authority tables, including
+`DELETE`.
 
 <span id="p1-project-setup-receipt"></span>
 

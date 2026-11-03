@@ -267,39 +267,39 @@ internal static class ApiAcceptanceBoard
         RequireSameIdentity(state, current);
         await ReadOwnedProjectAsync(api, state, ct).ConfigureAwait(false);
 
-        state.MutationInFlight = true;
-        try
+        state.Indeterminate = true;
+        response = await BoardGateway.ListAssignmentsAsync(api, projectId, ct).ConfigureAwait(false);
+        if (response.Status != 200)
         {
-            response = await BoardGateway.AssignOwnerAsync(api, projectId, new(state.ActorId!), ct).ConfigureAwait(false);
-        }
-        catch
-        {
-            state.Indeterminate = true;
-            throw;
-        }
-        state.MutationInFlight = false;
-        state.MutationAcknowledged = response.Status is >= 200 and < 300;
-        if (response.Status != 201)
-        {
-            if (response.Status >= 500) state.Indeterminate = true;
-            throw BoardFailure("assignProjectRole", response, [201]);
+            throw BoardFailure("listProjectRoleAssignments", response, [200]);
         }
 
-        JsonObject assignment = RequireBody(response, "assignProjectRole");
+        JsonObject assignmentList = RequireBody(response, "listProjectRoleAssignments");
+        JsonObject[] ownerAssignments = (assignmentList["assignments"] as JsonArray ?? [])
+            .OfType<JsonObject>()
+            .Where(item => ApiAcceptanceSupport.GetString(item, "principalId") == state.ActorId
+                && ApiAcceptanceSupport.GetString(item, "role") == "owner")
+            .ToArray();
+        if (ApiAcceptanceSupport.GetString(assignmentList, "projectId") != projectId
+            || ownerAssignments.Length != 1
+            || ApiAcceptanceSupport.GetString(ownerAssignments[0], "createdBy") != state.ActorId)
+        {
+            throw Indeterminate("Projects Config did not return the exact creator Owner assignment receipt.");
+        }
+
+        JsonObject assignment = ownerAssignments[0];
         string assignmentId = ApiAcceptanceSupport.GetString(assignment, "assignmentId") ?? "";
         long assignmentRevision = ReadPositive(assignment, "revision", "owner assignment revision");
         if (!ApiAcceptanceSupport.IsUuid(assignmentId)
-            || ApiAcceptanceSupport.GetString(assignment, "projectId") != projectId
-            || ApiAcceptanceSupport.GetString(assignment, "principalId") != state.ActorId
-            || ApiAcceptanceSupport.GetString(assignment, "role") != "owner"
-            || ApiAcceptanceSupport.GetString(assignment, "state") != "active"
-            || ApiAcceptanceSupport.GetString(assignment, "grantedBy") != state.ActorId)
+            || assignmentRevision != 1)
+        {
             throw Indeterminate("Projects Config returned a mismatched owner assignment receipt.");
+        }
 
         state.OwnerAssignmentId = assignmentId;
         state.OwnerAssignmentRevision = assignmentRevision;
         state.OwnerAcknowledged = true;
-        state.MutationAcknowledged = false;
+        state.Indeterminate = false;
         JsonObject authority = await ValidateContextAsync(api, null, state.ActorId, null, ct).ConfigureAwait(false);
         RequireSameIdentity(state, authority);
         RequireProjectAuthority(authority, projectId, "writeProjects");
@@ -892,7 +892,6 @@ internal static class ApiAcceptanceBoard
     private sealed record BoardGraphRevision(long ExpectedGraphRevision);
     private sealed record BoardEditTaskContent(BoardTaskContent Content, long ExpectedGraphRevision, long ExpectedTaskRevision);
     private sealed record BoardCreateProject(string Name);
-    private sealed record BoardAssignOwner(string PrincipalId);
     private sealed record BoardArchiveProject(string Name, long ExpectedRevision);
 
     private static class BoardGateway
@@ -906,11 +905,6 @@ internal static class ApiAcceptanceBoard
 
         public static Task<GatewayResponse> CreateProjectAsync(IGatewayClient api, BoardCreateProject request, CancellationToken ct) =>
             api.InvokeAsync("createProject", new(Body: new JsonObject { ["name"] = request.Name }), ct);
-
-        public static Task<GatewayResponse> AssignOwnerAsync(IGatewayClient api, string projectId, BoardAssignOwner request, CancellationToken ct) =>
-            api.InvokeAsync("assignProjectRole", new(
-                ApiAcceptanceJourney.Path(("projectId", projectId)),
-                Body: new JsonObject { ["principalId"] = request.PrincipalId, ["role"] = "owner" }), ct);
 
         public static Task<GatewayResponse> ReadProjectAsync(IGatewayClient api, string projectId, CancellationToken ct) =>
             api.InvokeAsync("getProject", new(ApiAcceptanceJourney.Path(("projectId", projectId))), ct);

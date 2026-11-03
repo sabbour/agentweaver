@@ -89,11 +89,16 @@ Both paths verify the archived-inclusive, detached-exclusive metric, then cancel
 the accepted run through an unbound Orchestrator client. Before removing project
 authority, the CLI independently verifies the cancelled run, retained root and
 archived child, and detached child at the advanced execution fence. It revokes
-the Orchestrator assignment, archives the project, revokes Owner last, and
+the Orchestrator assignment, archives the project, revokes the creator's
+verified Owner assignment last, and
 independently reads back the archived project and empty assignment list.
 Uncertain creation, selection, cancellation, or terminal readback remains
 indeterminate and blocks authority removal; a cancellation receipt alone does
 not prove cleanup.
+
+Project setup reads the creator's active Owner assignment from
+`listProjectRoleAssignments`; it does not assign Owner a second time.
+Orchestrator is granted separately for the fixture.
 
 ## Contracts and boundaries
 
