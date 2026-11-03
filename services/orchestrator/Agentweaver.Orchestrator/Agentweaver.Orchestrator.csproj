@@ -60,5 +60,6 @@
     <EmbeddedResource Include="Migrations\038_source_control_pull_request_operations.sql" />
     <EmbeddedResource Include="Migrations\039_runtime_execution_evidence.sql" />
     <EmbeddedResource Include="Migrations\040_p1_run_request_provenance.sql" />
+    <EmbeddedResource Include="Migrations\041_runtime_numeric_native_no_send.sql" />
   </ItemGroup>
 </Project>

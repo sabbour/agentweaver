@@ -62,6 +62,29 @@ text. An incomplete range or failed owner write fails closed. Orchestrator also
 stores a stage-specific receipt before denying a model-turn action at its
 authorization or verification boundary.
 
+Coordinator-root `MaxModelTurns` denials use a separate, narrower path in
+`AuthorizedRuntimeSession.SendTurnAsync`. After the Host persists the user's
+message and before root action authorization, it captures the native SDK cursor
+under the existing execution gate and uses that persisted message ID as both
+the action EventId and DispatchId. Only the exact stored model-turn denial can
+start the proof path. Orchestrator returns the denial as a no-store HTTP 403;
+the owner transport preserves its code only from a bounded, single-field JSON
+error envelope on the action-authorization routes. Other or malformed 403
+responses remain generic `runtime_owner_denied` errors. The Host then requires
+current authority and an unchanged
+source, reads a complete empty native-event range with the same cursor before
+and after, and posts a typed companion to Orchestrator. Orchestrator validates
+the original denial, root admission, source, authority, and owner send state
+before appending the companion to the existing immutable evidence ledger. The
+original denial is not changed. The Host returns the original denial only after
+the companion is stored; missing, stale, incomplete, or conflicting proof
+fails closed and never reaches SDK `Send`.
+
+This companion proves only the no-send interval for that persisted root
+attempt. Child pre-dispatch numeric denials and tool-call denials inside an
+admitted turn remain owner-only; they do not have this empty-range evidence.
+This slice does not establish restart recovery or duplicate-send prevention.
+
 Before native session creation, AgentHost reads skills through the current runtime
 registration. Orchestrator checks the accepted run selection and current read
 permission; Projects returns only imported revisions assigned to the active agent.

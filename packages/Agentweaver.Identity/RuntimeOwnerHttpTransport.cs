@@ -376,6 +376,11 @@ public static class RuntimeOwnerHttpTransport
                 throw new RuntimeAuthorizationException("runtime_owner_cache_contract_invalid");
             return null;
         }
+        if (response.StatusCode == System.Net.HttpStatusCode.Forbidden &&
+            (endpoint.AbsolutePath is "/internal/runtime/actions/authorize" or
+                "/internal/runtime/actions/authorize-content") &&
+            await IsExactNumericTurnLimitDenialAsync(response, cancellationToken).ConfigureAwait(false))
+            throw new RuntimeAuthorizationException("runtime_model_turn_limit_exhausted");
         if (!response.IsSuccessStatusCode)
             throw new RuntimeAuthorizationException(
                 response.StatusCode switch
@@ -398,6 +403,47 @@ public static class RuntimeOwnerHttpTransport
         catch (JsonException)
         {
             throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
+        }
+    }
+
+    private static async Task<bool> IsExactNumericTurnLimitDenialAsync(
+        HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        const int maximumBytes = 4096;
+        if (response.Headers.CacheControl?.NoStore != true ||
+            response.Content.Headers.ContentType?.MediaType != "application/json" ||
+            response.Content.Headers.ContentLength is > maximumBytes)
+            return false;
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var bytes = new MemoryStream();
+        var buffer = new byte[512];
+        int count;
+        while ((count = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) != 0)
+        {
+            if (bytes.Length + count > maximumBytes)
+                return false;
+            bytes.Write(buffer, 0, count);
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(bytes.GetBuffer().AsMemory(0, (int)bytes.Length),
+                new JsonDocumentOptions { MaxDepth = 4 });
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return false;
+            var properties = document.RootElement.EnumerateObject();
+            if (!properties.MoveNext())
+                return false;
+            var error = properties.Current;
+            return error.NameEquals("error") &&
+                error.Value.ValueKind == JsonValueKind.String &&
+                error.Value.GetString() == "runtime_model_turn_limit_exhausted" &&
+                !properties.MoveNext();
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 }

@@ -72,8 +72,12 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         };
         var snapshot = JsonSerializer.SerializeToElement(new
         {
-            projectId = "numeric-project", runId = run, projectRevision = 1,
-            projectConfigurationRevision = 1, platformRuntimeRevision = 1, contextRevision = "context-1",
+            projectId = "numeric-project",
+            runId = run,
+            projectRevision = 1,
+            projectConfigurationRevision = 1,
+            platformRuntimeRevision = 1,
+            contextRevision = "context-1",
             modelSelection = new { reference = "model:selected", sourceMode = "hostedCopilot" },
             projectConfiguration = new
             {
@@ -149,12 +153,16 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
                 accepted.ExecutionFence, "environment-1", $"placement-{index}", 1, "profile-1",
                 new("https://runtime.test/runtime/v1/configure"), new("https://runtime.test/observation"))
             {
-                WorkflowStepId = "implement", ModelSelectionReference = "model:selected",
+                WorkflowStepId = "implement",
+                ModelSelectionReference = "model:selected",
                 ModelSourceMode = ModelSourceMode.HostedCopilot,
                 PlacementProviderId = "sandbox-provider",
-                EnvironmentLifecycleGeneration = 1, EnvironmentLeaseRevision = 1,
-                EnvironmentCurrentFencingGeneration = 1, EnvironmentProviderFencingGeneration = 1,
-                MaxModelTurns = 1, MaxToolCalls = 1
+                EnvironmentLifecycleGeneration = 1,
+                EnvironmentLeaseRevision = 1,
+                EnvironmentCurrentFencingGeneration = 1,
+                EnvironmentProviderFencingGeneration = 1,
+                MaxModelTurns = 1,
+                MaxToolCalls = 1
             };
             await RegisterSourceAsync(index, binding);
         }
@@ -216,7 +224,9 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         Assert.Null(await PrepareAsync(0));
         var request = Action(0, toolInvocation: false) with
         {
-            ActionId = "model.turn", DispatchId = _intents[0].MessageId, InputHash = _intents[0].PromptHash
+            ActionId = "model.turn",
+            DispatchId = _intents[0].MessageId,
+            InputHash = _intents[0].PromptHash
         };
         await IssueAsync(0, request);
         foreach (var changed in new[]
@@ -269,6 +279,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             TurnId = rootContext.TurnId,
             AcceptedSelectionHash = rootContext.AcceptedSelectionHash,
             ExecutionFence = rootContext.ExecutionFence,
+            ObservationEndpoint = new("https://runtime.test/internal/runtime/observations"),
             ModelSelectionReference = rootContext.ModelSelectionReference,
             ModelCredentialReference = rootContext.ModelCredentialReference,
             ModelSourceMode = rootContext.ModelSourceMode,
@@ -337,6 +348,105 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         Assert.Equal(1, modelDenial.ObservedCount);
         Assert.Equal(modelDenial.SendStateBeforeHash, modelDenial.SendStateAfterHash);
 
+        var originalBefore = await ReadNumericLimitDenialStorageAsync(nextModelEventId);
+        var rootRegistration = _registrations[0];
+        var sourceGrant = _grants[0];
+        var cursorHash = RuntimeContractValidation.Hash("controlled-root-empty-range"u8);
+        var companion = RuntimeNumericLimitNativeNoSendReceipt.Seal(new(
+            1, RuntimeNumericLimitNativeNoSendIdentity.ReceiptId(
+                _root.ProjectId, _root.RunId, nextModelEventId, modelDenial.ReceiptId),
+            _root.ProjectId, _root.RunId, rootRegistration.Binding.SessionId,
+            rootRegistration.Binding.SessionId, rootRegistration.RuntimeInstanceId,
+            rootRegistration.Revision, rootRegistration.Binding.ExecutionFence,
+            nextModelEventId, nextModelEventId, RuntimeActionContract.Hash(nextModelRequest),
+            modelDenial.ReceiptId, modelDenial.CanonicalPayloadHash,
+            RuntimeContractValidation.RegistrationHash(rootRegistration),
+            RuntimeUsageSourceReceiptContract.HashSource(rootRegistration, _sources[0]),
+            sourceGrant.GrantId, sourceGrant.Revision,
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(_sources[0].SdkSessionId)),
+            cursorHash, cursorHash, 0, true, DateTimeOffset.UtcNow, string.Empty));
+        RuntimeNumericLimitNativeNoSendContract.ValidatePair(
+            companion, modelDenial, rootRegistration, nextModelRequest);
+        var sourceProof = SourceProof(sourceGrant);
+        var recordRequest = new RuntimeNumericLimitNativeNoSendRecordRequest(
+            sourceProof, nextModelRequest, companion);
+        using (var usageOwner = CreateRuntimeUsageOwner(rootRegistration, sourceGrant))
+        {
+            var currentSelection = await ProjectsClient().ReadAcceptedSelectionWithAuthorityAsync(
+                usageOwner.Context, _root.ProjectId, _root.RunId, default);
+            Assert.Equal(rootRegistration.Binding.AcceptedSelectionHash,
+                RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
+                    currentSelection.Selection.Snapshot.GetRawText())));
+            var stored = await RecordNumericLimitNoSendRouteAsync(usageOwner.Owner, recordRequest);
+            Assert.Equal(companion, stored);
+            Assert.Equal(stored, await RecordNumericLimitNoSendRouteAsync(usageOwner.Owner, recordRequest));
+
+            var changedCursorHash = RuntimeContractValidation.Hash("different-captured-cursor"u8);
+            var conflictingEvidence = RuntimeNumericLimitNativeNoSendReceipt.Seal(companion with
+            {
+                BeforeCursorHash = changedCursorHash,
+                AfterCursorHash = changedCursorHash,
+                CanonicalPayloadHash = string.Empty
+            });
+            await AssertNumericLimitNoSendRouteFailureAsync(
+                usageOwner.Owner, recordRequest with { Evidence = conflictingEvidence },
+                StatusCodes.Status409Conflict, "runtime_numeric_limit_native_no_send_conflict");
+
+            var staleSource = RuntimeNumericLimitNativeNoSendReceipt.Seal(companion with
+            {
+                SourceHash = new string('b', 64),
+                CanonicalPayloadHash = string.Empty
+            });
+            await AssertNumericLimitNoSendRouteFailureAsync(
+                usageOwner.Owner, recordRequest with { Evidence = staleSource },
+                StatusCodes.Status409Conflict, "runtime_numeric_limit_native_no_send_conflict");
+
+            var staleFence = RuntimeNumericLimitNativeNoSendReceipt.Seal(companion with
+            {
+                ExecutionFence = companion.ExecutionFence + 1,
+                CanonicalPayloadHash = string.Empty
+            });
+            await AssertNumericLimitNoSendRouteFailureAsync(
+                usageOwner.Owner, recordRequest with { Evidence = staleFence },
+                StatusCodes.Status409Conflict, "runtime_numeric_limit_native_no_send_conflict");
+
+            var staleDenialHash = RuntimeNumericLimitNativeNoSendReceipt.Seal(companion with
+            {
+                DenialPayloadHash = new string('c', 64),
+                CanonicalPayloadHash = string.Empty
+            });
+            await AssertNumericLimitNoSendRouteFailureAsync(
+                usageOwner.Owner, recordRequest with { Evidence = staleDenialHash },
+                StatusCodes.Status409Conflict, "runtime_numeric_limit_native_no_send_conflict");
+            Assert.Equal(2, await CountNumericLimitEvidencePairAsync(nextModelEventId));
+
+            _projectsHandler.AuthorizationCalls = 0;
+            _projectsHandler.AfterAuthorizationRead = count =>
+            {
+                if (count == 2)
+                    _projectsHandler.CurrentSelection = _projectsHandler.CurrentSelection with
+                    {
+                        Authorization = _projectsHandler.CurrentSelection.Authorization with
+                        {
+                            EffectiveAuthority = ImmutableArray<ProjectsAuthority>.Empty
+                        }
+                    };
+            };
+            await AssertNumericLimitNoSendRouteFailureAsync(
+                usageOwner.Owner, recordRequest, StatusCodes.Status403Forbidden,
+                "run_selection_permission_denied");
+            _projectsHandler.AfterAuthorizationRead = null;
+            _projectsHandler.CurrentSelection = _selection;
+            Assert.Equal(2, await CountNumericLimitEvidencePairAsync(nextModelEventId));
+        }
+        var readback = await GrantStore().ReadNumericLimitDenialAsync(rootRegistration,
+            new(rootRegistration.RuntimeInstanceId, rootRegistration.Revision,
+                rootRegistration.Binding.ExecutionFence, nextModelEventId), default);
+        Assert.Equal(modelDenial, readback.Receipt);
+        Assert.Equal(companion, readback.NativeNoSend);
+        Assert.Equal(originalBefore, await ReadNumericLimitDenialStorageAsync(nextModelEventId));
+        Assert.Equal(2, await CountNumericLimitEvidencePairAsync(nextModelEventId));
+
         var toolRequest = Action(0, toolInvocation: true);
         var toolGrant = await IssueAsync(0, toolRequest);
         await GrantStore().RequireToolInvocationReservationAsync(_registrations[0], toolRequest, default);
@@ -352,6 +462,33 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         Assert.Equal(1, toolDenial.AcceptedLimit);
         Assert.Equal(1, toolDenial.ObservedCount);
         Assert.Equal(toolDenial.SendStateBeforeHash, toolDenial.SendStateAfterHash);
+
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var revision = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordinator_decisions
+                (project_id, run_id, session_id, request_id, decision_id,
+                 actor_issuer, actor_subject, execution_fence, state_version,
+                 action_kind, idempotency_key, command_hash, decision_state, decision)
+            SELECT project_id, run_id, session_id, 'numeric-no-send-revision', @decision,
+                   actor_issuer, actor_subject, execution_fence, state_version + 1,
+                   action_kind, 'numeric-no-send-revision', command_hash, decision_state, decision
+            FROM "{_schema}".coordinator_decisions
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+            ORDER BY state_version DESC LIMIT 1
+            """, connection))
+        {
+            revision.Parameters.AddWithValue("project", _root.ProjectId);
+            revision.Parameters.AddWithValue("run", _root.RunId);
+            revision.Parameters.AddWithValue("session", _root.SessionId);
+            revision.Parameters.AddWithValue("decision", Guid.NewGuid());
+            Assert.Equal(1, await revision.ExecuteNonQueryAsync());
+        }
+        using (var usageOwner = CreateRuntimeUsageOwner(rootRegistration, sourceGrant))
+            await AssertNumericLimitNoSendRouteFailureAsync(
+                usageOwner.Owner, recordRequest, StatusCodes.Status409Conflict,
+                "runtime_numeric_limit_native_no_send_conflict");
+        Assert.Equal(originalBefore, await ReadNumericLimitDenialStorageAsync(nextModelEventId));
+        Assert.Equal(2, await CountNumericLimitEvidencePairAsync(nextModelEventId));
 
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         await using (var drop = new NpgsqlCommand(
@@ -1316,7 +1453,8 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         RuntimeNativeTurnAdmissionReceipt admission, Guid usageEventId) =>
         new(admission.Source, Guid.NewGuid().ToString("D"), "controlled-native-turn", Guid.NewGuid(),
             Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow.AddSeconds(-1),
-            "controlled-cursor", new string('d', 64), null) { UsageEventIds = [usageEventId] };
+            "controlled-cursor", new string('d', 64), null)
+        { UsageEventIds = [usageEventId] };
 
     private Task<RuntimeNativeTurnRecordedReceipt> RecordNativeAsync(
         RuntimeNativeTurnAdmissionReceipt admission, RuntimeNativeTurnObservation observation)
@@ -1355,7 +1493,8 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             null, new(null, null, CostDisposition.Unpriced, null, "controlled-cost"),
             totals)
         {
-            DispatchId = recorded.Admission.MessageId, RepresentedReceipts = [reference]
+            DispatchId = recorded.Admission.MessageId,
+            RepresentedReceipts = [reference]
         };
         var store = SourceStore();
         return store.ExecuteLockedAsync(registration.RuntimeInstanceId, async (connection, transaction, token) =>
@@ -1512,6 +1651,37 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             connection, transaction, _root.ProjectId, _root.RunId, attemptId, default);
     }
 
+    private async Task<(string Json, string Hash)> ReadNumericLimitDenialStorageAsync(Guid attemptId)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT receipt_json::text, payload_hash::text
+            FROM "{_schema}".maf_runtime_evidence_receipts
+            WHERE project_id = @project AND run_id = @run
+              AND receipt_kind = 'numeric-limit-denial' AND attempt_id = @attempt
+            """, connection);
+        command.Parameters.AddWithValue("project", _root.ProjectId);
+        command.Parameters.AddWithValue("run", _root.RunId);
+        command.Parameters.AddWithValue("attempt", attemptId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (reader.GetString(0), reader.GetString(1).Trim());
+    }
+
+    private async Task<int> CountNumericLimitEvidencePairAsync(Guid attemptId)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT count(*) FROM "{_schema}".maf_runtime_evidence_receipts
+            WHERE project_id = @project AND run_id = @run AND attempt_id = @attempt
+              AND receipt_kind IN ('numeric-limit-denial', 'numeric-limit-native-no-send')
+            """, connection);
+        command.Parameters.AddWithValue("project", _root.ProjectId);
+        command.Parameters.AddWithValue("run", _root.RunId);
+        command.Parameters.AddWithValue("attempt", attemptId);
+        return (int)(long)(await command.ExecuteScalarAsync())!;
+    }
+
     private async Task<ExecutableActionGrantReference> IssueAsync(int index, RuntimeActionRequest request)
     {
         var store = GrantStore();
@@ -1533,12 +1703,14 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
     private RuntimeActionRequest Action(int index, bool toolInvocation) =>
         new(1, _registrations[index].RuntimeInstanceId, _registrations[index].Revision,
             _registrations[index].Binding.ExecutionFence, Guid.NewGuid(), "tool.read",
-            RuntimeContractValidation.Hash("same tool arguments"u8)) { IsToolInvocation = toolInvocation };
+            RuntimeContractValidation.Hash("same tool arguments"u8))
+        { IsToolInvocation = toolInvocation };
 
     private RuntimeActionRequest ModelAction(int index, Guid? dispatchId) =>
         new(1, _registrations[index].RuntimeInstanceId, _registrations[index].Revision,
             _registrations[index].Binding.ExecutionFence, Guid.NewGuid(), "model.turn",
-            _intents[index].PromptHash) { DispatchId = dispatchId };
+            _intents[index].PromptHash)
+        { DispatchId = dispatchId };
 
     private async Task RegisterPositiveHardCreditAsync(
         int index, decimal hardLimit = 5m, decimal? softLimit = null)
@@ -1881,6 +2053,67 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         new(grant.GrantId, grant.RuntimeInstanceId, grant.Revision, RuntimeCredentialPurpose.Observe,
             grant.Audience, grant.ConfigurationHash, new string('e', 64), grant.ExpiresAt, Guid.Empty);
 
+    private async Task<RuntimeNumericLimitNativeNoSendReceipt> RecordNumericLimitNoSendRouteAsync(
+        RuntimeUsageSourceOwner owner, RuntimeNumericLimitNativeNoSendRecordRequest request)
+    {
+        var (statusCode, responseBody) = await InvokeNumericLimitNoSendRouteAsync(owner, request);
+        Assert.True(statusCode == StatusCodes.Status200OK,
+            $"The numeric-limit no-send route returned HTTP {statusCode}: {responseBody}");
+        return JsonSerializer.Deserialize<RuntimeNumericLimitNativeNoSendReceipt>(responseBody, OwnerJson)
+               ?? throw new InvalidOperationException("The numeric-limit no-send route returned no receipt.");
+    }
+
+    private async Task AssertNumericLimitNoSendRouteFailureAsync(
+        RuntimeUsageSourceOwner owner,
+        RuntimeNumericLimitNativeNoSendRecordRequest request,
+        int expectedStatusCode,
+        string expectedError)
+    {
+        var (statusCode, responseBody) = await InvokeNumericLimitNoSendRouteAsync(owner, request);
+        Assert.Equal(expectedStatusCode, statusCode);
+        using var document = JsonDocument.Parse(responseBody);
+        Assert.Equal(expectedError, document.RootElement.GetProperty("error").GetString());
+    }
+
+    private async Task<(int StatusCode, string ResponseBody)> InvokeNumericLimitNoSendRouteAsync(
+        RuntimeUsageSourceOwner owner, RuntimeNumericLimitNativeNoSendRecordRequest request)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddAuthorization();
+        builder.Services.ConfigureHttpJsonOptions(options =>
+        {
+            options.SerializerOptions.UnmappedMemberHandling =
+                System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow;
+            options.SerializerOptions.MaxDepth = 16;
+            options.SerializerOptions.Converters.Add(
+                new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        });
+        builder.Services.AddSingleton<IAuthenticationService>(
+            new OwnerAuthentication(DateTimeOffset.UtcNow.AddMinutes(5)));
+        builder.Services.AddSingleton(owner);
+        await using var app = builder.Build();
+        app.MapRuntimeUsageSourceEndpoints();
+        var endpoint = Assert.Single(((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints).OfType<RouteEndpoint>(), candidate =>
+                candidate.RoutePattern.RawText ==
+                    "/internal/runtime/turns/numeric-limit-denials/no-send" &&
+                candidate.Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods.Contains("POST"));
+        Assert.NotEmpty(endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>());
+
+        var context = RuntimeHttpContext(app.Services);
+        context.Features.Set<IHttpRequestBodyDetectionFeature>(new RequestBodyDetectionFeature());
+        context.Request.Method = HttpMethods.Post;
+        context.Request.ContentType = "application/json";
+        var requestBytes = JsonSerializer.SerializeToUtf8Bytes(request, OwnerJson);
+        context.Request.ContentLength = requestBytes.Length;
+        context.Request.Body = new MemoryStream(requestBytes);
+        context.Response.Body = new MemoryStream();
+        await endpoint.RequestDelegate!(context);
+        context.Response.Body.Position = 0;
+        var responseBody = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        return (context.Response.StatusCode, responseBody);
+    }
+
     private async Task<RuntimeFixedCreditGuardReadResult> ReadFixedCreditGuardRouteAsync(
         RuntimeUsageSourceOwner owner, RuntimeCredentialHttpRequest proof,
         RuntimeFixedCreditGuardReadRequest request)
@@ -2059,6 +2292,9 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
 
     private sealed class ProjectsHandler(AuthorizedRunSelection selection) : HttpMessageHandler
     {
+        public AuthorizedRunSelection CurrentSelection { get; set; } = selection;
+        public int AuthorizationCalls { get; set; }
+        public Action<int>? AfterAuthorizationRead { get; set; }
         public CurrentProjectSpendBudgets? ProjectSpendBudgets { get; set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
@@ -2067,17 +2303,20 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             Assert.Equal("controlled-owner", request.Headers.Authorization?.Parameter);
             Assert.Equal("tenant-1", Assert.Single(request.Headers.GetValues("X-Agentweaver-Tenant")));
             var path = request.RequestUri!.AbsolutePath;
+            var currentSelection = CurrentSelection;
             object body = path switch
             {
-                "/api/authorization/context" => selection.Authorization,
+                "/api/authorization/context" => currentSelection.Authorization,
                 _ when path.EndsWith("/spend-budgets", StringComparison.Ordinal) =>
                     ProjectSpendBudgets ?? new CurrentProjectSpendBudgets(
-                        selection.Selection.ProjectId,
-                        selection.Selection.ProjectConfigurationRevision,
-                        selection.Selection.PlatformRuntimeRevision,
+                        currentSelection.Selection.ProjectId,
+                        currentSelection.Selection.ProjectConfigurationRevision,
+                        currentSelection.Selection.PlatformRuntimeRevision,
                         []),
-                _ => selection.Selection.Snapshot
+                _ => currentSelection.Selection.Snapshot
             };
+            if (path == "/api/authorization/context")
+                AfterAuthorizationRead?.Invoke(++AuthorizationCalls);
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 RequestMessage = request,

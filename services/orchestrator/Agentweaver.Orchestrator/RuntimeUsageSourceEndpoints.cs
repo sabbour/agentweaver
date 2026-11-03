@@ -96,6 +96,12 @@ public static class RuntimeUsageSourceEndpoints
                 [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
                 ExecuteAsync(context, () => owner.RecordNativeTurnNoSendAsync(context, request, cancellationToken)))
             .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/turns/numeric-limit-denials/no-send",
+            (RuntimeNumericLimitNativeNoSendRecordRequest request, HttpContext context,
+                [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => owner.RecordNumericLimitNativeNoSendAsync(
+                    context, request, cancellationToken)))
+            .RequireAuthorization();
         endpoints.MapPost("/internal/runtime/turns/observations",
             (RuntimeNativeTurnObservationRequest request, HttpContext context,
                 [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>

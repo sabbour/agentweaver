@@ -104,13 +104,59 @@ public sealed class RuntimeUsageSourceHttpClient(
         var result = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNumericLimitDenialReadResult>(
             client, _address, "/internal/runtime/actions/numeric-denials/read", actor,
             request, cancellationToken).ConfigureAwait(false);
-        RuntimeNumericLimitDenialReadContract.ValidateResult(result, registration, request);
+        RuntimeNumericLimitNativeNoSendContract.ValidateResult(result, registration, request);
+        var sourceGrant = session.SourceGrant;
         if (result.Receipt is { } receipt &&
             (receipt.SourceRegistrationRevision != registration.Revision ||
-             receipt.SourceGrantId != session.SourceGrant.GrantId ||
+             receipt.SourceGrantId != sourceGrant.GrantId ||
              receipt.SourceHash != RuntimeUsageSourceReceiptContract.HashSource(registration, session.Facts)))
             throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_conflict");
+        if (result.NativeNoSend is { } evidence &&
+            (evidence.SourceGrantId != sourceGrant.GrantId ||
+             evidence.SourceGrantRevision != sourceGrant.Revision ||
+             evidence.SourceHash != RuntimeUsageSourceReceiptContract.HashSource(registration, session.Facts) ||
+             evidence.SdkSessionIdHash != RuntimeContractValidation.Hash(
+                 System.Text.Encoding.UTF8.GetBytes(session.Facts.SdkSessionId))))
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_conflict");
         return result.Receipt;
+    }
+
+    /// <summary>Persists the exact root numeric-limit no-send companion and validates the stored response.</summary>
+    internal async Task<RuntimeNumericLimitNativeNoSendReceipt> RecordNumericLimitNativeNoSendAsync(
+        AuthorizedRuntimeSession session,
+        RuntimeActionRequest action,
+        RuntimeNumericLimitDenialReceipt denial,
+        RuntimeNumericLimitNativeNoSendReceipt evidence,
+        CancellationToken cancellationToken)
+    {
+        RequireAudience(session);
+        var registration = session.Registration;
+        var sourceGrant = session.SourceGrant;
+        var sourceHash = RuntimeUsageSourceReceiptContract.HashSource(registration, session.Facts);
+        RuntimeNumericLimitNativeNoSendContract.ValidatePair(evidence, denial, registration, action);
+        if (evidence.SourceGrantId != sourceGrant.GrantId ||
+            evidence.SourceGrantRevision != sourceGrant.Revision ||
+            evidence.SourceHash != sourceHash ||
+            evidence.SdkSessionIdHash != RuntimeContractValidation.Hash(
+                System.Text.Encoding.UTF8.GetBytes(session.Facts.SdkSessionId)))
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_conflict");
+        var stored = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNumericLimitNativeNoSendReceipt>(
+            client, _address, "/internal/runtime/turns/numeric-limit-denials/no-send", actor,
+            new RuntimeNumericLimitNativeNoSendRecordRequest(
+                Request(session.Proof()), action, evidence), cancellationToken).ConfigureAwait(false);
+        RuntimeNumericLimitNativeNoSendContract.ValidatePair(stored, denial, registration, action);
+        if (stored.SourceGrantId != sourceGrant.GrantId ||
+            stored.SourceGrantRevision != sourceGrant.Revision ||
+            stored.SourceHash != sourceHash ||
+            stored.SdkSessionIdHash != RuntimeContractValidation.Hash(
+                System.Text.Encoding.UTF8.GetBytes(session.Facts.SdkSessionId)) ||
+            stored with
+            {
+                RecordedAt = evidence.RecordedAt,
+                CanonicalPayloadHash = evidence.CanonicalPayloadHash
+            } != evidence)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_conflict");
+        return stored;
     }
 
     /// <summary>Records evidence that an admitted native turn was denied without sending it.</summary>

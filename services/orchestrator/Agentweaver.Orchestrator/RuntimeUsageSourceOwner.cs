@@ -299,6 +299,58 @@ internal sealed class RuntimeUsageSourceOwner(
                     connection, transaction, registration, grant, request, token), cancellationToken);
     }
 
+    /// <summary>Persists one root model-limit no-send companion under current Observe and Projects authority.</summary>
+    internal Task<RuntimeNumericLimitNativeNoSendReceipt> RecordNumericLimitNativeNoSendAsync(
+        HttpContext context,
+        RuntimeNumericLimitNativeNoSendRecordRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Authorization);
+        ArgumentNullException.ThrowIfNull(request.Action);
+        ArgumentNullException.ThrowIfNull(request.Evidence);
+        return ExecuteWriteAsync(context, request.Authorization,
+            async (connection, transaction, registration, grant, actor, token) =>
+            {
+                await RequireCurrentNumericLimitAuthorityAsync(context, registration, token)
+                    .ConfigureAwait(false);
+                var stored = await store.RecordNumericLimitNativeNoSendWithinTransactionAsync(
+                    connection, transaction, registration, grant, request, token).ConfigureAwait(false);
+                await RequireCurrentNumericLimitAuthorityAsync(context, registration, token)
+                    .ConfigureAwait(false);
+                return stored;
+            }, cancellationToken);
+    }
+
+    private async Task RequireCurrentNumericLimitAuthorityAsync(
+        HttpContext context, RuntimeRegistration registration, CancellationToken cancellationToken)
+    {
+        var binding = registration.Binding;
+        var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        var authorized = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+            context, binding.ProjectId, binding.RunId, cancellationToken).ConfigureAwait(false);
+        var roleRevisions = authorized.Authorization.EffectiveAuthority
+            .Where(item => item.ResourceType == "project" && item.ResourceId == binding.ProjectId)
+            .SelectMany(item => item.Permissions)
+            .Where(item => item.Permission == "acceptRunSelection")
+            .Select(item => item.RoleRevision).Distinct().Take(2).ToArray();
+        if (roleRevisions.Length != 1 || actor.Issuer != binding.ActorIssuer ||
+            actor.Subject != binding.ActorId || authorized.Authorization.ActorId != binding.ActorId ||
+            authorized.Authorization.Issuer != binding.ActorIssuer ||
+            authorized.Authorization.TenantId != binding.TenantId ||
+            authorized.Selection.ProjectId != binding.ProjectId ||
+            authorized.Selection.RunId != binding.RunId ||
+            authorized.Selection.ProjectRevision != binding.ProjectRevision ||
+            authorized.Selection.ProjectConfigurationRevision != binding.ProjectConfigurationRevision ||
+            authorized.Selection.PlatformRuntimeRevision != binding.PlatformRuntimeRevision ||
+            authorized.Selection.ContextRevision != binding.ContextRevision ||
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
+                authorized.Selection.Snapshot.GetRawText())) != binding.AcceptedSelectionHash ||
+            registration.State != RuntimeRegistrationState.Active ||
+            registration.ExpiresAt <= timeProvider.GetUtcNow())
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_conflict");
+    }
+
     /// <summary>
     /// Persists native-turn admission and cost evidence before the host submits the native model request.
     /// </summary>

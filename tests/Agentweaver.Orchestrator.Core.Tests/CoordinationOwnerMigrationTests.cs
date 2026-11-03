@@ -1,5 +1,7 @@
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
 using Agentweaver.Persistence.Postgres;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using Xunit;
@@ -167,6 +169,163 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.True(await reader.ReadAsync());
         Assert.Equal(0L, reader.GetInt64(0));
         Assert.False(reader.GetBoolean(1));
+    }
+
+    [Fact]
+    public async Task RuntimeNumericNoSendMigrationPreservesLegacyReceiptsAndRequiresExactAllowlist()
+    {
+        await ApplyMigrationsThroughAsync(40);
+        const string projectId = "numeric-no-send-project";
+        const string runId = "numeric-no-send-run";
+        var originals = new[]
+        {
+            ("numeric-limit-denial", Guid.NewGuid(), new string('a', 64)),
+            ("replacement-comparison", Guid.NewGuid(), new string('b', 64))
+        };
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        {
+            await using (var acceptedRun = new NpgsqlCommand($"""
+                INSERT INTO "{_schema}".accepted_runs
+                    (project_id, run_id, accepted_selection, accepted_selection_hash,
+                     accepted_by_issuer, accepted_by_subject)
+                VALUES (@project, @run, jsonb_build_object(), repeat('a', 64), 'issuer', 'actor')
+                """, connection))
+            {
+                acceptedRun.Parameters.AddWithValue("project", projectId);
+                acceptedRun.Parameters.AddWithValue("run", runId);
+                await acceptedRun.ExecuteNonQueryAsync();
+            }
+
+            foreach (var (kind, attemptId, payloadHash) in originals)
+                await InsertEvidenceAsync(connection, kind, attemptId, payloadHash);
+        }
+
+        var legacyRows = await ReadEvidenceRowsAsync();
+        var attemptIdForPending = Guid.NewGuid();
+        var denialReceiptId = Guid.NewGuid();
+        var cursorHash = new string('c', 64);
+        var pendingEvidence = RuntimeNumericLimitNativeNoSendReceipt.Seal(new(
+            1,
+            RuntimeNumericLimitNativeNoSendIdentity.ReceiptId(
+                projectId, runId, attemptIdForPending, denialReceiptId),
+            projectId, runId, "root", "root", Guid.NewGuid(), 1, 1,
+            attemptIdForPending, attemptIdForPending, new string('d', 64),
+            denialReceiptId, new string('e', 64), new string('f', 64),
+            new string('1', 64), Guid.NewGuid(), 1, new string('2', 64),
+            cursorHash, cursorHash, 0, true, DateTimeOffset.UtcNow, string.Empty));
+        var ledger = new RuntimeExecutionEvidenceLedgerStore(_schema);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            var pending = await Assert.ThrowsAsync<CoordinationException>(() =>
+                ledger.AppendNumericLimitNativeNoSendAsync(
+                    connection, transaction, pendingEvidence, CancellationToken.None));
+            Assert.Equal("database_update_pending", pending.Code);
+            Assert.Equal(StatusCodes.Status503ServiceUnavailable, pending.StatusCode);
+        }
+
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        Assert.Equal(legacyRows, await ReadEvidenceRowsAsync());
+        var migratedHistory = await ReadMigrationHistoryAsync(int.MaxValue);
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        Assert.Equal(migratedHistory, await ReadMigrationHistoryAsync(int.MaxValue));
+        Assert.Equal(legacyRows, await ReadEvidenceRowsAsync());
+
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var weaken = new NpgsqlCommand($"""
+            ALTER TABLE "{_schema}".maf_runtime_evidence_receipts
+                DROP CONSTRAINT maf_runtime_evidence_receipts_receipt_kind_check;
+            ALTER TABLE "{_schema}".maf_runtime_evidence_receipts
+                ADD CONSTRAINT maf_runtime_evidence_receipts_receipt_kind_check CHECK (
+                    receipt_kind IN ('numeric-limit-denial', 'replacement-comparison'));
+            """, connection))
+            await weaken.ExecuteNonQueryAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var restore = new NpgsqlCommand($"""
+            ALTER TABLE "{_schema}".maf_runtime_evidence_receipts
+                DROP CONSTRAINT maf_runtime_evidence_receipts_receipt_kind_check;
+            ALTER TABLE "{_schema}".maf_runtime_evidence_receipts
+                ADD CONSTRAINT maf_runtime_evidence_receipts_receipt_kind_check CHECK (
+                    receipt_kind IN (
+                        'numeric-limit-denial',
+                        'replacement-comparison',
+                        'numeric-limit-native-no-send'));
+            """, connection))
+            await restore.ExecuteNonQueryAsync();
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+
+        var companionAttempt = Guid.NewGuid();
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        {
+            await InsertEvidenceAsync(connection, "numeric-limit-native-no-send",
+                companionAttempt, new string('c', 64));
+            var unknownKind = await Assert.ThrowsAsync<PostgresException>(() =>
+                InsertEvidenceAsync(connection, "unexpected-evidence-kind",
+                    Guid.NewGuid(), new string('d', 64)));
+            Assert.Equal(PostgresErrorCodes.CheckViolation, unknownKind.SqlState);
+        }
+        Assert.Equal(3, (await ReadEvidenceRowsAsync()).Length);
+        await AssertAppendOnlyAsync($"""
+            UPDATE "{_schema}".maf_runtime_evidence_receipts
+            SET payload_hash = repeat('e', 64)
+            WHERE receipt_kind = 'numeric-limit-native-no-send'
+            """);
+        await AssertAppendOnlyAsync($"""
+            DELETE FROM "{_schema}".maf_runtime_evidence_receipts
+            WHERE receipt_kind = 'numeric-limit-native-no-send'
+            """);
+        await AssertAppendOnlyAsync($"TRUNCATE \"{_schema}\".maf_runtime_evidence_receipts");
+
+        async Task InsertEvidenceAsync(
+            NpgsqlConnection connection, string kind, Guid attempt, string payloadHash)
+        {
+            await using var insert = new NpgsqlCommand($"""
+                INSERT INTO "{_schema}".maf_runtime_evidence_receipts
+                    (project_id, run_id, receipt_id, receipt_kind, attempt_id, payload_hash, receipt_json)
+                VALUES (@project, @run, @receipt, @kind, @attempt, @hash,
+                    jsonb_build_object('projectId', @project, 'runId', @run,
+                        'receiptId', @receipt::text, 'canonicalPayloadHash', @hash))
+                """, connection);
+            insert.Parameters.AddWithValue("project", projectId);
+            insert.Parameters.AddWithValue("run", runId);
+            insert.Parameters.AddWithValue("receipt", Guid.NewGuid());
+            insert.Parameters.AddWithValue("kind", kind);
+            insert.Parameters.AddWithValue("attempt", attempt);
+            insert.Parameters.AddWithValue("hash", payloadHash);
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        async Task<string[]> ReadEvidenceRowsAsync()
+        {
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using var read = new NpgsqlCommand($"""
+                SELECT receipt_kind || '|' || attempt_id::text || '|' ||
+                    payload_hash::text || '|' || receipt_json::text
+                FROM "{_schema}".maf_runtime_evidence_receipts
+                WHERE project_id = @project AND run_id = @run
+                ORDER BY receipt_kind, attempt_id
+                """, connection);
+            read.Parameters.AddWithValue("project", projectId);
+            read.Parameters.AddWithValue("run", runId);
+            var rows = new List<string>();
+            await using var reader = await read.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                rows.Add(reader.GetString(0));
+            return rows.ToArray();
+        }
+
+        async Task AssertAppendOnlyAsync(string sql)
+        {
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand(sql, connection);
+            var error = await Assert.ThrowsAsync<PostgresException>(() => command.ExecuteNonQueryAsync());
+            Assert.Contains("append-only", error.MessageText, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
@@ -362,8 +521,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.Equal(1L, reader.GetInt64(0));
         Assert.Equal(1L, reader.GetInt64(1));
         Assert.Equal(1L, reader.GetInt64(2));
-        // Old owner images reject the seven later versions: 033 and 035-040; deploy before applying them.
-        Assert.Equal(7L, reader.GetInt64(3));
+        // Old owner images reject the eight later versions: 033 and 035-041; deploy before applying them.
+        Assert.Equal(8L, reader.GetInt64(3));
         Assert.True(reader.GetBoolean(4));
     }
 
@@ -675,7 +834,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (37, "037_maf_child_spawn_authorization.sql"),
             (38, "038_source_control_pull_request_operations.sql"),
             (39, "039_runtime_execution_evidence.sql"),
-            (40, "040_p1_run_request_provenance.sql")
+            (40, "040_p1_run_request_provenance.sql"),
+            (41, "041_runtime_numeric_native_no_send.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""
@@ -797,7 +957,11 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 40),
                 EXISTS (SELECT 1 FROM pg_attribute
                     WHERE attrelid = to_regclass(@projectRunRequests) AND attname = 'p1_setup_invocation_id'
-                      AND atttypid = 'uuid'::regtype AND attnum > 0 AND NOT attisdropped)
+                      AND atttypid = 'uuid'::regtype AND attnum > 0 AND NOT attisdropped),
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 41),
+                (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                 WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
+                   AND conname = 'maf_runtime_evidence_receipts_receipt_kind_check')
             """, connection);
         command.Parameters.AddWithValue("projectRunRequests", $"{_schema}.project_run_requests");
         command.Parameters.AddWithValue("projectRunCancellations", $"{_schema}.project_run_cancellations");
@@ -852,7 +1016,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
         // The default history skips reserved versions 017 and 034.
         Assert.Equal(
-            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40]),
+            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41]),
             reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
@@ -885,6 +1049,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.Equal(2L, reader.GetInt64(37));
         Assert.Equal(1L, reader.GetInt64(38));
         Assert.True(reader.GetBoolean(39));
+        Assert.Equal(1L, reader.GetInt64(40));
+        Assert.Contains("numeric-limit-native-no-send", reader.GetString(41));
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version, bool includePreviouslyUnregistered = true)

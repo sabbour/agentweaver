@@ -416,8 +416,12 @@ internal sealed class ExecutableActionGrantOwnerStore(
                 $"runtime-tool-invocation/{request.EventId:N}", ToolInvocationEventType, 1,
                 JsonSerializer.SerializeToElement(new
                 {
-                    projectId = binding.ProjectId, runId = binding.RunId, binding.SessionId,
-                    binding.ExecutionFence, binding.MaxToolCalls, requestHash
+                    projectId = binding.ProjectId,
+                    runId = binding.RunId,
+                    binding.SessionId,
+                    binding.ExecutionFence,
+                    binding.MaxToolCalls,
+                    requestHash
                 }), timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
         }
         await transaction.CommitAsync(cancellationToken);
@@ -717,13 +721,16 @@ internal sealed class ExecutableActionGrantOwnerStore(
         var receipt = await _executionEvidence.ReadNumericLimitDenialAsync(
             connection, transaction, binding.ProjectId, binding.RunId, request.AttemptId,
             cancellationToken).ConfigureAwait(false);
+        var noSend = await _executionEvidence.ReadNumericLimitNativeNoSendAsync(
+            connection, transaction, binding.ProjectId, binding.RunId, request.AttemptId,
+            cancellationToken).ConfigureAwait(false);
         if (receipt is not null &&
             (receipt.RootSessionId != rootSessionId || receipt.OwnerRevision != ownerRevision ||
              receipt.SourceHash != source.CanonicalPayloadHash ||
              receipt.SourceGrantId != source.SourceGrantId))
             throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_conflict");
         var result = RuntimeNumericLimitDenialReadContract.ValidateResult(
-            new(receipt), registration, request);
+            new(receipt, noSend), registration, request);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result;
     }

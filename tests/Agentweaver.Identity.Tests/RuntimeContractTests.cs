@@ -425,6 +425,69 @@ public sealed class RuntimeContractTests
     }
 
     [Fact]
+    public void NativeNoSendCompanionRequiresTheExactStoredRootDenialAndCompleteEmptyRange()
+    {
+        var binding = CreateRegistration().Binding with
+        {
+            AgentId = RuntimeActionContract.CoordinatorRootStepId,
+            MaxModelTurns = 3
+        };
+        var registration = CreateRegistration() with { Binding = binding, Revision = 7 };
+        RuntimeContractValidation.Validate(registration);
+        var attemptId = Guid.NewGuid();
+        var sourceGrantId = Guid.NewGuid();
+        var hash = new string('b', 64);
+        var action = new RuntimeActionRequest(
+            1, registration.RuntimeInstanceId, registration.Revision, binding.ExecutionFence,
+            attemptId, "model.turn", hash)
+        { DispatchId = attemptId };
+        var sendStateHash = RuntimeContractValidation.Hash("empty-send-state"u8);
+        var denial = RuntimeNumericLimitDenialReceipt.Seal(new(
+            1, Guid.NewGuid(),
+            binding.ProjectId, binding.RunId, binding.SessionId, binding.SessionId,
+            registration.RuntimeInstanceId, registration.Revision, registration.Revision,
+            sourceGrantId, hash, attemptId, "1", binding.ExecutionFence,
+            binding.AcceptedSelectionHash, 2, RuntimeNumericLimitKind.ModelTurns,
+            binding.MaxModelTurns.Value, binding.MaxModelTurns.Value, attemptId,
+            RuntimeActionContract.Hash(action), attemptId, null, null, null, null, null, null,
+            sendStateHash, sendStateHash, DateTimeOffset.UtcNow, string.Empty));
+        var cursorHash = RuntimeContractValidation.Hash("unchanged-native-cursor"u8);
+        var companion = RuntimeNumericLimitNativeNoSendReceipt.Seal(new(
+            1, RuntimeNumericLimitNativeNoSendIdentity.ReceiptId(
+                binding.ProjectId, binding.RunId, attemptId, denial.ReceiptId),
+            binding.ProjectId, binding.RunId, binding.SessionId, binding.SessionId,
+            registration.RuntimeInstanceId, registration.Revision, binding.ExecutionFence,
+            attemptId, attemptId, RuntimeActionContract.Hash(action), denial.ReceiptId,
+            denial.CanonicalPayloadHash, RuntimeContractValidation.RegistrationHash(registration),
+            hash, sourceGrantId, 4, hash, cursorHash, cursorHash, 0, true,
+            DateTimeOffset.UtcNow, string.Empty));
+        RuntimeNumericLimitNativeNoSendContract.ValidatePair(companion, denial, registration, action);
+
+        var request = new RuntimeNumericLimitDenialReadRequest(
+            registration.RuntimeInstanceId, registration.Revision, binding.ExecutionFence, attemptId);
+        var paired = new RuntimeNumericLimitDenialReadResult(denial, companion);
+        Assert.Equal(paired, RuntimeNumericLimitNativeNoSendContract.ValidateResult(
+            paired, registration, request));
+        Assert.Null(RuntimeNumericLimitNativeNoSendContract.ValidateResult(
+            new(denial), registration, request).NativeNoSend);
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeNumericLimitNativeNoSendContract.ValidateResult(
+                new(null, companion), registration, request));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeNumericLimitNativeNoSendContract.ValidatePair(
+                companion with { DenialPayloadHash = hash }, denial, registration));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeNumericLimitNativeNoSendContract.ValidatePair(
+                companion, denial, registration, action with { InputHash = new string('c', 64) }));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeNumericLimitNativeNoSendReceipt.Seal(
+                companion with { ObservedEventCount = 1, CanonicalPayloadHash = string.Empty }));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeNumericLimitNativeNoSendReceipt.Seal(
+                companion with { RangeComplete = false, CanonicalPayloadHash = string.Empty }));
+    }
+
+    [Fact]
     public void ReplacementComparisonNeverValidatesWithoutExplicitMissingProvenance()
     {
         var registration = CreateRegistration();

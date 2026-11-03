@@ -621,9 +621,15 @@ internal sealed class RuntimeUsageSourceStore(
                 "copilot-soft-credit-limit", "orchestrator.run.copilot_soft_credit_limit_reached", 1,
                 JsonSerializer.SerializeToElement(new
                 {
-                    notificationId, binding.ProjectId, binding.RunId, rootSessionId,
-                    binding.ExecutionFence, binding.CopilotSoftCreditLimit, observedCredits = observed,
-                    ledgerEventCount = snapshot.CopilotTotals.Events, costIdentity
+                    notificationId,
+                    binding.ProjectId,
+                    binding.RunId,
+                    rootSessionId,
+                    binding.ExecutionFence,
+                    binding.CopilotSoftCreditLimit,
+                    observedCredits = observed,
+                    ledgerEventCount = snapshot.CopilotTotals.Events,
+                    costIdentity
                 }), timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
         }
         return new(observed, snapshot.CopilotTotals.Events, digest, costIdentity,
@@ -996,6 +1002,162 @@ internal sealed class RuntimeUsageSourceStore(
             sendStateAfter.Hash, timeProvider.GetUtcNow(), string.Empty));
         return await _executionEvidence.AppendNumericLimitDenialAsync(
             connection, transaction, receipt, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<RuntimeNumericLimitNativeNoSendReceipt> RecordNumericLimitNativeNoSendWithinTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RuntimeRegistration registration,
+        RuntimeGrantReceipt grant,
+        RuntimeNumericLimitNativeNoSendRecordRequest request,
+        CancellationToken cancellationToken)
+    {
+        var binding = registration.Binding;
+        var action = request.Action;
+        var evidence = request.Evidence;
+        RuntimeActionContract.Validate(action);
+        evidence.Validate();
+        if (binding.AgentId != RuntimeActionContract.CoordinatorRootStepId ||
+            binding.WorkflowStepId is not null || binding.MaxModelTurns is null ||
+            action.ActionId != "model.turn" || action.EventId != evidence.AttemptId ||
+            action.DispatchId != evidence.DispatchId || action.DispatchId != action.EventId ||
+            evidence.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            evidence.RegistrationRevision != registration.Revision ||
+            evidence.ExecutionFence != binding.ExecutionFence)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_conflict");
+
+        var source = await ReadCurrentSourceForGrantAsync(
+            connection, transaction, registration, grant, cancellationToken).ConfigureAwait(false);
+        var sourceHash = source.CanonicalPayloadHash;
+        var original = await _executionEvidence.ReadNumericLimitDenialAsync(
+            connection, transaction, binding.ProjectId, binding.RunId, evidence.AttemptId, cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_not_found");
+        RuntimeNumericLimitNativeNoSendContract.ValidatePair(evidence, original, registration, action);
+        if (evidence.SourceGrantId != grant.GrantId || evidence.SourceGrantRevision != grant.Revision ||
+            evidence.SourceHash != sourceHash ||
+            evidence.SdkSessionIdHash != RuntimeContractValidation.Hash(
+                Encoding.UTF8.GetBytes(source.Source.SdkSessionId)))
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_conflict");
+
+        await using (var run = new NpgsqlCommand($"""
+            SELECT tenant_id, accepted_selection_hash, execution_fence, execution_state
+            FROM {_schema}.accepted_runs
+            WHERE project_id = @project AND run_id = @run
+            FOR SHARE
+            """, connection, transaction))
+        {
+            run.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
+            run.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, binding.RunId);
+            await using var reader = await run.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+                reader.GetString(0) != binding.TenantId ||
+                !string.Equals(reader.GetString(1).Trim(), binding.AcceptedSelectionHash,
+                    StringComparison.OrdinalIgnoreCase) ||
+                reader.GetInt64(2) != binding.ExecutionFence ||
+                reader.GetString(3) is "completed" or "failed" or "indeterminate" or "cancelled")
+                throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_conflict");
+        }
+
+        Guid decisionId;
+        string rootSessionId;
+        long ownerRevision;
+        await using (var owner = new NpgsqlCommand($"""
+            SELECT s.root_session_id, d.decision_id, d.state_version
+            FROM {_sessions} s
+            JOIN {_schema}.accepted_runs r ON r.project_id = s.project_id AND r.run_id = s.run_id
+            JOIN {_decisions} d
+              ON d.project_id = s.project_id AND d.run_id = s.run_id AND d.session_id = s.root_session_id
+            WHERE s.project_id = @project AND s.run_id = @run AND s.session_id = @session
+              AND s.lifecycle_state = 'active' AND s.execution_fence = @fence
+              AND r.execution_fence = @fence AND r.execution_state <> 'completed'
+              AND r.tenant_id = @tenant AND r.accepted_selection_hash = @selection
+              AND d.decision_state = 'accepted'
+            ORDER BY d.state_version DESC LIMIT 1
+            FOR SHARE OF s, r, d
+            """, connection, transaction))
+        {
+            owner.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
+            owner.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, binding.RunId);
+            owner.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, binding.SessionId);
+            owner.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, binding.ExecutionFence);
+            owner.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, binding.TenantId);
+            owner.Parameters.AddWithValue(
+                "selection", NpgsqlDbType.Char, binding.AcceptedSelectionHash.ToUpperInvariant());
+            await using var reader = await owner.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_conflict");
+            rootSessionId = reader.GetString(0);
+            decisionId = reader.GetGuid(1);
+            ownerRevision = reader.GetInt64(2);
+        }
+        if (rootSessionId != binding.SessionId || ownerRevision != original.OwnerRevision ||
+            original.RootSessionId != rootSessionId || original.SessionId != binding.SessionId ||
+            original.LimitKind != RuntimeNumericLimitKind.ModelTurns ||
+            original.AcceptedLimit != binding.MaxModelTurns ||
+            original.AcceptedSelectionHash != binding.AcceptedSelectionHash ||
+            original.SourceGrantId != grant.GrantId || original.SourceHash != sourceHash ||
+            original.ReceiptId != RuntimeNumericLimitDenialIdentity.ReceiptId(
+                binding.ProjectId, binding.RunId, evidence.AttemptId) ||
+            original.SourceRegistrationRevision != registration.Revision ||
+            original.GrantId != action.EventId || original.GrantRevision != "1" ||
+            original.RequestHash != RuntimeActionContract.Hash(action) ||
+            original.AttemptId != action.EventId || original.DispatchId != action.DispatchId)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_conflict");
+
+        await using (var acquire = new NpgsqlCommand(
+            "SELECT pg_advisory_xact_lock(hashtext('agentweaver.maf.execution'), hashtext(@scope))",
+            connection, transaction))
+        {
+            acquire.Parameters.AddWithValue("scope", JsonSerializer.Serialize(
+                new[] { binding.ProjectId, binding.RunId, binding.SessionId }));
+            await acquire.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        await using (var available = new NpgsqlCommand("SELECT to_regclass(@table) IS NOT NULL", connection, transaction))
+        {
+            available.Parameters.AddWithValue(
+                "table", NpgsqlDbType.Text, $"{options.Schema}.maf_root_model_turn_admissions");
+            if (!(bool)(await available.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!)
+                throw new CoordinationException("database_update_pending", StatusCodes.Status503ServiceUnavailable);
+        }
+        await using (var admission = new NpgsqlCommand($"""
+            SELECT 1 FROM {_schema}.maf_root_model_turn_admissions
+            WHERE project_id = @project AND run_id = @run AND root_session_id = @session
+              AND request_id = @request AND actor_issuer = @issuer AND actor_id = @actor
+              AND tenant_id = @tenant AND accepted_selection_hash = @selection
+              AND prompt_hash = @prompt AND execution_fence = @fence
+              AND decision_id = @decision AND decision_state_version = @decisionVersion
+            """, connection, transaction))
+        {
+            admission.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
+            admission.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, binding.RunId);
+            admission.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, binding.SessionId);
+            admission.Parameters.AddWithValue("request", NpgsqlDbType.Uuid, action.EventId);
+            admission.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, binding.ActorIssuer);
+            admission.Parameters.AddWithValue("actor", NpgsqlDbType.Varchar, binding.ActorId);
+            admission.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, binding.TenantId);
+            admission.Parameters.AddWithValue("selection", NpgsqlDbType.Char, binding.AcceptedSelectionHash);
+            admission.Parameters.AddWithValue("prompt", NpgsqlDbType.Char, action.InputHash);
+            admission.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, binding.ExecutionFence);
+            admission.Parameters.AddWithValue("decision", NpgsqlDbType.Uuid, decisionId);
+            admission.Parameters.AddWithValue("decisionVersion", NpgsqlDbType.Bigint, ownerRevision);
+            if (await admission.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
+                throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_conflict");
+        }
+
+        var count = await RuntimeModelTurnReservationStore.CountRunWideAsync(
+            connection, transaction, options.Schema, binding.ProjectId, binding.RunId,
+            rootSessionId, action.EventId, cancellationToken).ConfigureAwait(false);
+        var sendState = await RuntimeNumericLimitSendState.ReadAsync(
+            connection, transaction, options.Schema, binding.ProjectId, binding.RunId,
+            action.EventId, cancellationToken).ConfigureAwait(false);
+        if (count != original.ObservedCount || count < binding.MaxModelTurns.Value ||
+            !sendState.IsEmpty || sendState.Hash != original.SendStateBeforeHash ||
+            original.SendStateBeforeHash != original.SendStateAfterHash)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_conflict");
+
+        return await _executionEvidence.AppendNumericLimitNativeNoSendAsync(
+            connection, transaction, evidence, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
