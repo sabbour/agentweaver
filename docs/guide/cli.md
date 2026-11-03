@@ -28,6 +28,10 @@ and output directory, then run `agentweaver` from that publish directory.
 Publish and test each target on its native platform. A local publish directory
 is a build output, not a released archive.
 
+The source-bound Windows archive verifier runs controlled checks against the
+exact extracted apphost. See [Windows archive checks](./testing.md#windows-archive-checks);
+this is not API acceptance or release publication evidence.
+
 When release archives are available, choose the archive matching the host,
 extract it, and place the executable directory on `PATH` or invoke the
 executable by path. No download URL is listed until a release is published.
