@@ -1700,7 +1700,8 @@ internal sealed partial class CoordinationOwnerStore
     public async Task<SessionStatusSnapshot> ReadSessionStatusAsync(
         CoordinationActor actor,
         SessionIdentity identity,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AuthorizedRunSelection? selection = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
@@ -1713,6 +1714,21 @@ internal sealed partial class CoordinationOwnerStore
         RequireWriter(session, actor);
         if (session.ExecutionFence != run.Fence)
             throw new CoordinationException("execution_fence_stale", StatusCodes.Status409Conflict);
+        var kind = ParseSessionKind(session.NodeKind);
+        var lifecycle = ParseLifecycle(session.LifecycleState);
+        if (selection is not null &&
+            kind == CoordinationSessionKind.Coordinator &&
+            lifecycle != CoordinationLifecycleState.Active &&
+            (selection.Selection.ProjectId != identity.ProjectId ||
+             selection.Selection.RunId != identity.RunId ||
+             run.TenantId != selection.Authorization.TenantId ||
+             !string.Equals(
+                 run.SelectionHash,
+                 HashSelection(selection.Selection),
+                 StringComparison.Ordinal) ||
+             session.ParentSessionId is not null ||
+             session.RootSessionId != session.SessionId))
+            throw new CoordinationException("coordinator_session_stale", StatusCodes.Status409Conflict);
         var (activity, activityUnavailableCode) = ToActivity(session.TurnState);
         var interruptionIntent = await ReadInterruptionIntentAsync(
             connection, transaction, identity, session.ExecutionFence, cancellationToken).ConfigureAwait(false);
@@ -1722,11 +1738,11 @@ internal sealed partial class CoordinationOwnerStore
             identity,
             session.ParentSessionId,
             session.RootSessionId,
-            ParseSessionKind(session.NodeKind),
+            kind,
             session.Detached,
             activity,
             activityUnavailableCode,
-            ParseLifecycle(session.LifecycleState),
+            lifecycle,
             run.Fence,
             session.StateVersion,
             [],

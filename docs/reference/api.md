@@ -1123,8 +1123,9 @@ accepting owner state does not start an automatic scheduler.
 | POST | `/sessions/{sessionId}/suspend` | Request fenced suspend. | No |
 | POST | `/sessions/{sessionId}/resume` | Request retained-Workspace resume. | No |
 
-For coordinator sessions, the status response also includes `executionRecovery`,
-a read-only view of the latest bound MAF checkpoint. It reports checkpoint status
+Active coordinator sessions also receive `executionRecovery`, a read-only view
+of the latest bound MAF checkpoint. A failed or indeterminate run still receives
+this projection when its session lifecycle remains active. The response reports checkpoint status
 and dependency readiness, pending child dispatches, BuildTest, OpenPullRequest,
 Merge, IndependentReview, and RubberDuck intent/receipt evidence, failed
 dependencies, and the current pending decision blocker. RubberDuck operations
@@ -1136,6 +1137,11 @@ as recorded evidence, not as proof of physical exactly-once execution. Missing o
 plan-mismatched checkpoints, or checkpoint progress incompatible with the
 accepted plan, are marked unavailable, not safe or complete. The projection
 does not dispatch work or reconcile children.
+
+For a non-active coordinator session, the status response reports persisted
+owner state and returns `blockers: []`. It omits `executionRecovery` and does
+not read decisions or checkpoints. A cancelled lifecycle does not imply idle
+activity, completed effects, or successful physical cleanup.
 
 For `IndependentReview`, `platformGateOperations` carries `approvalRequestId`,
 `evidenceHash`, and `reviewDecision` (null while pending). Its effect recovery
