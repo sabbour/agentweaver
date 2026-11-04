@@ -1,0 +1,89 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: environment-agent-sandbox-runtime-proposed
+  namespace: agentweaver
+rules:
+  - apiGroups: [extensions.agents.x-k8s.io]
+    resources: [sandboxclaims]
+    verbs: [get, list, create, patch, delete]
+  - apiGroups: [extensions.agents.x-k8s.io]
+    resources: [sandboxtemplates, sandboxwarmpools]
+    verbs: [get, create, delete]
+  - apiGroups: [agents.x-k8s.io]
+    resources: [sandboxes]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [agenthost-runtime-v1]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get, create, delete]
+  - apiGroups: [cilium.io]
+    resources: [ciliumnetworkpolicies]
+    verbs: [get, create, update, delete]
+  # Build-test only.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create, patch, delete]
+  # Build-test only.
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  # Build-test only. Add get only after separate review for the AKS server version.
+  - apiGroups: [""]
+    resources: [pods/exec, pods/attach]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: environment-agent-sandbox-runtime-proposed
+  namespace: agentweaver
+subjects:
+  - kind: ServiceAccount
+    name: environment
+    namespace: agentweaver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: environment-agent-sandbox-runtime-proposed
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: environment-agent-sandbox-runtime-proposed
+rules:
+  - apiGroups: [node.k8s.io]
+    resources: [runtimeclasses]
+    resourceNames: [kata-vm-isolation]
+    verbs: [get]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: environment-agent-sandbox-runtime-proposed
+subjects:
+  - kind: ServiceAccount
+    name: environment
+    namespace: agentweaver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: environment-agent-sandbox-runtime-proposed

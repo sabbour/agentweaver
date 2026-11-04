@@ -186,6 +186,75 @@ export async function verifyServiceRegistryImage(image, fetchImpl = globalThis.f
   };
 }
 
+/**
+ * Resolves the AgentHost linux/amd64 image and measures its unique compressed pull descriptors.
+ */
+export async function measureAgentHostRegistryImage(image, fetchImpl = globalThis.fetch, delay) {
+  const reference = splitImageReference(image);
+  const reader = await registryReader(reference.repository, fetchImpl, delay);
+  const top = await reader.manifest(reference.digest);
+  let platformDigest = reference.digest;
+  let platformManifest = top;
+  if (Array.isArray(top.value.manifests)) {
+    if (top.value.schemaVersion !== 2 || !indexTypes.has(top.value.mediaType)) {
+      fail('published AgentHost image has an invalid raw manifest index');
+    }
+    const amd64 = top.value.manifests.filter(entry =>
+      entry.platform?.os === 'linux' && entry.platform?.architecture === 'amd64');
+    if (amd64.length !== 1 || !DIGEST.test(amd64[0]?.digest ?? '') ||
+        !Number.isSafeInteger(amd64[0]?.size) || amd64[0].size <= 0) {
+      fail('published AgentHost image must have exactly one valid linux/amd64 platform manifest');
+    }
+    platformDigest = amd64[0].digest;
+    platformManifest = await reader.manifest(platformDigest, amd64[0].size);
+  }
+
+  const manifest = platformManifest.value;
+  if (manifest.schemaVersion !== 2 || !manifestTypes.has(manifest.mediaType) ||
+      !Array.isArray(manifest.layers) || manifest.layers.length === 0 ||
+      manifest.layers.some(layer => layer.mediaType !== 'application/vnd.oci.image.layer.v1.tar+gzip') ||
+      !configTypes.has(manifest.config?.mediaType) || !DIGEST.test(manifest.config?.digest ?? '') ||
+      !Number.isSafeInteger(manifest.config.size) || manifest.config.size <= 0) {
+    fail('published AgentHost platform manifest has invalid config or compressed-layer descriptors');
+  }
+
+  const descriptors = new Map();
+  for (const descriptor of [manifest.config, ...manifest.layers]) {
+    if (!DIGEST.test(descriptor.digest ?? '') || !Number.isSafeInteger(descriptor.size) || descriptor.size <= 0 ||
+        descriptors.has(descriptor.digest) && descriptors.get(descriptor.digest) !== descriptor.size) {
+      fail('published AgentHost image contains an invalid or conflicting blob descriptor');
+    }
+    descriptors.set(descriptor.digest, descriptor.size);
+  }
+  const config = parseJson(
+    (await reader.blob(manifest.config.digest, manifest.config.size)).toString('utf8'),
+    'published AgentHost image config',
+  );
+  const labels = config.config?.Labels;
+  if (config.os !== 'linux' || config.architecture !== 'amd64' || config.config?.User !== '1654:1654' ||
+      JSON.stringify(config.config?.Entrypoint) !== JSON.stringify(['dotnet', 'Agentweaver.AgentHost.dll']) ||
+      !SHA.test(labels?.['org.opencontainers.image.revision'] ?? '') ||
+      !SHA.test(labels?.['io.agentweaver.source-tree'] ?? '') ||
+      typeof labels?.['org.opencontainers.image.version'] !== 'string' ||
+      labels['org.opencontainers.image.version'].trim() !== labels['org.opencontainers.image.version'] ||
+      labels['org.opencontainers.image.version'].length === 0) {
+    fail('published AgentHost image config does not match the linux/amd64 runtime identity');
+  }
+
+  const compressedPullBytes = [...descriptors.values()]
+    .reduce((total, size) => total + size, platformManifest.bytes.length);
+  if (!Number.isSafeInteger(compressedPullBytes) || compressedPullBytes <= 0) {
+    fail('published AgentHost compressed pull-byte total is not a positive safe integer');
+  }
+  return {
+    digest: platformDigest,
+    platform: 'linux/amd64',
+    compressedPullBytes,
+    configDigest: manifest.config.digest,
+    image: `ghcr.io/${reference.repository}@${platformDigest}`,
+  };
+}
+
 /** Reads only the OCI revision label used to parse a migration image's schema support. */
 export async function readServiceImageRevision(image, fetchImpl = globalThis.fetch, delay) {
   const reference = splitImageReference(image);

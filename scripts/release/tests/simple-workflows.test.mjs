@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { parse, stringify } from 'yaml';
-import { deployKustomize, parseDeployKustomizeArgs, parseImageManifest } from '../deploy-kustomize.mjs';
+import {
+  deployKustomize,
+  ENVIRONMENT_RBAC_REQUIREMENTS,
+  parseDeployKustomizeArgs,
+  parseImageManifest,
+} from '../deploy-kustomize.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const REGISTRY = 'ghcr.io/sabbour';
@@ -12,6 +18,10 @@ const runtimeConfig = JSON.parse(readFileSync(
   path.join(root, 'deploy', 'k8s', 'runtime-configs', 'projects-config-runtime-config.json'), 'utf8',
 ));
 const readYaml = relativePath => parse(readFileSync(path.join(root, relativePath), 'utf8'));
+const agentHostRuntimeConfig = readYaml('deploy/k8s/profiles/agenthost/runtime-config.example.yaml');
+const environmentRuntimeConfig = JSON.parse(readFileSync(
+  path.join(root, 'deploy', 'k8s', 'runtime-configs', 'environment-runtime-config.json'), 'utf8',
+));
 const imageDigest = `sha256:${'a'.repeat(64)}`;
 const serviceClientId = '12345678-1234-4123-8123-123456789abc';
 const serviceNames = [
@@ -50,6 +60,74 @@ const selectedTag = `sha-${'b'.repeat(40)}`;
 const existingTag = `sha-${'c'.repeat(40)}`;
 const digestForTag = tag => `sha256:${tag.slice(4)}${'0'.repeat(24)}`;
 const restoreReplicasAnnotation = 'agentweaver.io/local-deploy-restore-replicas';
+
+function agentHostRegistryFixture(layerBytes) {
+  const digest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  const configBytes = Buffer.from(JSON.stringify({
+    os: 'linux',
+    architecture: 'amd64',
+    config: {
+      User: '1654:1654',
+      Entrypoint: ['dotnet', 'Agentweaver.AgentHost.dll'],
+      Labels: {
+        'org.opencontainers.image.revision': 'a'.repeat(40),
+        'io.agentweaver.source-tree': 'b'.repeat(40),
+        'org.opencontainers.image.version': '1.1.1',
+      },
+    },
+  }));
+  const configDigest = digest(configBytes);
+  const childBytes = Buffer.from(JSON.stringify({
+    schemaVersion: 2,
+    mediaType: 'application/vnd.oci.image.manifest.v1+json',
+    config: {
+      mediaType: 'application/vnd.oci.image.config.v1+json',
+      digest: configDigest,
+      size: configBytes.length,
+    },
+    layers: [{
+      mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
+      digest: 'sha256:' + 'c'.repeat(64),
+      size: layerBytes,
+    }],
+  }));
+  const childDigest = digest(childBytes);
+  const topBytes = Buffer.from(JSON.stringify({
+    schemaVersion: 2,
+    mediaType: 'application/vnd.oci.image.index.v1+json',
+    manifests: [{
+      mediaType: 'application/vnd.oci.image.manifest.v1+json',
+      digest: childDigest,
+      size: childBytes.length,
+      platform: { os: 'linux', architecture: 'amd64' },
+    }],
+  }));
+  const topDigest = digest(topBytes);
+  const response = (bytes, manifestDigest) => ({
+    ok: true,
+    status: 200,
+    headers: { get: name => name.toLowerCase() === 'docker-content-digest' ? manifestDigest : null },
+    text: async () => bytes.toString('utf8'),
+    arrayBuffer: async () => bytes,
+  });
+  return {
+    configDigest, configBytes, childDigest, childBytes, topDigest, topBytes,
+    layerSize: layerBytes,
+    fetchImpl: async url => {
+      const value = String(url);
+      if (value.startsWith('https://ghcr.io/token?')) {
+        return { ok: true, status: 200, json: async () => ({ token: 'fixture-token' }) };
+      }
+      if (value.endsWith(`/manifests/${topDigest}`)) return response(topBytes, topDigest);
+      if (value.endsWith(`/manifests/${childDigest}`)) return response(childBytes, childDigest);
+      if (value.endsWith(`/blobs/${configDigest}`)) return response(configBytes, null);
+      assert.fail(`unexpected AgentHost registry request: ${value}`);
+    },
+  };
+}
+
+const selectedAgentHostRegistry = agentHostRegistryFixture(1024);
+const existingAgentHostRegistry = agentHostRegistryFixture(2048);
 
 function scratch() {
   const directory = path.join(root, '.test-scratch', `simple-deploy-${process.pid}-${Math.random().toString(16).slice(2)}`);
@@ -99,6 +177,8 @@ function renderedRoot(kustomizationPath) {
   return [
     'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: agentweaver\n  labels:\n    pod-security.kubernetes.io/enforce: restricted\n',
     stringify(runtimeConfig),
+    stringify(environmentRuntimeConfig),
+    stringify(agentHostRuntimeConfig),
     ...resources.map(stringify),
   ].join('---\n');
 }
@@ -107,8 +187,21 @@ function fakeExec(calls, {
   failedJob, failedRollout, missingProjectsConfigClientId, liveImageRefs, distinctDigests = false,
   liveRuntimeConfig = runtimeConfig, denyRuntimeConfigDelete = false,
   liveAgentHostSettings = {}, failApplyCount = 0, remainingPodPolls = 0, state,
+  denyEnvironmentPermission, denyRuntimePermission, missingAgentHostTls = false,
+  wrongAgentHostTlsType = false,
+  selectedAgentHostImage = selectedAgentHostRegistry,
+  existingAgentHostImage = existingAgentHostRegistry,
 } = {}) {
   const live = state ?? { runtimeConfig: structuredClone(liveRuntimeConfig), deployments: {} };
+  live.configMaps ??= {};
+  const withIdentity = resource => {
+    const value = structuredClone(resource);
+    value.metadata.uid ??= `uid-${value.metadata.name}`;
+    value.metadata.resourceVersion ??= '1';
+    return value;
+  };
+  live.configMaps['agenthost-runtime-v1'] ??= withIdentity(agentHostRuntimeConfig);
+  live.configMaps['environment-runtime-config'] ??= withIdentity(environmentRuntimeConfig);
   let podPolls = remainingPodPolls;
   let failedApplies = failApplyCount;
   const liveDeployment = name => {
@@ -146,10 +239,19 @@ function fakeExec(calls, {
     }
     return live.deployments[name];
   };
-  return (command, args, options = {}) => {
+  const exec = (command, args, options = {}) => {
     calls.push({ command, args, options });
     if (command === 'docker') {
       const reference = args[3];
+      if (reference.startsWith(`${REGISTRY}/agentweaver-agenthost`)) {
+        const fixture = reference.endsWith(`:${existingTag}`)
+          ? existingAgentHostImage
+          : selectedAgentHostImage;
+        const digest = reference.includes('@sha256:')
+          ? reference.slice(reference.lastIndexOf('@') + 1)
+          : fixture.topDigest;
+        return { status: 0, stdout: `${digest}\n`, stderr: '' };
+      }
       const digest = !distinctDigests ? imageDigest
         : reference.includes('@sha256:') ? reference.slice(reference.lastIndexOf('@') + 1)
           : reference.endsWith(`:${selectedTag}`) ? digestForTag(selectedTag)
@@ -159,17 +261,49 @@ function fakeExec(calls, {
     if (command === 'az') return { status: 0, stdout: `${serviceClientId}\n`, stderr: '' };
     if (command !== 'kubectl') return { status: 1, stdout: '', stderr: `unexpected command ${command}` };
     if (args[0] === 'config') return { status: 0, stdout: 'selected-context\n', stderr: '' };
-    if (args[0] === 'auth') return {
-      status: 0,
-      stdout: denyRuntimeConfigDelete && args[2] === 'delete' &&
-        args[3] === 'configmap/projects-config-runtime-config' ? 'no\n' : 'yes\n',
-      stderr: '',
-    };
+    if (args[0] === 'auth') {
+      const isEnvironmentCheck = args.includes('system:serviceaccount:agentweaver:environment');
+      const permission = `${args[2]} ${args[3]}`;
+      const denied = denyRuntimeConfigDelete && args[2] === 'delete' &&
+        args[3] === 'configmap/projects-config-runtime-config' ||
+        isEnvironmentCheck && denyEnvironmentPermission === permission ||
+        !isEnvironmentCheck && denyRuntimePermission === permission;
+      return { status: 0, stdout: denied ? 'no\n' : 'yes\n', stderr: '' };
+    }
     if (args[0] === 'get' && args[1] === 'configmap') {
-      return { status: 0, stdout: live.runtimeConfig ? JSON.stringify(live.runtimeConfig) : '', stderr: '' };
+      const name = args[2];
+      const resource = name === 'projects-config-runtime-config'
+        ? live.runtimeConfig
+        : live.configMaps[name];
+      if (args.includes('--output=name')) {
+        return { status: 0, stdout: resource ? `configmap/${name}\n` : '', stderr: '' };
+      }
+      if (!resource) {
+        return {
+          status: 0,
+          stdout: args.some(arg => arg.startsWith('--ignore-not-found'))
+            ? ''
+            : JSON.stringify({ kind: 'ConfigMap', metadata: { name, namespace: 'agentweaver' } }),
+          stderr: '',
+        };
+      }
+      return {
+        status: 0,
+        stdout: JSON.stringify(options.projectJson ? options.projectJson(resource) : resource),
+        stderr: '',
+      };
     }
     if (args[0] === 'get' && args[1] === 'deployment') {
       return { status: 0, stdout: JSON.stringify(liveDeployment(args[2])), stderr: '' };
+    }
+    if (args[0] === 'get' && args[1] === 'secret') {
+      return {
+        status: 0,
+        stdout: missingAgentHostTls
+          ? 'No resources found in agentweaver namespace.\n'
+          : `NAME           TYPE\nagenthost-tls   ${wrongAgentHostTlsType ? 'Opaque' : 'kubernetes.io/tls'}\n`,
+        stderr: '',
+      };
     }
     if (args[0] === 'get' && args[1] === 'pods') {
       const items = podPolls > 0 ? [{ metadata: { name: 'projects-config-0' } }] : [];
@@ -211,17 +345,32 @@ function fakeExec(calls, {
     if (args[0] === 'create') {
       const resource = parse(options.input);
       if (resource.kind === 'ConfigMap') {
-        live.runtimeConfig = resource;
+        const name = resource.metadata.name;
+        resource.metadata.uid ??= `uid-${name}-new`;
+        resource.metadata.resourceVersion ??= '2';
+        if (name === 'projects-config-runtime-config') live.runtimeConfig = resource;
+        else live.configMaps[name] = resource;
         return { status: 0, stdout: 'configmap created\n', stderr: '' };
       }
       return { status: 0, stdout: 'job created\n', stderr: '' };
+    }
+    if (args[0] === 'delete' && args[1] === '--raw') {
+      const name = decodeURIComponent(args[2].split('/').at(-1));
+      const resource = live.configMaps[name];
+      const preconditions = JSON.parse(options.input).preconditions;
+      if (!resource || resource.metadata.uid !== preconditions.uid ||
+          resource.metadata.resourceVersion !== preconditions.resourceVersion) {
+        return { status: 1, stdout: '', stderr: 'Conflict: UID or resourceVersion precondition failed' };
+      }
+      delete live.configMaps[name];
+      return { status: 0, stdout: 'configmap deleted\n', stderr: '' };
     }
     if (args[0] === 'delete' && args[1] === 'configmap') {
       live.runtimeConfig = undefined;
       return { status: 0, stdout: 'configmap deleted\n', stderr: '' };
     }
     if (args[0] === 'annotate') {
-      const deployment = liveDeployment('projects-config');
+      const deployment = liveDeployment(args[1].slice('deployment/'.length));
       deployment.metadata.annotations ??= {};
       const annotation = args[2];
       if (annotation.endsWith('-')) delete deployment.metadata.annotations[annotation.slice(0, -1)];
@@ -233,7 +382,7 @@ function fakeExec(calls, {
     }
     if (args[0] === 'scale') {
       const replicas = Number(args.find(arg => arg.startsWith('--replicas=')).split('=')[1]);
-      liveDeployment('projects-config').spec.replicas = replicas;
+      liveDeployment(args[1].slice('deployment/'.length)).spec.replicas = replicas;
       return { status: 0, stdout: 'deployment scaled\n', stderr: '' };
     }
     if (args[0] === 'wait') {
@@ -250,8 +399,15 @@ function fakeExec(calls, {
       }
       const resources = parse(options.input).items;
       for (const resource of resources) {
-        if (resource.kind === 'ConfigMap' && resource.metadata.name === 'projects-config-runtime-config') {
-          live.runtimeConfig = resource;
+        if (resource.kind === 'ConfigMap') {
+          const name = resource.metadata.name;
+          const current = name === 'projects-config-runtime-config'
+            ? live.runtimeConfig
+            : live.configMaps[name];
+          resource.metadata.uid ??= current?.metadata.uid ?? `uid-${name}`;
+          resource.metadata.resourceVersion ??= current?.metadata.resourceVersion ?? '1';
+          if (name === 'projects-config-runtime-config') live.runtimeConfig = resource;
+          else live.configMaps[name] = resource;
         }
         if (resource.kind === 'Deployment') {
           const current = live.deployments[resource.metadata.name];
@@ -271,6 +427,20 @@ function fakeExec(calls, {
     if (args[0] === 'rollout') return { status: 0, stdout: 'deployment successfully rolled out\n', stderr: '' };
     return { status: 0, stdout: '', stderr: '' };
   };
+  exec.fetchImpl = async (url, options) => {
+    const value = String(url);
+    if (value.startsWith('https://ghcr.io/token?')) {
+      return selectedAgentHostImage.fetchImpl(url, options);
+    }
+    for (const fixture of [selectedAgentHostImage, existingAgentHostImage]) {
+      if ([fixture.topDigest, fixture.childDigest].some(digest => value.endsWith(`/manifests/${digest}`)) ||
+          value.endsWith(`/blobs/${fixture.configDigest}`)) {
+        return fixture.fetchImpl(url, options);
+      }
+    }
+    assert.fail(`unexpected AgentHost registry request: ${value}`);
+  };
+  return exec;
 }
 
 test('v1 image workflow pushes the ten existing Kustomize images directly', () => {
@@ -369,6 +539,52 @@ test('v1 workload deployment is operator-run rather than a hosted AKS workflow',
   assert.doesNotMatch(runbook, /gh workflow run .*v1-deploy/);
 });
 
+test('active installer stamps the selected AgentHost platform digest and measured bytes into both resources', async () => {
+  const directory = scratch();
+  const facts = [];
+  try {
+    for (const [imageTag, fixture] of [
+      [`sha-${'d'.repeat(40)}`, agentHostRegistryFixture(1024)],
+      [`sha-${'e'.repeat(40)}`, agentHostRegistryFixture(2048)],
+    ]) {
+      const calls = [];
+      await deployKustomize({ imageTag }, {
+        root: directory,
+        exec: fakeExec(calls, { selectedAgentHostImage: fixture }),
+        log() {},
+      });
+
+      const applied = parse(calls.find(call =>
+        call.command === 'kubectl' && call.args[0] === 'apply').options.input);
+      const environment = applied.items.find(resource =>
+        resource.kind === 'Deployment' && resource.metadata.name === 'environment');
+      const envSettings = Object.fromEntries(environment.spec.template.spec.containers
+        .find(container => container.name === 'environment').env.map(({ name, value }) => [name, value]));
+      const agentHostConfig = applied.items.find(resource =>
+        resource.kind === 'ConfigMap' && resource.metadata.name === 'agenthost-runtime-v1');
+      const agentHostImage = JSON.parse(agentHostConfig.data['appsettings.json']).AgentHost.Image;
+      const tuple = {
+        Digest: fixture.childDigest,
+        Platform: 'linux/amd64',
+        CompressedPullBytes: fixture.childBytes.length + fixture.configBytes.length + fixture.layerSize,
+      };
+
+      assert.deepEqual(agentHostImage, tuple);
+      assert.equal(envSettings.Environment__Sandbox__AgentSandbox__ContainerImage,
+        `${REGISTRY}/agentweaver-agenthost@${tuple.Digest}`);
+      assert.equal(envSettings.Environment__Sandbox__AgentSandbox__ContainerImagePlatform, tuple.Platform);
+      assert.equal(Number(envSettings.Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes),
+        tuple.CompressedPullBytes);
+      assert.notEqual(tuple.CompressedPullBytes, 322214685);
+      facts.push({ digest: tuple.Digest, bytes: tuple.CompressedPullBytes });
+    }
+    assert.notEqual(facts[0].digest, facts[1].digest);
+    assert.notEqual(facts[0].bytes, facts[1].bytes);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('deployment creates existing migration Jobs directly before one namespaced apply', async () => {
   const directory = scratch();
   const kustomizationPath = path.join(directory, 'deploy', 'k8s', 'kustomization.yaml');
@@ -382,7 +598,7 @@ test('deployment creates existing migration Jobs directly before one namespaced 
     });
 
     const createCalls = calls.filter(call => call.command === 'kubectl' && call.args[0] === 'create');
-    const createdJobs = createCalls.map(call => parse(call.options.input));
+    const createdJobs = createCalls.map(call => parse(call.options.input)).filter(value => value.kind === 'Job');
     assert.deepEqual(createdJobs.map(value => value.metadata.name.split('-').slice(0, -1).join('-')), jobNames);
     assert.equal(createdJobs.every(value => value.spec.ttlSecondsAfterFinished === 3600), true);
     assert.equal(createdJobs.every(value => value.spec.template.spec.containers[0].image.startsWith(`${REGISTRY}/`)), true);
@@ -406,10 +622,22 @@ test('deployment creates existing migration Jobs directly before one namespaced 
       call.args[3] === 'secrets'), false);
     assert.deepEqual(
       calls.filter(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
-        call.args[1] === 'can-i' && call.args[3]?.startsWith('deployment/'))
+        call.args[1] === 'can-i' && call.args[3]?.startsWith('deployment/') &&
+        !call.args.includes('system:serviceaccount:agentweaver:environment'))
         .map(call => `${call.args[2]}:${call.args[3]}`).sort(),
       serviceNames.flatMap(name => ['get', 'list', 'patch', 'watch']
         .map(verb => `${verb}:deployment/${name}`)).sort(),
+    );
+    assert.deepEqual(
+      calls.filter(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
+        call.args[1] === 'can-i' && call.args.includes('system:serviceaccount:agentweaver:environment'))
+        .map(({ args }) => {
+          const resourceName = args.find(arg => arg.startsWith('--resource-name='))?.split('=')[1];
+          return `${args[2]} ${args[3]}${resourceName ? `/${resourceName}` : ''}` +
+            `${args.includes('--namespace') ? '' : ' cluster'}`;
+        }).sort(),
+      ENVIRONMENT_RBAC_REQUIREMENTS.map(({ verb, resource, resourceName, cluster }) =>
+        `${verb} ${resource}${resourceName ? `/${resourceName}` : ''}${cluster ? ' cluster' : ''}`).sort(),
     );
     assert.equal(calls.some(call => call.command === 'npm'), false);
     assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'apply'), true);
@@ -431,6 +659,8 @@ test('deployment creates existing migration Jobs directly before one namespaced 
     assert.equal(applied.kind, 'List');
     assert.equal(applied.items.some(resource => resource.kind === 'Namespace'), false);
     assert.equal(applied.items.filter(resource => resource.kind === 'Deployment').length, 9);
+    assert.equal(applied.items.some(resource =>
+      ['Role', 'RoleBinding', 'ClusterRole', 'ClusterRoleBinding'].includes(resource.kind)), false);
     assert.equal(rollouts.length, 9);
     assert.equal(logs.some(message => /receipt|evidence/i.test(message)), false);
     assert.equal(readFileSync(kustomizationPath, 'utf8'), original);
@@ -527,7 +757,7 @@ test('partial deployment preserves unselected live images and skips unrelated mi
   const liveImageRefs = Object.fromEntries(imageRepositories.map(repository => [repository, existingTag]));
   const liveAgentHostSettings = {
     Environment__Sandbox__AgentSandbox__OptionsRevision: 'p1-v1.2.3',
-    Environment__Sandbox__AgentSandbox__ContainerImagePlatform: 'linux/arm64',
+    Environment__Sandbox__AgentSandbox__ContainerImagePlatform: 'linux/amd64',
     Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes: '987654321',
   };
   writeFileSync(manifestPath, JSON.stringify({ images: { 'agentweaver-web': selectedTag } }));
@@ -545,12 +775,16 @@ test('partial deployment preserves unselected live images and skips unrelated mi
     ]));
     assert.equal(rendered['agentweaver-web'], digestForTag(selectedTag));
     for (const repository of imageRepositories.filter(repository => repository !== 'agentweaver-web')) {
-      assert.equal(rendered[repository], digestForTag(existingTag), `${repository} keeps its deployed image`);
+      assert.equal(rendered[repository], repository === 'agentweaver-agenthost'
+        ? existingAgentHostRegistry.topDigest
+        : digestForTag(existingTag), `${repository} keeps its deployed image`);
     }
-    assert.equal(calls.filter(call => call.command === 'kubectl' && call.args[0] === 'create').length, 0);
+    assert.equal(calls.filter(call => call.command === 'kubectl' && call.args[0] === 'create')
+      .map(call => parse(call.options.input)).some(resource => resource.kind === 'Job'), false);
     assert.equal(calls.some(call => call.command === 'az'), false);
     assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
-      ['jobs.batch', 'pods', 'pods/log'].includes(call.args[3])), false);
+      ['jobs.batch', 'pods', 'pods/log'].includes(call.args[3]) &&
+      !call.args.includes('system:serviceaccount:agentweaver:environment')), false);
     assert.equal(calls.filter(call => call.command === 'kubectl' && call.args[0] === 'rollout').length, 9);
 
     const applied = parse(calls.find(call => call.command === 'kubectl' && call.args[0] === 'apply').options.input);
@@ -562,13 +796,69 @@ test('partial deployment preserves unselected live images and skips unrelated mi
     assert.equal(environmentContainer.image,
       `${REGISTRY}/agentweaver.environment@${digestForTag(existingTag)}`);
     assert.equal(environmentSettings.Environment__Sandbox__AgentSandbox__ContainerImage,
-      `${REGISTRY}/agentweaver-agenthost@${digestForTag(existingTag)}`);
+      `${REGISTRY}/agentweaver-agenthost@${existingAgentHostRegistry.topDigest}`);
     assert.equal(environmentSettings.Environment__Sandbox__AgentSandbox__OptionsRevision,
       liveAgentHostSettings.Environment__Sandbox__AgentSandbox__OptionsRevision);
     assert.equal(environmentSettings.Environment__Sandbox__AgentSandbox__ContainerImagePlatform,
       liveAgentHostSettings.Environment__Sandbox__AgentSandbox__ContainerImagePlatform);
     assert.equal(environmentSettings.Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes,
       liveAgentHostSettings.Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes);
+    const agentHostConfigMap = applied.items.find(resource =>
+      resource.kind === 'ConfigMap' && resource.metadata.name === 'agenthost-runtime-v1');
+    assert.deepEqual(JSON.parse(agentHostConfigMap.data['appsettings.json']).AgentHost.Image, {
+      Digest: existingAgentHostRegistry.topDigest,
+      Platform: 'linux/amd64',
+      CompressedPullBytes: 987654321,
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('omitted AgentHost facts that are missing or conflict fail before Kubernetes writes', async () => {
+  const directory = scratch();
+  const manifestPath = path.join(directory, 'images.json');
+  writeFileSync(manifestPath, JSON.stringify({ images: { 'agentweaver-web': selectedTag } }));
+  const invalidFacts = [
+    [{ Environment__Sandbox__AgentSandbox__ContainerImagePlatform: 'linux/arm64' },
+      /no supported Environment__Sandbox__AgentSandbox__ContainerImagePlatform/],
+    [{ Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes: '' },
+      /no valid positive Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes/],
+  ];
+  try {
+    for (const [liveAgentHostSettings, expected] of invalidFacts) {
+      const calls = [];
+      await assert.rejects(deployKustomize({ imageManifest: manifestPath }, {
+        root: directory, exec: fakeExec(calls, { liveAgentHostSettings }), log() {},
+      }), expected);
+      assert.equal(calls.some(call => call.command === 'kubectl' &&
+        ['annotate', 'create', 'delete', 'apply', 'scale'].includes(call.args[0])), false);
+    }
+
+    const calls = [];
+    const environment = workloadSource(path.join(directory, 'deploy', 'k8s', 'kustomization.yaml'), 'environment');
+    for (const container of environment.spec.template.spec.containers) {
+      if (container.image?.startsWith(`${REGISTRY}/`)) {
+        container.image = container.image.replace(/:receipt-pinned$/, `:${existingTag}`);
+      }
+      for (const setting of container.env ?? []) {
+        if (setting.value?.startsWith(`${REGISTRY}/`)) {
+          setting.value = setting.value.replace(/:receipt-pinned$/, `:${existingTag}`);
+        }
+      }
+    }
+    environment.spec.template.spec.containers[0].env.push({
+      name: 'Environment__Sandbox__AgentSandbox__ContainerImage',
+      value: `${REGISTRY}/agentweaver-agenthost@sha256:${'f'.repeat(64)}`,
+    });
+    await assert.rejects(deployKustomize({ imageManifest: manifestPath }, {
+      root: directory,
+      exec: fakeExec(calls, { state: { runtimeConfig: structuredClone(runtimeConfig),
+        deployments: { environment }, configMaps: {} } }),
+      log() {},
+    }), /conflicting image references for agentweaver-agenthost/);
+    assert.equal(calls.some(call => call.command === 'kubectl' &&
+      ['annotate', 'create', 'delete', 'apply', 'scale'].includes(call.args[0])), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -585,11 +875,113 @@ test('single Broker image update runs only its matching migration Job', async ()
       root: directory, exec: fakeExec(calls, { liveImageRefs, distinctDigests: true }), log() {},
     });
     const createdJobs = calls.filter(call => call.command === 'kubectl' && call.args[0] === 'create')
-      .map(call => parse(call.options.input));
+      .map(call => parse(call.options.input))
+      .filter(value => value.kind === 'Job');
     assert.deepEqual(createdJobs.map(value => value.metadata.name.split('-').slice(0, -1).join('-')),
       ['identity-broker-migration']);
     assert.equal(calls.some(call => call.command === 'az'), false);
   } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('active installer guards both runtime maps, activates Environment, and recovers a pending marker', async () => {
+  const directory = scratch();
+  const kustomizationPath = path.join(directory, 'deploy', 'k8s', 'kustomization.yaml');
+  const originalKustomization = readFileSync(kustomizationPath, 'utf8');
+  const calls = [];
+  const sleeps = [];
+  const agentHostMap = structuredClone(agentHostRuntimeConfig);
+  const agentHostSettings = JSON.parse(agentHostMap.data['appsettings.json']);
+  agentHostSettings.AgentHost.Image.Digest = `sha256:${'1'.repeat(64)}`;
+  agentHostSettings.AgentHost.Image.CompressedPullBytes = 123456;
+  agentHostMap.data['appsettings.json'] = JSON.stringify(agentHostSettings);
+  agentHostMap.metadata.uid = 'old-agenthost-uid';
+  agentHostMap.metadata.resourceVersion = '10';
+  const environmentMap = structuredClone(environmentRuntimeConfig);
+  environmentMap.data.Environment__RuntimeBootstrap__DefaultSourceProfileId = 'old-profile';
+  environmentMap.metadata.uid = 'old-environment-uid';
+  environmentMap.metadata.resourceVersion = '20';
+  const environmentDeployment = workloadSource(kustomizationPath, 'environment');
+  environmentDeployment.spec.replicas = 3;
+  const state = {
+    runtimeConfig: structuredClone(runtimeConfig),
+    deployments: { environment: environmentDeployment },
+    configMaps: {
+      'agenthost-runtime-v1': agentHostMap,
+      'environment-runtime-config': environmentMap,
+    },
+  };
+  const exec = fakeExec(calls, {
+    state,
+    failApplyCount: 1,
+    remainingPodPolls: 1,
+  });
+  const options = {
+    root: directory,
+    exec,
+    sleep: async milliseconds => sleeps.push(milliseconds),
+    log() {},
+  };
+  try {
+    await assert.rejects(deployKustomize({ imageTag: selectedTag }, options),
+      /Workload apply failed: simulated workload apply failure/);
+
+    const scaleDown = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'scale' &&
+      call.args[1] === 'deployment/environment' && call.args.includes('--replicas=0'));
+    const podWait = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'get' &&
+      call.args[1] === 'pods' && call.args.includes('--selector'));
+    const deletions = calls.map((call, index) => ({ call, index }))
+      .filter(({ call }) => call.command === 'kubectl' && call.args[0] === 'delete' &&
+        call.args[1] === '--raw');
+    const creations = calls.map((call, index) => ({ call, index }))
+      .filter(({ call }) => call.command === 'kubectl' && call.args[0] === 'create' &&
+        parse(call.options.input).kind === 'ConfigMap');
+    const scaleUp = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'scale' &&
+      call.args[1] === 'deployment/environment' && call.args.includes('--replicas=3'));
+    const apply = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'apply');
+    assert.ok(scaleDown < podWait && podWait < deletions[0].index);
+    assert.deepEqual(deletions.map(({ call }) => decodeURIComponent(call.args[2].split('/').at(-1))).sort(),
+      ['agenthost-runtime-v1', 'environment-runtime-config']);
+    assert.deepEqual(creations.map(({ call }) => parse(call.options.input).metadata.name).sort(),
+      ['agenthost-runtime-v1', 'environment-runtime-config']);
+    for (const { call, index } of deletions) {
+      const name = decodeURIComponent(call.args[2].split('/').at(-1));
+      const previous = name === 'agenthost-runtime-v1' ? agentHostMap : environmentMap;
+      assert.deepEqual(JSON.parse(call.options.input).preconditions, {
+        uid: previous.metadata.uid,
+        resourceVersion: previous.metadata.resourceVersion,
+      });
+      assert.ok(index < scaleUp);
+    }
+    assert.ok(creations.every(({ index }) => index < scaleUp));
+    assert.ok(scaleUp < apply);
+    assert.deepEqual(sleeps, [5_000, 70_000]);
+    assert.equal(state.deployments.environment.spec.replicas, 3);
+    assert.equal(state.deployments.environment.metadata.annotations[restoreReplicasAnnotation], '3');
+    const applied = parse(calls[apply].options.input);
+    const activeEnvironmentMap = applied.items.find(resource =>
+      resource.kind === 'ConfigMap' && resource.metadata.name === 'environment-runtime-config');
+    assert.equal(activeEnvironmentMap.data.Environment__RuntimeBootstrap__DefaultSourceProfileId,
+      'agenthost-default');
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'rollout' &&
+      /agenthost/.test(call.args[2] ?? '')), false);
+
+    const beforeRetry = calls.length;
+    await deployKustomize({ imageTag: selectedTag }, options);
+    const retry = calls.slice(beforeRetry);
+    assert.equal(retry.some(call => call.command === 'kubectl' && call.args[0] === 'delete' &&
+      call.args[1] === '--raw'), false);
+    assert.equal(retry.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'ConfigMap'), false);
+    assert.deepEqual(retry.filter(call => call.command === 'kubectl' && call.args[0] === 'scale')
+      .map(call => call.args[1] + ':' + call.args.find(arg => arg.startsWith('--replicas='))),
+    ['deployment/environment:--replicas=0', 'deployment/environment:--replicas=3']);
+    assert.equal(state.deployments.environment.spec.replicas, 3);
+    assert.equal(state.deployments.environment.metadata.annotations[restoreReplicasAnnotation], undefined);
+  } finally {
+    readFileSync(kustomizationPath, 'utf8') === originalKustomization ||
+      writeFileSync(kustomizationPath, originalKustomization);
     rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -653,7 +1045,8 @@ test('selective deployment replaces the Projects ConfigMap with run-binding TLS 
     const firstDelete = calls.findIndex(call => call.command === 'kubectl' &&
       call.args[0] === 'delete' && call.args[1] === 'configmap');
     const firstCreate = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'create' &&
-      parse(call.options.input).kind === 'ConfigMap');
+      parse(call.options.input).kind === 'ConfigMap' &&
+      parse(call.options.input).metadata.name === 'projects-config-runtime-config');
     const firstScaleDown = calls.findIndex(call => call.command === 'kubectl' &&
       call.args[0] === 'scale' && call.args[2] === '--replicas=0');
     const firstScaleUp = calls.findIndex(call => call.command === 'kubectl' &&
@@ -728,6 +1121,114 @@ test('immutable runtime ConfigMap update checks delete permission before migrati
       call.args[3] === 'configmap/projects-config-runtime-config'), true);
     assert.equal(calls.some(call => call.command === 'kubectl' &&
       ['annotate', 'create', 'delete', 'apply', 'scale'].includes(call.args[0])), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('runtime ConfigMap and Environment activation permission failures stop before every write', async () => {
+  const directory = scratch();
+  const manifestPath = path.join(directory, 'images.json');
+  writeFileSync(manifestPath, JSON.stringify({ images: { 'agentweaver-agenthost': selectedTag } }));
+  const changedEnvironmentState = () => {
+    const environmentMap = structuredClone(environmentRuntimeConfig);
+    environmentMap.data.Environment__RuntimeBootstrap__DefaultSourceProfileId = 'old-profile';
+    environmentMap.metadata.uid = 'environment-map-uid';
+    environmentMap.metadata.resourceVersion = '7';
+    const agentHostMap = structuredClone(agentHostRuntimeConfig);
+    agentHostMap.metadata.uid = 'agenthost-map-uid';
+    agentHostMap.metadata.resourceVersion = '8';
+    const deployment = workloadSource(path.join(directory, 'deploy', 'k8s', 'kustomization.yaml'),
+      'environment');
+    for (const container of deployment.spec.template.spec.containers) {
+      if (container.image?.startsWith(`${REGISTRY}/`)) {
+        container.image = container.image.replace(/:receipt-pinned$/, `:${existingTag}`);
+      }
+      for (const setting of container.env ?? []) {
+        if (setting.value?.startsWith(`${REGISTRY}/`)) {
+          setting.value = setting.value.replace(/:receipt-pinned$/, `:${existingTag}`);
+        }
+      }
+    }
+    deployment.spec.replicas = 2;
+    return {
+      runtimeConfig: structuredClone(runtimeConfig),
+      deployments: { environment: deployment },
+      configMaps: {
+        'agenthost-runtime-v1': agentHostMap,
+        'environment-runtime-config': environmentMap,
+      },
+    };
+  };
+  const denied = [
+    { permission: 'create configmaps', settings: {}, expected: /cannot create configmaps/ },
+    {
+      permission: 'delete configmaps/agenthost-runtime-v1',
+      settings: {},
+      expected: /must allow delete configmaps\/agenthost-runtime-v1/,
+    },
+    {
+      permission: 'update deployments/scale',
+      settings: { state: changedEnvironmentState() },
+      expected: /cannot update deployments\/scale/,
+    },
+    {
+      permission: 'patch deployments/scale',
+      settings: { state: changedEnvironmentState() },
+      expected: /cannot patch deployments\/scale/,
+    },
+    {
+      permission: 'patch deployment/environment',
+      settings: {},
+      expected: /cannot patch deployment\/environment/,
+    },
+    {
+      permission: 'list pods',
+      settings: { state: changedEnvironmentState() },
+      expected: /cannot list pods/,
+    },
+  ];
+  try {
+    for (const { permission, settings, expected } of denied) {
+      const calls = [];
+      await assert.rejects(deployKustomize({ imageManifest: manifestPath }, {
+        root: directory,
+        exec: fakeExec(calls, { ...settings, denyRuntimePermission: permission }),
+        log() {},
+      }), expected);
+      assert.equal(calls.some(call => call.command === 'kubectl' &&
+        ['annotate', 'create', 'delete', 'apply', 'scale', 'patch'].includes(call.args[0])), false,
+      `${permission} denial must precede writes`);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('TLS metadata and effective Environment RBAC failures stop before workload effects', async () => {
+  const directory = scratch();
+  const failures = [
+    [{ missingAgentHostTls: true }, /Secret\/agenthost-tls is missing/],
+    [{ wrongAgentHostTlsType: true }, /must exist in namespace agentweaver with type kubernetes.io\/tls/],
+    [{ denyEnvironmentPermission: 'get sandboxclaims.extensions.agents.x-k8s.io' },
+      /lacks effective permission get sandboxclaims.extensions.agents.x-k8s.io/],
+  ];
+  try {
+    for (const [settings, expected] of failures) {
+      const calls = [];
+      await assert.rejects(deployKustomize({ imageTag: selectedTag }, {
+        root: directory, exec: fakeExec(calls, settings), log() {},
+      }), expected);
+      assert.equal(calls.some(call => call.command === 'kubectl' &&
+        ['annotate', 'create', 'delete', 'apply', 'scale', 'patch'].includes(call.args[0])), false);
+      const secretReads = calls.filter(call => call.command === 'kubectl' &&
+        call.args[0] === 'get' && call.args[1] === 'secret');
+      assert.equal(secretReads.length, 1);
+      assert.equal(secretReads[0].args.some(arg => arg === '--output=json'), false);
+      assert.equal(secretReads[0].args.includes('--output=wide'), true);
+      assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
+        call.args.includes('secrets')), false);
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

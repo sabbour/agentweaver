@@ -5,14 +5,54 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse, stringify } from 'yaml';
 import { parseKustomizeResources } from './kustomize-runtime.mjs';
+import {
+  findImmutableRuntimeConfigMapReplacements,
+  replaceImmutableRuntimeConfigMaps,
+  verifyImmutableRuntimeConfigMapReplacementPermissions,
+} from './immutable-runtime-config-maps.mjs';
+import { measureAgentHostRegistryImage } from './registry.mjs';
 import { run, redact } from '../azure/lib/exec.mjs';
 
 const REGISTRY = 'ghcr.io/sabbour';
 const NAMESPACE = 'agentweaver';
 const PROJECTS_CONFIG_RUNTIME_CONFIG = 'projects-config-runtime-config';
 const PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION = 'agentweaver.io/local-deploy-restore-replicas';
+const AGENTHOST_RUNTIME_CONFIG = 'agenthost-runtime-v1';
+const ENVIRONMENT_RUNTIME_CONFIG = 'environment-runtime-config';
+const RUNTIME_CONFIG_MAPS = new Set([AGENTHOST_RUNTIME_CONFIG, ENVIRONMENT_RUNTIME_CONFIG]);
+const AGENTHOST_CONFIGURATION_ENDPOINT =
+  'https://agenthost-runtime.agentweaver.svc.cluster.local:8443/runtime/v1/configure';
 const AGENT_SANDBOX_ENV_PREFIX = 'Environment__Sandbox__AgentSandbox__';
 const AGENT_SANDBOX_IMAGE_SETTING = `${AGENT_SANDBOX_ENV_PREFIX}ContainerImage`;
+const AGENT_SANDBOX_PLATFORM_SETTING = `${AGENT_SANDBOX_ENV_PREFIX}ContainerImagePlatform`;
+const AGENT_SANDBOX_COMPRESSED_BYTES_SETTING =
+  `${AGENT_SANDBOX_ENV_PREFIX}ContainerImageCompressedPullBytes`;
+const ENVIRONMENT_SERVICE_ACCOUNT = 'system:serviceaccount:agentweaver:environment';
+const rbacEntries = (group, resource, verbs, options = {}) => verbs.map(verb => ({
+  verb,
+  resource: group ? `${resource}.${group}` : resource,
+  ...options,
+}));
+export const ENVIRONMENT_RBAC_REQUIREMENTS = [
+  ...rbacEntries('extensions.agents.x-k8s.io', 'sandboxclaims', ['get', 'list', 'create', 'patch', 'delete']),
+  ...rbacEntries('extensions.agents.x-k8s.io', 'sandboxtemplates', ['get', 'create', 'delete']),
+  ...rbacEntries('extensions.agents.x-k8s.io', 'sandboxwarmpools', ['get', 'create', 'delete']),
+  ...rbacEntries('agents.x-k8s.io', 'sandboxes', ['get', 'list']),
+  ...rbacEntries('', 'pods', ['get', 'list', 'create', 'patch', 'delete']),
+  ...rbacEntries('', 'services', ['get']),
+  ...rbacEntries('', 'configmaps', ['get'], { resourceName: 'agenthost-runtime-v1' }),
+  ...rbacEntries('', 'events', ['list']),
+  ...rbacEntries('', 'persistentvolumeclaims', ['get', 'create', 'delete']),
+  ...rbacEntries('cilium.io', 'ciliumnetworkpolicies', ['get', 'create', 'update', 'delete']),
+  ...rbacEntries('', 'pods/log', ['get']),
+  ...rbacEntries('', 'pods/exec', ['create']),
+  ...rbacEntries('', 'pods/attach', ['create']),
+  ...rbacEntries('node.k8s.io', 'runtimeclasses', ['get'], {
+    resourceName: 'kata-vm-isolation', cluster: true,
+  }),
+  ...rbacEntries('storage.k8s.io', 'storageclasses', ['get'], { cluster: true }),
+  ...rbacEntries('', 'persistentvolumes', ['get', 'patch'], { cluster: true }),
+];
 const IMAGE_REPOSITORIES = [
   'agentweaver-agenthost',
   'agentweaver.identity.broker',
@@ -173,6 +213,56 @@ function verifyAuthorization(exec, context, root, migrationsRequired) {
     }
 }
 
+function verifyEnvironmentRuntimeAuthorization(exec, context, root) {
+  for (const { verb, resource, resourceName, cluster } of ENVIRONMENT_RBAC_REQUIREMENTS) {
+    const args = ['auth', 'can-i', verb, resource];
+    if (resourceName) args.push(`--resource-name=${resourceName}`);
+    args.push('--as', ENVIRONMENT_SERVICE_ACCOUNT);
+    if (!cluster) args.push('--namespace', NAMESPACE);
+    args.push('--context', context);
+    const result = exec('kubectl', args, { check: false, cwd: root });
+    if (result.status !== 0) {
+      fail(`Could not check effective permission ${verb} ${resource}` +
+        `${resourceName ? `/${resourceName}` : ''} for ${ENVIRONMENT_SERVICE_ACCOUNT}; ` +
+        `the selected identity must be allowed to impersonate that ServiceAccount: ` +
+        `${(result.stderr || result.stdout || `exit ${result.status}`).trim()}`);
+    }
+    if (result.stdout.trim().toLowerCase() !== 'yes') {
+      fail(`${ENVIRONMENT_SERVICE_ACCOUNT} lacks effective permission ${verb} ${resource}` +
+        `${resourceName ? `/${resourceName}` : ''}${cluster ? ' at cluster scope' : ` in namespace ${NAMESPACE}`}.`);
+    }
+  }
+}
+
+function verifyAgentHostTlsSecret(exec, context, root) {
+  const result = kubectl(exec, context, [
+    'get', 'secret', 'agenthost-tls', '--ignore-not-found=true', '--output=wide',
+  ], root, 'Could not check Secret/agenthost-tls metadata');
+  const rows = result.stdout.trim().split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const row = rows.find(line => line.split(/\s+/)[0] === 'agenthost-tls');
+  if (!row) fail('Secret/agenthost-tls is missing; the operator must provide the TLS Secret.');
+  const [name, type] = row.split(/\s+/);
+  if (name !== 'agenthost-tls' || type !== 'kubernetes.io/tls') {
+    fail('Secret/agenthost-tls must exist in namespace agentweaver with type kubernetes.io/tls.');
+  }
+}
+
+function verifyEnvironmentActivationAuthorization(exec, context, root) {
+  for (const [verb, resource] of [
+    ['update', 'deployments/scale'],
+    ['patch', 'deployments/scale'],
+    ['patch', 'deployment/environment'],
+    ['list', 'pods'],
+  ]) {
+    const result = kubectl(exec, context, ['auth', 'can-i', verb, resource], root,
+      `Could not check Kubernetes permission ${verb} ${resource} for Environment activation`);
+    if (result.stdout.trim().toLowerCase() !== 'yes') {
+      fail(`The selected identity cannot ${verb} ${resource} in namespace ${NAMESPACE}; ` +
+        'this permission is required before Environment activation.');
+    }
+  }
+}
+
 function readResource(exec, context, kind, name, root) {
   const result = kubectl(exec, context, ['get', kind, name, '--output=json'], root,
     `Required ${kind}/${name} is unavailable`);
@@ -184,26 +274,40 @@ function readResource(exec, context, kind, name, root) {
 }
 
 function readExistingRuntimeConfigMap(exec, context, root) {
+  return readExistingNamedRuntimeConfigMap(exec, context, root, PROJECTS_CONFIG_RUNTIME_CONFIG);
+}
+
+function readExistingNamedRuntimeConfigMap(exec, context, root, name) {
   const result = kubectl(exec, context, [
-    'get', 'configmap', PROJECTS_CONFIG_RUNTIME_CONFIG, '--ignore-not-found=true', '--output=json',
-  ], root, `Could not read ConfigMap/${PROJECTS_CONFIG_RUNTIME_CONFIG}`);
+    'get', 'configmap', name, '--ignore-not-found=true', '--output=json',
+  ], root, `Could not read ConfigMap/${name}`);
   if (!result.stdout.trim()) return undefined;
+  let resource;
   try {
-    return JSON.parse(result.stdout);
+    resource = JSON.parse(result.stdout);
   } catch {
-    fail(`Kubernetes returned invalid JSON for ConfigMap/${PROJECTS_CONFIG_RUNTIME_CONFIG}.`);
+    fail(`Kubernetes returned invalid JSON for ConfigMap/${name}.`);
   }
+  if (resource.kind !== 'ConfigMap' || resource.metadata?.name !== name ||
+      resource.metadata?.namespace !== NAMESPACE) {
+    fail(`Kubernetes returned an unexpected object for ConfigMap/${name}.`);
+  }
+  return resource;
 }
 
 function readExistingProjectsConfigDeployment(exec, context, root) {
+  return readExistingDeployment(exec, context, root, 'projects-config');
+}
+
+function readExistingDeployment(exec, context, root, name) {
   const result = kubectl(exec, context, [
-    'get', 'deployment', 'projects-config', '--ignore-not-found=true', '--output=json',
-  ], root, 'Could not read deployment/projects-config');
+    'get', 'deployment', name, '--ignore-not-found=true', '--output=json',
+  ], root, `Could not read deployment/${name}`);
   if (!result.stdout.trim()) return undefined;
   try {
     return JSON.parse(result.stdout);
   } catch {
-    fail('Kubernetes returned invalid JSON for deployment/projects-config.');
+    fail(`Kubernetes returned invalid JSON for deployment/${name}.`);
   }
 }
 
@@ -218,45 +322,45 @@ function sameRuntimeConfig(left, right) {
   return left.immutable === right.immutable && sameConfigMapData(left, right);
 }
 
-function deploymentReplicas(deployment) {
+function deploymentReplicas(deployment, name = 'projects-config') {
   const saved = deployment.metadata?.annotations?.[PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION];
   if (saved !== undefined) {
     if (!/^(0|[1-9]\d*)$/.test(saved)) {
-      fail(`deployment/projects-config has an invalid ${PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION} annotation.`);
+      fail(`deployment/${name} has an invalid ${PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION} annotation.`);
     }
     return Number(saved);
   }
   const replicas = deployment.spec?.replicas ?? 1;
   if (!Number.isSafeInteger(replicas) || replicas < 0) {
-    fail('deployment/projects-config has an invalid replica count.');
+    fail(`deployment/${name} has an invalid replica count.`);
   }
   return replicas;
 }
 
-function deploymentSelector(deployment) {
+function deploymentSelector(deployment, name = 'projects-config') {
   const labels = deployment.spec?.selector?.matchLabels;
   if (!labels || !Object.keys(labels).length) {
-    fail('deployment/projects-config has no pod selector for safe ConfigMap replacement.');
+    fail(`deployment/${name} has no pod selector for safe ConfigMap replacement.`);
   }
   return Object.entries(labels).map(([key, value]) => `${key}=${value}`).join(',');
 }
 
-async function waitForDeploymentPodsToStop(exec, context, root, selector, sleep) {
+async function waitForDeploymentPodsToStop(exec, context, root, selector, sleep, name = 'projects-config') {
   const deadline = Date.now() + POD_TERMINATION_TIMEOUT_MS;
   for (;;) {
     const result = kubectl(exec, context, [
       'get', 'pods', '--selector', selector, '--output=json',
-    ], root, 'Could not check deployment/projects-config Pods');
+    ], root, `Could not check deployment/${name} Pods`);
     let pods;
     try {
       pods = JSON.parse(result.stdout).items;
     } catch {
-      fail('Kubernetes returned invalid Pod list JSON while stopping deployment/projects-config.');
+      fail(`Kubernetes returned invalid Pod list JSON while stopping deployment/${name}.`);
     }
-    if (!Array.isArray(pods)) fail('Kubernetes returned an invalid Pod list for deployment/projects-config.');
+    if (!Array.isArray(pods)) fail(`Kubernetes returned an invalid Pod list for deployment/${name}.`);
     if (!pods.length) return;
     if (Date.now() >= deadline) {
-      fail('Timed out waiting for deployment/projects-config Pods to terminate.');
+      fail(`Timed out waiting for deployment/${name} Pods to terminate.`);
     }
     await sleep(5_000);
   }
@@ -309,6 +413,62 @@ async function activateRuntimeConfig(exec, context, root, runtimeConfig, deploym
     if (recoveryFailure) {
       throw new Error(`${error.message}; ${recoveryFailure}`);
     }
+    throw error;
+  }
+}
+
+async function activateEnvironmentRuntimeConfigs(
+  exec, context, root, desiredMaps, replacements, missingNames, deployment, sleep, log, mapRun,
+) {
+  const replicas = deploymentReplicas(deployment, 'environment');
+  const selector = deploymentSelector(deployment, 'environment');
+  const marker = deployment.metadata?.annotations?.[PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION];
+  if (marker === undefined) {
+    kubectl(exec, context, [
+      'annotate', 'deployment/environment',
+      `${PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION}=${replicas}`, '--overwrite',
+    ], root, 'Could not save deployment/environment replicas for AgentHost ConfigMap recovery');
+  }
+
+  try {
+    kubectl(exec, context, ['scale', 'deployment/environment', '--replicas=0'], root,
+      'Could not stop deployment/environment for immutable ConfigMap replacement');
+    await waitForDeploymentPodsToStop(exec, context, root, selector, sleep, 'environment');
+    await sleep(IMMUTABLE_CONFIGMAP_CACHE_WAIT_MS);
+    replaceImmutableRuntimeConfigMaps(replacements, NAMESPACE, { root, run: mapRun, fail });
+    for (const resource of desiredMaps) {
+      if (missingNames.has(resource.metadata.name)) {
+        kubectl(exec, context, ['create', '--filename', '-'], root,
+          `Could not create ConfigMap/${resource.metadata.name}`, { input: JSON.stringify(resource) });
+      }
+    }
+    for (const resource of desiredMaps) {
+      const current = readExistingNamedRuntimeConfigMap(exec, context, root, resource.metadata.name);
+      if (!current || !sameRuntimeConfig(current, resource)) {
+        fail(`ConfigMap/${resource.metadata.name} does not match the desired runtime settings after replacement.`);
+      }
+    }
+    kubectl(exec, context, ['scale', 'deployment/environment', `--replicas=${replicas}`], root,
+      'Could not restore deployment/environment replicas after ConfigMap replacement');
+    log('Activated the AgentHost runtime ConfigMaps on deployment/environment.');
+  } catch (error) {
+    let recoveryFailure;
+    try {
+      const mapsReady = desiredMaps.every(resource => {
+        const current = readExistingNamedRuntimeConfigMap(exec, context, root, resource.metadata.name);
+        return current && sameRuntimeConfig(current, resource);
+      });
+      if (mapsReady) {
+        kubectl(exec, context, ['scale', 'deployment/environment', `--replicas=${replicas}`], root,
+          'Could not restore deployment/environment after ConfigMap activation failed');
+      } else {
+        recoveryFailure = 'The AgentHost runtime ConfigMap pair is absent or incomplete; ' +
+          'deployment/environment remains stopped. Rerun the deploy command to recover.';
+      }
+    } catch (restoreError) {
+      recoveryFailure = restoreError.message;
+    }
+    if (recoveryFailure) throw new Error(`${error.message}; ${recoveryFailure}`);
     throw error;
   }
 }
@@ -399,7 +559,37 @@ function currentImageReferences(exec, context, root, repositories) {
   return { references: found, agentHostSettings };
 }
 
-function preserveLiveAgentHostSettings(resources, settings, digests) {
+function liveAgentHostTuple(settings, digest) {
+  const values = new Map();
+  for (const setting of settings) {
+    if (values.has(setting.name)) fail(`Current deployment has duplicate AgentHost environment setting ${setting.name}.`);
+    values.set(setting.name, setting.value);
+  }
+  const image = values.get(AGENT_SANDBOX_IMAGE_SETTING);
+  const currentImage = deployedImageReference(image);
+  if (!currentImage || currentImage.repository !== 'agentweaver-agenthost' ||
+      !IMAGE_DIGEST.test(digest ?? '')) {
+    fail(`Current deployment has no valid immutable ${AGENT_SANDBOX_IMAGE_SETTING} reference.`);
+  }
+  const platform = values.get(AGENT_SANDBOX_PLATFORM_SETTING);
+  if (platform !== 'linux/amd64') {
+    fail(`Current deployment has no supported ${AGENT_SANDBOX_PLATFORM_SETTING} value.`);
+  }
+  const bytesText = values.get(AGENT_SANDBOX_COMPRESSED_BYTES_SETTING);
+  const compressedPullBytes = Number(bytesText);
+  if (typeof bytesText !== 'string' || !/^[1-9]\d*$/.test(bytesText) ||
+      !Number.isSafeInteger(compressedPullBytes)) {
+    fail(`Current deployment has no valid positive ${AGENT_SANDBOX_COMPRESSED_BYTES_SETTING} value.`);
+  }
+  return {
+    digest,
+    platform,
+    compressedPullBytes,
+    image: `${REGISTRY}/agentweaver-agenthost@${digest}`,
+  };
+}
+
+function preserveLiveAgentHostSettings(resources, settings, tuple) {
   const environment = resources.find(resource =>
     resource.kind === 'Deployment' && resource.metadata?.name === 'environment');
   const container = environment?.spec?.template?.spec?.containers?.find(value => value.name === 'environment');
@@ -407,20 +597,69 @@ function preserveLiveAgentHostSettings(resources, settings, digests) {
   if (!settings.some(setting => setting.name === AGENT_SANDBOX_IMAGE_SETTING)) {
     fail(`Current deployment is missing ${AGENT_SANDBOX_IMAGE_SETTING}; include agentweaver-agenthost in the manifest.`);
   }
-  const imageDigest = digests.get('agentweaver-agenthost');
-  if (!IMAGE_DIGEST.test(imageDigest ?? '')) {
-    fail('No published image digest was resolved for agentweaver-agenthost.');
-  }
-  const preservedSettings = settings.map(setting => setting.name === AGENT_SANDBOX_IMAGE_SETTING
-    ? { ...setting, value: `${REGISTRY}/agentweaver-agenthost@${imageDigest}` }
-    : setting);
-  const names = preservedSettings.map(setting => setting.name);
-  if (new Set(names).size !== names.length) {
-    fail('Current deployment has duplicate AgentHost environment settings.');
+  const preservedSettings = settings.map(setting => ({
+    ...setting,
+    ...(setting.name === AGENT_SANDBOX_IMAGE_SETTING ? { value: tuple.image } : {}),
+    ...(setting.name === AGENT_SANDBOX_PLATFORM_SETTING ? { value: tuple.platform } : {}),
+    ...(setting.name === AGENT_SANDBOX_COMPRESSED_BYTES_SETTING
+      ? { value: String(tuple.compressedPullBytes) } : {}),
+  }));
+  const have = new Set(preservedSettings.map(setting => setting.name));
+  for (const [name, value] of [
+    [AGENT_SANDBOX_IMAGE_SETTING, tuple.image],
+    [AGENT_SANDBOX_PLATFORM_SETTING, tuple.platform],
+    [AGENT_SANDBOX_COMPRESSED_BYTES_SETTING, String(tuple.compressedPullBytes)],
+  ]) {
+    if (!have.has(name)) preservedSettings.push({ name, value });
   }
   container.env = [
     ...(container.env ?? []).filter(setting => !setting.name?.startsWith(AGENT_SANDBOX_ENV_PREFIX)),
     ...preservedSettings,
+  ];
+}
+
+function stampAgentHostRuntime(resources, tuple) {
+  const environment = resources.find(resource =>
+    resource.kind === 'Deployment' && resource.metadata?.name === 'environment');
+  const container = environment?.spec?.template?.spec?.containers?.find(value => value.name === 'environment');
+  if (!container) fail('Kustomize must render the Environment container to stamp AgentHost image facts.');
+  const runtimeConfig = resources.find(resource =>
+    resource.kind === 'ConfigMap' && resource.metadata?.name === AGENTHOST_RUNTIME_CONFIG);
+  if (!runtimeConfig || runtimeConfig.metadata?.namespace !== NAMESPACE || runtimeConfig.immutable !== true) {
+    fail(`Kustomize must render immutable ConfigMap/${AGENTHOST_RUNTIME_CONFIG} in namespace ${NAMESPACE}.`);
+  }
+  let settings;
+  try {
+    settings = JSON.parse(runtimeConfig.data?.['appsettings.json']);
+  } catch {
+    fail(`ConfigMap/${AGENTHOST_RUNTIME_CONFIG} must contain valid appsettings.json.`);
+  }
+  if (!settings.AgentHost || !settings.AgentHost.Authentication) {
+    fail(`ConfigMap/${AGENTHOST_RUNTIME_CONFIG} must contain AgentHost settings.`);
+  }
+  settings.AgentHost.ConfigureEndpoint = AGENTHOST_CONFIGURATION_ENDPOINT;
+  settings.AgentHost.Authentication.Audience = AGENTHOST_CONFIGURATION_ENDPOINT;
+  settings.AgentHost.MaximumPendingTurns = 4;
+  settings.AgentHost.Image = {
+    Digest: tuple.digest,
+    Platform: tuple.platform,
+    CompressedPullBytes: tuple.compressedPullBytes,
+  };
+  runtimeConfig.data['appsettings.json'] = JSON.stringify(settings, null, 2);
+
+  const stamped = new Map();
+  for (const [name, value] of [
+    [AGENT_SANDBOX_IMAGE_SETTING, tuple.image],
+    [AGENT_SANDBOX_PLATFORM_SETTING, tuple.platform],
+    [AGENT_SANDBOX_COMPRESSED_BYTES_SETTING, String(tuple.compressedPullBytes)],
+  ]) {
+    const matches = (container.env ?? []).filter(setting => setting.name === name);
+    if (matches.length > 1) fail(`Kustomize rendered duplicate Environment setting ${name}.`);
+    stamped.set(name, { ...(matches[0] ?? {}), name, value });
+  }
+  container.env = [
+    ...(container.env ?? []).filter(setting => !stamped.has(setting.name)),
+    ...stamped.values(),
   ];
 }
 
@@ -539,6 +778,7 @@ function runMigrationJob(job, exec, context, root, log) {
 export async function deployKustomize(options, overrides = {}) {
   const root = overrides.root ?? process.cwd();
   const exec = overrides.exec ?? run;
+  const fetchImpl = overrides.fetchImpl ?? exec.fetchImpl ?? globalThis.fetch;
   const log = overrides.log ?? (message => console.log(message));
   const requestedImages = options.imageManifest === undefined
     ? new Map(IMAGE_REPOSITORIES.map(repository => [repository, options.imageTag]))
@@ -553,8 +793,11 @@ export async function deployKustomize(options, overrides = {}) {
   if (!context) fail('No kubectl context is selected.');
   verifyAuthorization(exec, context, root,
     [...requestedImages.keys()].some(repository => MIGRATION_IMAGES.has(repository)));
+  verifyAgentHostTlsSecret(exec, context, root);
+  verifyEnvironmentRuntimeAuthorization(exec, context, root);
   const missingRepositories = IMAGE_REPOSITORIES.filter(repository => !digests.has(repository));
   let liveAgentHostSettings;
+  let agentHostTuple;
   if (missingRepositories.length) {
     const current = currentImageReferences(exec, context, root, missingRepositories);
     for (const [repository, reference] of current.references) {
@@ -562,7 +805,20 @@ export async function deployKustomize(options, overrides = {}) {
     }
     if (!requestedImages.has('agentweaver-agenthost')) {
       liveAgentHostSettings = current.agentHostSettings;
+      agentHostTuple = liveAgentHostTuple(liveAgentHostSettings,
+        digests.get('agentweaver-agenthost'));
     }
+  }
+  if (requestedImages.has('agentweaver-agenthost')) {
+    const measured = await measureAgentHostRegistryImage(
+      `${REGISTRY}/agentweaver-agenthost@${digests.get('agentweaver-agenthost')}`, fetchImpl);
+    agentHostTuple = {
+      digest: measured.digest,
+      platform: measured.platform,
+      compressedPullBytes: measured.compressedPullBytes,
+      image: measured.image,
+    };
+    digests.set('agentweaver-agenthost', measured.digest);
   }
 
   const kustomizationPath = path.join(root, 'deploy', 'k8s', 'kustomization.yaml');
@@ -582,11 +838,56 @@ export async function deployKustomize(options, overrides = {}) {
         DEPLOYMENTS.some(name => !deployments.includes(name))) {
       fail('Kustomize must render exactly the nine named v1 Deployments.');
     }
+    if (!agentHostTuple) fail('No validated AgentHost image tuple is available for the runtime ConfigMaps.');
+    if (liveAgentHostSettings) {
+      preserveLiveAgentHostSettings(resources, liveAgentHostSettings, agentHostTuple);
+    }
+    stampAgentHostRuntime(resources, agentHostTuple);
     const runtimeConfig = resources.find(resource => resource.kind === 'ConfigMap' &&
       resource.metadata?.name === PROJECTS_CONFIG_RUNTIME_CONFIG);
     if (!runtimeConfig) fail(`Kustomize must render ConfigMap/${PROJECTS_CONFIG_RUNTIME_CONFIG}.`);
-    if (liveAgentHostSettings) {
-      preserveLiveAgentHostSettings(resources, liveAgentHostSettings, digests);
+    const desiredRuntimeMaps = resources.filter(resource =>
+      resource.kind === 'ConfigMap' && RUNTIME_CONFIG_MAPS.has(resource.metadata?.name));
+    if (desiredRuntimeMaps.length !== RUNTIME_CONFIG_MAPS.size ||
+        desiredRuntimeMaps.some(resource => resource.metadata?.namespace !== NAMESPACE || resource.immutable !== true)) {
+      fail('Kustomize must render both immutable AgentHost runtime ConfigMaps in namespace agentweaver.');
+    }
+    const existingRuntimeMaps = new Map([...RUNTIME_CONFIG_MAPS].map(name => [
+      name, readExistingNamedRuntimeConfigMap(exec, context, root, name),
+    ]));
+    const missingRuntimeMaps = new Set([...existingRuntimeMaps]
+      .filter(([, resource]) => resource === undefined).map(([name]) => name));
+    const runtimeMapManifest = { apiVersion: 'v1', kind: 'List', items: desiredRuntimeMaps };
+    const replacements = findImmutableRuntimeConfigMapReplacements(runtimeMapManifest, NAMESPACE, {
+      root,
+      run: (command, args, settings = {}) => must(exec, command, [...args, '--context', context],
+        { cwd: root, ...settings }, `Could not ${args[0]} immutable runtime ConfigMap`).
+        stdout.trim(),
+      fail,
+      replaceableNames: RUNTIME_CONFIG_MAPS,
+    });
+    const mapRun = (command, args, settings = {}) => must(
+      exec, command, [...args, '--context', context], { cwd: root, ...settings },
+      `Could not ${args[0]} immutable runtime ConfigMap`,
+    ).stdout.trim();
+    verifyImmutableRuntimeConfigMapReplacementPermissions(replacements, NAMESPACE, {
+      root, run: mapRun, fail,
+    });
+    const environmentDeployment = readExistingDeployment(exec, context, root, 'environment');
+    const pendingEnvironmentActivation = environmentDeployment?.metadata?.annotations?.[
+      PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION
+    ] !== undefined;
+    const replaceEnvironmentRuntimeConfig = replacements.some(resource =>
+      resource.metadata.name === ENVIRONMENT_RUNTIME_CONFIG);
+    const activateEnvironment = environmentDeployment !== undefined &&
+      (pendingEnvironmentActivation || replaceEnvironmentRuntimeConfig ||
+        missingRuntimeMaps.has(ENVIRONMENT_RUNTIME_CONFIG));
+    if (activateEnvironment) {
+      verifyEnvironmentActivationAuthorization(exec, context, root);
+      const deployment = resources.find(resource =>
+        resource.kind === 'Deployment' && resource.metadata?.name === 'environment');
+      if (!deployment?.spec) fail('Kustomize must render deployment/environment for runtime ConfigMap activation.');
+      deployment.spec.replicas = deploymentReplicas(environmentDeployment, 'environment');
     }
     const currentRuntimeConfig = readExistingRuntimeConfigMap(exec, context, root);
     const projectsConfigDeployment = readExistingProjectsConfigDeployment(exec, context, root);
@@ -628,6 +929,14 @@ export async function deployKustomize(options, overrides = {}) {
     for (const job of jobs) runMigrationJob(job, exec, context, root, log);
     log('Database migrations completed.');
 
+    if (activateEnvironment) {
+      await activateEnvironmentRuntimeConfigs(exec, context, root, desiredRuntimeMaps, replacements,
+        missingRuntimeMaps, environmentDeployment,
+        overrides.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))),
+        log, mapRun);
+    } else {
+      replaceImmutableRuntimeConfigMaps(replacements, NAMESPACE, { root, run: mapRun, fail });
+    }
     if (activateProjectsConfig) {
       await activateRuntimeConfig(exec, context, root, runtimeConfig, projectsConfigDeployment,
         overrides.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))), log);
@@ -651,6 +960,11 @@ export async function deployKustomize(options, overrides = {}) {
       kubectl(exec, context, [
         'annotate', 'deployment/projects-config', `${PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION}-`,
       ], root, 'Could not clear the Projects & Config ConfigMap recovery marker');
+    }
+    if (activateEnvironment) {
+      kubectl(exec, context, [
+        'annotate', 'deployment/environment', `${PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION}-`,
+      ], root, 'Could not clear the Environment AgentHost ConfigMap recovery marker');
     }
     return { context, namespace: NAMESPACE, deployments, images: Object.fromEntries(digests) };
   } finally {

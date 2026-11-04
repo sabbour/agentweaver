@@ -24,6 +24,7 @@ into a deployed or selectable provider.
 | Guardrails | [Guardrails settings](#guardrails-settings) |
 | Events & Sessions | [Events settings](#events-sessions-settings) |
 | Environment | [Environment settings](#environment-settings) |
+| AgentHost | [AgentHost runtime settings](#agenthost-runtime-settings) |
 | Web | [Web settings](#web-settings) |
 | Provider options | [Options not fully represented in runtime maps](#provider-option-classes-not-fully-represented-in-runtime-maps) |
 | Azure values | [Common values](#obtain-common-azure-values) and [values Azure CLI does not return](#find-values-that-azure-cli-does-not-return) |
@@ -706,10 +707,10 @@ are not stored in the two runtime ConfigMaps:
 | Configuration path | Contract and value source |
 | --- | --- |
 | `Environment:Sandbox:AgentSandbox:OptionsRevision` | Required 1-128 character token using ASCII letters, digits, `.`, `_`, `-`, or `:`. It must match the catalog registration. |
-| `Environment:Sandbox:AgentSandbox:ContainerImage` | Required OCI image pinned to a SHA-256 digest. Use the AgentHost digest reported by the v1 image workflow. |
-| `Environment:Sandbox:AgentSandbox:ContainerImagePlatform` | Required value `linux/amd64`, matching the image workflow platform. |
-| `Environment:Sandbox:AgentSandbox:ContainerImageCompressedPullBytes` | Required positive compressed image size. The reader supplies `0` when omitted, which fails validation; use the AgentHost compressed-pull byte count reported by the image workflow. |
-| `Environment:Sandbox:AgentSandbox:AgentHost:ConfigurationMapName`, `TlsSecretName` | Optional AgentHost profile. When present, both values are required Kubernetes DNS subdomains; use the reviewed ConfigMap and TLS Secret names. |
+| `Environment:Sandbox:AgentSandbox:ContainerImage` | Required OCI image pinned to the AgentHost platform-manifest SHA-256 digest. The deploy helper writes the same selected or validated live image reference into the Environment options and AgentHost runtime profile. |
+| `Environment:Sandbox:AgentSandbox:ContainerImagePlatform` | Required value `linux/amd64`. The deploy helper resolves and checks this platform for a selected AgentHost image. |
+| `Environment:Sandbox:AgentSandbox:ContainerImageCompressedPullBytes` | Required positive byte count for the platform manifest and its compressed config and layers. The deploy helper measures the selected image from GHCR or preserves the validated live value for an omitted image. |
+| `Environment:Sandbox:AgentSandbox:AgentHost:ConfigurationMapName`, `TlsSecretName` | Optional AgentHost profile. When present, both values are required Kubernetes DNS subdomains; use `agenthost-runtime-v1` and the operator-owned `agenthost-tls` Secret. |
 | `Environment:NetworkPolicy:Cilium:AdapterVersion` | Required parseable version with no default. Match the adapter version in the provider registration. |
 | `Environment:NetworkPolicy:Cilium:OptionsRevision` | Required nonempty, non-whitespace revision with no default. Match the catalog registration. |
 | `Environment:Storage:AzureFiles:OptionsRevision` | Required 1-128 character token using ASCII letters, digits, `.`, `_`, `-`, or `:`. Match the catalog registration. |
@@ -720,8 +721,9 @@ bootstrap setting (environment-variable form:
 When present, it must contain 1-256 ASCII letters, digits, `.`, `_`, `-`, or `:`,
 and must not equal any static `Environment:RuntimeBootstrap:Profiles` ID.
 Startup fails if either bootstrap owner address or the AgentHost launch profile
-is missing. Configure this setting together with the reviewed AgentHost ConfigMap
-and TLS Secret names, not as a per-run profile entry.
+is missing. The checked-in Environment map names `agenthost-runtime-v1` and
+`agenthost-tls`. Configure the global source profile with these reviewed
+settings, not as a per-run profile entry.
 The matching ID derives a source from the authorized Sandbox lease, the observed
 receiver configure URL, and the Orchestrator owner `/internal/runtime/observations`.
 Static sources remain supported. An unset default preserves static-only behavior.
@@ -765,6 +767,32 @@ by the provider profile: the OCI image must be pinned by SHA-256 digest, use
 `linux/amd64`, and have a positive compressed pull size. CPU and memory values
 must be valid Kubernetes quantities. The provider does not create the
 RuntimeClass, Azure Files CSI driver, or the underlying Azure resources.
+
+## AgentHost runtime settings
+
+The root Kustomize bundle includes the immutable
+`agenthost-runtime-v1` ConfigMap from
+`deploy/k8s/profiles/agenthost/runtime-config.example.yaml`. Its
+`appsettings.json` values configure the optional AgentHost runtime used by
+Environment Sandboxes. The shared profile does not create an AgentHost
+Deployment.
+
+| Setting | Contract |
+| --- | --- |
+| `AgentHost:ConfigureEndpoint` | HTTPS configure endpoint used by Environment. The certificate must cover its hostname, and the audience must equal the full endpoint URL. |
+| `AgentHost:Authentication:Authority` | HTTPS authority that issues the configure bearer. |
+| `AgentHost:Authentication:Audience` | Exact audience for `ConfigureEndpoint`. |
+| `AgentHost:Image:Digest` | SHA-256 digest of the `linux/amd64` platform manifest. The deploy helper sets it to the same validated digest as `Environment:Sandbox:AgentSandbox:ContainerImage`. |
+| `AgentHost:Image:Platform` | Must be `linux/amd64` and match the Environment Sandbox options. |
+| `AgentHost:Image:CompressedPullBytes` | Positive compressed byte count matching the Environment Sandbox options. For a selected image, the deploy helper measures it from GHCR; for an omitted image, it retains the live validated tuple. |
+| `AgentHost:MaximumPendingTurns` | Pending `enqueue` limit. The checked-in value is `4`; this deployment change preserves the current queue behavior and default. |
+| `AgentHost:ModelBindingsRevision`, `AgentHost:ModelBindings` | Existing server-owned model bindings and their revision. Change them only through the reviewed runtime configuration process. |
+
+The operator must provide the `agenthost-tls` Secret in namespace
+`agentweaver` with Kubernetes type `kubernetes.io/tls`. The deployment helper
+uses the Kubernetes server-side table to check the Secret name and type; it
+does not retrieve or validate certificate or key data. Verify the certificate
+and key through the approved operator process.
 
 ## Web settings
 

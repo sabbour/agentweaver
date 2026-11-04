@@ -22,6 +22,24 @@ Microsoft Agent Framework remains an Orchestrator dependency, not an AgentHost
 runtime. For host settings, see the
 [runtime configuration reference](../reference/runtime-configuration.md).
 
+## Deployment profile
+
+The optional `agenthost-runtime-v1` ConfigMap supplies the AgentHost settings
+for Environment Sandboxes. It does not create a shared AgentHost Deployment.
+The local Kustomize installer binds the same AgentHost digest, `linux/amd64`
+platform, and compressed image byte count into this ConfigMap and the
+Environment Sandbox options. A selected image is resolved and measured from
+GHCR; an omitted image keeps the validated live tuple. A missing or conflicting
+live tuple fails before Kubernetes writes.
+
+The operator supplies the `agenthost-tls` Secret. Before writes, the installer
+checks its Kubernetes TLS Secret type and checks the effective Environment
+ServiceAccount permissions needed by the Sandbox provider. It does not inspect
+certificate or key data, create the Secret, or apply RBAC. The proposed
+Agent Sandbox permissions are kept outside the active Kustomize bundle. The
+profile retains `MaximumPendingTurns: 4`; this setup does not change queue
+semantics or select a new limit.
+
 The current native SDK path consumes either a hosted access token or a
 bring-your-own-key (BYOK) credential inside the selected Sandbox. This is
 legacy credential delivery, **not credential-less

@@ -389,9 +389,8 @@ test('P0 service addresses and source-backed provider defaults are exact', () =>
   const agentHostManifest = parse(readFileSync(
     path.join(root, 'deploy', 'k8s', 'profiles', 'agenthost', 'runtime-config.example.yaml'), 'utf8'));
   assert.equal(agentHostManifest.immutable, true);
-  assert.equal(agentHostManifest.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
-  assert.equal(agentHostManifest.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
-    `${incompleteProvisioningReason.slice(0, -1)}; AgentHost.ConfigureEndpoint and Authentication.Audience require the exact per-Sandbox HTTPS service endpoint; AgentHost.MaximumPendingTurns has no approved P0 value; Environment__Sandbox__AgentSandbox__AgentHost__TlsSecretName has no approved existing Secret name.`);
+  assert.equal(agentHostManifest.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
+  assert.equal(agentHostManifest.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'], undefined);
   const agentHost = JSON.parse(agentHostManifest.data['appsettings.json']).AgentHost;
   assert.equal(agentHost.ModelBindingsRevision, 'p1-v1.0.1');
   assert.deepEqual(agentHost.ModelBindings, {
@@ -400,17 +399,21 @@ test('P0 service addresses and source-backed provider defaults are exact', () =>
     'gpt-6.1-sol': { ModelId: 'gpt-6.1-sol', SourceMode: 'HostedCopilot' },
     'gpt-6-luna': { ModelId: 'gpt-6-luna', SourceMode: 'HostedCopilot' },
   });
-  assert.equal(agentHost.ConfigureEndpoint, '');
-  assert.equal(agentHost.Authentication.Audience, '');
-  assert.equal(agentHost.MaximumPendingTurns, undefined);
+  assert.equal(agentHost.ConfigureEndpoint,
+    'https://agenthost-runtime.agentweaver.svc.cluster.local:8443/runtime/v1/configure');
+  assert.equal(agentHost.Authentication.Audience, agentHost.ConfigureEndpoint);
+  assert.equal(agentHost.MaximumPendingTurns, 4);
   assert.equal(agentHost.BrokerAddress, serviceAddress('identity-broker', 443));
   assert.equal(agentHost.OrchestratorAddress, serviceAddress('orchestrator'));
   assert.equal(agentHost.EnvironmentAddress, serviceAddress('environment'));
   assert.equal(agentHost.EventsAddress, serviceAddress('events-and-sessions'));
   assert.equal(agentHost.Authentication.Authority, broker);
   assert.equal(agentHost.Image.Platform, 'linux/amd64');
-  assert.equal(environment.data['Environment__Sandbox__AgentSandbox__AgentHost__ConfigurationMapName'], undefined);
-  assert.equal(environment.data['Environment__Sandbox__AgentSandbox__AgentHost__TlsSecretName'], undefined);
+  assert.equal(environment.data['Environment__Sandbox__AgentSandbox__AgentHost__ConfigurationMapName'],
+    'agenthost-runtime-v1');
+  assert.equal(environment.data['Environment__Sandbox__AgentSandbox__AgentHost__TlsSecretName'],
+    'agenthost-tls');
+  assert.equal(environment.data['Environment__RuntimeBootstrap__DefaultSourceProfileId'], 'agenthost-default');
 });
 
 test('nested Cilium selectors match the existing source policies and contain no env-unsafe keys', () => {
@@ -1105,7 +1108,7 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
   assert.equal(agentHost.Image.Platform,
     environmentEnv.get('Environment__Sandbox__AgentSandbox__ContainerImagePlatform'));
   assert.equal(agentHost.Image.CompressedPullBytes, compressedPullBytes);
-  assert.equal(agentHostConfigMap.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
+  assert.equal(agentHostConfigMap.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
 
   const identityDeployment = resources.find(resource =>
     resource.kind === 'Deployment' && resource.metadata.name === 'identity-broker');

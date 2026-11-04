@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { readServiceImageRevision, verifyRegistryImage, verifyServiceRegistryImage } from '../registry.mjs';
+import {
+  measureAgentHostRegistryImage,
+  readServiceImageRevision,
+  verifyRegistryImage,
+  verifyServiceRegistryImage,
+} from '../registry.mjs';
 
 const sourceSha = 'a'.repeat(40);
 const sourceTree = 'b'.repeat(40);
@@ -17,6 +22,8 @@ function serviceFixture({ duplicateAmd64 = false, mutateConfig = () => {}, tampe
     os: 'linux',
     architecture: 'amd64',
     config: {
+      User: '1654:1654',
+      Entrypoint: ['dotnet', 'Agentweaver.AgentHost.dll'],
       Labels: {
         'org.opencontainers.image.revision': sourceSha,
         'io.agentweaver.source-tree': sourceTree,
@@ -27,6 +34,8 @@ function serviceFixture({ duplicateAmd64 = false, mutateConfig = () => {}, tampe
   mutateConfig(config);
   const configBytes = Buffer.from(JSON.stringify(config));
   const configDigest = digest(configBytes);
+  const layerBytes = Buffer.from('compressed layer fixture');
+  const layerDigest = digest(layerBytes);
   const childBytes = Buffer.from(JSON.stringify({
     schemaVersion: 2,
     mediaType: 'application/vnd.oci.image.manifest.v1+json',
@@ -35,6 +44,11 @@ function serviceFixture({ duplicateAmd64 = false, mutateConfig = () => {}, tampe
       digest: configDigest,
       size: configBytes.length,
     },
+    layers: [{
+      mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
+      digest: layerDigest,
+      size: layerBytes.length,
+    }],
   }));
   const childDigest = digest(childBytes);
   const descriptor = {
@@ -74,8 +88,26 @@ function serviceFixture({ duplicateAmd64 = false, mutateConfig = () => {}, tampe
     }
     assert.fail(`unexpected registry request: ${value}`);
   };
-  return { calls, fetchImpl, childDigest, configDigest, topDigest, configBytes, topReference };
+  return {
+    calls, fetchImpl, childDigest, configDigest, topDigest, configBytes, childBytes,
+    layerSize: layerBytes.length, topReference,
+  };
 }
+
+test('AgentHost registry measurement stamps the verified platform child and unique compressed bytes', async () => {
+  const fixture = serviceFixture();
+  const result = await measureAgentHostRegistryImage(
+    `${fixture.topReference}${fixture.topDigest}`, fixture.fetchImpl);
+
+  assert.deepEqual(result, {
+    digest: fixture.childDigest,
+    platform: 'linux/amd64',
+    compressedPullBytes: fixture.childBytes.length + fixture.configBytes.length + fixture.layerSize,
+    configDigest: fixture.configDigest,
+    image: `${fixture.topReference}${fixture.childDigest}`,
+  });
+  assert.notEqual(result.compressedPullBytes, 322214685);
+});
 
 test('service registry verification checks raw index, unique amd64 child, and source-bound config', async () => {
   const fixture = serviceFixture();

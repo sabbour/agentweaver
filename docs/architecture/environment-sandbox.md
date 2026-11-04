@@ -625,6 +625,14 @@ UID/GID/fsGroup 1000, and HTTPS health probes. Only this profile asks the Sandbo
 controller to create its private ClusterIP Service. The provider and runtime endpoint
 require HTTPS on TCP 8443 and verify that the Service selector resolves to exactly the
 actual AgentHost Pod; no shared AgentHost Deployment or Service is created.
+The deployment helper keeps the AgentHost platform digest, `linux/amd64` value,
+and compressed byte count identical in the AgentHost ConfigMap and Environment
+Sandbox options. It checks the operator-owned TLS Secret type and the
+Environment ServiceAccount's effective permissions before writing; it does not
+create the Secret or apply RBAC. The proposed permissions are kept outside the
+active Kustomize bundle. See the
+[Azure deployment guide](../guide/deploy-to-azure.md) for installer checks and
+recovery behavior.
 The Pod also mounts `service-backend-ca` read-only at
 `/var/run/service-backend-ca` for its internal owner HTTP clients.
 Environment's own bootstrap and sandbox HTTPS clients validate internal
