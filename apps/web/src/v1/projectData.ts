@@ -164,6 +164,7 @@ export const PERMISSION_LABELS: Record<ProjectAuthorizationPermission, string> =
   accessPrivateKnowledge: 'Read private memories',
   readPlatformRuntimeDefaults: 'View platform defaults',
   writePlatformRuntimeDefaults: 'Change platform defaults',
+  cancelRun: 'Stop runs',
 };
 
 /** One permission and the scope that grants it. */

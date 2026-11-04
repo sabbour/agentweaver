@@ -83,7 +83,8 @@ export type ProjectAuthorizationPermission =
   | 'acceptRunSelection'
   | 'accessPrivateKnowledge'
   | 'readPlatformRuntimeDefaults'
-  | 'writePlatformRuntimeDefaults';
+  | 'writePlatformRuntimeDefaults'
+  | 'cancelRun';
 
 /** A permission and the role revision that currently supplies it. */
 export interface ProjectAuthorizationPermissionGrant {
@@ -173,6 +174,7 @@ export function isProjectAuthorizationContextResponse(
           'accessPrivateKnowledge',
           'readPlatformRuntimeDefaults',
           'writePlatformRuntimeDefaults',
+          'cancelRun',
         ].includes(String(permission.permission)) &&
         Number.isSafeInteger(permission.roleRevision) &&
         (permission.roleRevision as number) > 0;

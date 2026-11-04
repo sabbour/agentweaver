@@ -265,7 +265,11 @@ describe('Gateway API client', () => {
         membershipRevision: 2,
         boundProjectId: null,
         boundRunId: null,
-        effectiveAuthority: [],
+        effectiveAuthority: [{
+          resourceType: 'tenant',
+          resourceId: 'tenant-1',
+          permissions: [{ permission: 'cancelRun', roleRevision: 2 }],
+        }],
       }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     );
     const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
@@ -273,6 +277,9 @@ describe('Gateway API client', () => {
     const context = await client.getAuthorizationContext('broker-token', 'tenant-1');
 
     expect(context.tenantId).toBe('tenant-1');
+    expect(context.effectiveAuthority[0].permissions).toEqual([
+      { permission: 'cancelRun', roleRevision: 2 },
+    ]);
     const [url, init] = fetcher.mock.calls[0];
     expect(String(url)).toBe('https://gateway.example.test/api/v1/authorization/context');
     expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
@@ -289,8 +296,11 @@ describe('Gateway API client', () => {
         membershipRevision: 2,
         boundProjectId: null,
         boundRunId: null,
-        effectiveAuthority: [],
-        role: 'tenantAdmin',
+        effectiveAuthority: [{
+          resourceType: 'tenant',
+          resourceId: 'tenant-1',
+          permissions: [{ permission: 'deleteEverything', roleRevision: 2 }],
+        }],
       }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     );
     const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
