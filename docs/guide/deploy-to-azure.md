@@ -319,20 +319,26 @@ separate.
    the service DNS name required by the manifests. AKS creates
    `identity-broker-tls` from a managed `DefaultDomainCertificate`; do not
    create that Secret manually.
-3. Resolve all required runtime ConfigMap values before applying the product
+3. When using the AgentHost profile, provide `agenthost-tls` in namespace
+   `agentweaver` as a `kubernetes.io/tls` Secret for the configured HTTPS
+   endpoint. The deployment helper checks only its name and type through
+   server-side metadata. It does not create the Secret or inspect its
+   certificate and key. Verify those values through the approved operator
+   process.
+4. Resolve all required runtime ConfigMap values before applying the product
    bundle. For an existing installation, use the
    [immutable ConfigMap update procedure](#replace-an-immutable-runtime-configmap).
    The Projects & Config map includes only the approved privileged-setup
    issuer, tenant, and subject. Review the exact values in the
    [runtime configuration reference](../reference/runtime-configuration.md#projects-config-settings);
    do not add another subject or role.
-4. Set the approved public Web origin and the reviewed Gateway namespace and
+5. Set the approved public Web origin and the reviewed Gateway namespace and
    security policy. The product namespace stays `restricted`. The current AKS
    managed Gateway pods cannot set the seccomp profile required by that
    policy, so routing acceptance needs a separately approved Gateway namespace
    using the `baseline` policy. Do not change the product namespace policy to
    work around this limitation.
-5. Confirm the selected image tag was pushed by the v1 image workflow.
+6. Confirm the selected image tag was pushed by the v1 image workflow.
 
 Do not copy acceptance-only OAuth client IDs or loopback redirect URIs into a
 production registration. Keep passwords, OAuth secrets, PFX passwords, tokens,
@@ -705,14 +711,23 @@ replacement process.
    ```
 
 The local `deploy:kustomize` helper follows this stop/wait/cache-expiry
-procedure for `projects-config-runtime-config`. It records the existing
-replica count on `deployment/projects-config`, waits for that Deployment's
-Pods to terminate, waits 70 seconds, replaces only the named ConfigMap, then
-restores the replica count before applying workloads and checking rollouts.
-If replacement, apply, or rollout fails, the recovery annotation remains;
-rerun the same deployment command to resume. If the ConfigMap is absent, the
-helper leaves the Deployment stopped until the retry recreates it. Do not
-clear the annotation manually. Other immutable ConfigMaps, including
+procedure for `projects-config-runtime-config` and the AgentHost
+`environment-runtime-config` pair. For an Environment map change, it records
+the current replica count on `deployment/environment`, stops that Deployment,
+waits for its Pods to terminate and waits 70 seconds before replacing the
+exact map. It uses the live map's UID and resource version as delete
+preconditions and verifies the replacement data before it resumes the
+Deployment. A change to only `agenthost-runtime-v1` does not stop Environment.
+
+The helper checks the caller's exact map and Deployment permissions before
+writing. It also checks the effective Agent Sandbox permissions of the
+Environment ServiceAccount. The proposed rules in
+`deploy/k8s/proposed/environment-agent-sandbox-rbac.yaml` are not in the active
+Kustomize bundle and are not applied by the helper. If Environment replacement,
+apply, or rollout fails, its recovery annotation remains; rerun the same
+deployment command to resume. If the ConfigMap is absent, the helper leaves
+the Deployment stopped until the retry recreates it. Do not clear the
+annotation manually. Other immutable ConfigMaps, including
 `knowledge-runtime-config`, still require the manual procedure above.
 
 Kubelet caches immutable ConfigMap data per node and does not watch it for

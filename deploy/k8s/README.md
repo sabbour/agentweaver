@@ -6,10 +6,14 @@ runtime ConfigMaps, the Projects & Config provider catalog, namespace controls,
 network policies, and the Portal Web HTTPRoute. It references a separately
 managed Gateway, listener, certificate, and public DNS.
 
-The root also pins ten product images, including the optional AgentHost runtime
-profile. The AgentHost profile remains incomplete until its Sandbox endpoint,
-queue limit, and operator-owned TLS Secret are configured. The Broker
-migration Job and acceptance Foundation Probe are separate overlays.
+The root pins ten product images, including the optional AgentHost runtime
+profile. The profile includes its configure endpoint and keeps the existing
+pending-turn limit of four. Environment supplies the matching AgentHost image
+tuple and bootstrap settings. The operator must provide `agenthost-tls`; the
+deployment helper checks its Kubernetes TLS Secret type but does not create or
+inspect certificate data. AgentHost runs only in selected Sandboxes, not as a
+shared Deployment. The Broker migration Job and acceptance Foundation Probe
+are separate overlays.
 
 For versioning and image builds, see the [release guide](../../releases/README.md).
 For the Azure prerequisites and installation order, see
@@ -27,8 +31,11 @@ prerequisites:
    catalog. Follow the runtime configuration reference; do not put credentials
    or private keys in ConfigMaps.
 3. Create the operator-owned Secrets and backend CA ConfigMap referenced by
-   the workloads. Complete the managed certificate procedure so AKS creates
-   `identity-broker-tls`.
+   the workloads. When using AgentHost, provide `agenthost-tls` as a
+   `kubernetes.io/tls` Secret for the configured HTTPS endpoint. The installer
+   checks only the Secret's name and type; verify its certificate and key
+   through the approved operator process. Complete the managed certificate
+   procedure so AKS creates `identity-broker-tls`.
 4. Confirm the database and Entra workload identities are ready. The deploy
    command runs the selected service migrations before it applies workloads.
 5. After the product Services exist, configure the separate managed Gateway
@@ -44,7 +51,8 @@ runtime configuration, or external permissions.
 | `base/` | Product namespace, ServiceAccounts, Deployments, Services, and network policies. |
 | `runtime-configs/` | Non-secret ConfigMap inputs for service hosts and Environment settings. |
 | `provider-catalogs/` | Projects & Config provider catalog snapshot and ConfigMap. |
-| `profiles/` | Optional runtime profiles, including the incomplete AgentHost profile. |
+| `profiles/` | Optional runtime profiles, including the AgentHost runtime ConfigMap. |
+| `proposed/` | Proposed Agent Sandbox RBAC rules, excluded from the active Kustomize bundle. |
 | `migrations/identity-broker/` | Separate Broker migration ServiceAccount and one-shot Job. |
 | `migrations/p1-postgres/` | PostgreSQL migration resources applied by the database maintenance runner. |
 | `routing/identity-broker/` | Portal Web route and Cilium ingress policies included by the root bundle. |
@@ -118,7 +126,10 @@ does not prove an end-to-end user workflow.
 
 Runtime ConfigMaps contain non-secret values. Most are immutable, so
 Kubernetes rejects changes to their data. Review and apply the intended values
-before deploying workloads. Follow the
+before deploying workloads. The AgentHost profile and Environment Deployment
+options must agree on the Sandbox image tuple. The Environment ConfigMap names
+the AgentHost profile and TLS Secret; these must match the reviewed resources.
+Follow the
 [runtime configuration reference](../../docs/reference/runtime-configuration.md)
 when changing an existing installation. For Knowledge, preserve the stable
 resource label `agentweaver.knowledge` and increase `ResourceGeneration` only
@@ -169,16 +180,23 @@ MCP, Knowledge, and AgentHost updates do not trigger these deployment
 migration Jobs. The root Kustomize bundle is still applied and all nine
 Deployment rollouts are checked.
 
-If the rendered `projects-config-runtime-config` data changes, the helper
-checks delete permission scoped to `configmap/projects-config-runtime-config`
-before migrations. It saves the existing replica count on the exact
-`projects-config` Deployment, stops that Deployment, waits for its Pods to
-terminate and for the 70-second immutable-ConfigMap cache window, then deletes
-and recreates only `projects-config-runtime-config`. It restores the saved
-replica count before applying the workloads and checking all rollouts.
+The helper checks permissions before replacing any changed immutable runtime
+ConfigMap. Its allow-list includes `agenthost-runtime-v1` and
+`environment-runtime-config`; it uses UID and resource-version preconditions
+when deleting each observed map, then verifies the replacement data. When the
+Environment map changes, it records the Environment replica count, stops that
+Deployment, waits for its Pods to terminate and for the 70-second
+immutable-ConfigMap cache window, then replaces the map. A change to only the
+AgentHost ConfigMap does not restart Environment.
 
-If replacement, workload apply, or rollout fails, the helper keeps a recovery
-annotation on `projects-config`. Rerun the same deployment command to resume
-the stop/wait/replace/resume sequence; if the ConfigMap is absent, the helper
-keeps the Deployment stopped until the retry recreates it. Do not clear the
-annotation manually.
+If Environment replacement, workload apply, or rollout fails, the helper
+keeps a recovery annotation on `environment`. Rerun the same deployment
+command to resume the stop/wait/replace/resume sequence; if the ConfigMap is
+absent, the helper keeps the Deployment stopped until the retry recreates it.
+Do not clear the annotation manually.
+
+Before any writes, the helper checks the effective Agent Sandbox permissions
+of the Environment ServiceAccount and the metadata-only type of
+`agenthost-tls`. These checks do not grant permissions or create Secrets. The
+proposed rules in `proposed/environment-agent-sandbox-rbac.yaml` are not part
+of the active Kustomize bundle and are never applied by this command.

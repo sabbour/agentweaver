@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
-import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
@@ -13,6 +12,7 @@ import {
 
 const namespace = 'agentweaver';
 const name = 'projects-config-runtime-config';
+const testScratchRoot = path.resolve('.test-scratch', 'release-tests');
 
 function desiredMap(name, value) {
   return {
@@ -43,7 +43,11 @@ async function startApiServer(statusFor) {
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'aw-immutable-map-'));
+  fs.mkdirSync(testScratchRoot, { recursive: true });
+  const directory = path.join(
+    testScratchRoot, `immutable-map-${process.pid}-${Math.random().toString(16).slice(2)}`,
+  );
+  fs.mkdirSync(directory);
   const kubeconfig = path.join(directory, 'config');
   fs.writeFileSync(kubeconfig, [
     'apiVersion: v1', 'kind: Config',
@@ -101,6 +105,7 @@ async function replaceWithRealDelete(api) {
     items: [
       desired,
       desiredMap('agenthost-runtime-v1', 'same'),
+      desiredMap('environment-runtime-config', 'same'),
       desiredMap('gateway-runtime-config', 'same'),
       desiredMap('orchestrator-runtime-config', 'same'),
     ],

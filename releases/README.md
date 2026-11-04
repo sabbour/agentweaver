@@ -46,10 +46,13 @@ For a local deployment that updates only selected repositories, use the JSON
 image manifest described in the
 [Kustomize guide](../deploy/k8s/README.md#select-images-with-a-manifest).
 
-Run deployment from a machine with Azure CLI, `kubectl`, `kubelogin`, Docker,
-and Node.js 24. Select the published references you want to update in the
-operator-supplied manifest; the helper keeps live references for omitted
-images. The legacy `--image-tag` option still updates all ten images.
+Run deployment from a machine with Azure CLI, `kubectl`, `kubelogin`,
+Docker Buildx, and Node.js 24. The helper uses Buildx to resolve image
+references and reads AgentHost manifests and blob descriptors from GHCR to
+measure the selected platform image; it does not download the image layers.
+Select the published references you want to update in the operator-supplied
+manifest; the helper keeps live references for omitted images. The legacy
+`--image-tag` option still updates all ten images.
 
 ```powershell
 az login
@@ -68,15 +71,38 @@ have the required AKS and namespace permissions; the deployment does not
 grant access or provision Azure resources.
 
 The command resolves selected manifest references to GHCR digests and keeps
-live references for omitted repositories. It runs only migrations for
-selected services, renders the Kustomize overlay, applies namespaced
-resources, and waits for all nine Deployments. It excludes Namespace objects.
-A migration failure stops before the root workload apply. Earlier migrations
-or workload apply may have
+live references for omitted repositories. For AgentHost, it verifies the
+`linux/amd64` image manifest and measures the compressed image bytes. It
+stamps the same digest, platform, and byte count into the AgentHost runtime
+profile and Environment Sandbox options. An omitted AgentHost image keeps the
+validated live tuple; missing or conflicting live references fail before any
+Kubernetes write.
+
+Before writes, the command checks that `agenthost-tls` exists as a
+`kubernetes.io/tls` Secret and checks the effective Agent Sandbox permissions
+of the Environment ServiceAccount. The Secret check reads server-side table
+metadata only; it does not validate certificate contents. The checks do not
+create the Secret or grant access. The proposed RBAC manifest in
+`deploy/k8s/proposed/` is separate from the active Kustomize set and is not
+applied.
+
+The command runs only migrations for selected services, renders the Kustomize
+overlay, applies namespaced resources, and waits for all nine Deployments. It
+excludes Namespace objects. A migration failure stops before the root
+workload apply. Earlier migrations or workload apply may have
 completed when a later step fails; inspect partial state and do not assume
 rollback. Before retrying a failed migration, have an authorized operator
 diagnose the cause and state. Verify schema compatibility before choosing an
 older image.
+
+When `environment-runtime-config` changes, the helper checks permissions
+before writes, stops the Environment Deployment, waits for its Pods and the
+immutable ConfigMap cache window, then replaces only the observed map with
+UID and resource-version delete preconditions. It restores the prior replica
+count and verifies rollout. If replacement or rollout fails, the Environment
+recovery annotation remains; rerun the same deployment command to resume.
+A change to only `agenthost-runtime-v1` does not restart Environment.
+See the [Kustomize guide](../deploy/k8s/README.md) for replacement details.
 
 The Projects & Config migration identity must already have `CONNECT` and
 ownership only of `projects_config` and its planned objects. Its migration

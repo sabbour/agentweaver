@@ -2,12 +2,14 @@ import { createHash } from 'node:crypto';
 
 export const REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS = new Set([
   'agenthost-runtime-v1',
+  'environment-runtime-config',
   'projects-config-runtime-config',
   'gateway-runtime-config',
   'orchestrator-runtime-config',
 ]);
 
 export const IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENTS = new Map([
+  ['environment-runtime-config', ['environment']],
   ['projects-config-runtime-config', ['projects-config']],
   ['gateway-runtime-config', ['gateway']],
   ['orchestrator-runtime-config', ['orchestrator']],
@@ -121,6 +123,7 @@ export function verifyImmutableRuntimeConfigMapReplacementPermissions(replacemen
     const name = metadata.name;
     // Check create before delete because replacement removes the old object first.
     for (const [verb, resource] of [
+      ['get', `configmaps/${name}`],
       ['create', 'configmaps'],
       ['delete', `configmaps/${name}`],
     ]) {
