@@ -350,8 +350,71 @@ function deploymentSelector(deployment, name = 'projects-config') {
   return Object.entries(labels).map(([key, value]) => `${key}=${value}`).join(',');
 }
 
-async function waitForDeploymentPodsToStop(exec, context, root, selector, sleep, name = 'projects-config') {
-  const deadline = Date.now() + POD_TERMINATION_TIMEOUT_MS;
+function isRetainedProjectsConfigMigrationPod(pod) {
+  if (!pod || typeof pod !== 'object') return false;
+  const owners = pod.metadata?.ownerReferences;
+  const owner = Array.isArray(owners) && owners.find(reference =>
+    reference && typeof reference === 'object' &&
+    reference.apiVersion === 'batch/v1' && reference.kind === 'Job' && reference.controller === true);
+  if (pod.status?.phase !== 'Succeeded' ||
+      pod.metadata?.labels?.['agentweaver.io/migration'] !== 'projects-config' ||
+      pod.spec?.serviceAccountName !== 'projects-config-migration' ||
+      !owner || typeof owner.uid !== 'string' || !owner.uid.trim() ||
+      !/^projects-config-migration-[a-f0-9]{8}$/.test(owner.name ?? '')) {
+    return false;
+  }
+
+  const spec = pod.spec;
+  if (!Array.isArray(spec.containers) || !spec.containers.length ||
+      [spec.initContainers, spec.ephemeralContainers, spec.volumes]
+        .some(value => value !== undefined && !Array.isArray(value))) return false;
+  const referencesRuntimeConfig = container => {
+    if (!container || typeof container !== 'object' ||
+        [container.envFrom, container.env].some(value => value !== undefined && !Array.isArray(value))) {
+      return true;
+    }
+    return (container.envFrom ?? []).some(source => {
+      if (!source || typeof source !== 'object') return true;
+      const reference = source.configMapRef;
+      return reference !== undefined && (!reference || typeof reference !== 'object' ||
+        typeof reference.name !== 'string' || reference.name === PROJECTS_CONFIG_RUNTIME_CONFIG);
+    }) || (container.env ?? []).some(setting => {
+      if (!setting || typeof setting !== 'object') return true;
+      const valueFrom = setting.valueFrom;
+      if (valueFrom === undefined) return false;
+      if (!valueFrom || typeof valueFrom !== 'object') return true;
+      const reference = valueFrom.configMapKeyRef;
+      return reference !== undefined && (!reference || typeof reference !== 'object' ||
+        typeof reference.name !== 'string' || reference.name === PROJECTS_CONFIG_RUNTIME_CONFIG);
+    });
+  };
+  if ([
+    ...(spec.containers ?? []),
+    ...(spec.initContainers ?? []),
+    ...(spec.ephemeralContainers ?? []),
+  ].some(referencesRuntimeConfig)) return false;
+  return !(spec.volumes ?? []).some(volume => {
+    if (!volume || typeof volume !== 'object') return true;
+    const configMap = volume.configMap;
+    if (configMap !== undefined && (!configMap || typeof configMap !== 'object' ||
+        typeof configMap.name !== 'string' || configMap.name === PROJECTS_CONFIG_RUNTIME_CONFIG)) return true;
+    const projected = volume.projected;
+    if (projected === undefined) return false;
+    if (!projected || typeof projected !== 'object' || !Array.isArray(projected.sources)) return true;
+    return projected.sources.some(source => {
+      if (!source || typeof source !== 'object') return true;
+      const reference = source.configMap;
+      return reference !== undefined && (!reference || typeof reference !== 'object' ||
+        typeof reference.name !== 'string' || reference.name === PROJECTS_CONFIG_RUNTIME_CONFIG);
+    });
+  });
+}
+
+async function waitForDeploymentPodsToStop(
+  exec, context, root, selector, sleep, name = 'projects-config',
+  ignorePod = () => false, now = Date.now,
+) {
+  const deadline = now() + POD_TERMINATION_TIMEOUT_MS;
   for (;;) {
     const result = kubectl(exec, context, [
       'get', 'pods', '--selector', selector, '--output=json',
@@ -363,15 +426,15 @@ async function waitForDeploymentPodsToStop(exec, context, root, selector, sleep,
       fail(`Kubernetes returned invalid Pod list JSON while stopping deployment/${name}.`);
     }
     if (!Array.isArray(pods)) fail(`Kubernetes returned an invalid Pod list for deployment/${name}.`);
-    if (!pods.length) return;
-    if (Date.now() >= deadline) {
+    if (!pods.some(pod => !ignorePod(pod))) return;
+    if (now() >= deadline) {
       fail(`Timed out waiting for deployment/${name} Pods to terminate.`);
     }
     await sleep(5_000);
   }
 }
 
-async function activateRuntimeConfig(exec, context, root, runtimeConfig, deployment, sleep, log) {
+async function activateRuntimeConfig(exec, context, root, runtimeConfig, deployment, sleep, log, now) {
   const replicas = deploymentReplicas(deployment);
   const selector = deploymentSelector(deployment);
   const marker = deployment.metadata?.annotations?.[PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION];
@@ -385,7 +448,8 @@ async function activateRuntimeConfig(exec, context, root, runtimeConfig, deploym
   try {
     kubectl(exec, context, ['scale', 'deployment/projects-config', '--replicas=0'], root,
       'Could not stop deployment/projects-config for immutable ConfigMap replacement');
-    await waitForDeploymentPodsToStop(exec, context, root, selector, sleep);
+    await waitForDeploymentPodsToStop(exec, context, root, selector, sleep, 'projects-config',
+      isRetainedProjectsConfigMigrationPod, now);
     await sleep(IMMUTABLE_CONFIGMAP_CACHE_WAIT_MS);
 
     const current = readExistingRuntimeConfigMap(exec, context, root);
@@ -787,6 +851,7 @@ export async function deployKustomize(options, overrides = {}) {
   const exec = overrides.exec ?? run;
   const fetchImpl = overrides.fetchImpl ?? exec.fetchImpl ?? globalThis.fetch;
   const log = overrides.log ?? (message => console.log(message));
+  const now = overrides.now ?? Date.now;
   const requestedImages = options.imageManifest === undefined
     ? new Map(IMAGE_REPOSITORIES.map(repository => [repository, options.imageTag]))
     : parseImageManifest(readFileSync(path.resolve(root, options.imageManifest), 'utf8'));
@@ -946,7 +1011,8 @@ export async function deployKustomize(options, overrides = {}) {
     }
     if (activateProjectsConfig) {
       await activateRuntimeConfig(exec, context, root, runtimeConfig, projectsConfigDeployment,
-        overrides.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))), log);
+        overrides.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))),
+        log, now);
     } else if (replaceRuntimeConfig) {
       kubectl(exec, context, ['delete', 'configmap', PROJECTS_CONFIG_RUNTIME_CONFIG], root,
         `Could not delete ConfigMap/${PROJECTS_CONFIG_RUNTIME_CONFIG}`);

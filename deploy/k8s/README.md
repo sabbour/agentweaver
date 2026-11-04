@@ -176,6 +176,26 @@ If you omit AgentHost, its live Environment image must already use the digest
 in the retained runtime tuple. A tag or a different digest stops deployment
 before writes; select AgentHost explicitly to update it.
 
+When a Projects & Config migration completes, its Job retains a `Succeeded`
+Pod that matches the Deployment selector. During Projects runtime ConfigMap
+activation, the helper ignores only a Pod with phase `Succeeded`, the
+`agentweaver.io/migration: projects-config` label, the
+`projects-config-migration` ServiceAccount, and a controlling `batch/v1` Job
+owner with a nonempty UID and a name that matches
+`projects-config-migration-<8 lowercase hex>`. The Pod must not reference
+`projects-config-runtime-config` through `envFrom.configMapRef` or
+`env.valueFrom.configMapKeyRef` in a regular, init, or ephemeral container, or
+through a ConfigMap volume or projected ConfigMap volume. Any other selected
+Pod remains a blocker, including a terminal or terminating workload Pod. The
+helper does not delete Jobs or Pods or change the migration completion gate.
+
+After all blocking Pods stop, the helper waits 70 seconds for the immutable
+ConfigMap cache window, replaces the map when needed, and restores the
+Deployment replicas. If activation, workload apply, or rollout fails after
+Projects activation starts, do not clear the Projects recovery annotation.
+Rerun the same deployment command. If the ConfigMap is absent, the helper
+keeps Projects & Config stopped until a retry recreates it.
+
 Only selected images with schema migrations run migration Jobs: Broker runs
 the Broker Job; Environment, Orchestrator, and Events & Sessions each run
 their matching migration Job; Projects & Config runs its migration Job. Web, Gateway,
