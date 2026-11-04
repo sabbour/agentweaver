@@ -1487,6 +1487,102 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         Assert.Equal("unavailable", returnedToIdle.RuntimeEffectsState);
     }
 
+    [Theory]
+    [InlineData("selection-hash")]
+    [InlineData("tenant")]
+    public async Task NonActiveCoordinatorStatusRejectsStoredBindingMismatch(string mismatch)
+    {
+        await SetCancelledOwnerStatusAsync();
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        var update = mismatch switch
+        {
+            "selection-hash" => $"""
+                UPDATE "{_schema}".accepted_runs
+                SET accepted_selection_hash = @value
+                WHERE project_id = @project AND run_id = @run
+                """,
+            "tenant" => $"""
+                UPDATE "{_schema}".accepted_runs
+                SET tenant_id = @value
+                WHERE project_id = @project AND run_id = @run
+                """,
+            _ => throw new ArgumentOutOfRangeException(nameof(mismatch))
+        };
+        await using (var command = new NpgsqlCommand(update, connection))
+        {
+            command.Parameters.AddWithValue(
+                "value",
+                mismatch == "selection-hash" ? new string('b', 64) : "other-tenant");
+            command.Parameters.AddWithValue("project", _root.ProjectId);
+            command.Parameters.AddWithValue("run", _root.RunId);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+
+        var rejected = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.ReadSessionStatusAsync(
+                _actor, _root, CancellationToken.None, _selection));
+        Assert.Equal("coordinator_session_stale", rejected.Code);
+        Assert.Equal(409, rejected.StatusCode);
+    }
+
+    [Fact]
+    public async Task NonActiveCoordinatorStatusRejectsRootBindingMismatch()
+    {
+        await SetCancelledOwnerStatusAsync();
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            UPDATE "{_schema}".coordination_sessions
+            SET root_session_id = @otherRoot
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", _root.ProjectId);
+            command.Parameters.AddWithValue("run", _root.RunId);
+            command.Parameters.AddWithValue("session", _root.SessionId);
+            command.Parameters.AddWithValue("otherRoot", _child.Identity.SessionId);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+
+        var rejected = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.ReadSessionStatusAsync(
+                _actor, _root, CancellationToken.None, _selection));
+        Assert.Equal("coordinator_session_stale", rejected.Code);
+        Assert.Equal(409, rejected.StatusCode);
+    }
+
+    [Fact]
+    public async Task NonActiveCoordinatorStatusRejectsStaleSessionFenceAndWrongWriter()
+    {
+        await SetCancelledOwnerStatusAsync();
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            UPDATE "{_schema}".coordination_sessions
+            SET execution_fence = execution_fence - 1
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", _root.ProjectId);
+            command.Parameters.AddWithValue("run", _root.RunId);
+            command.Parameters.AddWithValue("session", _root.SessionId);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+
+        var staleFence = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.ReadSessionStatusAsync(
+                _actor, _root, CancellationToken.None, _selection));
+        Assert.Equal("execution_fence_stale", staleFence.Code);
+        Assert.Equal(409, staleFence.StatusCode);
+
+        var wrongWriter = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.ReadSessionStatusAsync(
+                _actor with { Subject = Guid.NewGuid().ToString("D") },
+                _root,
+                CancellationToken.None,
+                _selection));
+        Assert.Equal("session_writer_mismatch", wrongWriter.Code);
+        Assert.Equal(403, wrongWriter.StatusCode);
+    }
+
     [Fact]
     public async Task IndeterminateRunOutcomeIsOwnerPersistedAndRecoveredUnderANewFence()
     {
@@ -1728,6 +1824,40 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             presenting.StateVersion,
             presentedMessage: null,
             cancellationToken: CancellationToken.None);
+    }
+
+    private async Task SetCancelledOwnerStatusAsync()
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        long nextFence;
+        await using (var updateRun = new NpgsqlCommand($"""
+            UPDATE "{_schema}".accepted_runs
+            SET execution_state = 'cancelled',
+                cancelled_at = clock_timestamp(),
+                execution_fence = execution_fence + 1,
+                state_version = state_version + 1
+            WHERE project_id = @project AND run_id = @run
+            RETURNING execution_fence
+            """, connection))
+        {
+            updateRun.Parameters.AddWithValue("project", _root.ProjectId);
+            updateRun.Parameters.AddWithValue("run", _root.RunId);
+            nextFence = (long)(await updateRun.ExecuteScalarAsync()
+                ?? throw new InvalidOperationException("The accepted run was not updated."));
+        }
+
+        await using var updateSession = new NpgsqlCommand($"""
+            UPDATE "{_schema}".coordination_sessions
+            SET lifecycle_state = 'cancelled',
+                execution_fence = @fence,
+                state_version = state_version + 1
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+            """, connection);
+        updateSession.Parameters.AddWithValue("project", _root.ProjectId);
+        updateSession.Parameters.AddWithValue("run", _root.RunId);
+        updateSession.Parameters.AddWithValue("session", _root.SessionId);
+        updateSession.Parameters.AddWithValue("fence", nextFence);
+        Assert.Equal(1, await updateSession.ExecuteNonQueryAsync());
     }
 
     private async Task SeedCoordinatorDecisionVersionAsync(

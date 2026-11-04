@@ -227,9 +227,11 @@ public static partial class CoordinationEndpoints
             var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
                 context, projectId, runId, cancellationToken).ConfigureAwait(false);
             var identity = new SessionIdentity(projectId, runId, sessionId);
-            var status = await store.ReadSessionStatusAsync(actor, identity, cancellationToken)
+            var status = await store.ReadSessionStatusAsync(
+                    actor, identity, cancellationToken, selection)
                 .ConfigureAwait(false);
-            if (status.Kind == CoordinationSessionKind.Coordinator)
+            if (status.Kind == CoordinationSessionKind.Coordinator &&
+                status.Lifecycle == CoordinationLifecycleState.Active)
             {
                 var decision = await decisions.ReadCurrentAsync(
                     actor, identity, selection, cancellationToken).ConfigureAwait(false);

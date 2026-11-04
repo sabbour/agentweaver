@@ -5,6 +5,9 @@ extern alias ProjectsConfig;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.WebUtilities;
@@ -84,7 +87,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.DoesNotContain(unboundClaims, claim => claim.Type is "project_id" or "run_id");
         var subject = SingleClaim(unboundClaims, "sub");
         var orchestratorMembership = await AddMembershipAsync(projects.PrivilegedFixtureDataSource, subject, TenantId);
-        await AssignRoleAsync(projects.PrivilegedFixtureDataSource, orchestratorMembership.MembershipId,
+        var orchestratorAssignment = await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource, orchestratorMembership.MembershipId,
             ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Orchestrator);
 
         var ownerSchema = "chat_owner_" + Guid.NewGuid().ToString("N");
@@ -123,8 +127,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 .MigrateAsync(migrations, eventsSchema);
         }
         EventsIntegrationFactory? eventsReference = null;
+        var statusSelectionBarrier = new ControlledRequestBarrier();
+        var statusSelectionChange = new ProjectsSelectionResponseChange();
+        var statusSelectionReads = 0;
         await using var orchestratorFactory = new OrchestratorIntegrationFactory(
-            _connectionString, ownerSchema, signingKey, projects.CreateHandler,
+            _connectionString, ownerSchema, signingKey,
+            () => new ProjectsSelectionBarrierHandler(
+                projects.CreateHandler(), statusSelectionBarrier, statusSelectionChange),
             () => eventsReference!.Server.CreateHandler());
         await using var eventsFactory = new EventsIntegrationFactory(
             _connectionString, eventsSchema, signingKey, projects.CreateHandler,
@@ -435,19 +444,80 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         }
 
+        var rootStatusPath =
+            $"/api/v1/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{pending.RootSessionId}/status";
+        var childStatusPath =
+            $"/api/v1/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{messageTargetSessionId}/status";
+        using var rootStatusBeforeCancelResponse = await SendAsync(
+            gateway.Client, HttpMethod.Get, rootStatusPath, boundToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, rootStatusBeforeCancelResponse.StatusCode);
+        var rootStatusBeforeCancel = await rootStatusBeforeCancelResponse.Content
+            .ReadFromJsonAsync<SessionStatusSnapshot>(OrchestratorJsonOptions);
+        Assert.NotNull(rootStatusBeforeCancel);
+        Assert.Equal(CoordinationSessionKind.Coordinator, rootStatusBeforeCancel.Kind);
+        Assert.Equal(CoordinationLifecycleState.Active, rootStatusBeforeCancel.Lifecycle);
+        Assert.NotNull(rootStatusBeforeCancel.ExecutionRecovery);
+
+        using var childStatusBeforeCancelResponse = await SendAsync(
+            gateway.Client, HttpMethod.Get, childStatusPath, boundToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, childStatusBeforeCancelResponse.StatusCode);
+        var childStatusBeforeCancel = await childStatusBeforeCancelResponse.Content
+            .ReadFromJsonAsync<SessionStatusSnapshot>(OrchestratorJsonOptions);
+        Assert.NotNull(childStatusBeforeCancel);
+        Assert.Equal(CoordinationSessionKind.ChildWork, childStatusBeforeCancel.Kind);
+        Assert.Null(childStatusBeforeCancel.ExecutionRecovery);
+
+        var acceptedSelectionPath =
+            $"/api/projects/{project.ProjectId}/runs/{pending.RunId}/selection";
+        Interlocked.Exchange(ref statusSelectionReads, 0);
+        statusSelectionChange.ChangeSecondResponse(acceptedSelectionPath);
+        statusSelectionBarrier.Arm((request, _) => Task.FromResult(
+            request.Method == HttpMethod.Get &&
+            request.RequestUri?.AbsolutePath == acceptedSelectionPath &&
+            Interlocked.Increment(ref statusSelectionReads) == 2));
+        var changedSelectionRead = SendAsync(
+            gateway.Client, HttpMethod.Get, rootStatusPath, boundToken, [TenantId]);
+        try
+        {
+            var selectionPause = statusSelectionBarrier.WaitUntilPausedAsync();
+            var selectionRace = await Task.WhenAny(selectionPause, changedSelectionRead)
+                .WaitAsync(TimeSpan.FromSeconds(30));
+            if (selectionRace == changedSelectionRead)
+            {
+                using var earlyResponse = await changedSelectionRead;
+                Assert.Fail(
+                    $"The status read finished before the final-selection barrier " +
+                    $"(selection reads: {statusSelectionReads}, status: {(int)earlyResponse.StatusCode}).");
+            }
+            await selectionPause;
+            statusSelectionBarrier.Release();
+            using var changedSelectionResponse =
+                    await changedSelectionRead.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Equal(HttpStatusCode.Conflict, changedSelectionResponse.StatusCode);
+            Assert.Contains(
+                "coordinator_selection_stale",
+                await changedSelectionResponse.Content.ReadAsStringAsync());
+        }
+        finally
+        {
+            statusSelectionBarrier.Release();
+        }
+
         // Project Contributors can cancel another actor's run without obtaining that actor's run-bound token.
         var contributorToken = await IssueTokenAsync(
             "projects.orchestrator", [TenantId], "chat-contributor", null, null, []);
         var contributorSubject = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(contributorToken).Claims, "sub");
         var contributorMembership = await AddMembershipAsync(
             projects.PrivilegedFixtureDataSource, contributorSubject, TenantId);
-        await AssignRoleAsync(projects.PrivilegedFixtureDataSource, contributorMembership.MembershipId,
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource, contributorMembership.MembershipId,
             ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Contributor);
         var viewerToken = await IssueTokenAsync(
             "projects.orchestrator", [TenantId], "chat-viewer", null, null, []);
         var viewerSubject = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(viewerToken).Claims, "sub");
         var viewerMembership = await AddMembershipAsync(projects.PrivilegedFixtureDataSource, viewerSubject, TenantId);
-        await AssignRoleAsync(projects.PrivilegedFixtureDataSource, viewerMembership.MembershipId,
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource, viewerMembership.MembershipId,
             ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Viewer);
         using (var deniedCreate = new HttpRequestMessage(HttpMethod.Post, $"/api/v1/projects/{project.ProjectId}/runs")
         {
@@ -465,12 +535,111 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
         using (var boundDenied = await CancelChatAsync(boundToken, "bound-cancel"))
             Assert.Equal(HttpStatusCode.Forbidden, boundDenied.StatusCode);
-        using (var cancelled = await CancelChatAsync(contributorToken, "contributor-cancel"))
+        Interlocked.Exchange(ref statusSelectionReads, 0);
+        statusSelectionBarrier.Arm((request, _) => Task.FromResult(
+            request.Method == HttpMethod.Get &&
+            request.RequestUri?.AbsolutePath == acceptedSelectionPath &&
+            Interlocked.Increment(ref statusSelectionReads) == 2));
+        var overlappingStatusRead = SendAsync(
+            gateway.Client, HttpMethod.Get, rootStatusPath, boundToken, [TenantId]);
+        try
         {
+            await statusSelectionBarrier.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            using var cancelled = await CancelChatAsync(contributorToken, "contributor-cancel");
             Assert.Equal(HttpStatusCode.OK, cancelled.StatusCode);
             var receipt = await cancelled.Content.ReadFromJsonAsync<CancelProjectRunResponse>(OrchestratorJsonOptions);
             Assert.NotNull(receipt);
             Assert.False(receipt.AlreadyTerminal);
+        }
+        finally
+        {
+            statusSelectionBarrier.Release();
+        }
+        using (var overlapping = await overlappingStatusRead.WaitAsync(TimeSpan.FromSeconds(30)))
+        {
+            if (overlapping.StatusCode == HttpStatusCode.OK)
+            {
+                var earlier = await overlapping.Content.ReadFromJsonAsync<SessionStatusSnapshot>(
+                    OrchestratorJsonOptions);
+                Assert.NotNull(earlier);
+                Assert.Equal(CoordinationLifecycleState.Active, earlier.Lifecycle);
+                Assert.Equal(rootStatusBeforeCancel.ExecutionFence, earlier.ExecutionFence);
+                Assert.Equal(rootStatusBeforeCancel.StateVersion, earlier.StateVersion);
+                Assert.Equal(rootStatusBeforeCancel.RunExecution, earlier.RunExecution);
+            }
+            else
+            {
+                Assert.Equal(HttpStatusCode.Conflict, overlapping.StatusCode);
+            }
+        }
+
+        using var rootStatusAfterCancelResponse = await SendAsync(
+            gateway.Client, HttpMethod.Get, rootStatusPath, boundToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, rootStatusAfterCancelResponse.StatusCode);
+        var rootStatusAfterCancelBody =
+            await rootStatusAfterCancelResponse.Content.ReadAsStringAsync();
+        var rootStatusAfterCancel = JsonSerializer.Deserialize<SessionStatusSnapshot>(
+            rootStatusAfterCancelBody, OrchestratorJsonOptions);
+        Assert.NotNull(rootStatusAfterCancel);
+        Assert.Equal(rootStatusBeforeCancel.Identity, rootStatusAfterCancel.Identity);
+        Assert.Equal(rootStatusBeforeCancel.ParentSessionId, rootStatusAfterCancel.ParentSessionId);
+        Assert.Equal(rootStatusBeforeCancel.RootSessionId, rootStatusAfterCancel.RootSessionId);
+        Assert.Equal(rootStatusBeforeCancel.Kind, rootStatusAfterCancel.Kind);
+        Assert.Equal(rootStatusBeforeCancel.Detached, rootStatusAfterCancel.Detached);
+        Assert.Equal(CoordinationLifecycleState.Cancelled, rootStatusAfterCancel.Lifecycle);
+        Assert.Equal(rootStatusBeforeCancel.ExecutionFence + 1, rootStatusAfterCancel.ExecutionFence);
+        Assert.Equal(rootStatusBeforeCancel.StateVersion + 1, rootStatusAfterCancel.StateVersion);
+        Assert.Equal(rootStatusBeforeCancel.Activity, rootStatusAfterCancel.Activity);
+        Assert.Equal(rootStatusBeforeCancel.ActivityUnavailableCode, rootStatusAfterCancel.ActivityUnavailableCode);
+        Assert.Equal(rootStatusBeforeCancel.RuntimeEffectsState, rootStatusAfterCancel.RuntimeEffectsState);
+        Assert.Equal(
+            rootStatusBeforeCancel.RuntimeEffectsUnavailableCode,
+            rootStatusAfterCancel.RuntimeEffectsUnavailableCode);
+        Assert.Equal(rootStatusBeforeCancel.InterruptionIntent, rootStatusAfterCancel.InterruptionIntent);
+        Assert.Empty(rootStatusAfterCancel.Blockers);
+        Assert.Null(rootStatusAfterCancel.ExecutionRecovery);
+        Assert.Equal("cancelled", rootStatusAfterCancel.RunExecution.State);
+        Assert.Equal(
+            rootStatusBeforeCancel.RunExecution.StateVersion + 1,
+            rootStatusAfterCancel.RunExecution.StateVersion);
+        using (var rootJson = JsonDocument.Parse(rootStatusAfterCancelBody))
+            Assert.False(rootJson.RootElement.TryGetProperty("executionRecovery", out _));
+
+        using var childStatusAfterCancelResponse = await SendAsync(
+            gateway.Client, HttpMethod.Get, childStatusPath, boundToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, childStatusAfterCancelResponse.StatusCode);
+        var childStatusAfterCancel = await childStatusAfterCancelResponse.Content
+            .ReadFromJsonAsync<SessionStatusSnapshot>(OrchestratorJsonOptions);
+        Assert.NotNull(childStatusAfterCancel);
+        Assert.Equal(childStatusBeforeCancel.Identity, childStatusAfterCancel.Identity);
+        Assert.Equal(childStatusBeforeCancel.ParentSessionId, childStatusAfterCancel.ParentSessionId);
+        Assert.Equal(childStatusBeforeCancel.RootSessionId, childStatusAfterCancel.RootSessionId);
+        Assert.Equal(childStatusBeforeCancel.Kind, childStatusAfterCancel.Kind);
+        Assert.Equal(childStatusBeforeCancel.Detached, childStatusAfterCancel.Detached);
+        Assert.Equal(CoordinationLifecycleState.Cancelled, childStatusAfterCancel.Lifecycle);
+        Assert.Equal(childStatusBeforeCancel.ExecutionFence + 1, childStatusAfterCancel.ExecutionFence);
+        Assert.Equal(childStatusBeforeCancel.StateVersion + 1, childStatusAfterCancel.StateVersion);
+        Assert.Equal(childStatusBeforeCancel.Activity, childStatusAfterCancel.Activity);
+        Assert.Equal(
+            childStatusBeforeCancel.ActivityUnavailableCode,
+            childStatusAfterCancel.ActivityUnavailableCode);
+        Assert.Equal(childStatusBeforeCancel.RuntimeEffectsState, childStatusAfterCancel.RuntimeEffectsState);
+        Assert.Equal(
+            childStatusBeforeCancel.RuntimeEffectsUnavailableCode,
+            childStatusAfterCancel.RuntimeEffectsUnavailableCode);
+        Assert.Equal(childStatusBeforeCancel.InterruptionIntent, childStatusAfterCancel.InterruptionIntent);
+        Assert.Empty(childStatusAfterCancel.Blockers);
+        Assert.Null(childStatusAfterCancel.ExecutionRecovery);
+        Assert.Equal("cancelled", childStatusAfterCancel.RunExecution.State);
+
+        using (var wrongRunStatus = await SendAsync(
+            gateway.Client,
+            HttpMethod.Get,
+            $"/api/v1/projects/{project.ProjectId}/runs/{pending.RunId}-wrong/coordination/sessions/{pending.RootSessionId}/status",
+            boundToken,
+            [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, wrongRunStatus.StatusCode);
         }
         using (var terminal = await CancelChatAsync(contributorToken, "terminal-cancel"))
         {
@@ -479,6 +648,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.NotNull(receipt);
             Assert.True(receipt.AlreadyTerminal);
         }
+        await RevokeRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            orchestratorAssignment.AssignmentId,
+            orchestratorAssignment.Revision);
+        using (var revokedStatus = await SendAsync(
+            gateway.Client, HttpMethod.Get, rootStatusPath, boundToken, [TenantId]))
+            Assert.Equal(HttpStatusCode.Forbidden, revokedStatus.StatusCode);
 
         // Exercise the production Gateway and both fresh Projects checks for each cancellation.
         async Task<HttpResponseMessage> CancelChatAsync(string token, string key)
@@ -508,6 +684,54 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             if (key is not null)
                 request.Headers.Add("Idempotency-Key", key);
             return await gateway.Client.SendAsync(request);
+        }
+    }
+
+    private sealed class ProjectsSelectionBarrierHandler(
+        HttpMessageHandler innerHandler,
+        ControlledRequestBarrier barrier,
+        ProjectsSelectionResponseChange selectionChange) : DelegatingHandler(innerHandler)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            await barrier.PauseIfMatchedAsync(request, cancellationToken).ConfigureAwait(false);
+            var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            return await selectionChange.MutateSecondResponseAsync(
+                request, response, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private sealed class ProjectsSelectionResponseChange
+    {
+        private string? _path;
+        private int _remaining;
+
+        public void ChangeSecondResponse(string path)
+        {
+            Volatile.Write(ref _path, path);
+            Volatile.Write(ref _remaining, 2);
+        }
+
+        public async Task<HttpResponseMessage> MutateSecondResponseAsync(
+            HttpRequestMessage request,
+            HttpResponseMessage response,
+            CancellationToken cancellationToken)
+        {
+            if (request.RequestUri?.AbsolutePath != Volatile.Read(ref _path) ||
+                Interlocked.Decrement(ref _remaining) != 0 ||
+                response.StatusCode != HttpStatusCode.OK)
+                return response;
+
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var selection = JsonNode.Parse(body)?.AsObject()
+                ?? throw new InvalidOperationException("Projects returned a selection that is not a JSON object.");
+            selection["contextRevision"] = "status-recheck-changed";
+            response.Content.Dispose();
+            response.Content = new StringContent(selection.ToJsonString(), Encoding.UTF8, "application/json");
+            Volatile.Write(ref _path, null);
+            return response;
         }
     }
 }
