@@ -33,6 +33,7 @@ internal static class MafScribeContract
         SessionIdentity identity, WorkPlanSnapshot plan, MafExecutionCheckpoint checkpoint,
         string stepId, string associationId, CoordinationActor actor)
     {
+        // Scribe records results from completed selected or fixed work; it does not produce them.
         if (checkpoint.WorkPlanId != plan.Plan.Id ||
             !plan.Workflow.Definition.Steps.Any(step =>
                 step.Id == stepId && step.Mode == WorkflowStepMode.Platform &&
@@ -66,6 +67,7 @@ internal static class MafScribeContract
             throw Conflict();
         }
 
+        // Preserve the full canonical producer result in the intent.
         var content = JsonSerializer.Serialize(new Output(
             identity.ProjectId, identity.RunId, identity.SessionId, plan.Plan.Id,
             associationId, agentId,
@@ -79,6 +81,7 @@ internal static class MafScribeContract
 
     internal static void ValidateIntent(MafExecutionScribeIntent intent)
     {
+        // The key does not include content, so replay validation rejects changed output under the same key.
         if (intent.Actor is null ||
             new[] { intent.Identity.ProjectId, intent.Identity.RunId, intent.Identity.SessionId,
                 intent.WorkPlanId, intent.StepId, intent.AssociationId, intent.AgentId,
@@ -86,6 +89,7 @@ internal static class MafScribeContract
             intent.IdempotencyKey != CreateKey(intent.Identity, intent.WorkPlanId, intent.AssociationId) ||
             string.IsNullOrWhiteSpace(intent.Content))
             throw Conflict();
+        // Reject oversized output; truncation would change the persisted result.
         if (intent.Content.Length > MaximumContentLength)
             throw new CoordinationException(
                 "maf_execution_scribe_payload_limit_exceeded", StatusCodes.Status409Conflict);

@@ -2147,6 +2147,7 @@ public static partial class CoordinationEndpoints
             async Task<MafExecutionScribeGateIntent> PrepareScribeAsync(
                 WorkflowStepDefinition step, CancellationToken token)
             {
+                // Persist the complete intent and Running checkpoint before Knowledge I/O; retries reuse this intent.
                 await using var connection = await dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
                 await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
                 await RequireScribeDecisionAsync(connection, transaction, token).ConfigureAwait(false);

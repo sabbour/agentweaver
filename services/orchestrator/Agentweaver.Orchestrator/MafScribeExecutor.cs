@@ -169,8 +169,10 @@ internal static class MafScribeGateContract
                 throw Conflict();
             receipts = receipts.SetItem(receipt.AssociationId, receipt);
         }
+        // An empty output set needs no receipts; otherwise every output needs one.
         var status = intent.Outputs.All(output => receipts.ContainsKey(output.AssociationId))
             ? MafExecutionTaskStatus.Succeeded : MafExecutionTaskStatus.Running;
+        // Keep an identical completion from adding a checkpoint revision.
         if (receipts == state.ScribeReceipts && state.Progress.NonModelSteps[intent.StepId] == status)
             return null;
         return state with
@@ -211,6 +213,8 @@ internal sealed class MafScribeExecutor(
             ?? throw new CoordinationException(
                 "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
         await requireCurrentAsync(intent, latest.State, cancellationToken).ConfigureAwait(false);
+        // An empty output set makes no Knowledge write.
+        // Knowledge may commit before its reply or local receipt; replay the saved intent and key.
         foreach (var output in intent.Outputs)
         {
             // Re-read and re-authorize even when replay already has a compact receipt.
@@ -242,6 +246,7 @@ internal sealed class MafScribeExecutor(
         MafExecutionScribeGateIntent intent, MafScribeTerminalReceipt? receipt,
         CancellationToken cancellationToken)
     {
+        // These checks protect the local receipt append; they do not make a transaction with Knowledge.
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await requireDecisionAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
