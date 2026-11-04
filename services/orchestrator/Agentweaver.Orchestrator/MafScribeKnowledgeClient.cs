@@ -66,12 +66,15 @@ internal sealed class MafScribeKnowledgeClient(HttpClient client, Uri ownerAddre
             if (response.StatusCode is not (HttpStatusCode.Created or HttpStatusCode.OK))
                 throw new CoordinationException(
                     "maf_execution_scribe_owner_unavailable", StatusCodes.Status502BadGateway);
+            // On replay, HTTP 200 returns the original creation result.
             if (response.Content.Headers.ContentType?.MediaType != "application/json")
                 throw InvalidResponse();
             await response.Content.LoadIntoBufferAsync(512 * 1024, cancellationToken).ConfigureAwait(false);
             var result = await response.Content.ReadFromJsonAsync<KnowledgeRecordWriteResult>(
                 JsonOptions, cancellationToken).ConfigureAwait(false);
             var record = result?.Record;
+            // Accept only the exact pending-trust Memory record.
+            // This record is not trust approval or independent source-output evidence.
             if (result?.Status != KnowledgeWriteStatus.Created || record is null ||
                 record.RecordId == Guid.Empty || record.Revision != 1 || record.RevisionId == Guid.Empty ||
                 record.ProjectId != intent.Identity.ProjectId || record.SourceRunId != intent.Identity.RunId ||
