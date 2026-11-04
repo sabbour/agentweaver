@@ -172,6 +172,9 @@ resolved digests. It fails if any omitted image cannot be read or validated;
 it never falls back to the checked-in Kustomize pins. A full ten-image
 manifest also works when no live Deployment refs are available. The existing
 `--image-tag sha-<commit>` form remains available to update all ten images.
+If you omit AgentHost, its live Environment image must already use the digest
+in the retained runtime tuple. A tag or a different digest stops deployment
+before writes; select AgentHost explicitly to update it.
 
 Only selected images with schema migrations run migration Jobs: Broker runs
 the Broker Job; Environment, Orchestrator, and Events & Sessions each run

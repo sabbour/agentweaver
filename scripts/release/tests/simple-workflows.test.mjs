@@ -216,14 +216,20 @@ function fakeExec(calls, {
           const prefix = `${REGISTRY}/${repository}:`;
           const reference = liveImageRefs && Object.hasOwn(liveImageRefs, repository)
             ? liveImageRefs[repository]
-            : existingTag;
+            : repository === 'agentweaver-agenthost' ? existingAgentHostRegistry.childDigest : existingTag;
           if (reference === null) {
             if (container.image?.startsWith(prefix)) container.image = undefined;
-          } else if (container.image?.startsWith(prefix)) container.image = `${prefix}${reference}`;
+          } else if (container.image?.startsWith(prefix)) {
+            container.image = `${REGISTRY}/${repository}${reference.startsWith('sha256:')
+              ? `@${reference}` : `:${reference}`}`;
+          }
           for (const setting of container.env ?? []) {
             if (reference === null) {
               if (setting.value?.startsWith(prefix)) setting.value = undefined;
-            } else if (setting.value?.startsWith(prefix)) setting.value = `${prefix}${reference}`;
+            } else if (setting.value?.startsWith(prefix)) {
+              setting.value = `${REGISTRY}/${repository}${reference.startsWith('sha256:')
+                ? `@${reference}` : `:${reference}`}`;
+            }
           }
         }
       }
@@ -262,8 +268,12 @@ function fakeExec(calls, {
     if (command !== 'kubectl') return { status: 1, stdout: '', stderr: `unexpected command ${command}` };
     if (args[0] === 'config') return { status: 0, stdout: 'selected-context\n', stderr: '' };
     if (args[0] === 'auth') {
+      if (args.some(arg => arg === '--resource-name' || arg.startsWith('--resource-name='))) {
+        return { status: 1, stdout: '', stderr: 'error: unknown flag: --resource-name' };
+      }
       const isEnvironmentCheck = args.includes('system:serviceaccount:agentweaver:environment');
-      const permission = `${args[2]} ${args[3]}`;
+      const subresource = args.find(arg => arg.startsWith('--subresource='));
+      const permission = `${args[2]} ${args[3]}${subresource ? ` ${subresource}` : ''}`;
       const denied = denyRuntimeConfigDelete && args[2] === 'delete' &&
         args[3] === 'configmap/projects-config-runtime-config' ||
         isEnvironmentCheck && denyEnvironmentPermission === permission ||
@@ -628,16 +638,18 @@ test('deployment creates existing migration Jobs directly before one namespaced 
       serviceNames.flatMap(name => ['get', 'list', 'patch', 'watch']
         .map(verb => `${verb}:deployment/${name}`)).sort(),
     );
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args.includes('--resource-name')), false);
     assert.deepEqual(
       calls.filter(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
         call.args[1] === 'can-i' && call.args.includes('system:serviceaccount:agentweaver:environment'))
         .map(({ args }) => {
-          const resourceName = args.find(arg => arg.startsWith('--resource-name='))?.split('=')[1];
-          return `${args[2]} ${args[3]}${resourceName ? `/${resourceName}` : ''}` +
+          const subresource = args.find(arg => arg.startsWith('--subresource='));
+          return `${args[2]} ${args[3]}${subresource ? ` ${subresource}` : ''}` +
             `${args.includes('--namespace') ? '' : ' cluster'}`;
         }).sort(),
-      ENVIRONMENT_RBAC_REQUIREMENTS.map(({ verb, resource, resourceName, cluster }) =>
-        `${verb} ${resource}${resourceName ? `/${resourceName}` : ''}${cluster ? ' cluster' : ''}`).sort(),
+      ENVIRONMENT_RBAC_REQUIREMENTS.map(({ verb, resource, resourceName, subresource, cluster }) =>
+        `${verb} ${resource}${resourceName ? `/${resourceName}` : ''}` +
+        `${subresource ? ` --subresource=${subresource}` : ''}${cluster ? ' cluster' : ''}`).sort(),
     );
     assert.equal(calls.some(call => call.command === 'npm'), false);
     assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'apply'), true);
@@ -755,6 +767,7 @@ test('partial deployment preserves unselected live images and skips unrelated mi
   const manifestPath = path.join(directory, 'images.json');
   const calls = [];
   const liveImageRefs = Object.fromEntries(imageRepositories.map(repository => [repository, existingTag]));
+  liveImageRefs['agentweaver-agenthost'] = existingAgentHostRegistry.childDigest;
   const liveAgentHostSettings = {
     Environment__Sandbox__AgentSandbox__OptionsRevision: 'p1-v1.2.3',
     Environment__Sandbox__AgentSandbox__ContainerImagePlatform: 'linux/amd64',
@@ -776,7 +789,7 @@ test('partial deployment preserves unselected live images and skips unrelated mi
     assert.equal(rendered['agentweaver-web'], digestForTag(selectedTag));
     for (const repository of imageRepositories.filter(repository => repository !== 'agentweaver-web')) {
       assert.equal(rendered[repository], repository === 'agentweaver-agenthost'
-        ? existingAgentHostRegistry.topDigest
+        ? existingAgentHostRegistry.childDigest
         : digestForTag(existingTag), `${repository} keeps its deployed image`);
     }
     assert.equal(calls.filter(call => call.command === 'kubectl' && call.args[0] === 'create')
@@ -796,7 +809,7 @@ test('partial deployment preserves unselected live images and skips unrelated mi
     assert.equal(environmentContainer.image,
       `${REGISTRY}/agentweaver.environment@${digestForTag(existingTag)}`);
     assert.equal(environmentSettings.Environment__Sandbox__AgentSandbox__ContainerImage,
-      `${REGISTRY}/agentweaver-agenthost@${existingAgentHostRegistry.topDigest}`);
+      `${REGISTRY}/agentweaver-agenthost@${existingAgentHostRegistry.childDigest}`);
     assert.equal(environmentSettings.Environment__Sandbox__AgentSandbox__OptionsRevision,
       liveAgentHostSettings.Environment__Sandbox__AgentSandbox__OptionsRevision);
     assert.equal(environmentSettings.Environment__Sandbox__AgentSandbox__ContainerImagePlatform,
@@ -806,10 +819,28 @@ test('partial deployment preserves unselected live images and skips unrelated mi
     const agentHostConfigMap = applied.items.find(resource =>
       resource.kind === 'ConfigMap' && resource.metadata.name === 'agenthost-runtime-v1');
     assert.deepEqual(JSON.parse(agentHostConfigMap.data['appsettings.json']).AgentHost.Image, {
-      Digest: existingAgentHostRegistry.topDigest,
+      Digest: existingAgentHostRegistry.childDigest,
       Platform: 'linux/amd64',
       CompressedPullBytes: 987654321,
     });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('partial deployment rejects an omitted tagged AgentHost image before Kubernetes writes', async () => {
+  const directory = scratch();
+  const manifestPath = path.join(directory, 'images.json');
+  const calls = [];
+  writeFileSync(manifestPath, JSON.stringify({ images: { 'agentweaver-web': selectedTag } }));
+  try {
+    await assert.rejects(deployKustomize({ imageManifest: manifestPath }, {
+      root: directory,
+      exec: fakeExec(calls, { liveImageRefs: { 'agentweaver-agenthost': existingTag } }),
+      log() {},
+    }), /no valid immutable Environment__Sandbox__AgentSandbox__ContainerImage reference matching the resolved digest/);
+    assert.equal(calls.some(call => call.command === 'kubectl' &&
+      ['annotate', 'create', 'delete', 'apply', 'scale', 'patch'].includes(call.args[0])), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -869,6 +900,7 @@ test('single Broker image update runs only its matching migration Job', async ()
   const manifestPath = path.join(directory, 'images.json');
   const calls = [];
   const liveImageRefs = Object.fromEntries(imageRepositories.map(repository => [repository, existingTag]));
+  liveImageRefs['agentweaver-agenthost'] = existingAgentHostRegistry.childDigest;
   writeFileSync(manifestPath, JSON.stringify({ images: { 'agentweaver.identity.broker': selectedTag } }));
   try {
     await deployKustomize({ imageManifest: manifestPath }, {
@@ -1168,14 +1200,14 @@ test('runtime ConfigMap and Environment activation permission failures stop befo
       expected: /must allow delete configmaps\/agenthost-runtime-v1/,
     },
     {
-      permission: 'update deployments/scale',
+      permission: 'update deployments.apps/environment --subresource=scale',
       settings: { state: changedEnvironmentState() },
-      expected: /cannot update deployments\/scale/,
+      expected: /cannot update deployments\.apps\/environment --subresource=scale/,
     },
     {
-      permission: 'patch deployments/scale',
+      permission: 'patch deployments.apps/environment --subresource=scale',
       settings: { state: changedEnvironmentState() },
-      expected: /cannot patch deployments\/scale/,
+      expected: /cannot patch deployments\.apps\/environment --subresource=scale/,
     },
     {
       permission: 'patch deployment/environment',
@@ -1212,6 +1244,16 @@ test('TLS metadata and effective Environment RBAC failures stop before workload 
     [{ wrongAgentHostTlsType: true }, /must exist in namespace agentweaver with type kubernetes.io\/tls/],
     [{ denyEnvironmentPermission: 'get sandboxclaims.extensions.agents.x-k8s.io' },
       /lacks effective permission get sandboxclaims.extensions.agents.x-k8s.io/],
+    [{ denyEnvironmentPermission: 'get configmaps/agenthost-runtime-v1' },
+      /lacks effective permission get configmaps\/agenthost-runtime-v1/],
+    [{ denyEnvironmentPermission: 'get runtimeclasses.node.k8s.io/kata-vm-isolation' },
+      /lacks effective permission get runtimeclasses\.node\.k8s\.io\/kata-vm-isolation/],
+    [{ denyEnvironmentPermission: 'get pods --subresource=log' },
+      /lacks effective permission get pods --subresource=log/],
+    [{ denyEnvironmentPermission: 'create pods --subresource=exec' },
+      /lacks effective permission create pods --subresource=exec/],
+    [{ denyEnvironmentPermission: 'create pods --subresource=attach' },
+      /lacks effective permission create pods --subresource=attach/],
   ];
   try {
     for (const [settings, expected] of failures) {
