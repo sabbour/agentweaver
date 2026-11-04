@@ -136,6 +136,19 @@ function scratch() {
   return directory;
 }
 
+function boundedClock() {
+  let current = 0;
+  const sleeps = [];
+  return {
+    now: () => current,
+    sleep: async milliseconds => {
+      sleeps.push(milliseconds);
+      current += milliseconds;
+    },
+    sleeps,
+  };
+}
+
 function job(name) {
   return {
     apiVersion: 'batch/v1',
@@ -152,6 +165,83 @@ function job(name) {
 function workloadSource(kustomizationPath, name) {
   return parse(readFileSync(path.join(path.dirname(kustomizationPath), 'base', 'workloads',
     deploymentFiles[name]), 'utf8'));
+}
+
+function projectsMigrationPod(jobResource) {
+  return {
+    metadata: {
+      name: `${jobResource.metadata.name}-abcde`,
+      namespace: 'agentweaver',
+      labels: structuredClone(jobResource.spec.template.metadata.labels),
+      ownerReferences: [{
+        apiVersion: 'batch/v1',
+        kind: 'Job',
+        name: jobResource.metadata.name,
+        uid: 'projects-migration-job-uid',
+        controller: true,
+        blockOwnerDeletion: true,
+      }],
+    },
+    spec: structuredClone(jobResource.spec.template.spec),
+    status: { phase: 'Succeeded' },
+  };
+}
+
+function projectsWorkloadPod(deployment, phase, deletionTimestamp) {
+  const metadata = {
+    name: 'projects-config-7d9c6f4f8d-abcde',
+    namespace: 'agentweaver',
+    labels: structuredClone(deployment.spec.template.metadata.labels),
+    ownerReferences: [{
+      apiVersion: 'apps/v1',
+      kind: 'ReplicaSet',
+      name: 'projects-config-7d9c6f4f8d',
+      uid: 'projects-config-replicaset-uid',
+      controller: true,
+      blockOwnerDeletion: true,
+    }],
+  };
+  if (deletionTimestamp) metadata.deletionTimestamp = deletionTimestamp;
+  return {
+    metadata,
+    spec: structuredClone(deployment.spec.template.spec),
+    status: { phase },
+  };
+}
+
+function projectsActivationFixture(directory) {
+  const imageManifest = path.join(directory, 'images.json');
+  writeFileSync(imageManifest, JSON.stringify({ images: { 'agentweaver.projects.config': selectedTag } }));
+  const liveRuntimeConfig = structuredClone(runtimeConfig);
+  liveRuntimeConfig.data.AgentHost__ModelBindingsRevision = 'old-revision';
+  const projectsConfigDeployment = workloadSource(
+    path.join(directory, 'deploy', 'k8s', 'kustomization.yaml'), 'projects-config');
+  projectsConfigDeployment.spec.replicas = 3;
+  for (const container of [
+    ...(projectsConfigDeployment.spec.template.spec.containers ?? []),
+    ...(projectsConfigDeployment.spec.template.spec.initContainers ?? []),
+  ]) {
+    if (container.image?.startsWith(`${REGISTRY}/agentweaver.projects.config:`)) {
+      container.image = `${REGISTRY}/agentweaver.projects.config:${existingTag}`;
+    }
+  }
+  return {
+    imageManifest,
+    liveRuntimeConfig,
+    state: {
+      runtimeConfig: liveRuntimeConfig,
+      deployments: { 'projects-config': projectsConfigDeployment },
+    },
+  };
+}
+
+function createdProjectsMigrationPod(calls) {
+  const jobCall = calls.find(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+    parse(call.options.input).kind === 'Job');
+  assert.ok(jobCall, 'Projects migration Job must be created before its Pod is listed');
+  const jobResource = parse(jobCall.options.input);
+  assert.match(jobResource.metadata.name, /^projects-config-migration-[a-f0-9]{8}$/);
+  return projectsMigrationPod(jobResource);
 }
 
 function renderedRoot(kustomizationPath) {
@@ -186,7 +276,7 @@ function renderedRoot(kustomizationPath) {
 function fakeExec(calls, {
   failedJob, failedRollout, missingProjectsConfigClientId, liveImageRefs, distinctDigests = false,
   liveRuntimeConfig = runtimeConfig, denyRuntimeConfigDelete = false,
-  liveAgentHostSettings = {}, failApplyCount = 0, remainingPodPolls = 0, state,
+  liveAgentHostSettings = {}, failApplyCount = 0, remainingPodPolls = 0, podList, state,
   denyEnvironmentPermission, denyRuntimePermission, missingAgentHostTls = false,
   wrongAgentHostTlsType = false,
   selectedAgentHostImage = selectedAgentHostRegistry,
@@ -203,6 +293,7 @@ function fakeExec(calls, {
   live.configMaps['agenthost-runtime-v1'] ??= withIdentity(agentHostRuntimeConfig);
   live.configMaps['environment-runtime-config'] ??= withIdentity(environmentRuntimeConfig);
   let podPolls = remainingPodPolls;
+  let podListIndex = 0;
   let failedApplies = failApplyCount;
   const liveDeployment = name => {
     if (!live.deployments[name]) {
@@ -316,7 +407,9 @@ function fakeExec(calls, {
       };
     }
     if (args[0] === 'get' && args[1] === 'pods') {
-      const items = podPolls > 0 ? [{ metadata: { name: 'projects-config-0' } }] : [];
+      const items = podList
+        ? podList(podListIndex++, calls)
+        : podPolls > 0 ? [{ metadata: { name: 'projects-config-0' } }] : [];
       podPolls = Math.max(0, podPolls - 1);
       return { status: 0, stdout: JSON.stringify({ items }), stderr: '' };
     }
@@ -1130,6 +1223,250 @@ test('selective deployment replaces the Projects ConfigMap with run-binding TLS 
     assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
       call.args[1] === 'can-i' && call.args[2] === 'delete' &&
       call.args[3] === 'configmap/projects-config-runtime-config'), true);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('retained completed Projects migration Pod does not block ConfigMap activation', async () => {
+  const directory = scratch();
+  const fixture = projectsActivationFixture(directory);
+  const calls = [];
+  const logs = [];
+  const clock = boundedClock();
+  const exec = fakeExec(calls, {
+    liveRuntimeConfig: fixture.liveRuntimeConfig,
+    state: fixture.state,
+    podList: (_, recordedCalls) => [createdProjectsMigrationPod(recordedCalls)],
+  });
+  try {
+    await deployKustomize({ imageManifest: fixture.imageManifest }, {
+      root: directory, exec, log: message => logs.push(message),
+      sleep: clock.sleep, now: clock.now,
+    });
+
+    const jobCall = calls.find(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'Job');
+    const migrationJob = parse(jobCall.options.input);
+    const migrationWait = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'wait' &&
+      call.args[2] === `job/${migrationJob.metadata.name}`);
+    const podPoll = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'get' &&
+      call.args[1] === 'pods' && call.args.includes('--selector'));
+    const mapDelete = calls.findIndex(call => call.command === 'kubectl' &&
+      call.args[0] === 'delete' && call.args[1] === 'configmap' &&
+      call.args[2] === 'projects-config-runtime-config');
+    const mapCreate = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'ConfigMap' &&
+      parse(call.options.input).metadata.name === 'projects-config-runtime-config');
+    const replacement = parse(calls[mapCreate].options.input);
+    const scaleUp = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'scale' &&
+      call.args[1] === 'deployment/projects-config' && call.args.includes('--replicas=3'));
+    const apply = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'apply');
+    const rollouts = calls.filter(call => call.command === 'kubectl' && call.args[0] === 'rollout');
+    const markerRemoval = calls.findIndex(call => call.command === 'kubectl' &&
+      call.args[0] === 'annotate' && call.args[1] === 'deployment/projects-config' &&
+      call.args[2] === `${restoreReplicasAnnotation}-`);
+
+    assert.match(migrationJob.metadata.name, /^projects-config-migration-[a-f0-9]{8}$/);
+    assert.ok(migrationWait >= 0 && migrationWait < podPoll);
+    assert.ok(podPoll < mapDelete && mapDelete < mapCreate && mapCreate < scaleUp && scaleUp < apply,
+      JSON.stringify({ podPoll, mapDelete, mapCreate, scaleUp, apply }));
+    assert.deepEqual(replacement.data, runtimeConfig.data);
+    assert.equal(clock.sleeps.includes(5_000), false);
+    assert.deepEqual(clock.sleeps, [70_000]);
+    assert.equal(rollouts.length, 9);
+    assert.ok(markerRemoval > calls.lastIndexOf(rollouts.at(-1)));
+    assert.equal(fixture.state.deployments['projects-config'].spec.replicas, 3);
+    assert.equal(fixture.state.deployments['projects-config'].metadata.annotations[restoreReplicasAnnotation], undefined);
+    assert.ok(logs.includes(`Migration Job ${migrationJob.metadata.name} completed.`));
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'logs'), false);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'delete' &&
+      ['job', 'pod'].includes(call.args[1])), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('selected Projects workload Pods block activation until removed', async () => {
+  const directory = scratch();
+  const cases = [
+    { phase: 'Pending' },
+    { phase: 'Running' },
+    { phase: 'Unknown' },
+    { phase: 'Succeeded' },
+    { phase: 'Failed' },
+    { phase: 'Running', deletionTimestamp: '2026-11-04T00:00:00Z' },
+    { phase: 'Succeeded', deletionTimestamp: '2026-11-04T00:00:00Z' },
+  ];
+  try {
+    for (const { phase, deletionTimestamp } of cases) {
+      const fixture = projectsActivationFixture(directory);
+      const calls = [];
+      const clock = boundedClock();
+      const projectsDeployment = workloadSource(
+        path.join(directory, 'deploy', 'k8s', 'kustomization.yaml'), 'projects-config');
+      const exec = fakeExec(calls, {
+        liveRuntimeConfig: fixture.liveRuntimeConfig,
+        state: fixture.state,
+        podList: (index, recordedCalls) => {
+          const migration = createdProjectsMigrationPod(recordedCalls);
+          return index === 0
+            ? [migration, projectsWorkloadPod(projectsDeployment, phase, deletionTimestamp)]
+            : [migration];
+        },
+      });
+
+      await deployKustomize({ imageManifest: fixture.imageManifest }, {
+        root: directory, exec, log() {}, sleep: clock.sleep, now: clock.now,
+      });
+
+      const podPolls = calls.map((call, index) => ({ call, index }))
+        .filter(({ call }) => call.command === 'kubectl' && call.args[0] === 'get' &&
+          call.args[1] === 'pods' && call.args.includes('--selector'));
+      const mapDelete = calls.findIndex(call => call.command === 'kubectl' &&
+        call.args[0] === 'delete' && call.args[1] === 'configmap' &&
+        call.args[2] === 'projects-config-runtime-config');
+      const mapCreate = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+        parse(call.options.input).kind === 'ConfigMap' &&
+        parse(call.options.input).metadata.name === 'projects-config-runtime-config');
+      const apply = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'apply');
+
+      assert.equal(podPolls.length, 2, `${phase} ${deletionTimestamp ?? 'active'} Pod must block one poll`);
+      assert.ok(podPolls[0].index < podPolls[1].index &&
+        podPolls[1].index < mapDelete && mapDelete < mapCreate && mapCreate < apply,
+      JSON.stringify({ polls: podPolls.map(item => item.index), mapDelete, mapCreate, apply }));
+      assert.deepEqual(clock.sleeps, [5_000, 70_000]);
+      assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'delete' &&
+        ['job', 'pod'].includes(call.args[1])), false);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('remaining Projects workload Pod preserves the stop timeout and recovery', async () => {
+  const directory = scratch();
+  const fixture = projectsActivationFixture(directory);
+  const calls = [];
+  const clock = boundedClock();
+  const projectsDeployment = workloadSource(
+    path.join(directory, 'deploy', 'k8s', 'kustomization.yaml'), 'projects-config');
+  const exec = fakeExec(calls, {
+    liveRuntimeConfig: fixture.liveRuntimeConfig,
+    state: fixture.state,
+    podList: (_, recordedCalls) => [
+      createdProjectsMigrationPod(recordedCalls),
+      projectsWorkloadPod(projectsDeployment, 'Running'),
+    ],
+  });
+  try {
+    await assert.rejects(deployKustomize({ imageManifest: fixture.imageManifest }, {
+      root: directory, exec, log() {}, sleep: clock.sleep, now: clock.now,
+    }), /Timed out waiting for deployment\/projects-config Pods to terminate/);
+
+    const podPolls = calls.filter(call => call.command === 'kubectl' && call.args[0] === 'get' &&
+      call.args[1] === 'pods' && call.args.includes('--selector'));
+    assert.equal(podPolls.length, 61);
+    assert.deepEqual(clock.sleeps, Array(60).fill(5_000));
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'delete' &&
+      call.args[1] === 'configmap' && call.args[2] === 'projects-config-runtime-config'), false);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'ConfigMap' &&
+      parse(call.options.input).metadata.name === 'projects-config-runtime-config'), false);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'apply'), false);
+    assert.equal(fixture.state.deployments['projects-config'].spec.replicas, 3);
+    assert.equal(fixture.state.deployments['projects-config'].metadata.annotations[restoreReplicasAnnotation], '3');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Projects migration Pod exemption requires its full identity and no runtime map reference', async () => {
+  const directory = scratch();
+  const targetMap = 'projects-config-runtime-config';
+  const keyReference = {
+    name: 'RUNTIME_SETTING',
+    valueFrom: { configMapKeyRef: { name: targetMap, key: 'setting' } },
+  };
+  const cases = [
+    ['missing owner', pod => { delete pod.metadata.ownerReferences; }],
+    ['malformed owner references', pod => { pod.metadata.ownerReferences = {}; }],
+    ['null owner reference', pod => { pod.metadata.ownerReferences = [null]; }],
+    ['ReplicaSet owner', pod => {
+      pod.metadata.ownerReferences[0].apiVersion = 'apps/v1';
+      pod.metadata.ownerReferences[0].kind = 'ReplicaSet';
+    }],
+    ['non-controlling Job owner', pod => { pod.metadata.ownerReferences[0].controller = false; }],
+    ['empty Job UID', pod => { pod.metadata.ownerReferences[0].uid = ''; }],
+    ['invalid generated Job name', pod => { pod.metadata.ownerReferences[0].name = 'projects-config-migration-old'; }],
+    ['wrong Job API version', pod => { pod.metadata.ownerReferences[0].apiVersion = 'batch/v1beta1'; }],
+    ['wrong migration label', pod => { pod.metadata.labels['agentweaver.io/migration'] = 'other'; }],
+    ['missing migration label', pod => { delete pod.metadata.labels['agentweaver.io/migration']; }],
+    ['wrong ServiceAccount', pod => { pod.spec.serviceAccountName = 'projects-config'; }],
+    ['active migration Pod', pod => { pod.status.phase = 'Running'; }],
+    ['failed migration Pod', pod => { pod.status.phase = 'Failed'; }],
+    ['container envFrom map reference', pod => {
+      pod.spec.containers[0].envFrom = [{ configMapRef: { name: targetMap } }];
+    }],
+    ['container env valueFrom map reference', pod => {
+      pod.spec.containers[0].env.push(structuredClone(keyReference));
+    }],
+    ['init container envFrom map reference', pod => {
+      pod.spec.initContainers = [structuredClone(pod.spec.containers[0])];
+      pod.spec.initContainers[0].envFrom = [{ configMapRef: { name: targetMap } }];
+    }],
+    ['init container env valueFrom map reference', pod => {
+      pod.spec.initContainers = [structuredClone(pod.spec.containers[0])];
+      pod.spec.initContainers[0].env.push(structuredClone(keyReference));
+    }],
+    ['ephemeral container envFrom map reference', pod => {
+      pod.spec.ephemeralContainers = [structuredClone(pod.spec.containers[0])];
+      pod.spec.ephemeralContainers[0].envFrom = [{ configMapRef: { name: targetMap } }];
+    }],
+    ['ephemeral container env valueFrom map reference', pod => {
+      pod.spec.ephemeralContainers = [structuredClone(pod.spec.containers[0])];
+      pod.spec.ephemeralContainers[0].env.push(structuredClone(keyReference));
+    }],
+    ['ConfigMap volume reference', pod => {
+      pod.spec.volumes.push({ name: 'runtime-config', configMap: { name: targetMap } });
+    }],
+    ['projected ConfigMap volume reference', pod => {
+      pod.spec.volumes.push({
+        name: 'runtime-config',
+        projected: { sources: [{ configMap: { name: targetMap } }] },
+      });
+    }],
+  ];
+  try {
+    for (const [name, mutate] of cases) {
+      const fixture = projectsActivationFixture(directory);
+      const calls = [];
+      const clock = boundedClock();
+      const exec = fakeExec(calls, {
+        liveRuntimeConfig: fixture.liveRuntimeConfig,
+        state: fixture.state,
+        podList: (index, recordedCalls) => {
+          const migration = createdProjectsMigrationPod(recordedCalls);
+          if (index !== 0) return [migration];
+          const candidate = structuredClone(migration);
+          mutate(candidate);
+          return [migration, candidate];
+        },
+      });
+
+      await deployKustomize({ imageManifest: fixture.imageManifest }, {
+        root: directory, exec, log() {}, sleep: clock.sleep, now: clock.now,
+      });
+
+      const podPolls = calls.filter(call => call.command === 'kubectl' && call.args[0] === 'get' &&
+        call.args[1] === 'pods' && call.args.includes('--selector'));
+      const mapDelete = calls.findIndex(call => call.command === 'kubectl' &&
+        call.args[0] === 'delete' && call.args[1] === 'configmap' &&
+        call.args[2] === 'projects-config-runtime-config');
+      assert.equal(podPolls.length, 2, `${name} must remain a blocker until removed`);
+      assert.ok(calls.indexOf(podPolls[1]) < mapDelete, `${name} must block ConfigMap replacement`);
+      assert.deepEqual(clock.sleeps, [5_000, 70_000]);
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
