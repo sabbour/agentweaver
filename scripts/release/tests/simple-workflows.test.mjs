@@ -1153,17 +1153,29 @@ test('selective deployment replaces the Projects ConfigMap with run-binding TLS 
     runtimeConfig: liveRuntimeConfig,
     deployments: { 'projects-config': projectConfigDeployment },
   };
-  const sleeps = [];
+  const clock = boundedClock();
+  const podLists = [];
+  const removedWorkloadPod = projectsWorkloadPod(projectConfigDeployment, 'Running');
+  const olderMigrationJob = readYaml('deploy/k8s/migrations/projects-config/job.yaml');
+  olderMigrationJob.metadata.name = 'projects-config-migration-1234abcd';
+  const retainedMigrationPod = projectsMigrationPod(olderMigrationJob);
+  retainedMigrationPod.metadata.creationTimestamp = '2026-11-03T00:00:00Z';
   writeFileSync(manifestPath, JSON.stringify({ images: { 'agentweaver-web': selectedTag } }));
   try {
     const exec = fakeExec(calls, {
       liveRuntimeConfig,
       state,
       failApplyCount: 1,
-      remainingPodPolls: 1,
       distinctDigests: true,
+      podList: index => {
+        const items = index === 0
+          ? [removedWorkloadPod, retainedMigrationPod]
+          : [retainedMigrationPod];
+        podLists.push(items);
+        return items;
+      },
     });
-    const options = { root: directory, exec, sleep: async milliseconds => sleeps.push(milliseconds), log() {} };
+    const options = { root: directory, exec, sleep: clock.sleep, now: clock.now, log() {} };
     await assert.rejects(deployKustomize({ imageManifest: manifestPath }, options),
       /Workload apply failed: simulated workload apply failure/);
 
@@ -1219,7 +1231,16 @@ test('selective deployment replaces the Projects ConfigMap with run-binding TLS 
       .map(call => call.args[2]), ['--replicas=0', '--replicas=3']);
     assert.equal(state.deployments['projects-config'].spec.replicas, 3);
     assert.equal(state.deployments['projects-config'].metadata.annotations[restoreReplicasAnnotation], undefined);
-    assert.deepEqual(sleeps, [5_000, 70_000, 70_000]);
+    assert.equal(retainedMigrationPod.metadata.ownerReferences[0].name, olderMigrationJob.metadata.name);
+    assert.equal(retainedMigrationPod.metadata.creationTimestamp, '2026-11-03T00:00:00Z');
+    assert.deepEqual(podLists, [
+      [removedWorkloadPod, retainedMigrationPod],
+      [retainedMigrationPod],
+      [retainedMigrationPod],
+    ]);
+    assert.equal(podLists[1][0], retainedMigrationPod);
+    assert.equal(podLists[2][0], retainedMigrationPod);
+    assert.deepEqual(clock.sleeps, [5_000, 70_000, 70_000]);
     assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
       call.args[1] === 'can-i' && call.args[2] === 'delete' &&
       call.args[3] === 'configmap/projects-config-runtime-config'), true);
