@@ -319,26 +319,47 @@ no-model fixture and cleanup paths. Distinct-actor and revoked-role checks
 remain blocked without a separate authenticated non-admin actor; TenantAdmin
 authority cannot establish those denials.
 
+The P1 `journal` journey checks the Events journal without dispatching work.
+Omit `selectionContext` from `fixturePlan` to let Projects create a pending run
+from current project configuration. The CLI uses the server-returned run and
+root-session IDs, then reads back the selection and checks the expected platform
+runtime revision. It obtains authorization bound to that exact project and
+run before it admits the root. The server creates the raw selection context;
+the CLI does not copy an effective selection or guess provider requirements.
+Supplying `selectionContext` keeps the explicit raw-context path.
+
+After it reads back the accepted root, the CLI sends one run-bound
+`sendProjectRunMessage` request with an invocation-scoped idempotency key.
+`replayRunEvents` must return nonempty, ordered pages with exact project and run
+identity and advancing cursors. The message is a journal seed; it does not
+start a workflow or dispatch a model. Before removing project authority, the
+CLI cancels the owned run and independently reads the cancelled run, root
+session, and session tree. It then revokes Orchestrator, archives the project,
+revokes the creator's Owner assignment last, and reads back the archived
+project and empty assignment list. A missing receipt or failed readback remains
+indeterminate; the CLI does not retry an uncertain write or report cleanup as
+complete.
+
 The P1 `session-history-metric` journey creates two child history records
 without starting a model turn. It completes and archives one child, detaches
 the other, then reads the current session tree and `readProjectMetrics`. The
 fixture expects exactly two history records (root plus archived child), one
 accepted run, and zero runs in a date range that excludes that run.
 
-For this journey only, omit `selectionContext` from `fixturePlan` to create a
-real pending interactive run. The CLI uses the server-returned run and root
-session IDs and reads back the effective selection. Its benign `firstMessage`
-does not start the run or dispatch work. Root acceptance still uses normal
-runtime admission and budget checks; it is not a zero-cost or admission-free
-path. Supplying `selectionContext` keeps the explicit raw-context selection
-path. Both paths cancel the accepted run before removing authority, then
-independently verify the terminal run, retained session tree, and detached
-session at the advanced fence. Cleanup archives the project before the final
-Owner revocation and reads back the archived project and empty assignment list.
-An uncertain create, selection, cancellation, or readback remains
-indeterminate; the CLI does not claim that the fixture was never created or
-cleaned. A missing denied actor remains a blocked probe, so this narrow feature
-result is not full P1 acceptance.
+For this journey, and for `journal`, omit `selectionContext` from `fixturePlan`
+to create a real pending interactive run. The CLI uses the server-returned run
+and root-session IDs and reads back the effective selection. Its benign
+`firstMessage` does not start the run or dispatch work. Root acceptance still
+uses normal runtime admission and budget checks; it is not a zero-cost or
+admission-free path. Supplying `selectionContext` keeps the explicit
+raw-context selection path. Both metric paths cancel the accepted run before
+removing authority, then independently verify the terminal run, root, retained
+session tree, and detached session at the advanced fence. Cleanup archives the
+project before the final Owner revocation and reads back the archived project
+and empty assignment list. An uncertain create, selection, cancellation, or
+readback remains indeterminate; the CLI does not claim that the fixture was
+never created or cleaned. A missing denied actor remains a blocked probe, so
+this narrow feature result is not full P1 acceptance.
 
 No native Workspace refs/tree/file journey is currently defined. The Gateway
 read operations require the short-lived Repo App selection code in
@@ -388,10 +409,12 @@ For API acceptance journeys, the manifest's `environment` object must provide `b
 (Gateway origin), `issuer` (Broker/OIDC issuer), `audience`, `tenantId`, and
 `actorId`. The runner builds its target from those fields and uses the
 `agentweaver-cli` client; it does not substitute target flags or environment
-variables. For each acceptance invocation, the runner creates its owned project, takes
-its ID from the `createProject` receipt, and derives the run ID from the
-invocation identity. The `board-delete` target and input contract are separate
-and described above.
+variables. For each API acceptance invocation, the runner creates its owned project and
+takes its ID from the `createProject` receipt. Journeys with an explicit
+`selectionContext` derive run and root-session IDs from the invocation. The
+`journal` and `session-history-metric` journeys may omit that context and then
+use the run and root-session IDs returned by `createProjectRun`. The
+`board-delete` target and input contract are separate and described above.
 
 Interaction is disabled by default (`InteractionPolicy.Never`). Only
 `--interactive` allows browser authorization. For a test run, the CLI first

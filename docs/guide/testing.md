@@ -662,14 +662,19 @@ of unverified ownership claims. They do not prove live owner behavior, native
 model execution, or deployment.
 
 The retained controlled journal regression starts with an empty in-memory event
-journal. Fixture setup discovers and invokes the Gateway
-`sendProjectRunMessage` operation with its run-bound token and an
-invocation-scoped `Idempotency-Key`, then checks the exact accepted receipt
-before the API surface runner replays the event and validates its identity,
-cursor, and position. This records one owner-addressed event; it does not
-dispatch native work. Missing execution intent or an invalid owner contract is
-refused, and an ambiguous message result leaves cleanup indeterminate rather
-than retrying the write.
+journal. It checks both explicit raw-context selection and the pending-run
+selection path. The pending path uses `createProjectRun`, the returned run and
+root-session IDs, an independent selection readback, and normal run-bound
+authorization. Fixture setup then invokes the Gateway
+`sendProjectRunMessage` operation with an invocation-scoped `Idempotency-Key`
+and checks the exact accepted receipt before the API surface runner replays the
+event and validates its identity, cursor, and position. The owner-addressed
+event does not dispatch native work. Cleanup cancels the owned run and checks
+the terminal run, root, and tree before it removes authority. It then archives
+the project and independently checks the archived project and empty assignment
+list. Missing execution intent or an invalid owner contract is refused, and an
+ambiguous write or cleanup result remains indeterminate rather than causing a
+retry.
 This controlled regression does not prove distributable apphost acceptance or
 verify the production evidence providers.
 
@@ -700,15 +705,16 @@ dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configura
 dotnet test tests\Agentweaver.Cli.Acceptance.Tests\Agentweaver.Cli.Acceptance.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~BoardDelete
 ```
 
-The `session-history-metric` regressions exercise both explicit raw-context
-selection and interactive pending-run creation through the real CLI runner.
-They check server-returned identities, effective selection revisions, the
-absence of start or dispatch calls, metric counts, cancellation with an
-unbound Orchestrator client, advanced-fence run/tree/detached-session
-readbacks, and cleanup ordering before role removal. Lost create responses,
-invalid selection revisions, and failed cancellation must remain
-indeterminate and must not remove project authority. Run the focused tests
-with:
+The journal and `session-history-metric` regressions exercise both explicit
+raw-context selection and interactive pending-run creation through the real
+CLI runner. They check server-returned identities, effective selection
+revisions, the absence of start or dispatch calls, cancellation with an
+unbound Orchestrator client, advanced-fence run/root/tree readbacks, and
+cleanup ordering before role removal. Metric tests also retain the archived
+and detached child checks and metric counts. Lost create or seed responses,
+invalid selection revisions, unavailable run-bound reads, and failed
+cancellation or terminal readbacks must remain indeterminate and must not
+remove project authority. Run the focused tests with:
 
 ```powershell
 dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~ApiAcceptanceManifestTests
