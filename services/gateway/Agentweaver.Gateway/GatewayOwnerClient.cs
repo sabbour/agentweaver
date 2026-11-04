@@ -1409,6 +1409,7 @@ public sealed partial class GatewayOwnerClient(
                     context, projectId, runId, cursor, cancellationToken).ConfigureAwait(false);
                 if (page.Event is not null)
                 {
+                    // Project access may change during the Events read; a fetched event is not permission to send it.
                     await EnsureCurrentProjectReadAsync(context, projectId, runId, cancellationToken)
                         .ConfigureAwait(false);
                     await WriteEventAsync(context, page, cancellationToken).ConfigureAwait(false);
@@ -1426,6 +1427,7 @@ public sealed partial class GatewayOwnerClient(
         }
         catch (GatewayOwnerFailureException exception)
         {
+            // Once SSE starts, abort rather than mix an owner error body into the event stream.
             if (context.Response.HasStarted)
                 context.Abort();
             else
