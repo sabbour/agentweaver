@@ -73,8 +73,9 @@ test('proposed Environment RBAC matches the reviewed namespaced and cluster perm
     const [scope, group, resource, verb, resourceName] = entry.split('|');
     return `${scope}|${group ? `${resource}.${group}` : resource}|${verb}|${resourceName}`;
   }).sort();
-  assert.deepEqual(ENVIRONMENT_RBAC_REQUIREMENTS.map(({ verb, resource, resourceName, cluster }) =>
-    `${cluster ? 'cluster' : 'namespaced'}|${resource}|${verb}|${resourceName ?? ''}`).sort(),
+  assert.deepEqual(ENVIRONMENT_RBAC_REQUIREMENTS.map(({ verb, resource, resourceName, subresource, cluster }) =>
+    `${cluster ? 'cluster' : 'namespaced'}|${subresource ? `${resource}/${subresource}` : resource}|` +
+    `${verb}|${resourceName ?? ''}`).sort(),
   expectedChecks);
   assert.doesNotMatch(manifestText, /(^|[\s\[])watch([\s,\]]|$)|resources:\s*\[\s*\*\s*\]/);
   assert.doesNotMatch(manifestText, /resources:\s*\[[^\]]*\b(secrets|nodes|namespaces)\b/);

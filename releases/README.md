@@ -77,6 +77,8 @@ stamps the same digest, platform, and byte count into the AgentHost runtime
 profile and Environment Sandbox options. An omitted AgentHost image keeps the
 validated live tuple; missing or conflicting live references fail before any
 Kubernetes write.
+The live Environment image must already use the digest in that tuple. If it
+uses a tag or a different digest, select AgentHost explicitly to update it.
 
 Before writes, the command checks that `agenthost-tls` exists as a
 `kubernetes.io/tls` Secret and checks the effective Agent Sandbox permissions

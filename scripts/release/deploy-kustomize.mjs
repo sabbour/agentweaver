@@ -44,9 +44,9 @@ export const ENVIRONMENT_RBAC_REQUIREMENTS = [
   ...rbacEntries('', 'events', ['list']),
   ...rbacEntries('', 'persistentvolumeclaims', ['get', 'create', 'delete']),
   ...rbacEntries('cilium.io', 'ciliumnetworkpolicies', ['get', 'create', 'update', 'delete']),
-  ...rbacEntries('', 'pods/log', ['get']),
-  ...rbacEntries('', 'pods/exec', ['create']),
-  ...rbacEntries('', 'pods/attach', ['create']),
+  ...rbacEntries('', 'pods', ['get'], { subresource: 'log' }),
+  ...rbacEntries('', 'pods', ['create'], { subresource: 'exec' }),
+  ...rbacEntries('', 'pods', ['create'], { subresource: 'attach' }),
   ...rbacEntries('node.k8s.io', 'runtimeclasses', ['get'], {
     resourceName: 'kata-vm-isolation', cluster: true,
   }),
@@ -214,22 +214,24 @@ function verifyAuthorization(exec, context, root, migrationsRequired) {
 }
 
 function verifyEnvironmentRuntimeAuthorization(exec, context, root) {
-  for (const { verb, resource, resourceName, cluster } of ENVIRONMENT_RBAC_REQUIREMENTS) {
-    const args = ['auth', 'can-i', verb, resource];
-    if (resourceName) args.push(`--resource-name=${resourceName}`);
+  for (const { verb, resource, resourceName, subresource, cluster } of ENVIRONMENT_RBAC_REQUIREMENTS) {
+    const target = resourceName ? `${resource}/${resourceName}` : resource;
+    const args = ['auth', 'can-i', verb, target];
+    if (subresource) args.push(`--subresource=${subresource}`);
     args.push('--as', ENVIRONMENT_SERVICE_ACCOUNT);
     if (!cluster) args.push('--namespace', NAMESPACE);
     args.push('--context', context);
     const result = exec('kubectl', args, { check: false, cwd: root });
     if (result.status !== 0) {
-      fail(`Could not check effective permission ${verb} ${resource}` +
-        `${resourceName ? `/${resourceName}` : ''} for ${ENVIRONMENT_SERVICE_ACCOUNT}; ` +
+      fail(`Could not check effective permission ${verb} ${target}` +
+        `${subresource ? ` --subresource=${subresource}` : ''} for ${ENVIRONMENT_SERVICE_ACCOUNT}; ` +
         `the selected identity must be allowed to impersonate that ServiceAccount: ` +
         `${(result.stderr || result.stdout || `exit ${result.status}`).trim()}`);
     }
     if (result.stdout.trim().toLowerCase() !== 'yes') {
-      fail(`${ENVIRONMENT_SERVICE_ACCOUNT} lacks effective permission ${verb} ${resource}` +
-        `${resourceName ? `/${resourceName}` : ''}${cluster ? ' at cluster scope' : ` in namespace ${NAMESPACE}`}.`);
+      fail(`${ENVIRONMENT_SERVICE_ACCOUNT} lacks effective permission ${verb} ${target}` +
+        `${subresource ? ` --subresource=${subresource}` : ''}` +
+        `${cluster ? ' at cluster scope' : ` in namespace ${NAMESPACE}`}.`);
     }
   }
 }
@@ -248,16 +250,19 @@ function verifyAgentHostTlsSecret(exec, context, root) {
 }
 
 function verifyEnvironmentActivationAuthorization(exec, context, root) {
-  for (const [verb, resource] of [
-    ['update', 'deployments/scale'],
-    ['patch', 'deployments/scale'],
-    ['patch', 'deployment/environment'],
-    ['list', 'pods'],
+  for (const { verb, resource, subresource } of [
+    { verb: 'update', resource: 'deployments.apps/environment', subresource: 'scale' },
+    { verb: 'patch', resource: 'deployments.apps/environment', subresource: 'scale' },
+    { verb: 'patch', resource: 'deployment/environment' },
+    { verb: 'list', resource: 'pods' },
   ]) {
-    const result = kubectl(exec, context, ['auth', 'can-i', verb, resource], root,
-      `Could not check Kubernetes permission ${verb} ${resource} for Environment activation`);
+    const args = ['auth', 'can-i', verb, resource];
+    if (subresource) args.push(`--subresource=${subresource}`);
+    const permission = `${verb} ${resource}${subresource ? ` --subresource=${subresource}` : ''}`;
+    const result = kubectl(exec, context, args, root,
+      `Could not check Kubernetes permission ${permission} for Environment activation`);
     if (result.stdout.trim().toLowerCase() !== 'yes') {
-      fail(`The selected identity cannot ${verb} ${resource} in namespace ${NAMESPACE}; ` +
+      fail(`The selected identity cannot ${permission} in namespace ${NAMESPACE}; ` +
         'this permission is required before Environment activation.');
     }
   }
@@ -568,8 +573,10 @@ function liveAgentHostTuple(settings, digest) {
   const image = values.get(AGENT_SANDBOX_IMAGE_SETTING);
   const currentImage = deployedImageReference(image);
   if (!currentImage || currentImage.repository !== 'agentweaver-agenthost' ||
+      !IMAGE_DIGEST.test(currentImage.reference ?? '') || currentImage.reference !== digest ||
       !IMAGE_DIGEST.test(digest ?? '')) {
-    fail(`Current deployment has no valid immutable ${AGENT_SANDBOX_IMAGE_SETTING} reference.`);
+    fail(`Current deployment has no valid immutable ${AGENT_SANDBOX_IMAGE_SETTING} reference ` +
+      `matching the resolved digest; include agentweaver-agenthost in the manifest.`);
   }
   const platform = values.get(AGENT_SANDBOX_PLATFORM_SETTING);
   if (platform !== 'linux/amd64') {

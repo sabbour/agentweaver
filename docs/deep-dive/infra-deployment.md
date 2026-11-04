@@ -208,6 +208,9 @@ omitted repositories retain their live image references. The legacy
 [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md)
 for the approved operator procedure; this view explains its boundaries rather
 than duplicate login, target selection and mutation steps.
+An omitted AgentHost image must already be pinned to the digest in its retained
+runtime tuple. A tag or mismatched digest stops deployment before writes;
+select AgentHost explicitly to update it.
 
 The command resolves selected image references to immutable digests, runs
 only the selected services' migrations with runtime-grant reconciliation,
