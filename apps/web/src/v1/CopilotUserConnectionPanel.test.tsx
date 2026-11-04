@@ -97,6 +97,33 @@ describe('Copilot user connection panel', () => {
     });
   });
 
+  it('calls the begin method when the authorization context includes cancelRun', async () => {
+    mocks.getAuthorizationContext.mockResolvedValueOnce({
+      actorId: 'actor-1',
+      effectiveAuthority: [{
+        resourceType: 'tenant',
+        resourceId: 'tenant-1',
+        permissions: [{ permission: 'cancelRun', roleRevision: 2 }],
+      }],
+    });
+    const popup = createPopup();
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    try {
+      render(<CopilotUserConnectionPanel projectId="project-1" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub Copilot' }));
+
+      await waitFor(() => expect(mocks.beginCopilotConnection).toHaveBeenCalledWith(
+        'broker-token',
+        'project',
+        'project-1',
+        'tenant-1',
+      ));
+      expect(screen.queryByRole('alert')).toBeNull();
+    } finally {
+      open.mockRestore();
+    }
+  });
+
   it('completes only a matching popup callback and displays the owner status', async () => {
     const popup = createPopup();
     const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
