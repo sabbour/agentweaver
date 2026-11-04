@@ -574,17 +574,19 @@ public sealed class ApiAcceptanceRunnerTests
     }
 
     [Theory]
-    [InlineData("message", false, false)]
-    [InlineData("message", true, false)]
-    [InlineData("message", false, true)]
-    [InlineData("journal", false, false)]
-    [InlineData("gate-answer", false, false)]
-    [InlineData("gate-approve", false, false)]
-    [InlineData("gate-reject", false, false)]
+    [InlineData("message", false, false, false)]
+    [InlineData("message", true, false, false)]
+    [InlineData("message", false, true, false)]
+    [InlineData("journal", false, false, false)]
+    [InlineData("journal", false, false, true)]
+    [InlineData("gate-answer", false, false, false)]
+    [InlineData("gate-approve", false, false, false)]
+    [InlineData("gate-reject", false, false, false)]
     public async Task TestCommandRunsSelectedJourneyThroughGatewayTransportAndPersistsCleanupOutcome(
         string journey,
         bool interactive,
-        bool failCleanup)
+        bool failCleanup,
+        bool omitSelectionContext)
     {
         string workspace = Path.Combine(AppContext.BaseDirectory, "acceptance-work", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workspace);
@@ -615,6 +617,8 @@ public sealed class ApiAcceptanceRunnerTests
                 Error: output);
 
             JsonObject manifest = CreateManifest(workspace, handler.GatewayOrigin, journey);
+            if (journey == "journal" && omitSelectionContext)
+                manifest["fixturePlan"]!.AsObject().Remove("selectionContext");
             if (journey == "journal")
                 Assert.Empty(handler.JournalEvents);
             string inputPath = Path.Combine(workspace, "manifest.json");
@@ -700,6 +704,11 @@ public sealed class ApiAcceptanceRunnerTests
                 Assert.Equal(seed.RunId, replay.RunId);
                 Assert.Equal(1, journalEvent["position"]?.GetValue<int>());
                 Assert.Equal("Controlled P1 journal fixture event.", seed.Body?["text"]?.GetValue<string>());
+                Assert.Equal(ApiAcceptanceSupport.StableUuid(
+                    ApiAcceptanceSupport.GetString(
+                        result["observations"]?["fixtureSetup"] as JsonObject ?? [], "invocationId")!,
+                    "journal-message-idempotency"),
+                    seed.Headers["Idempotency-Key"]);
 
                 int rootAcceptedIndex = Array.FindIndex(requests, request => request.OperationId == "acceptRunRoot");
                 int runReadback = Array.FindIndex(requests, request => request.OperationId == "readRunStatus");
@@ -710,6 +719,112 @@ public sealed class ApiAcceptanceRunnerTests
                     && runReadback < seedIndex && sessionReadback < seedIndex && seedIndex < replayIndex,
                     $"The empty root must be read back before the owner message is accepted and replayed: " +
                     string.Join(", ", requests.Select(request => request.OperationId)));
+
+                JsonObject fixture = result["observations"]?["fixtureSetup"] as JsonObject ?? [];
+                string invocationId = ApiAcceptanceSupport.GetString(fixture, "invocationId")!;
+                string projectId = ApiAcceptanceSupport.GetString(fixture["setup"] as JsonObject ?? [], "projectId")!;
+                string runId = ApiAcceptanceSupport.GetString(receipt, "runId")!;
+                string rootSessionId = ApiAcceptanceSupport.GetString(receipt, "rootSessionId")!;
+                Assert.Equal(projectId, ApiAcceptanceSupport.GetString(receipt, "projectId"));
+                Assert.Equal(runId, ApiAcceptanceSupport.GetString(fixture["selection"] as JsonObject ?? [], "runId"));
+                Assert.Equal(rootSessionId, ApiAcceptanceSupport.GetString(fixture, "rootSessionId"));
+                Assert.Equal(omitSelectionContext ? "interactive-v1" : "selection-v1",
+                    ApiAcceptanceSupport.GetString(fixture["selection"] as JsonObject ?? [], "contextRevision"));
+                if (omitSelectionContext)
+                {
+                    RecordedRequest create = Assert.Single(requests, request => request.OperationId == "createProjectRun");
+                    Assert.Equal("Acceptance fixture request; no work is dispatched.",
+                        create.Body?["firstMessage"]?.GetValue<string>());
+                    Assert.Equal(2, create.Body?.Count);
+                    Assert.Equal(1, create.Body?["expectedProjectConfigRevision"]?.GetValue<long>());
+                    Assert.Equal(ApiAcceptanceSupport.StableUuid(invocationId, "journal-create-run"),
+                        create.Headers["Idempotency-Key"]);
+                    Assert.Equal(AcceptanceGatewayHandler.InteractiveRunId, runId);
+                    Assert.Equal(AcceptanceGatewayHandler.InteractiveRootSessionId, rootSessionId);
+                    Assert.DoesNotContain(requests, request => request.OperationId == "acceptRunSelection");
+                }
+                else
+                {
+                    RecordedRequest accepted = Assert.Single(requests, request => request.OperationId == "acceptRunSelection");
+                    Assert.Equal(ApiAcceptanceSupport.StableUuid(invocationId, "run"), runId);
+                    Assert.Equal(ApiAcceptanceSupport.StableUuid(invocationId, "root-session"), rootSessionId);
+                    Assert.Equal("selection-v1", ApiAcceptanceSupport.GetString(
+                        accepted.Body?["context"] as JsonObject ?? [], "revision"));
+                    Assert.DoesNotContain(requests, request => request.OperationId == "createProjectRun");
+                }
+
+                Assert.DoesNotContain(requests, request => request.OperationId is
+                    "startProjectRun" or "selectWorkflow" or "dispatchProjectRun");
+                RecordedRequest cancel = Assert.Single(requests, request => request.OperationId == "cancelProjectRun");
+                Assert.Equal(runId, cancel.RunId);
+                Assert.Equal(ApiAcceptanceSupport.StableUuid(invocationId, "journal-cancel-run"),
+                    cancel.Headers["Idempotency-Key"]);
+                Assert.Equal("Acceptance fixture cleanup.", cancel.Body?["reason"]?.GetValue<string>());
+                string[] cancelToken = cancel.Headers["Authorization"]["Bearer ".Length..].Split('~');
+                Assert.Equal("owner", cancelToken[0]);
+                Assert.Equal("tenant-owner", cancelToken[1]);
+                Assert.Equal("-", cancelToken[2]);
+                Assert.Equal("-", cancelToken[3]);
+                Assert.Contains("projects.orchestrator", cancelToken[4].Split(',', StringSplitOptions.RemoveEmptyEntries));
+
+                JsonObject terminalization = fixture["cleanup"]?["runTerminalization"] as JsonObject ?? [];
+                Assert.Equal("cancelled", terminalization["state"]?.GetValue<string>());
+                Assert.Equal(false, terminalization["alreadyTerminal"]?.GetValue<bool>());
+                Assert.Equal(2, terminalization["executionFence"]?.GetValue<long>());
+                Assert.Equal(1, terminalization["stateVersion"]?.GetValue<long>());
+                Assert.Equal("verified", terminalization["acceptedRunReadback"]?.GetValue<string>());
+                Assert.Equal("verified", terminalization["rootSessionReadback"]?.GetValue<string>());
+                Assert.Equal("verified", terminalization["attachedHistoryReadback"]?.GetValue<string>());
+                Assert.Equal("archived", fixture["cleanup"]?["projectReadback"]?.GetValue<string>());
+                Assert.Equal("empty", fixture["cleanup"]?["assignmentsReadback"]?.GetValue<string>());
+                JsonObject rootCleanup = Assert.Single(
+                    (fixture["cleanup"]?["steps"] as JsonArray ?? []).OfType<JsonObject>(),
+                    step => step["step"]?.GetValue<string>() == "read-cancelled-root-session");
+                Assert.Equal("passed", rootCleanup["status"]?.GetValue<string>());
+                Assert.Equal(rootSessionId,
+                    ApiAcceptanceSupport.GetString(rootCleanup["receipt"] as JsonObject ?? [], "rootSessionId"));
+                Assert.Equal("cancelled",
+                    ApiAcceptanceSupport.GetString(rootCleanup["receipt"] as JsonObject ?? [], "lifecycle"));
+                JsonObject treeCleanup = Assert.Single(
+                    (fixture["cleanup"]?["steps"] as JsonArray ?? []).OfType<JsonObject>(),
+                    step => step["step"]?.GetValue<string>() == "read-cancelled-session-tree");
+                Assert.Equal(1, treeCleanup["receipt"]?["nodeCount"]?.GetValue<int>());
+                Assert.DoesNotContain(requests, request => request.OperationId is
+                    "registerChild" or "advanceTurnBoundary" or "completeTurn" or "archiveChild"
+                    or "detachSession" or "readProjectMetrics");
+
+                int cancellationIndex = Array.FindIndex(requests, request => request.OperationId == "cancelProjectRun");
+                int terminalRunReadback = Array.FindLastIndex(requests, request => request.OperationId == "readRunStatus");
+                int terminalRootReadback = Array.FindLastIndex(requests, request =>
+                    request.OperationId == "readSessionStatus" && request.RunId == runId);
+                int terminalTreeReadback = Array.FindLastIndex(requests, request => request.OperationId == "readSessionTree");
+                int firstRevoke = Array.FindIndex(requests, request => request.OperationId == "revokeProjectRoleAssignment");
+                int archive = Array.FindIndex(requests, request =>
+                    request.OperationId == "updateProject" && request.Body?["state"]?.GetValue<string>() == "archived");
+                int ownerRevoke = Array.FindLastIndex(requests, request => request.OperationId == "revokeProjectRoleAssignment");
+                int finalProjectReadback = Array.FindLastIndex(requests, request => request.OperationId == "getProject");
+                int finalAssignmentsReadback = Array.FindLastIndex(requests, request => request.OperationId == "listProjectRoleAssignments");
+                Assert.True(cancellationIndex < terminalRunReadback && terminalRunReadback < terminalRootReadback
+                    && terminalRootReadback < terminalTreeReadback && terminalTreeReadback < firstRevoke
+                    && firstRevoke < archive && archive < ownerRevoke && ownerRevoke < finalProjectReadback
+                    && finalProjectReadback < finalAssignmentsReadback,
+                    $"The full journal cleanup order was incorrect: {string.Join(", ", requests.Select(request => request.OperationId))}");
+                RecordedRequest[] ownerRunRequests = requests.Where(request =>
+                    request.OperationId is "acceptRunRoot" or "sendProjectRunMessage"
+                        or "replayRunEvents" or "readRunStatus" or "readSessionStatus" or "readSessionTree"
+                    && request.Headers["Authorization"].StartsWith("Bearer owner~tenant-owner~", StringComparison.Ordinal))
+                    .ToArray();
+                Assert.NotEmpty(ownerRunRequests);
+                Assert.All(ownerRunRequests,
+                    request =>
+                    {
+                        string[] token = request.Headers["Authorization"]["Bearer ".Length..].Split('~');
+                        Assert.Equal("owner", token[0]);
+                        Assert.Equal("tenant-owner", token[1]);
+                        Assert.Equal(projectId, token[2]);
+                        Assert.Equal(runId, token[3]);
+                        Assert.Contains("projects.orchestrator", token[4].Split(',', StringSplitOptions.RemoveEmptyEntries));
+                    });
             }
             Assert.Contains(result["steps"]!.AsArray().OfType<JsonObject>(), step =>
                 step["id"]?.GetValue<string>() == journey &&
@@ -721,7 +836,10 @@ public sealed class ApiAcceptanceRunnerTests
                 item.StartsWith($"auth:owner:{(interactive ? InteractionPolicy.Allow : InteractionPolicy.Never)}:unbound:",
                     StringComparison.Ordinal)
                 && item.EndsWith(",projects.orchestrator", StringComparison.Ordinal));
-            int selectionAccepted = Array.FindIndex(events, item => item == "http:acceptRunSelection");
+            string selectionOperation = journey == "journal" && omitSelectionContext
+                ? "createProjectRun"
+                : "acceptRunSelection";
+            int selectionAccepted = Array.FindIndex(events, item => item == $"http:{selectionOperation}");
             int runAuthorization = Array.FindIndex(events, item =>
                 item.StartsWith($"auth:owner:{(interactive ? InteractionPolicy.Allow : InteractionPolicy.Never)}:project-bound:",
                     StringComparison.Ordinal)
@@ -796,8 +914,9 @@ public sealed class ApiAcceptanceRunnerTests
             artifactResponse.EnsureSuccessStatusCode();
             JsonObject openApi = JsonNode.Parse(await artifactResponse.Content.ReadAsStringAsync())!.AsObject();
             var trace = new ConcurrentQueue<string>();
-            using var http = new HttpClient(new AcceptanceGatewayHandler(
-                openApi, trace, failCleanup: false, malformedJournalCase: mutation));
+            var handler = new AcceptanceGatewayHandler(
+                openApi, trace, failCleanup: false, malformedJournalCase: mutation);
+            using var http = new HttpClient(handler);
             var authentication = new TestAuthentication(trace);
             var factory = new GatewayClientFactory(http, authentication);
             var output = new StringWriter();
@@ -822,6 +941,144 @@ public sealed class ApiAcceptanceRunnerTests
             Assert.Equal("failed", result["surfaceStatus"]?.GetValue<string>());
             Assert.Equal("cleaned", result["observations"]?["fixtureSetup"]?["cleanup"]?["state"]?.GetValue<string>());
             Assert.NotEmpty(result["failure"]?["message"]?.GetValue<string>() ?? "");
+            RecordedRequest[] requests = handler.Requests.ToArray();
+            int cancel = Array.FindIndex(requests, request => request.OperationId == "cancelProjectRun");
+            int terminalRun = Array.FindLastIndex(requests, request => request.OperationId == "readRunStatus");
+            int terminalRoot = Array.FindLastIndex(requests, request => request.OperationId == "readSessionStatus");
+            int terminalTree = Array.FindLastIndex(requests, request => request.OperationId == "readSessionTree");
+            int firstRevoke = Array.FindIndex(requests, request => request.OperationId == "revokeProjectRoleAssignment");
+            int archive = Array.FindIndex(requests, request =>
+                request.OperationId == "updateProject" && request.Body?["state"]?.GetValue<string>() == "archived");
+            Assert.True(cancel < terminalRun && terminalRun < terminalRoot && terminalRoot < terminalTree
+                && terminalTree < firstRevoke && firstRevoke < archive,
+                $"Malformed replay must still complete verified pre-archive cleanup: {string.Join(", ", requests.Select(request => request.OperationId))}");
+        }
+        finally
+        {
+            if (Directory.Exists(workspace))
+                Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("create-lost-response")]
+    [InlineData("selection-lost-response")]
+    [InlineData("run-auth-unavailable")]
+    [InlineData("root-lost-response")]
+    [InlineData("seed-lost-response")]
+    [InlineData("seed-malformed-receipt")]
+    [InlineData("cancel-failure")]
+    [InlineData("terminal-run-unavailable")]
+    [InlineData("terminal-root-mismatch")]
+    [InlineData("terminal-tree-mismatch")]
+    [InlineData("terminal-tree-extra-node")]
+    [InlineData("project-readback-unavailable")]
+    [InlineData("assignment-readback-contradictory")]
+    public async Task JournalSetupOrCleanupUncertaintyNeverReportsCleaned(string scenario)
+    {
+        string workspace = Path.Combine(AppContext.BaseDirectory, "acceptance-work", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        try
+        {
+            await using var gateway = await GatewayOpenApiParityTests.StartGatewayAsync();
+            string gatewayAddress = gateway.Services.GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+            using var artifactClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
+            using HttpResponseMessage artifactResponse = await artifactClient.GetAsync(
+                new Uri(new Uri(gatewayAddress), "/openapi/v1.json"));
+            artifactResponse.EnsureSuccessStatusCode();
+            JsonObject openApi = JsonNode.Parse(await artifactResponse.Content.ReadAsStringAsync())!.AsObject();
+            var trace = new ConcurrentQueue<string>();
+            var handler = new AcceptanceGatewayHandler(openApi, trace, failCleanup: false, journalScenario: scenario)
+            {
+                GatewayOrigin = new Uri(gatewayAddress),
+            };
+            using var http = new HttpClient(handler);
+            var authentication = new TestAuthentication(trace,
+                failRunBoundRunId: scenario == "run-auth-unavailable"
+                    ? AcceptanceGatewayHandler.InteractiveRunId
+                    : null);
+            var factory = new GatewayClientFactory(http, authentication);
+            var output = new StringWriter();
+            var runner = new ApiAcceptanceRunner(factory, authentication, new TestDeploymentEvidenceProvider(), output);
+            var runtime = new CliRuntimeOptions(
+                HttpClient: http,
+                GatewayClientFactory: factory,
+                Authentication: authentication,
+                AcceptanceRunner: runner,
+                Output: output,
+                Error: output);
+            JsonObject manifest = CreateManifest(workspace, handler.GatewayOrigin, "journal");
+            manifest["fixturePlan"]!.AsObject().Remove("selectionContext");
+            string inputPath = Path.Combine(workspace, "manifest.json");
+            string evidencePath = Path.Combine(workspace, "evidence.jsonl");
+            await File.WriteAllTextAsync(inputPath, manifest.ToJsonString());
+
+            int exitCode = await CliApplication.RunAsync(
+                ["test", "--input", inputPath, "--output", evidencePath], runtime);
+            JsonObject result = JsonNode.Parse((await File.ReadAllLinesAsync(evidencePath)).Last())!.AsObject();
+            JsonObject fixture = result["observations"]?["fixtureSetup"] as JsonObject ?? [];
+            JsonObject cleanup = fixture["cleanup"] as JsonObject ?? [];
+            RecordedRequest[] requests = handler.Requests.ToArray();
+
+            Assert.Equal(1, exitCode);
+            Assert.Equal("failed", result["surfaceStatus"]?.GetValue<string>());
+            Assert.Equal("indeterminate", cleanup["state"]?.GetValue<string>());
+            Assert.NotEqual("cleaned", cleanup["state"]?.GetValue<string>());
+            if (scenario == "selection-lost-response")
+                Assert.DoesNotContain("metric", cleanup["reason"]?.GetValue<string>() ?? "", StringComparison.OrdinalIgnoreCase);
+
+            if (scenario == "create-lost-response")
+            {
+                Assert.Single(requests, request => request.OperationId == "createProjectRun");
+                Assert.DoesNotContain(requests, request => request.OperationId == "cancelProjectRun");
+                Assert.DoesNotContain(requests, request => request.OperationId is
+                    "readRunStatus" or "readSessionStatus" or "readSessionTree"
+                    or "revokeProjectRoleAssignment" or "updateProject");
+            }
+            else if (scenario is "selection-lost-response" or "run-auth-unavailable" or "root-lost-response")
+            {
+                Assert.Single(requests, request => request.OperationId == "cancelProjectRun");
+                Assert.DoesNotContain(requests, request => request.OperationId is
+                    "readRunStatus" or "readSessionStatus" or "readSessionTree"
+                    or "revokeProjectRoleAssignment" or "updateProject");
+            }
+            else if (scenario is "seed-lost-response" or "seed-malformed-receipt")
+            {
+                Assert.Single(requests, request => request.OperationId == "sendProjectRunMessage");
+                Assert.Single(handler.JournalEvents);
+                Assert.DoesNotContain(requests, request => request.OperationId == "replayRunEvents");
+                if (scenario == "seed-malformed-receipt")
+                    Assert.False(handler.JournalMessageReceipt!.ContainsKey("threadId"));
+                Assert.Single(requests, request => request.OperationId == "cancelProjectRun");
+                Assert.Contains(requests, request => request.OperationId == "readRunStatus");
+                Assert.Contains(requests, request => request.OperationId == "readSessionTree");
+                Assert.DoesNotContain(requests, request => request.OperationId is
+                    "revokeProjectRoleAssignment" or "updateProject");
+            }
+            else if (scenario == "terminal-tree-extra-node")
+            {
+                JsonObject treeStep = Assert.Single(
+                    (cleanup["steps"] as JsonArray ?? []).OfType<JsonObject>(),
+                    step => step["step"]?.GetValue<string>() == "read-cancelled-session-tree");
+                Assert.Equal(2, treeStep["receipt"]?["nodeCount"]?.GetValue<int>());
+                Assert.DoesNotContain(requests, request => request.OperationId is
+                    "revokeProjectRoleAssignment" or "updateProject");
+            }
+            else if (scenario is "project-readback-unavailable" or "assignment-readback-contradictory")
+            {
+                Assert.Contains(requests, request => request.OperationId == "updateProject"
+                    && request.Body?["state"]?.GetValue<string>() == "archived");
+                Assert.Equal(2, requests.Count(request => request.OperationId == "revokeProjectRoleAssignment"));
+            }
+            else
+            {
+                Assert.Single(requests, request => request.OperationId == "cancelProjectRun");
+                Assert.DoesNotContain(requests, request => request.OperationId is
+                    "revokeProjectRoleAssignment" or "updateProject");
+                Assert.DoesNotContain(cleanup["steps"]?.AsArray().OfType<JsonObject>() ?? [],
+                    step => step["step"]?.GetValue<string>() is "archive-project" or "revoke-owner");
+            }
         }
         finally
         {
@@ -1581,6 +1838,7 @@ public sealed class ApiAcceptanceRunnerTests
         private readonly string? _ownerDenialScenario;
         private readonly CancellationTokenSource? _cancelOnMessage;
         private readonly string? _metricScenario;
+        private readonly string? _journalScenario;
         private readonly int _metricCount;
         private int _revokeCalls;
         private string? _rootSessionId;
@@ -1632,7 +1890,8 @@ public sealed class ApiAcceptanceRunnerTests
             string? malformedBoardSnapshot = null,
             string? ownerDenialScenario = null,
             string? metricScenario = null,
-            int metricCount = 2)
+            int metricCount = 2,
+            string? journalScenario = null)
         {
             _openApi = (JsonObject)openApi.DeepClone();
             _operations = GatewayContract.Parse(_openApi);
@@ -1648,9 +1907,12 @@ public sealed class ApiAcceptanceRunnerTests
             _ownerDenialScenario = ownerDenialScenario;
             _cancelOnMessage = cancelOnMessage;
             _metricScenario = metricScenario;
+            _journalScenario = journalScenario;
             _metricCount = metricCount;
             GatewayOrigin = new Uri("http://127.0.0.1:49241/");
         }
+
+        private string? LifecycleScenario => _journalScenario ?? _metricScenario;
 
         public Uri GatewayOrigin { get; set; }
         public ConcurrentQueue<RecordedRequest> Requests { get; } = new();
@@ -1881,11 +2143,11 @@ public sealed class ApiAcceptanceRunnerTests
                 ["contextRevision"] = "interactive-v1",
                 ["snapshot"] = new JsonObject { ["selection"] = "effective" },
             };
-            if (_metricScenario == "selection-revision")
+            if (LifecycleScenario == "selection-revision")
                 _selection["projectConfigurationRevision"] = 2L;
-            if (_metricScenario == "selection-malformed-revision")
+            if (LifecycleScenario == "selection-malformed-revision")
                 _selection["platformRuntimeRevision"] = "1";
-            if (_metricScenario == "create-lost-response")
+            if (LifecycleScenario is "create-lost-response")
                 return Json(HttpStatusCode.ServiceUnavailable, new JsonObject { ["title"] = "Creation response lost" });
             return Json(HttpStatusCode.Created, new JsonObject
             {
@@ -1897,13 +2159,13 @@ public sealed class ApiAcceptanceRunnerTests
         }
 
         private HttpResponseMessage GetRunSelection() =>
-            _metricScenario == "selection-lost-response"
+            LifecycleScenario == "selection-lost-response"
                 ? Json(HttpStatusCode.ServiceUnavailable, new JsonObject { ["title"] = "Selection readback unavailable" })
                 : Json(HttpStatusCode.OK, (JsonObject)_selection!.DeepClone());
 
         private HttpResponseMessage CancelRun(string projectId, string runId)
         {
-            if (_metricScenario == "cancel-failure")
+            if (LifecycleScenario == "cancel-failure")
                 return Json(HttpStatusCode.ServiceUnavailable, new JsonObject { ["title"] = "Cancellation unavailable" });
             if (_executionFence > 0 && !_runCancelled)
             {
@@ -1931,18 +2193,23 @@ public sealed class ApiAcceptanceRunnerTests
             _runStateVersion = 0;
             _rootStateVersion = 0;
             _runCancelled = false;
-            return Json(HttpStatusCode.Created, new JsonObject
+            JsonObject receipt = new()
             {
                 ["projectId"] = projectId,
                 ["runId"] = runId,
                 ["rootSessionId"] = _rootSessionId,
                 ["executionFence"] = _executionFence,
                 ["stateVersion"] = _rootStateVersion,
-            });
+            };
+            return _journalScenario == "root-lost-response"
+                ? Json(HttpStatusCode.ServiceUnavailable, new JsonObject { ["title"] = "Root response lost" })
+                : Json(HttpStatusCode.Created, receipt);
         }
 
         private HttpResponseMessage RunStatus(string projectId, string runId) =>
-            _executionFence == 0
+            _journalScenario == "terminal-run-unavailable" && _runCancelled
+                ? Json(HttpStatusCode.ServiceUnavailable, new JsonObject { ["title"] = "Terminal run read unavailable" })
+                : _executionFence == 0
                 ? Json(HttpStatusCode.NotFound, new JsonObject { ["title"] = "No accepted run" })
                 : Json(HttpStatusCode.OK, new JsonObject
             {
@@ -1975,6 +2242,8 @@ public sealed class ApiAcceptanceRunnerTests
                     : sessionId == _metricDetachedChildId
                         ? _detachedChildStateVersion
                         : _stateVersion;
+            if (_journalScenario == "terminal-root-mismatch" && _runCancelled && sessionId == _rootSessionId)
+                lifecycle = "active";
             return Json(HttpStatusCode.OK, new JsonObject
             {
                 ["identity"] = new JsonObject
@@ -2043,6 +2312,15 @@ public sealed class ApiAcceptanceRunnerTests
                 nodes.Add(Node(projectId, runId, _metricDetachedChildId));
             if (_childSessionId is not null)
                 nodes.Add(Node(projectId, runId, _childSessionId));
+            if (_journalScenario == "terminal-tree-mismatch" && _runCancelled)
+                nodes[0]!.AsObject()["lifecycle"] = "active";
+            if (_journalScenario == "terminal-tree-extra-node" && _runCancelled)
+            {
+                JsonObject extra = Node(projectId, runId,
+                    ApiAcceptanceSupport.StableUuid(runId, "unexpected-journal-child"));
+                extra["lifecycle"] = "active";
+                nodes.Add(extra);
+            }
             return Json(HttpStatusCode.OK, new JsonObject
             {
                 ["rootSessionId"] = _rootSessionId,
@@ -2222,7 +2500,7 @@ public sealed class ApiAcceptanceRunnerTests
 
         private HttpResponseMessage ReadProject(string projectId)
         {
-            if (_metricScenario == "project-readback-unavailable"
+            if (LifecycleScenario == "project-readback-unavailable"
                 && projectId == _projectId && _projectArchived)
                 return Json(HttpStatusCode.ServiceUnavailable, new JsonObject { ["title"] = "Project readback unavailable" });
             return projectId == BoardProjectId && _boardProject
@@ -2269,7 +2547,7 @@ public sealed class ApiAcceptanceRunnerTests
                     ["createdBy"] = assignment["grantedBy"]?.DeepClone(),
                     ["createdAt"] = assignment["createdAt"]?.DeepClone(),
                 }).ToArray());
-            if (_metricScenario == "assignment-readback-contradictory" && _projectArchived)
+            if (LifecycleScenario == "assignment-readback-contradictory" && _projectArchived)
             {
                 assignments.Add(new JsonObject
                 {
@@ -2512,6 +2790,8 @@ public sealed class ApiAcceptanceRunnerTests
                 ["threadId"] = "66666666-6666-4666-8666-666666666666",
                 ["threadSequence"] = _journalEvents.Count + 1,
             };
+            if (_journalScenario == "seed-malformed-receipt")
+                receipt.Remove("threadId");
             JournalMessageReceipt = (JsonObject)receipt.DeepClone();
             _journalEvents.Add(new JsonObject
             {
@@ -2524,7 +2804,9 @@ public sealed class ApiAcceptanceRunnerTests
                 },
                 ["position"] = _journalEvents.Count + 1,
             });
-            return Json(HttpStatusCode.OK, receipt);
+            return _journalScenario == "seed-lost-response"
+                ? Json(HttpStatusCode.ServiceUnavailable, new JsonObject { ["title"] = "Seed response lost" })
+                : Json(HttpStatusCode.OK, receipt);
         }
 
         private HttpResponseMessage ReplayEvents(string projectId, string runId)

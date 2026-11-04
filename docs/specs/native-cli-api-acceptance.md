@@ -73,10 +73,35 @@ target flags or take its target from environment variables.
   Keep denied-actor checks, current authority, fixture ownership, and cleanup
   visible rather than inferring them from setup success.
 
+### Journal fixture
+
+The `journal` journey may omit `fixturePlan.selectionContext`. The CLI then
+uses `createProjectRun` with the observed project configuration revision and a
+stable invocation key. Projects creates the selection from current owner-held
+configuration. The CLI uses the returned run and root-session IDs, reads back
+the exact selection and expected platform runtime revision, then obtains
+run-bound authorization before root admission. It does not construct raw
+context from an effective selection.
+
+After it reads back the accepted root, the CLI sends one real
+`sendProjectRunMessage` seed and replays the journal through the owner API.
+Replay requires nonempty pages, exact project/run identity, unique ordered
+positions, and advancing bounded cursors. The seed does not start a workflow
+or dispatch a model. Explicit `selectionContext` keeps the existing raw-context
+path.
+
+Cleanup cancels the owned run before it removes authority. It checks the
+cancellation receipt and independently reads the cancelled run, root session,
+and session tree at the advanced fence. It then revokes Orchestrator, archives
+the project, revokes the creator's Owner assignment last, and independently
+reads the archived project and empty assignment list. Missing receipts or
+failed readbacks remain indeterminate; the runner does not retry uncertain
+writes or report cleanup as complete.
+
 ### Session-history metric fixture
 
-Only the `session-history-metric` journey may omit `fixturePlan.selectionContext`.
-That absence selects interactive pending-run creation; explicit `null` or a
+The `session-history-metric` journey may also omit
+`fixturePlan.selectionContext`. For both journeys, explicit `null` or a
 malformed selection context remains invalid. The CLI uses an idempotency key
 for `createProjectRun`, accepts only the returned run and root-session IDs,
 reads the effective selection, and admits the root with its run-bound

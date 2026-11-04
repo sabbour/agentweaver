@@ -20,6 +20,7 @@ internal sealed record AcceptanceManifest(
 internal sealed class AcceptanceFixtureState(string invocationId)
 {
     public string InvocationId { get; } = invocationId;
+    public string? Journey { get; set; }
     public string ProjectName { get; } = $"p1-{invocationId.ToLowerInvariant()}";
     public JsonObject? Setup { get; set; }
     public JsonObject? Selection { get; set; }
@@ -32,6 +33,7 @@ internal sealed class AcceptanceFixtureState(string invocationId)
     public bool VerifyCleanupReadback { get; set; }
     public bool SelectionKnown { get; set; }
     public bool RootAccepted { get; set; }
+    public bool RootAcceptanceAttempted { get; set; }
     public string? RunId { get; set; }
     public string? RootSessionId { get; set; }
     public long? RootExecutionFence { get; set; }
@@ -287,8 +289,9 @@ internal static partial class ApiAcceptanceSupport
             throw new InvalidDataException("Runner plans cannot contain caller-supplied owner fences or fixture receipts.");
         }
 
-        bool interactiveMetric = journey == "session-history-metric" && !plan.ContainsKey("selectionContext");
-        string[] fixtureKeys = (interactiveMetric
+        bool serverOwnedSelection = (journey is "journal" or "session-history-metric")
+            && !plan.ContainsKey("selectionContext");
+        string[] fixtureKeys = (serverOwnedSelection
             ? new[] { "expectedPlatformRuntimeRevision", "gate", "message" }
             : new[] { "expectedPlatformRuntimeRevision", "selectionContext", "gate", "message" })
             .Concat(plan.ContainsKey("deniedActor") ? new[] { "deniedActor" } : [])
@@ -299,7 +302,7 @@ internal static partial class ApiAcceptanceSupport
             throw new InvalidDataException("A positive expected platform runtime revision is required in the runner fixture plan.");
         }
 
-        if (!interactiveMetric)
+        if (!serverOwnedSelection)
         {
             JsonObject context = RequireObject(plan["selectionContext"], "The run selection context is required.");
             RequireExactKeys(context,

@@ -116,6 +116,74 @@ public sealed class ApiAcceptanceManifestTests
     }
 
     [Fact]
+    public async Task JournalAllowsAnAbsentSelectionContext()
+    {
+        JsonObject root = JournalManifest();
+        root["fixturePlan"]!.AsObject().Remove("selectionContext");
+        string path = WriteManifest(root);
+        try
+        {
+            AcceptanceManifest manifest = await ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None);
+
+            Assert.Equal("journal", manifest.Journey);
+            Assert.False(manifest.FixturePlan.ContainsKey("selectionContext"));
+            Assert.Equal(1L, manifest.FixturePlan["expectedPlatformRuntimeRevision"]?.GetValue<long>());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task JournalStillRejectsExplicitNullOrMalformedSelectionContext()
+    {
+        foreach (JsonObject? context in new JsonObject?[]
+        {
+            null,
+            new JsonObject
+            {
+                ["revision"] = "selection-1",
+                ["availableModelSelectionReferences"] = new JsonArray(),
+                ["providerRequirements"] = new JsonArray(),
+                ["requiredEgress"] = new JsonArray(),
+                ["unexpected"] = true,
+            },
+        })
+        {
+            JsonObject root = JournalManifest();
+            root["fixturePlan"]!["selectionContext"] = context?.DeepClone();
+            string path = WriteManifest(root);
+            try
+            {
+                await Assert.ThrowsAsync<InvalidDataException>(
+                    () => ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None));
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task JournalRetainsExplicitRawSelectionContext()
+    {
+        string path = WriteManifest(JournalManifest());
+        try
+        {
+            AcceptanceManifest manifest = await ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None);
+
+            Assert.Equal("selection-1", ApiAcceptanceSupport.GetString(
+                manifest.FixturePlan["selectionContext"]!.AsObject(), "revision"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task SessionHistoryMetricAllowsAnAbsentSelectionContext()
     {
         JsonObject root = SessionHistoryMetricManifest();
@@ -273,6 +341,15 @@ public sealed class ApiAcceptanceManifestTests
         plan["gate"] = null;
         plan["message"] = null;
         plan.Remove("deniedActor");
+        return root;
+    }
+
+    private static JsonObject JournalManifest()
+    {
+        JsonObject root = P1Manifest();
+        root["journey"] = "journal";
+        root["fixturePlan"]!["gate"] = null;
+        root["fixturePlan"]!["message"] = null;
         return root;
     }
 
