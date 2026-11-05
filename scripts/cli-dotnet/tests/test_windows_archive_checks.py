@@ -1,6 +1,7 @@
 import http.client
 import json
 import os
+import re
 import shutil
 import socket
 import ssl
@@ -445,6 +446,25 @@ class WindowsArchivePreflightTests(unittest.TestCase):
 
 
 class WindowsArchiveRegressionTests(unittest.TestCase):
+    def test_help_expectations_match_product_help_text(self):
+        product_path = (
+            Path(__file__).resolve().parents[3]
+            / "tools"
+            / "Agentweaver.Cli"
+            / "Commands"
+            / "CliApplication.cs"
+        )
+        product_source = product_path.read_text(encoding="utf-8")
+        match = re.search(
+            r'private static string HelpText\s*=>\s*"""(.*?)"""',
+            product_source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        for expected in checks.HELP_EXPECTED:
+            with self.subTest(expected=expected):
+                self.assertIn(expected, match.group(1))
+
     def _powershell(self):
         if os.name != "nt":
             self.skipTest("Native Windows coverage is required.")
