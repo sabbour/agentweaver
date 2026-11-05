@@ -253,6 +253,8 @@ public sealed class MafDurableDispatchPostgresTests(CoordinationPostgresFixture 
     private async Task<SpawnedSession> SpawnAsync(
         WorkPlanSnapshot plan, MafExecutionAction action, string? promptHash = null)
     {
+        var bound = MafExecutionWorkflowBindings.RequireBound(plan, hasBuildTestOwner: false);
+        MafExecutionWorkflowBindings.RequireBoundAction(bound, action);
         var item = action.WorkItem!;
         var child = MafExecutionPlanner.CreateChildSessionId(_root, plan.Plan.Id, item.Id);
         var intent = new MafExecutionDispatchIntent(

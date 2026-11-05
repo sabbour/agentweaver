@@ -125,8 +125,11 @@ typed outcome, selection, WorkPlan, and revision proposals against those snapsho
 invalid definitions and plans return structured reasons and no snapshot value.
 Generated definitions remain marked for first-use confirmation. The Orchestrator
 owner persists accepted definitions and decisions, exact-request gate state, workflow
-position, and MAF checkpoints in its own PostgreSQL schema. The full dispatch engine
-remains a separate slice.
+position, and MAF checkpoints in its own PostgreSQL schema. The dispatcher binds
+that accepted snapshot to registered executors, then advances the ready frontier
+and persists child intents with their outbox events and checkpoints. Targeted
+PostgreSQL and controlled Host tests cover this source path; they do not prove
+deployed or native AKS execution.
 
 ## Authorize child work before registration
 
