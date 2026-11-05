@@ -39,6 +39,11 @@ CREDENTIAL_TYPE_GENERIC = 1
 CREDENTIAL_PERSIST_LOCAL_MACHINE = 2
 ERROR_NOT_FOUND = 1168
 MAXIMUM_BLOB_BYTES = 5 * 512
+ATTENDED_TRUST_TIMEOUT_SECONDS = 60
+TRUST_CLEANUP_PENDING_MESSAGE = (
+    "The owned test root is present or its absence is unverified. Keep the recovery journal and public CA file; "
+    "an operator must complete cleanup."
+)
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 PROCESS_TERMINATE = 0x0001
@@ -51,6 +56,7 @@ POWERSHELL_DIAGNOSTIC_ROLES = frozenset({
     "current-user-root-removal",
     "current-user-root-precheck",
     "current-user-root-import",
+    "current-user-root-inspection",
     "recovery-profile-check",
     "recovery-current-user-root-removal",
 })
@@ -336,6 +342,35 @@ def stop_child(process: subprocess.Popen[str], label: str) -> None:
         raise CheckError(f"Owned process {process.pid} ({label}) could not be stopped.")
 
 
+def stop_trust_helper(process: subprocess.Popen[str], label: str) -> tuple[bool, bool]:
+    try:
+        stop_child(process, label)
+    except KeyboardInterrupt:
+        return False, True
+    except Exception:
+        return False, False
+    try:
+        process.communicate(timeout=5)
+    except KeyboardInterrupt:
+        try:
+            stopped = process.poll() is not None
+        except KeyboardInterrupt:
+            stopped = False
+        for stream in (process.stdout, process.stderr):
+            try:
+                if stream is not None:
+                    stream.close()
+            except (Exception, KeyboardInterrupt):
+                pass
+        return stopped, True
+    except Exception:
+        return False, False
+    try:
+        return process.poll() is not None, False
+    except KeyboardInterrupt:
+        return False, True
+
+
 def stop_owned_children(context: dict[str, Any], *, persist: bool = True) -> list[str]:
     errors: list[str] = []
     for process, identity in reversed(context.get("children", [])):
@@ -343,7 +378,7 @@ def stop_owned_children(context: dict[str, Any], *, persist: bool = True) -> lis
             stop_child(process, str(identity["role"]))
             identity["state"] = "exited"
             identity["exitCode"] = process.returncode
-        except Exception:
+        except (Exception, KeyboardInterrupt):
             identity["state"] = "unresolved"
             errors.append("owned-cli-or-helper-process-did-not-stop")
     if persist:
@@ -684,6 +719,43 @@ $verify.Close()
 if ($remaining.Count -ne 0) { throw 'The test root remains in CurrentUser\\Root.' }
 """
 
+TRUST_INSPECT_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+$expected = $null
+$subject = $null
+if (Test-Path -LiteralPath $env:ARCHIVE_CA_FILE -PathType Leaf) {
+  $expected = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($env:ARCHIVE_CA_FILE)
+  $subject = $expected.Subject
+}
+try {
+  if ($expected -and $expected.Thumbprint -ne $env:ARCHIVE_THUMBPRINT) { throw 'The recorded CA file thumbprint differs.' }
+  $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+    [System.Security.Cryptography.X509Certificates.StoreName]::Root,
+    [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+  $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+  try {
+    $matches = @($store.Certificates | Where-Object { $_.Thumbprint -eq $env:ARCHIVE_THUMBPRINT })
+    $state = 'mismatch'
+    $storeSubject = $null
+    if ($matches.Count -eq 0) { $state = 'absent' }
+    elseif ($matches.Count -eq 1) {
+      $storeSubject = $matches[0].Subject
+      if ($expected -and [Convert]::ToBase64String($matches[0].RawData).Equals([Convert]::ToBase64String($expected.RawData))) {
+        $state = 'present'
+      }
+    }
+    [ordered]@{
+      state = $state
+      thumbprint = $env:ARCHIVE_THUMBPRINT
+      subject = $subject
+      storeSubject = $storeSubject
+    } | ConvertTo-Json -Compress
+  }
+  finally { $store.Close() }
+}
+finally { if ($expected) { $expected.Dispose() } }
+"""
+
 
 def run_powershell(
     executable: Path,
@@ -696,6 +768,7 @@ def run_powershell(
     persist_identity: bool = True,
     role: str = "powershell-helper",
     preserve_proxy_env: bool = False,
+    drain_timeout: int | None = None,
 ) -> str:
     environment = powershell_env(workspace)
     if preserve_proxy_env:
@@ -749,7 +822,13 @@ def run_powershell(
                     if persist_identity:
                         persist_journal(context)
                 raise
-            process.communicate()
+            if drain_timeout is None:
+                process.communicate()
+            else:
+                try:
+                    process.communicate(timeout=drain_timeout)
+                except subprocess.TimeoutExpired as drain_error:
+                    raise CheckError("A stopped Windows PowerShell helper did not drain its pipes.") from drain_error
             if identity is not None:
                 identity["state"] = "stopped-after-timeout"
                 identity["exitCode"] = process.returncode
@@ -769,7 +848,10 @@ def run_powershell(
         if process is not None and process.poll() is None:
             try:
                 stop_child(process, "powershell-helper")
-                process.communicate()
+                if drain_timeout is None:
+                    process.communicate()
+                else:
+                    process.communicate(timeout=drain_timeout)
             except Exception:
                 if identity is not None:
                     identity["state"] = "unresolved"
@@ -782,6 +864,295 @@ def run_powershell(
     if process.returncode:
         raise CheckError("A Windows PowerShell helper failed.")
     return stdout.strip()
+
+
+class TrustActionError(CheckError):
+    def __init__(self, message: str, failure_code: str) -> None:
+        super().__init__(message)
+        self.failure_code = failure_code
+
+
+def attended_console_available() -> bool:
+    try:
+        terminal = all(
+            getattr(stream, "isatty", lambda: False)()
+            for stream in (sys.stdin, sys.stderr)
+        )
+    except Exception:
+        terminal = False
+    return terminal and not os.environ.get("CI") and not os.environ.get("GITHUB_ACTIONS")
+
+
+def inspect_owned_trust(context: dict[str, Any], *, allow_missing_ca: bool = False) -> dict[str, Any]:
+    workspace = Path(context["workspace"])
+    journal_path = Path(context["journalPath"])
+    ca_path = Path(context["caPath"])
+    assert_no_reparse_components(workspace)
+    assert_no_reparse_components(journal_path)
+    assert_no_reparse_components(ca_path)
+    ca_missing = not ca_path.exists()
+    if (
+        not workspace.is_dir()
+        or not journal_path.is_file()
+        or (ca_missing and not allow_missing_ca)
+        or (not ca_missing and not ca_path.is_file())
+    ):
+        raise CheckError("The owned workspace, recovery journal, or public CA file is missing.")
+    if (
+        file_identity(workspace) != context["journal"].get("workspaceIdentity")
+        or workspace.resolve() not in ca_path.resolve(strict=not ca_missing).parents
+        or Path(context["journal"].get("certificatePath", "")).resolve(strict=False)
+        != ca_path.resolve(strict=not ca_missing)
+    ):
+        raise CheckError("The owned workspace or public CA path identity changed.")
+    try:
+        recorded_journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise CheckError("The recovery journal could not be verified before trust inspection.") from error
+    if recorded_journal != context["journal"]:
+        raise CheckError("The recovery journal changed before trust inspection.")
+    output = run_powershell(
+        context["powershell"],
+        TRUST_INSPECT_SCRIPT,
+        {
+            "ARCHIVE_CA_FILE": str(context["caPath"]),
+            "ARCHIVE_THUMBPRINT": context["journal"]["certificateThumbprint"],
+        },
+        timeout=5,
+        workspace=context.get("childWorkingDirectory", context["workspace"] / "child-temp"),
+        context=context,
+        role="current-user-root-inspection",
+        drain_timeout=5,
+    )
+    try:
+        identity = json.loads(output)
+    except json.JSONDecodeError as error:
+        raise CheckError("The CurrentUser\\Root inspection returned invalid identity data.") from error
+    if (
+        not isinstance(identity, dict)
+        or identity.get("state") not in {"absent", "present", "mismatch"}
+        or identity.get("thumbprint") != context["journal"]["certificateThumbprint"]
+        or (
+            not isinstance(identity.get("subject"), str)
+            and not (allow_missing_ca and ca_missing and identity.get("subject") is None)
+        )
+        or (identity.get("storeSubject") is not None and not isinstance(identity.get("storeSubject"), str))
+    ):
+        raise CheckError("The CurrentUser\\Root inspection returned incomplete identity data.")
+    expected_subject = f"CN=Agentweaver Archive Check CA {context['runId']}"
+    if not ca_missing and identity["subject"] != expected_subject:
+        raise CheckError("The owned public CA subject does not match the archive run.")
+    if ca_missing and identity["state"] == "present":
+        identity["state"] = "mismatch"
+    if identity["state"] == "present" and identity["storeSubject"] != expected_subject:
+        identity["state"] = "mismatch"
+    return identity
+
+
+def trust_cleanup_pending_reason(context: dict[str, Any]) -> str:
+    message = TRUST_CLEANUP_PENDING_MESSAGE
+    if context.get("attendedTrust") and not attended_console_available():
+        message += " --attended-trust requires a local operator terminal and is not allowed in CI."
+    return message
+
+
+def stop_and_record_trust_helper(
+    context: dict[str, Any],
+    process: subprocess.Popen[str],
+    process_identity: dict[str, Any],
+    role: str,
+    stopped_state: str,
+) -> tuple[bool, bool]:
+    stopped, interrupted = stop_trust_helper(process, role)
+    if stopped:
+        process_identity["state"] = "stopped-after-cancellation" if interrupted else stopped_state
+        process_identity["exitCode"] = process.returncode
+    else:
+        process_identity["state"] = "unresolved"
+    try:
+        persist_journal(context)
+    except (Exception, KeyboardInterrupt):
+        pass
+    return stopped, interrupted
+
+
+def run_attended_trust_action(
+    context: dict[str, Any],
+    *,
+    action: str,
+    script: str,
+    role: str,
+    deadline: float,
+) -> None:
+    if not attended_console_available():
+        raise TrustActionError(
+            "--attended-trust requires a local operator terminal and is not allowed in CI.",
+            "attended_console_required",
+        )
+    identity = inspect_owned_trust(context)
+    if identity["state"] != ("absent" if action == "import" else "present"):
+        raise TrustActionError(
+            "The exact owned Windows test root could not be confirmed before the attended action.",
+            "trust_import_not_verified" if action == "import" else "trust_cleanup_pending",
+        )
+    action_started = time.monotonic()
+    action_deadline = min(action_started + ATTENDED_TRUST_TIMEOUT_SECONDS, deadline)
+    timeout = action_deadline - action_started
+    if timeout <= 0:
+        raise TrustActionError(
+            "The attended Windows trust action did not finish within its time limit.",
+            "operator_confirmation_timed_out",
+        )
+    details = (
+        f"Windows archive trust action: {action}\n"
+        f"Run ID: {context['runId']}\n"
+        "Store: CurrentUser\\Root\n"
+        f"Certificate subject: {identity['subject']}\n"
+        f"SHA-1 thumbprint: {identity['thumbprint']}\n"
+        f"Public certificate file: {context['caPath']}\n"
+        f"Available wait: {timeout:.2f} seconds\n"
+    )
+    if action == "import":
+        details += "Cleanup removes this exact certificate and may need the operator again.\n"
+    else:
+        details += "A Windows security warning may appear during removal.\n"
+    details += (
+        "Review the Windows Security Warning for this certificate. Answer the\n"
+        "warning yourself only if its certificate identity matches the details\n"
+        "above and you approve this action. Otherwise reject it or cancel.\n"
+        "The verifier cannot answer the warning.\n"
+    )
+    print(details, file=sys.stderr, flush=True)
+
+    journal = context["journal"]
+    process_identity: dict[str, Any] = {
+        "pid": None,
+        "startTimeFiletime": None,
+        "role": role,
+        "executable": str(context["powershell"]),
+        "state": "launch-intended",
+    }
+    journal["processIdentities"].append(process_identity)
+    if action == "remove":
+        journal["trustRemovalAttempted"] = True
+    persist_journal(context)
+
+    process: subprocess.Popen[str] | None = None
+    if min(action_deadline, deadline) - time.monotonic() <= 0:
+        process_identity["state"] = "not-started"
+        persist_journal(context)
+        raise TrustActionError(
+            "The attended Windows trust action did not finish within its time limit.",
+            "operator_confirmation_timed_out",
+        )
+    try:
+        environment = powershell_env(context.get("childWorkingDirectory"))
+        environment.update({
+            "ARCHIVE_CA_FILE": str(context["caPath"]),
+            "ARCHIVE_THUMBPRINT": journal["certificateThumbprint"],
+        })
+        process = subprocess.Popen(
+            _powershell_command(context["powershell"], script),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+        )
+    except KeyboardInterrupt as error:
+        raise TrustActionError(
+            "The attended Windows trust action was cancelled.",
+            "operator_confirmation_cancelled",
+        ) from error
+    except OSError as error:
+        process_identity["state"] = "not-started"
+        persist_journal(context)
+        raise TrustActionError(
+            "The attended Windows trust helper could not be started.",
+            "trust_import_not_verified" if action == "import" else "trust_cleanup_pending",
+        ) from error
+
+    context.setdefault("children", []).append((process, process_identity))
+    try:
+        process_identity.update({
+            "pid": process.pid,
+            "startTimeFiletime": process_start_ticks(process.pid),
+            "state": "running",
+        })
+        persist_journal(context)
+        remaining = min(action_deadline, deadline) - time.monotonic()
+        if remaining <= 0:
+            _, shutdown_interrupted = stop_and_record_trust_helper(
+                context,
+                process,
+                process_identity,
+                role,
+                "stopped-after-timeout",
+            )
+            raise TrustActionError(
+                "The attended Windows trust action was cancelled."
+                if shutdown_interrupted else
+                "The attended Windows trust action did not finish within its time limit.",
+                "operator_confirmation_cancelled"
+                if shutdown_interrupted else
+                "operator_confirmation_timed_out",
+            )
+        try:
+            process.communicate(timeout=remaining)
+        except subprocess.TimeoutExpired as error:
+            _, shutdown_interrupted = stop_and_record_trust_helper(
+                context,
+                process,
+                process_identity,
+                role,
+                "stopped-after-timeout",
+            )
+            raise TrustActionError(
+                "The attended Windows trust action was cancelled."
+                if shutdown_interrupted else
+                "The attended Windows trust action did not finish within its time limit.",
+                "operator_confirmation_cancelled"
+                if shutdown_interrupted else
+                "operator_confirmation_timed_out",
+            ) from error
+        except KeyboardInterrupt as error:
+            stop_and_record_trust_helper(
+                context,
+                process,
+                process_identity,
+                role,
+                "stopped-after-cancellation",
+            )
+            raise TrustActionError(
+                "The attended Windows trust action was cancelled.",
+                "operator_confirmation_cancelled",
+            ) from error
+        process_identity["state"] = "exited"
+        process_identity["exitCode"] = process.returncode
+        persist_journal(context)
+    except TrustActionError:
+        raise
+    except BaseException as error:
+        _, shutdown_interrupted = stop_and_record_trust_helper(
+            context,
+            process,
+            process_identity,
+            role,
+            "stopped-after-error",
+        )
+        if isinstance(error, KeyboardInterrupt) or shutdown_interrupted:
+            raise TrustActionError(
+                "The attended Windows trust action was cancelled.",
+                "operator_confirmation_cancelled",
+            ) from error
+        raise
+    if process.returncode:
+        raise TrustActionError(
+            "The attended Windows trust helper failed.",
+            "trust_import_not_verified" if action == "import" else "trust_cleanup_pending",
+        )
 
 
 def make_certificates(
@@ -1768,25 +2139,85 @@ def cleanup_marker(path: Path) -> None:
 def remove_owned_trust(context: dict[str, Any], errors: list[str]) -> None:
     journal = context["journal"]
     if not journal.get("trustImportAttempted"):
-        return
-    try:
-        env = {
-            "ARCHIVE_CA_FILE": str(context["caPath"]),
-            "ARCHIVE_THUMBPRINT": journal["certificateThumbprint"],
-        }
-        run_powershell(
-            context["powershell"],
-            TRUST_REMOVE_SCRIPT,
-            env,
-            timeout=5,
-            workspace=context["childWorkingDirectory"],
-            context=context,
-            role="current-user-root-removal",
-        )
         journal["trustRemovedAndVerified"] = True
+        return
+    journal["trustRemovedAndVerified"] = False
+    try:
         persist_journal(context)
     except Exception:
         errors.append("current-user-root-removal-unverified")
+        context["trustFailureCode"] = "trust_cleanup_pending"
+        context["trustFailureReason"] = trust_cleanup_pending_reason(context)
+        return
+    try:
+        current = inspect_owned_trust(context, allow_missing_ca=True)
+    except Exception:
+        errors.append("current-user-root-removal-unverified")
+        context["trustFailureCode"] = "trust_cleanup_pending"
+        context["trustFailureReason"] = trust_cleanup_pending_reason(context)
+        return
+    if current["state"] == "absent":
+        journal["trustRemovedAndVerified"] = True
+        persist_journal(context)
+        return
+    if current["state"] != "present":
+        errors.append("current-user-root-removal-unverified")
+        context["trustFailureCode"] = "trust_cleanup_pending"
+        context["trustFailureReason"] = trust_cleanup_pending_reason(context)
+        return
+    if not context.get("attendedTrust") or not attended_console_available():
+        errors.append("current-user-root-removal-unverified")
+        context["trustFailureCode"] = "trust_cleanup_pending"
+        context["trustFailureReason"] = trust_cleanup_pending_reason(context)
+        return
+    action_error: TrustActionError | None = None
+    try:
+        run_attended_trust_action(
+            context,
+            action="remove",
+            script=TRUST_REMOVE_SCRIPT,
+            role=context.get("trustRemovalRole", "current-user-root-removal"),
+            deadline=context["cleanupDeadline"],
+        )
+    except TrustActionError as error:
+        action_error = error
+    except Exception:
+        action_error = TrustActionError(
+            "The exact owned test root could not be removed.",
+            "trust_cleanup_pending",
+        )
+    unresolved_child = any(
+        identity.get("role") == context.get("trustRemovalRole", "current-user-root-removal")
+        and identity.get("state") == "unresolved"
+        for _, identity in context.get("children", [])
+    )
+    if unresolved_child or trust_recovery_unresolved(journal):
+        errors.append("current-user-root-removal-unverified")
+        context["trustFailureCode"] = "trust_cleanup_pending"
+        context["trustFailureReason"] = trust_cleanup_pending_reason(context)
+        return
+    try:
+        after = inspect_owned_trust(context, allow_missing_ca=True)
+    except Exception:
+        after = {"state": "unknown"}
+    if after["state"] == "absent":
+        journal["trustRemovedAndVerified"] = True
+        persist_journal(context)
+        if action_error and action_error.failure_code in {
+            "operator_confirmation_timed_out",
+            "operator_confirmation_cancelled",
+        }:
+            context["trustFailureCode"] = action_error.failure_code
+            context["trustFailureReason"] = str(action_error)
+        return
+    errors.append("current-user-root-removal-unverified")
+    context["trustFailureCode"] = "trust_cleanup_pending"
+    context["trustFailureReason"] = trust_cleanup_pending_reason(context)
+    if action_error and action_error.failure_code in {
+        "operator_confirmation_timed_out",
+        "operator_confirmation_cancelled",
+    }:
+        context["trustFailureReason"] += " " + str(action_error)
 
 
 def wait_for_fixture_threads(server: FixtureServer, worker: threading.Thread, state: FIXTURE_STATE) -> bool:
@@ -1918,6 +2349,10 @@ def cleanup_run(context: dict[str, Any], server: FixtureServer | None, worker: t
     persist_journal(context)
 
     errors.extend(stop_owned_children(context))
+    if trust_recovery_unresolved(journal):
+        errors.append("current-user-root-removal-unverified")
+        context["trustFailureCode"] = "trust_cleanup_pending"
+        context["trustFailureReason"] = trust_cleanup_pending_reason(context)
 
     listener_stopped = True
     if server is not None and worker is not None:
@@ -1932,6 +2367,10 @@ def cleanup_run(context: dict[str, Any], server: FixtureServer | None, worker: t
     persist_journal(context)
 
     if errors:
+        if journal.get("trustImportAttempted"):
+            errors.append("current-user-root-removal-unverified")
+            context["trustFailureCode"] = "trust_cleanup_pending"
+            context["trustFailureReason"] = trust_cleanup_pending_reason(context)
         journal["cleanupErrors"] = list(dict.fromkeys(errors))
         journal["cleanupProgress"] = "unresolved"
         persist_journal(context)
@@ -1971,7 +2410,11 @@ def cleanup_run(context: dict[str, Any], server: FixtureServer | None, worker: t
 
     process_errors = stop_owned_children(context)
     errors.extend(process_errors)
-    if process_errors:
+    if trust_recovery_unresolved(journal):
+        errors.append("current-user-root-removal-unverified")
+        context["trustFailureCode"] = "trust_cleanup_pending"
+        context["trustFailureReason"] = trust_cleanup_pending_reason(context)
+    if process_errors or trust_recovery_unresolved(journal):
         journal["cleanupErrors"] = list(dict.fromkeys(errors))
         journal["cleanupProgress"] = "unresolved"
         persist_journal(context)
@@ -2090,14 +2533,20 @@ def cleanup_run(context: dict[str, Any], server: FixtureServer | None, worker: t
     journal["cleanupProgress"] = "removing-owned-workspace-files"
     journal["cleanupErrors"] = list(dict.fromkeys(errors))
     persist_journal(context)
-    preserve_paths = {context["caPath"]} if "current-user-root-removal-unverified" in errors else set()
+    preserve_paths = set()
+    if "current-user-root-removal-unverified" in errors:
+        preserve_paths.update({
+            context["caPath"],
+            context["caPath"].parent,
+            context["childWorkingDirectory"],
+        })
     workspace_ok, workspace_errors = delete_workspace_paths(
         context,
         keep_journal=True,
         preserve_paths=preserve_paths,
     )
     errors.extend(workspace_errors)
-    if not errors and workspace_ok:
+    if not errors and workspace_ok and not preserve_paths:
         try:
             context["journalPath"].unlink()
             context["workspace"].rmdir()
@@ -2177,12 +2626,52 @@ def verify_and_run(args: argparse.Namespace) -> int:
     if output.name != SIDECAR_NAME:
         print(f"Output file must be named {SIDECAR_NAME}.", file=sys.stderr)
         return 1
+    try:
+        verify_windows_path(output, must_exist=False)
+        if not output.parent.is_dir() or output.exists() or output.is_symlink():
+            raise CheckError("The sidecar output path must be new and its parent directory must exist.")
+    except (CheckError, OSError) as error:
+        print(f"Windows archive check failed: {error}", file=sys.stderr)
+        return 1
     source_commit = args.source_commit
     result = initial_sidecar(run_id, source_commit, None, started, "failed")
+    attended_trust = bool(getattr(args, "attended_trust", False))
+    result["controlledArchiveChecks"]["trustMode"] = "attended" if attended_trust else "unattended"
+    if not attended_trust:
+        failure = "Windows archive trust checks require an attended operator. Run manually with --attended-trust."
+        result["controlledArchiveChecks"].update({
+            "status": "blocked",
+            "reason": failure,
+            "failureCode": "operator_confirmation_required",
+        })
+        result["completedAt"] = utc_now()
+        try:
+            save_sidecar(output, result)
+        except Exception:
+            print("Could not write the new sanitized archive-check sidecar.", file=sys.stderr)
+            return 1
+        print(failure, file=sys.stderr)
+        return 2
+    if not attended_console_available():
+        failure = "--attended-trust requires a local operator terminal and is not allowed in CI."
+        result["controlledArchiveChecks"].update({
+            "status": "blocked",
+            "reason": failure,
+            "failureCode": "attended_console_required",
+        })
+        result["completedAt"] = utc_now()
+        try:
+            save_sidecar(output, result)
+        except Exception:
+            print("Could not write the new sanitized archive-check sidecar.", file=sys.stderr)
+            return 1
+        print(failure, file=sys.stderr)
+        return 2
     context: dict[str, Any] | None = None
     server: FixtureServer | None = None
     worker: threading.Thread | None = None
     failure: str | None = None
+    failure_code: str | None = None
     blocked = False
     cleanup: dict[str, Any] | None = None
 
@@ -2255,6 +2744,7 @@ def verify_and_run(args: argparse.Namespace) -> int:
             "nativeProbeAcquisitionAttempted": False,
             "certificateThumbprint": None,
             "certificateNotAfter": None,
+            "trustMode": "attended",
             "certificatePath": str(certificate_path),
             "leafCertificatePath": str(workspace / "certificates" / "server.cer.pem"),
             "leafPrivateKeyPath": str(workspace / "certificates" / "server.key.pem"),
@@ -2269,6 +2759,7 @@ def verify_and_run(args: argparse.Namespace) -> int:
             "createdPaths": planned_path_list(workspace, receipt),
             "processIdentities": [],
             "trustImportAttempted": False,
+            "trustRemovalAttempted": False,
             "credentialSeedAttempted": False,
             "cleanupProgress": "journal-created",
         }
@@ -2276,6 +2767,7 @@ def verify_and_run(args: argparse.Namespace) -> int:
             "runId": run_id,
             "startedAt": started,
             "deadline": time.monotonic() + 600,
+            "attendedTrust": attended_trust,
             "workspace": workspace,
             "journal": journal,
             "journalPath": workspace / "journal.json",
@@ -2384,22 +2876,30 @@ def verify_and_run(args: argparse.Namespace) -> int:
         else:
             raise BlockedError("The controlled HTTPS fixture did not become ready.")
 
-        trust_env = {
-            "ARCHIVE_CA_FILE": str(certificate_path),
-            "ARCHIVE_THUMBPRINT": certificate["thumbprint"],
-        }
         context["journal"]["trustImportAttempted"] = True
         context["journal"]["cleanupProgress"] = "current-user-root-import-intended"
         persist_journal(context)
-        run_powershell(
-            powershell,
-            TRUST_IMPORT_SCRIPT,
-            trust_env,
-            timeout=5,
-            workspace=context["childWorkingDirectory"],
-            context=context,
-            role="current-user-root-import",
-        )
+        try:
+            run_attended_trust_action(
+                context,
+                action="import",
+                script=TRUST_IMPORT_SCRIPT,
+                role="current-user-root-import",
+                deadline=context["deadline"],
+            )
+            trust_readback = inspect_owned_trust(context)
+        except TrustActionError:
+            raise
+        except CheckError as error:
+            raise TrustActionError(
+                "The exact test root was not verified after the attended import.",
+                "trust_import_not_verified",
+            ) from error
+        if trust_readback["state"] != "present":
+            raise TrustActionError(
+                "The exact test root was not verified after the attended import.",
+                "trust_import_not_verified",
+            )
         context["journal"]["trustImportedAndVerified"] = True
         persist_journal(context)
 
@@ -2428,6 +2928,9 @@ def verify_and_run(args: argparse.Namespace) -> int:
     except BlockedError as error:
         blocked = True
         failure = str(error)
+    except TrustActionError as error:
+        failure = str(error)
+        failure_code = error.failure_code
     except BaseException as error:
         failure = str(error) or type(error).__name__
         if context is not None:
@@ -2466,6 +2969,14 @@ def verify_and_run(args: argparse.Namespace) -> int:
         blocked = False
 
     if context is not None:
+        trust_failure_code = context.get("trustFailureCode")
+        if trust_failure_code:
+            failure_code = trust_failure_code
+            trust_failure_reason = context.get("trustFailureReason")
+            if trust_failure_reason:
+                failure = f"{failure or ''} {trust_failure_reason}".strip()
+        if failure_code:
+            result["controlledArchiveChecks"]["failureCode"] = failure_code
         result["runId"] = run_id
         result["host"]["logonSid"] = context["profile"]["sid"]
         result["source"] = {"commit": source_commit, "tree": context["sourceTree"]}
@@ -2510,6 +3021,8 @@ def verify_and_run(args: argparse.Namespace) -> int:
             result["controlledArchiveChecks"]["reason"] = "Cleanup completion could not be verified."
     else:
         result["controlledArchiveChecks"]["status"] = "blocked" if blocked else "failed"
+        if failure_code:
+            result["controlledArchiveChecks"]["failureCode"] = failure_code
         if failure:
             result["controlledArchiveChecks"]["reason"] = failure
         if source_commit:
@@ -2539,7 +3052,54 @@ def verify_and_run(args: argparse.Namespace) -> int:
     return 1
 
 
-def cleanup_only(workspace_argument: Path, output_argument: Path) -> int:
+def trust_recovery_unresolved(journal: dict[str, Any]) -> bool:
+    roles_by_attempt = [
+        ("trustImportAttempted", {"current-user-root-import"}),
+        ("trustRemovalAttempted", {"current-user-root-removal", "recovery-current-user-root-removal"}),
+    ]
+    if (
+        "trustRemovalAttempted" not in journal
+        and journal.get("cleanupStartedAt")
+        and journal.get("trustImportAttempted")
+    ):
+        roles_by_attempt.append((
+            "legacyRemovalMayHaveStarted",
+            {"current-user-root-removal", "recovery-current-user-root-removal"},
+        ))
+    process_identities = journal.get("processIdentities", [])
+    for attempted_key, roles in roles_by_attempt:
+        if attempted_key != "legacyRemovalMayHaveStarted" and not journal.get(attempted_key):
+            continue
+        matching = [
+            item for item in process_identities
+            if isinstance(item, dict) and item.get("role") in roles
+        ]
+        if not matching:
+            return True
+        for item in matching:
+            state = item.get("state")
+            if state == "not-started":
+                continue
+            if state in {"exited", "stopped-after-timeout", "stopped-after-cancellation", "stopped-after-error"}:
+                continue
+            if (
+                isinstance(item.get("pid"), int)
+                and item["pid"] > 0
+                and isinstance(item.get("startTimeFiletime"), int)
+                and item["startTimeFiletime"] > 0
+            ):
+                continue
+            return True
+    return False
+
+
+def cleanup_only(
+    workspace_argument: Path,
+    output_argument: Path,
+    *,
+    attended_trust: bool = False,
+) -> int:
+    cleanup_deadline = time.monotonic() + ATTENDED_TRUST_TIMEOUT_SECONDS
     workspace = Path(os.path.abspath(workspace_argument))
     output = Path(os.path.abspath(output_argument))
     if os.name != "nt":
@@ -2573,6 +3133,9 @@ def cleanup_only(workspace_argument: Path, output_argument: Path) -> int:
         "assertions": {},
         "certificateMaterial": {},
         "journalReady": True,
+        "runId": str(journal.get("runId")),
+        "attendedTrust": attended_trust,
+        "cleanupDeadline": cleanup_deadline,
     }
     profile = json.loads(run_powershell(
         powershell_executable(),
@@ -2644,13 +3207,33 @@ def cleanup_only(workspace_argument: Path, output_argument: Path) -> int:
     errors: list[str] = []
     recovered_processes: list[dict[str, Any]] = []
     for identity in journal.get("processIdentities", []):
-        pid = int(identity.get("pid", -1))
-        start = int(identity.get("startTimeFiletime", -1))
+        if not isinstance(identity, dict):
+            errors.append("owned-process-identity-or-shutdown-unverified")
+            continue
+        if identity.get("state") in {
+            "not-started",
+            "exited",
+            "stopped-after-timeout",
+            "stopped-after-cancellation",
+            "stopped-after-error",
+        }:
+            recovered_processes.append({"pid": identity.get("pid"), "stopped": True})
+            continue
+        pid = identity.get("pid")
+        start = identity.get("startTimeFiletime")
+        if not isinstance(pid, int) or not isinstance(start, int) or pid <= 0 or start <= 0:
+            errors.append("owned-process-identity-or-shutdown-unverified")
+            continue
         try:
             stopped = terminate_owned_process(pid, start)
+            identity["state"] = "exited"
             recovered_processes.append({"pid": pid, "stopped": stopped})
         except Exception:
             errors.append("owned-process-identity-or-shutdown-unverified")
+    try:
+        write_journal(journal_path, workspace / "journal.json.new", journal)
+    except Exception:
+        errors.append("recovery-journal-update-failed")
 
     powershell = powershell_executable()
     context.update({
@@ -2659,6 +3242,9 @@ def cleanup_only(workspace_argument: Path, output_argument: Path) -> int:
         "lockPath": expected_lock,
         "markerPath": expected_marker,
         "credentialTarget": expected_target,
+        "childWorkingDirectory": workspace / "child-temp",
+        "cleanupDeadline": cleanup_deadline,
+        "trustRemovalRole": "recovery-current-user-root-removal",
         "fixtureState": FIXTURE_STATE(
             str(origin_identity.get("gateway", "")),
             str(origin_identity.get("tenant", "")),
@@ -2675,7 +3261,20 @@ def cleanup_only(workspace_argument: Path, output_argument: Path) -> int:
         "cleanup-only recovery does not rerun or pass the archive checks.",
     )
     result["host"]["logonSid"] = profile["sid"]
-    if "owned-process-identity-or-shutdown-unverified" in errors:
+    result["controlledArchiveChecks"]["trustMode"] = "attended" if attended_trust else "unattended"
+    trust_unresolved = trust_recovery_unresolved(journal)
+    if (
+        "owned-process-identity-or-shutdown-unverified" in errors
+        or "recovery-journal-update-failed" in errors
+        or trust_unresolved
+    ):
+        trust_pending = trust_unresolved or bool(
+            journal.get("trustImportAttempted") or journal.get("trustRemovalAttempted")
+        )
+        if trust_pending:
+            errors.append("current-user-root-removal-unverified")
+            context["trustFailureCode"] = "trust_cleanup_pending"
+            context["trustFailureReason"] = trust_cleanup_pending_reason(context)
         journal["cleanupProgress"] = "unresolved"
         journal["cleanupErrors"] = list(dict.fromkeys(errors))
         try:
@@ -2683,7 +3282,13 @@ def cleanup_only(workspace_argument: Path, output_argument: Path) -> int:
         except Exception:
             errors.append("recovery-journal-update-failed")
         result["controlledArchiveChecks"]["status"] = "failed"
-        result["controlledArchiveChecks"]["reason"] = "Recovery could not verify shutdown of every owned process."
+        result["controlledArchiveChecks"]["reason"] = (
+            context["trustFailureReason"]
+            if trust_pending else
+            "Recovery could not verify shutdown of every owned process."
+        )
+        if trust_pending:
+            result["controlledArchiveChecks"]["failureCode"] = "trust_cleanup_pending"
         result["controlledArchiveChecks"]["cleanup"] = {
             "status": "failed",
             "errors": list(dict.fromkeys(errors)),
@@ -2700,7 +3305,7 @@ def cleanup_only(workspace_argument: Path, output_argument: Path) -> int:
         result["issue2449Acceptance"] = "incomplete"
         result["completedAt"] = utc_now()
         save_sidecar(output, result)
-        print("Recovery could not stop every owned process; native resources and the journal were preserved.", file=sys.stderr)
+        print("Recovery remains unresolved; native resources and the journal were preserved.", file=sys.stderr)
         return 1
     try:
         if journal.get("credentialSeedAttempted"):
@@ -2732,25 +3337,7 @@ def cleanup_only(workspace_argument: Path, output_argument: Path) -> int:
             errors.append("unexpected-credential-appeared-at-native-probe-target")
     except Exception:
         errors.append("native-probe-credential-cleanup-unverified")
-    if journal.get("trustImportAttempted"):
-        try:
-            run_powershell(
-                powershell,
-                TRUST_REMOVE_SCRIPT,
-                {
-                    "ARCHIVE_CA_FILE": str(ca_path),
-                    "ARCHIVE_THUMBPRINT": certificate_thumbprint,
-                },
-                timeout=5,
-                workspace=workspace / "child-temp",
-                context=context,
-                role="recovery-current-user-root-removal",
-            )
-            journal["trustRemovedAndVerified"] = True
-        except Exception:
-            errors.append("current-user-root-removal-unverified")
-    else:
-        journal["trustRemovedAndVerified"] = True
+    remove_owned_trust(context, errors)
 
     lock_residual = None
     try:
@@ -2777,7 +3364,9 @@ def cleanup_only(workspace_argument: Path, output_argument: Path) -> int:
         "owned-process-identity-or-shutdown-unverified",
         "owned-cli-or-helper-process-did-not-stop",
     ))
-    preserve_paths = {ca_path} if "current-user-root-removal-unverified" in errors else set()
+    preserve_paths = set()
+    if "current-user-root-removal-unverified" in errors:
+        preserve_paths.update({ca_path, ca_path.parent, workspace / "child-temp"})
     if not process_unresolved:
         _workspace_ok, cleanup_errors = delete_workspace_paths(
             context,
@@ -2813,6 +3402,10 @@ def cleanup_only(workspace_argument: Path, output_argument: Path) -> int:
     result["controlledArchiveChecks"]["reason"] = "Cleanup-only recovery preserves the original interrupted check as failed."
     result["controlledArchiveChecks"]["cleanup"] = cleanup
     result["controlledArchiveChecks"]["fixtureCalls"] = []
+    if context.get("trustFailureCode"):
+        result["controlledArchiveChecks"]["failureCode"] = context["trustFailureCode"]
+        if context["trustFailureCode"] == "trust_cleanup_pending":
+            result["controlledArchiveChecks"]["reason"] += " " + context.get("trustFailureReason", "")
     result["nativeJourneyProof"]["status"] = "not-run"
     result["issue2449Acceptance"] = "incomplete"
     result["completedAt"] = utc_now()
@@ -2828,12 +3421,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cleanup-only", action="store_true")
+    parser.add_argument("--attended-trust", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.cleanup_only:
             if args.directory is not None or args.source_commit is not None:
                 raise CheckError("--cleanup-only does not accept an archive directory or source commit.")
-            return cleanup_only(args.workspace, args.output)
+            return cleanup_only(args.workspace, args.output, attended_trust=args.attended_trust)
         if args.directory is None or args.source_commit is None:
             raise CheckError("A candidate directory and full expected source commit are required.")
         return verify_and_run(args)

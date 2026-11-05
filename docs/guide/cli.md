@@ -30,7 +30,9 @@ is a build output, not a released archive.
 
 The source-bound Windows archive verifier runs controlled checks against the
 exact extracted apphost. See [Windows archive checks](./testing.md#windows-archive-checks);
-this is not API acceptance or release publication evidence.
+these checks require an explicit attended Windows trust action. This is a
+verifier option, not a product TLS option, API acceptance, or release
+publication evidence.
 
 When release archives are available, choose the archive matching the host,
 extract it, and place the executable directory on `PATH` or invoke the

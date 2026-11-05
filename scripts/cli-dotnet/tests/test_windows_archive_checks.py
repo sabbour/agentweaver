@@ -1,5 +1,6 @@
 import hashlib
 import http.client
+import io
 import json
 import os
 import re
@@ -55,6 +56,26 @@ class ExitedProcess:
         return "helper-result", ""
 
 
+class RecordingProcess(ExitedProcess):
+    def __init__(self):
+        self.communicate_calls = []
+
+    def communicate(self, timeout=None):
+        self.communicate_calls.append(timeout)
+        return "helper-result", ""
+
+
+class InterruptingProcess:
+    pid = 8456
+    returncode = None
+
+    def poll(self):
+        return self.returncode
+
+    def communicate(self, timeout=None):
+        raise KeyboardInterrupt()
+
+
 class TimedOutProcess:
     pid = 8345
 
@@ -94,6 +115,100 @@ class TimedOutProcess:
         if self.clock is not None:
             self.clock.now += 60
         return "sensitive stdout", "sensitive stderr"
+
+
+def write_recovery_fixture(
+    folder,
+    *,
+    trust_import_attempted=False,
+    import_verified=False,
+    certificate_exists=True,
+    process_identities=None,
+    cleanup_started=False,
+    legacy_journal=False,
+):
+    folder.mkdir(parents=True, exist_ok=True)
+    workspace = folder / "workspace"
+    workspace.mkdir()
+    for name in ("child-temp", "extracted", "fixtures", "certificates"):
+        (workspace / name).mkdir()
+    output = folder / checks.SIDECAR_NAME
+    run_id = uuid.uuid4().hex
+    origin = "https://127.0.0.1:43123"
+    issuer = origin + "/"
+    tenant = "archive-tenant"
+    audience = "archive-audience"
+    account = checks.account_key(issuer, "agentweaver-cli", audience, origin, tenant)
+    target = checks.credential_target(account)
+    local_app_data = folder / "local-app-data"
+    _state_directory, lock_path, marker_path = checks.account_state_paths(str(local_app_data), account)
+    ca_path = workspace / "certificates" / "test-root.cer"
+    if certificate_exists:
+        ca_path.write_bytes(b"synthetic public CA")
+    paths = [
+        workspace / "journal.json",
+        workspace / "journal.json.new",
+        workspace / "child-temp",
+        workspace / "extracted",
+        workspace / "fixtures",
+        workspace / "certificates",
+        ca_path,
+        workspace / "certificates" / "server.cer.pem",
+        workspace / "certificates" / "server.key.pem",
+    ]
+    identity = {
+        "issuer": issuer,
+        "clientId": "agentweaver-cli",
+        "audience": audience,
+        "gateway": origin,
+        "tenant": tenant,
+        "scopes": ["openid", "api.read", "offline_access"],
+        "projectId": None,
+        "runId": None,
+        "account": account,
+        "credentialTarget": target,
+        "lockPath": str(lock_path),
+        "refreshMarkerPath": str(marker_path),
+    }
+    journal = {
+        "schemaVersion": 1,
+        "runId": run_id,
+        "workspace": str(workspace),
+        "workspaceIdentity": checks.file_identity(workspace),
+        "logonSid": "S-1-5-21-1-2-3-1001",
+        "controllerProcess": {"pid": 99999, "startTimeFiletime": 12345},
+        "identity": identity,
+        "credentialTarget": target,
+        "nativeProbeTarget": "Agentweaver.Cli.ArchiveProbe.v1:" + run_id,
+        "nativeProbeAcquisitionAttempted": False,
+        "certificateThumbprint": "A" * 40 if trust_import_attempted else None,
+        "certificatePath": str(ca_path),
+        "leafCertificatePath": str(workspace / "certificates" / "server.cer.pem"),
+        "leafPrivateKeyPath": str(workspace / "certificates" / "server.key.pem"),
+        "trustMode": "attended",
+        "trustImportAttempted": trust_import_attempted,
+        "trustImportedAndVerified": import_verified,
+        "trustRemovalAttempted": False,
+        "trustRemovedAndVerified": False,
+        "credentialSeedAttempted": False,
+        "stableLockIdentity": None,
+        "createdPaths": [str(path) for path in paths],
+        "processIdentities": list(process_identities or []),
+        "startedAt": "2026-11-02T00:00:00+00:00",
+        "sourceCommit": "a" * 40,
+        "sourceTree": "b" * 40,
+    }
+    if cleanup_started:
+        journal["cleanupStartedAt"] = "2026-11-02T00:01:00+00:00"
+    if legacy_journal:
+        journal.pop("trustRemovalAttempted")
+    journal_path = workspace / "journal.json"
+    journal_path.write_text(json.dumps(journal), encoding="utf-8")
+    profile = json.dumps({
+        "sid": journal["logonSid"],
+        "localAppData": str(local_app_data),
+    })
+    return workspace, output, journal, profile
 
 
 class WindowsArchiveCleanupTests(unittest.TestCase):
@@ -143,6 +258,65 @@ class WindowsArchiveCleanupTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertFalse(result["workspaceRemoved"])
         self.assertIn("owned-cli-or-helper-process-did-not-stop", result["errors"])
+
+    def test_unresolved_trust_launch_intent_blocks_dependent_cleanup(self):
+        journal = {
+            "runId": "fixture-run",
+            "trustImportAttempted": True,
+            "trustRemovalAttempted": False,
+            "certificateThumbprint": "A" * 40,
+            "processIdentities": [],
+            "cleanupErrors": [],
+        }
+        context = {
+            "runId": "fixture-run",
+            "powershell": Path("pwsh.exe"),
+            "caPath": Path("test-root.cer"),
+            "journal": journal,
+            "children": [],
+            "fixtureState": SimpleNamespace(secrets=set()),
+        }
+        with (
+            patch.object(checks, "attended_console_available", return_value=True),
+            patch.object(checks, "inspect_owned_trust", return_value={
+                "state": "absent",
+                "thumbprint": "A" * 40,
+                "subject": "CN=Agentweaver Archive Check CA fixture-run",
+            }),
+            patch.object(checks, "powershell_env", return_value={"PATH": ""}),
+            patch.object(checks.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, create=True),
+            patch.object(checks.subprocess, "Popen", side_effect=KeyboardInterrupt()),
+            patch.object(checks.sys, "stderr", io.StringIO()),
+            patch.object(checks, "persist_journal"),
+        ):
+            with self.assertRaises(checks.TrustActionError) as raised:
+                checks.run_attended_trust_action(
+                    context,
+                    action="import",
+                    script=checks.TRUST_IMPORT_SCRIPT,
+                    role="current-user-root-import",
+                    deadline=time.monotonic() + 60,
+                )
+
+        self.assertEqual(raised.exception.failure_code, "operator_confirmation_cancelled")
+        self.assertEqual(context["children"], [])
+        self.assertEqual(journal["processIdentities"][0]["state"], "launch-intended")
+
+        with (
+            patch.object(checks, "persist_journal"),
+            patch.object(checks, "credential_read") as credential_read,
+            patch.object(checks, "remove_owned_trust") as remove_owned_trust,
+            patch.object(checks, "delete_workspace_paths") as delete_workspace_paths,
+        ):
+            result = checks.cleanup_run(context, None, None)
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("current-user-root-removal-unverified", result["errors"])
+        self.assertEqual(context["trustFailureCode"], "trust_cleanup_pending")
+        self.assertFalse(result["workspaceRemoved"])
+        credential_read.assert_not_called()
+        remove_owned_trust.assert_not_called()
+        delete_workspace_paths.assert_not_called()
 
     def test_failed_logout_keeps_cleanup_failed_even_when_credential_is_removed(self):
         executable = Path(__file__).resolve()
@@ -961,6 +1135,7 @@ $actual = @($acl.Access | ForEach-Object {
             source_commit=source_commit,
             directory=folder,
             workspace=workspace,
+            attended_trust=True,
         )
         try:
             with (
@@ -977,6 +1152,7 @@ $actual = @($acl.Access | ForEach-Object {
                     },
                 ),
                 patch.object(checks, "reserve_loopback_port", return_value=43123),
+                patch.object(checks, "attended_console_available", return_value=True),
                 patch.object(checks, "assert_no_reparse_components"),
                 patch.object(checks, "process_start_ticks", return_value=12345),
                 patch.object(checks, "credential_read", return_value=None),
@@ -1039,6 +1215,7 @@ $actual = @($acl.Access | ForEach-Object {
             source_commit=source_commit,
             directory=folder,
             workspace=workspace,
+            attended_trust=True,
         )
         process = TimedOutProcess()
         captured_errors = []
@@ -1072,6 +1249,7 @@ $actual = @($acl.Access | ForEach-Object {
                     },
                 ),
                 patch.object(checks, "reserve_loopback_port", return_value=43123),
+                patch.object(checks, "attended_console_available", return_value=True),
                 patch.object(checks, "assert_no_reparse_components"),
                 patch.object(checks, "process_start_ticks", return_value=12345),
                 patch.object(checks, "credential_read", return_value=None),
@@ -1101,6 +1279,558 @@ $actual = @($acl.Access | ForEach-Object {
             self.assertEqual(sidecar["controlledArchiveChecks"]["cleanup"]["status"], "passed")
             self.assertTrue(sidecar["controlledArchiveChecks"]["cleanup"]["workspaceRemoved"])
             cleanup_run.assert_called_once()
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+
+class WindowsArchiveAttendedTrustTests(unittest.TestCase):
+    def test_unattended_and_nonterminal_calls_block_before_preflight(self):
+        folder = temporary_test_path("archive-trust-gate")
+        folder.mkdir()
+        try:
+            for name, attended, console, expected_code in (
+                ("unattended", False, True, "operator_confirmation_required"),
+                ("nonterminal", True, False, "attended_console_required"),
+            ):
+                with self.subTest(name=name):
+                    output_dir = folder / name
+                    output_dir.mkdir()
+                    output = output_dir / checks.SIDECAR_NAME
+                    args = SimpleNamespace(
+                        output=output,
+                        source_commit="a" * 40,
+                        directory=folder / "candidate",
+                        workspace=folder / "workspace",
+                        attended_trust=attended,
+                    )
+                    with (
+                        patch.object(checks, "preflight") as preflight,
+                        patch.object(checks, "attended_console_available", return_value=console),
+                    ):
+                        self.assertEqual(checks.verify_and_run(args), 2)
+
+                    preflight.assert_not_called()
+                    sidecar = json.loads(output.read_text(encoding="utf-8"))
+                    self.assertEqual(sidecar["controlledArchiveChecks"]["status"], "blocked")
+                    self.assertEqual(sidecar["controlledArchiveChecks"]["failureCode"], expected_code)
+                    self.assertEqual(
+                        sidecar["controlledArchiveChecks"]["trustMode"],
+                        "attended" if attended else "unattended",
+                    )
+                    self.assertFalse(args.workspace.exists())
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_any_nonempty_ci_indicator_blocks_attended_console(self):
+        terminal = SimpleNamespace(isatty=lambda: True)
+        for name in ("CI", "GITHUB_ACTIONS"):
+            with self.subTest(name=name):
+                with (
+                    patch.object(checks.sys, "stdin", terminal),
+                    patch.object(checks.sys, "stderr", terminal),
+                    patch.dict(checks.os.environ, {name: "false"}),
+                ):
+                    self.assertFalse(checks.attended_console_available())
+        with (
+            patch.object(checks.sys, "stdin", io.StringIO()),
+            patch.object(checks.sys, "stderr", terminal),
+            patch.dict(checks.os.environ, {}, clear=True),
+        ):
+            self.assertFalse(checks.attended_console_available())
+
+    def test_cleanup_parser_forwards_only_explicit_attended_option(self):
+        with patch.object(checks, "cleanup_only", return_value=1) as cleanup:
+            result = checks.main([
+                "--cleanup-only",
+                "--attended-trust",
+                "--workspace",
+                "owned-workspace",
+                "--output",
+                checks.SIDECAR_NAME,
+            ])
+
+        self.assertEqual(result, 1)
+        cleanup.assert_called_once_with(
+            Path("owned-workspace"),
+            Path(checks.SIDECAR_NAME),
+            attended_trust=True,
+        )
+
+    def test_trust_action_persists_intent_before_launch_and_clamps_deadline(self):
+        folder = temporary_test_path("archive-trust-action")
+        folder.mkdir()
+        process = ExitedProcess()
+        states = []
+        context = {
+            "runId": "fixture-run",
+            "powershell": Path("pwsh.exe"),
+            "caPath": folder / "test-root.cer",
+            "childWorkingDirectory": folder,
+            "children": [],
+            "journal": {
+                "runId": "fixture-run",
+                "certificateThumbprint": "A" * 40,
+                "processIdentities": [],
+            },
+        }
+
+        def persist(_context):
+            states.append(context["journal"]["processIdentities"][-1]["state"])
+
+        try:
+            stderr_output = io.StringIO()
+
+            def launch(*_args, **_kwargs):
+                self.assertEqual(states, ["launch-intended"])
+                self.assertIn("SHA-1 thumbprint: " + "A" * 40, stderr_output.getvalue())
+                self.assertIn("The verifier cannot answer the warning.", stderr_output.getvalue())
+                return process
+
+            with (
+                patch.object(checks, "attended_console_available", return_value=True),
+                patch.object(checks, "inspect_owned_trust", return_value={
+                    "state": "absent",
+                    "thumbprint": "A" * 40,
+                    "subject": "CN=Agentweaver Archive Check CA fixture-run",
+                }),
+                patch.object(checks, "powershell_env", return_value={"PATH": ""}),
+                patch.object(checks, "persist_journal", side_effect=persist),
+                patch.object(checks, "process_start_ticks", return_value=456),
+                patch.object(checks.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, create=True),
+                patch.object(checks.subprocess, "Popen", side_effect=launch),
+                patch.object(checks.time, "monotonic", return_value=10.0),
+                patch.object(checks.sys, "stderr", stderr_output),
+            ):
+                checks.run_attended_trust_action(
+                    context,
+                    action="import",
+                    script=checks.TRUST_IMPORT_SCRIPT,
+                    role="current-user-root-import",
+                    deadline=42.0,
+                )
+
+            self.assertEqual(states, ["launch-intended", "running", "exited"])
+            self.assertEqual(context["journal"]["processIdentities"][0]["pid"], process.pid)
+            self.assertEqual(context["journal"]["processIdentities"][0]["startTimeFiletime"], 456)
+            self.assertIn("Available wait: 32.00 seconds", stderr_output.getvalue())
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_trust_action_rechecks_deadline_after_helper_startup(self):
+        clock = SimpleNamespace(now=10.0)
+        process = RecordingProcess()
+        context = {
+            "runId": "fixture-run",
+            "powershell": Path("pwsh.exe"),
+            "caPath": Path("test-root.cer"),
+            "children": [],
+            "journal": {
+                "runId": "fixture-run",
+                "certificateThumbprint": "A" * 40,
+                "processIdentities": [],
+            },
+        }
+
+        def launch(*_args, **_kwargs):
+            clock.now += 2.0
+            return process
+
+        with (
+            patch.object(checks, "attended_console_available", return_value=True),
+            patch.object(checks, "inspect_owned_trust", return_value={
+                "state": "absent",
+                "thumbprint": "A" * 40,
+                "subject": "CN=Agentweaver Archive Check CA fixture-run",
+            }),
+            patch.object(checks, "powershell_env", return_value={"PATH": ""}),
+            patch.object(checks, "persist_journal"),
+            patch.object(checks, "process_start_ticks", return_value=456),
+            patch.object(checks.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, create=True),
+            patch.object(checks.subprocess, "Popen", side_effect=launch),
+            patch.object(checks.time, "monotonic", side_effect=lambda: clock.now),
+            patch.object(checks.sys, "stderr", io.StringIO()),
+        ):
+            with self.assertRaises(checks.TrustActionError) as raised:
+                checks.run_attended_trust_action(
+                    context,
+                    action="import",
+                    script=checks.TRUST_IMPORT_SCRIPT,
+                    role="current-user-root-import",
+                    deadline=11.0,
+                )
+
+        self.assertEqual(raised.exception.failure_code, "operator_confirmation_timed_out")
+        self.assertEqual(process.communicate_calls, [5])
+        self.assertEqual(context["journal"]["processIdentities"][0]["state"], "stopped-after-timeout")
+
+    def test_zero_trust_deadline_does_not_launch_a_helper(self):
+        context = {
+            "runId": "fixture-run",
+            "powershell": Path("pwsh.exe"),
+            "caPath": Path("test-root.cer"),
+            "children": [],
+            "journal": {
+                "runId": "fixture-run",
+                "certificateThumbprint": "A" * 40,
+                "processIdentities": [],
+            },
+        }
+        with (
+            patch.object(checks, "attended_console_available", return_value=True),
+            patch.object(checks, "inspect_owned_trust", return_value={
+                "state": "absent",
+                "thumbprint": "A" * 40,
+                "subject": "CN=Agentweaver Archive Check CA fixture-run",
+            }),
+            patch.object(checks.time, "monotonic", return_value=10.0),
+            patch.object(checks.subprocess, "Popen") as popen,
+            patch.object(checks.sys, "stderr", io.StringIO()),
+        ):
+            with self.assertRaises(checks.TrustActionError) as raised:
+                checks.run_attended_trust_action(
+                    context,
+                    action="import",
+                    script=checks.TRUST_IMPORT_SCRIPT,
+                    role="current-user-root-import",
+                    deadline=10.0,
+                )
+
+        self.assertEqual(raised.exception.failure_code, "operator_confirmation_timed_out")
+        popen.assert_not_called()
+
+    def test_unattended_cleanup_does_not_remove_a_present_root(self):
+        context = {
+            "journal": {
+                "trustImportAttempted": True,
+                "trustRemovedAndVerified": True,
+                "certificateThumbprint": "A" * 40,
+            },
+            "attendedTrust": False,
+            "children": [],
+        }
+        errors = []
+        with (
+            patch.object(checks, "inspect_owned_trust", return_value={"state": "present"}),
+            patch.object(checks, "run_attended_trust_action") as action,
+        ):
+            checks.remove_owned_trust(context, errors)
+
+        action.assert_not_called()
+        self.assertFalse(context["journal"]["trustRemovedAndVerified"])
+        self.assertEqual(errors, ["current-user-root-removal-unverified"])
+        self.assertEqual(context["trustFailureCode"], "trust_cleanup_pending")
+
+    def test_recovery_requires_provable_trust_helper_shutdown(self):
+        self.assertTrue(checks.trust_recovery_unresolved({
+            "trustImportAttempted": True,
+            "processIdentities": [],
+        }))
+        self.assertTrue(checks.trust_recovery_unresolved({
+            "trustImportAttempted": True,
+            "processIdentities": [{
+                "role": "current-user-root-import",
+                "state": "launch-intended",
+                "pid": None,
+                "startTimeFiletime": None,
+            }],
+        }))
+        self.assertFalse(checks.trust_recovery_unresolved({
+            "trustImportAttempted": True,
+            "processIdentities": [{
+                "role": "current-user-root-import",
+                "state": "not-started",
+                "pid": None,
+                "startTimeFiletime": None,
+            }],
+        }))
+        self.assertFalse(checks.trust_recovery_unresolved({
+            "trustImportAttempted": True,
+            "processIdentities": [{
+                "role": "current-user-root-import",
+                "state": "running",
+                "pid": 4321,
+                "startTimeFiletime": 9876,
+            }],
+        }))
+
+    def test_old_cleanup_journal_without_removal_identity_stays_unresolved(self):
+        journal = {
+            "trustImportAttempted": True,
+            "trustImportedAndVerified": True,
+            "cleanupStartedAt": "2026-11-02T00:01:00+00:00",
+            "processIdentities": [{
+                "role": "current-user-root-import",
+                "state": "exited",
+                "pid": 4321,
+                "startTimeFiletime": 9876,
+            }],
+        }
+
+        self.assertTrue(checks.trust_recovery_unresolved(journal))
+
+    def test_legacy_recovery_without_removal_identity_preserves_journal_and_skips_mutation(self):
+        folder = temporary_test_path("archive-trust-legacy-recovery")
+        workspace, output, _journal, profile = write_recovery_fixture(
+            folder,
+            trust_import_attempted=True,
+            import_verified=True,
+            process_identities=[{
+                "role": "current-user-root-import",
+                "state": "exited",
+                "pid": 4321,
+                "startTimeFiletime": 9876,
+            }],
+            cleanup_started=True,
+            legacy_journal=True,
+        )
+        try:
+            with (
+                patch.object(checks, "powershell_executable", return_value=Path("pwsh.exe")),
+                patch.object(checks, "run_powershell", return_value=profile),
+                patch.object(checks, "process_is_alive", return_value=False),
+                patch.object(checks, "credential_delete") as credential_delete,
+                patch.object(checks, "inspect_owned_trust") as inspect,
+                patch.object(checks, "delete_workspace_paths") as delete_paths,
+            ):
+                self.assertEqual(checks.cleanup_only(workspace, output), 1)
+
+            credential_delete.assert_not_called()
+            inspect.assert_not_called()
+            delete_paths.assert_not_called()
+            sidecar = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(sidecar["controlledArchiveChecks"]["failureCode"], "trust_cleanup_pending")
+            self.assertFalse(sidecar["controlledArchiveChecks"]["cleanup"]["workspaceRemoved"])
+            self.assertTrue((workspace / "journal.json").exists())
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_recovery_verifies_absent_root_without_public_ca_file(self):
+        folder = temporary_test_path("archive-trust-missing-ca")
+        workspace, output, journal, profile = write_recovery_fixture(
+            folder,
+            trust_import_attempted=True,
+            import_verified=True,
+            certificate_exists=False,
+            process_identities=[{
+                "role": "current-user-root-import",
+                "state": "exited",
+                "pid": 4321,
+                "startTimeFiletime": 9876,
+            }],
+        )
+
+        def fake_powershell(_executable, script, *_args, **_kwargs):
+            if script == checks.TRUST_INSPECT_SCRIPT:
+                return json.dumps({
+                    "state": "absent",
+                    "thumbprint": journal["certificateThumbprint"],
+                    "subject": None,
+                    "storeSubject": None,
+                })
+            return profile
+
+        try:
+            with (
+                patch.object(checks, "powershell_executable", return_value=Path("pwsh.exe")),
+                patch.object(checks, "run_powershell", side_effect=fake_powershell),
+                patch.object(checks, "process_is_alive", return_value=False),
+                patch.object(checks, "credential_read", return_value=None),
+            ):
+                self.assertEqual(checks.cleanup_only(workspace, output), 1)
+
+            sidecar = json.loads(output.read_text(encoding="utf-8"))
+            cleanup = sidecar["controlledArchiveChecks"]["cleanup"]
+            self.assertTrue(cleanup["currentUserRootCertificateAbsent"])
+            self.assertTrue(cleanup["workspaceRemoved"])
+            self.assertFalse(workspace.exists())
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_repeated_cancellation_during_recovery_shutdown_writes_pending_sidecar(self):
+        folder = temporary_test_path("archive-trust-repeat-cancel")
+        workspace, output, journal, profile = write_recovery_fixture(
+            folder,
+            trust_import_attempted=True,
+            import_verified=True,
+            process_identities=[{
+                "role": "current-user-root-import",
+                "state": "exited",
+                "pid": 4321,
+                "startTimeFiletime": 9876,
+            }],
+        )
+        process = InterruptingProcess()
+        try:
+            with (
+                patch.object(checks, "powershell_executable", return_value=Path("pwsh.exe")),
+                patch.object(checks, "run_powershell", return_value=profile),
+                patch.object(checks, "process_is_alive", return_value=False),
+                patch.object(checks, "credential_read", return_value=None),
+                patch.object(checks, "inspect_owned_trust", return_value={
+                    "state": "present",
+                    "thumbprint": "A" * 40,
+                    "subject": "CN=Agentweaver Archive Check CA " + journal["runId"],
+                    "storeSubject": "CN=Agentweaver Archive Check CA " + journal["runId"],
+                }),
+                patch.object(checks, "attended_console_available", return_value=True),
+                patch.object(checks, "powershell_env", return_value={"PATH": ""}),
+                patch.object(checks, "process_start_ticks", return_value=456),
+                patch.object(checks.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, create=True),
+                patch.object(checks.subprocess, "Popen", return_value=process),
+                patch.object(checks, "stop_child", side_effect=[KeyboardInterrupt(), KeyboardInterrupt()]),
+                patch.object(checks.sys, "stderr", io.StringIO()),
+            ):
+                self.assertEqual(checks.main([
+                    "--cleanup-only",
+                    "--attended-trust",
+                    "--workspace",
+                    str(workspace),
+                    "--output",
+                    str(output),
+                ]), 1)
+
+            sidecar = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(sidecar["controlledArchiveChecks"]["failureCode"], "trust_cleanup_pending")
+            self.assertEqual(sidecar["controlledArchiveChecks"]["cleanup"]["status"], "failed")
+            self.assertFalse(sidecar["controlledArchiveChecks"]["cleanup"]["workspaceRemoved"])
+            self.assertTrue((workspace / "journal.json").exists())
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_incomplete_trust_launch_journal_blocks_recovery_side_effects(self):
+        folder = temporary_test_path("archive-trust-recovery")
+        workspace = folder / "workspace"
+        workspace.mkdir(parents=True)
+        output = folder / checks.SIDECAR_NAME
+        run_id = uuid.uuid4().hex
+        origin = "https://127.0.0.1:43123"
+        issuer = origin + "/"
+        tenant = "archive-tenant"
+        audience = "archive-audience"
+        account = checks.account_key(issuer, "agentweaver-cli", audience, origin, tenant)
+        target = checks.credential_target(account)
+        local_app_data = folder / "local-app-data"
+        _state_directory, lock_path, marker_path = checks.account_state_paths(str(local_app_data), account)
+        paths = [
+            workspace / "journal.json",
+            workspace / "journal.json.new",
+            workspace / "child-temp",
+            workspace / "extracted",
+            workspace / "fixtures",
+            workspace / "certificates",
+            workspace / "certificates" / "test-root.cer",
+            workspace / "certificates" / "server.cer.pem",
+            workspace / "certificates" / "server.key.pem",
+        ]
+        identity = {
+            "issuer": issuer,
+            "clientId": "agentweaver-cli",
+            "audience": audience,
+            "gateway": origin,
+            "tenant": tenant,
+            "scopes": ["openid", "api.read", "offline_access"],
+            "projectId": None,
+            "runId": None,
+            "account": account,
+            "credentialTarget": target,
+            "lockPath": str(lock_path),
+            "refreshMarkerPath": str(marker_path),
+        }
+        journal = {
+            "schemaVersion": 1,
+            "runId": run_id,
+            "workspace": str(workspace),
+            "workspaceIdentity": checks.file_identity(workspace),
+            "logonSid": "S-1-5-21-1-2-3-1001",
+            "controllerProcess": {"pid": 99999, "startTimeFiletime": 12345},
+            "identity": identity,
+            "credentialTarget": target,
+            "nativeProbeTarget": "Agentweaver.Cli.ArchiveProbe.v1:" + run_id,
+            "nativeProbeAcquisitionAttempted": False,
+            "certificateThumbprint": "A" * 40,
+            "certificatePath": str(workspace / "certificates" / "test-root.cer"),
+            "leafCertificatePath": str(workspace / "certificates" / "server.cer.pem"),
+            "leafPrivateKeyPath": str(workspace / "certificates" / "server.key.pem"),
+            "trustImportAttempted": True,
+            "credentialSeedAttempted": False,
+            "createdPaths": [str(path) for path in paths],
+            "processIdentities": [{
+                "role": "current-user-root-import",
+                "state": "launch-intended",
+                "pid": None,
+                "startTimeFiletime": None,
+            }],
+            "sourceCommit": "a" * 40,
+            "sourceTree": "b" * 40,
+        }
+        journal_path = workspace / "journal.json"
+        journal_path.write_text(json.dumps(journal), encoding="utf-8")
+        profile = json.dumps({
+            "sid": journal["logonSid"],
+            "localAppData": str(local_app_data),
+        })
+        try:
+            with (
+                patch.object(checks, "powershell_executable", return_value=Path("pwsh.exe")),
+                patch.object(checks, "run_powershell", return_value=profile),
+                patch.object(checks, "process_is_alive", return_value=False),
+                patch.object(checks, "terminate_owned_process") as terminate,
+                patch.object(checks, "credential_delete") as credential_delete,
+                patch.object(checks, "inspect_owned_trust") as inspect,
+                patch.object(checks, "delete_workspace_paths") as delete_paths,
+            ):
+                self.assertEqual(checks.cleanup_only(workspace, output), 1)
+
+            terminate.assert_not_called()
+            credential_delete.assert_not_called()
+            inspect.assert_not_called()
+            delete_paths.assert_not_called()
+            sidecar = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(sidecar["controlledArchiveChecks"]["failureCode"], "trust_cleanup_pending")
+            self.assertFalse(sidecar["controlledArchiveChecks"]["cleanup"]["workspaceRemoved"])
+            self.assertTrue(journal_path.exists())
+            self.assertTrue(workspace.exists())
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_pending_root_preserves_ca_parent_and_child_temp_only(self):
+        folder = temporary_test_path("archive-trust-retention")
+        workspace = folder / "workspace"
+        certificates = workspace / "certificates"
+        child_temp = workspace / "child-temp"
+        extracted = workspace / "extracted"
+        fixtures = workspace / "fixtures"
+        for directory in (certificates, child_temp, extracted, fixtures):
+            directory.mkdir(parents=True, exist_ok=True)
+        ca_path = certificates / "test-root.cer"
+        leaf_key = certificates / "server.key.pem"
+        apphost = extracted / "agentweaver.exe"
+        journal_path = workspace / "journal.json"
+        ca_path.write_bytes(b"public ca")
+        leaf_key.write_bytes(b"private leaf key")
+        apphost.write_bytes(b"apphost")
+        journal_path.write_text("{}", encoding="utf-8")
+        paths = [certificates, ca_path, leaf_key, child_temp, extracted, apphost, fixtures, journal_path]
+        context = {
+            "workspace": workspace,
+            "journal": {"createdPaths": [str(path) for path in paths]},
+            "journalPath": journal_path,
+            "journalTemporaryPath": workspace / "journal.json.new",
+        }
+        try:
+            ok, errors = checks.delete_workspace_paths(
+                context,
+                keep_journal=True,
+                preserve_paths={ca_path, certificates, child_temp},
+            )
+            self.assertTrue(ok)
+            self.assertEqual(errors, [])
+            self.assertTrue(ca_path.exists())
+            self.assertTrue(certificates.is_dir())
+            self.assertTrue(child_temp.is_dir())
+            self.assertTrue(journal_path.exists())
+            self.assertFalse(leaf_key.exists())
+            self.assertFalse(apphost.exists())
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 
