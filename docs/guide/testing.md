@@ -592,26 +592,51 @@ After the approved host preflight succeeds, run the verifier against that
 candidate and its full source commit. Set `$workspace` to a new durable path
 outside every Git checkout and `$output` to a new
 `windows-controlled-archive-checks.json` path; both parent directories must
-already exist.
+already exist. The verifier blocks by default before preflight or fixture
+acquisition. Run it from a local operator terminal with `--attended-trust`.
+The verifier also blocks when either standard input or standard error is not a
+terminal, or when `CI` or `GITHUB_ACTIONS` is nonempty.
 
 ```powershell
 $sourceCommit = (git rev-parse HEAD).Trim()
 python scripts\cli-dotnet\verify_windows_archive_checks.py `
   --directory .\artifacts\cli\win-x64 `
   --source-commit $sourceCommit `
+  --attended-trust `
   --workspace $workspace `
   --output $output
 ```
 
 The source commit must be the full 40-character value recorded in the candidate
 receipt, and the workspace and output paths must be separate. The verifier
-uses a temporary CurrentUser root certificate
-and unique synthetic Credential Manager entries, and requires verified
-cleanup. If cleanup is unresolved, preserve the workspace and journal and use
-`--cleanup-only` with the original workspace and a new sidecar path; recovery
-does not pass the interrupted check. This sidecar is local controlled-test
-evidence only; `nativeJourneyProof` remains `not-run`, and this is not release
-evidence or issue #2449 acceptance.
+uses one temporary `CurrentUser\Root` certificate and unique synthetic
+Credential Manager entries. Before each import or removal, it displays the
+certificate subject, SHA-1 thumbprint, run ID, store, public certificate path,
+and available wait. Review the matching Windows Security Warning and answer it
+yourself. The verifier cannot answer it. The import and each removal get at
+most 60 seconds, clamped to the existing execution or cleanup deadline. A
+timeout or cancellation fails the check.
+
+If cleanup is unresolved, keep the workspace, journal, public CA certificate,
+its parent directory, and `child-temp`. Use the original workspace and a new
+sidecar path for recovery:
+
+```powershell
+python scripts\cli-dotnet\verify_windows_archive_checks.py `
+  --cleanup-only --attended-trust `
+  --workspace $workspace `
+  --output $recoveryOutput
+```
+
+Recovery does not rerun or pass the interrupted check. Without
+`--attended-trust`, it can stop proven owned processes, remove other proven
+owned fixture data, and inspect `CurrentUser\Root`; it does not remove a root
+certificate. Recovery can verify root absence by the recorded thumbprint even
+if the public CA file is missing. If the root is present, recovery needs the
+public CA file and an exact byte match before it can remove the certificate.
+This sidecar is local controlled-test evidence only;
+`nativeJourneyProof` remains `not-run`, and this is not release evidence or
+issue #2449 acceptance.
 
 ## Run API acceptance with the native CLI
 
