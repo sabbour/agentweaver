@@ -45,6 +45,15 @@ PROCESS_TERMINATE = 0x0001
 SYNCHRONIZE = 0x00100000
 WAIT_OBJECT_0 = 0
 WAIT_TIMEOUT = 258
+POWERSHELL_DIAGNOSTIC_ROLES = frozenset({
+    "ephemeral-certificate-generation",
+    "workspace-acl",
+    "current-user-root-removal",
+    "current-user-root-precheck",
+    "current-user-root-import",
+    "recovery-profile-check",
+    "recovery-current-user-root-removal",
+})
 
 
 class CheckError(RuntimeError):
@@ -728,8 +737,10 @@ def run_powershell(
             if persist_identity:
                 persist_journal(context)
         try:
+            communication_started = time.monotonic()
             stdout, _ = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired as error:
+            elapsed_seconds = time.monotonic() - communication_started
             try:
                 stop_child(process, "powershell-helper")
             except CheckError:
@@ -744,7 +755,11 @@ def run_powershell(
                 identity["exitCode"] = process.returncode
                 if persist_identity:
                     persist_journal(context)
-            raise CheckError("A bounded Windows PowerShell helper timed out.") from error
+            diagnostic_role = role if role in POWERSHELL_DIAGNOSTIC_ROLES else "powershell-helper"
+            raise CheckError(
+                "A bounded Windows PowerShell helper timed out "
+                f"(role={diagnostic_role}; timeoutSeconds={timeout}; elapsedSeconds={elapsed_seconds:.3f})."
+            ) from error
         if identity is not None:
             identity["state"] = "exited"
             identity["exitCode"] = process.returncode
