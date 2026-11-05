@@ -27,6 +27,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import verify_windows_archive_checks as checks
 
 
+def patch_test_path_reparse_boundary(root):
+    has_reparse_attribute = checks.has_reparse_attribute
+
+    def has_reparse_attribute_within_test_root(path):
+        path = Path(path)
+        if path == root or root in path.parents:
+            return has_reparse_attribute(path)
+        return False
+
+    return patch.object(
+        checks,
+        "has_reparse_attribute",
+        side_effect=has_reparse_attribute_within_test_root,
+    )
+
+
 class HangingProcess:
     def __init__(self, pid=8123):
         self.pid = pid
@@ -1306,6 +1322,7 @@ class WindowsArchiveAttendedTrustTests(unittest.TestCase):
                     with (
                         patch.object(checks, "preflight") as preflight,
                         patch.object(checks, "attended_console_available", return_value=console),
+                        patch_test_path_reparse_boundary(folder),
                     ):
                         self.assertEqual(checks.verify_and_run(args), 2)
 
@@ -1830,11 +1847,12 @@ class WindowsArchiveAttendedTrustTests(unittest.TestCase):
             "journalTemporaryPath": workspace / "journal.json.new",
         }
         try:
-            ok, errors = checks.delete_workspace_paths(
-                context,
-                keep_journal=True,
-                preserve_paths={ca_path, certificates, child_temp},
-            )
+            with patch_test_path_reparse_boundary(folder):
+                ok, errors = checks.delete_workspace_paths(
+                    context,
+                    keep_journal=True,
+                    preserve_paths={ca_path, certificates, child_temp},
+                )
             self.assertTrue(ok)
             self.assertEqual(errors, [])
             self.assertTrue(ca_path.exists())
