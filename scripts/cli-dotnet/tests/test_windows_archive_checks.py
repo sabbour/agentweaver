@@ -1585,6 +1585,9 @@ class WindowsArchiveAttendedTrustTests(unittest.TestCase):
         )
         try:
             with (
+                patch.object(checks.os, "name", "nt"),
+                patch.object(checks, "Path", type(folder)),
+                patch.object(checks, "has_reparse_attribute", return_value=False),
                 patch.object(checks, "powershell_executable", return_value=Path("pwsh.exe")),
                 patch.object(checks, "run_powershell", return_value=profile),
                 patch.object(checks, "process_is_alive", return_value=False),
@@ -1631,6 +1634,9 @@ class WindowsArchiveAttendedTrustTests(unittest.TestCase):
 
         try:
             with (
+                patch.object(checks.os, "name", "nt"),
+                patch.object(checks, "Path", type(folder)),
+                patch.object(checks, "has_reparse_attribute", return_value=False),
                 patch.object(checks, "powershell_executable", return_value=Path("pwsh.exe")),
                 patch.object(checks, "run_powershell", side_effect=fake_powershell),
                 patch.object(checks, "process_is_alive", return_value=False),
@@ -1662,6 +1668,9 @@ class WindowsArchiveAttendedTrustTests(unittest.TestCase):
         process = InterruptingProcess()
         try:
             with (
+                patch.object(checks.os, "name", "nt"),
+                patch.object(checks, "Path", type(folder)),
+                patch.object(checks, "has_reparse_attribute", return_value=False),
                 patch.object(checks, "powershell_executable", return_value=Path("pwsh.exe")),
                 patch.object(checks, "run_powershell", return_value=profile),
                 patch.object(checks, "process_is_alive", return_value=False),
@@ -1771,6 +1780,9 @@ class WindowsArchiveAttendedTrustTests(unittest.TestCase):
         })
         try:
             with (
+                patch.object(checks.os, "name", "nt"),
+                patch.object(checks, "Path", type(folder)),
+                patch.object(checks, "has_reparse_attribute", return_value=False),
                 patch.object(checks, "powershell_executable", return_value=Path("pwsh.exe")),
                 patch.object(checks, "run_powershell", return_value=profile),
                 patch.object(checks, "process_is_alive", return_value=False),
