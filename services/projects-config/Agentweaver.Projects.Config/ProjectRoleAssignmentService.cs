@@ -236,6 +236,7 @@ public sealed class ProjectRoleAssignmentService(
                     cancellationToken)
                 .ConfigureAwait(false)
                 ?? throw ProjectConfigException.NotFound();
+            // Serialize changes to different Owner rows; the target row lock alone cannot protect the last-Owner check.
             if (current.Role == ProjectAuthorityRole.Owner)
                 await ProjectAuthorityRules.LockProjectOwnersAsync(db, projectId, cancellationToken)
                     .ConfigureAwait(false);
