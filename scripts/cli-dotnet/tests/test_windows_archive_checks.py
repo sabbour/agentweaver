@@ -1,3 +1,4 @@
+import hashlib
 import http.client
 import json
 import os
@@ -7,6 +8,7 @@ import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -14,6 +16,10 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+
+def temporary_test_path(prefix):
+    return Path(tempfile.gettempdir()) / f"{prefix}-{uuid.uuid4().hex}"
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -47,6 +53,47 @@ class ExitedProcess:
 
     def communicate(self, timeout=None):
         return "helper-result", ""
+
+
+class TimedOutProcess:
+    pid = 8345
+
+    def __init__(self, clock=None):
+        self.returncode = None
+        self.clock = clock
+        self.events = []
+        self.communicate_calls = []
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.events.append("terminate")
+
+    def kill(self):
+        self.events.append("kill")
+
+    def wait(self, timeout):
+        self.events.append("wait")
+        self.returncode = 0
+        return 0
+
+    def communicate(self, timeout=None):
+        self.communicate_calls.append(timeout)
+        if timeout is not None:
+            self.events.append("communicate-timeout")
+            if self.clock is not None:
+                self.clock.now += 10.126
+            raise subprocess.TimeoutExpired(
+                "sensitive-command-sentinel",
+                timeout,
+                output="stdout-sentinel",
+                stderr="stderr-sentinel",
+            )
+        self.events.append("communicate-drain")
+        if self.clock is not None:
+            self.clock.now += 60
+        return "sensitive stdout", "sensitive stderr"
 
 
 class WindowsArchiveCleanupTests(unittest.TestCase):
@@ -443,6 +490,91 @@ class WindowsArchivePreflightTests(unittest.TestCase):
                     )
         finally:
             shutil.rmtree(folder, ignore_errors=True)
+
+
+class WindowsArchiveHelperTimeoutTests(unittest.TestCase):
+    def test_timeout_diagnostic_is_allowlisted_and_preserves_cleanup_and_journal(self):
+        cases = (
+            ("ephemeral-certificate-generation", "ephemeral-certificate-generation"),
+            ("current-user-root-import", "current-user-root-import"),
+            ("untrusted-role-sentinel", "powershell-helper"),
+        )
+        sensitive_values = (
+            "sensitive-executable-sentinel",
+            "sensitive-script-sentinel",
+            "sensitive-environment-sentinel",
+            "sensitive-command-sentinel",
+            "stdout-sentinel",
+            "stderr-sentinel",
+        )
+
+        for role, diagnostic_role in cases:
+            with self.subTest(role=role):
+                process = TimedOutProcess()
+                context = {"children": [], "journal": {"processIdentities": []}}
+                with (
+                    patch.object(checks, "powershell_env", return_value={"PATH": ""}),
+                    patch.object(checks.subprocess, "Popen", return_value=process),
+                    patch.object(checks.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, create=True),
+                    patch.object(checks, "process_start_ticks", return_value=456),
+                    patch.object(checks, "persist_journal"),
+                    patch.object(checks.time, "monotonic", return_value=10.0),
+                    self.assertRaises(checks.CheckError) as raised,
+                ):
+                    checks.run_powershell(
+                        Path("sensitive-executable-sentinel"),
+                        "sensitive-script-sentinel",
+                        {"SECRET": "sensitive-environment-sentinel"},
+                        timeout=7,
+                        context=context,
+                        role=role,
+                    )
+
+                error = raised.exception
+                self.assertEqual(
+                    str(error),
+                    "A bounded Windows PowerShell helper timed out "
+                    f"(role={diagnostic_role}; timeoutSeconds=7; elapsedSeconds=0.000).",
+                )
+                self.assertTrue(all(value not in str(error) for value in sensitive_values))
+                self.assertIsInstance(error.__cause__, subprocess.TimeoutExpired)
+                self.assertEqual(process.communicate_calls, [7, None])
+                self.assertEqual(
+                    process.events,
+                    ["communicate-timeout", "terminate", "wait", "communicate-drain"],
+                )
+                self.assertEqual(context["journal"]["processIdentities"][0]["role"], role)
+                self.assertEqual(
+                    context["journal"]["processIdentities"][0]["state"],
+                    "stopped-after-timeout",
+                )
+
+    def test_timeout_duration_excludes_setup_stop_and_drain(self):
+        clock = SimpleNamespace(now=0.0)
+        process = TimedOutProcess(clock)
+        stop_child = checks.stop_child
+
+        def launch_process(*_args, **_kwargs):
+            clock.now += 5
+            return process
+
+        def stop_after_delay(*args):
+            clock.now += 100
+            return stop_child(*args)
+
+        with (
+            patch.object(checks, "powershell_env", return_value={"PATH": ""}),
+            patch.object(checks.subprocess, "Popen", side_effect=launch_process),
+            patch.object(checks.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, create=True),
+            patch.object(checks.time, "monotonic", side_effect=lambda: clock.now),
+            patch.object(checks, "stop_child", side_effect=stop_after_delay),
+            self.assertRaises(checks.CheckError) as raised,
+        ):
+            checks.run_powershell(Path("pwsh.exe"), "safe command", timeout=5)
+
+        self.assertIn("elapsedSeconds=10.126", str(raised.exception))
+        self.assertEqual(clock.now, 175.126)
+        self.assertEqual(process.communicate_calls, [5, None])
 
 
 class WindowsArchiveRegressionTests(unittest.TestCase):
@@ -866,6 +998,109 @@ $actual = @($acl.Access | ForEach-Object {
             self.assertIsNone(sidecar["executable"]["sha256After"])
             self.assertEqual(sidecar["nativeJourneyProof"]["status"], "not-run")
             self.assertEqual(sidecar["issue2449Acceptance"], "incomplete")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_helper_timeout_reason_reaches_failed_sidecar_after_cleanup(self):
+        folder = temporary_test_path("archive-helper-timeout")
+        folder.mkdir()
+        workspace = folder / "workspace"
+        archive = folder / "candidate.zip"
+        receipt_path = folder / "candidate.receipt.json"
+        output_dir = folder / "output"
+        output_dir.mkdir()
+        output = output_dir / checks.SIDECAR_NAME
+        archive.write_bytes(b"archive")
+        receipt_path.write_bytes(b"receipt")
+        source_commit = "c" * 40
+        source_tree = "e" * 40
+        apphost_bytes = b"exact extracted apphost"
+        receipt = {
+            "files": [{
+                "path": "agentweaver.exe",
+                "sha256": hashlib.sha256(apphost_bytes).hexdigest(),
+            }],
+            "version": "1.1.0",
+            "source": {"commit": source_commit, "tree": source_tree},
+            "runtimeTest": {"status": "passed"},
+        }
+        profile = {
+            "sid": "S-1-5-21-1-2-3-1001",
+            "localAppData": str(folder / "local-app-data"),
+            "userProfile": str(folder),
+            "appData": str(folder / "app-data"),
+            "systemRoot": "C:\\Windows",
+            "home": str(folder),
+            "username": "fixture-user",
+            "userDomain": "fixture-domain",
+        }
+        args = SimpleNamespace(
+            output=output,
+            source_commit=source_commit,
+            directory=folder,
+            workspace=workspace,
+        )
+        process = TimedOutProcess()
+        captured_errors = []
+        real_run_powershell = checks.run_powershell
+
+        def capture_helper_error(*call_args, **call_kwargs):
+            try:
+                return real_run_powershell(*call_args, **call_kwargs)
+            except checks.CheckError as error:
+                captured_errors.append(error)
+                raise
+
+        def extract_archive(_archive, _rid, target):
+            target.mkdir()
+            executable = target / "agentweaver.exe"
+            executable.write_bytes(apphost_bytes)
+            return executable
+
+        try:
+            with (
+                patch.object(
+                    checks,
+                    "preflight",
+                    return_value={
+                        "receipt": receipt,
+                        "archive": archive,
+                        "receiptPath": receipt_path,
+                        "sourceTree": source_tree,
+                        "profile": profile,
+                        "powershell": Path("pwsh.exe"),
+                    },
+                ),
+                patch.object(checks, "reserve_loopback_port", return_value=43123),
+                patch.object(checks, "assert_no_reparse_components"),
+                patch.object(checks, "process_start_ticks", return_value=12345),
+                patch.object(checks, "credential_read", return_value=None),
+                patch.object(checks, "account_state_paths", side_effect=lambda _local, account: (
+                    folder / "state",
+                    folder / "state" / f"{account}.lock",
+                    folder / "state" / f"{account}.refreshing",
+                )),
+                patch.object(checks, "secure_workspace", side_effect=lambda path, *_args, **_kwargs: path.mkdir()),
+                patch.object(checks.package, "extract_archive", side_effect=extract_archive),
+                patch.object(checks, "powershell_env", return_value={"PATH": ""}),
+                patch.object(checks.subprocess, "Popen", return_value=process),
+                patch.object(checks.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, create=True),
+                patch.object(checks, "run_powershell", side_effect=capture_helper_error),
+                patch.object(checks, "cleanup_run", wraps=checks.cleanup_run) as cleanup_run,
+            ):
+                result = checks.verify_and_run(args)
+
+            sidecar = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(result, 1)
+            self.assertEqual(len(captured_errors), 1)
+            self.assertEqual(
+                sidecar["controlledArchiveChecks"]["reason"],
+                str(captured_errors[0]),
+            )
+            self.assertEqual(sidecar["controlledArchiveChecks"]["status"], "failed")
+            self.assertEqual(sidecar["controlledArchiveChecks"]["cleanup"]["status"], "passed")
+            self.assertTrue(sidecar["controlledArchiveChecks"]["cleanup"]["workspaceRemoved"])
+            cleanup_run.assert_called_once()
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 
