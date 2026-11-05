@@ -33,6 +33,7 @@ import package
 
 
 SIDECAR_NAME = "windows-controlled-archive-checks.json"
+HELP_EXPECTED = ("api operations", "auth login|status|logout", "test")
 CREDENTIAL_SERVICE = "Agentweaver.Cli.OAuth.v1"
 CREDENTIAL_TYPE_GENERIC = 1
 CREDENTIAL_PERSIST_LOCAL_MACHINE = 2
@@ -1458,7 +1459,7 @@ def run_controlled_sequence(context: dict[str, Any], gateway: str, issuer: str, 
     marker_path: Path = context["markerPath"]
     assertions: dict[str, bool] = {}
 
-    stdout, _ = assert_cli_result(context, ["--help"], "help", 0, output_contains=("api operations", "auth status", "test"))
+    stdout, _ = assert_cli_result(context, ["--help"], "help", 0, output_contains=HELP_EXPECTED)
     assertions["help"] = bool(stdout)
     stdout, _ = assert_cli_result(context, ["--version"], "version", 0)
     receipt = context["receipt"]
