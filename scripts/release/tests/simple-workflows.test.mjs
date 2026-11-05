@@ -546,12 +546,19 @@ function fakeExec(calls, {
   return exec;
 }
 
-test('v1 image workflow pushes the ten existing Kustomize images directly', () => {
+test('v1 image workflow builds the ten existing Kustomize images from exact source commits', () => {
   const workflow = readYaml('.github/workflows/v1-integration-images.yml');
   const entries = workflow.jobs['build-and-push'].strategy.matrix.include;
+  const job = workflow.jobs['build-and-push'];
   const overlay = readYaml('deploy/k8s/kustomization.yaml');
 
   assert.deepEqual(workflow.on.push.branches, ['v1']);
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.source_sha, {
+    description: 'Full commit SHA to build',
+    required: true,
+    type: 'string',
+  });
+  assert.equal(job.if, "github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/v1'");
   for (const input of ['.github/workflows/v1-integration-images.yml', 'Directory.Build.*', 'releases/foundation.json'])
     assert.ok(workflow.on.push.paths.includes(input), input);
   assert.equal(entries.length, 10);
@@ -568,24 +575,36 @@ test('v1 image workflow pushes the ten existing Kustomize images directly', () =
       assert.equal(existsSync(path.join(root, entry.dockerfile)), true, `${entry.id} Dockerfile exists`);
   }
 
-  const steps = workflow.jobs['build-and-push'].steps;
+  const steps = job.steps;
+  const checkout = steps.find(({ uses }) => uses === 'actions/checkout@v4');
+  assert.deepEqual(checkout.with, {
+    ref: '${{ inputs.source_sha || github.sha }}',
+    'fetch-depth': 0,
+  });
   assert.equal(steps.filter(({ uses }) => uses === 'docker/build-push-action@v6').length, 3);
   assert.equal(steps.filter(({ uses }) => uses === 'docker/build-push-action@v6')
     .every(({ with: options }) => options.provenance === false), true);
   assert.equal(steps.some(({ run = '' }) => run.includes('PublishContainer')), true);
-  assert.equal(steps.some(({ run = '' }) => run.includes('imagetools inspect')), true);
+  const digest = steps.find(({ name }) => name === 'Report pushed image digest');
+  assert.equal(digest.env.IMAGE, 'ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ steps.source.outputs.sha }}');
+  assert.equal(digest.run.includes('imagetools inspect "$IMAGE"'), true);
   assert.equal(steps.some(({ uses = '' }) => /upload-artifact|download-artifact/.test(uses)), false);
-  assert.equal(JSON.stringify(workflow).includes('source_sha'), false);
 
   // Every image must carry the exact source commit, Git tree, and manifest component version.
   const identity = steps.findIndex(({ id }) => id === 'source');
   assert.ok(identity >= 0 && identity < steps.findIndex(({ uses = '' }) => uses === 'docker/build-push-action@v6'));
   assert.equal(steps[identity].env.COMPONENT_ID, '${{ matrix.id }}');
-  assert.match(steps[identity].run, /git rev-parse --verify "\$\{GITHUB_SHA\}\^\{tree\}"/);
+  assert.equal(steps[identity].env.REQUESTED_SOURCE_SHA, '${{ inputs.source_sha }}');
+  assert.match(steps[identity].run, /git rev-parse --verify 'HEAD\^\{commit\}'/);
+  assert.match(steps[identity].run, /\[\[ "\$GITHUB_EVENT_NAME" == "workflow_dispatch" \]\]/);
+  assert.match(steps[identity].run, /\[\[ ! "\$REQUESTED_SOURCE_SHA" =~ \^\[0-9a-f\]\{40\}\$ \]\]/);
+  assert.match(steps[identity].run, /git fetch --no-tags origin v1/);
+  assert.match(steps[identity].run, /git merge-base --is-ancestor "\$source_sha" FETCH_HEAD/);
+  assert.match(steps[identity].run, /git rev-parse --verify "\$\{source_sha\}\^\{tree\}"/);
   assert.match(steps[identity].run, /select\(\.id == \$id\) \| \.version\] \| if length == 1/);
   assert.match(steps[identity].run, /releases\/foundation\.json/);
   for (const output of [
-    'echo "sha=${GITHUB_SHA}"',
+    'echo "sha=${source_sha}"',
     'echo "tree=${tree}"',
     'echo "version=${version}"',
   ]) assert.ok(steps[identity].run.includes(output), output);
@@ -610,10 +629,15 @@ test('v1 image workflow pushes the ten existing Kustomize images directly', () =
   assert.deepEqual(dockerSteps.map(({ if: condition }) => condition).sort(), [
     "matrix.id == 'Agentweaver.AgentHost'", "matrix.id == 'Agentweaver.Identity.Broker'", "matrix.mode == 'web'",
   ]);
-  for (const { with: options } of dockerSteps)
+  for (const { with: options } of dockerSteps) {
+    assert.match(options.tags, /:sha-\$\{\{ steps\.source\.outputs\.sha \}\}$/);
     for (const label of labels) assert.ok(options.labels.split('\n').includes(label), label);
+  }
+  const webBuild = dockerSteps.find(({ if: condition }) => condition === "matrix.mode == 'web'");
+  assert.ok(webBuild.with['build-args'].includes('GIT_SHA=${{ steps.source.outputs.sha }}'));
   const publish = steps.find(({ run = '' }) => run.includes('PublishContainer'));
   assert.equal(publish.if, "matrix.mode == 'dotnet'");
+  assert.ok(publish.run.includes('-p:ContainerImageTag=sha-${{ steps.source.outputs.sha }}'));
   for (const property of [
     '-p:AgentweaverImageSourceSha=${{ steps.source.outputs.sha }}',
     '-p:AgentweaverImageSourceTree=${{ steps.source.outputs.tree }}',

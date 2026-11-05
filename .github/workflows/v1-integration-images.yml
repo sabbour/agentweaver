@@ -15,6 +15,12 @@ on:
       - packages/**
       - releases/foundation.json
       - services/**
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full commit SHA to build
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -22,6 +28,7 @@ permissions:
 
 jobs:
   build-and-push:
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/v1'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -72,16 +79,36 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          fetch-depth: 0
 
       - name: Resolve image source identity
         id: source
         env:
           COMPONENT_ID: ${{ matrix.id }}
+          REQUESTED_SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
-          tree="$(git rev-parse --verify "${GITHUB_SHA}^{tree}")"
+          source_sha="$(git rev-parse --verify 'HEAD^{commit}')"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ ! "$REQUESTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "source_sha must be a full lowercase 40-character commit SHA" >&2
+              exit 1
+            fi
+            if [[ "$source_sha" != "$REQUESTED_SOURCE_SHA" ]]; then
+              echo "checked-out commit does not match source_sha" >&2
+              exit 1
+            fi
+            git fetch --no-tags origin v1
+            if ! git merge-base --is-ancestor "$source_sha" FETCH_HEAD; then
+              echo "source_sha must be an ancestor of origin/v1" >&2
+              exit 1
+            fi
+          fi
+          tree="$(git rev-parse --verify "${source_sha}^{tree}")"
           version="$(jq -er --arg id "$COMPONENT_ID" '[.components[] | select(.id == $id) | .version] | if length == 1 then .[0] else error("expected exactly one manifest component \($id)") end' releases/foundation.json)"
           {
-            echo "sha=${GITHUB_SHA}"
+            echo "sha=${source_sha}"
             echo "tree=${tree}"
             echo "version=${version}"
           } >> "$GITHUB_OUTPUT"
@@ -135,7 +162,7 @@ jobs:
           file: ${{ matrix.dockerfile }}
           push: true
           provenance: false
-          tags: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ github.sha }}
+          tags: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ steps.source.outputs.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
@@ -150,7 +177,7 @@ jobs:
           file: ${{ matrix.dockerfile }}
           push: true
           provenance: false
-          tags: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ github.sha }}
+          tags: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ steps.source.outputs.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
@@ -165,10 +192,10 @@ jobs:
           file: apps/web/Dockerfile
           push: true
           provenance: false
-          tags: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ github.sha }}
+          tags: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ steps.source.outputs.sha }}
           build-args: |
             IMAGE_TAG=${{ steps.web-version.outputs.version }}
-            GIT_SHA=${{ github.sha }}
+            GIT_SHA=${{ steps.source.outputs.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
@@ -185,7 +212,7 @@ jobs:
           -p:EnableSdkContainerSupport=true
           -p:ContainerRegistry=ghcr.io
           -p:ContainerRepository=sabbour/${{ matrix.repository }}
-          -p:ContainerImageTag=sha-${GITHUB_SHA}
+          -p:ContainerImageTag=sha-${{ steps.source.outputs.sha }}
           -p:RepositoryCommit=${{ steps.source.outputs.sha }}
           -p:AgentweaverImageSourceSha=${{ steps.source.outputs.sha }}
           -p:AgentweaverImageSourceTree=${{ steps.source.outputs.tree }}
@@ -193,7 +220,7 @@ jobs:
 
       - name: Report pushed image digest
         env:
-          IMAGE: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ github.sha }}
+          IMAGE: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ steps.source.outputs.sha }}
         run: |
           digest="$(docker buildx imagetools inspect "$IMAGE" --format '{{.Manifest.Digest}}')"
           echo "- \`$IMAGE\` → \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
