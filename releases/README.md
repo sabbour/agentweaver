@@ -37,7 +37,17 @@ not manual). It pushes ten images directly to GHCR as `sha-<40-character-commit>
 tags; the workflow summary lists each digest. Every image is labeled with the
 exact source commit (`org.opencontainers.image.revision`), its Git tree
 (`io.agentweaver.source-tree`), and its `releases/foundation.json` component
-version (`org.opencontainers.image.version`). There are no image archives,
+version (`org.opencontainers.image.version`).
+
+To build all ten images from an existing commit on the current `v1` history,
+run the workflow manually with its full, lowercase commit SHA:
+
+```powershell
+gh workflow run v1-integration-images.yml --ref v1 -f source_sha=<40-character-commit>
+```
+
+The manual run stops if the commit is not an ancestor of `origin/v1`. The
+workflow summary lists each pushed image digest. There are no image archives,
 publication receipts, or source-claim gates.
 
 ## Deploy workloads locally
