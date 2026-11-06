@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
@@ -50,6 +51,39 @@ public sealed class SuspendResumeEndpointRegistrationTests
         Assert.Equal(configured ? 1 : 0, routes.Length);
         if (configured)
             Assert.NotEmpty(Assert.Single(routes).Metadata.GetOrderedMetadata<IAuthorizeData>());
+    }
+
+    [Fact]
+    public async Task RuntimeRegistrationPostFromCanonicalDeployMapIsAuthorized()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Production,
+            Args = Array.Empty<string>()
+        });
+        builder.Configuration.Sources.Clear();
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory, "runtime-configs", "orchestrator-runtime-config.json")));
+        var configuration = manifest.RootElement.GetProperty("data").EnumerateObject()
+            .ToDictionary(
+                setting => setting.Name.Replace("__", ":", StringComparison.Ordinal),
+                setting => setting.Value.GetString());
+        builder.Configuration.AddInMemoryCollection(configuration);
+        var options = new OrchestratorOptions(
+            "https://issuer.test/", "orchestrator-api", "https://projects.test/",
+            "projects-api", "https://events.test/", "events-api");
+        builder.Services.AddAuthorization();
+        Assert.True(builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options));
+
+        await using var app = builder.Build();
+        app.MapRuntimeRegistrationEndpoints();
+        var routes = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>().Where(endpoint =>
+                endpoint.RoutePattern.RawText ==
+                "/internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-registrations" &&
+                endpoint.Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods.Contains("POST")).ToArray();
+
+        Assert.NotEmpty(Assert.Single(routes).Metadata.GetOrderedMetadata<IAuthorizeData>());
     }
 
     [Fact]

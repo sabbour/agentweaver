@@ -336,6 +336,7 @@ test('P0 service addresses and source-backed provider defaults are exact', () =>
 
   const orch = orchestrator.data;
   assert.equal(orch.Orchestrator__Schema, 'orchestrator');
+  assert.equal(orch.Orchestrator__RuntimeRegistration__EnvironmentOwnerAddress, serviceAddress('environment'));
   assert.equal(orch.ProjectsConfig__AuthorizationContext__OwnerBaseAddress, serviceAddress('projects-config'));
   assert.equal(orch.ProjectsConfig__AuthorizationContext__Audience, broker);
   assert.equal(orch.EventsAndSessions__Authorization__OwnerBaseAddress, serviceAddress('events-and-sessions'));
