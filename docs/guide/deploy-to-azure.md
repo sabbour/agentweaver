@@ -673,6 +673,186 @@ rendered manifest, healthy pod, routing receipt, or `202 Accepted` response
 does not prove a complete user workflow, a successful asynchronous effect, or
 release acceptance.
 
+## Configure the optional GitHub providers
+
+Use the existing Azure installer to add GitHub Copilot and GitHub Repo App
+startup settings to Identity Broker. This procedure does not create provider
+registrations, import or rotate secrets, deploy a release, or make live model
+calls.
+
+Before you start, get the exact provider registration values and the
+references to the secrets that are already managed. Do not put secret values
+in the input file. You need Node.js 24 to render the plan.
+
+To activate the plan, also confirm that you have an approved non-production
+target with Identity Broker already installed, and a signed-in Azure CLI,
+`kubectl`, and `kubelogin`. Your identity must be able to read the Broker's
+source ConfigMap and Deployment, create a ConfigMap, and patch and observe the
+Deployment.
+
+The diagram shows the offline plan, manual registration, revision checks, and
+activation recovery. The installer preserves existing `envFrom` sources. An
+explicit `env` entry takes precedence over an `envFrom` value with the same
+name; the installer does not read Secret data.
+
+<figure class="aw-diagram" tabindex="0">
+  <a :href="'/agentweaver/v1/diagrams/flagship/v1-identity-provider-setup.png'">
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-identity-provider-setup.png'" alt="The installer renders a deterministic offline plan from non-secret input and local source, then prints exact URLs for manual provider registration. Activation checks the selected target, source drift, and expected ConfigMap and Deployment resource versions. It creates an immutable successor map before a revision-fenced patch changes only provider environment values, the explicit OAuth Secret reference, the active map reference, and a fingerprint. The installer reads back the active map and rollout state, keeps the old map, and reports readback after a partial failure. It never reads Secret data or automates provider registration." />
+  </a>
+  <figcaption>Provider setup uses an offline plan and a guarded, revision-fenced activation. Provider registration and secret management remain separate operator tasks.</figcaption>
+</figure>
+<p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-identity-provider-setup.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-identity-provider-setup.drawio'">Open editable draw.io source</a></p>
+
+Create a JSON input file. This example has no secret values. Replace each
+sample provider value with the matching registration value. Replace each
+sample secret name and version with the exact name and version of an existing
+Key Vault secret. The sample secret references show valid syntax; they do not
+identify real secrets. `AppId` must be a positive JSON integer. The sample
+value `12345` shows the required type; replace it with the registered App ID.
+
+```json
+{
+  "IdentityBroker": {
+    "WebOrigin": "https://<portal-host>",
+    "CopilotConnection": {
+      "ProjectsOwnerAddress": "https://<projects-owner>/",
+      "ClientId": "<copilot-client-id>",
+      "CallbackUri": "https://<portal-host>/auth/github/copilot-app/callback",
+      "ClientSecretReference": {
+        "Id": "copilot-client-secret",
+        "Version": "0123456789abcdef0123456789abcdef"
+      }
+    },
+    "GitHubRepoApp": {
+      "OAuthClientId": "<repo-app-oauth-client-id>",
+      "CallbackUri": "https://<portal-host>/auth/github/repo-app/callback",
+      "AppId": 12345,
+      "AppSlug": "<repo-app-slug>",
+      "PrivateKeySecretId": "repo-app-private-key",
+      "PrivateKeySecretVersion": "0123456789abcdef0123456789abcdef"
+    }
+  },
+  "SecretBindings": {
+    "IdentityBroker__GitHubRepoApp__OAuthClientSecret": {
+      "SecretKeyRef": {
+        "Name": "<existing-kubernetes-secret-name>",
+        "Key": "<existing-secret-key>"
+      }
+    }
+  }
+}
+```
+
+`WebOrigin` must be the exact HTTPS origin, with no path, query, or fragment.
+`ProjectsOwnerAddress` must be the HTTPS root address for the Projects owner.
+It must not include a path other than `/`, a query, or a fragment. Each Key
+Vault secret ID field takes a secret name, not a full Key Vault URL. A secret
+name can contain 1 to 127 ASCII letters, digits, or hyphens. A secret version
+can contain 1 to 256 ASCII letters, digits, periods, underscores, hyphens, or
+colons.
+The callback values must be exactly:
+
+- Copilot OAuth Redirect URI:
+  `https://<portal-host>/auth/github/copilot-app/callback`
+- GitHub Repo App OAuth Redirect URI:
+  `https://<portal-host>/auth/github/repo-app/callback`
+- GitHub Repo App Setup URL:
+  `https://<portal-host>/auth/github/repo-app/callback`
+
+Register these values manually in the matching provider settings. The
+installer prints the same checklist; it does not call GitHub or change provider
+registrations. The Repo App OAuth client secret must already exist in the
+named Kubernetes Secret and key. The input contains only that reference. The
+Copilot client-secret and Repo App private-key fields are exact Key Vault
+secret IDs and versions, not secret values.
+
+The current Broker Deployment has an optional broad Secret `envFrom`. For this
+source, include both `CopilotConnection` and `GitHubRepoApp`; omitting either
+could leave its settings supplied by the existing Secret. The input parser
+rejects an omitted section, unknown field, empty value, duplicate JSON key,
+or partial section. Errors name a field only and do not echo values.
+
+### Render and review the plan
+
+Run this command from the repository root in PowerShell. Use a new output
+path; the command does not overwrite an existing file:
+
+```powershell
+node scripts\azure\deploy.mjs `
+  --identity-broker-provider-config .\provider-setup.json `
+  --identity-broker-provider-mode render `
+  --identity-broker-provider-output .\provider-setup-plan.json
+```
+
+Render reads the local v1 source and the non-secret JSON file. It makes no
+network or Azure call, does not authenticate, does not open a browser, does not
+read Secret data, and does not change cluster resources. Review the rendered
+immutable ConfigMap data, explicit Secret reference, and registration
+checklist. Correct the input and render to a different new output path if the
+plan is wrong.
+
+### Activate the reviewed plan
+
+After you finish provider registration and review the plan, read the current
+resource versions from the approved `agentweaver-aks` cluster. Confirm that
+your current `kubectl` context targets that cluster before you use these
+values. These commands do not read Secret data:
+
+```powershell
+kubectl config current-context
+$SubscriptionId = '<approved-subscription-guid>'
+$TenantId = '<approved-tenant-guid>'
+$ConfigResourceVersion = kubectl get configmap identity-broker-runtime-config-v3 -n agentweaver -o jsonpath='{.metadata.resourceVersion}'
+$DeploymentResourceVersion = kubectl get deployment identity-broker -n agentweaver -o jsonpath='{.metadata.resourceVersion}'
+```
+
+Replace the first two values with the approved subscription and tenant GUIDs.
+The next two commands save the exact current resource versions. The installer
+checks the selected target, source ConfigMap, Deployment, resource versions,
+and required Kubernetes permissions before it writes. Confirm that both
+resource-version values are non-empty before you activate.
+
+```powershell
+node scripts\azure\deploy.mjs `
+  --identity-broker-provider-config .\provider-setup.json `
+  --identity-broker-provider-mode activate `
+  --resource-group agentweaver `
+  --subscription $SubscriptionId `
+  --allowed-subscription $SubscriptionId `
+  --tenant $TenantId `
+  --allowed-tenant $TenantId `
+  --expected-identity-broker-config-resource-version $ConfigResourceVersion `
+  --expected-identity-broker-deployment-resource-version $DeploymentResourceVersion
+```
+
+Do not add `--execute`. Provider activation rejects it. If the effective
+settings and Secret reference are already active and the Deployment is ready,
+the installer returns `changed: false` without a rollout or secret rotation.
+Otherwise, it creates and reads back a new immutable ConfigMap before it
+applies a Deployment patch that tests the current UID and resource version.
+The patch changes only provider values, the active ConfigMap reference, and
+the provider fingerprint. The old immutable ConfigMap remains in place.
+
+On success, the result reports the active map and verified Deployment
+generation. On an error with code
+`identity_broker_provider_activation_partial`, read the reported active map
+and Deployment state before you retry. If readback shows the old map is still
+active, get fresh resource versions and review the plan again before retrying.
+If the new map is active but the Deployment is not ready, resolve the rollout
+failure first; a retry reports the current readback instead of returning a
+false no-op. Stop if readback is unavailable or does not match either state.
+Do not delete the old or unreferenced immutable map as recovery.
+
+Later, the normal Kustomize release preflight validates and preserves the
+active successor map, provider environment entries, SecretKeyRef, and
+fingerprint. It keeps the checked-in v3 ConfigMap drift guard and stops before
+workload writes if provider state is unknown or conflicts with source. It does
+not read Secret data. See the [release deployment reference](../reference/releases.md#kubernetes-workload-deployment).
+
+See the [runtime configuration reference](../reference/runtime-configuration.md#identity-broker-settings)
+for the exact input fields and the [troubleshooting guide](./troubleshooting.md)
+for the unconfigured Repo App status response.
+
 ## Replace an immutable runtime ConfigMap
 
 Most checked-in runtime ConfigMaps, including `knowledge-runtime-config`, set

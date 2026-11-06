@@ -168,6 +168,20 @@ describe('IdentityBrokerRepoAppClient', () => {
       code: 'not_connected',
       message: 'The GitHub app request failed with HTTP 409 (not_connected).',
     } satisfies Partial<RepoAppBrokerError>);
+
+    const notConfigured = new IdentityBrokerRepoAppClient(
+      'https://identity.example.test',
+      vi.fn<typeof fetch>().mockResolvedValue(Response.json(
+        { error: 'github_repo_app_not_configured' },
+        { status: 503 },
+      )),
+    );
+    await expect(notConfigured.getStatus()).rejects.toMatchObject({
+      name: 'RepoAppBrokerError',
+      status: 503,
+      code: 'github_repo_app_not_configured',
+      message: 'GitHub Repo App is not configured. Ask an operator to configure the Identity Broker provider.',
+    } satisfies Partial<RepoAppBrokerError>);
   });
 
   it('accepts only the exact popup callback notification shape', () => {

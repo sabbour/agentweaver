@@ -68,6 +68,12 @@ access, read Secrets, or manage Namespaces. A migration failure stops before
 the root workload apply. Earlier migrations or workload updates may have
 completed if a later step fails; inspect state before retrying.
 
+The preflight also validates and preserves an active Identity Broker GitHub
+provider successor ConfigMap, its environment bindings, the explicit
+`SecretKeyRef`, and its fingerprint. It stops before workload writes if
+provider state is unknown or conflicts with source. It does not read Secret
+data. See [GitHub provider setup](../guide/deploy-to-azure.md#configure-the-optional-github-providers).
+
 The Projects & Config migration Job uses Kubernetes Workload Identity, not a
 token Secret. Its one-time identity and PostgreSQL ownership setup are separate
 prerequisites. The release runbook and

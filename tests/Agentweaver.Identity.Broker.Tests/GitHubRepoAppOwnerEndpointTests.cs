@@ -232,6 +232,47 @@ public sealed class GitHubRepoAppOwnerEndpointTests(PostgresContainerFixture pos
     }
 
     [Fact]
+    public async Task StatusRemainsOwnerScopedWhenRepoAppIsNotConfigured()
+    {
+        var connectionString = _factory.ConnectionStringForRestartTest;
+        await _factory.DisposeAsync();
+        _broker.Dispose();
+        _factory = new IdentityBrokerWebApplicationFactory(
+            connectionString, _fakeIdp, signingCertificate: _signingCertificate);
+        _broker = _factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            BaseAddress = new Uri("https://broker.test.local")
+        });
+
+        using var anonymous = _factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            BaseAddress = new Uri("https://broker.test.local")
+        });
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            (await anonymous.GetAsync("/auth/github/repo-app/status")).StatusCode);
+
+        var (_, challenge) = Pkce.Create();
+        _ = await BrokerFlowDriver.AuthorizeWithConsentAsync(
+            _broker,
+            _fakeIdpClient,
+            IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            string.Join(' ', IdentityBrokerWebApplicationFactory.TestClientScopes),
+            challenge);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/auth/github/repo-app/status");
+        request.Headers.Add("Origin", "https://untrusted.example");
+        using var response = await _broker.SendAsync(request);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("github_repo_app_not_configured", body.GetProperty("error").GetString());
+    }
+
+    [Fact]
     public async Task ConnectFormUsesBrokerAntiforgeryCookieAndReturnsUnfollowedOAuthRedirect()
     {
         var (_, challenge) = Pkce.Create();

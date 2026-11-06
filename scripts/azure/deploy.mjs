@@ -14,6 +14,14 @@ import {
 } from './lib/identity-broker-routing.mjs';
 import { bootstrapIdentityBrokerState } from './lib/identity-broker-state.mjs';
 import { assertBrokerRuntimeInputs, bootstrapIdentityBrokerRuntime } from './lib/identity-broker-runtime.mjs';
+import {
+  activateIdentityBrokerProviderSetup,
+  buildIdentityBrokerProviderPlan,
+  IdentityBrokerProviderSetupError,
+  providerSetupErrorLine,
+  readIdentityBrokerProviderInput,
+  writeIdentityBrokerProviderPlan,
+} from './lib/identity-broker-provider-setup.mjs';
 import { bootstrapFoundationProbeInputs } from './lib/foundation-probe-inputs.mjs';
 import {
   assertDedicatedTarget,
@@ -405,7 +413,56 @@ export function cliConfig(values) {
     upstreamClientId: values['identity-upstream-client-id'],
     verifyBrokerReadiness: values['verify-identity-broker-readiness'] ?? false,
     registerBrokerCallback: values['register-identity-broker-callback'] ?? false,
-    confirmBrokerCallback: values['confirm-identity-broker-callback'] };
+    confirmBrokerCallback: values['confirm-identity-broker-callback'],
+    identityBrokerProviderConfig: values['identity-broker-provider-config'],
+    identityBrokerProviderMode: values['identity-broker-provider-mode'],
+    identityBrokerProviderOutput: values['identity-broker-provider-output'],
+    expectedConfigResourceVersion: values['expected-identity-broker-config-resource-version'],
+    expectedDeploymentResourceVersion: values['expected-identity-broker-deployment-resource-version'] };
+}
+
+/** Runs the offline plan or revision-fenced provider activation through the existing installer entry point. */
+export async function setupIdentityBrokerProviders(config, dependencies = {}) {
+  const invalid = field => {
+    throw new IdentityBrokerProviderSetupError('identity_broker_provider_input_invalid', { field });
+  };
+  if (!['render', 'activate'].includes(config.identityBrokerProviderMode)) {
+    invalid('--identity-broker-provider-mode');
+  }
+  if (!config.identityBrokerProviderConfig) invalid('--identity-broker-provider-config');
+  if (config.execute) invalid('--execute');
+  if (config.bootstrapIdentityPostgres || config.bootstrapIdentityRouting || config.identityRoutingOnly ||
+      config.identityRoutingCertificatesOnly || config.bootstrapIdentityBrokerState ||
+      config.alignExistingIdentityBrokerHostname || config.bootstrapIdentityBrokerRuntime ||
+      config.bootstrapFoundationProbeInputs || config.bootstrapFoundationProbePostgres ||
+      config.gatewayNamespace || config.gatewaySecurityPolicy || config.upstreamClientId ||
+      config.verifyBrokerReadiness || config.registerBrokerCallback || config.confirmBrokerCallback) {
+    invalid('--identity-broker-provider-mode');
+  }
+  const input = readIdentityBrokerProviderInput(config.identityBrokerProviderConfig);
+  if (config.identityBrokerProviderMode === 'render') {
+    if (!config.identityBrokerProviderOutput) invalid('--identity-broker-provider-output');
+    if (config.resourceGroup || config.subscriptionId || config.allowedSubscriptionId ||
+        config.tenantId || config.allowedTenantId) invalid('--identity-broker-provider-mode');
+    if (config.expectedConfigResourceVersion !== undefined) {
+      invalid('--expected-identity-broker-config-resource-version');
+    }
+    if (config.expectedDeploymentResourceVersion !== undefined) {
+      invalid('--expected-identity-broker-deployment-resource-version');
+    }
+    const plan = buildIdentityBrokerProviderPlan(input, config.repoRoot);
+    writeIdentityBrokerProviderPlan(plan, config.identityBrokerProviderOutput);
+    return {
+      mode: 'render',
+      output: config.identityBrokerProviderOutput,
+      configMap: plan.configMap.metadata.name,
+      registrationChecklist: plan.registrationChecklist,
+    };
+  }
+  if (config.identityBrokerProviderOutput !== undefined) {
+    invalid('--identity-broker-provider-output');
+  }
+  return activateIdentityBrokerProviderSetup(input, config, dependencies);
 }
 
 /** CLI option definitions shared by the deployment and planning entry points. */
@@ -432,17 +489,27 @@ export const cliOptions = {
   'verify-identity-broker-readiness': { type: 'boolean', default: false },
   'register-identity-broker-callback': { type: 'boolean', default: false },
   'confirm-identity-broker-callback': { type: 'string' },
+  'identity-broker-provider-config': { type: 'string' },
+  'identity-broker-provider-mode': { type: 'string' },
+  'identity-broker-provider-output': { type: 'string' },
+  'expected-identity-broker-config-resource-version': { type: 'string' },
+  'expected-identity-broker-deployment-resource-version': { type: 'string' },
   execute: { type: 'boolean', default: false },
 };
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  let providerSetup = false;
   Promise.resolve().then(() => {
     const { values } = parseArgs({ options: cliOptions });
-    return deploy(cliConfig(values));
+    const config = cliConfig(values);
+    providerSetup = Boolean(config.identityBrokerProviderConfig || config.identityBrokerProviderMode ||
+      config.identityBrokerProviderOutput || config.expectedConfigResourceVersion !== undefined ||
+      config.expectedDeploymentResourceVersion !== undefined);
+    return providerSetup ? setupIdentityBrokerProviders(config) : deploy(config);
   }).then(result => {
     console.log(JSON.stringify(result, null, 2));
   }).catch(error => {
-    console.error(error.message);
+    console.error(providerSetup ? providerSetupErrorLine(error) : error.message);
     process.exitCode = 1;
   });
 }

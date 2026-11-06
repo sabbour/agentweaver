@@ -11,6 +11,7 @@ import {
   parseDeployKustomizeArgs,
   parseImageManifest,
 } from '../deploy-kustomize.mjs';
+import { buildIdentityBrokerProviderPlan } from '../../azure/lib/identity-broker-provider-setup.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const REGISTRY = 'ghcr.io/sabbour';
@@ -64,6 +65,33 @@ const selectedTag = `sha-${'b'.repeat(40)}`;
 const existingTag = `sha-${'c'.repeat(40)}`;
 const digestForTag = tag => `sha256:${tag.slice(4)}${'0'.repeat(24)}`;
 const restoreReplicasAnnotation = 'agentweaver.io/local-deploy-restore-replicas';
+const providerSetupInput = {
+  IdentityBroker: {
+    WebOrigin: 'https://portal.example.test',
+    CopilotConnection: {
+      ProjectsOwnerAddress: 'https://projects.example.test/',
+      ClientId: 'copilot-client-id',
+      CallbackUri: 'https://portal.example.test/auth/github/copilot-app/callback',
+      ClientSecretReference: {
+        Id: 'copilot-client-secret',
+        Version: '0123456789abcdef0123456789abcdef',
+      },
+    },
+    GitHubRepoApp: {
+      OAuthClientId: 'repo-app-client-id',
+      CallbackUri: 'https://portal.example.test/auth/github/repo-app/callback',
+      AppId: 12345,
+      AppSlug: 'agentweaver',
+      PrivateKeySecretId: 'repo-app-private-key',
+      PrivateKeySecretVersion: '0123456789abcdef0123456789abcdef',
+    },
+  },
+  SecretBindings: {
+    IdentityBroker__GitHubRepoApp__OAuthClientSecret: {
+      SecretKeyRef: { Name: 'github-repo-app-oauth', Key: 'oauth-client-secret' },
+    },
+  },
+};
 
 function agentHostRegistryFixture(layerBytes) {
   const digest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -298,6 +326,8 @@ function fakeExec(calls, {
   liveAgentHostSettings = {}, failApplyCount = 0, remainingPodPolls = 0, podList, state,
   denyEnvironmentPermission, denyRuntimePermission, missingAgentHostTls = false,
   wrongAgentHostTlsType = false,
+  liveProviderSetup,
+  activateProviderDuringMigration,
   selectedAgentHostImage = selectedAgentHostRegistry,
   existingAgentHostImage = existingAgentHostRegistry,
 } = {}) {
@@ -314,9 +344,14 @@ function fakeExec(calls, {
   if (!missingBrokerRuntimeConfig) {
     live.configMaps[brokerRuntimeConfigName] ??= withIdentity(liveBrokerRuntimeConfig);
   }
+  if (liveProviderSetup) {
+    live.configMaps[liveProviderSetup.configMap.metadata.name] ??=
+      withIdentity(liveProviderSetup.configMap);
+  }
   let podPolls = remainingPodPolls;
   let podListIndex = 0;
   let failedApplies = failApplyCount;
+  let activatedProviderDuringMigration = false;
   const liveDeployment = name => {
     if (!live.deployments[name]) {
       const kustomizationPath = path.join(calls[0].options.cwd, 'deploy', 'k8s', 'kustomization.yaml');
@@ -352,6 +387,22 @@ function fakeExec(calls, {
             .find(container => container.name === 'environment').env
             .find(entry => entry.name === settingName);
           if (setting) setting.value = value;
+        }
+      }
+      if (name === 'identity-broker') {
+        deployment.metadata.uid ??= 'uid-identity-broker';
+        deployment.metadata.resourceVersion ??= '1';
+        deployment.metadata.generation ??= 1;
+        if (liveProviderSetup) {
+          const container = deployment.spec.template.spec.containers
+            .find(item => item.name === 'identity-broker');
+          container.envFrom.find(item => item.configMapRef).configMapRef.name =
+            liveProviderSetup.configMap.metadata.name;
+          container.env.push(...structuredClone(liveProviderSetup.deployment.env));
+          deployment.spec.template.metadata.annotations = {
+            ...(deployment.spec.template.metadata.annotations ?? {}),
+            ...liveProviderSetup.deployment.podTemplateAnnotations,
+          };
         }
       }
       live.deployments[name] = deployment;
@@ -521,11 +572,50 @@ function fakeExec(calls, {
     }
     if (args[0] === 'wait') {
       const name = args[2].slice('job/'.length);
-      return name.startsWith(failedJob ?? '\u0000')
-        ? { status: 1, stdout: '', stderr: 'job failed' }
-        : { status: 0, stdout: 'condition met\n', stderr: '' };
+      if (name.startsWith(failedJob ?? '\u0000')) {
+        return { status: 1, stdout: '', stderr: 'job failed' };
+      }
+      if (activateProviderDuringMigration && !activatedProviderDuringMigration) {
+        activatedProviderDuringMigration = true;
+        const deployment = liveDeployment('identity-broker');
+        const container = deployment.spec.template.spec.containers
+          .find(item => item.name === 'identity-broker');
+        const providerNames = new Set(activateProviderDuringMigration.deployment.env
+          .map(entry => entry.name));
+        container.env = [
+          ...container.env.filter(entry => !providerNames.has(entry.name)),
+          ...structuredClone(activateProviderDuringMigration.deployment.env),
+        ];
+        container.envFrom.find(item => item.configMapRef).configMapRef.name =
+          activateProviderDuringMigration.configMap.metadata.name;
+        deployment.spec.template.metadata.annotations ??= {};
+        Object.assign(deployment.spec.template.metadata.annotations,
+          activateProviderDuringMigration.deployment.podTemplateAnnotations);
+        deployment.metadata.resourceVersion = '2';
+        live.configMaps[activateProviderDuringMigration.configMap.metadata.name] =
+          withIdentity(activateProviderDuringMigration.configMap);
+      }
+      return { status: 0, stdout: 'condition met\n', stderr: '' };
     }
     if (args[0] === 'logs') return { status: 0, stdout: 'migration failed safely\n', stderr: '' };
+    if (args[0] === 'patch' && args[1] === 'deployment/identity-broker') {
+      const deployment = liveDeployment('identity-broker');
+      const patch = JSON.parse(args[args.indexOf('--patch') + 1]);
+      for (const operation of patch.filter(value => value.op === 'test')) {
+        const actual = operation.path === '/metadata/uid'
+          ? deployment.metadata.uid
+          : operation.path === '/metadata/resourceVersion'
+            ? deployment.metadata.resourceVersion
+            : undefined;
+        if (actual !== operation.value) {
+          return { status: 1, stdout: '', stderr: 'Conflict: UID or resourceVersion precondition failed' };
+        }
+      }
+      const spec = patch.find(value => value.op === 'replace' && value.path === '/spec');
+      deployment.spec = structuredClone(spec.value);
+      deployment.metadata.resourceVersion = String(Number(deployment.metadata.resourceVersion) + 1);
+      return { status: 0, stdout: 'deployment patched\n', stderr: '' };
+    }
     if (args[0] === 'apply') {
       if (failedApplies > 0) {
         failedApplies -= 1;
@@ -725,6 +815,83 @@ test('Broker preflight accepts an exact order-independent match and omits the im
       (call.args[1] === 'configmap' && call.args[2] === brokerRuntimeConfigName ||
         call.args[0] === 'create' && parse(call.options.input).kind === 'ConfigMap' &&
           parse(call.options.input).metadata.name === brokerRuntimeConfigName)), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Kustomize release preserves a validated active provider successor with a resource-version fence', async () => {
+  const directory = scratch();
+  const calls = [];
+  const plan = buildIdentityBrokerProviderPlan(providerSetupInput, root);
+  try {
+    await deployKustomize({ imageTag: selectedTag }, {
+      root: directory, exec: fakeExec(calls, { liveProviderSetup: plan }), log() {},
+    });
+
+    const patchCall = calls.find(call => call.command === 'kubectl' &&
+      call.args[0] === 'patch' && call.args[1] === 'deployment/identity-broker');
+    const patch = JSON.parse(patchCall.args[patchCall.args.indexOf('--patch') + 1]);
+    const spec = patch.find(operation => operation.path === '/spec').value;
+    const container = spec.template.spec.containers
+      .find(item => item.name === 'identity-broker');
+    const secretEnv = container.env.find(entry =>
+      entry.name === 'IdentityBroker__GitHubRepoApp__OAuthClientSecret');
+    assert.equal(container.envFrom.find(item => item.configMapRef).configMapRef.name,
+      plan.configMap.metadata.name);
+    assert.deepEqual(secretEnv.valueFrom.secretKeyRef, {
+      name: 'github-repo-app-oauth', key: 'oauth-client-secret', optional: false,
+    });
+    assert.equal(secretEnv.value, undefined);
+    assert.equal(spec.template.metadata.annotations[
+      'agentweaver.io/provider-setup-fingerprint'],
+    plan.deployment.podTemplateAnnotations['agentweaver.io/provider-setup-fingerprint']);
+    const appliedResources = parse(calls.find(call =>
+      call.command === 'kubectl' && call.args[0] === 'apply').options.input).items;
+    assert.equal(appliedResources.some(resource =>
+      resource.kind === 'Deployment' && resource.metadata.name === 'identity-broker'), false);
+    assert.equal(appliedResources.some(resource =>
+      resource.kind === 'ConfigMap' && resource.metadata.name === plan.configMap.metadata.name), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('provider activation during release migrations blocks the stale Broker release write', async () => {
+  const directory = scratch();
+  const calls = [];
+  const planA = buildIdentityBrokerProviderPlan(providerSetupInput, root);
+  const inputB = structuredClone(providerSetupInput);
+  inputB.IdentityBroker.CopilotConnection.ClientId = 'activated-during-release';
+  const planB = buildIdentityBrokerProviderPlan(inputB, root);
+  const state = { runtimeConfig: structuredClone(runtimeConfig), deployments: {} };
+  try {
+    await assert.rejects(deployKustomize({ imageTag: selectedTag }, {
+      root,
+      exec: fakeExec(calls, {
+        liveProviderSetup: planA,
+        activateProviderDuringMigration: planB,
+        state,
+      }),
+      log() {},
+    }), /Identity Broker Deployment update failed: Conflict: UID or resourceVersion precondition failed/);
+
+    const deployment = state.deployments['identity-broker'];
+    const container = deployment.spec.template.spec.containers
+      .find(item => item.name === 'identity-broker');
+    assert.equal(container.envFrom.find(item => item.configMapRef).configMapRef.name,
+      planB.configMap.metadata.name);
+    assert.equal(container.env.find(entry =>
+      entry.name === 'IdentityBroker__CopilotConnection__ClientId').value,
+    'activated-during-release');
+    const patchCall = calls.find(call => call.command === 'kubectl' &&
+      call.args[0] === 'patch' && call.args[1] === 'deployment/identity-broker');
+    assert.ok(patchCall);
+    assert.equal(parse(calls.find(call => call.command === 'kubectl' &&
+      call.args[0] === 'apply').options.input).items.some(resource =>
+      resource.kind === 'Deployment' && resource.metadata.name === 'identity-broker'), false);
+    assert.ok(state.configMaps[planA.configMap.metadata.name]);
+    assert.ok(state.configMaps[planB.configMap.metadata.name]);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -942,8 +1109,15 @@ test('deployment creates existing migration Jobs directly before one namespaced 
       call.args[0] === 'kustomize' && call.args[1].endsWith(path.join('deploy', 'k8s')));
     const firstJob = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'create');
     const apply = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'apply');
+    const brokerPatch = calls.findIndex(call => call.command === 'kubectl' &&
+      call.args[0] === 'patch' && call.args[1] === 'deployment/identity-broker');
     const rollouts = calls.filter(call => call.command === 'kubectl' && call.args[0] === 'rollout');
-    assert.ok(render >= 0 && render < firstJob && firstJob < apply);
+    assert.ok(render >= 0 && render < firstJob && firstJob < apply && apply < brokerPatch);
+    assert.deepEqual(JSON.parse(calls[brokerPatch].args[
+      calls[brokerPatch].args.indexOf('--patch') + 1]).slice(0, 2), [
+      { op: 'test', path: '/metadata/uid', value: 'uid-identity-broker' },
+      { op: 'test', path: '/metadata/resourceVersion', value: '1' },
+    ]);
     assert.equal(apply, calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'apply'));
     assert.deepEqual(calls[apply].args.slice(1, 5), [
       '--filename', '-', '--context', 'selected-context',
@@ -951,7 +1125,9 @@ test('deployment creates existing migration Jobs directly before one namespaced 
     const applied = parse(calls[apply].options.input);
     assert.equal(applied.kind, 'List');
     assert.equal(applied.items.some(resource => resource.kind === 'Namespace'), false);
-    assert.equal(applied.items.filter(resource => resource.kind === 'Deployment').length, 9);
+    assert.equal(applied.items.filter(resource => resource.kind === 'Deployment').length, 8);
+    assert.equal(applied.items.some(resource =>
+      resource.kind === 'Deployment' && resource.metadata.name === 'identity-broker'), false);
     assert.equal(applied.items.some(resource =>
       ['Role', 'RoleBinding', 'ClusterRole', 'ClusterRoleBinding'].includes(resource.kind)), false);
     assert.equal(rollouts.length, 9);

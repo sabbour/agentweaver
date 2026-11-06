@@ -77,6 +77,11 @@ not prove that a runtime loaded or used the repository.
   Repo App work and closes its tracked popup.
 - The owner-reported connection state and revision determine what the panel
   displays.
+- If the Repo App provider is not configured, the Broker status request returns
+  `503 github_repo_app_not_configured` after the session and owner checks. The
+  Web app asks an operator to configure Identity Broker. Follow
+  [the provider setup procedure](../guide/deploy-to-azure.md#configure-the-optional-github-providers);
+  do not retry the connection until setup is complete.
 - A project configured for a different App connection cannot use the displayed
   connection until you update `sourceControl.appConnectionId`.
 

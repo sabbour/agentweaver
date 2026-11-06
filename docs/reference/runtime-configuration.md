@@ -273,7 +273,7 @@ change. See the [CLI guide](../guide/cli.md) for local setup.
 | `IdentityBroker__ExternalProvider__ClientId` | Required client ID registered with the upstream provider. |
 | `IdentityBroker__ExternalProvider__ClientSecret` | Optional. Store it in `identity-broker-client-secrets` only when the upstream client is confidential. A public client uses authorization-code flow with PKCE and has no secret. |
 | `IdentityBroker__ExternalProvider__MetadataAddress` | Optional discovery-metadata override. Production normally derives metadata from `Authority`; use an override only when the approved provider requires it. |
-| `IdentityBroker__WebOrigin` | Optional exact HTTPS origin for direct Broker browser calls. It must not contain credentials, a path, a query, or a fragment. It is required when GitHub Repo App or Remote MCP OAuth is configured. |
+| `IdentityBroker__WebOrigin` | Optional exact HTTPS origin for direct Broker browser calls. It must not contain credentials, a path, a query, or a fragment. It is required when GitHub Copilot, GitHub Repo App, or Remote MCP OAuth is configured. |
 | `IdentityBroker__Clients__<index>__ClientId` | Required ID of an explicitly seeded Broker OAuth client. The Broker does not enable dynamic client registration. |
 | `IdentityBroker__Clients__<index>__DisplayName` | Required operator-facing client name. |
 | `IdentityBroker__Clients__<index>__Type` | Required enum: `Public` or `Confidential`. PKCE with S256 is required for both types. |
@@ -298,7 +298,55 @@ not from the checked-in non-secret runtime map:
 | `IdentityBroker:Signing:PfxPassword` | Required PFX password from the same Kubernetes Secret. Never put it in a ConfigMap. |
 | `IdentityBroker:RunBinding:*` | Optional Projects run-binding owner address, audience, and certificate/trust-bundle SHA-256 pins. |
 | `IdentityBroker:RemoteMcpOAuth:*` | Optional remote OAuth allowlist. When enabled, it requires Projects and Environment owner roots and at least one provider. Each provider requires an issuer, client ID, redirect URI, at least one approved resource and scope, and at least two approved OAuth endpoints. The Broker rejects values outside this allowlist. |
-| `IdentityBroker:GitHubRepoApp:*` | Optional GitHub OAuth and App settings. Requires OAuth client ID and secret, HTTPS callback URI, positive App ID, App slug, and exact Key Vault private-key secret ID and version. Store the OAuth secret in the Broker client Secret. |
+| `IdentityBroker:CopilotConnection:*` | Optional GitHub Copilot user OAuth settings. Requires a Projects owner root address, client ID, exact HTTPS callback URI, and exact Key Vault client-secret name and version. |
+| `IdentityBroker:GitHubRepoApp:*` | Optional GitHub OAuth and App settings. Requires OAuth client ID and secret, HTTPS callback URI, positive App ID, App slug, and exact Key Vault private-key secret name and version. Store the OAuth secret in an existing Kubernetes Secret and configure only its name/key reference. |
+
+### Installer input for optional GitHub providers
+
+The Azure installer accepts a non-secret JSON file through
+`--identity-broker-provider-config`. It uses this input to render or activate
+the optional Copilot and GitHub Repo App settings. The input field names and
+types are:
+
+| Input field | Type and contract |
+| --- | --- |
+| `IdentityBroker.WebOrigin` | Required string. Exact HTTPS origin with no path, query, or fragment. |
+| `IdentityBroker.CopilotConnection` | Optional object. If present, all fields below are required. |
+| `IdentityBroker.CopilotConnection.ProjectsOwnerAddress` | HTTPS Projects owner root address. It has no path other than `/`, query, or fragment. |
+| `IdentityBroker.CopilotConnection.ClientId` | Non-empty Copilot client ID. |
+| `IdentityBroker.CopilotConnection.CallbackUri` | Exactly `<WebOrigin>/auth/github/copilot-app/callback`. |
+| `IdentityBroker.CopilotConnection.ClientSecretReference.Id` | Exact managed Key Vault secret name, not a full URL. It has 1–127 ASCII letters, digits, or hyphens. This is a reference, not a secret value. |
+| `IdentityBroker.CopilotConnection.ClientSecretReference.Version` | Exact managed Key Vault secret version: 1–256 ASCII letters, digits, periods, underscores, hyphens, or colons. |
+| `IdentityBroker.GitHubRepoApp` | Optional object. If present, all fields below and the SecretKeyRef are required. |
+| `IdentityBroker.GitHubRepoApp.OAuthClientId` | Non-empty GitHub OAuth client ID. |
+| `IdentityBroker.GitHubRepoApp.CallbackUri` | Exactly `<WebOrigin>/auth/github/repo-app/callback`. |
+| `IdentityBroker.GitHubRepoApp.AppId` | Positive JSON integer. |
+| `IdentityBroker.GitHubRepoApp.AppSlug` | Non-empty slug with letters, digits, hyphens, or underscores. |
+| `IdentityBroker.GitHubRepoApp.PrivateKeySecretId` | Exact managed Key Vault private-key secret name, not a full URL. It has 1–127 ASCII letters, digits, or hyphens. This is a reference, not a secret value. |
+| `IdentityBroker.GitHubRepoApp.PrivateKeySecretVersion` | Exact managed Key Vault secret version: 1–256 ASCII letters, digits, periods, underscores, hyphens, or colons. |
+| `SecretBindings.IdentityBroker__GitHubRepoApp__OAuthClientSecret.SecretKeyRef.Name` | Existing Kubernetes Secret name. Required when Repo App is configured. |
+| `SecretBindings.IdentityBroker__GitHubRepoApp__OAuthClientSecret.SecretKeyRef.Key` | Existing key in that Secret. Required when Repo App is configured. |
+
+Do not put the OAuth client secret, private key, or any other secret value in
+the input file. Repo App OAuth uses an explicit
+`valueFrom.secretKeyRef` for `IdentityBroker__GitHubRepoApp__OAuthClientSecret`.
+Kubernetes gives an explicit container `env` entry precedence over a matching
+key from `envFrom`. The installer preserves other `envFrom` sources and never
+reads Secret data.
+
+The checked-in Identity Broker Deployment has an optional broad Secret
+`envFrom`. For this source, include both provider objects; omitting either
+could leave settings supplied by that Secret. The parser rejects omitted
+sections, empty or partial objects, unknown fields, duplicate JSON keys, and
+invalid callback values. Its errors identify a field without echoing values.
+See [Configure the optional GitHub providers](../guide/deploy-to-azure.md#configure-the-optional-github-providers)
+for offline rendering, manual registration, activation, and recovery.
+
+The Broker always maps `GET /auth/github/repo-app/status`. After the existing
+session and owner checks, an unconfigured Repo App returns HTTP `503` with
+`{"error":"github_repo_app_not_configured"}` and `Cache-Control: no-store`.
+The Web client shows an operator setup message. The route and its CORS policy
+do not change when the optional service is absent.
 
 `IdentityBroker:Clients` must contain at least one client. Each client requires
 a nonempty redirect URI list, scope list, and resource list. A confidential

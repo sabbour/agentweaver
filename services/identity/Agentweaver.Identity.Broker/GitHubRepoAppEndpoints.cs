@@ -26,10 +26,17 @@ internal static class GitHubRepoAppEndpoints
         var browserApi = app.MapGroup("/auth/github/repo-app")
             .RequireCors(IdentityBrokerOptions.WebCorsPolicyName);
         browserApi.MapGet("/csrf", GetAntiforgeryTokenAsync);
-        browserApi.MapGet("/status", GetStatusAsync);
         browserApi.MapPost("/disconnect", DisconnectAsync);
         browserApi.MapGet("/repositories", ListRepositoriesAsync);
         browserApi.MapPost("/selection", CreateRepositorySelectionAsync);
+    }
+
+    /// <summary>Maps the owner-scoped status route even when the optional provider is not configured.</summary>
+    internal static void MapGitHubRepoAppStatusEndpoint(this IEndpointRouteBuilder app)
+    {
+        app.MapGroup("/auth/github/repo-app")
+            .RequireCors(IdentityBrokerOptions.WebCorsPolicyName)
+            .MapGet("/status", GetStatusAsync);
     }
 
     private static async Task<IResult> BeginUserAuthorizationAsync(
@@ -164,13 +171,16 @@ internal static class GitHubRepoAppEndpoints
 
     private static async Task<IResult> GetStatusAsync(
         HttpContext context,
-        GitHubRepoAppConnectionService connectionService,
         CancellationToken cancellationToken)
     {
         if (await TryGetOwnerIdAsync(context, cancellationToken).ConfigureAwait(false) is not { } ownerId)
             return Results.Unauthorized();
 
         context.Response.Headers.CacheControl = "no-store";
+        var connectionService = context.RequestServices.GetService<GitHubRepoAppConnectionService>();
+        if (connectionService is null)
+            return Results.Json(new { error = "github_repo_app_not_configured" },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
         var status = await connectionService.GetStatusAsync(ownerId, cancellationToken).ConfigureAwait(false);
         return Results.Json(status);
     }

@@ -517,6 +517,7 @@ app.MapIssueSyncGrants(issueSyncWorker);
 app.MapIdentitySecretRedemptionEndpoints();
 app.MapCopilotConnectionEndpoints();
 app.MapRemoteMcpOAuthManagementEndpoints();
+app.MapGitHubRepoAppStatusEndpoint();
 if (identityOptions.GitHubRepoApp is not null)
 {
     app.MapGitHubRepoAppEndpoints(webOrigin!);

@@ -417,7 +417,12 @@
       "required": [
         "docs/architecture/identity-secrets.md",
         "docs/reference/contracts.md",
-        "docs/diagrams/src/flagship/v1-identity-redemption.json"
+        "docs/reference/runtime-configuration.md",
+        "docs/guide/deploy-to-azure.md",
+        "docs/guide/troubleshooting.md",
+        "docs/experience/connections.md",
+        "docs/diagrams/src/flagship/v1-identity-redemption.json",
+        "docs/diagrams/src/flagship/v1-identity-provider-setup.json"
       ]
     },
     {
@@ -455,8 +460,12 @@
         "docs/architecture/azure.md",
         "docs/reference/contracts.md",
         "docs/guide/azure-acceptance.md",
+        "docs/guide/deploy-to-azure.md",
+        "docs/guide/troubleshooting.md",
+        "docs/reference/runtime-configuration.md",
         "docs/diagrams/src/flagship/v1-azure-foundation.json",
-        "docs/diagrams/src/flagship/v1-azure-acceptance.json"
+        "docs/diagrams/src/flagship/v1-azure-acceptance.json",
+        "docs/diagrams/src/flagship/v1-identity-provider-setup.json"
       ]
     },
     {
@@ -466,7 +475,10 @@
         "releases/"
       ],
       "required": [
-        "docs/reference/releases.md"
+        "docs/reference/releases.md",
+        "docs/guide/deploy-to-azure.md",
+        "docs/reference/runtime-configuration.md",
+        "docs/diagrams/src/flagship/v1-identity-provider-setup.json"
       ]
     },
     {
@@ -653,7 +665,9 @@
         "docs/experience/connections.md",
         "docs/experience/runs-sessions.md",
         "docs/experience/knowledge.md",
-        "docs/guide/web-client.md"
+        "docs/guide/web-client.md",
+        "docs/guide/deploy-to-azure.md",
+        "docs/guide/troubleshooting.md"
       ]
     }
   ]
