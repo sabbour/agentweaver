@@ -353,6 +353,13 @@ for local execution, monitoring, recovery, and context verification. Complete
 the one-time identity and PostgreSQL ownership prerequisites before running
 the local command; it runs migrations and grants before applying workloads.
 
+Before a migration or Kubernetes write, the local helper requires the live
+`identity-broker-runtime-config-v3` ConfigMap to match the complete rendered
+Broker map. It also checks that the Broker Deployment references this map. A
+missing, malformed, or different map stops the command before writes. The
+helper does not create, replace, or repair the map; use a separately reviewed
+setup path for those cases.
+
 For a fresh installation, complete the managed certificate procedure from the
 [Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#application-routing-source-setting)
 before deployment. After product Services exist, configure the separate

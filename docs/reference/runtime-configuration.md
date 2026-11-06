@@ -149,6 +149,14 @@ Most checked-in runtime ConfigMaps are immutable. For the existing-installation
 procedure and its limits, see
 [Replace an immutable runtime ConfigMap](../guide/deploy-to-azure.md#replace-an-immutable-runtime-configmap).
 
+Before `deploy:kustomize` runs a migration or writes to Kubernetes, it requires
+the live `identity-broker-runtime-config-v3` ConfigMap to match the complete
+rendered Broker map, including `data`, `binaryData`, and `immutable`. The
+Broker Deployment must reference that map. A missing, malformed, or different
+map stops deployment. When the check passes, the helper omits the unchanged
+Broker map from the final apply. The helper does not create, replace, or repair
+that map.
+
 ## PostgreSQL connection and workload identity
 
 These settings appear in the service runtime maps. Use the prefix shown in the

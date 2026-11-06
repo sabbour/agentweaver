@@ -16,6 +16,7 @@ import { run, redact } from '../azure/lib/exec.mjs';
 
 const REGISTRY = 'ghcr.io/sabbour';
 const NAMESPACE = 'agentweaver';
+const BROKER_RUNTIME_CONFIG = 'identity-broker-runtime-config-v3';
 const PROJECTS_CONFIG_RUNTIME_CONFIG = 'projects-config-runtime-config';
 const PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION = 'agentweaver.io/local-deploy-restore-replicas';
 const AGENTHOST_RUNTIME_CONFIG = 'agenthost-runtime-v1';
@@ -314,6 +315,125 @@ function sameConfigMapData(left, right) {
 
 function sameRuntimeConfig(left, right) {
   return left.immutable === right.immutable && sameConfigMapData(left, right);
+}
+
+function configMapReferences(deployment) {
+  const podSpec = deployment.spec?.template?.spec;
+  const containers = [
+    ...(Array.isArray(podSpec?.containers) ? podSpec.containers : []),
+    ...(Array.isArray(podSpec?.initContainers) ? podSpec.initContainers : []),
+    ...(Array.isArray(podSpec?.ephemeralContainers) ? podSpec.ephemeralContainers : []),
+  ].filter(container => container && typeof container === 'object' && !Array.isArray(container));
+  const references = new Set();
+  for (const container of containers) {
+    for (const source of Array.isArray(container.envFrom) ? container.envFrom : []) {
+      if (source && typeof source === 'object' &&
+          typeof source.configMapRef?.name === 'string') references.add(source.configMapRef.name);
+    }
+    for (const setting of Array.isArray(container.env) ? container.env : []) {
+      const name = setting?.valueFrom?.configMapKeyRef?.name;
+      if (typeof name === 'string') references.add(name);
+    }
+  }
+  for (const volume of Array.isArray(podSpec?.volumes) ? podSpec.volumes : []) {
+    if (!volume || typeof volume !== 'object' || Array.isArray(volume)) continue;
+    if (typeof volume.configMap?.name === 'string') references.add(volume.configMap.name);
+    for (const source of Array.isArray(volume.projected?.sources) ? volume.projected.sources : []) {
+      if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
+      if (typeof source.configMap?.name === 'string') references.add(source.configMap.name);
+    }
+  }
+  return references;
+}
+
+function findBrokerRuntimeConfig(resources) {
+  const namedResources = resources.filter(resource =>
+    resource && typeof resource === 'object' &&
+    resource.metadata?.name === BROKER_RUNTIME_CONFIG);
+  if (namedResources.length !== 1) {
+    fail(`Kustomize must render exactly one ConfigMap/${BROKER_RUNTIME_CONFIG}.`);
+  }
+  const runtimeConfig = namedResources[0];
+  if (runtimeConfig.apiVersion !== 'v1' || runtimeConfig.kind !== 'ConfigMap' ||
+      runtimeConfig.metadata?.namespace !== NAMESPACE || runtimeConfig.immutable !== true) {
+    fail(`Kustomize must render immutable v1 ConfigMap/${BROKER_RUNTIME_CONFIG} in namespace ${NAMESPACE}.`);
+  }
+  const deployments = resources.filter(resource =>
+    resource && typeof resource === 'object' &&
+    resource.kind === 'Deployment' && resource.metadata?.name === 'identity-broker');
+  if (deployments.length !== 1 || deployments[0].apiVersion !== 'apps/v1' ||
+      deployments[0].metadata?.namespace !== NAMESPACE ||
+      !configMapReferences(deployments[0]).has(BROKER_RUNTIME_CONFIG)) {
+    fail(`Kustomize must render deployment/identity-broker with a reference to ConfigMap/${BROKER_RUNTIME_CONFIG}.`);
+  }
+  return runtimeConfig;
+}
+
+function configMapStringData(resource, field, differences) {
+  const values = resource[field];
+  if (values === undefined) return {};
+  if (!values || typeof values !== 'object' || Array.isArray(values)) {
+    differences.add(field);
+    return {};
+  }
+  for (const [key, value] of Object.entries(values)) {
+    if (typeof value !== 'string') differences.add(`${field}[${key}]`);
+  }
+  return values;
+}
+
+function brokerRuntimeConfigDifferences(live, candidate) {
+  const differences = new Set();
+  for (const field of ['apiVersion', 'kind']) {
+    if (live[field] !== candidate[field]) differences.add(field);
+  }
+  for (const field of ['name', 'namespace']) {
+    if (live.metadata?.[field] !== candidate.metadata?.[field]) differences.add(`metadata.${field}`);
+  }
+  if (live.immutable !== true || candidate.immutable !== true) differences.add('immutable');
+  for (const field of ['data', 'binaryData']) {
+    const liveValues = configMapStringData(live, field, differences);
+    const candidateValues = configMapStringData(candidate, field, differences);
+    for (const key of new Set([...Object.keys(liveValues), ...Object.keys(candidateValues)])) {
+      if (!Object.hasOwn(liveValues, key) || !Object.hasOwn(candidateValues, key) ||
+          liveValues[key] !== candidateValues[key]) {
+        differences.add(`${field}[${key}]`);
+      }
+    }
+  }
+  return [...differences].sort();
+}
+
+function preflightBrokerRuntimeConfig(exec, context, root, candidate) {
+  let result;
+  try {
+    result = exec('kubectl', [
+      'get', 'configmap', BROKER_RUNTIME_CONFIG, '--ignore-not-found=true', '--output=json',
+      '--context', context, '--namespace', NAMESPACE,
+    ], { check: false, cwd: root });
+  } catch {
+    fail(`Could not read ConfigMap/${BROKER_RUNTIME_CONFIG} for the Broker preflight.`);
+  }
+  if (!result || result.status !== 0) {
+    fail(`Could not read ConfigMap/${BROKER_RUNTIME_CONFIG} for the Broker preflight.`);
+  }
+  const source = typeof result.stdout === 'string' ? result.stdout.trim() : '';
+  if (!source) {
+    fail(`Live ConfigMap/${BROKER_RUNTIME_CONFIG} is missing; the Broker preflight requires an exact match.`);
+  }
+  let live;
+  try {
+    live = JSON.parse(source);
+  } catch {
+    fail(`Kubernetes returned invalid JSON for ConfigMap/${BROKER_RUNTIME_CONFIG} during the Broker preflight.`);
+  }
+  if (!live || typeof live !== 'object' || Array.isArray(live)) {
+    fail(`Kubernetes returned an invalid object for ConfigMap/${BROKER_RUNTIME_CONFIG} during the Broker preflight.`);
+  }
+  const differences = brokerRuntimeConfigDifferences(live, candidate);
+  if (differences.length) {
+    fail(`Live ConfigMap/${BROKER_RUNTIME_CONFIG} differs from the rendered candidate: ${differences.join(', ')}.`);
+  }
 }
 
 function deploymentReplicas(deployment, name = 'projects-config') {
@@ -904,6 +1024,8 @@ export async function deployKustomize(options, overrides = {}) {
       preserveLiveAgentHostSettings(resources, liveAgentHostSettings, agentHostTuple);
     }
     stampAgentHostRuntime(resources, agentHostTuple);
+    const brokerRuntimeConfig = findBrokerRuntimeConfig(resources);
+    preflightBrokerRuntimeConfig(exec, context, root, brokerRuntimeConfig);
     const runtimeConfig = resources.find(resource => resource.kind === 'ConfigMap' &&
       resource.metadata?.name === PROJECTS_CONFIG_RUNTIME_CONFIG);
     if (!runtimeConfig) fail(`Kustomize must render ConfigMap/${PROJECTS_CONFIG_RUNTIME_CONFIG}.`);
@@ -983,7 +1105,7 @@ export async function deployKustomize(options, overrides = {}) {
     const workloads = {
       apiVersion: 'v1',
       kind: 'List',
-      items: resources.filter(resource => resource.kind !== 'Namespace'),
+      items: resources.filter(resource => resource.kind !== 'Namespace' && resource !== brokerRuntimeConfig),
     };
     const jobs = migrationJobs(root, exec, context, digests, requestedImages.keys());
 

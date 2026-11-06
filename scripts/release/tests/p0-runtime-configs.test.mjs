@@ -173,9 +173,9 @@ test('Identity Broker snapshot keeps existing clients and adds versioned public 
   assert.equal(identityBroker.data.IdentityBroker__RunBinding__ProjectsOwnerAddress,
     'https://projects-config.agentweaver.svc.cluster.local:8443/');
   assert.equal(identityBroker.data.IdentityBroker__RunBinding__ProjectsServerCertificateSha256,
-    '2f8d3d969428d8ca3b33d1a083a2fc80da34ed54111d65eaf7a87c3a0240f053');
+    'd55bd61d14cd86a3b00a6911d763561bb904000be5b433d065d11d600d6e9fe9');
   assert.equal(identityBroker.data.IdentityBroker__RunBinding__ProjectsTrustBundleSha256,
-    '5de6410b8a7ac85025497d89b230be09407428f7a29d0bc4f6f3e6db0ea3dbfa');
+    'e156c1bdf3fee14ae46ef716267a9cd9a876eee4d22eeaf5b6f2b22e19d8a43a');
   assert.equal(identityBroker.data.IdentityBroker__ExternalProvider__ClientId,
     '3b682024-2c59-4497-aff2-fc6335d12d97');
   assert.equal(identityBroker.data.IdentityBroker__Clients__1__ClientId, 'agentweaver-web');
@@ -604,7 +604,7 @@ test('Gateway, Web, Knowledge, and Projects ConfigMaps contain complete sourced 
     ProjectsConfig__Tls__CertificatePath: '/var/run/projects-config-tls/tls.crt',
     ProjectsConfig__Tls__KeyPath: '/var/run/projects-config-tls/tls.key',
     ProjectsConfig__Tls__ServerCertificateSha256:
-      '2f8d3d969428d8ca3b33d1a083a2fc80da34ed54111d65eaf7a87c3a0240f053',
+      'd55bd61d14cd86a3b00a6911d763561bb904000be5b433d065d11d600d6e9fe9',
     ProjectsConfig__Knowledge__BaseAddress: serviceAddress('knowledge'),
     ProjectsConfig__PrivilegedSetup__ApprovedIssuer: broker,
     ProjectsConfig__PrivilegedSetup__ApprovedTenantId: tenant,
