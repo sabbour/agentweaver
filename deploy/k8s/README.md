@@ -78,6 +78,16 @@ subscription and AKS kubeconfig context; it uses the local interactive Azure
 CLI identity, not a GitHub-hosted deployment identity. Builds still publish
 images automatically to GHCR.
 
+Before a migration or Kubernetes write, the helper checks that the live
+`identity-broker-runtime-config-v3` ConfigMap exactly matches the rendered
+Broker map. The check covers its API version, kind, name, namespace,
+`immutable` flag, `data`, and `binaryData`. The Broker Deployment must also
+reference this map. A missing, malformed, or different map stops the command
+before writes. The error names changed fields or keys, not values. If the check
+passes, the helper leaves this unchanged ConfigMap out of the final apply. It
+does not create, replace, or repair the Broker map; that requires a separate
+reviewed design.
+
 Projects & Config's runtime identity is DDL-restricted. The migration Job uses
 Kubernetes Workload Identity, not a token Secret. The one-time setup provisions
 the `projects-config-migration` ServiceAccount annotation and the

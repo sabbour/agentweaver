@@ -17,6 +17,10 @@ const REGISTRY = 'ghcr.io/sabbour';
 const runtimeConfig = JSON.parse(readFileSync(
   path.join(root, 'deploy', 'k8s', 'runtime-configs', 'projects-config-runtime-config.json'), 'utf8',
 ));
+const brokerRuntimeConfig = JSON.parse(readFileSync(
+  path.join(root, 'deploy', 'k8s', 'runtime-configs', 'identity-broker-runtime-config.json'), 'utf8',
+));
+const brokerRuntimeConfigName = 'identity-broker-runtime-config-v3';
 const readYaml = relativePath => parse(readFileSync(path.join(root, relativePath), 'utf8'));
 const agentHostRuntimeConfig = readYaml('deploy/k8s/profiles/agenthost/runtime-config.example.yaml');
 const environmentRuntimeConfig = JSON.parse(readFileSync(
@@ -244,11 +248,22 @@ function createdProjectsMigrationPod(calls) {
   return projectsMigrationPod(jobResource);
 }
 
-function renderedRoot(kustomizationPath) {
+function renderedRoot(kustomizationPath, {
+  brokerConfigMapCount = 1,
+  brokerConfigMapReference = brokerRuntimeConfigName,
+} = {}) {
   const source = parse(readFileSync(kustomizationPath, 'utf8'));
   assert.equal(source.images.length, 10);
   assert.equal(source.images.every(image => /^sha256:[a-f0-9]{64}$/.test(image.digest)), true);
   const resources = serviceNames.map(name => workloadSource(kustomizationPath, name));
+  const broker = resources.find(resource => resource.metadata.name === 'identity-broker');
+  for (const container of broker.spec.template.spec.containers ?? []) {
+    for (const source of container.envFrom ?? []) {
+      if (source.configMapRef?.name === brokerRuntimeConfigName) {
+        source.configMapRef.name = brokerConfigMapReference;
+      }
+    }
+  }
   for (const image of source.images) {
     const oldImage = `${image.name}:`;
     const newImage = `${image.newName}@${image.digest}`;
@@ -266,6 +281,7 @@ function renderedRoot(kustomizationPath) {
   }
   return [
     'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: agentweaver\n  labels:\n    pod-security.kubernetes.io/enforce: restricted\n',
+    ...Array.from({ length: brokerConfigMapCount }, () => stringify(brokerRuntimeConfig)),
     stringify(runtimeConfig),
     stringify(environmentRuntimeConfig),
     stringify(agentHostRuntimeConfig),
@@ -276,6 +292,9 @@ function renderedRoot(kustomizationPath) {
 function fakeExec(calls, {
   failedJob, failedRollout, missingProjectsConfigClientId, liveImageRefs, distinctDigests = false,
   liveRuntimeConfig = runtimeConfig, denyRuntimeConfigDelete = false,
+  liveBrokerRuntimeConfig = brokerRuntimeConfig, missingBrokerRuntimeConfig = false,
+  brokerConfigMapReadFailure = false, brokerConfigMapReadOutput,
+  brokerConfigMapCount = 1, brokerConfigMapReference = brokerRuntimeConfigName,
   liveAgentHostSettings = {}, failApplyCount = 0, remainingPodPolls = 0, podList, state,
   denyEnvironmentPermission, denyRuntimePermission, missingAgentHostTls = false,
   wrongAgentHostTlsType = false,
@@ -292,6 +311,9 @@ function fakeExec(calls, {
   };
   live.configMaps['agenthost-runtime-v1'] ??= withIdentity(agentHostRuntimeConfig);
   live.configMaps['environment-runtime-config'] ??= withIdentity(environmentRuntimeConfig);
+  if (!missingBrokerRuntimeConfig) {
+    live.configMaps[brokerRuntimeConfigName] ??= withIdentity(liveBrokerRuntimeConfig);
+  }
   let podPolls = remainingPodPolls;
   let podListIndex = 0;
   let failedApplies = failApplyCount;
@@ -373,6 +395,12 @@ function fakeExec(calls, {
     }
     if (args[0] === 'get' && args[1] === 'configmap') {
       const name = args[2];
+      if (name === brokerRuntimeConfigName && brokerConfigMapReadFailure) {
+        return { status: 1, stdout: 'private-response-value', stderr: 'private-error-value' };
+      }
+      if (name === brokerRuntimeConfigName && brokerConfigMapReadOutput !== undefined) {
+        return { status: 0, stdout: brokerConfigMapReadOutput, stderr: '' };
+      }
       const resource = name === 'projects-config-runtime-config'
         ? live.runtimeConfig
         : live.configMaps[name];
@@ -433,7 +461,10 @@ function fakeExec(calls, {
       const relative = path.relative(calls[0].options.cwd, args[1]).replaceAll('\\', '/');
       if (relative === 'deploy/k8s') {
         calls.at(-1).renderedImages = parse(readFileSync(path.join(args[1], 'kustomization.yaml'), 'utf8')).images;
-        return { status: 0, stdout: renderedRoot(path.join(args[1], 'kustomization.yaml')), stderr: '' };
+        return { status: 0, stdout: renderedRoot(path.join(args[1], 'kustomization.yaml'), {
+          brokerConfigMapCount,
+          brokerConfigMapReference,
+        }), stderr: '' };
       }
       if (relative.endsWith('migrations/p1-postgres')) {
         return { status: 0, stdout: [
@@ -544,6 +575,11 @@ function fakeExec(calls, {
     assert.fail(`unexpected AgentHost registry request: ${value}`);
   };
   return exec;
+}
+
+function kubernetesWriteCalls(calls) {
+  const writes = new Set(['create', 'delete', 'apply', 'scale', 'annotate', 'patch', 'replace']);
+  return calls.filter(call => call.command === 'kubectl' && writes.has(call.args[0]));
 }
 
 test('v1 image workflow builds the ten existing Kustomize images from exact source commits', () => {
@@ -664,6 +700,134 @@ test('v1 workload deployment is operator-run rather than a hosted AKS workflow',
   assert.match(runbook, /az login/);
   assert.match(runbook, /npm run deploy:kustomize -- --image-manifest/);
   assert.doesNotMatch(runbook, /gh workflow run .*v1-deploy/);
+});
+
+test('Broker preflight accepts an exact order-independent match and omits the immutable map from apply', async () => {
+  const directory = scratch();
+  const calls = [];
+  const liveBrokerRuntimeConfig = structuredClone(brokerRuntimeConfig);
+  liveBrokerRuntimeConfig.data = Object.fromEntries(Object.entries(liveBrokerRuntimeConfig.data).reverse());
+  try {
+    await deployKustomize({ imageTag: selectedTag }, {
+      root: directory, exec: fakeExec(calls, { liveBrokerRuntimeConfig }), log() {},
+    });
+
+    const brokerRead = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'get' &&
+      call.args[1] === 'configmap' && call.args[2] === brokerRuntimeConfigName);
+    const firstWrite = calls.findIndex(call => kubernetesWriteCalls([call]).length > 0);
+    const apply = calls.find(call => call.command === 'kubectl' && call.args[0] === 'apply');
+    const appliedResources = parse(apply.options.input).items;
+    assert.ok(brokerRead >= 0 && brokerRead < firstWrite);
+    assert.equal(appliedResources.some(resource =>
+      resource.kind === 'ConfigMap' && resource.metadata.name === brokerRuntimeConfigName), false);
+    assert.equal(calls.some(call => call.command === 'kubectl' &&
+      ['create', 'delete'].includes(call.args[0]) &&
+      (call.args[1] === 'configmap' && call.args[2] === brokerRuntimeConfigName ||
+        call.args[0] === 'create' && parse(call.options.input).kind === 'ConfigMap' &&
+          parse(call.options.input).metadata.name === brokerRuntimeConfigName)), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Broker preflight rejects any data drift before Kubernetes writes without exposing values', async () => {
+  const cases = [
+    ['leaf pin', config => { config.data.IdentityBroker__RunBinding__ProjectsServerCertificateSha256 = 'private-pin-value'; },
+      'data[IdentityBroker__RunBinding__ProjectsServerCertificateSha256]'],
+    ['unrelated value', config => { config.data.IdentityBroker__Issuer = 'private-issuer-value'; },
+      'data[IdentityBroker__Issuer]'],
+    ['extra key', config => { config.data.extra = 'private-extra-value'; }, 'data[extra]'],
+    ['missing key', config => { delete config.data.IdentityBroker__Issuer; }, 'data[IdentityBroker__Issuer]'],
+    ['non-string value', config => { config.data.IdentityBroker__Issuer = { value: 'private-object-value' }; },
+      'data[IdentityBroker__Issuer]'],
+    ['binaryData', config => { config.binaryData = { 'private.bin': 'private-binary-value' }; },
+      'binaryData[private.bin]'],
+  ];
+  for (const [name, change, key] of cases) {
+    const directory = scratch();
+    const calls = [];
+    const logs = [];
+    const liveBrokerRuntimeConfig = structuredClone(brokerRuntimeConfig);
+    change(liveBrokerRuntimeConfig);
+    const kustomizationPath = path.join(directory, 'deploy', 'k8s', 'kustomization.yaml');
+    const originalKustomization = readFileSync(kustomizationPath, 'utf8');
+    try {
+      await assert.rejects(deployKustomize({ imageTag: selectedTag }, {
+        root: directory, exec: fakeExec(calls, { liveBrokerRuntimeConfig }),
+        log: message => logs.push(message),
+      }), error => {
+        assert.match(error.message, /differs from the rendered candidate/);
+        assert.ok(error.message.includes(key), error.message);
+        assert.doesNotMatch(error.message, /private-(?:pin|issuer|extra|binary|object)-value/);
+        return true;
+      }, name);
+      assert.deepEqual(kubernetesWriteCalls(calls), [], name);
+      assert.equal(readFileSync(kustomizationPath, 'utf8'), originalKustomization, name);
+      assert.equal(logs.some(message => /private-(?:pin|issuer|extra|binary|object)-value/.test(message)), false, name);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test('Broker preflight fails closed for unreadable, malformed, missing, or invalid resources', async () => {
+  const cases = [
+    ['missing live map', { missingBrokerRuntimeConfig: true }, /Live ConfigMap\/identity-broker-runtime-config-v3 is missing/],
+    ['read failure', { brokerConfigMapReadFailure: true }, /Could not read ConfigMap\/identity-broker-runtime-config-v3/],
+    ['malformed JSON', { brokerConfigMapReadOutput: 'private malformed response' }, /invalid JSON/],
+    ['wrong identity', {
+      liveBrokerRuntimeConfig: {
+        ...structuredClone(brokerRuntimeConfig),
+        kind: 'Secret',
+      },
+    }, /kind/],
+    ['wrong API version', {
+      liveBrokerRuntimeConfig: { ...structuredClone(brokerRuntimeConfig), apiVersion: 'v2' },
+    }, /apiVersion/],
+    ['wrong map name', {
+      liveBrokerRuntimeConfig: {
+        ...structuredClone(brokerRuntimeConfig),
+        metadata: { ...brokerRuntimeConfig.metadata, name: 'other-config' },
+      },
+    }, /metadata\.name/],
+    ['wrong namespace', {
+      liveBrokerRuntimeConfig: {
+        ...structuredClone(brokerRuntimeConfig),
+        metadata: { ...brokerRuntimeConfig.metadata, namespace: 'other-namespace' },
+      },
+    }, /metadata\.namespace/],
+    ['mutable map', {
+      liveBrokerRuntimeConfig: { ...structuredClone(brokerRuntimeConfig), immutable: false },
+    }, /immutable/],
+    ['malformed data map', {
+      liveBrokerRuntimeConfig: { ...structuredClone(brokerRuntimeConfig), data: [] },
+    }, /data/],
+    ['malformed binaryData map', {
+      liveBrokerRuntimeConfig: { ...structuredClone(brokerRuntimeConfig), binaryData: 'private-binary-value' },
+    }, /binaryData/],
+    ['missing rendered map', { brokerConfigMapCount: 0 }, /exactly one ConfigMap/],
+    ['duplicate rendered map', { brokerConfigMapCount: 2 }, /exactly one ConfigMap/],
+    ['wrong Deployment reference', { brokerConfigMapReference: 'other-config' }, /deployment\/identity-broker/],
+  ];
+  for (const [name, options, expected] of cases) {
+    const directory = scratch();
+    const calls = [];
+    const kustomizationPath = path.join(directory, 'deploy', 'k8s', 'kustomization.yaml');
+    const originalKustomization = readFileSync(kustomizationPath, 'utf8');
+    try {
+      await assert.rejects(deployKustomize({ imageTag: selectedTag }, {
+        root: directory, exec: fakeExec(calls, options), log() {},
+      }), error => {
+        assert.match(error.message, expected, name);
+        assert.doesNotMatch(error.message, /private-response-value|private-error-value|private malformed response/, name);
+        return true;
+      });
+      assert.deepEqual(kubernetesWriteCalls(calls), [], name);
+      assert.equal(readFileSync(kustomizationPath, 'utf8'), originalKustomization, name);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
 });
 
 test('active installer stamps the selected AgentHost platform digest and measured bytes into both resources', async () => {
@@ -1165,7 +1329,7 @@ test('selective deployment replaces the Projects ConfigMap with run-binding TLS 
     ProjectsConfig__Tls__CertificatePath: '/var/run/projects-config-tls/tls.crt',
     ProjectsConfig__Tls__KeyPath: '/var/run/projects-config-tls/tls.key',
     ProjectsConfig__Tls__ServerCertificateSha256:
-      '2f8d3d969428d8ca3b33d1a083a2fc80da34ed54111d65eaf7a87c3a0240f053',
+      'd55bd61d14cd86a3b00a6911d763561bb904000be5b433d065d11d600d6e9fe9',
   });
   liveRuntimeConfig.data.AgentHost__ModelBindingsRevision = 'old-revision';
   const projectConfigDeployment = workloadSource(path.join(directory, 'deploy', 'k8s', 'kustomization.yaml'),
@@ -1213,8 +1377,12 @@ test('selective deployment replaces the Projects ConfigMap with run-binding TLS 
     const firstScaleUp = calls.findIndex(call => call.command === 'kubectl' &&
       call.args[0] === 'scale' && call.args[2] === '--replicas=3');
     const firstApply = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'apply');
+    const brokerRead = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'get' &&
+      call.args[1] === 'configmap' && call.args[2] === brokerRuntimeConfigName);
+    const firstWrite = calls.findIndex(call => kubernetesWriteCalls([call]).length > 0);
     assert.ok(firstScaleDown < firstDelete && firstDelete < firstCreate &&
       firstCreate < firstScaleUp && firstScaleUp < firstApply);
+    assert.ok(brokerRead >= 0 && brokerRead < firstWrite);
     assert.equal(calls[firstDelete].args[2], 'projects-config-runtime-config');
     const replacedRuntimeConfig = parse(calls[firstCreate].options.input);
     assert.equal(replacedRuntimeConfig.metadata.name, 'projects-config-runtime-config');
@@ -1225,10 +1393,12 @@ test('selective deployment replaces the Projects ConfigMap with run-binding TLS 
     assert.equal(replacedRuntimeConfig.data.ProjectsConfig__Tls__KeyPath,
       '/var/run/projects-config-tls/tls.key');
     assert.equal(replacedRuntimeConfig.data.ProjectsConfig__Tls__ServerCertificateSha256,
-      '2f8d3d969428d8ca3b33d1a083a2fc80da34ed54111d65eaf7a87c3a0240f053');
+      'd55bd61d14cd86a3b00a6911d763561bb904000be5b433d065d11d600d6e9fe9');
     assert.equal(state.deployments['projects-config'].spec.replicas, 3);
     assert.equal(state.deployments['projects-config'].metadata.annotations[restoreReplicasAnnotation], '3');
     const appliedResources = parse(calls[firstApply].options.input).items;
+    assert.equal(appliedResources.some(resource =>
+      resource.kind === 'ConfigMap' && resource.metadata.name === brokerRuntimeConfigName), false);
     const appliedRuntimeConfig = appliedResources.find(resource =>
       resource.kind === 'ConfigMap' && resource.metadata.name === 'projects-config-runtime-config');
     assert.equal(appliedRuntimeConfig.data.ProjectsConfig__Authentication__BrokerRunBindingAudience,
@@ -1238,7 +1408,7 @@ test('selective deployment replaces the Projects ConfigMap with run-binding TLS 
     assert.equal(appliedRuntimeConfig.data.ProjectsConfig__Tls__KeyPath,
       '/var/run/projects-config-tls/tls.key');
     assert.equal(appliedRuntimeConfig.data.ProjectsConfig__Tls__ServerCertificateSha256,
-      '2f8d3d969428d8ca3b33d1a083a2fc80da34ed54111d65eaf7a87c3a0240f053');
+      'd55bd61d14cd86a3b00a6911d763561bb904000be5b433d065d11d600d6e9fe9');
     const appliedProjectsDeployment = appliedResources.find(resource =>
       resource.kind === 'Deployment' && resource.metadata.name === 'projects-config');
     assert.equal(appliedProjectsDeployment.spec.replicas, 3);
@@ -1248,6 +1418,10 @@ test('selective deployment replaces the Projects ConfigMap with run-binding TLS 
     const callsBeforeRetry = calls.length;
     await deployKustomize({ imageManifest: manifestPath }, options);
     const retryCalls = calls.slice(callsBeforeRetry);
+    const retryBrokerRead = retryCalls.findIndex(call => call.command === 'kubectl' &&
+      call.args[0] === 'get' && call.args[1] === 'configmap' && call.args[2] === brokerRuntimeConfigName);
+    const retryFirstWrite = retryCalls.findIndex(call => kubernetesWriteCalls([call]).length > 0);
+    assert.ok(retryBrokerRead >= 0 && retryBrokerRead < retryFirstWrite);
     assert.equal(retryCalls.some(call => call.command === 'kubectl' && call.args[0] === 'delete'), false);
     assert.equal(retryCalls.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
       parse(call.options.input).kind === 'ConfigMap'), false);

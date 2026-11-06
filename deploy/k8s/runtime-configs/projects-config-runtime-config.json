@@ -17,7 +17,7 @@
     "ProjectsConfig__Authentication__BrokerRunBindingAudience": "https://projects.agentweaver.io/run-binding",
     "ProjectsConfig__Tls__CertificatePath": "/var/run/projects-config-tls/tls.crt",
     "ProjectsConfig__Tls__KeyPath": "/var/run/projects-config-tls/tls.key",
-    "ProjectsConfig__Tls__ServerCertificateSha256": "2f8d3d969428d8ca3b33d1a083a2fc80da34ed54111d65eaf7a87c3a0240f053",
+    "ProjectsConfig__Tls__ServerCertificateSha256": "d55bd61d14cd86a3b00a6911d763561bb904000be5b433d065d11d600d6e9fe9",
     "ProjectsConfig__Knowledge__BaseAddress": "https://knowledge.agentweaver.svc.cluster.local:8443/",
     "ProjectsConfig__PrivilegedSetup__ApprovedIssuer": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
     "ProjectsConfig__PrivilegedSetup__ApprovedTenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47",

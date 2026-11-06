@@ -139,6 +139,15 @@ rollback. Before retrying a failed migration, have an authorized operator
 diagnose the cause and state. Verify schema compatibility before choosing an
 older image.
 
+Before any migration or Kubernetes write, the helper requires the live
+`identity-broker-runtime-config-v3` ConfigMap to match the rendered Broker map,
+including its identity, `immutable` flag, `data`, and `binaryData`. It also
+checks that the Broker Deployment references this map. A missing, malformed,
+or different map stops the command before writes. The helper reports changed
+field or key names without values. After a successful check, it omits the
+unchanged immutable map from the final apply. It does not create, replace, or
+repair the map; use a separately reviewed design for those cases.
+
 When `environment-runtime-config` changes, the helper checks permissions
 before writes, stops the Environment Deployment, waits for its Pods and the
 immutable ConfigMap cache window, then replaces only the observed map with
