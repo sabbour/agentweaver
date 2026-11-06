@@ -9,6 +9,7 @@
     "release:plan": "node scripts/release/plan.mjs releases/foundation.json",
     "release:apply": "node scripts/release/apply.mjs artifacts/release/plan.json releases/foundation.json",
     "deploy:kustomize": "node scripts/release/deploy-kustomize.mjs",
+    "azure:deploy-from-commit": "node scripts/release/deploy-from-commit.mjs",
     "harness:p1": "node scripts/harness-shared/run-p1.mjs",
     "harness:p1:signin-run": "node scripts/harness-shared/p1-signin-run.mjs",
     "test:release": "node --test scripts/release/tests/*.test.mjs",
