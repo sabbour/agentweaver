@@ -13,6 +13,7 @@ import {
 import { IMAGE_REPOSITORIES } from './image-repositories.mjs';
 import { measureAgentHostRegistryImage } from './registry.mjs';
 import { run, redact } from '../azure/lib/exec.mjs';
+import { preserveIdentityBrokerProviderSetup } from '../azure/lib/identity-broker-provider-setup.mjs';
 
 const REGISTRY = 'ghcr.io/sabbour';
 const NAMESPACE = 'agentweaver';
@@ -404,7 +405,7 @@ function brokerRuntimeConfigDifferences(live, candidate) {
   return [...differences].sort();
 }
 
-function preflightBrokerRuntimeConfig(exec, context, root, candidate) {
+function preflightBrokerRuntimeConfig(exec, context, root, candidate, resources) {
   let result;
   try {
     result = exec('kubectl', [
@@ -434,6 +435,12 @@ function preflightBrokerRuntimeConfig(exec, context, root, candidate) {
   if (differences.length) {
     fail(`Live ConfigMap/${BROKER_RUNTIME_CONFIG} differs from the rendered candidate: ${differences.join(', ')}.`);
   }
+  const liveDeployment = readExistingDeployment(exec, context, root, 'identity-broker');
+  if (!liveDeployment) return undefined;
+  return preserveIdentityBrokerProviderSetup(resources, liveDeployment, name =>
+    name === BROKER_RUNTIME_CONFIG
+      ? live
+      : readExistingNamedRuntimeConfigMap(exec, context, root, name), root);
 }
 
 function deploymentReplicas(deployment, name = 'projects-config') {
@@ -1025,7 +1032,12 @@ export async function deployKustomize(options, overrides = {}) {
     }
     stampAgentHostRuntime(resources, agentHostTuple);
     const brokerRuntimeConfig = findBrokerRuntimeConfig(resources);
-    preflightBrokerRuntimeConfig(exec, context, root, brokerRuntimeConfig);
+    const providerSetup = preflightBrokerRuntimeConfig(exec, context, root, brokerRuntimeConfig, resources);
+    if (providerSetup?.configMap) {
+      log(`Preserved Identity Broker provider setup from ConfigMap/${providerSetup.configMap}.`);
+    }
+    const brokerDeployment = resources.find(resource =>
+      resource.kind === 'Deployment' && resource.metadata?.name === 'identity-broker');
     const runtimeConfig = resources.find(resource => resource.kind === 'ConfigMap' &&
       resource.metadata?.name === PROJECTS_CONFIG_RUNTIME_CONFIG);
     if (!runtimeConfig) fail(`Kustomize must render ConfigMap/${PROJECTS_CONFIG_RUNTIME_CONFIG}.`);
@@ -1105,7 +1117,8 @@ export async function deployKustomize(options, overrides = {}) {
     const workloads = {
       apiVersion: 'v1',
       kind: 'List',
-      items: resources.filter(resource => resource.kind !== 'Namespace' && resource !== brokerRuntimeConfig),
+      items: resources.filter(resource => resource.kind !== 'Namespace' &&
+        resource !== brokerRuntimeConfig && resource !== brokerDeployment),
     };
     const jobs = migrationJobs(root, exec, context, digests, requestedImages.keys());
 
@@ -1133,6 +1146,18 @@ export async function deployKustomize(options, overrides = {}) {
 
     kubectl(exec, context, ['apply', '--filename', '-'], root, 'Workload apply failed',
       { input: stringify(workloads) });
+    if (providerSetup) {
+      const patch = [
+        { op: 'test', path: '/metadata/uid', value: providerSetup.deploymentUid },
+        { op: 'test', path: '/metadata/resourceVersion', value: providerSetup.deploymentResourceVersion },
+        { op: 'replace', path: '/spec', value: brokerDeployment.spec },
+      ];
+      kubectl(exec, context, ['patch', 'deployment/identity-broker', '--type=json',
+        '--patch', JSON.stringify(patch)], root, 'Identity Broker Deployment update failed');
+    } else {
+      kubectl(exec, context, ['create', '--filename', '-'], root,
+        'Could not create deployment/identity-broker', { input: stringify(brokerDeployment) });
+    }
     log(`Applied Kustomize workloads to ${context}/${NAMESPACE}.`);
 
     for (const name of deployments) {

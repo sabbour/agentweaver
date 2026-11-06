@@ -48,6 +48,11 @@
       "docs": ["docs/architecture/identity-secrets.md"]
     },
     {
+      "name": "v1-identity-provider-setup",
+      "concept": "Identity Broker GitHub provider configuration and recovery",
+      "docs": ["docs/guide/deploy-to-azure.md"]
+    },
+    {
       "name": "v1-outbox-inbox",
       "concept": "PostgreSQL outbox and inbox delivery",
       "docs": ["docs/architecture/persistence-objects.md"]

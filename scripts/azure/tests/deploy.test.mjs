@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDeployArgs, cliConfig, cliOptions, deploy } from '../deploy.mjs';
+import {
+  buildDeployArgs, cliConfig, cliOptions, deploy, setupIdentityBrokerProviders,
+} from '../deploy.mjs';
 import {
   fixture, source, fakeAzure, ids, tags, deploymentOutputs,
 } from './fixtures/target.mjs';
@@ -57,6 +59,30 @@ test('identity PostgreSQL bootstrap is a separate default-off deployment option'
   assert.equal(cliOptions['bootstrap-identity-postgres'].default, false);
   assert.equal(cliConfig({}).bootstrapIdentityPostgres, false);
   assert.equal(cliConfig({ 'bootstrap-identity-postgres': true }).bootstrapIdentityPostgres, true);
+});
+
+test('provider setup uses explicit input, mode, output, and revision options', async () => {
+  const values = {
+    'identity-broker-provider-config': 'provider-input.json',
+    'identity-broker-provider-mode': 'activate',
+    'identity-broker-provider-output': 'provider-plan.json',
+    'expected-identity-broker-config-resource-version': 'config-rv',
+    'expected-identity-broker-deployment-resource-version': 'deployment-rv',
+  };
+  assert.deepEqual(Object.keys(values).map(name => cliOptions[name].type), [
+    'string', 'string', 'string', 'string', 'string',
+  ]);
+  const config = cliConfig(values);
+  assert.equal(config.identityBrokerProviderConfig, 'provider-input.json');
+  assert.equal(config.identityBrokerProviderMode, 'activate');
+  assert.equal(config.identityBrokerProviderOutput, 'provider-plan.json');
+  assert.equal(config.expectedConfigResourceVersion, 'config-rv');
+  assert.equal(config.expectedDeploymentResourceVersion, 'deployment-rv');
+  await assert.rejects(setupIdentityBrokerProviders({
+    ...config,
+    execute: true,
+  }), error => error.error === 'identity_broker_provider_input_invalid' &&
+    error.details.field === '--execute');
 });
 
 test('Probe PostgreSQL bootstrap is independently default-off and never runs in a plan', async () => {

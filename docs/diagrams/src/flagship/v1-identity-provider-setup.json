@@ -1,0 +1,217 @@
+{
+  "$schema": "../sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Identity Broker GitHub provider setup",
+  "alt": "The installer renders a deterministic offline plan from non-secret input and local source. It prints exact callback and setup URLs for manual provider registration. Activation checks the selected target, source drift, and expected ConfigMap and Deployment resource versions. It creates an immutable successor map before a JSON patch that changes only provider environment values, the explicit OAuth Secret reference, the active map reference, and a fingerprint. The installer reads back active state, keeps the old map, and reports readback after a partial failure. It never reads Secret data or automates provider registration.",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "operator",
+      "label": "Operator",
+      "subLabel": "Approved non-production target",
+      "icon": "user",
+      "fluentIcon": "person",
+      "badge": { "text": "Manual", "tone": "neutral" }
+    },
+    {
+      "id": "installer",
+      "label": "Azure installer",
+      "subLabel": "deploy.mjs provider setup mode",
+      "icon": "server",
+      "fluentIcon": "code",
+      "badge": { "text": "Source", "tone": "teal" }
+    },
+    {
+      "id": "kubernetes",
+      "label": "Kubernetes API",
+      "subLabel": "agentweaver namespace",
+      "icon": "server",
+      "fluentIcon": "cloud",
+      "badge": { "text": "Target", "tone": "green" }
+    },
+    {
+      "id": "broker",
+      "label": "Identity Broker",
+      "subLabel": "Provider settings and Secret reference",
+      "icon": "server",
+      "fluentIcon": "identity",
+      "badge": { "text": "Workload", "tone": "neutral" }
+    }
+  ],
+  "steps": [
+    {
+      "type": "note",
+      "over": ["operator", "installer"],
+      "label": "Render reads local source and non-secret JSON only. No network, authentication, browser, Secret data, or cluster access."
+    },
+    {
+      "type": "message",
+      "from": "operator",
+      "to": "installer",
+      "label": "Render: input JSON and new output path",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "installer",
+      "to": "operator",
+      "label": "Deterministic map plan and callback checklist",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "note",
+      "over": ["operator", "installer"],
+      "label": "Register the printed Redirect URI and Setup URL manually in provider settings. No registration API call."
+    },
+    {
+      "type": "message",
+      "from": "operator",
+      "to": "installer",
+      "label": "Activate: target and expected ConfigMap/Deployment resource versions",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "installer",
+      "to": "kubernetes",
+      "label": "Read v3 map, active map, and Deployment",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "kubernetes",
+      "to": "installer",
+      "label": "Resource versions, UIDs, and non-secret config; no Secret data",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "Revision and effective-settings checks",
+      "sections": [
+        {
+          "label": "stale revision or source drift",
+          "steps": [
+            {
+              "type": "message",
+              "from": "installer",
+              "to": "operator",
+              "label": "Typed conflict; no resource write",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        },
+        {
+          "label": "same effective settings and Secret reference",
+          "steps": [
+            {
+              "type": "message",
+              "from": "installer",
+              "to": "operator",
+              "label": "No-op; no rollout or rotation",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        },
+        {
+          "label": "effective settings changed",
+          "steps": [
+            {
+              "type": "message",
+              "from": "installer",
+              "to": "kubernetes",
+              "label": "Create immutable successor ConfigMap",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "kubernetes",
+              "to": "installer",
+              "label": "Read back map UID and data",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "installer",
+              "to": "kubernetes",
+              "label": "Patch tests Deployment UID/resourceVersion; sets provider env, Secret ref, map, and fingerprint",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "kubernetes",
+              "to": "broker",
+              "label": "Roll out Broker with explicit SecretKeyRef",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "fragment",
+              "operator": "alt",
+              "label": "Rollout and readback",
+              "sections": [
+                {
+                  "label": "rollout ready",
+                  "steps": [
+                    {
+                      "type": "message",
+                      "from": "installer",
+                      "to": "kubernetes",
+                      "label": "Read active map, Deployment generation, and readiness",
+                      "line": "solid",
+                      "arrow": "filled"
+                    },
+                    {
+                      "type": "message",
+                      "from": "installer",
+                      "to": "operator",
+                      "label": "Verified active map; old map retained",
+                      "line": "dashed",
+                      "arrow": "open"
+                    }
+                  ]
+                },
+                {
+                  "label": "write or rollout uncertain",
+                  "steps": [
+                    {
+                      "type": "message",
+                      "from": "installer",
+                      "to": "kubernetes",
+                      "label": "Read active map UID/hash and Deployment readiness",
+                      "line": "solid",
+                      "arrow": "filled"
+                    },
+                    {
+                      "type": "message",
+                      "from": "installer",
+                      "to": "operator",
+                      "label": "Partial failure with readback; inspect before retry",
+                      "line": "dashed",
+                      "arrow": "open"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "note",
+      "over": ["kubernetes", "broker"],
+      "label": "Explicit SecretKeyRef overrides a matching envFrom key. Other envFrom sources remain; no Secret values are read."
+    }
+  ]
+}

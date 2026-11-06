@@ -199,6 +199,9 @@ function errorCode(value: unknown): string | undefined {
 
 function errorMessage(value: unknown, status: number): string {
   const code = errorCode(value);
+  if (code === 'github_repo_app_not_configured') {
+    return 'GitHub Repo App is not configured. Ask an operator to configure the Identity Broker provider.';
+  }
   return code
     ? `The GitHub app request failed with HTTP ${status} (${code}).`
     : `The GitHub app request failed with HTTP ${status}.`;

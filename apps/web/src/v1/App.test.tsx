@@ -1861,6 +1861,29 @@ describe('v1 web project scoping', () => {
     )).toBeNull();
   });
 
+  it('shows an operator action when the Repo App provider is not configured', async () => {
+    const { RepoAppBrokerError } = await import('./repoApp');
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    const selection = selectionSnapshot('p1', 'r1');
+    selection.projectConfiguration.sourceControl = {
+      authMode: 'githubApp',
+      appConnectionId: 'identity-app-1',
+    };
+    mocks.getRunSelection.mockResolvedValue(selection);
+    mocks.getRepoAppStatus.mockRejectedValue(new RepoAppBrokerError(
+      503,
+      'github_repo_app_not_configured',
+      'GitHub Repo App is not configured. Ask an operator to configure the Identity Broker provider.',
+    ));
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=changes');
+    render(<App />);
+
+    expect(await screen.findByText(
+      'GitHub Repo App is not configured. Ask an operator to configure the Identity Broker provider.',
+    )).toBeTruthy();
+  });
+
   it('defaults invalid run view queries to Chat while preserving other query parameters', async () => {
     mocks.binding = { projectId: 'p1', runId: 'r1' };
     configureRunSnapshots('p1', 'r1');
