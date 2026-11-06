@@ -10,6 +10,7 @@ import {
   replaceImmutableRuntimeConfigMaps,
   verifyImmutableRuntimeConfigMapReplacementPermissions,
 } from './immutable-runtime-config-maps.mjs';
+import { IMAGE_REPOSITORIES } from './image-repositories.mjs';
 import { measureAgentHostRegistryImage } from './registry.mjs';
 import { run, redact } from '../azure/lib/exec.mjs';
 
@@ -52,18 +53,6 @@ export const ENVIRONMENT_RBAC_REQUIREMENTS = [
   }),
   ...rbacEntries('storage.k8s.io', 'storageclasses', ['get'], { cluster: true }),
   ...rbacEntries('', 'persistentvolumes', ['get', 'patch'], { cluster: true }),
-];
-const IMAGE_REPOSITORIES = [
-  'agentweaver-agenthost',
-  'agentweaver.identity.broker',
-  'agentweaver.eventsandsessions',
-  'agentweaver.gateway',
-  'agentweaver.mcp',
-  'agentweaver-web',
-  'agentweaver.orchestrator',
-  'agentweaver.environment',
-  'agentweaver.knowledge',
-  'agentweaver.projects.config',
 ];
 const DEPLOYMENTS = [
   'identity-broker',

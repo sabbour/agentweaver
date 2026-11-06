@@ -50,6 +50,38 @@ The manual run stops if the commit is not an ancestor of `origin/v1`. The
 workflow summary lists each pushed image digest. There are no image archives,
 publication receipts, or source-claim gates.
 
+## Deploy an exact v1 source commit
+
+Use this command for intermediate acceptance of a commit whose ten images are
+already published. Run it from the repository root on an operator machine with
+Azure CLI, `kubectl`, `kubelogin`, Docker Buildx, and Node.js 24. Select and
+confirm an approved non-production subscription and Kubernetes context first.
+The command runs migrations and applies workloads to that cluster, so use only
+the exact reviewed and trusted commit. Its `npm ci` runs package lifecycle
+scripts from that commit; review and trust the source before execution. The
+command requires the same AKS and namespace permissions as the local
+deployment command.
+
+Replace the placeholder with the commit's full lowercase 40-character SHA.
+
+```powershell
+npm run azure:deploy-from-commit -- <full-lowercase-40-character-commit-sha> --execute
+```
+
+The command fetches the current `origin/v1` and stops unless the selected
+commit is an ancestor. It creates a detached worktree at that exact commit,
+runs locked `npm ci` there, resolves all ten `sha-<commit>` GHCR tags to
+digests, and checks each image's OCI source commit and Git tree. It passes
+those immutable digests to the existing Kustomize deployment helper.
+
+The command does not switch branches or change tracked files in your current
+worktree. It runs the existing migration-first deployment, permission checks,
+selected-context apply, and nine Deployment rollouts. This command can change
+the selected cluster. A failure after a migration or apply can leave partial
+deployment state; follow the [local deployment recovery guidance](#deploy-workloads-locally).
+If Git cannot remove the temporary worktree, the command reports the path and
+leaves it in place.
+
 ## Deploy workloads locally
 
 For a local deployment that updates only selected repositories, use the JSON

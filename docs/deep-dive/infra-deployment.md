@@ -46,6 +46,7 @@ database grants before workloads can become ready.
 | `scripts/release/` | Component version planning, Kustomize image helpers, and shared registry reads |
 | `.github/workflows/v1-integration-images.yml` | Direct GHCR image builds for service changes |
 | `.github/workflows/v1-release-pack.yml` | NuGet package publication after component version changes |
+| `scripts/release/deploy-from-commit.mjs` | Exact-source intermediate acceptance deployment from a detached worktree |
 | `scripts/release/deploy-kustomize.mjs` | Local migration-first Kustomize deployment |
 
 The Azure acceptance verifier is `scripts/azure/verify-acceptance.mjs`.
@@ -56,6 +57,9 @@ The Azure acceptance verifier is `scripts/azure/verify-acceptance.mjs`.
   reports the registry digest.
 - The local deployment command resolves those tags to digests, runs the
   existing migration Jobs, then renders and applies the root Kustomize overlay.
+- `npm run azure:deploy-from-commit` checks all ten images against an ancestor of
+  `origin/v1`, then delegates their immutable digests to the same deployment
+  helper from a detached worktree at that source commit.
 - Shared services and per-Sandbox AgentHost placement have separate lifecycles.
 - Missing runtime prerequisites stop deployment. Rollout does not create new
   credentials or grant itself access.
