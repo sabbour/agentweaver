@@ -1,9 +1,12 @@
 ---
 "Agentweaver.Abstractions": minor
+"Agentweaver.AgentRuntime": patch
 "Agentweaver.Identity": minor
+"Agentweaver.Providers.Sandbox.AgentSandbox": patch
 "Agentweaver.Environment": patch
 "Agentweaver.Identity.Broker": patch
 "Agentweaver.Orchestrator": minor
+"Agentweaver.Projects.Config": patch
 "Agentweaver.Web": patch
 ---
 
