@@ -119,6 +119,7 @@ public sealed class EnvironmentEgressManagerTests
         bool canReadProjects = false,
         bool canReadSelection = true,
         bool canWrite = true,
+        bool canCancel = false,
         string? boundProjectId = null,
         string? boundRunId = null)
     {
@@ -135,6 +136,10 @@ public sealed class EnvironmentEgressManagerTests
             permissions.Add(new ProjectAuthorizationPermissionGrant(
                 ProjectAuthorizationPermission.WriteProjects,
                 6));
+        if (canCancel)
+            permissions.Add(new ProjectAuthorizationPermissionGrant(
+                ProjectAuthorizationPermission.CancelRun,
+                7));
         var authority = permissions.Count == 0
             ? ImmutableArray<EffectiveProjectAuthorization>.Empty
             : [
@@ -225,6 +230,43 @@ public sealed class EnvironmentEgressManagerTests
             tag => tag.Value is string value &&
                 new[] { TenantId, ProjectId, RunId, "validated.jwt.token", "api.github.com" }
                     .Contains(value, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task FirstStartCleanupUsesUnboundCancelPermissionWithoutReadingRunSelection()
+    {
+        var authorization = AuthorizationContext(
+            canReadProjects: true, canReadSelection: false, canWrite: false, canCancel: true);
+        var projects = new FakeProjectsConfigClient(authorization, Selection());
+        var manager = Manager(projects, new FakeCiliumPolicyResourceStore());
+
+        var current = await manager.GetAuthorizedRunCancellationContextAsync(
+            Caller(),
+            new EnvironmentOwnerIdentity(TenantId, ProjectId, RunId, EnvironmentId),
+            CancellationToken.None);
+
+        Assert.Equal("actor-a", current.ActorId);
+        Assert.Equal(2, projects.AuthorizationReads);
+        Assert.Equal(0, projects.SelectionReads);
+    }
+
+    [Fact]
+    public async Task FirstStartCleanupRejectsCallerWithoutCancelPermission()
+    {
+        var projects = new FakeProjectsConfigClient(
+            AuthorizationContext(canReadProjects: true, canReadSelection: false, canWrite: false),
+            Selection());
+        var manager = Manager(projects, new FakeCiliumPolicyResourceStore());
+
+        var exception = await Assert.ThrowsAsync<ProjectsConfigApiException>(() =>
+            manager.GetAuthorizedRunCancellationContextAsync(
+                Caller(),
+                new EnvironmentOwnerIdentity(TenantId, ProjectId, RunId, EnvironmentId),
+                CancellationToken.None));
+
+        Assert.Equal("run_cancel_permission_denied", exception.Code);
+        Assert.Equal(1, projects.AuthorizationReads);
+        Assert.Equal(0, projects.SelectionReads);
     }
 
     [Fact]

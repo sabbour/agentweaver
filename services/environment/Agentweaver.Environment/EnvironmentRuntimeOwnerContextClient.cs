@@ -23,6 +23,22 @@ public sealed class EnvironmentRuntimeOwnerContextClient(
             actor, null, cancellationToken);
     }
 
+    /// <summary>Reads the separate terminal projection with fresh unbound cancellation authority.</summary>
+    public async Task<RuntimeRunStartCleanupProjection> ReadCleanupAsync(
+        RuntimeActorAuthorization actor, string projectId, string runId, string sessionId,
+        CancellationToken cancellationToken)
+    {
+        if (options is null)
+            throw new RuntimeAuthorizationException("runtime_owner_context_unavailable");
+        var projection = await RuntimeOwnerHttpTransport.ReadRuntimeRunStartCleanupAsync<
+            RuntimeRunStartCleanupProjection>(
+                client, options.OrchestratorOwnerAddress,
+                $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}" +
+                $"/coordination/sessions/{Uri.EscapeDataString(sessionId)}/runtime-owner-context",
+                actor, cancellationToken).ConfigureAwait(false);
+        return projection.Validate();
+    }
+
     /// <summary>Reads Core's no-store current P1 binding using the same authenticated run-bound actor.</summary>
     public async Task<P1InvocationBinding?> ReadCurrentAsync(
         RuntimeActorAuthorization actor,

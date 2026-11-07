@@ -103,6 +103,25 @@ describe('New chat', () => {
     expect(window.sessionStorage.getItem(PENDING_CHAT_STORAGE_KEY)).toBeNull();
   });
 
+  it('opens the chat and keeps recovery when startup is accepted but still pending', async () => {
+    hoisted.gateway!.failNext('POST', '/api/v1/projects/p1/runs/run-1/start', {
+      status: 200,
+      body: {
+        runId: 'run-1',
+        rootSessionId: 'run-1-root',
+        state: 'started',
+        runtimeStartup: { state: 'pending', step: 'activation', failureCode: null },
+      },
+    });
+    renderPage();
+    fireEvent.click(await typeAndSend('Fix the flaky test'));
+
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/projects/p1/runs/run-1'));
+    expect(window.sessionStorage.getItem(PENDING_CHAT_STORAGE_KEY)).toContain('"runId":"run-1"');
+    expect(screen.queryByText('The chat was created but did not start.')).toBeNull();
+    expect(creates()).toHaveLength(1);
+  });
+
   it('reuses the Idempotency-Key when the first response is lost', async () => {
     // The server creates the run but the client never sees the response.
     hoisted.gateway!.failNext('POST', '/api/v1/projects/p1/runs', 'lost');

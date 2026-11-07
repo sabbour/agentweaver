@@ -79,9 +79,34 @@ describe('resumePendingRun', () => {
 
   it('starts and clears the record', async () => {
     savePendingRun(run);
-    const start = vi.fn().mockResolvedValue({ state: 'started' });
+    const start = vi.fn().mockResolvedValue({
+      state: 'started',
+      runtimeStartup: { state: 'ready', step: 'ready' },
+    });
     await expect(resumePendingRun({ ensureRunSession: async () => true, start })).resolves.toBe('started');
     expect(start).toHaveBeenCalledTimes(1);
+    expect(readPendingRun(created)).toBeNull();
+  });
+
+  it('keeps the record when the start response does not confirm runtime readiness', async () => {
+    savePendingRun(run);
+    const start = vi.fn().mockResolvedValue({ state: 'started' });
+
+    await expect(resumePendingRun({ ensureRunSession: async () => true, start }))
+      .rejects.toThrow('agent runtime status is unavailable');
+    expect(readPendingRun(created)).toEqual(run);
+  });
+
+  it('returns accepted pending startup and keeps the record until a ready replay', async () => {
+    savePendingRun(run);
+    const start = vi.fn()
+      .mockResolvedValueOnce({ state: 'started', runtimeStartup: { state: 'pending', step: 'activation' } })
+      .mockResolvedValueOnce({ state: 'started', runtimeStartup: { state: 'ready', step: 'ready' } });
+
+    await expect(resumePendingRun({ ensureRunSession: async () => true, start })).resolves.toBe('starting');
+    expect(readPendingRun(created)).toEqual(run);
+    await expect(resumePendingRun({ ensureRunSession: async () => true, start })).resolves.toBe('started');
+    expect(start).toHaveBeenCalledTimes(2);
     expect(readPendingRun(created)).toBeNull();
   });
 
@@ -90,7 +115,10 @@ describe('resumePendingRun', () => {
     const sleep = vi.fn().mockResolvedValue(undefined);
     const start = vi.fn()
       .mockRejectedValueOnce(gatewayError(504, 'run_start_timeout'))
-      .mockResolvedValueOnce({ state: 'started' });
+      .mockResolvedValueOnce({
+        state: 'started',
+        runtimeStartup: { state: 'ready', step: 'ready' },
+      });
     await expect(resumePendingRun({ ensureRunSession: async () => true, start, sleep })).resolves.toBe('started');
     expect(start).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledWith(1000);

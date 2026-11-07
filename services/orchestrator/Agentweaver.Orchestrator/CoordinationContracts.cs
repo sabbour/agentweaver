@@ -311,7 +311,10 @@ public sealed record AcceptedRoot(
     long ExecutionFence,
     long StateVersion,
     long LogicalTurnOrdinal,
-    string ExecutionState);
+    string ExecutionState)
+{
+    public RuntimeStartupSummary? RuntimeStartup { get; init; }
+}
 
 /// <summary>
 /// Request body for registering a child session under a parent session.
@@ -545,6 +548,9 @@ public sealed record SessionStatusSnapshot(
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MafExecutionRecoverySnapshot? ExecutionRecovery { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeStartupSummary? RuntimeStartup { get; init; }
 }
 
 /// <summary>

@@ -1216,6 +1216,7 @@ public static class ProjectConfigEndpoints
                 .WithName("GetBrokerRunBindingProof");
         }
 
+        app.MapP1ProjectSetupEndpoint();
         return app;
     }
 

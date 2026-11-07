@@ -357,14 +357,20 @@
         "services/environment/Agentweaver.Environment/EnvironmentDbContext.cs",
         "services/environment/Agentweaver.Environment/EnvironmentEndpoints.cs",
         "services/environment/Agentweaver.Environment/EnvironmentEgressManager.cs",
+        "services/environment/Agentweaver.Environment/EnvironmentRuntimeBootstrapEndpoints.cs",
+        "services/environment/Agentweaver.Environment/EnvironmentRuntimeBootstrapProfiles.cs",
+        "services/environment/Agentweaver.Environment/EnvironmentRuntimeOwnerContextClient.cs",
+        "services/environment/Agentweaver.Environment/EnvironmentRuntimeRunStartManager.cs",
         "services/environment/Agentweaver.Environment/EnvironmentLifecycleStore.cs",
         "services/environment/Agentweaver.Environment/EnvironmentSandboxLeaseStore.cs",
         "services/environment/Agentweaver.Environment/EnvironmentSandboxManager.cs",
         "services/environment/Agentweaver.Environment/Migrations/20261006170000_SandboxLeases.cs",
         "services/environment/Agentweaver.Environment/Program.cs",
         "tests/Agentweaver.Environment.Tests/AgentSandboxProviderTests.cs",
+        "tests/Agentweaver.Environment.Tests/EnvironmentEgressManagerTests.cs",
         "tests/Agentweaver.Environment.Tests/EnvironmentSandboxLeasePostgresTests.cs",
-        "tests/Agentweaver.Environment.Tests/EnvironmentSandboxManagerTests.cs"
+        "tests/Agentweaver.Environment.Tests/EnvironmentSandboxManagerTests.cs",
+        "tests/Agentweaver.Providers.Storage.AzureFiles.Tests/AzureFilesCsiWorkspaceVolumeProviderTests.cs"
       ],
       "required": [
         "docs/architecture/environment-sandbox.md",
@@ -508,7 +514,9 @@
       ],
       "required": [
         "docs/deep-dive/orchestration.md",
-        "docs/experience/runs-sessions.md"
+        "docs/experience/runs-sessions.md",
+        "docs/guide/testing.md",
+        "docs/guide/cli.md"
       ]
     },
     {
@@ -528,7 +536,8 @@
         "packages/Agentweaver.AgentRuntime/"
       ],
       "required": [
-        "docs/deep-dive/agent-runtime.md"
+        "docs/deep-dive/agent-runtime.md",
+        "docs/deep-dive/orchestration.md"
       ]
     },
     {

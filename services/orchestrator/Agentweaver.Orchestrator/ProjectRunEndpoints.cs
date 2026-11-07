@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Http;
 using Agentweaver.Abstractions;
 
@@ -48,6 +49,7 @@ public static partial class CoordinationEndpoints
         context.Response.Headers.CacheControl = "no-store";
         var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
         var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(context, projectId, runId, cancellationToken);
+        string? acceptedRootSessionId = null;
         async Task AcceptP1RootInTransaction(
             Npgsql.NpgsqlConnection connection,
             Npgsql.NpgsqlTransaction transaction,
@@ -74,6 +76,7 @@ public static partial class CoordinationEndpoints
             async (row, token) =>
             {
                 var identity = new SessionIdentity(projectId, runId, row.RootSessionId);
+                acceptedRootSessionId = row.RootSessionId;
                 if (row.P1SetupInvocationId is null)
                     await AcceptInteractiveRootAsync(projectId, runId, row.RootSessionId,
                         context, options, projects, events, store, decisions, token).ConfigureAwait(false);
@@ -100,7 +103,13 @@ public static partial class CoordinationEndpoints
             token => RequireUnchangedAuthorizedSelectionAsync(context, projectId, runId, selection, projects, token),
             cancellationToken,
             acceptRootInTransaction: AcceptP1RootInTransaction);
-        return Results.Ok(result);
+        acceptedRootSessionId ??= result.RootSessionId;
+        var runtimeStartup = acceptedRootSessionId is not null
+            ? await QueueRuntimeRunStartAsync(
+                projectId, runId, acceptedRootSessionId, context, options,
+                projects, store, decisions, cancellationToken).ConfigureAwait(false)
+            : null;
+        return Results.Ok(result with { RuntimeStartup = runtimeStartup });
     }, cancellationToken);
 
     /// <summary>Cancels project runs using fresh unbound Contributor, Owner, or tenant-admin authority.</summary>
@@ -114,7 +123,7 @@ public static partial class CoordinationEndpoints
         var key = RequireProjectRunIdempotencyKey(context);
         var selection = await projects.ReadSelectionForCancelAsync(context, projectId, runId, cancellationToken);
         var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
-        return Results.Ok(await store.CancelProjectRunAsync(actor, selection, key, request,
+        var result = await store.CancelProjectRunAsync(actor, selection, key, request,
             async token =>
             {
                 var refreshed = await projects.ReadSelectionForCancelAsync(context, projectId, runId, token);
@@ -123,7 +132,13 @@ public static partial class CoordinationEndpoints
                         CoordinationOwnerStore.HashSelection(selection.Selection))
                     throw new CoordinationException("accepted_run_conflict", StatusCodes.Status409Conflict);
             },
-            cancellationToken));
+            cancellationToken).ConfigureAwait(false);
+        var dispatcher = context.RequestServices.GetService<RuntimeRunStartDispatcher>();
+        if (dispatcher is not null)
+            await dispatcher.EnqueueCleanupAsync(
+                context, selection.Authorization.TenantId, projectId, runId, cancellationToken)
+                .ConfigureAwait(false);
+        return Results.Ok(result);
     }, cancellationToken);
 
     /// <summary>Shares root admission, budget checks, decision initialization and Events registration with the legacy root route.</summary>
@@ -162,6 +177,36 @@ public static partial class CoordinationEndpoints
         if (context.Request.Query.Count != 0 ||
             noBody && (context.Request.ContentLength is > 0 || context.Request.Headers.TransferEncoding.Count != 0))
             throw new CoordinationException("run_request_invalid", StatusCodes.Status400BadRequest);
+    }
+
+    private static async Task<RuntimeStartupSummary?> QueueRuntimeRunStartAsync(
+        string projectId,
+        string runId,
+        string rootSessionId,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        CoordinatorDecisionOwnerStore decisions,
+        CancellationToken cancellationToken)
+    {
+        var dispatcher = context.RequestServices.GetService<RuntimeRunStartDispatcher>();
+        if (dispatcher is null)
+            return null;
+        var owner = await ReadRuntimeOwnerContextCoreAsync(
+            projectId,
+            runId,
+            rootSessionId,
+            context,
+            options,
+            projects,
+            store,
+            decisions,
+            context.RequestServices.GetRequiredService<CoordinatorRunSelectionContextStore>(),
+            context.RequestServices.GetRequiredService<PostgresMafCheckpointStore>(),
+            cancellationToken,
+            allowCoordinatorRoot: true).ConfigureAwait(false);
+        return await dispatcher.EnqueueAsync(context, owner, cancellationToken).ConfigureAwait(false);
     }
 }
 

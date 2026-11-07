@@ -43,7 +43,10 @@ public sealed record CreateProjectRunResponse(
     string RunId, string RootSessionId, string State, ProjectRunBinding Binding);
 
 /// <summary>Identifies the durable run and root after first-message delivery.</summary>
-public sealed record StartProjectRunResponse(string RunId, string RootSessionId, string State);
+public sealed record StartProjectRunResponse(string RunId, string RootSessionId, string State)
+{
+    public RuntimeStartupSummary? RuntimeStartup { get; init; }
+}
 
 /// <summary>Optional explanation recorded with a cancellation, not an instruction to a runtime.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

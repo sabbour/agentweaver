@@ -425,6 +425,13 @@ authorization bound to both that exact project and run. Setup and run
 authorization must identify the same actor and tenant. An unbound token or
 refresh cannot stand in for exact-run authority.
 
+When a journey accepts a coordinator root and its first message, Orchestrator
+can report `runtimeStartup.state` as `pending` while it starts AgentHost in the
+background. Read the run's session status to check whether startup is still
+pending, ready, blocked, or cleaning up. Starting AgentHost does not send a
+model turn. A controlled CLI journey or a `pending` result does not prove that
+the Host is ready.
+
 `--dry-run` validates the manifest without network calls, authentication,
 browser launch, or evidence creation, even when `--interactive` is present.
 The intended distributed runner does not need Node.js, a .NET SDK/runtime,

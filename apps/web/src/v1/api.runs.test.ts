@@ -55,14 +55,22 @@ describe('Gateway run, metrics, and notification routes', () => {
   it('sends create and cancel with an idempotency key and start without a body', async () => {
     const { fetcher, client } = clientReturning(
       { status: 201, body: { runId: 'r1', rootSessionId: 's1', state: 'awaiting_binding', binding: {} } },
-      { body: { runId: 'r1', state: 'active' } },
+      {
+        body: {
+          runId: 'r1',
+          rootSessionId: 's1',
+          state: 'started',
+          runtimeStartup: { state: 'pending', step: 'placement', failureCode: null },
+        },
+      },
       { body: { runId: 'r1', state: 'cancelled', cancelledAt: '2026-01-01T00:00:00Z', alreadyTerminal: false } },
     );
 
     await client.createProjectRun('token', 'p1', { firstMessage: 'Hello', expectedProjectConfigRevision: 4 }, 'key-1');
-    await client.startProjectRun('run-token', 'p1', 'r1');
+    const started = await client.startProjectRun('run-token', 'p1', 'r1');
     await client.cancelProjectRun('token', 'p1', 'r1', 'key-2');
 
+    expect(started.runtimeStartup).toEqual({ state: 'pending', step: 'placement', failureCode: null });
     const [createUrl, createInit] = fetcher.mock.calls[0];
     expect(String(createUrl)).toBe(`${base}/projects/p1/runs`);
     expect(createInit?.method).toBe('POST');

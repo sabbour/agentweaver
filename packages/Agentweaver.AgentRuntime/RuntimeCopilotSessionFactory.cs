@@ -235,7 +235,7 @@ public sealed class RuntimeCopilotSessionFactory : IRuntimeHostedModelReasoningC
                 var recordedMaterial = recovery.Cache?.Material.Reference.Material;
                 var previousConfiguration = recovery.PreviousConfigurationBinding;
                 var previousModelBinding = recovery.PreviousModelBinding;
-                if (recovery.JournalEvidence is not null &&
+                if (recovery.Turns.Count > 0 && recovery.JournalEvidence is not null &&
                     previousConfiguration is null && previousModelBinding is null && recordedMaterial is null)
                     throw new RuntimeAuthorizationException("runtime_recovery_model_binding_unavailable");
                 if (previousConfiguration is not null &&

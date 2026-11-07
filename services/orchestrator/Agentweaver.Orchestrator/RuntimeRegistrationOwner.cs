@@ -60,7 +60,7 @@ internal sealed class RuntimeEnvironmentContextClient(
     public Task<EnvironmentRuntimeReadinessContext> ReadReadinessAsync(
         RuntimeActorAuthorization actor, string projectId, string runId, string sessionId,
         string environmentId, string profileId, CancellationToken cancellationToken) =>
-        RuntimeOwnerHttpTransport.SendAsync<EnvironmentRuntimeReadinessContext>(
+        RuntimeOwnerHttpTransport.SendRuntimeRunStartAsync<EnvironmentRuntimeReadinessContext>(
             client, options.EnvironmentOwnerAddress,
             $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}" +
             $"/environments/{Uri.EscapeDataString(environmentId)}/coordination/sessions/{Uri.EscapeDataString(sessionId)}" +
@@ -112,6 +112,43 @@ internal sealed class RuntimeRegistrationOwner(
             }).ConfigureAwait(false);
         var final = await DeriveCurrentBindingAsync(
             context, projectId, runId, sessionId, resolvedRequest, cancellationToken).ConfigureAwait(false);
+        RequireSame(derived, final);
+        return registration;
+    }
+
+    internal async Task<RuntimeRegistration> RegisterAsync(
+        RuntimeActorAuthorization actor,
+        RuntimeOwnerContext expectedOwner,
+        string environmentId,
+        string sourceProfileId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(expectedOwner);
+        if (expectedOwner.ContractVersion != 1 ||
+            expectedOwner.AgentId != CoordinationEndpoints.CoordinatorRuntimeAgentId ||
+            expectedOwner.LogicalTurnOrdinal != 0 ||
+            expectedOwner.ExecutionFence <= 0 ||
+            !actor.Bearer.IsUsable())
+            throw new RuntimeAuthorizationException("runtime_owner_context_stale");
+        RuntimeContractValidation.ValidateIdentifier(environmentId);
+        RuntimeContractValidation.ValidateIdentifier(sourceProfileId);
+        var request = new RegisterRuntimeRequest(environmentId,
+            await environment.ResolveProfileIdAsync(
+                actor, expectedOwner.ProjectId, expectedOwner.RunId, expectedOwner.SessionId,
+                environmentId, sourceProfileId, cancellationToken).ConfigureAwait(false));
+        var derived = await DeriveCurrentBindingAsync(
+            actor, expectedOwner, request, cancellationToken).ConfigureAwait(false);
+        var registration = await registrations.RegisterAsync(
+            derived.Binding, derived.ExpiresAt, cancellationToken,
+            async token =>
+            {
+                var current = await DeriveCurrentBindingAsync(
+                    actor, expectedOwner, request, token).ConfigureAwait(false);
+                RequireSame(derived, current);
+            }).ConfigureAwait(false);
+        var final = await DeriveCurrentBindingAsync(
+            actor, expectedOwner, request, cancellationToken).ConfigureAwait(false);
         RequireSame(derived, final);
         return registration;
     }
@@ -327,45 +364,70 @@ internal sealed class RuntimeRegistrationOwner(
             if ((firstOwner is not null && owner != firstOwner) || !credential.IsUsable())
                 throw new RuntimeAuthorizationException("runtime_owner_context_stale");
             ValidatePlacement(owner, request, placement);
-            var binding = new RuntimeBinding(
-                owner.ActorIssuer, owner.ActorId, owner.TenantId, projectId, runId, sessionId,
-                owner.AgentId, owner.TurnId, owner.ProjectRevision, owner.ProjectConfigurationRevision,
-                owner.PlatformRuntimeRevision, owner.ContextRevision, owner.AcceptedSelectionHash,
-                owner.ExecutionFence, placement.EnvironmentId, placement.Resource.ResourceId,
-                placement.Resource.Generation, placement.ProfileId,
-                placement.ConfigureEndpoint, placement.ObservationEndpoint)
-            {
-                WorkflowStepId = owner.WorkflowStepId,
-                ModelSelectionReference = owner.ModelSelectionReference,
-                ModelCredentialReference = owner.ModelCredentialReference,
-                ModelSourceMode = owner.ModelSourceMode,
-                ReasoningEffort = owner.ReasoningEffort,
-                ModelBindingPin = owner.ModelBindingPin,
-                ModelConnectionId = owner.ModelConnectionId,
-                ModelConnectionScope = owner.ModelConnectionScope,
-                MaxModelTurns = owner.MaxModelTurns,
-                MaxToolCalls = owner.MaxToolCalls,
-                MaxPromptTokens = owner.MaxPromptTokens,
-                MaxRevisionAttempts = owner.MaxRevisionAttempts,
-                CopilotSoftCreditLimit = owner.CopilotSoftCreditLimit,
-                CopilotHardCreditLimit = owner.CopilotHardCreditLimit,
-                PlacementProviderId = placement.Resource.ProviderId,
-                EnvironmentLifecycleGeneration = placement.LifecycleGeneration,
-                EnvironmentLeaseRevision = placement.LeaseRevision,
-                EnvironmentCurrentFencingGeneration = placement.CurrentFencingGeneration,
-                EnvironmentProviderFencingGeneration = placement.ProviderFencingGeneration,
-                Image = placement.Image
-            };
-            // PostgreSQL timestamps have microsecond precision; compare using the stored precision.
-            var expiry = new DateTimeOffset(
-                placement.LeaseExpiresAt.UtcTicks - placement.LeaseExpiresAt.UtcTicks % 10, TimeSpan.Zero);
-            return new(binding, expiry);
+            return CreateDerivedBinding(owner, placement);
         }
 
         finally
         {
             credential.Invalidate();
         }
+    }
+
+    private async Task<DerivedBinding> DeriveCurrentBindingAsync(
+        RuntimeActorAuthorization actor,
+        RuntimeOwnerContext expectedOwner,
+        RegisterRuntimeRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!actor.Bearer.IsUsable())
+            throw new RuntimeAuthorizationException("runtime_actor_expired");
+        var placement = await environment.ReadAsync(
+            actor, expectedOwner.ProjectId, expectedOwner.RunId, expectedOwner.SessionId,
+            request.EnvironmentId, request.ProfileId, cancellationToken).ConfigureAwait(false);
+        var owner = placement.RuntimeOwnerContext
+            ?? throw new RuntimeAuthorizationException("runtime_owner_context_unavailable");
+        if (owner != expectedOwner || !actor.Bearer.IsUsable())
+            throw new RuntimeAuthorizationException("runtime_owner_context_stale");
+        ValidatePlacement(owner, request, placement);
+        return CreateDerivedBinding(owner, placement);
+    }
+
+    private DerivedBinding CreateDerivedBinding(
+        RuntimeOwnerContext owner, EnvironmentRuntimeBootstrapContext placement)
+    {
+        var binding = new RuntimeBinding(
+            owner.ActorIssuer, owner.ActorId, owner.TenantId, owner.ProjectId, owner.RunId, owner.SessionId,
+            owner.AgentId, owner.TurnId, owner.ProjectRevision, owner.ProjectConfigurationRevision,
+            owner.PlatformRuntimeRevision, owner.ContextRevision, owner.AcceptedSelectionHash,
+            owner.ExecutionFence, placement.EnvironmentId, placement.Resource.ResourceId,
+            placement.Resource.Generation, placement.ProfileId,
+            placement.ConfigureEndpoint, placement.ObservationEndpoint)
+        {
+            WorkflowStepId = owner.WorkflowStepId,
+            ModelSelectionReference = owner.ModelSelectionReference,
+            ModelCredentialReference = owner.ModelCredentialReference,
+            ModelSourceMode = owner.ModelSourceMode,
+            ReasoningEffort = owner.ReasoningEffort,
+            ModelBindingPin = owner.ModelBindingPin,
+            ModelConnectionId = owner.ModelConnectionId,
+            ModelConnectionScope = owner.ModelConnectionScope,
+            MaxModelTurns = owner.MaxModelTurns,
+            MaxToolCalls = owner.MaxToolCalls,
+            MaxPromptTokens = owner.MaxPromptTokens,
+            MaxRevisionAttempts = owner.MaxRevisionAttempts,
+            CopilotSoftCreditLimit = owner.CopilotSoftCreditLimit,
+            CopilotHardCreditLimit = owner.CopilotHardCreditLimit,
+            PlacementProviderId = placement.Resource.ProviderId,
+            EnvironmentLifecycleGeneration = placement.LifecycleGeneration,
+            EnvironmentLeaseRevision = placement.LeaseRevision,
+            EnvironmentCurrentFencingGeneration = placement.CurrentFencingGeneration,
+            EnvironmentProviderFencingGeneration = placement.ProviderFencingGeneration,
+            Image = placement.Image
+        };
+        // PostgreSQL timestamps have microsecond precision; compare using the stored precision.
+        var expiry = new DateTimeOffset(
+            placement.LeaseExpiresAt.UtcTicks - placement.LeaseExpiresAt.UtcTicks % 10, TimeSpan.Zero);
+        return new(binding, expiry);
     }
 
     /// <summary>

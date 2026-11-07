@@ -486,14 +486,14 @@ public sealed record WorkspaceVolumeMountDeclaration(
     bool ReadOnly);
 
 /// <summary>
-/// Collection of volume mounts under the agent workspace root. It rejects duplicate paths,
+/// Collection of volume mounts for the agent workspace. It rejects duplicate paths,
 /// duplicate volume references, and ancestor/descendant mounts that could shadow each other.
 /// </summary>
 public sealed record WorkspaceVolumeMountManifest(ImmutableArray<WorkspaceVolumeMountDeclaration> Mounts)
 {
     private const string WorkspaceRoot = "/workspace/agentweaver";
 
-    /// <summary>Validates all volume references and non-overlapping paths under the workspace root.</summary>
+    /// <summary>Validates all volume references and non-overlapping workspace paths.</summary>
     /// <exception cref="ArgumentException">A mount path is unsafe, duplicated, or shadows another path.</exception>
     public WorkspaceVolumeMountManifest Validate()
     {
@@ -523,14 +523,15 @@ public sealed record WorkspaceVolumeMountManifest(ImmutableArray<WorkspaceVolume
         return this;
     }
 
-    /// <summary>Requires an absolute normalized path below the allowed workspace root.</summary>
+    /// <summary>Requires the Host workspace root or a normalized path under its Agentweaver directory.</summary>
     private static string ValidateMountPath(string value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 512 ||
             value.Any(char.IsControl) || value.Contains('\\') ||
+            value != "/workspace" &&
             !value.StartsWith(WorkspaceRoot + "/", StringComparison.Ordinal))
             throw new ArgumentException(
-                "Workspace mounts must use an absolute path under /workspace/agentweaver.",
+                "Workspace mounts must use /workspace or a path under /workspace/agentweaver.",
                 nameof(value));
         var segments = value.Split('/');
         if (segments.Skip(1).Any(segment => segment is "" or "." or ".."))
@@ -686,6 +687,18 @@ public static class WorkspaceVolumeAttachmentNegotiator
             volume.Owner.Kind == WorkspaceVolumeOwnerKind.Run &&
             !string.Equals(volume.Owner.Id, runId, StringComparison.Ordinal))
             throw new InvalidOperationException("Run-owned workspace volumes are restricted to their owning run.");
+        if (mount.MountPath == "/workspace" &&
+            (volume.BindingMode != WorkspaceVolumeBindingMode.Environment ||
+             volume.Owner.Kind != WorkspaceVolumeOwnerKind.Run ||
+             volume.Owner.Id != runId ||
+             volume.AccessMode != WorkspaceVolumeAccessMode.ReadWriteMany ||
+             volume.CapacityGiB != 1 ||
+             volume.Consistency != WorkspaceVolumeConsistency.Strict ||
+             volume.ReclaimPolicy != WorkspaceVolumeReclaimPolicy.Retain ||
+             volume.OwnerDeletionPolicy != WorkspaceVolumeOwnerDeletionPolicy.Retain ||
+             !volume.AuthorizedEnvironmentIds.IsEmpty))
+            throw new InvalidOperationException(
+                "The /workspace mount requires the private 1 GiB run-owned Environment workspace.");
         if (!mountManifest.Mounts.Contains(mount) ||
             mount.Volume.ProjectId != volume.ProjectId ||
             mount.Volume.VolumeId != volume.VolumeId ||

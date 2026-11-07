@@ -2,6 +2,7 @@ using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Orchestrator;
 
@@ -21,11 +22,54 @@ public static partial class CoordinationEndpoints
         OrchestratorOptions options, ProjectsRunSelectionClient projects,
         CoordinationOwnerStore store, CoordinatorDecisionOwnerStore decisions,
         CoordinatorRunSelectionContextStore runSelectionContexts, PostgresMafCheckpointStore checkpoints,
-        CancellationToken cancellationToken) =>
-        ExecuteAsync(async () => Results.Ok(await ReadRuntimeOwnerContextCoreAsync(
+        CancellationToken cancellationToken)
+    {
+        var cleanup = context.Request.Headers["X-Agentweaver-Runtime-Cleanup"];
+        if (cleanup.Count != 0)
+        {
+            if (cleanup.Count != 1 || cleanup[0] != "1")
+                return ExecuteAsync(() => Task.FromResult<IResult>(
+                    Results.BadRequest(new { code = "runtime_start_cleanup_request_invalid" })),
+                    cancellationToken);
+            return ReadRuntimeRunStartCleanupProjectionAsync(
+                projectId, runId, sessionId, context, options, projects, cancellationToken);
+        }
+        return ExecuteAsync(async () => Results.Ok(await ReadRuntimeOwnerContextCoreAsync(
             projectId, runId, sessionId, context, options, projects, store, decisions,
             runSelectionContexts, checkpoints, cancellationToken, allowCoordinatorRoot: true)
             .ConfigureAwait(false)), cancellationToken);
+    }
+
+    private static Task<IResult> ReadRuntimeRunStartCleanupProjectionAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (context.Request.Query.Count != 0)
+                throw new CoordinationException("runtime_start_cleanup_request_invalid", 400);
+            var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+            var selection = await projects.ReadSelectionForCancelAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            CoordinationOwnerStore.RequireProjectRunCancellationAuthority(actor, selection);
+            var starts = context.RequestServices.GetService<CoordinationRuntimeRunStartStore>()
+                ?? throw new CoordinationException(
+                    "runtime_start_cleanup_unavailable", StatusCodes.Status409Conflict);
+            var projection = await starts.ReadCleanupProjectionAsync(
+                projectId, runId, sessionId, selection, cancellationToken).ConfigureAwait(false);
+            var refreshed = await projects.ReadSelectionForCancelAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            if (refreshed.Authorization.TenantId != selection.Authorization.TenantId ||
+                CoordinationOwnerStore.HashSelection(refreshed.Selection) !=
+                    CoordinationOwnerStore.HashSelection(selection.Selection))
+                throw new CoordinationException("accepted_run_conflict", StatusCodes.Status409Conflict);
+            return Results.Ok(projection);
+        }, cancellationToken);
 
     /// <summary>
     /// Builds a runtime owner context from the accepted run selection, root decision, child association, and run admission.

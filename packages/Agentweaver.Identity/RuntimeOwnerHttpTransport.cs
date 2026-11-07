@@ -17,6 +17,15 @@ public static class RuntimeOwnerHttpTransport
 {
     internal const string ServiceBackendCaFile = "/var/run/service-backend-ca/ca.crt";
     private const string ServerAuthenticationOid = "1.3.6.1.5.5.7.3.1";
+    private static readonly HashSet<string> RuntimeRunStartFailureCodes = new(StringComparer.Ordinal)
+    {
+        "runtime_delivery_pending",
+        "runtime_delivery_failed",
+        "runtime_readiness_unavailable",
+        "runtime_placement_unavailable",
+        "runtime_owner_context_stale",
+        "sandbox_lease_expired"
+    };
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -103,12 +112,33 @@ public static class RuntimeOwnerHttpTransport
             allowNotFound: false, cancellationToken).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
 
+    /// <summary>Sends a run-start owner request and preserves only known startup failure codes.</summary>
+    public static async Task<TResponse> SendRuntimeRunStartAsync<TResponse>(
+        HttpClient client,
+        Uri ownerAddress,
+        string path,
+        RuntimeActorAuthorization actor,
+        object? body,
+        CancellationToken cancellationToken) where TResponse : class =>
+        await SendCoreAsync<TResponse>(
+            client, ownerAddress, path, actor, body, allowNotFound: false, cancellationToken,
+            allowedFailureCodes: RuntimeRunStartFailureCodes).ConfigureAwait(false)
+        ?? throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
+
     /// <summary>Reads a JSON response and returns null only when the owner reports not found.</summary>
     public static Task<TResponse?> ReadOptionalAsync<TResponse>(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
         CancellationToken cancellationToken) where TResponse : class =>
         SendCoreAsync<TResponse>(client, ownerAddress, path, actor, null,
             allowNotFound: true, cancellationToken);
+
+    /// <summary>Reads the authenticated terminal cleanup projection from the existing runtime-owner route.</summary>
+    public static async Task<TResponse> ReadRuntimeRunStartCleanupAsync<TResponse>(
+        HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken) where TResponse : class =>
+        await SendCoreAsync<TResponse>(client, ownerAddress, path, actor, null,
+            allowNotFound: false, cancellationToken, runtimeRunStartCleanup: true).ConfigureAwait(false)
+        ?? throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
 
     /// <summary>
     /// Sends a bounded JSON request, optionally bound to a validated sandbox endpoint, and
@@ -356,12 +386,16 @@ public static class RuntimeOwnerHttpTransport
     /// <summary>Implements the standard authenticated JSON request with no-store and redirect checks.</summary>
     private static async Task<TResponse?> SendCoreAsync<TResponse>(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
-        object? body, bool allowNotFound, CancellationToken cancellationToken) where TResponse : class
+        object? body, bool allowNotFound, CancellationToken cancellationToken,
+        bool runtimeRunStartCleanup = false,
+        IReadOnlySet<string>? allowedFailureCodes = null) where TResponse : class
     {
         var endpoint = new Uri(RequireOwnerAddress(ownerAddress), path);
         using var request = new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post, endpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", actor.Bearer.GetValue());
         request.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true, NoCache = true };
+        if (runtimeRunStartCleanup)
+            request.Headers.Add("X-Agentweaver-Runtime-Cleanup", "1");
         if (actor.TenantSelector is not null)
             request.Headers.Add("X-Agentweaver-Tenant", actor.TenantSelector);
         if (body is not null)
@@ -382,6 +416,12 @@ public static class RuntimeOwnerHttpTransport
             await IsExactNumericTurnLimitDenialAsync(response, cancellationToken).ConfigureAwait(false))
             throw new RuntimeAuthorizationException("runtime_model_turn_limit_exhausted");
         if (!response.IsSuccessStatusCode)
+        {
+            if (allowedFailureCodes is not null &&
+                response.Headers.CacheControl?.NoStore == true &&
+                await ReadAllowedFailureCodeAsync(response, allowedFailureCodes, cancellationToken)
+                    .ConfigureAwait(false) is { } failureCode)
+                throw new RuntimeAuthorizationException(failureCode);
             throw new RuntimeAuthorizationException(
                 response.StatusCode switch
                 {
@@ -393,6 +433,7 @@ public static class RuntimeOwnerHttpTransport
                     System.Net.HttpStatusCode.PreconditionRequired => "runtime_owner_content_required",
                     _ => "runtime_owner_unavailable"
                 });
+        }
         if (response.Headers.CacheControl?.NoStore != true)
             throw new RuntimeAuthorizationException("runtime_owner_cache_contract_invalid");
         try
@@ -403,6 +444,45 @@ public static class RuntimeOwnerHttpTransport
         catch (JsonException)
         {
             throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
+        }
+    }
+
+    private static async Task<string?> ReadAllowedFailureCodeAsync(
+        HttpResponseMessage response,
+        IReadOnlySet<string> allowedFailureCodes,
+        CancellationToken cancellationToken)
+    {
+        const int maximumBytes = 4096;
+        if (response.Content.Headers.ContentType?.MediaType != "application/json" ||
+            response.Content.Headers.ContentLength is > maximumBytes)
+            return null;
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var bytes = new MemoryStream();
+        var buffer = new byte[512];
+        int count;
+        while ((count = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) != 0)
+        {
+            if (bytes.Length + count > maximumBytes)
+                return null;
+            bytes.Write(buffer, 0, count);
+        }
+        try
+        {
+            using var document = JsonDocument.Parse(bytes.GetBuffer().AsMemory(0, (int)bytes.Length));
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return null;
+            foreach (var property in new[] { "error", "code" })
+            {
+                if (document.RootElement.TryGetProperty(property, out var value) &&
+                    value.ValueKind == JsonValueKind.String &&
+                    allowedFailureCodes.Contains(value.GetString()!))
+                    return value.GetString();
+            }
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 

@@ -177,7 +177,12 @@ export function createFakeGateway(seed: Partial<FakeGatewayState> = {}) {
         const runId = parts[3];
         state.runs[projectId] = (state.runs[projectId] ?? []).map((item) => item.runId === runId ? { ...item, state: 'active' } : item);
         state.conversations = state.conversations.map((item) => item.runId === runId ? { ...item, requestState: 'started', runState: 'active' } : item);
-        return json(200, { runId, rootSessionId: `${runId}-root`, state: 'started' });
+        return json(200, {
+          runId,
+          rootSessionId: `${runId}-root`,
+          state: 'started',
+          runtimeStartup: { state: 'ready', step: 'ready' },
+        });
       }
     }
     if (path === '/notifications' && method === 'GET') {

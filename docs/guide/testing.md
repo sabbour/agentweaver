@@ -680,6 +680,13 @@ entrypoint is compatibility delegation only. If used, set
 runner. The CLI `rest` command makes individual Gateway requests and is not a
 substitute for this acceptance journey.
 
+An accepted root and first message can queue AgentHost startup. The start
+response may report `runtimeStartup.state` as `pending`; check the run's
+session status for the current startup state. `pending` does not mean that
+AgentHost is ready. This lifecycle check does not send a model turn. Do not
+count a controlled test, an HTTP request to an owner route, or a successful
+dry run as native API acceptance or proof of a running AgentHost.
+
 ## Test API, UI, and retained MCP compatibility code
 
 Run the controlled local adapter tests with:

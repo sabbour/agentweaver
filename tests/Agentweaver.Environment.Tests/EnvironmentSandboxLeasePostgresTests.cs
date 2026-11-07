@@ -27,6 +27,10 @@ public sealed class EnvironmentSandboxLeasePostgresTests(EnvironmentPostgresFixt
         var reservation = await store.ReserveProvisionAsync(fence, "provision-1", Intent(), CancellationToken.None);
         Assert.Equal(1, reservation.Lease.LeaseRevision);
         Assert.Equal(time.GetUtcNow().AddSeconds(60), reservation.Lease.LeaseExpiresAt);
+        Assert.Equal(reservation.Lease.OperationId,
+            (await store.GetByProvisionIdempotencyKeyAsync(fence, "provision-1", CancellationToken.None))?.OperationId);
+        Assert.Null(await store.GetByProvisionIdempotencyKeyAsync(
+            fence, "another-owner-operation", CancellationToken.None));
 
         time.Advance(TimeSpan.FromMinutes(2));
         var expired = await store.GetCurrentAsync(fence, CancellationToken.None);
@@ -477,11 +481,25 @@ public sealed class EnvironmentSandboxLeasePostgresTests(EnvironmentPostgresFixt
         var cleanupClaim = await store.ClaimNextLateResourceCleanupAsync(
             originalFence, CancellationToken.None);
         Assert.NotNull(cleanupClaim);
-        _ = await store.BeginProviderAttemptAsync(
+        Assert.True(await store.HasOutstandingLateResourceCleanupAsync(
+            originalFence, reservation.Lease.OperationId, reservation.Lease.ResourceGeneration,
+            CancellationToken.None));
+        var releaseAttempt = await store.BeginProviderAttemptAsync(
             SandboxProviderAttemptRequest.ForLateResourceRelease(cleanupClaim),
             CancellationToken.None);
+        var unknownRelease = await store.RecordProviderAttemptOutcomeAsync(
+            releaseAttempt.Attempt.AttemptId,
+            originalFence,
+            Json("{\"errorCode\":\"release_timeout\",\"effectMayHaveApplied\":true}"),
+            effectMayHaveApplied: true,
+            failureCode: "release_timeout",
+            CancellationToken.None);
+        Assert.Equal(SandboxProviderAttemptState.Unknown, unknownRelease.State);
         time.Advance(TimeSpan.FromMinutes(3));
         Assert.Null(await store.ClaimNextLateResourceCleanupAsync(originalFence, CancellationToken.None));
+        Assert.True(await store.HasOutstandingLateResourceCleanupAsync(
+            originalFence, reservation.Lease.OperationId, reservation.Lease.ResourceGeneration,
+            CancellationToken.None));
 
         var receipt = new SandboxReleaseReceipt(
             lateResource.Resource,
@@ -498,6 +516,9 @@ public sealed class EnvironmentSandboxLeasePostgresTests(EnvironmentPostgresFixt
         Assert.NotNull(durableLease);
         Assert.Equal(SandboxLeaseState.Released, durableLease.State);
         Assert.Null(await store.ClaimNextLateResourceCleanupAsync(originalFence, CancellationToken.None));
+        Assert.False(await store.HasOutstandingLateResourceCleanupAsync(
+            originalFence, reservation.Lease.OperationId, reservation.Lease.ResourceGeneration,
+            CancellationToken.None));
 
         var advanced = await lifecycle.TransitionAsync(
             new EnvironmentLifecycleTransitionRequest(

@@ -614,7 +614,14 @@ public sealed partial class RuntimeResumeBootstrapTests
             SandboxPartialReleaseCompletionRequest request, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
         public virtual Task<SandboxLateResourceCleanupClaim?> ClaimNextLateResourceCleanupAsync(
-            EnvironmentGenerationFence fence, CancellationToken cancellationToken) => throw new NotSupportedException();
+            EnvironmentGenerationFence fence, CancellationToken cancellationToken) =>
+            Task.FromResult<SandboxLateResourceCleanupClaim?>(null);
+        public virtual Task<SandboxLateResourceCleanupClaim?> ClaimNextLateResourceCleanupAsync(
+            EnvironmentGenerationFence fence,
+            CancellationToken cancellationToken,
+            Guid? operationId,
+            long? resourceGeneration) =>
+            Task.FromResult<SandboxLateResourceCleanupClaim?>(null);
         public virtual Task CompleteLateResourceCleanupAsync(EnvironmentGenerationFence currentFence,
             SandboxLateResourceCleanupClaim claim, SandboxReleaseReceipt receipt, CancellationToken cancellationToken,
             Guid? providerAttemptId = null) =>

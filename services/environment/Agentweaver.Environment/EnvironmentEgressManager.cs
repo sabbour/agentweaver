@@ -42,19 +42,40 @@ public sealed class EnvironmentEgressManager(
     /// <summary>
     /// Reserves, applies, and verifies a policy generation; provider and authority failures return a not-ready result.
     /// </summary>
-    public async Task<EnvironmentEgressOperationResult> ApplyAndVerifyAsync(
+    public Task<EnvironmentEgressOperationResult> ApplyAndVerifyAsync(
         CurrentCallerRequest caller,
         ApplyEnvironmentEgressRequest request,
         CancellationToken cancellationToken,
-        Func<CancellationToken, Task>? requireCurrent = null)
+        Func<CancellationToken, Task>? requireCurrent = null) =>
+        ApplyAndVerifyCoreAsync(caller, request, cancellationToken, requireCurrent, firstStartOwner: null);
+
+    internal Task<EnvironmentEgressOperationResult> ApplyCoordinatorFirstStartAndVerifyAsync(
+        CurrentCallerRequest caller,
+        RuntimeOwnerContext expectedOwner,
+        ApplyEnvironmentEgressRequest request,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? requireCurrent = null) =>
+        ApplyAndVerifyCoreAsync(caller, request, cancellationToken, requireCurrent, expectedOwner);
+
+    private async Task<EnvironmentEgressOperationResult> ApplyAndVerifyCoreAsync(
+        CurrentCallerRequest caller,
+        ApplyEnvironmentEgressRequest request,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? requireCurrent,
+        RuntimeOwnerContext? firstStartOwner)
     {
         try
         {
             ValidateRequest(request);
             var trace = TraceOperation("apply", request.PolicyGeneration);
             await lifecycleStore.RequireActiveAsync(request.Fence, cancellationToken).ConfigureAwait(false);
-            var selection = await GetAuthorizedSelectionAsync(
-                caller, request.Fence.Owner, cancellationToken).ConfigureAwait(false);
+            var selection = firstStartOwner is null
+                ? await GetAuthorizedSelectionAsync(
+                    caller, request.Fence.Owner, cancellationToken).ConfigureAwait(false)
+                : await GetAuthorizedRunEnvironmentSelectionAsync(
+                    caller, request.Fence.Owner, cancellationToken).ConfigureAwait(false);
+            if (firstStartOwner is not null)
+                RequireFirstStartOwnerSelection(firstStartOwner, request.Fence.Owner, selection);
             var intent = Compile(selection);
             var network = ResolveNetworkProvider(selection, providerOptions, cilium, intent);
             TraceProviderResolution(trace, network.Resolution);
@@ -87,12 +108,9 @@ public sealed class EnvironmentEgressManager(
             try
             {
                 await lifecycleStore.RequireActiveAsync(request.Fence, cancellationToken).ConfigureAwait(false);
-                await EnsureAuthorizationUnchangedAsync(
-                    caller,
-                    request.Fence.Owner,
-                    selection.Authorization,
-                    requireRunSelection: true,
-                    cancellationToken).ConfigureAwait(false);
+                await EnsureApplyAuthorizationUnchangedAsync(
+                    caller, request.Fence.Owner, selection, firstStartOwner, cancellationToken)
+                    .ConfigureAwait(false);
 
                 if (requireCurrent is not null)
                     await requireCurrent(cancellationToken).ConfigureAwait(false);
@@ -135,12 +153,9 @@ public sealed class EnvironmentEgressManager(
                 try
                 {
                     await lifecycleStore.RequireActiveAsync(request.Fence, cancellationToken).ConfigureAwait(false);
-                    await EnsureAuthorizationUnchangedAsync(
-                        caller,
-                        request.Fence.Owner,
-                        selection.Authorization,
-                        requireRunSelection: true,
-                        cancellationToken).ConfigureAwait(false);
+                    await EnsureApplyAuthorizationUnchangedAsync(
+                        caller, request.Fence.Owner, selection, firstStartOwner, cancellationToken)
+                        .ConfigureAwait(false);
                 }
                 catch (ProjectsConfigApiException exception)
                 {
@@ -220,6 +235,57 @@ public sealed class EnvironmentEgressManager(
                 "upstream_timeout",
                 "Projects & Config or Kubernetes did not complete the operation; the environment remains not ready.");
         }
+    }
+
+    private async Task EnsureApplyAuthorizationUnchangedAsync(
+        CurrentCallerRequest caller,
+        EnvironmentOwnerIdentity owner,
+        AuthorizedSelection original,
+        RuntimeOwnerContext? firstStartOwner,
+        CancellationToken cancellationToken)
+    {
+        if (firstStartOwner is null)
+        {
+            await EnsureAuthorizationUnchangedAsync(
+                caller, owner, original.Authorization, requireRunSelection: true, cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var current = await GetAuthorizedRunEnvironmentSelectionAsync(
+            caller, owner, cancellationToken).ConfigureAwait(false);
+        RequireFirstStartOwnerSelection(firstStartOwner, owner, current);
+        if (!SameAuthorizationContext(original.Authorization, current.Authorization))
+            throw new ProjectsConfigApiException(
+                "authorization_changed",
+                "The run-bound Environment authority changed while the first-start policy was applied.");
+    }
+
+    private static void RequireFirstStartOwnerSelection(
+        RuntimeOwnerContext expectedOwner,
+        EnvironmentOwnerIdentity environmentOwner,
+        AuthorizedSelection selection)
+    {
+        var run = selection.RunSelection;
+        var authorization = selection.Authorization;
+        if (expectedOwner.ContractVersion != 1 ||
+            expectedOwner.AgentId != RuntimeActionContract.CoordinatorRootStepId ||
+            expectedOwner.LogicalTurnOrdinal != 0 ||
+            expectedOwner.ExecutionFence < 1 ||
+            RuntimeRunStartKeys.EnvironmentId(expectedOwner) != environmentOwner.EnvironmentId ||
+            expectedOwner.TenantId != environmentOwner.TenantId ||
+            expectedOwner.ProjectId != environmentOwner.ProjectId ||
+            expectedOwner.RunId != environmentOwner.RunId ||
+            authorization.TenantId != expectedOwner.TenantId ||
+            authorization.Issuer != expectedOwner.ActorIssuer ||
+            authorization.ActorId != expectedOwner.ActorId ||
+            run.ProjectId != expectedOwner.ProjectId ||
+            run.RunId != expectedOwner.RunId ||
+            run.ProjectRevision != expectedOwner.ProjectRevision ||
+            run.ProjectConfigurationRevision != expectedOwner.ProjectConfigurationRevision ||
+            run.PlatformRuntimeRevision != expectedOwner.PlatformRuntimeRevision ||
+            run.ContextRevision != expectedOwner.ContextRevision)
+            throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
     }
 
     /// <summary>Checks whether the exact owner-recorded policy generation and current authorization remain valid.</summary>
@@ -891,6 +957,32 @@ public sealed class EnvironmentEgressManager(
         return new AuthorizedSelection(current, selection);
     }
 
+    internal async Task<ProjectAuthorizationContextResponse> GetAuthorizedRunCancellationContextAsync(
+        CurrentCallerRequest caller,
+        EnvironmentOwnerIdentity owner,
+        CancellationToken cancellationToken)
+    {
+        var authorization = await ReadCurrentAuthorizationContextAsync(
+            caller, owner, cancellationToken).ConfigureAwait(false);
+        if (authorization.BoundProjectId is not null ||
+            authorization.BoundRunId is not null ||
+            !HasRunCancellationPermission(authorization, owner))
+            throw new ProjectsConfigApiException(
+                "run_cancel_permission_denied",
+                "A fresh unbound cancelRun authority is required for first-start cleanup.");
+
+        var current = await ReadCurrentAuthorizationContextAsync(
+            caller, owner, cancellationToken).ConfigureAwait(false);
+        if (!SameAuthorizationContext(authorization, current) ||
+            current.BoundProjectId is not null ||
+            current.BoundRunId is not null ||
+            !HasRunCancellationPermission(current, owner))
+            throw new ProjectsConfigApiException(
+                "authorization_changed",
+                "The caller's cancelRun authority changed during first-start cleanup.");
+        return current;
+    }
+
     private static void ValidateAuthorizedRunSelection(
         EffectiveNetworkPolicySelection selection,
         EnvironmentOwnerIdentity owner)
@@ -1171,6 +1263,18 @@ public sealed class EnvironmentEgressManager(
             string.Equals(resource.ResourceId, projectId, StringComparison.Ordinal) &&
             resource.Permissions.Any(grant =>
                 grant.Permission == permission && grant.RoleRevision > 0));
+
+    private static bool HasRunCancellationPermission(
+        ProjectAuthorizationContextResponse authorization,
+        EnvironmentOwnerIdentity owner) =>
+        authorization.EffectiveAuthority.Any(resource =>
+            (resource.ResourceType == ProjectAuthorityResourceType.Project &&
+             string.Equals(resource.ResourceId, owner.ProjectId, StringComparison.Ordinal) ||
+             resource.ResourceType == ProjectAuthorityResourceType.Tenant &&
+             string.Equals(resource.ResourceId, owner.TenantId, StringComparison.Ordinal)) &&
+            resource.Permissions.Any(grant =>
+                grant.Permission == ProjectAuthorizationPermission.CancelRun &&
+                grant.RoleRevision > 0));
 
     private static bool HasRunBoundPlacementReadAuthority(
         ProjectAuthorizationContextResponse authorization,

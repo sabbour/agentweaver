@@ -248,6 +248,8 @@ public sealed class WorkspaceVolumeContractsTests
 
         Assert.Single(manifest.Mounts);
         Assert.True(manifest.Mounts[0].ReadOnly);
+        Assert.Equal("/workspace", new WorkspaceVolumeMountManifest(
+            [new WorkspaceVolumeMountDeclaration(volume, "/workspace", false)]).Validate().Mounts[0].MountPath);
         Assert.Throws<ArgumentException>(() => new WorkspaceVolumeMountManifest(
             [new WorkspaceVolumeMountDeclaration(volume, "/workspace/agentweaver/../secrets", false)]).Validate());
         Assert.Throws<ArgumentException>(() => new WorkspaceVolumeMountManifest(
@@ -364,6 +366,46 @@ public sealed class WorkspaceVolumeContractsTests
             sandbox,
             environmentFence,
             7,
+            profile,
+            WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim));
+
+        var firstStartVolume = Spec(
+            capacityGiB: 1,
+            accessMode: WorkspaceVolumeAccessMode.ReadWriteMany,
+            ownerDeletionPolicy: WorkspaceVolumeOwnerDeletionPolicy.Retain);
+        var rootMount = new WorkspaceVolumeMountDeclaration(
+            reference,
+            "/workspace",
+            ReadOnly: false);
+        var rootManifest = new WorkspaceVolumeMountManifest([rootMount]);
+        var rootNegotiation = WorkspaceVolumeAttachmentNegotiator.Negotiate(
+            "project-1",
+            "environment-1",
+            "run-1",
+            firstStartVolume,
+            storage,
+            rootManifest,
+            rootMount,
+            sandbox,
+            environmentFence,
+            0,
+            profile,
+            WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim);
+        Assert.Equal("/workspace", rootNegotiation.MountPath);
+        Assert.Throws<InvalidOperationException>(() => WorkspaceVolumeAttachmentNegotiator.Negotiate(
+            "project-1",
+            "environment-1",
+            "run-1",
+            Spec(
+                capacityGiB: 1,
+                accessMode: WorkspaceVolumeAccessMode.ReadWriteMany,
+                ownerDeletionPolicy: WorkspaceVolumeOwnerDeletionPolicy.Unbind),
+            storage,
+            rootManifest,
+            rootMount,
+            sandbox,
+            environmentFence,
+            0,
             profile,
             WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim));
         Assert.Throws<InvalidOperationException>(() => WorkspaceVolumeAttachmentNegotiator.Negotiate(
@@ -742,7 +784,9 @@ public sealed class WorkspaceVolumeContractsTests
         string? environmentId = "environment-1",
         WorkspaceVolumeAccessMode accessMode = WorkspaceVolumeAccessMode.ReadWriteOnce,
         ImmutableArray<string> authorizedEnvironmentIds = default,
-        WorkspaceVolumeOwner? owner = null) =>
+        WorkspaceVolumeOwner? owner = null,
+        long capacityGiB = 8,
+        WorkspaceVolumeOwnerDeletionPolicy ownerDeletionPolicy = WorkspaceVolumeOwnerDeletionPolicy.Unbind) =>
         new(
             "volume-1",
             "project-1",
@@ -750,10 +794,10 @@ public sealed class WorkspaceVolumeContractsTests
             environmentId,
             bindingMode,
             accessMode,
-            capacityGiB: 8,
+            capacityGiB,
             storageClass: "azure-files-premium",
             WorkspaceVolumeConsistency.Strict,
             WorkspaceVolumeReclaimPolicy.Retain,
-            WorkspaceVolumeOwnerDeletionPolicy.Unbind,
+            ownerDeletionPolicy,
             authorizedEnvironmentIds.IsDefault ? [] : authorizedEnvironmentIds);
 }
