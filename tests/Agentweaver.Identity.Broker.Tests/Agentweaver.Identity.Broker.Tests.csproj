@@ -34,6 +34,9 @@
     <ProjectReference Include="..\..\tools\Agentweaver.Cli\Agentweaver.Cli.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="..\..\deploy\k8s\runtime-configs\identity-broker-runtime-config.json"
+          Link="runtime-configs\identity-broker-runtime-config.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Migrations\runtime_registration.sql" LogicalName="Agentweaver.Identity.Broker.Tests.runtime_registration.sql" />
   </ItemGroup>
 </Project>

@@ -152,6 +152,10 @@ test('Identity Broker snapshot keeps existing clients and adds versioned public 
     'IdentityBroker__RunBinding__ProjectsOwnerAddress',
     'IdentityBroker__RunBinding__ProjectsServerCertificateSha256',
     'IdentityBroker__RunBinding__ProjectsTrustBundleSha256',
+    'IdentityBroker__RuntimeBootstrap__BootstrapLifetime',
+    'IdentityBroker__RuntimeBootstrap__EnvironmentOwnerAddress',
+    'IdentityBroker__RuntimeBootstrap__OrchestratorOwnerAddress',
+    'IdentityBroker__RuntimeBootstrap__SourceLifetime',
     'IdentityBroker__SecretRedemption__Audience',
     'IdentityBroker__SecretRedemption__VaultHost',
     'IdentityBroker__SecretRedemption__VaultUri',
@@ -176,6 +180,12 @@ test('Identity Broker snapshot keeps existing clients and adds versioned public 
     'd55bd61d14cd86a3b00a6911d763561bb904000be5b433d065d11d600d6e9fe9');
   assert.equal(identityBroker.data.IdentityBroker__RunBinding__ProjectsTrustBundleSha256,
     'e156c1bdf3fee14ae46ef716267a9cd9a876eee4d22eeaf5b6f2b22e19d8a43a');
+  assert.equal(identityBroker.data.IdentityBroker__RuntimeBootstrap__OrchestratorOwnerAddress,
+    serviceAddress('orchestrator'));
+  assert.equal(identityBroker.data.IdentityBroker__RuntimeBootstrap__EnvironmentOwnerAddress,
+    serviceAddress('environment'));
+  assert.equal(identityBroker.data.IdentityBroker__RuntimeBootstrap__BootstrapLifetime, '00:01:00');
+  assert.equal(identityBroker.data.IdentityBroker__RuntimeBootstrap__SourceLifetime, '00:02:00');
   assert.equal(identityBroker.data.IdentityBroker__ExternalProvider__ClientId,
     '3b682024-2c59-4497-aff2-fc6335d12d97');
   assert.equal(identityBroker.data.IdentityBroker__Clients__1__ClientId, 'agentweaver-web');
