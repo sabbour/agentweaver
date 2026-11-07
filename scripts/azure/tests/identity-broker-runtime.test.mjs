@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { alignExistingP0BrokerHostname, observeExistingP0BrokerRouting } from '../lib/identity-broker-routing.mjs';
 import { assertBrokerRuntimeInputs, bootstrapIdentityBrokerRuntime, brokerAcceptanceConfiguration,
   brokerObjectHash, projectBrokerRuntimeResource } from '../lib/identity-broker-runtime.mjs';
@@ -336,6 +338,20 @@ test('runtime configuration retains the run-owned acceptance client and seeds th
   const data = brokerAcceptanceConfiguration(config, {
     issuer: `https://${hostname}/`, identity: { clientId, principalId }, portalHostname,
   });
+  const brokerMap = JSON.parse(readFileSync(path.join(config.repoRoot, 'deploy', 'k8s', 'runtime-configs',
+    'identity-broker-runtime-config.json'), 'utf8')).data;
+  const runtimeBootstrap = {
+    IdentityBroker__RuntimeBootstrap__OrchestratorOwnerAddress:
+      'https://orchestrator.agentweaver.svc.cluster.local:8443/',
+    IdentityBroker__RuntimeBootstrap__EnvironmentOwnerAddress:
+      'https://environment.agentweaver.svc.cluster.local:8443/',
+    IdentityBroker__RuntimeBootstrap__BootstrapLifetime: '00:01:00',
+    IdentityBroker__RuntimeBootstrap__SourceLifetime: '00:02:00',
+  };
+  for (const [key, value] of Object.entries(runtimeBootstrap)) {
+    assert.equal(data[key], value, key);
+    assert.equal(data[key], brokerMap[key], `${key} must match the canonical Broker map`);
+  }
   assert.equal(data.IdentityBroker__WebOrigin, `https://${portalHostname}`);
   assert.equal(data.IdentityBroker__SecretRedemption__VaultUri, 'https://agentweaver-kv.vault.azure.net/');
   assert.equal(data.IdentityBroker__SecretRedemption__VaultHost, 'agentweaver-kv.vault.azure.net');

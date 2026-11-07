@@ -281,12 +281,26 @@ change. See the [CLI guide](../guide/cli.md) for local setup.
 | `IdentityBroker__Clients__<index>__Scopes__<item>` | One or more explicitly allowed scopes. |
 | `IdentityBroker__Clients__<index>__Resources__<item>` | One or more token audiences approved for that client. |
 | `IdentityBroker__DataProtectionKeyPath` | Required path for the durable ASP.NET Data Protection key ring. Mount the retained key-ring volume at this path. |
+| `IdentityBroker__RuntimeBootstrap__OrchestratorOwnerAddress` | Required with the other runtime-bootstrap settings when that section is configured. Use the absolute HTTPS Orchestrator service root `https://orchestrator.agentweaver.svc.cluster.local:8443/`. |
+| `IdentityBroker__RuntimeBootstrap__EnvironmentOwnerAddress` | Required with the other runtime-bootstrap settings when that section is configured. Use the absolute HTTPS Environment service root `https://environment.agentweaver.svc.cluster.local:8443/`. |
+| `IdentityBroker__RuntimeBootstrap__BootstrapLifetime` | Required positive `TimeSpan` in `hh:mm:ss` form. The canonical source value is `00:01:00`; there is no code default. |
+| `IdentityBroker__RuntimeBootstrap__SourceLifetime` | Required positive `TimeSpan` in `hh:mm:ss` form. The canonical source value is `00:02:00`; there is no code default. |
 | `IdentityBroker__SecretRedemption__Audience` | Required HTTPS audience for the secret-redemption endpoint. |
 | `IdentityBroker__SecretRedemption__VaultHost` | Required exact public Key Vault host used by the Kubernetes egress policy. Set it to the lowercase host from the vault URI derived from `keyVaultName` in the reviewed Bicep parameter file. |
 | `IdentityBroker__SecretRedemption__VaultUri` | Required URI of the Key Vault secrets backend. Set it from the same reviewed `keyVaultName`; obtain the deployed value with `az keyvault show --resource-group <resource-group> --name <key-vault-name-from-reviewed-parameters> --query properties.vaultUri --output tsv`. The host must match `IdentityBroker__SecretRedemption__VaultHost`. |
 | `IdentityBroker__SecretRedemption__WorkloadIdentityTenantId` | Required Entra tenant GUID for the Broker's Key Vault identity. |
 | `IdentityBroker__SecretRedemption__WorkloadIdentityClientId` | Required client ID of the Broker's user-assigned managed identity. |
 | `IdentityBroker__SecretRedemption__WorkloadIdentityTokenFilePath` | Required absolute path to the projected Broker workload-identity token file. |
+
+The runtime-bootstrap section is optional in code, but the canonical Broker map
+requires all four settings to compose runtime bootstrap and source routes. An
+absent section leaves the existing runtime credential route group unmapped;
+an incomplete or invalid section fails at startup. A grant can expire before
+its configured lifetime because its registration or actor bearer expires
+first. Source refresh does not renew either authority. Changing an `envFrom`
+source requires a Broker restart. The checked-in map is immutable; its
+replacement requires a separately approved operation. See
+[Replace an immutable runtime ConfigMap](../guide/deploy-to-azure.md#replace-an-immutable-runtime-configmap).
 
 The following `IdentityBrokerOptions` settings are required by the host but
 come from the operator-managed Secret or an optional feature configuration,

@@ -1,14 +1,22 @@
+using System.Collections;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Identity;
-using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
+using Microsoft.EntityFrameworkCore;
+using OpenIddict.Validation.AspNetCore;
 using Xunit;
 
 namespace Agentweaver.Identity.Broker.Tests;
@@ -17,6 +25,25 @@ namespace Agentweaver.Identity.Broker.Tests;
 [Collection("IdentityBrokerPostgres")]
 public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture postgres)
 {
+    private static readonly string[] RuntimeCredentialRoutePaths =
+    [
+        "/internal/runtime/model-session/grant",
+        "/internal/runtime/model-session/verify",
+        "/internal/runtime/model-session/redeem",
+        "/internal/runtime/bootstrap/request",
+        "/internal/runtime/bootstrap/verify-pending",
+        "/internal/runtime/bootstrap/consume",
+        "/internal/runtime/bootstrap/exchange",
+        "/internal/runtime/source/verify",
+        "/internal/runtime/source/rotate",
+        "/internal/runtime/source/revoke"
+    ];
+    private static readonly string[] RequiredRuntimeCredentialRoutePaths =
+    [
+        "/internal/runtime/bootstrap/request",
+        "/internal/runtime/bootstrap/verify-pending",
+        "/internal/runtime/source/verify"
+    ];
     private static readonly System.Text.Json.JsonSerializerOptions JsonOptions = new(System.Text.Json.JsonSerializerDefaults.Web)
     {
         Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase) }
@@ -24,19 +51,14 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
     [Fact]
     public async Task BrokerIssuedBearerAndIndependentNonceAreRequiredAcrossTheRuntimeHttpLifecycle()
     {
+        var runtimeBootstrap = ReadRuntimeBootstrapConfiguration();
         await using var idp = await FakeIdentityProvider.StartAsync();
         var owner = new EndpointStorageOwner();
         var delivery = new EndpointStorageDelivery();
         var secrets = new EndpointStorageSecretRedemption();
         await using var factory = new IdentityBrokerWebApplicationFactory(
             await postgres.CreateMigratedDatabaseAsync(), idp,
-            configure: settings =>
-            {
-                settings["IdentityBroker__RuntimeBootstrap__OrchestratorOwnerAddress"] = "https://orchestrator.test/";
-                settings["IdentityBroker__RuntimeBootstrap__EnvironmentOwnerAddress"] = "https://environment.test/";
-                settings["IdentityBroker__RuntimeBootstrap__BootstrapLifetime"] = "00:01:00";
-                settings["IdentityBroker__RuntimeBootstrap__SourceLifetime"] = "00:02:00";
-            },
+            configure: settings => ConfigureRuntimeBootstrapEnvironment(settings, runtimeBootstrap.Settings),
             configureServices: services =>
             {
                 services.RemoveAll<IRuntimeRegistrationOwner>();
@@ -46,17 +68,37 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
                 services.AddSingleton<IRuntimeBootstrapDelivery>(delivery);
                 services.AddSingleton<ISecretRedemption>(secrets);
             });
-        using var broker = factory.CreateClient(new WebApplicationFactoryClientOptions
+        await using var productionFactory = factory.WithWebHostBuilder(
+            builder => builder.UseEnvironment(Environments.Production));
+        using var broker = productionFactory.CreateClient(new WebApplicationFactoryClientOptions
         {
             AllowAutoRedirect = false,
             BaseAddress = new Uri("https://broker.test/")
         });
+        Assert.Equal(Environments.Production,
+            productionFactory.Services.GetRequiredService<IWebHostEnvironment>().EnvironmentName);
+        var policy = productionFactory.Services.GetRequiredService<RuntimeCredentialPolicy>();
+        var options = productionFactory.Services.GetRequiredService<RuntimeBootstrapOptions>();
+        Assert.Equal(runtimeBootstrap.Options.BootstrapLifetime, policy.BootstrapLifetime);
+        Assert.Equal(runtimeBootstrap.Options.SourceLifetime, policy.SourceLifetime);
+        Assert.Equal(runtimeBootstrap.Options.OrchestratorOwnerAddress, options.OrchestratorOwnerAddress);
+        Assert.Equal(runtimeBootstrap.Options.EnvironmentOwnerAddress, options.EnvironmentOwnerAddress);
+        var routeEndpoints = GetRuntimeCredentialEndpoints(productionFactory.Services);
+        foreach (var route in RequiredRuntimeCredentialRoutePaths)
+        {
+            var endpoint = routeEndpoints.SingleOrDefault(candidate => candidate.RoutePattern.RawText == route);
+            Assert.NotNull(endpoint);
+            Assert.Contains("POST", endpoint.Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods);
+            Assert.Contains(endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>(),
+                metadata => metadata.AuthenticationSchemes ==
+                    OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
+        }
         var request = new RuntimeBootstrapRequest(
             owner.Registration.RuntimeInstanceId, Guid.NewGuid(), new string('a', 64));
         using (var unauthenticated = await broker.PostAsJsonAsync("/internal/runtime/bootstrap/request", request))
             Assert.Equal(HttpStatusCode.Unauthorized, unauthenticated.StatusCode);
         Assert.Equal(0, owner.Reads);
-        using (var scope = factory.Services.CreateScope())
+        using (var scope = productionFactory.Services.CreateScope())
         {
             var user = await scope.ServiceProvider.GetRequiredService<BrokerUserProvisioner>().ProvisionAsync(
                 FakeIdentityProvider.Authority, idp.Subject, "Runtime endpoint test", null, default);
@@ -235,7 +277,7 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
             Assert.Equal(receipt.GrantId, replacement.GrantId);
             Assert.Equal(2, replacement.Revision);
 
-            using var scope = factory.Services.CreateScope();
+            using var scope = productionFactory.Services.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
             var revisions = await db.SecretGrantRevisions.AsNoTracking()
                 .Where(row => row.GrantId == receipt.GrantId)
@@ -388,7 +430,7 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
                 timeout.Token));
         Assert.All(authorityLoss.InnerExceptions, error => Assert.IsType<RuntimeAuthorizationException>(error));
         Assert.Contains(interruptedSdk.Requests, item => item.Method == "session.detach");
-        using (var scope = factory.Services.CreateScope())
+        using (var scope = productionFactory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
             var sourceHeads = await db.RuntimeGrantHeads.Join(db.RuntimeGrantRevisions,
@@ -403,6 +445,119 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
         Assert.DoesNotContain(EndpointStorageSecretRedemption.CredentialValue,
             string.Join('\n', factory.LogMessages));
     }
+
+    [Fact]
+    public async Task RuntimeCredentialRoutesAreNotMappedWhenRuntimeBootstrapSectionIsAbsent()
+    {
+        await using var idp = await FakeIdentityProvider.StartAsync();
+        await using var factory = new IdentityBrokerWebApplicationFactory(
+            await postgres.CreateMigratedDatabaseAsync(), idp,
+            configure: settings => ConfigureRuntimeBootstrapEnvironment(settings, null));
+        await using var productionFactory = factory.WithWebHostBuilder(
+            builder => builder.UseEnvironment(Environments.Production));
+        using var broker = productionFactory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            BaseAddress = new Uri("https://broker.test/")
+        });
+
+        Assert.Equal(Environments.Production,
+            productionFactory.Services.GetRequiredService<IWebHostEnvironment>().EnvironmentName);
+        Assert.Null(productionFactory.Services.GetService<RuntimeCredentialPolicy>());
+        var endpoints = GetRuntimeCredentialEndpoints(productionFactory.Services);
+        Assert.Empty(endpoints);
+        foreach (var route in RequiredRuntimeCredentialRoutePaths)
+        {
+            using var response = await broker.PostAsync(route, new StringContent("{}"));
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        }
+    }
+
+    [Theory]
+    [InlineData("IdentityBroker__RuntimeBootstrap__BootstrapLifetime", "00:00:00")]
+    [InlineData("IdentityBroker__RuntimeBootstrap__SourceLifetime", "00:00:00")]
+    [InlineData("IdentityBroker__RuntimeBootstrap__BootstrapLifetime", "-00:00:01")]
+    [InlineData("IdentityBroker__RuntimeBootstrap__SourceLifetime", null)]
+    public async Task InvalidRuntimeBootstrapPolicyFailsAtStartup(string key, string? value)
+    {
+        var runtimeBootstrap = ReadRuntimeBootstrapConfiguration();
+        var settings = new Dictionary<string, string?>(runtimeBootstrap.Settings, StringComparer.OrdinalIgnoreCase);
+        if (value is null)
+            settings.Remove(key);
+        else
+            settings[key] = value;
+
+        await using var idp = await FakeIdentityProvider.StartAsync();
+        await using var factory = new IdentityBrokerWebApplicationFactory(
+            await postgres.CreateMigratedDatabaseAsync(), idp,
+            configure: environment => ConfigureRuntimeBootstrapEnvironment(environment, settings));
+        await using var productionFactory = factory.WithWebHostBuilder(
+            builder => builder.UseEnvironment(Environments.Production));
+
+        var failure = Record.Exception(() => productionFactory.CreateClient());
+        Assert.NotNull(failure);
+        var details = failure.ToString();
+        Assert.True(
+            details.Contains("explicit positive runtime lifetimes", StringComparison.OrdinalIgnoreCase) ||
+            details.Contains(nameof(RuntimeBootstrapOptions), StringComparison.Ordinal) ||
+            details.Contains(nameof(RuntimeBootstrapOptions.SourceLifetime), StringComparison.Ordinal),
+            $"Expected configuration binding or explicit-positive lifetime validation to fail. Details: {details}");
+    }
+
+    private static (Dictionary<string, string?> Settings, RuntimeBootstrapOptions Options)
+        ReadRuntimeBootstrapConfiguration()
+    {
+        var mapPath = Path.Combine(AppContext.BaseDirectory, "runtime-configs", "identity-broker-runtime-config.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(mapPath));
+        var data = document.RootElement.GetProperty("data");
+        var values = data.EnumerateObject()
+            .ToDictionary(property => property.Name, property => property.Value.GetString());
+        var runtimeKeys = new[]
+        {
+            "IdentityBroker__RuntimeBootstrap__OrchestratorOwnerAddress",
+            "IdentityBroker__RuntimeBootstrap__EnvironmentOwnerAddress",
+            "IdentityBroker__RuntimeBootstrap__BootstrapLifetime",
+            "IdentityBroker__RuntimeBootstrap__SourceLifetime"
+        };
+        foreach (var key in runtimeKeys)
+            Assert.True(values.ContainsKey(key), $"Canonical Broker map is missing {key}.");
+
+        var configurationValues = values.ToDictionary(
+            entry => entry.Key.Replace("__", ":", StringComparison.Ordinal),
+            entry => entry.Value);
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(configurationValues).Build();
+        var options = configuration.GetSection("IdentityBroker:RuntimeBootstrap").Get<RuntimeBootstrapOptions>();
+        Assert.NotNull(options);
+        return (runtimeKeys.ToDictionary(key => key, key => values[key]), options!);
+    }
+
+    private static void ConfigureRuntimeBootstrapEnvironment(
+        Dictionary<string, string?> settings,
+        IReadOnlyDictionary<string, string?>? runtimeSettings)
+    {
+        settings["ASPNETCORE_ENVIRONMENT"] = Environments.Production;
+        settings["DOTNET_ENVIRONMENT"] = Environments.Production;
+        foreach (DictionaryEntry variable in Environment.GetEnvironmentVariables())
+        {
+            var key = variable.Key.ToString();
+            if (key is not null &&
+                (key.StartsWith("IdentityBroker__RuntimeBootstrap__", StringComparison.OrdinalIgnoreCase) ||
+                 key.StartsWith("IdentityBroker:RuntimeBootstrap:", StringComparison.OrdinalIgnoreCase)))
+                settings[key] = null;
+        }
+
+        if (runtimeSettings is null)
+            return;
+        foreach (var (key, value) in runtimeSettings)
+            settings[key] = value;
+    }
+
+    private static RouteEndpoint[] GetRuntimeCredentialEndpoints(IServiceProvider services) =>
+        services.GetRequiredService<EndpointDataSource>().Endpoints
+            .OfType<RouteEndpoint>()
+            .Where(endpoint => RuntimeCredentialRoutePaths.Contains(
+                endpoint.RoutePattern.RawText ?? string.Empty, StringComparer.Ordinal))
+            .ToArray();
 
     private sealed class EndpointStorageSecretRedemption : ISecretRedemption
     {

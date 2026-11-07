@@ -58,6 +58,12 @@ export function brokerAcceptanceConfiguration(config, { issuer, identity, portal
     IdentityBroker__RunBinding__ProjectsOwnerAddress: 'https://projects-config.agentweaver.svc.cluster.local:8443/',
     IdentityBroker__RunBinding__ProjectsServerCertificateSha256: 'd55bd61d14cd86a3b00a6911d763561bb904000be5b433d065d11d600d6e9fe9',
     IdentityBroker__RunBinding__ProjectsTrustBundleSha256: 'e156c1bdf3fee14ae46ef716267a9cd9a876eee4d22eeaf5b6f2b22e19d8a43a',
+    IdentityBroker__RuntimeBootstrap__OrchestratorOwnerAddress:
+      'https://orchestrator.agentweaver.svc.cluster.local:8443/',
+    IdentityBroker__RuntimeBootstrap__EnvironmentOwnerAddress:
+      'https://environment.agentweaver.svc.cluster.local:8443/',
+    IdentityBroker__RuntimeBootstrap__BootstrapLifetime: '00:01:00',
+    IdentityBroker__RuntimeBootstrap__SourceLifetime: '00:02:00',
     IdentityBroker__ExternalProvider__Authority: `https://login.microsoftonline.com/${config.tenantId}/v2.0`,
     IdentityBroker__ExternalProvider__ClientId: config.upstreamClientId,
     IdentityBroker__SecretRedemption__Audience: issuer,
