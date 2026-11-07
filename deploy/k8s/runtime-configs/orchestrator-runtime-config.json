@@ -15,6 +15,7 @@
     "Orchestrator__Schema": "orchestrator",
     "Orchestrator__SourceControlOwner__OwnerBaseAddress": "https://orchestrator.agentweaver.svc.cluster.local:8443/",
     "Orchestrator__RuntimeRegistration__EnvironmentOwnerAddress": "https://environment.agentweaver.svc.cluster.local:8443/",
+    "Orchestrator__RuntimeUsage__BrokerOwnerAddress": "https://identity-broker.agentweaver.svc.cluster.local:443/",
     "Identity__Issuer": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
     "Identity__Audience": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
     "ProjectsConfig__AuthorizationContext__OwnerBaseAddress": "https://projects-config.agentweaver.svc.cluster.local:8443/",
