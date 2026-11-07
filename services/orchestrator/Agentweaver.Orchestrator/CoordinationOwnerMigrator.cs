@@ -21,8 +21,8 @@ public static class CoordinationOwnerMigrator
         // Version 035 adds queue ordering; 036 and 037 use the row-lock trigger introduced in 021.
         // Version 038 adds the Source Control pull-request operation ledger; 039 adds runtime evidence receipts.
         // Version 040 adds immutable P1 run-request provenance and accepted invocation bindings.
-        // Version 041 extends the immutable runtime-evidence kind allowlist.
-        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41])];
+        // Version 041 extends the immutable runtime-evidence kind allowlist; 042 adds run-start intents.
+        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42])];
 
     /// <summary>
     /// Applies the supported embedded migrations in order under a schema-scoped PostgreSQL lock.
@@ -70,7 +70,7 @@ public static class CoordinationOwnerMigrator
         // Fail on any version this build doesn't know, or on a version whose prerequisite is missing.
         // Optional owner features remain compatible with their complete pre-migration shapes
         // until the reviewed maintenance plan applies them.
-        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33 or 35 or 36 or 37 or 38 or 39 or 40 or 41)) ||
+        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33 or 35 or 36 or 37 or 38 or 39 or 40 or 41 or 42)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -117,7 +117,8 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(38) && !applied.Contains(12)) ||
             (applied.Contains(39) && !applied.Contains(15)) ||
             (applied.Contains(40) && !applied.Contains(23)) ||
-            (applied.Contains(41) && !applied.Contains(39)))
+            (applied.Contains(41) && !applied.Contains(39)) ||
+            (applied.Contains(42) && !applied.Contains(41)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
         // Apply every catalog version that is not yet recorded, in catalog order. Operator tooling relies on
         // this: it can only cap what runs by checking that the catalog itself ends at the approved version.
@@ -167,6 +168,7 @@ public static class CoordinationOwnerMigrator
                 39 => "runtime_execution_evidence",
                 40 => "p1_run_request_provenance",
                 41 => "runtime_numeric_native_no_send",
+                42 => "runtime_run_start",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
             var filename = version == 10 ? $"{migrationName}.sql" : $"{version:000}_{migrationName}.sql";
@@ -225,7 +227,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -604,6 +606,25 @@ public static class CoordinationOwnerMigrator
                               AND pg_get_constraintdef(oid) LIKE
                                   'FOREIGN KEY (project_id, run_id) REFERENCES %(project_id, run_id)')
                     )
+                ),
+                (
+                    ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 42) = 0
+                        AND to_regclass(@runtimeRunStartIntents) IS NULL)
+                    OR
+                    ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 42) = 1
+                        AND to_regclass(@runtimeRunStartIntents) IS NOT NULL
+                        AND (SELECT count(*) FROM information_schema.columns
+                             WHERE table_schema = @schema AND table_name = 'runtime_run_start_intents') = 20
+                        AND (SELECT count(*) FROM pg_constraint
+                             WHERE conrelid = to_regclass(@runtimeRunStartIntents) AND contype = 'p') = 1
+                        AND (SELECT count(*) FROM pg_constraint
+                             WHERE conrelid = to_regclass(@runtimeRunStartIntents) AND contype = 'u') = 4
+                        AND (SELECT count(*) FROM pg_constraint
+                             WHERE conrelid = to_regclass(@runtimeRunStartIntents) AND contype = 'f'
+                               AND confrelid = to_regclass(@runs) AND convalidated) = 1
+                        AND (SELECT count(*) FROM pg_constraint
+                             WHERE conrelid = to_regclass(@runtimeRunStartIntents) AND contype = 'c'
+                               AND convalidated) = 4)
                 )
             """, connection);
         command.Parameters.AddWithValue(
@@ -700,6 +721,9 @@ public static class CoordinationOwnerMigrator
             "CHECK (((receipt_kind)::text = ANY ((ARRAY['numeric-limit-denial'::character varying, 'replacement-comparison'::character varying])::text[])))");
         command.Parameters.AddWithValue("runtimeEvidenceNativeKindCheck", NpgsqlDbType.Text,
             "CHECK (((receipt_kind)::text = ANY ((ARRAY['numeric-limit-denial'::character varying, 'replacement-comparison'::character varying, 'numeric-limit-native-no-send'::character varying])::text[])))");
+        command.Parameters.AddWithValue("runtimeRunStartIntents", NpgsqlDbType.Text,
+            $"{schema}.runtime_run_start_intents");
+        command.Parameters.AddWithValue("schema", NpgsqlDbType.Text, schema);
         command.Parameters.AddWithValue("p1RunRequestProvenance", NpgsqlDbType.Text,
             $"{schema}.p1_run_request_provenance");
         command.Parameters.AddWithValue("p1InvocationBindings", NpgsqlDbType.Text,
@@ -757,7 +781,7 @@ public static class CoordinationOwnerMigrator
             // checks, the six version 030 checks, and the two version 031 checks precede the
             // optional-033, optional-032, optional-036, optional-035, optional-037, and optional-038 shape checks.
             // A partial apply never counts as ready.
-            Enumerable.Range(57, 52).Any(column => !reader.GetBoolean(column)))
+            Enumerable.Range(57, 53).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }

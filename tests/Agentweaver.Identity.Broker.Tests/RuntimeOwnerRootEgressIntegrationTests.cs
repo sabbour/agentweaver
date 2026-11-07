@@ -280,6 +280,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ["Orchestrator__Database__WorkloadIdentity__TokenFilePath"] = TestTokenFile,
             ["Orchestrator__Schema"] = ownerSchema,
             ["Orchestrator__RuntimeRegistration__EnvironmentOwnerAddress"] = "https://environment.test/",
+            ["Orchestrator__RuntimeUsage__BrokerOwnerAddress"] = "https://broker.test/",
             ["ConnectionStrings__EventsAndSessions"] = _connectionString,
             ["EventsAndSessions__Database__WorkloadIdentity__TenantId"] = Guid.NewGuid().ToString(),
             ["EventsAndSessions__Database__WorkloadIdentity__ClientId"] = Guid.NewGuid().ToString(),
@@ -369,8 +370,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             builder.ConfigureTestServices(services =>
             {
                 ConfigureTestHttpClient(services, "runtime-suspend-environment",
-                    () => new RuntimeServiceRouter(routes, failures));
-                ConfigureTestHttpClient(services, nameof(MafBuildTestEnvironmentClient),
+                      () => new RuntimeServiceRouter(routes, failures));
+                  ConfigureTestHttpClient(services, nameof(MafBuildTestEnvironmentClient),
                     () => new RuntimeServiceRouter(routes, failures));
                 ConfigureTestHttpClient(services, "maf-execution-host",
                     () => new RuntimeServiceRouter(routes, failures,
@@ -398,6 +399,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         {
             BaseAddress = new Uri("https://orchestrator.test/"), AllowAutoRedirect = false
         });
+        var factoryConfiguration =
+            factory.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>();
+        Assert.Equal("https://environment.test/",
+            factoryConfiguration["Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress"]);
+        Assert.Equal("https://broker.test/",
+            factoryConfiguration["Orchestrator:RuntimeUsage:BrokerOwnerAddress"]);
+        using (var factoryScope = factory.Services.CreateScope())
+            Assert.NotNull(factoryScope.ServiceProvider.GetService<RuntimeRunStartDispatcher>());
         Assert.True(routes.TryAdd("orchestrator.test", () => factory.Server.CreateHandler()));
         var rootPath = $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root";
         var registrationPath = $"/internal/projects/{project.ProjectId}/runs/{RunId}" +
@@ -405,6 +414,58 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var root = await SendJsonAsync(client, HttpMethod.Post,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/root", runToken, new AcceptRootRequest("root"));
         await AssertStatusAsync(root, HttpStatusCode.Created);
+        var rootResponseBody = await root.Content.ReadAsStringAsync();
+        using var rootResponseDocument = JsonDocument.Parse(rootResponseBody);
+        Assert.True(rootResponseDocument.RootElement.TryGetProperty("runtimeStartup", out var runtimeStartup),
+            rootResponseBody);
+        Assert.Equal("pending", runtimeStartup.GetProperty("state").GetString());
+        Assert.Equal("accepted", runtimeStartup.GetProperty("step").GetString());
+        var acceptedRoot = await ReadJsonAsync<AcceptedRoot>(root);
+        Assert.Equal("pending", acceptedRoot.RuntimeStartup?.State);
+        await using (var startIntentConnection = await dataSource.OpenConnectionAsync())
+        await using (var startIntentCount = new NpgsqlCommand($"""
+            SELECT count(*)
+            FROM "{ownerSchema}".runtime_run_start_intents
+            WHERE project_id = @project AND run_id = @run AND root_session_id = @root
+            """, startIntentConnection))
+        {
+            startIntentCount.Parameters.AddWithValue("project", project.ProjectId);
+            startIntentCount.Parameters.AddWithValue("run", RunId);
+            startIntentCount.Parameters.AddWithValue("root", acceptedRoot.RootSessionId);
+            Assert.Equal(1L, (long)(await startIntentCount.ExecuteScalarAsync())!);
+        }
+        var rootReplays = await Task.WhenAll(Enumerable.Range(0, 2).Select(_ => SendJsonAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/root",
+            runToken,
+            new AcceptRootRequest("root"))));
+        try
+        {
+            foreach (var replayedRoot in rootReplays)
+            {
+                await AssertStatusAsync(replayedRoot, HttpStatusCode.Created);
+                var replayed = await ReadJsonAsync<AcceptedRoot>(replayedRoot);
+                Assert.Equal(acceptedRoot.RootSessionId, replayed.RootSessionId);
+            }
+        }
+        finally
+        {
+            foreach (var replayedRoot in rootReplays)
+                replayedRoot.Dispose();
+        }
+        await using (var startIntentConnection = await dataSource.OpenConnectionAsync())
+        await using (var startIntentCount = new NpgsqlCommand($"""
+            SELECT count(*)
+            FROM "{ownerSchema}".runtime_run_start_intents
+            WHERE project_id = @project AND run_id = @run AND root_session_id = @root
+            """, startIntentConnection))
+        {
+            startIntentCount.Parameters.AddWithValue("project", project.ProjectId);
+            startIntentCount.Parameters.AddWithValue("run", RunId);
+            startIntentCount.Parameters.AddWithValue("root", acceptedRoot.RootSessionId);
+            Assert.Equal(1L, (long)(await startIntentCount.ExecuteScalarAsync())!);
+        }
         using var rootStatusResponse = await SendAsync(client, HttpMethod.Get, rootPath + "/status", runToken, [TenantId]);
         await AssertStatusAsync(rootStatusResponse, HttpStatusCode.OK);
         var rootStatus = await ReadJsonAsync<SessionStatusSnapshot>(rootStatusResponse);
@@ -851,7 +912,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             async Task ConfigureHostAsync(
                 string environmentId,
                 RuntimeRegistration registration,
-                RuntimeAgentHost host,
+                RuntimePlacementTestServer environment,
                 System.Diagnostics.Stopwatch hostElapsed,
                 DateTimeOffset leaseCreatedAt)
             {
@@ -860,41 +921,38 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     $"Host {environmentId} RuntimeAgentHost.ConfigureAsync begin; " +
                     $"hostElapsed={hostElapsed.Elapsed}, leaseAge={DateTimeOffset.UtcNow - leaseCreatedAt}, " +
                     $"registrationExpiresAt={registration.ExpiresAt:O}.");
-                var bearer = new SecretCredential(runToken, registration.ExpiresAt);
+                using var environmentClient = new HttpClient(environment.CreateHandler())
+                {
+                    BaseAddress = new Uri("https://environment.test/")
+                };
+                using var request = new HttpRequestMessage(HttpMethod.Post, "/internal/runtime/v1/activate")
+                {
+                    Content = JsonContent.Create(new RuntimeHostConfigureRequest(
+                        1, registration, Guid.NewGuid(), Guid.NewGuid(),
+                        JsonSerializer.SerializeToElement(new { })))
+                };
+                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+                    "Bearer", runToken);
+                request.Headers.Add("X-Agentweaver-Tenant", TenantId);
                 try
                 {
-                    var readiness = await host.ConfigureAsync(
-                        new(1, registration, Guid.NewGuid(), Guid.NewGuid(), JsonSerializer.SerializeToElement(new { })),
-                        new(bearer, TenantId), token);
+                    using var response = await environmentClient.SendAsync(request, token);
+                    await AssertStatusAsync(response, HttpStatusCode.OK, string.Join('\n', failures));
+                    var readiness = await ReadJsonAsync<RuntimeHostReadinessReceipt>(response);
                     Assert.Contains(readiness.StartupPhases, phase => phase.Phase == SandboxStartupPhase.Ready);
                     sourceGrantReceipts[registration.RuntimeInstanceId] = readiness.SourceGrant;
                     TraceNativeStage(failures,
-                        $"Host {environmentId} RuntimeAgentHost.ConfigureAsync reached Ready; " +
+                        $"Host {environmentId} /internal/runtime/v1/activate reached Ready; " +
                         $"configureElapsed={configureElapsed.Elapsed}, hostElapsed={hostElapsed.Elapsed}.");
                     TraceSourceGrantMetadata(
                         $"Host {environmentId} reached Ready", registration, readiness.SourceGrant,
                         null, DateTimeOffset.UtcNow, storedWasRead: false);
                 }
-                catch (RuntimeStartupException error)
-                {
-                    var budgetFailure = error.Failure;
-                    var budgetDetails = budgetFailure is null
-                        ? "no startup budget evidence"
-                        : $"phase={budgetFailure.Phase}({(int)budgetFailure.Phase}), " +
-                          $"effectivePhaseBudgetSeconds={budgetFailure.BudgetSeconds}, " +
-                          $"deadline={budgetFailure.Deadline:O}, observedAt={budgetFailure.ObservedAt:O}";
-                    TraceNativeStage(failures,
-                        $"Host {environmentId} RuntimeAgentHost.ConfigureAsync failed after " +
-                        $"{configureElapsed.Elapsed}: {error.Code}; {budgetDetails}.");
-                    throw new InvalidOperationException(
-                        $"{error.Code}: {JsonSerializer.Serialize(error.Failure)}", error);
-                }
                 finally
                 {
                     TraceNativeStage(failures,
-                        $"Host {environmentId} RuntimeAgentHost.ConfigureAsync ended; " +
+                        $"Host {environmentId} /internal/runtime/v1/activate ended; " +
                         $"configureElapsed={configureElapsed.Elapsed}, hostElapsed={hostElapsed.Elapsed}.");
-                    bearer.Invalidate();
                 }
             }
 
@@ -1084,7 +1142,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 var configureStarted = bootstrapReceived.Task.IsCompletedSuccessfully;
                 if (configureStarted)
                     configureHosts.Add(ConfigureHostAsync(
-                        environmentId, registration, host, hostElapsed, leaseCreatedAt));
+                        environmentId, registration, childEnvironment, hostElapsed, leaseCreatedAt));
                 using (var delivery = await deliveryTask)
                     await AssertStatusAsync(delivery, HttpStatusCode.OK, string.Join('\n', failures));
                 Assert.True(bootstrapReceived.Task.IsCompletedSuccessfully,
@@ -1094,7 +1152,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     $"hostElapsed={hostElapsed.Elapsed}, registrationExpiresAt={registration.ExpiresAt:O}.");
                 if (!configureStarted)
                     configureHosts.Add(ConfigureHostAsync(
-                        environmentId, registration, host, hostElapsed, leaseCreatedAt));
+                        environmentId, registration, childEnvironment, hostElapsed, leaseCreatedAt));
             }
             Assert.Equal(2, hosts.Count);
             Assert.Equal(2, runtimeInstances.Count);

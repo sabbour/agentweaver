@@ -302,7 +302,7 @@ public sealed class RuntimeGrantAuthority(
         var registration = await RequireCurrentAsync(runtimeInstanceId, cancellationToken);
         var requestHash = Hash("deliver", registration, configurationHash);
         var prior = await ReadOperationAsync<RuntimeBootstrapDeliveryReceipt>(
-            operationId, requestHash, cancellationToken);
+            operationId, requestHash, cancellationToken, revokedIsFailure: true);
         if (prior is not null)
         {
             await RequireSameCurrentAsync(registration, cancellationToken);
@@ -322,7 +322,7 @@ public sealed class RuntimeGrantAuthority(
                 {
                     await transaction.RollbackAsync(cancellationToken);
                     var completed = await ReadOperationAsync<RuntimeBootstrapDeliveryReceipt>(
-                        operationId, requestHash, cancellationToken)
+                        operationId, requestHash, cancellationToken, revokedIsFailure: true)
                         ?? throw Denied("runtime_delivery_pending");
                     await RequireSameCurrentAsync(registration, cancellationToken);
                     return completed;
@@ -859,7 +859,8 @@ public sealed class RuntimeGrantAuthority(
     }
 
     private async Task<T?> ReadOperationAsync<T>(
-        Guid operationId, string requestHash, CancellationToken cancellationToken) where T : class
+        Guid operationId, string requestHash, CancellationToken cancellationToken,
+        bool revokedIsFailure = false) where T : class
     {
         var operation = await db.RuntimeGrantOperations.AsNoTracking().SingleOrDefaultAsync(
             row => row.OperationId == operationId, cancellationToken);
@@ -870,7 +871,16 @@ public sealed class RuntimeGrantAuthority(
         var receipt = await db.RuntimeGrantOperationReceipts.AsNoTracking().SingleOrDefaultAsync(
             row => row.OperationId == operationId, cancellationToken);
         if (receipt is null)
-            throw Denied("runtime_operation_pending");
+        {
+            if (revokedIsFailure &&
+                await db.RuntimeGrantRevisions.AsNoTracking()
+                    .Where(row => row.GrantId == operation.GrantId)
+                    .OrderByDescending(row => row.Revision)
+                    .Select(row => row.State)
+                    .FirstOrDefaultAsync(cancellationToken) == RuntimeCredentialState.Revoked)
+                throw Denied("runtime_delivery_failed");
+            throw Denied(revokedIsFailure ? "runtime_delivery_pending" : "runtime_operation_pending");
+        }
         return JsonSerializer.Deserialize<T>(receipt.ReceiptJson, JsonOptions)
             ?? throw new InvalidOperationException("A committed runtime operation receipt is invalid.");
     }

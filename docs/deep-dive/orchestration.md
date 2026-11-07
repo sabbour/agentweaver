@@ -125,6 +125,40 @@ recorded from that time on. See the [API reference](../reference/api.md#project-
 
 ## 6. Runtime view
 
+### Start the root AgentHost
+
+After Orchestrator commits an accepted root and admits the first message, it
+saves a runtime-start intent and queues a bounded background continuation.
+Direct root acceptance uses the same path. P1 admission reaches it only after
+the setup receipt, accepted run selection, root, and first message pass their
+current owner checks. Startup does not create a model turn.
+
+The continuation uses the accepted run selection and its execution fence. It
+asks Environment to register the run's Environment, apply the selected egress
+policy, create a private 1 GiB `ReadWriteMany` workspace at `/workspace`, and
+provision the first Sandbox placement. The workspace uses `Strict` consistency
+and `Retain` for both reclaim and owner deletion. Environment returns the exact
+lease, placement, and selected default source profile.
+
+Orchestrator then creates the current runtime registration, requests Broker
+bootstrap, and calls Environment's authenticated
+`POST /internal/runtime/v1/activate` route. `Ready` is stored only after
+Environment validates the current registration, placement, AgentHost receipt,
+and readiness evidence. The response and session status report `pending`,
+`ready`, or `blocked`; `pending` is not proof that the Host is ready.
+
+The startup intent stores operation IDs, owner fences, and non-credential
+receipts. It does not store bearer credentials. A retry needs fresh
+authenticated run authority. Replaying a start request can queue recovery
+without sending the first message again. Cancelling a run records a cleanup
+obligation for the saved placement; cleanup releases only that placement and
+does not delete retained workspace data or start a replacement Host.
+
+The continuation and its durable state live in
+`RuntimeRunStartOrchestration.cs` and `CoordinationRuntimeRunStartStore.cs`.
+Environment owns first placement in `EnvironmentRuntimeRunStartManager.cs`.
+The real activation route is in `EnvironmentRuntimeBootstrapEndpoints.cs`.
+
 ### Understand workflows, plans, and gates
 
 A workflow is a versioned catalog of steps. Its step mode defines who creates

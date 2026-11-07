@@ -176,6 +176,9 @@ public sealed class EnvironmentRuntimeBootstrapProfileRegistry
     private readonly string? _defaultSourceProfileId;
     private readonly Uri? _observationEndpoint;
 
+    internal string DefaultSourceProfileId =>
+        _defaultSourceProfileId ?? throw new RuntimeAuthorizationException("runtime_delivery_unavailable");
+
     /// <summary>Validates all profile registrations and rejects duplicate owner/profile keys.</summary>
     public EnvironmentRuntimeBootstrapProfileRegistry(
         IEnumerable<EnvironmentRuntimeBootstrapProfileRegistration> registrations,

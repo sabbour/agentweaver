@@ -116,7 +116,8 @@ import { OrchestrationsPage } from './OrchestrationsPage';
 import { BoardPage } from './BoardPage';
 import { SessionsPage } from './SessionsPage';
 import { NewSessionPage } from './NewSessionPage';
-import { readPendingRun } from './pendingRun';
+import { clearPendingRun, readPendingRun } from './pendingRun';
+import { clearPendingChat } from './chiefOfStaff';
 import { StopRunButton } from './StopRunButton';
 import { AgentsView } from './AgentsView';
 import { CastTeamPage } from './CastTeamPage';
@@ -2626,6 +2627,18 @@ function ActivityView({
                 </div>
                 <p className="v1-muted">Lifecycle: {status.lifecycle} · detached: {String(status.detached)} · fence {status.executionFence} · version {status.stateVersion}</p>
                 <p className="v1-muted">Runtime effects: {status.runtimeEffectsState}{status.runtimeEffectsUnavailableCode ? ` · ${status.runtimeEffectsUnavailableCode}` : ''}</p>
+                {status.runtimeStartup && (
+                  <p className="v1-muted">
+                    AgentHost startup: {{
+                      pending: 'Starting',
+                      ready: 'Ready',
+                      blocked: 'Blocked',
+                      cleanup_pending: 'Cleanup pending',
+                      cleanup_complete: 'Cleanup complete',
+                    }[status.runtimeStartup.state]} · {status.runtimeStartup.step}
+                    {status.runtimeStartup.failureCode ? ` · ${status.runtimeStartup.failureCode}` : ''}
+                  </p>
+                )}
                 <p className="v1-muted">Run owner state: {status.runExecution.state} · state version {status.runExecution.stateVersion}</p>
                 {status.runExecution.causeCode && <p className="v1-muted">Cause: {status.runExecution.causeCode}{status.runExecution.reference ? ` · ${status.runExecution.reference}` : ''}</p>}
               </article>
@@ -2656,6 +2669,7 @@ function ChatView({
   nodes,
   targetSessionId,
   journalEvents,
+  runtimeStartup,
   apiCall,
   snapshotBusy,
 }: {
@@ -2664,6 +2678,7 @@ function ChatView({
   nodes: SessionTreeNode[];
   targetSessionId: string;
   journalEvents: SessionEventEnvelope[];
+  runtimeStartup?: SessionStatusSnapshot['runtimeStartup'];
   apiCall: AuthReturn['apiCall'];
   snapshotBusy: boolean;
 }) {
@@ -2672,6 +2687,11 @@ function ChatView({
   const [notice, setNotice] = useState<string | null>(null);
   const target = activeNodes.find((node) => node.identity.sessionId === targetSessionId);
   const targetName = target ? sessionName(target) : 'Coordinator';
+  const startupMessage = runtimeStartup?.state === 'pending'
+    ? 'Starting the agent runtime. This status refreshes automatically.'
+    : runtimeStartup?.state === 'blocked'
+      ? `AgentHost startup is blocked${runtimeStartup.failureCode ? ` (${runtimeStartup.failureCode})` : ''}.`
+      : null;
   // Historical text comes from run-bound event references, not the local send receipt.
   const transcript = useTurnTranscript(journalEvents, projectId, runId, apiCall);
 
@@ -2694,6 +2714,11 @@ function ChatView({
 
   return (
     <div className="v1-stack">
+      {startupMessage && (
+        <MessageBar intent={runtimeStartup?.state === 'blocked' ? 'error' : 'info'}>
+          <MessageBarBody>{startupMessage}</MessageBarBody>
+        </MessageBar>
+      )}
       {notice && <MessageBar intent="info"><MessageBarBody>{notice}</MessageBarBody></MessageBar>}
       <TranscriptPanel transcript={transcript} />
       <Panel title="Activity" description="Events from this run, oldest first. Message text is not stored in the event list.">
@@ -3273,6 +3298,19 @@ function RunPage() {
     };
   }, [authorized, projectId, runId, session?.accessToken]);
 
+  const rootStartupState = runStatus
+    ? statuses[runStatus.rootSessionId]?.runtimeStartup?.state
+    : undefined;
+  useEffect(() => {
+    if (loadedSnapshotScope !== snapshotScope || !runStatus ||
+        (rootStartupState !== 'ready' && !isRunFinished(runStatus.executionState)))
+      return;
+    const pendingRun = readPendingRun();
+    if (pendingRun?.projectId === projectId && pendingRun.runId === runId)
+      clearPendingRun();
+    clearPendingChat(runId);
+  }, [loadedSnapshotScope, projectId, rootStartupState, runId, runStatus, snapshotScope]);
+
   if (!authorized) {
     return (
       <>
@@ -3446,7 +3484,7 @@ function RunPage() {
               )}
             </div>
           )}
-          {tab === 'chat' && <ChatView key={`${projectId}/${runId}/${session?.accessToken ?? ''}`} projectId={projectId} runId={runId} nodes={nodes} targetSessionId={chatTarget} journalEvents={journal.events} apiCall={apiCall} snapshotBusy={snapshotBusy} />}
+          {tab === 'chat' && <ChatView key={`${projectId}/${runId}/${session?.accessToken ?? ''}`} projectId={projectId} runId={runId} nodes={nodes} targetSessionId={chatTarget} journalEvents={journal.events} runtimeStartup={currentRunStatus ? currentStatuses[currentRunStatus.rootSessionId]?.runtimeStartup : null} apiCall={apiCall} snapshotBusy={snapshotBusy} />}
           {tab === 'approvals' && (
             <DecisionList projectId={projectId} runId={runId} pinned={pinnedDecisionFromSearch(searchParams)} statuses={currentStatuses} decisions={currentDecisions} apiCall={apiCall} refresh={() => refreshRef.current()} snapshotBusy={snapshotBusy} />
           )}

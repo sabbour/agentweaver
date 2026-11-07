@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Agentweaver.Environment.Tests" />
+    <InternalsVisibleTo Include="Agentweaver.Identity.Broker.Tests" />
     <PackageReference Include="Azure.Identity" Version="1.17.1" Aliases="AzureIdentity" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.12" />

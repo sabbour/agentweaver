@@ -47,6 +47,35 @@ public sealed class RuntimeOwnerHttpTransportTests
         Assert.Equal("owner", role.Role);
     }
 
+    [Theory]
+    [InlineData("runtime_delivery_pending", "runtime_delivery_pending")]
+    [InlineData("runtime_delivery_failed", "runtime_delivery_failed")]
+    [InlineData("arbitrary_owner_error", "runtime_owner_denied")]
+    public async Task RunStartTransportPreservesOnlyAllowlistedBrokerFailures(
+        string errorCode,
+        string expectedCode)
+    {
+        var handler = new RecordingHandler(request =>
+        {
+            var response = Response(request, new { error = errorCode });
+            response.StatusCode = HttpStatusCode.Forbidden;
+            return Task.FromResult(response);
+        });
+        using var client = new HttpClient(handler);
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            RuntimeOwnerHttpTransport.SendRuntimeRunStartAsync<RuntimeBootstrapDeliveryReceipt>(
+                client,
+                new Uri("https://broker.test/"),
+                "/internal/runtime/bootstrap/request",
+                new(new SecretCredential("actor", DateTimeOffset.UtcNow.AddMinutes(1)), null),
+                new RuntimeBootstrapRequest(Guid.NewGuid(), Guid.NewGuid(), new string('a', 64)),
+                default));
+
+        Assert.Equal(expectedCode, failure.Code);
+        Assert.Single(handler.Requests);
+    }
+
     [Fact]
     public async Task PendingVerifierForwardsOnlyTheProtectedActorAndExactTransientProof()
     {

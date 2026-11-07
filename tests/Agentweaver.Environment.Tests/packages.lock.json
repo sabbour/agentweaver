@@ -8,6 +8,12 @@
         "resolved": "10.0.1",
         "contentHash": "27jXSV/0DbVqF5jDrAxuQFZ9oaz6gmG03p8ttxAFk+X0M4woFYj7MoWDLCna5EGLb0CE6OE7X6ZH3Wt5smTtaA=="
       },
+      "Microsoft.AspNetCore.TestHost": {
+        "type": "Direct",
+        "requested": "[10.0.0, )",
+        "resolved": "10.0.0",
+        "contentHash": "Q3ia+k+wYM3Iv/Qq5IETOdpz/R0xizs3WNAXz699vEQx5TMVAfG715fBSq9Thzopvx8dYZkxQ/mumTn6AJ/vGQ=="
+      },
       "Microsoft.EntityFrameworkCore.Relational": {
         "type": "Direct",
         "requested": "[10.0.12, )",
@@ -472,11 +478,11 @@
       "agentweaver.environment": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )",
-          "Agentweaver.Identity": "[1.6.0, )",
-          "Agentweaver.Persistence.Postgres": "[1.2.2, )",
+          "Agentweaver.Abstractions": "[1.7.0, )",
+          "Agentweaver.Identity": "[1.7.0, )",
+          "Agentweaver.Persistence.Postgres": "[1.2.3, )",
           "Agentweaver.Providers": "[1.1.0, )",
-          "Agentweaver.Providers.Sandbox.AgentSandbox": "[1.1.4, )",
+          "Agentweaver.Providers.Sandbox.AgentSandbox": "[1.2.0, )",
           "Agentweaver.Providers.Storage.AzureFiles": "[1.0.4, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
@@ -487,7 +493,7 @@
       "agentweaver.identity": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )"
+          "Agentweaver.Abstractions": "[1.7.0, )"
         }
       },
       "agentweaver.persistence.postgres": {
@@ -499,7 +505,7 @@
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )",
+          "Agentweaver.Abstractions": "[1.7.0, )",
           "Microsoft.Extensions.Configuration.Abstractions": "[10.0.0, )",
           "Microsoft.Extensions.Configuration.Binder": "[10.0.0, )"
         }
@@ -507,13 +513,13 @@
       "agentweaver.providers.sandbox.agentsandbox": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )"
+          "Agentweaver.Abstractions": "[1.7.0, )"
         }
       },
       "agentweaver.providers.storage.azurefiles": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )"
+          "Agentweaver.Abstractions": "[1.7.0, )"
         }
       }
     }

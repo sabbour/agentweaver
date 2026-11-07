@@ -258,6 +258,7 @@ builder.Services.AddScoped(services => new ExecutableActionGuard(
 // Registers the ordered Guardrails checks. Prompt Shields is added only when its settings section exists.
 builder.Services.AddGuardrails(builder.Configuration, options.Schema);
 var runtimeRegistrationEnabled = builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options);
+_ = builder.Services.AddRuntimeRunStart(builder.Configuration, options, runtimeRegistrationEnabled);
 var remoteToolTlsSection = builder.Configuration.GetSection("Orchestrator:RemoteToolResults:Tls");
 if (remoteToolTlsSection.Exists())
 {

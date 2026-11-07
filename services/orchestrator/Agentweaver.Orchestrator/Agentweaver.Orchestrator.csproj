@@ -61,5 +61,6 @@
     <EmbeddedResource Include="Migrations\039_runtime_execution_evidence.sql" />
     <EmbeddedResource Include="Migrations\040_p1_run_request_provenance.sql" />
     <EmbeddedResource Include="Migrations\041_runtime_numeric_native_no_send.sql" />
+    <EmbeddedResource Include="Migrations\042_runtime_run_start.sql" />
   </ItemGroup>
 </Project>

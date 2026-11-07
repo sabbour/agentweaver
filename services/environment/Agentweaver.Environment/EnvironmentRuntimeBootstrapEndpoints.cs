@@ -33,6 +33,28 @@ public static class EnvironmentRuntimeBootstrapEndpoints
             await ExecuteAsync(context, timeProvider,
                 actor => delivery.ActivateAsync(request, actor, token), token).ConfigureAwait(false))
             .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/run-start/placement", async (
+            RuntimeRunStartPlacementRequest request,
+            HttpContext context,
+            [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimeRunStartManager manager,
+            TimeProvider timeProvider,
+            CancellationToken token) =>
+            await ExecuteAsync(context, timeProvider,
+                async actor => request.Cleanup is null
+                    ? (object)await manager.ProvisionAsync(request, actor, token).ConfigureAwait(false)
+                    : await manager.CleanupAsync(request, actor, token).ConfigureAwait(false),
+                token).ConfigureAwait(false))
+            .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/run-start/retire-failed", async (
+            RuntimeRunStartRetirementRequest request,
+            HttpContext context,
+            [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimeRunStartManager manager,
+            TimeProvider timeProvider,
+            CancellationToken token) =>
+            await ExecuteAsync(context, timeProvider,
+                actor => manager.RetireFailedBootstrapAsync(request, actor, token), token)
+                .ConfigureAwait(false))
+            .RequireAuthorization();
         endpoints.MapPost(
             "/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}" +
             "/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}/resolve",

@@ -81,7 +81,12 @@ describe('NewSessionPage', () => {
     mocks.createProjectRun.mockReset().mockResolvedValue({
       runId: 'r1', rootSessionId: 's1', state: 'awaiting_binding', binding: { projectId: 'p2', runId: 'r1' },
     });
-    mocks.startProjectRun.mockReset().mockResolvedValue({ runId: 'r1', rootSessionId: 's1', state: 'started' });
+    mocks.startProjectRun.mockReset().mockResolvedValue({
+      runId: 'r1',
+      rootSessionId: 's1',
+      state: 'started',
+      runtimeStartup: { state: 'ready', step: 'ready' },
+    });
     mocks.ensureSession.mockReset().mockResolvedValue(true);
     mocks.authorize.mockReset().mockResolvedValue(undefined);
     // Records which session each call used: null for unbound, or the run binding.
@@ -106,6 +111,23 @@ describe('NewSessionPage', () => {
     expect(mocks.ensureSession).toHaveBeenCalledWith({ projectId: 'p2', runId: 'r1' });
     expect(mocks.startProjectRun).toHaveBeenCalledWith('run-token', 'p2', 'r1', 'tenant-1');
     expect(readPendingRun()).toBeNull();
+  });
+
+  it('opens the saved chat when startup is accepted as pending and keeps recovery', async () => {
+    mocks.startProjectRun.mockResolvedValue({
+      runId: 'r1',
+      rootSessionId: 's1',
+      state: 'started',
+      runtimeStartup: { state: 'pending', step: 'activation', failureCode: null },
+    });
+    renderPage();
+    await screen.findByRole('combobox', { name: /Project/ });
+    await send('Hello team');
+
+    await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/projects/p2/runs/r1?view=chat'));
+    expect(readPendingRun()).toMatchObject({ projectId: 'p2', runId: 'r1' });
+    expect(mocks.createProjectRun).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/agent runtime status is unavailable/i)).toBeNull();
   });
 
   it('shows plain copy when the Orchestrator role is missing', async () => {
@@ -154,13 +176,19 @@ describe('NewSessionPage', () => {
   });
 
   it('resumes a saved chat on load without creating another run', async () => {
+    mocks.startProjectRun.mockResolvedValue({
+      runId: 'r9',
+      rootSessionId: 's9',
+      state: 'started',
+      runtimeStartup: { state: 'pending', step: 'activation', failureCode: null },
+    });
     savePendingRun({ projectId: 'p1', runId: 'r9', createdAt: new Date().toISOString() });
     renderPage('/assistant');
     await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/projects/p1/runs/r9?view=chat'));
     expect(mocks.createProjectRun).not.toHaveBeenCalled();
     expect(mocks.startProjectRun).toHaveBeenCalledWith('run-token', 'p1', 'r9', 'tenant-1');
     expect(mocks.listProjects).not.toHaveBeenCalled();
-    expect(readPendingRun()).toBeNull();
+    expect(readPendingRun()).toMatchObject({ projectId: 'p1', runId: 'r9' });
   });
 
   it('offers Try again after start keeps timing out', async () => {
@@ -172,7 +200,12 @@ describe('NewSessionPage', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
       expect(await screen.findByText(/did not start in time/)).toBeTruthy();
       expect(mocks.startProjectRun).toHaveBeenCalledTimes(3);
-      mocks.startProjectRun.mockResolvedValue({ runId: 'r9', rootSessionId: 's', state: 'started' });
+      mocks.startProjectRun.mockResolvedValue({
+        runId: 'r9',
+        rootSessionId: 's',
+        state: 'started',
+        runtimeStartup: { state: 'ready', step: 'ready' },
+      });
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Try again' })); });
       await waitFor(() => expect(screen.getByTestId('where').textContent).toBe('/projects/p1/runs/r9?view=chat'));
     } finally {

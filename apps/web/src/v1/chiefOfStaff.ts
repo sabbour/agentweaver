@@ -6,7 +6,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { useAuth } from './AuthContext';
-import { gatewayClient } from './api';
+import { GatewayError, gatewayClient } from './api';
+import { requireRuntimeStartupReady } from './pendingRun';
 import type {
   ChiefOfStaffConversation,
   ChiefOfStaffConversationPage,
@@ -77,8 +78,8 @@ export function runPath(projectId: string, runId: string): string {
   return `/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`;
 }
 
-/** `started` when the first message was accepted; `sign_in_required` when the run token needs interactive sign-in. */
-export type StartChatResult = 'started' | 'sign_in_required';
+/** Reports whether startup is ready, pending, ended, or needs interactive sign-in. */
+export type StartChatResult = 'started' | 'starting' | 'ended' | 'sign_in_required';
 
 /**
  * Binds a created run to My conversations, gets a token bound to that run, and
@@ -96,7 +97,20 @@ export function useStartChat() {
     // If that needs sign-in, stop here; the pending entry stays so start resumes later.
     if (!await ensureSession(binding, false)) return 'sign_in_required';
     // Step 3: start the run with the run-bound token. This sends the first message.
-    await apiCall((token, tenant) => gatewayClient.startProjectRun(token, chat.projectId, chat.runId, tenant), binding);
+    let started: unknown;
+    try {
+      started = await apiCall(
+        (token, tenant) => gatewayClient.startProjectRun(token, chat.projectId, chat.runId, tenant),
+        binding,
+      );
+    } catch (error) {
+      if (error instanceof GatewayError && error.status === 409 && error.code === 'run_terminal') {
+        clearPendingChat(chat.runId);
+        return 'ended';
+      }
+      throw error;
+    }
+    if (requireRuntimeStartupReady(started) === 'pending') return 'starting';
     // Only forget the pending entry after start succeeded. Any thrown error above
     // leaves it in storage so the user can retry.
     clearPendingChat(chat.runId);

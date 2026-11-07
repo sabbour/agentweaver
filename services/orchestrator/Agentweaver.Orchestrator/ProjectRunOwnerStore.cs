@@ -222,6 +222,10 @@ internal sealed partial class CoordinationOwnerStore
                 var receipt = JsonSerializer.Deserialize<CancelProjectRunResponse>(reader.GetString(1), JsonOptions)
                     ?? throw new CoordinationException("cancel_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
                 await reader.DisposeAsync();
+                if (run?.ExecutionState == "cancelled")
+                    await CoordinationRuntimeRunStartStore.CaptureCleanupInTransactionAsync(
+                        connection, transaction, _schema, projectId, runId, cancellationToken)
+                        .ConfigureAwait(false);
                 await revalidateAuthority(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 return receipt;
@@ -268,6 +272,10 @@ internal sealed partial class CoordinationOwnerStore
             if (pending is not null)
                 await SetProjectRunRequestStateAsync(connection, transaction, projectId, runId, "cancelled", cancellationToken);
         }
+        if (run is not null && result.State == "cancelled")
+            await CoordinationRuntimeRunStartStore.CaptureCleanupInTransactionAsync(
+                connection, transaction, _schema, projectId, runId, cancellationToken)
+                .ConfigureAwait(false);
         await using (var save = new NpgsqlCommand($"""
             INSERT INTO {_schema}.project_run_cancellations
                 (tenant_id, project_id, run_id, actor_issuer, actor_subject,

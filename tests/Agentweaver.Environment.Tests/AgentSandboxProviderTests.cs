@@ -412,6 +412,66 @@ public sealed partial class AgentSandboxProviderTests
                 fence, longResource.Resource, 1, longResource.ProviderBinding, leaseCreatedAt));
             Assert.Equal(longMountPath, longObservation.PodObservation!.WorkspaceAttachment!.MountPath);
         }
+        var rootOperationId = Guid.NewGuid();
+        var rootPlannedResource = SandboxResourceIdentity.CreatePlannedReference(
+            candidate.ProviderId,
+            candidate.OptionsRevision,
+            fence,
+            resourceGeneration: 1,
+            fencingGeneration: 1,
+            rootOperationId);
+        var rootWorkspaceSpec = new WorkspaceVolumeSpec(
+            workspaceSpec.VolumeId,
+            workspaceSpec.ProjectId,
+            workspaceSpec.Owner,
+            workspaceSpec.EnvironmentId,
+            WorkspaceVolumeBindingMode.Environment,
+            WorkspaceVolumeAccessMode.ReadWriteMany,
+            1,
+            workspaceSpec.StorageClass,
+            WorkspaceVolumeConsistency.Strict,
+            WorkspaceVolumeReclaimPolicy.Retain,
+            WorkspaceVolumeOwnerDeletionPolicy.Retain,
+            []);
+        var rootStorage = new WorkspaceVolumeResource(
+            storage.Resource,
+            Enum.GetValues<WorkspaceVolumeAccessMode>()
+                .Select(WorkspaceVolumeCapabilities.ForAccessMode)
+                .Append(WorkspaceVolumeCapabilities.ReadOnlyMount)
+                .ToImmutableHashSet(StringComparer.Ordinal),
+            storage.ProviderBinding);
+        var rootMount = new WorkspaceVolumeMountDeclaration(workspaceReference, "/workspace", ReadOnly: false);
+        var rootNegotiation = WorkspaceVolumeAttachmentNegotiator.Negotiate(
+            owner.ProjectId,
+            owner.EnvironmentId,
+            owner.RunId,
+            rootWorkspaceSpec,
+            rootStorage,
+            new WorkspaceVolumeMountManifest([rootMount]),
+            rootMount,
+            rootPlannedResource,
+            fence,
+            dataGeneration: 0,
+            profile with { Resource = rootPlannedResource },
+            WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim);
+        var rootHandler = new FakeKubernetesHandler();
+        using (var rootHttp = new HttpClient(rootHandler) { BaseAddress = new Uri("https://kubernetes.example/") })
+        {
+            var rootProvider = new AgentSandboxProvider(
+                options,
+                new KubernetesAgentSandboxClient(rootHttp, KubernetesTestCaCertificate.Primary),
+                new FixedTimeProvider(leaseCreatedAt.AddSeconds(2)));
+            var rootResource = await rootProvider.ProvisionAsync(request with
+            {
+                OperationId = rootOperationId,
+                Workspace = request.Workspace with { Negotiation = rootNegotiation }
+            });
+            rootHandler.AddReadySandbox(rootResource.Resource.ResourceId, leaseCreatedAt);
+            var rootObservation = await rootProvider.DescribeAsync(new(
+                fence, rootResource.Resource, 1, rootResource.ProviderBinding, leaseCreatedAt));
+            Assert.True(rootObservation.WorkspaceAttachmentVerified);
+            Assert.Equal("/workspace", rootObservation.PodObservation!.WorkspaceAttachment!.MountPath);
+        }
         foreach (var fault in new[] { "missing", "uid", "resourceVersion" })
         {
             handler.PodReadbackFault = fault;

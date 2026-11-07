@@ -230,6 +230,13 @@ public static partial class CoordinationEndpoints
             var status = await store.ReadSessionStatusAsync(
                     actor, identity, cancellationToken, selection)
                 .ConfigureAwait(false);
+            var runtimeStart = context.RequestServices.GetService<RuntimeRunStartDispatcher>();
+            if (runtimeStart is not null)
+                status = status with
+                {
+                    RuntimeStartup = await runtimeStart.ReadSummaryAsync(
+                        context, projectId, runId, status.RootSessionId, cancellationToken).ConfigureAwait(false)
+                };
             if (status.Kind == CoordinationSessionKind.Coordinator &&
                 status.Lifecycle == CoordinationLifecycleState.Active)
             {
@@ -1456,9 +1463,12 @@ public static partial class CoordinationEndpoints
         {
             var accepted = await AcceptInteractiveRootAsync(projectId, runId, request.SessionId,
                 context, options, projects, events, store, decisions, cancellationToken).ConfigureAwait(false);
+            var runtimeStartup = await QueueRuntimeRunStartAsync(
+                projectId, runId, accepted.RootSessionId, context, options,
+                projects, store, decisions, cancellationToken).ConfigureAwait(false);
             return Results.Created(
                 $"/api/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}/coordination/root",
-                accepted);
+                accepted with { RuntimeStartup = runtimeStartup });
         }, cancellationToken);
 
     /// <summary>

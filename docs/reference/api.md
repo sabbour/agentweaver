@@ -718,8 +718,8 @@ Orchestrator role through
 | Method | Suffix | Token | Purpose | Gateway |
 | --- | --- | --- | --- | --- |
 | POST | `/` | Not bound to a run | Save the first message, mint `runId` and `rootSessionId`, and accept the run selection. Returns `201` with `awaiting_binding`. | Yes |
-| POST | `/{runId}/start` | Bound to the run | Accept the root session and deliver the saved first message once. Returns `200` with `started`. | Yes |
-| POST | `/{runId}/cancel` | Not bound to a run | Cancel any run as a current project Contributor, Owner, or tenant admin. Viewer receives `403`. Returns `200`, including terminal no-ops. | Yes |
+| POST | `/{runId}/start` | Bound to the run | Accept the root session and deliver the saved first message once. Returns `200` with `started` and the current `runtimeStartup` summary when startup is enabled. | Yes |
+| POST | `/{runId}/cancel` | Not bound to a run | Cancel any run as a current project Contributor, Owner, or tenant admin. Viewer receives `403`. Returns `200`, including terminal no-ops; cleanup queue saturation can return `503 runtime_start_queue_full` after cancellation is saved. | Yes |
 | POST | `/{runId}/messages` | Bound to the run | Send user text to the coordinator or an explicitly selected active session. Returns an Events admission receipt. | Yes |
 
 Create, cancel, and run messages require exactly one `Idempotency-Key` header.
@@ -728,10 +728,23 @@ the same key and a different body returns `409 idempotency_conflict`. Start
 takes no body and no key; a repeated start returns the same result without
 sending the first message again. Cancel on a finished run returns `200` with
 `alreadyTerminal: true` and does not change state. Cancellation receipts are
-scoped to each caller.
+scoped to each caller. Cancellation is saved before the service queues runtime
+cleanup. If that queue is full, the service returns `503 runtime_start_queue_full`
+and keeps the cancellation. Retry with the same key and body to queue cleanup.
 Start has a 30-second deadline covering its request lock and downstream calls;
 a timeout returns `504 run_start_timeout`. Start after cancellation returns
 `409 run_terminal`.
+
+Runtime startup continues in the background after root admission. Its summary
+reports `pending`, `ready`, or `blocked`; `pending` does not mean AgentHost is
+ready. Session status can also report `cleanup_pending` or `cleanup_complete`
+after cancellation. A retry with fresh run authority can resume pending startup
+without sending the first message again.
+When a start replay checks a `ready` result, Orchestrator reads the current
+Environment placement and authenticated Host `GET /runtime/v1/readiness`.
+An unavailable or not-ready Host keeps the result `pending`; stale Host or
+placement evidence makes it `blocked`. This read does not activate the Host or
+provision a Sandbox.
 
 The create request body has `firstMessage` (1–32,768 UTF-8 bytes),
 `expectedProjectConfigRevision`, and optional `title`, `workflowId` and

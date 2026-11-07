@@ -53,9 +53,73 @@ public sealed record EnvironmentReleaseApiRequest(long ExpectedLifecycleGenerati
 public sealed class EnvironmentLifecycleManager(
     EnvironmentEgressManager authorization,
     IEnvironmentLifecycleProducer lifecycleProducer,
-    IEnvironmentP1InvocationBindingReader? p1BindingReader = null)
+    IEnvironmentP1InvocationBindingReader? p1BindingReader = null,
+    EnvironmentRuntimeOwnerContextClient? runtimeOwnerContext = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    internal async Task<EnvironmentLifecycleTransitionResult> RegisterCoordinatorRootAsync(
+        RuntimeActorAuthorization actor,
+        RuntimeOwnerContext expectedOwner,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(expectedOwner);
+        if (expectedOwner.ContractVersion != 1 ||
+            expectedOwner.AgentId != RuntimeActionContract.CoordinatorRootStepId ||
+            expectedOwner.LogicalTurnOrdinal != 0 ||
+            expectedOwner.ExecutionFence <= 0 ||
+            !actor.Bearer.IsUsable() ||
+            runtimeOwnerContext is null)
+            throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
+
+        var caller = new CurrentCallerRequest(actor.Bearer.GetValue(), actor.TenantSelector);
+        var auth = await authorization.GetAuthorizedRunEnvironmentPlacementReadContextAsync(
+            caller, expectedOwner.ProjectId, expectedOwner.RunId, cancellationToken).ConfigureAwait(false);
+        if (auth.TenantId != expectedOwner.TenantId ||
+            auth.Issuer != expectedOwner.ActorIssuer ||
+            auth.ActorId != expectedOwner.ActorId)
+            throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
+
+        var idempotencyKey = RuntimeRunStartKeys.IdempotencyKey(expectedOwner);
+        var owner = new EnvironmentOwnerIdentity(
+            expectedOwner.TenantId, expectedOwner.ProjectId, expectedOwner.RunId,
+            CreateEnvironmentId(expectedOwner.TenantId, expectedOwner.ProjectId,
+                expectedOwner.RunId, idempotencyKey));
+        var selection = await authorization.GetAuthorizedRunEnvironmentSelectionAsync(
+            caller, owner, cancellationToken).ConfigureAwait(false);
+        RequireSameOwnerSelection(expectedOwner, selection.RunSelection);
+
+        async Task RequireCurrentAsync(CancellationToken token)
+        {
+            if (!actor.Bearer.IsUsable())
+                throw new RuntimeAuthorizationException("runtime_start_actor_expired");
+            var current = await runtimeOwnerContext.ReadAsync(
+                actor, expectedOwner.ProjectId, expectedOwner.RunId, expectedOwner.SessionId, token)
+                .ConfigureAwait(false);
+            if (current != expectedOwner)
+                throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
+            var currentSelection = await authorization.GetAuthorizedRunEnvironmentSelectionAsync(
+                caller, owner, token).ConfigureAwait(false);
+            RequireSameOwnerSelection(expectedOwner, currentSelection.RunSelection);
+        }
+
+        await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+        return await lifecycleProducer.RegisterAsync(
+            owner, idempotencyKey, cancellationToken, RequireCurrentAsync).ConfigureAwait(false);
+    }
+
+    private static void RequireSameOwnerSelection(
+        RuntimeOwnerContext owner, EffectiveNetworkPolicySelection selection)
+    {
+        if (selection.ProjectId != owner.ProjectId ||
+            selection.RunId != owner.RunId ||
+            selection.ProjectRevision != owner.ProjectRevision ||
+            selection.ProjectConfigurationRevision != owner.ProjectConfigurationRevision ||
+            selection.PlatformRuntimeRevision != owner.PlatformRuntimeRevision ||
+            selection.ContextRevision != owner.ContextRevision)
+            throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
+    }
 
     /// <summary>
     /// Creates the run's deterministic Environment identity and registers it as active.

@@ -1414,6 +1414,13 @@ public interface ISandboxLeaseStore
         long resourceGeneration,
         CancellationToken cancellationToken);
 
+    /// <summary>Reads the exact provision attempt bound to an immutable idempotency key.</summary>
+    Task<SandboxLeaseSnapshot?> GetByProvisionIdempotencyKeyAsync(
+        EnvironmentGenerationFence fence,
+        string idempotencyKey,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("The Sandbox lease owner cannot find an exact provision attempt.");
+
     /// <summary>Persists the exact serialized provider request before dispatching its external effect.</summary>
     Task<SandboxLeaseSnapshot> SaveProviderRequestAsync(
         Guid operationId,
@@ -1518,6 +1525,21 @@ public interface ISandboxLeaseStore
     Task<SandboxLateResourceCleanupClaim?> ClaimNextLateResourceCleanupAsync(
         EnvironmentGenerationFence fence,
         CancellationToken cancellationToken);
+
+    /// <summary>Optionally limits a late-resource claim to the exact provision operation and generation.</summary>
+    Task<SandboxLateResourceCleanupClaim?> ClaimNextLateResourceCleanupAsync(
+        EnvironmentGenerationFence fence,
+        CancellationToken cancellationToken,
+        Guid? operationId,
+        long? resourceGeneration);
+
+    /// <summary>Checks whether an exact operation and generation still have an unreleased late resource.</summary>
+    Task<bool> HasOutstandingLateResourceCleanupAsync(
+        EnvironmentGenerationFence fence,
+        Guid operationId,
+        long resourceGeneration,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("The Sandbox lease owner cannot inspect exact late-resource cleanup state.");
 
     /// <summary>Records late-resource release against the current fence and matching cleanup claim.</summary>
     Task CompleteLateResourceCleanupAsync(

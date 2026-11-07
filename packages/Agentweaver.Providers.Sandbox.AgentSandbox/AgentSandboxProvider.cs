@@ -2020,8 +2020,13 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         }
         catch (ArgumentException exception)
         {
+            var failureCode = leaseCreatedAt > now
+                ? "sandbox_startup_evidence_invalid_lease_future"
+                : phases.Any(phase => phase.ObservedAt > now)
+                    ? "sandbox_startup_evidence_invalid_phase_future"
+                    : "sandbox_startup_evidence_invalid_order";
             throw new SandboxProviderException(
-                "sandbox_startup_evidence_invalid", exception.Message, effectMayHaveApplied: false);
+                failureCode, exception.Message, effectMayHaveApplied: false);
         }
     }
 
@@ -2419,8 +2424,11 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
     private static bool IsWorkspaceMountPath(string value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 512 ||
-            value.Any(char.IsControl) || value.Contains('\\') ||
-            !value.StartsWith("/workspace/agentweaver/", StringComparison.Ordinal))
+            value.Any(char.IsControl) || value.Contains('\\'))
+            return false;
+        if (string.Equals(value, "/workspace", StringComparison.Ordinal))
+            return true;
+        if (!value.StartsWith("/workspace/agentweaver/", StringComparison.Ordinal))
             return false;
         var segments = value.Split('/');
         return segments.Skip(1).All(segment => segment is not ("" or "." or ".."));

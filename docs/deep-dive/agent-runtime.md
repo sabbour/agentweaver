@@ -70,6 +70,11 @@ noncredential receipt; it does not start the SDK or send a turn.
 
 ### Bootstrap a runtime session
 
+Orchestrator starts the root AgentHost after it accepts the root and admits the
+first message. This creates a ready runtime, but it does not start a model
+turn. See the [run-start flow](./orchestration.md#start-the-root-agenthost)
+for the owner checks, durable retry state, and cancellation cleanup.
+
 Before bootstrap, AgentHost needs the current runtime registration, an accepted
 model binding, configured owner addresses, and the selected Sandbox placement.
 

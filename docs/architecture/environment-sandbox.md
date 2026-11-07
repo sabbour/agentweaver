@@ -14,11 +14,41 @@ connects the lifecycle, placement and recovery views.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'" alt="Environment rechecks trusted Projects authority and selection around owner-fenced lifecycle changes. It records each provider attempt before an external effect and saves its exact outcome under the owner lock. Unknown or unresolved calls block release and generation advance. Late cleanup uses the active owner fence for authorization and keeps the saved source fence for provider identity; older-generation cleanup does not read or change the current Workspace." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'" alt="Orchestrator starts the root AgentHost only after durable run admission. Environment checks the current actor, selection, and fences before it creates the retained 1 GiB workspace and first Sandbox placement. Orchestrator then registers the runtime, requests Broker bootstrap, and calls the real Environment activation route. Readiness is committed only after current registration, placement, and Host evidence pass. Provider cleanup uses the saved owner and attempt; it does not delete retained workspace data." />
   </a>
-  <figcaption>Environment lifecycle and Sandbox provider-call recovery. A ready lease requires exact Workspace and network observations; retirement releases Sandbox placement only, not the Environment or its Workspace data. Every provider call has a durable attempt. Late cleanup uses the active owner fence for authorization and retains its saved source fence for provider identity.</figcaption>
+  <figcaption>Coordinator first-start, Environment placement, AgentHost activation, and Sandbox provider-call recovery. A ready lease requires exact Workspace and network observations; retirement releases Sandbox placement only, not the Environment or its Workspace data. Every provider call has a durable attempt. Late cleanup uses the active owner fence for authorization and retains its saved source fence for provider identity.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.drawio'">Open editable draw.io source</a></p>
+
+## Coordinator first-start
+
+After Orchestrator accepts the root and admits its first message, it stores a
+fenced startup intent and runs a bounded continuation in a fresh service scope.
+The same continuation starts direct roots and genuine P1 roots after their
+admission checks pass. The start response and session status expose the saved
+startup state; `pending` does not mean that AgentHost is ready.
+
+Environment first registers the run owner, verifies the exact current run
+selection, applies the selected network policy, and creates a private workspace
+volume. The first-start volume is 1 GiB, `ReadWriteMany`, `Strict`, and uses
+`Retain` for both reclaim and owner deletion. It is bound to the Environment,
+has no authorized consumer list, and mounts at `/workspace`. Environment then
+creates the first Sandbox placement and returns its current UID, lease, and
+fences with the selected default source profile.
+
+Orchestrator creates the matching runtime registration, requests Broker
+bootstrap, and calls the authenticated
+`POST /internal/runtime/v1/activate` route. Environment validates the Host
+receipt and current placement before Orchestrator commits `ready`. Startup
+does not send a model turn. A retry requires fresh authenticated run authority;
+the durable intent stores operation IDs and non-credential receipts, not bearer
+credentials.
+
+Cancellation records a cleanup obligation from the saved startup intent.
+Cleanup releases only the exact saved placement. It does not create a new
+placement, activate a Host, or delete workspace data. The separate Orchestrator
+runtime-start flow is described in the
+[runtime deep dive](../deep-dive/orchestration.md#start-the-root-agenthost).
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-buildtest-command.png'">

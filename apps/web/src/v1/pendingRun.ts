@@ -85,6 +85,22 @@ export function runChatPath(projectId: string, runId: string): string {
   return `/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}?view=chat`;
 }
 
+/** Returns the accepted startup state or fails when the owner blocks or omits it. */
+export function requireRuntimeStartupReady(response: unknown): 'ready' | 'pending' {
+  const startup = response && typeof response === 'object' && 'runtimeStartup' in response
+    ? (response as { runtimeStartup?: { state?: unknown } | null }).runtimeStartup
+    : null;
+  if (startup?.state === 'ready' || startup?.state === 'pending') return startup.state;
+  if (startup?.state === 'blocked') {
+    const code = typeof (startup as { failureCode?: unknown }).failureCode === 'string'
+      ? (startup as { failureCode: string }).failureCode
+      : '';
+    const safeCode = /^[a-z0-9_]{1,80}$/.test(code) ? ` (${code})` : '';
+    throw new Error(`The chat is saved. The agent runtime did not start${safeCode}.`);
+  }
+  throw new Error('The chat is saved, but the agent runtime status is unavailable. Try again.');
+}
+
 /** True for a Gateway error with this status and, when given, this code. */
 function isGatewayError(error: unknown, status: number, code?: string): error is GatewayError {
   return error instanceof GatewayError && error.status === status && (code === undefined || error.code === code);
@@ -130,12 +146,13 @@ export interface ResumeSteps {
 }
 
 /** Result of one resume attempt. */
-export type ResumeOutcome = 'started' | 'ended' | 'needs-sign-in';
+export type ResumeOutcome = 'started' | 'starting' | 'ended' | 'needs-sign-in';
 
 /**
  * Binds and starts a pending run. Start is safe to repeat: the service sends
  * the saved first message only once. Returns:
  * - `started`: the run started; the pending record is cleared.
+ * - `starting`: the chat is open while the runtime starts; the record stays.
  * - `ended`: the run already ended; the pending record is cleared.
  * - `needs-sign-in`: no session could be made without the user; the record stays.
  * Other failures are thrown and the record stays, so the user can try again.
@@ -147,7 +164,8 @@ export async function resumePendingRun(steps: ResumeSteps): Promise<ResumeOutcom
   if (!await steps.ensureRunSession()) return 'needs-sign-in';
   for (let attempt = 1; ; attempt += 1) {
     try {
-      await steps.start();
+      const response = await steps.start();
+      if (requireRuntimeStartupReady(response) === 'pending') return 'starting';
       clearPendingRun();
       return 'started';
     } catch (error) {

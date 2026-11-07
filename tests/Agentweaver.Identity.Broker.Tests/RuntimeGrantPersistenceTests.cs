@@ -303,6 +303,58 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
     }
 
     [Fact]
+    public async Task BootstrapReplayDistinguishesActivePendingDeliveryFromRevokedFailure()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        var options = CreateOptions(dataSource);
+        await IdentityBrokerMigrator.MigrateAsync(dataSource, options);
+        var owner = new StorageOwner();
+        var clock = new StorageClock();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pendingDelivery = new StorageDelivery { Clock = clock, DeliveryStarted = entered, ContinueDelivery = finish };
+        var operation = Guid.NewGuid();
+        RuntimeBootstrapDeliveryReceipt delivered;
+        await using (var db = new IdentityBrokerDbContext(options))
+        {
+            var authority = new RuntimeGrantAuthority(
+                db, owner, pendingDelivery, CreatePolicy(), CreateActor(clock), clock);
+            var original = authority.DeliverBootstrapAsync(
+                owner.Registration.RuntimeInstanceId, new string('a', 64), operation);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            await using var retryDb = new IdentityBrokerDbContext(options);
+            var retry = new RuntimeGrantAuthority(
+                retryDb, owner, new StorageDelivery { Clock = clock }, CreatePolicy(), CreateActor(clock), clock);
+            var pending = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                retry.DeliverBootstrapAsync(
+                    owner.Registration.RuntimeInstanceId, new string('a', 64), operation));
+            Assert.Equal("runtime_delivery_pending", pending.Code);
+
+            finish.TrySetResult();
+            delivered = await original;
+            Assert.Equal(delivered, await authority.DeliverBootstrapAsync(
+                owner.Registration.RuntimeInstanceId, new string('a', 64), operation));
+        }
+        Assert.Equal(1, pendingDelivery.Deliveries);
+
+        var failedOperation = Guid.NewGuid();
+        var failedDelivery = new StorageDelivery { Clock = clock, FailDelivery = true };
+        await using var failedDb = new IdentityBrokerDbContext(options);
+        var failedAuthority = new RuntimeGrantAuthority(
+            failedDb, owner, failedDelivery, CreatePolicy(), CreateActor(clock), clock);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            failedAuthority.DeliverBootstrapAsync(
+                owner.Registration.RuntimeInstanceId, new string('b', 64), failedOperation));
+        var failedReplay = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            failedAuthority.DeliverBootstrapAsync(
+                owner.Registration.RuntimeInstanceId, new string('b', 64), failedOperation));
+        Assert.Equal("runtime_delivery_failed", failedReplay.Code);
+        Assert.Equal(1, failedDelivery.Deliveries);
+    }
+
+    [Fact]
     public async Task CurrentOwnerRevocationAddsAnImmutableRevocationBeforeDenyingTheActualSourceCredential()
     {
         var connectionString = await postgres.CreateDatabaseAsync();
@@ -539,6 +591,9 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
         public SecretCredential? Credential { get; private set; }
         public int Deliveries { get; private set; }
         public bool WrongPlacement { get; init; }
+        public bool FailDelivery { get; init; }
+        public TaskCompletionSource? DeliveryStarted { get; init; }
+        public TaskCompletionSource? ContinueDelivery { get; init; }
         public TimeProvider Clock { get; init; } = TimeProvider.System;
         public Func<RuntimeRegistration, Guid, Guid, string, SecretCredential, Task>? VerifyPending { get; set; }
 
@@ -550,8 +605,13 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
             _ = actor.Bearer.GetValue();
             Deliveries++;
             Credential = new SecretCredential(credential.GetValue(), credential.ExpiresAt, Clock);
+            DeliveryStarted?.TrySetResult();
+            if (ContinueDelivery is not null)
+                await ContinueDelivery.Task.WaitAsync(cancellationToken);
             if (VerifyPending is not null)
                 await VerifyPending(registration, operationId, grantId, configurationHash, credential);
+            if (FailDelivery)
+                throw new RuntimeAuthorizationException("runtime_delivery_failed");
             var now = Clock.GetUtcNow();
             var deliveredAt = new DateTimeOffset(now.UtcTicks - now.UtcTicks % 10, TimeSpan.Zero);
             return new RuntimeBootstrapDeliveryReceipt(

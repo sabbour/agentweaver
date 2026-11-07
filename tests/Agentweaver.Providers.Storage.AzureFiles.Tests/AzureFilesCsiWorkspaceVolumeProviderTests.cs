@@ -149,6 +149,29 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
     }
 
     [Fact]
+    public async Task OneGiBWorkspaceIsAllowedAtTheConfiguredCapacityLimit()
+    {
+        var client = new FakeAzureFilesCsiClient();
+        var provider = CreateProvider(client, maximumCapacityGiB: 1);
+        var request = new WorkspaceVolumeProvisionRequest(
+            Spec(capacityGiB: 1, ownerDeletionPolicy: WorkspaceVolumeOwnerDeletionPolicy.Retain),
+            1,
+            "first-start-workspace");
+
+        var result = await provider.ProvisionAsync(request);
+
+        var claim = Assert.Single(client.Claims.Values);
+        Assert.Equal(1, claim.CapacityGiB);
+        Assert.Equal(WorkspaceVolumeAccessMode.ReadWriteMany, Assert.Single(claim.AccessModes));
+        Assert.Equal(WorkspaceVolumeBindingMode.Environment, request.Spec.BindingMode);
+        Assert.Equal(WorkspaceVolumeConsistency.Strict, request.Spec.Consistency);
+        Assert.Equal(WorkspaceVolumeReclaimPolicy.Retain, request.Spec.ReclaimPolicy);
+        Assert.Equal(WorkspaceVolumeOwnerDeletionPolicy.Retain, request.Spec.OwnerDeletionPolicy);
+        Assert.Empty(request.Spec.AuthorizedEnvironmentIds);
+        Assert.Contains(WorkspaceVolumeCapabilities.ReadWriteMany, result.NegotiatedCapabilities);
+    }
+
+    [Fact]
     public async Task EnvironmentIdentityScopesClaimNamesAndAnnotations()
     {
         var client = new FakeAzureFilesCsiClient();
@@ -242,17 +265,17 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
     }
 
     [Fact]
-    public async Task RejectsNonStrictConsistencyAndCapacityBeforeProvisioning()
+    public async Task RejectsNonStrictConsistencyAndTwoGiBWorkspaceAtOneGiBCeiling()
     {
         var client = new FakeAzureFilesCsiClient();
-        var provider = CreateProvider(client, maximumCapacityGiB: 8);
+        var provider = CreateProvider(client, maximumCapacityGiB: 1);
 
         var consistency = await Assert.ThrowsAsync<AzureFilesCsiException>(() =>
             provider.ProvisionAsync(new WorkspaceVolumeProvisionRequest(
                 Spec(consistency: WorkspaceVolumeConsistency.Eventual), 1, "provision-4")));
         var capacity = await Assert.ThrowsAsync<AzureFilesCsiException>(() =>
             provider.ProvisionAsync(new WorkspaceVolumeProvisionRequest(
-                Spec(capacityGiB: 9), 1, "provision-5")));
+                Spec(capacityGiB: 2), 1, "provision-5")));
 
         Assert.Equal("consistency_unsupported", consistency.Code);
         Assert.Equal("capacity_exceeded", capacity.Code);

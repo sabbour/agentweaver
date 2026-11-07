@@ -660,6 +660,45 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
         Assert.Equal(1L, reader.GetInt64(1));
     }
 
+    [Fact]
+    public async Task CancelCapturesStartupCleanupAndExactReplayDoesNotReopenCompletedCleanup()
+    {
+        var row = await Create("cancel-startup-cleanup", new CreateProjectRunRequest("Hello", 1));
+        var runSelection = Selection(row.RunId);
+        await Start(row.RunId, async (pending, token) =>
+        {
+            await _store.AcceptRootAsync(_actor, runSelection, pending.RootSessionId, token);
+            await _store.SendMessageAsync(_actor,
+                new SessionIdentity(Project, row.RunId, pending.RootSessionId),
+                FirstMessage(pending, row.RunId, pending.FirstMessage, pending.WorkflowId), token);
+        });
+        await InsertRuntimeStartIntentAsync(row);
+
+        var selection = CancellationSelection(row.RunId, _actor);
+        var request = new CancelProjectRunRequest("Stopped");
+        var response = await _store.CancelProjectRunAsync(
+            _actor, selection, "cleanup-key", request, NoCheck, CancellationToken.None);
+        Assert.False(response.AlreadyTerminal);
+        var pendingCleanup = await ReadRuntimeStartCleanupAsync(row.RunId);
+        Assert.Equal("cleanup_pending", pendingCleanup.State);
+        Assert.True(pendingCleanup.Obligation);
+        var committedOutboxCount = await CountAsync("outbox_events");
+
+        Assert.Equal(response, await _store.CancelProjectRunAsync(
+            _actor, selection, "cleanup-key", request, NoCheck, CancellationToken.None));
+        Assert.Equal(pendingCleanup, await ReadRuntimeStartCleanupAsync(row.RunId));
+        Assert.Equal(committedOutboxCount, await CountAsync("outbox_events"));
+
+        await SetRuntimeStartCleanupCompleteAsync(row.RunId);
+        var complete = await ReadRuntimeStartCleanupAsync(row.RunId);
+        Assert.Equal("cleanup_complete", complete.State);
+        Assert.True(complete.Obligation);
+        Assert.Equal(response, await _store.CancelProjectRunAsync(
+            _actor, selection, "cleanup-key", request, NoCheck, CancellationToken.None));
+        Assert.Equal(complete, await ReadRuntimeStartCleanupAsync(row.RunId));
+        Assert.Equal(committedOutboxCount, await CountAsync("outbox_events"));
+    }
+
     /// <summary>Project cancellation is independent of the accepted run's creator and receipts remain caller-scoped.</summary>
     [Fact]
     public async Task AnotherProjectContributorCancelsStartedRunAndTerminalRequestsSucceed()
@@ -719,6 +758,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
     {
         var row = await Create("ended", new CreateProjectRunRequest("Hello", 1));
         await _store.AcceptRootAsync(_actor, Selection(row.RunId), row.RootSessionId, CancellationToken.None);
+        await InsertRuntimeStartIntentAsync(row);
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var update = new NpgsqlCommand($"""
             UPDATE "{_schema}".accepted_runs SET execution_state = @state,
@@ -735,6 +775,9 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
         Assert.Equal(state, result.State);
         Assert.True(result.AlreadyTerminal);
         Assert.Null(result.CancelledAt);
+        var cleanup = await ReadRuntimeStartCleanupAsync(row.RunId);
+        Assert.False(cleanup.Obligation);
+        Assert.Equal("pending", cleanup.State);
         Assert.Equal(0L, await CountAsync("outbox_events"));
     }
 
@@ -753,6 +796,58 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
         Action<CoordinationOwnerStore.ProjectRunRequestRow>? validateRequest = null) =>
         _store.StartProjectRunAsync(
             _actor, Tenant, Project, runId, deliver, NoCheck, CancellationToken.None, validateRequest);
+
+    private async Task InsertRuntimeStartIntentAsync(
+        CoordinationOwnerStore.ProjectRunRequestRow row)
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".runtime_run_start_intents
+                (tenant_id, project_id, run_id, root_session_id, accepted_selection_hash,
+                 execution_fence, intent_id, bootstrap_operation_id, consume_operation_id,
+                 exchange_operation_id)
+            SELECT @tenant, @project, @run, @root, accepted_selection_hash, execution_fence,
+                   @intent, @bootstrap, @consume, @exchange
+            FROM "{_schema}".accepted_runs WHERE project_id = @project AND run_id = @run
+            """, connection);
+        command.Parameters.AddWithValue("tenant", Tenant);
+        command.Parameters.AddWithValue("project", Project);
+        command.Parameters.AddWithValue("run", row.RunId);
+        command.Parameters.AddWithValue("root", row.RootSessionId);
+        command.Parameters.AddWithValue("intent", Guid.NewGuid());
+        command.Parameters.AddWithValue("bootstrap", Guid.NewGuid());
+        command.Parameters.AddWithValue("consume", Guid.NewGuid());
+        command.Parameters.AddWithValue("exchange", Guid.NewGuid());
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
+    private async Task<(string State, bool Obligation, long Version)> ReadRuntimeStartCleanupAsync(string runId)
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT state, cleanup_obligation, row_version
+            FROM "{_schema}".runtime_run_start_intents
+            WHERE project_id = @project AND run_id = @run
+            """, connection);
+        command.Parameters.AddWithValue("project", Project);
+        command.Parameters.AddWithValue("run", runId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (reader.GetString(0), reader.GetBoolean(1), reader.GetInt64(2));
+    }
+
+    private async Task SetRuntimeStartCleanupCompleteAsync(string runId)
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            UPDATE "{_schema}".runtime_run_start_intents
+            SET state = 'cleanup_complete', cleanup_obligation = true, row_version = row_version + 1
+            WHERE project_id = @project AND run_id = @run
+            """, connection);
+        command.Parameters.AddWithValue("project", Project);
+        command.Parameters.AddWithValue("run", runId);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
 
     private static Task NoDelivery(CoordinationOwnerStore.ProjectRunRequestRow row, CancellationToken token) =>
         throw new InvalidOperationException("Delivery was not expected.");

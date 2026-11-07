@@ -224,6 +224,8 @@ vi.mock('./config', async (importOriginal) => {
 
 import App from './App';
 import { GatewayError } from './api';
+import { PENDING_CHAT_STORAGE_KEY } from './chiefOfStaff';
+import { PENDING_RUN_STORAGE_KEY } from './pendingRun';
 import { clearRecentRuns } from './recentRuns';
 
 function deferred<T>() {
@@ -371,6 +373,7 @@ function sessionStatusSnapshot(projectId: string, runId: string) {
     blockers: [],
     runtimeEffectsState: 'none',
     runtimeEffectsUnavailableCode: '',
+    runtimeStartup: null,
     interruptionIntent: { state: 'none' as const },
     runExecution: { state: 'active', stateVersion: 1 },
   };
@@ -1485,6 +1488,51 @@ describe('v1 web project scoping', () => {
     // The happy path shows no alerts and no "different run" binding warning.
     expect(screen.queryAllByRole('alert')).toHaveLength(0);
     expect(screen.queryByText(/different run/)).toBeNull();
+  });
+
+  it('shows pending AgentHost startup in chat and the root session details', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    window.sessionStorage.setItem(PENDING_RUN_STORAGE_KEY, JSON.stringify({
+      projectId: 'p1', runId: 'r1', createdAt: new Date().toISOString(),
+    }));
+    window.sessionStorage.setItem(PENDING_CHAT_STORAGE_KEY, JSON.stringify([
+      { projectId: 'p1', runId: 'r1', rootSessionId: 's1' },
+    ]));
+    mocks.getSessionStatus.mockResolvedValue({
+      ...sessionStatusSnapshot('p1', 'r1'),
+      runtimeStartup: { state: 'pending', step: 'activation', failureCode: null },
+    });
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=chat');
+    render(<App />);
+
+    expect(await screen.findByText('Starting the agent runtime. This status refreshes automatically.')).toBeTruthy();
+    expect(window.sessionStorage.getItem(PENDING_RUN_STORAGE_KEY)).not.toBeNull();
+    expect(window.sessionStorage.getItem(PENDING_CHAT_STORAGE_KEY)).not.toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
+    expect(await screen.findByText('AgentHost startup: Starting · activation')).toBeTruthy();
+  });
+
+  it('clears pending startup recovery when the current runtime becomes ready', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    mocks.getSessionStatus.mockResolvedValue({
+      ...sessionStatusSnapshot('p1', 'r1'),
+      runtimeStartup: { state: 'ready', step: 'ready', failureCode: null },
+    });
+    window.sessionStorage.setItem(PENDING_RUN_STORAGE_KEY, JSON.stringify({
+      projectId: 'p1', runId: 'r1', createdAt: new Date().toISOString(),
+    }));
+    window.sessionStorage.setItem(PENDING_CHAT_STORAGE_KEY, JSON.stringify([
+      { projectId: 'p1', runId: 'r1', rootSessionId: 's1' },
+    ]));
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=chat');
+    render(<App />);
+
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem(PENDING_RUN_STORAGE_KEY)).toBeNull();
+      expect(window.sessionStorage.getItem(PENDING_CHAT_STORAGE_KEY)).toBeNull();
+    });
   });
 
   it('shows addressed-message routing details in a run activity journal', async () => {

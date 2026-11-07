@@ -15,11 +15,19 @@ export interface CreateProjectRunResponse {
   binding: { projectId: string; runId: string };
 }
 
+/** Durable background state for first AgentHost startup. */
+export interface RuntimeStartupSummary {
+  state: 'pending' | 'ready' | 'blocked' | 'cleanup_pending' | 'cleanup_complete';
+  step: string;
+  failureCode?: string | null;
+}
+
 /** Receipt for idempotent first-message delivery to the accepted root. */
 export interface StartProjectRunResponse {
   runId: string;
   rootSessionId: string;
   state: 'started';
+  runtimeStartup?: RuntimeStartupSummary | null;
 }
 
 /** Optional human-readable explanation saved with a cancellation. */
@@ -1912,6 +1920,7 @@ export interface SessionStatusSnapshot {
     ownerMessageId?: string | null;
     causeCode?: string | null;
   };
+  runtimeStartup?: RuntimeStartupSummary | null;
   runExecution: {
     state: string;
     stateVersion: number;

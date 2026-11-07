@@ -16,6 +16,7 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.Identity;
 using Agentweaver.Providers;
 using Agentweaver.Providers.Sandbox.AgentSandbox;
+using Agentweaver.Providers.Storage.AzureFiles;
 using EnvironmentService::Agentweaver.Environment;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
@@ -1984,28 +1985,100 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         KubernetesAgentSandboxClient sandboxKubernetesClient,
         ISandboxProvider sandboxProvider,
         CiliumEgressProviderOptions networkOptions,
-        ICiliumPolicyResourceStore networkStore)
+        ICiliumPolicyResourceStore networkStore,
+        bool enableFirstStart = false)
     {
         services.AddSingleton(sandboxOptions);
         services.AddSingleton(sandboxKubernetesClient);
         services.AddSingleton<ISandboxProvider>(sandboxProvider);
         services.AddSingleton(networkOptions);
         services.AddSingleton<ICiliumPolicyResourceStore>(networkStore);
-        services.AddScoped<EnvironmentLifecycleManager>(_ => throw new NotSupportedException());
+        if (enableFirstStart)
+        {
+            services.AddScoped<EnvironmentLifecycleManager>();
+            services.AddScoped<EnvironmentRuntimeRunStartManager>();
+        }
+        else
+        {
+            services.AddScoped<EnvironmentLifecycleManager>(_ => throw new NotSupportedException());
+        }
         services.AddScoped<CiliumEgressPolicyAdapter>();
         services.AddScoped<EnvironmentEgressManager>();
         services.AddScoped<EnvironmentSandboxManager>();
         services.AddScoped<EnvironmentRuntimePlacementReader>();
     }
 
-    private sealed class RuntimePlacementTestServer(IHost host, NpgsqlDataSource dataSource,
-        HttpClient sandboxHttpClient, SandboxLeaseSnapshot lease, RuntimePlacementReadTimeProvider readTime) : IAsyncDisposable
+    private sealed class RuntimePlacementWorkspaceVolumeProvider(
+        AzureFilesCsiOptions options,
+        string clusterIdentity)
+        : IWorkspaceVolumeProvider
     {
-        public SandboxLeaseSnapshot Lease { get; } = lease;
+        public Task<WorkspaceVolumeResource> ProvisionAsync(
+            WorkspaceVolumeProvisionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var resource = new ProviderResourceRef(
+                ProviderSeam.Storage,
+                AzureFilesCsiProviderMetadata.ProviderId,
+                "workspace-claim-uid",
+                request.ResourceGeneration);
+            var binding = new WorkspaceVolumeProviderBindingSnapshot(
+                resource.ProviderId,
+                AzureFilesCsiProviderMetadata.AdapterVersion.ToString(),
+                options.OptionsSchemaVersion,
+                options.OptionsRevision,
+                JsonSerializer.SerializeToElement(options),
+                JsonSerializer.SerializeToElement(new
+                {
+                    clusterIdentity,
+                    @namespace = options.Namespace,
+                    claimName = "workspace-claim",
+                    claimUid = "workspace-claim-uid"
+                }));
+            return Task.FromResult(new WorkspaceVolumeResource(
+                resource,
+                ImmutableHashSet.Create(
+                    StringComparer.Ordinal,
+                    WorkspaceVolumeCapabilities.ReadWriteMany,
+                    WorkspaceVolumeCapabilities.ReadOnlyMount),
+                binding).Validate());
+        }
+
+        public Task<WorkspaceVolumeReleaseReceipt> ReleaseAsync(
+            WorkspaceVolumeReleaseRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new WorkspaceVolumeReleaseReceipt(
+                request.Resource,
+                request.IdempotencyKey,
+                request.ReclaimPolicy == WorkspaceVolumeReclaimPolicy.Retain
+                    ? WorkspaceVolumeReleaseDisposition.Retained
+                    : WorkspaceVolumeReleaseDisposition.Released).ValidateFor(request));
+    }
+
+    private sealed class RuntimePlacementTestServer(IHost host, NpgsqlDataSource dataSource,
+        HttpClient sandboxHttpClient, SandboxLeaseSnapshot? lease, RuntimePlacementReadTimeProvider readTime,
+        EnvironmentOwnerIdentity owner) : IAsyncDisposable
+    {
+        private readonly SandboxLeaseSnapshot? _lease = lease;
+        public SandboxLeaseSnapshot Lease => _lease
+            ?? throw new InvalidOperationException("The on-demand first-start Environment has no saved Sandbox lease.");
         public HttpMessageHandler CreateHandler() => host.GetTestServer().CreateHandler();
         public Task<EnvironmentRuntimeBootstrapProfileReplacement?> ReadReplacementAsync(string profileId) =>
             new EnvironmentRuntimeBootstrapProfileReplacementStore(dataSource, TimeProvider.System)
                 .ReadAsync(Lease.Fence.Owner, profileId, CancellationToken.None);
+
+        public async Task ExpireCurrentLeaseAsync()
+        {
+            var lifecycle = await new EnvironmentLifecycleStore(dataSource, TimeProvider.System)
+                .GetAsync(owner, CancellationToken.None)
+                .ConfigureAwait(false)
+                ?? throw new InvalidOperationException("The on-demand first-start Environment has no lifecycle.");
+            var current = await new EnvironmentSandboxLeaseStore(dataSource, readTime)
+                .GetCurrentAsync(lifecycle.Fence, CancellationToken.None)
+                .ConfigureAwait(false)
+                ?? throw new InvalidOperationException("The on-demand first-start Environment has no saved Sandbox lease.");
+            readTime.Current = current.LeaseExpiresAt!.Value.AddSeconds(1);
+        }
 
         public void ExpireCurrentLease() =>
             readTime.Current = Lease.LeaseExpiresAt!.Value.AddSeconds(1);
@@ -2028,11 +2101,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             string configureEndpoint = RuntimeReceiverConfigureEndpoint,
             string mountPath = "/workspace/agentweaver/project",
             DateTimeOffset? leaseClockStart = null,
-            AgentSandboxStartupBudgets? startupBudgets = null)
+            AgentSandboxStartupBudgets? startupBudgets = null,
+            string volumeId = "runtime-workspace",
+            bool firstStartWorkspace = false,
+            bool provisionFirstStartOnDemand = false)
         {
             var dataSource = NpgsqlDataSource.Create(connectionString);
             // This cross-service integration can exceed the sandbox's short production lease.
             var leaseTimeProvider = new RuntimeLeaseTestTimeProvider(leaseClockStart);
+            if (leaseClockStart is not null)
+                leaseTimeProvider.AdvanceTo(DateTimeOffset.UtcNow);
             var readTimeProvider = new RuntimePlacementReadTimeProvider();
             HttpClient? sandboxHttpClient = null;
             IHost? host = null;
@@ -2043,8 +2121,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         "__ef_migrations_history", EnvironmentDbContext.Schema)).Options;
                 await EnvironmentMigrator.MigrateAsync(dataSource, dbOptions);
                 var lifecycleStore = new EnvironmentLifecycleStore(dataSource, TimeProvider.System);
-                var lifecycle = await new EnvironmentLifecycleProducer(lifecycleStore)
-                    .RegisterAsync(owner, "runtime-register", default);
+                var lifecycle = provisionFirstStartOnDemand
+                    ? null
+                    : await new EnvironmentLifecycleProducer(lifecycleStore)
+                        .RegisterAsync(owner, "runtime-register", default);
                 var leaseStore = new EnvironmentSandboxLeaseStore(dataSource, leaseTimeProvider);
                 var sandboxOptions = CreateRuntimePlacementSandboxOptions(candidate);
                 if (startupBudgets is not null)
@@ -2056,6 +2136,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 var selectedNetworkCandidate = runSelection.Providers
                     .Single(provider => provider.Seam == ProviderSeam.NetworkPolicy)
                     .Candidates.Single(provider => provider.Layer == NetworkPolicyLayer.L3L4);
+                var storageOptions = new AzureFilesCsiOptions(
+                    AzureFilesCsiOptions.CurrentOptionsSchemaVersion,
+                    "runtime-storage-options",
+                    "agentweaver",
+                    "azure-files",
+                    1,
+                    60,
+                    100);
                 var networkOptions = new CiliumEgressProviderOptions(
                     "agentweaver", Version.Parse(selectedNetworkCandidate.AdapterVersion),
                     selectedNetworkCandidate.OptionsSchemaVersion, selectedNetworkCandidate.OptionsRevision,
@@ -2069,18 +2157,21 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     throw new InvalidOperationException(
                         compiledEgress.Failure?.Message ?? "The controlled run egress selection is invalid.");
                 const long networkPolicyGeneration = 1;
-                var networkEffect = await lifecycleStore.ReserveNetworkEffectAsync(
-                    lifecycle.Snapshot.Fence,
-                    $"{networkSelector.Namespace}/{networkSelector.PolicyName}",
-                    networkPolicyGeneration,
-                    0,
-                    EnvironmentNetworkEffectKind.Apply,
-                    "runtime-profile-resolution",
-                    default);
-                _ = await cilium.ApplyAsync(
-                    networkSelector, compiledEgress.Intent!, networkPolicyGeneration, 0, default);
-                await lifecycleStore.CompleteNetworkEffectAsync(
-                    networkEffect.OperationId, lifecycle.Snapshot.Fence, true, true, default);
+                if (!provisionFirstStartOnDemand)
+                {
+                    var networkEffect = await lifecycleStore.ReserveNetworkEffectAsync(
+                        lifecycle!.Snapshot.Fence,
+                        $"{networkSelector.Namespace}/{networkSelector.PolicyName}",
+                        networkPolicyGeneration,
+                        0,
+                        EnvironmentNetworkEffectKind.Apply,
+                        "runtime-profile-resolution",
+                        default);
+                    _ = await cilium.ApplyAsync(
+                        networkSelector, compiledEgress.Intent!, networkPolicyGeneration, 0, default);
+                    await lifecycleStore.CompleteNetworkEffectAsync(
+                        networkEffect.OperationId, lifecycle!.Snapshot.Fence, true, true, default);
+                }
 
                 var sandboxCandidate =
                     ResolveRuntimePlacementSandboxCandidate(candidate, sandboxOptions);
@@ -2096,95 +2187,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     candidate.RequiredCapabilities.OrderBy(capability => capability, StringComparer.Ordinal),
                     sandboxCandidate.RequiredCapabilities.OrderBy(capability => capability, StringComparer.Ordinal));
                 var provisionRequest = new SandboxProvisionApiRequest(
-                    "runtime-workspace", 1, 0, mountPath,
+                    volumeId, 1, 0, mountPath,
                     false, networkPolicyGeneration, "runtime-provision");
-                if (leaseClockStart is not null)
-                    leaseTimeProvider.AdvanceTo(DateTimeOffset.UtcNow);
-                var optionsSnapshot = JsonSerializer.SerializeToElement(sandboxOptions, jsonOptions);
-                var intent = new SandboxLeaseProvisionIntent(
-                    candidate.ProviderId, candidate.AdapterVersion, candidate.OptionsSchemaVersion,
-                    candidate.OptionsRevision, optionsSnapshot, selection,
-                    JsonSerializer.SerializeToElement(provisionRequest, jsonOptions));
-                var reserved = await leaseStore.ReserveProvisionAsync(
-                    lifecycle.Snapshot.Fence, provisionRequest.IdempotencyKey, intent, default);
-                var lease = reserved.Lease;
-                var plannedResource = SandboxResourceIdentity.CreatePlannedReference(
-                    sandboxCandidate.ProviderId, sandboxCandidate.OptionsRevision, lease.Fence,
-                    lease.ResourceGeneration, lease.ProviderFencingGeneration, lease.OperationId);
-                var storageResource = new ProviderResourceRef(
-                    ProviderSeam.Storage, sandboxOptions.WorkspaceStorageProviderId, "workspace-claim-uid", 1);
-                var workspaceSpec = new WorkspaceVolumeSpec(
-                    provisionRequest.VolumeId, owner.ProjectId,
-                    new(WorkspaceVolumeOwnerKind.Run, owner.RunId), owner.EnvironmentId,
-                    WorkspaceVolumeBindingMode.Environment, WorkspaceVolumeAccessMode.ReadWriteOnce, 8,
-                    "azure-files", WorkspaceVolumeConsistency.Strict, WorkspaceVolumeReclaimPolicy.Delete,
-                    WorkspaceVolumeOwnerDeletionPolicy.Retain, []);
-                var workspaceReference = new WorkspaceVolumeReference(
-                    owner.ProjectId, provisionRequest.VolumeId, provisionRequest.VolumeResourceGeneration);
-                var workspaceMount = new WorkspaceVolumeMountDeclaration(
-                    workspaceReference, provisionRequest.MountPath, provisionRequest.ReadOnly);
-                var storageBinding = new WorkspaceVolumeProviderBindingSnapshot(
-                    storageResource.ProviderId, "1.0.0", 1, "runtime-storage-options",
-                    JsonSerializer.SerializeToElement(new { @namespace = "agentweaver" }, jsonOptions),
-                    JsonSerializer.SerializeToElement(new
-                    {
-                        @namespace = "agentweaver",
-                        claimName = "workspace-claim",
-                        claimUid = "workspace-claim-uid"
-                    }, jsonOptions));
-                var workspaceStorage = new WorkspaceVolumeResource(
-                    storageResource,
-                    ImmutableHashSet.Create(
-                        StringComparer.Ordinal,
-                        WorkspaceVolumeCapabilities.ReadWriteOnce,
-                        WorkspaceVolumeCapabilities.ReadOnlyMount),
-                    storageBinding);
-                var sandboxAttachmentProfile = new WorkspaceSandboxAttachmentProfile(
-                    plannedResource,
-                    Enum.GetValues<WorkspaceVolumeAccessMode>().ToImmutableHashSet(),
-                    ImmutableHashSet.Create(WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim),
-                    ImmutableHashSet.Create(StringComparer.Ordinal, storageResource.ProviderId),
-                    SupportsReadOnlyMounts: true);
-                var workspaceNegotiation = WorkspaceVolumeAttachmentNegotiator.Negotiate(
-                    owner.ProjectId,
-                    owner.EnvironmentId,
-                    owner.RunId,
-                    workspaceSpec,
-                    workspaceStorage,
-                    new WorkspaceVolumeMountManifest([workspaceMount]),
-                    workspaceMount,
-                    plannedResource,
-                    lifecycle.Snapshot.Fence,
-                    provisionRequest.DataGeneration,
-                    sandboxAttachmentProfile,
-                    WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim);
-                var workspaceAttachment = new SandboxWorkspaceAttachment(
-                    workspaceNegotiation,
-                    JsonSerializer.SerializeToElement(new AgentSandboxPersistentVolumeClaimAttachment(
-                        1, storageResource.ProviderId, "agentweaver", "workspace-claim", "workspace-claim-uid"),
-                        jsonOptions)).Validate();
-                var sandboxProvisionRequest = new SandboxProvisionRequest(
-                    lifecycle.Snapshot.Fence,
-                    sandboxCandidate,
-                    lease.ResourceGeneration,
-                    lease.ProviderFencingGeneration,
-                    lease.OperationId,
-                    networkSelector.MatchLabels,
-                    workspaceAttachment).Validate();
-                var recoveryIntent = JsonSerializer.SerializeToElement(new
-                {
-                    contractVersion = 1,
-                    request = provisionRequest,
-                    workspace = workspaceAttachment,
-                    egressSelectorLabels = networkSelector.MatchLabels,
-                    workspaceAttachmentTransitionRevision = 2
-                }, jsonOptions);
-                lease = await leaseStore.SaveProviderRequestAsync(
-                    lease.OperationId, lifecycle.Snapshot.Fence, recoveryIntent, default);
-                var provisionAttempt = await leaseStore.BeginProviderAttemptAsync(
-                    SandboxProviderAttemptRequest.ForProvision(lease), default);
                 var kubernetesTransport = new RuntimePlacementKubernetesTransport(
-                    sandboxOptions, owner, provisionRequest, configureEndpoint);
+                    sandboxOptions, owner, provisionRequest, configureEndpoint,
+                    provisionFirstStartOnDemand, leaseTimeProvider);
                 sandboxHttpClient = new HttpClient(kubernetesTransport)
                 {
                     BaseAddress = new Uri("https://kubernetes.test/")
@@ -2193,15 +2200,125 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     sandboxHttpClient, KubernetesTestCaCertificate.Primary);
                 var sandboxProvider = new AgentSandboxProvider(
                     sandboxOptions, sandboxKubernetesClient, leaseTimeProvider);
-                var provisioned = await sandboxProvider.ProvisionAsync(sandboxProvisionRequest);
-                var leaseCreatedAt = lease.CreatedAt ?? throw new InvalidOperationException(
-                    "The controlled Sandbox lease has no creation timestamp.");
-                kubernetesTransport.AddReadySandbox(
-                    provisioned, leaseCreatedAt);
-                lease = await leaseStore.CompleteProvisionAsync(
-                    lease.OperationId, lease.Fence, provisioned, true, default,
-                    provisionAttempt.Attempt.AttemptId);
-                leaseTimeProvider.AdvanceTo(leaseCreatedAt.AddSeconds(2));
+                var storageProvider = new RuntimePlacementWorkspaceVolumeProvider(
+                    storageOptions,
+                    await sandboxKubernetesClient.GetClusterIdentityAsync());
+                SandboxLeaseSnapshot? lease = null;
+                if (!provisionFirstStartOnDemand)
+                {
+                    var optionsSnapshot = JsonSerializer.SerializeToElement(sandboxOptions, jsonOptions);
+                    var intent = new SandboxLeaseProvisionIntent(
+                        candidate.ProviderId, candidate.AdapterVersion, candidate.OptionsSchemaVersion,
+                        candidate.OptionsRevision, optionsSnapshot, selection,
+                        JsonSerializer.SerializeToElement(provisionRequest, jsonOptions));
+                    var reserved = await leaseStore.ReserveProvisionAsync(
+                        lifecycle!.Snapshot.Fence, provisionRequest.IdempotencyKey, intent, default);
+                    lease = reserved.Lease;
+                    var plannedResource = SandboxResourceIdentity.CreatePlannedReference(
+                        sandboxCandidate.ProviderId, sandboxCandidate.OptionsRevision, lease.Fence,
+                        lease.ResourceGeneration, lease.ProviderFencingGeneration, lease.OperationId);
+                    var storageResource = new ProviderResourceRef(
+                        ProviderSeam.Storage, sandboxOptions.WorkspaceStorageProviderId, "workspace-claim-uid", 1);
+                    var workspaceSpec = new WorkspaceVolumeSpec(
+                        provisionRequest.VolumeId, owner.ProjectId,
+                        new(WorkspaceVolumeOwnerKind.Run, owner.RunId), owner.EnvironmentId,
+                        WorkspaceVolumeBindingMode.Environment,
+                        firstStartWorkspace ? WorkspaceVolumeAccessMode.ReadWriteMany : WorkspaceVolumeAccessMode.ReadWriteOnce,
+                        firstStartWorkspace ? 1 : 8,
+                        "azure-files", WorkspaceVolumeConsistency.Strict,
+                        firstStartWorkspace ? WorkspaceVolumeReclaimPolicy.Retain : WorkspaceVolumeReclaimPolicy.Delete,
+                        WorkspaceVolumeOwnerDeletionPolicy.Retain, []);
+                    var workspaceReference = new WorkspaceVolumeReference(
+                        owner.ProjectId, provisionRequest.VolumeId, provisionRequest.VolumeResourceGeneration);
+                    var workspaceMount = new WorkspaceVolumeMountDeclaration(
+                        workspaceReference, provisionRequest.MountPath, provisionRequest.ReadOnly);
+                    var storageBinding = new WorkspaceVolumeProviderBindingSnapshot(
+                        storageResource.ProviderId,
+                        AzureFilesCsiProviderMetadata.AdapterVersion.ToString(),
+                        storageOptions.OptionsSchemaVersion,
+                        storageOptions.OptionsRevision,
+                        JsonSerializer.SerializeToElement(storageOptions, jsonOptions),
+                        JsonSerializer.SerializeToElement(new
+                        {
+                            @namespace = "agentweaver",
+                            claimName = "workspace-claim",
+                            claimUid = "workspace-claim-uid"
+                        }, jsonOptions));
+                    var workspaceStorage = new WorkspaceVolumeResource(
+                        storageResource,
+                        firstStartWorkspace
+                            ? Enum.GetValues<WorkspaceVolumeAccessMode>()
+                                .Select(WorkspaceVolumeCapabilities.ForAccessMode)
+                                .Append(WorkspaceVolumeCapabilities.ReadOnlyMount)
+                                .ToImmutableHashSet(StringComparer.Ordinal)
+                            : ImmutableHashSet.Create(
+                                StringComparer.Ordinal,
+                                WorkspaceVolumeCapabilities.ReadWriteOnce,
+                                WorkspaceVolumeCapabilities.ReadOnlyMount),
+                        storageBinding);
+                    var sandboxAttachmentProfile = new WorkspaceSandboxAttachmentProfile(
+                        plannedResource,
+                        Enum.GetValues<WorkspaceVolumeAccessMode>().ToImmutableHashSet(),
+                        ImmutableHashSet.Create(WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim),
+                        ImmutableHashSet.Create(StringComparer.Ordinal, storageResource.ProviderId),
+                        SupportsReadOnlyMounts: true);
+                    var workspaceNegotiation = WorkspaceVolumeAttachmentNegotiator.Negotiate(
+                        owner.ProjectId,
+                        owner.EnvironmentId,
+                        owner.RunId,
+                        workspaceSpec,
+                        workspaceStorage,
+                        new WorkspaceVolumeMountManifest([workspaceMount]),
+                        workspaceMount,
+                        plannedResource,
+                        lifecycle!.Snapshot.Fence,
+                        provisionRequest.DataGeneration,
+                        sandboxAttachmentProfile,
+                        WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim);
+                    var workspaceAttachment = new SandboxWorkspaceAttachment(
+                        workspaceNegotiation,
+                        JsonSerializer.SerializeToElement(new AgentSandboxPersistentVolumeClaimAttachment(
+                            1, storageResource.ProviderId, "agentweaver", "workspace-claim", "workspace-claim-uid"),
+                            jsonOptions)).Validate();
+                    var sandboxProvisionRequest = new SandboxProvisionRequest(
+                        lifecycle!.Snapshot.Fence,
+                        sandboxCandidate,
+                        lease.ResourceGeneration,
+                        lease.ProviderFencingGeneration,
+                        lease.OperationId,
+                        networkSelector.MatchLabels,
+                        workspaceAttachment).Validate();
+                    var recoveryIntent = JsonSerializer.SerializeToElement(new
+                    {
+                        contractVersion = 1,
+                        request = provisionRequest,
+                        workspace = workspaceAttachment,
+                        egressSelectorLabels = networkSelector.MatchLabels,
+                        workspaceAttachmentTransitionRevision = 2
+                    }, jsonOptions);
+                    lease = await leaseStore.SaveProviderRequestAsync(
+                        lease.OperationId, lifecycle!.Snapshot.Fence, recoveryIntent, default);
+                    var provisionAttempt = await leaseStore.BeginProviderAttemptAsync(
+                        SandboxProviderAttemptRequest.ForProvision(lease), default);
+                    var provisioned = await sandboxProvider.ProvisionAsync(sandboxProvisionRequest);
+                    var leaseCreatedAt = lease.CreatedAt ?? throw new InvalidOperationException(
+                        "The controlled Sandbox lease has no creation timestamp.");
+                    kubernetesTransport.AddReadySandbox(provisioned, leaseCreatedAt);
+                    lease = await leaseStore.CompleteProvisionAsync(
+                        lease.OperationId, lease.Fence, provisioned, true, default,
+                        provisionAttempt.Attempt.AttemptId);
+                    leaseTimeProvider.AdvanceTo(leaseCreatedAt.AddSeconds(2));
+                    var readyObservation = await sandboxProvider.DescribeAsync(new SandboxDescribeRequest(
+                        lease.Fence,
+                        lease.ProvisionedResource!.Resource,
+                        lease.ProviderFencingGeneration,
+                        lease.ProvisionedResource.ProviderBinding,
+                        lease.CreatedAt!.Value)
+                    {
+                        RequireRuntimeEndpoint = true
+                    });
+                    Assert.True(readyObservation.WorkspaceAttachmentVerified);
+                }
                 host = await new HostBuilder().ConfigureWebHost(web =>
                 {
                     web.UseTestServer();
@@ -2214,14 +2331,32 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
                         AddRuntimePlacementManagerServices(
                             services, sandboxOptions, sandboxKubernetesClient, sandboxProvider,
-                            networkOptions, networkStore);
+                            networkOptions, networkStore, provisionFirstStartOnDemand);
                         services.AddScoped<EnvironmentWorkspaceVolumeManager>();
+                        if (provisionFirstStartOnDemand)
+                        {
+                            services.AddScoped<IEnvironmentLifecycleProducer, EnvironmentLifecycleProducer>();
+                            services.AddSingleton(storageOptions);
+                            services.AddScoped<IWorkspaceVolumeProvider>(_ => storageProvider);
+                            services.AddScoped<WorkspaceVolumeService>();
+                        }
                         services.AddScoped<IEnvironmentRuntimeBootstrapProfileReplacementStore,
                             EnvironmentRuntimeBootstrapProfileReplacementStore>();
                         services.AddHttpClient<EnvironmentRuntimeEndpointVerifier>()
                             .ConfigurePrimaryHttpMessageHandler(() => new RuntimeEndpointHealthTransport());
-                        services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(
-                            [], "runtime-profile", new("https://orchestrator.test/")));
+                        services.AddSingleton(provisionFirstStartOnDemand
+                            ? new EnvironmentRuntimeBootstrapProfileRegistry(
+                                [], "runtime-profile", new("https://orchestrator.test/"))
+                            : new EnvironmentRuntimeBootstrapProfileRegistry(
+                            [
+                                new EnvironmentRuntimeBootstrapProfileRegistration(
+                                    owner,
+                                    new(
+                                        "runtime-profile",
+                                        new(configureEndpoint),
+                                        new("https://orchestrator.test/internal/runtime/observations")),
+                                    lease!.ProvisionedResource!.Resource)
+                            ]));
                         services.AddSingleton(new EnvironmentRuntimeBootstrapDeliveryOptions(
                             new("https://orchestrator.test/"), new("https://broker.test/")));
                         services.AddHttpClient<EnvironmentRuntimeBootstrapDelivery>()
@@ -2251,7 +2386,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         });
                     });
                 }).StartAsync();
-                return new(host, dataSource, sandboxHttpClient!, lease, readTimeProvider);
+                return new(host, dataSource, sandboxHttpClient!, lease, readTimeProvider, owner);
             }
             catch
             {
@@ -2370,16 +2505,22 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     {
         private readonly AgentSandboxOptions _options;
         private readonly string _configureEndpoint;
+        private readonly bool _readyOnSandboxClaimCreation;
+        private readonly RuntimeLeaseTestTimeProvider _leaseTimeProvider;
         private readonly Dictionary<string, JsonNode> _resources = new(StringComparer.Ordinal);
         private JsonNode? _pods;
         private JsonNode? _events;
 
         public RuntimePlacementKubernetesTransport(
             AgentSandboxOptions options, EnvironmentOwnerIdentity owner, SandboxProvisionApiRequest provisionRequest,
-            string configureEndpoint = RuntimeReceiverConfigureEndpoint)
+            string configureEndpoint,
+            bool readyOnSandboxClaimCreation,
+            RuntimeLeaseTestTimeProvider leaseTimeProvider)
         {
             _options = options;
             _configureEndpoint = configureEndpoint;
+            _readyOnSandboxClaimCreation = readyOnSandboxClaimCreation;
+            _leaseTimeProvider = leaseTimeProvider;
             _resources["api/v1/namespaces/agentweaver/persistentvolumeclaims/workspace-claim"] =
                 JsonSerializer.SerializeToNode(new
                 {
@@ -2414,9 +2555,21 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         public void AddReadySandbox(SandboxProvisionedResource provisioned, DateTimeOffset leaseCreatedAt)
         {
             var descriptor = provisioned.ProviderBinding.ReleaseDescriptor;
-            var kubernetesNamespace = descriptor.GetProperty("namespace").GetString()!;
-            var claimName = descriptor.GetProperty("claimName").GetString()!;
-            var templateName = descriptor.GetProperty("templateName").GetString()!;
+            AddReadySandbox(
+                descriptor.GetProperty("namespace").GetString()!,
+                descriptor.GetProperty("claimName").GetString()!,
+                descriptor.GetProperty("templateName").GetString()!,
+                provisioned.Resource.ResourceId,
+                leaseCreatedAt);
+        }
+
+        private void AddReadySandbox(
+            string kubernetesNamespace,
+            string claimName,
+            string templateName,
+            string claimUid,
+            DateTimeOffset leaseCreatedAt)
+        {
             var claimPath = $"apis/extensions.agents.x-k8s.io/v1beta1/namespaces/{kubernetesNamespace}/sandboxclaims/{claimName}";
             var templatePath = $"apis/extensions.agents.x-k8s.io/v1beta1/namespaces/{kubernetesNamespace}/sandboxtemplates/{templateName}";
             var claim = _resources[claimPath];
@@ -2431,7 +2584,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             const string podUid = "pod-uid";
             const string serviceName = "sandbox-a";
             const string podAddress = "10.2.3.4";
-            var claimUid = provisioned.Resource.ResourceId;
             var sandboxPath =
                 $"apis/agents.x-k8s.io/v1beta1/namespaces/{kubernetesNamespace}/sandboxes/{sandboxName}";
             _resources[sandboxPath] = JsonSerializer.SerializeToNode(new
@@ -2456,8 +2608,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             var podTemplate = template["spec"]!["podTemplate"]!;
             var labels = podTemplate["metadata"]!["labels"]!.DeepClone().AsObject();
             labels["agents.x-k8s.io/claim-uid"] = claimUid;
-            var startedAt = leaseCreatedAt.AddSeconds(2);
-            var pulledAt = leaseCreatedAt.AddSeconds(1);
+            var startedAt = leaseCreatedAt;
+            var pulledAt = leaseCreatedAt;
             var pod = JsonSerializer.SerializeToNode(new
             {
                 apiVersion = "v1",
@@ -2467,6 +2619,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     name = podName,
                     @namespace = kubernetesNamespace,
                     uid = podUid,
+                    generation = 1,
+                    resourceVersion = "1",
                     labels,
                     ownerReferences = new[] { new { uid = sandboxUid, controller = true } }
                 },
@@ -2481,7 +2635,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         {
                             type = "PodScheduled",
                             status = "True",
-                            lastTransitionTime = leaseCreatedAt.AddMilliseconds(500)
+                            lastTransitionTime = leaseCreatedAt
                         }
                     },
                     containerStatuses = new[]
@@ -2574,6 +2728,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             {
                 if (path == "api/v1/namespaces/agentweaver/pods")
                     return JsonResponse(_pods ?? new JsonObject { ["items"] = new JsonArray() });
+                const string podPath = "api/v1/namespaces/agentweaver/pods/";
+                if (path.StartsWith(podPath, StringComparison.Ordinal))
+                {
+                    var podName = Uri.UnescapeDataString(path[podPath.Length..]);
+                    var pod = _pods?["items"]?.AsArray().FirstOrDefault(item =>
+                        item?["metadata"]?["name"]?.GetValue<string>() == podName);
+                    return pod is null
+                        ? new HttpResponseMessage(HttpStatusCode.NotFound)
+                        : JsonResponse(pod);
+                }
                 if (path == "api/v1/namespaces/agentweaver/events")
                     return JsonResponse(_events ?? new JsonObject { ["items"] = new JsonArray() });
                 return _resources.TryGetValue(path, out var resource)
@@ -2599,6 +2763,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 metadata["generation"] = 1;
                 metadata["resourceVersion"] = "1";
                 _resources[$"{path}/{Uri.EscapeDataString(name)}"] = body;
+                if (_readyOnSandboxClaimCreation && resourceType == "sandboxclaims")
+                {
+                    var kubernetesNamespace = metadata["namespace"]!.GetValue<string>();
+                    var templatePath = _resources.Keys.Single(key =>
+                        key.StartsWith(
+                            $"apis/extensions.agents.x-k8s.io/v1beta1/namespaces/{kubernetesNamespace}/sandboxtemplates/",
+                            StringComparison.Ordinal));
+                    var templateName = templatePath[(templatePath.LastIndexOf('/') + 1)..];
+                    _leaseTimeProvider.AdvanceTo(DateTimeOffset.UtcNow);
+                    var leaseCreatedAt = _leaseTimeProvider.GetUtcNow();
+                    AddReadySandbox(kubernetesNamespace, name, templateName, name, leaseCreatedAt);
+                }
                 return JsonResponse(body, HttpStatusCode.Created);
             }
 

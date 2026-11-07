@@ -199,6 +199,7 @@ builder.Services.AddScoped<ISandboxProvider, AgentSandboxProvider>();
 builder.Services.AddScoped<ISandboxBuildTestCommandProvider>(services =>
     (ISandboxBuildTestCommandProvider)services.GetRequiredService<ISandboxProvider>());
 builder.Services.AddScoped<EnvironmentSandboxManager>();
+builder.Services.AddScoped<EnvironmentRuntimeRunStartManager>();
 builder.Services.AddScoped<EnvironmentSandboxBuildTestCommandManager>();
 builder.Services.AddAgentweaverWorkspaceVolumeService(
     azureFilesOptions,

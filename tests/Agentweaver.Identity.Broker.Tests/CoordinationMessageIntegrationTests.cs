@@ -41,6 +41,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Http;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.Playwright;
 using Npgsql;
@@ -5551,7 +5552,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     }
 
     internal static ProviderCatalog CreateSourceControlProviderCatalog(
-        AgtPolicyProviderOptions? policyOptions = null)
+        AgtPolicyProviderOptions? policyOptions = null,
+        AzureFilesCsiOptions? storageOptions = null)
     {
         policyOptions ??= SourceControlMergePolicyOptions();
         var policyProvider = new AgtPolicyProvider();
@@ -5564,13 +5566,25 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             GitHubSourceControlAdapter.CurrentOptionsSchemaVersion);
         var policyRegistration = policyProvider.CreateRegistration(policyOptions);
         var networkRegistration = networkOptions.CreateRegistration();
+        var registrations = new List<ProviderRegistration>
+        {
+            sandboxRegistration, sourceControlRegistration, policyRegistration, networkRegistration
+        };
+        var selections = new List<ProviderSelection>
+        {
+            new(ProviderSeam.Sandbox, AgentSandboxProviderMetadata.ProviderId),
+            new(ProviderSeam.SourceControl, SourceControlProviderIds.GitHub),
+            new(ProviderSeam.Policy, AgtPolicyProvider.ProviderId)
+        };
+        if (storageOptions is not null)
+        {
+            registrations.Add(AzureFilesCsiProviderMetadata.CreateRegistration(storageOptions));
+            selections.Add(new ProviderSelection(
+                ProviderSeam.Storage, AzureFilesCsiProviderMetadata.ProviderId));
+        }
         return Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
-            [sandboxRegistration, sourceControlRegistration, policyRegistration, networkRegistration],
-            [
-                new ProviderSelection(ProviderSeam.Sandbox, AgentSandboxProviderMetadata.ProviderId),
-                new ProviderSelection(ProviderSeam.SourceControl, SourceControlProviderIds.GitHub),
-                new ProviderSelection(ProviderSeam.Policy, AgtPolicyProvider.ProviderId)
-            ],
+            registrations,
+            selections,
             [],
             layerSelections:
             [
@@ -6755,11 +6769,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         AgtPolicyProviderOptions? policyOptions = null,
         GitWorkspaceManager? gitWorkspaceManager = null,
         Func<HttpMessageHandler>? environmentHandler = null,
-        Func<HttpMessageHandler>? runtimeUsageHandler = null)
+        Func<HttpMessageHandler>? runtimeUsageHandler = null,
+        ILoggerProvider? loggerProvider = null,
+        Func<HttpMessageHandler>? runtimeHostHandler = null)
         : WebApplicationFactory<OrchestratorHost::Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            if (loggerProvider is not null)
+                builder.ConfigureLogging(logging => logging.AddProvider(loggerProvider));
             builder.ConfigureAppConfiguration((_, configuration) =>
                 configuration.AddInMemoryCollection(new Dictionary<string, string?>
                 {
@@ -6806,13 +6824,21 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 if (gitWorkspaceManager is not null)
                     services.AddSingleton(gitWorkspaceManager);
                 if (environmentHandler is not null)
+                {
                     ConfigureTestHttpClient(services,
                         typeof(OrchestratorHost::Agentweaver.Orchestrator.RuntimeEnvironmentContextClient).Name,
                         environmentHandler);
+                    ConfigureTestHttpClient(services, "runtime-run-start-environment", environmentHandler);
+                }
                 if (runtimeUsageHandler is not null)
+                {
                     ConfigureTestHttpClient(services,
                         typeof(OrchestratorHost::Agentweaver.Orchestrator.RuntimeUsageBrokerClient).Name,
                         runtimeUsageHandler);
+                    ConfigureTestHttpClient(services, "runtime-run-start-broker", runtimeUsageHandler);
+                }
+                if (runtimeHostHandler is not null)
+                    ConfigureTestHttpClient(services, "runtime-suspend-host", runtimeHostHandler);
                 if (objectStore is not null)
                     services.AddSingleton<IObjectStore>(objectStore);
                 if (sandboxProvider is not null)

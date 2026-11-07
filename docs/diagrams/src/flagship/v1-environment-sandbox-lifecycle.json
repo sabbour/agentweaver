@@ -1,70 +1,54 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Environment Sandbox lease, provider attempts, readiness, and cleanup",
-  "alt": "Environment rechecks trusted Projects authority and selection around owner-fenced lifecycle changes. Reservation and provider-operation leases, including retirement, expire after 60 seconds; a valid transition into Active assigns a fixed 600-second lifetime without replay renewal. Runtime registrations copy the persisted active expiry, while credential grants retain independent caps. The store records each provider attempt before an external effect and saves its exact outcome under the owner lock. Unknown or unresolved calls block release and generation advance. Late cleanup uses the active owner fence for authorization and keeps the saved source fence for provider identity; older-generation cleanup does not read or change the current Workspace. Claim expiry permits recovery but does not prove that a provider call stopped.",
+  "title": "Coordinator AgentHost first-start, readiness, and cleanup",
+  "alt": "Orchestrator starts the root AgentHost only after durable run admission. Environment checks the current actor, selection, and fences before it creates the retained 1 GiB workspace and first Sandbox placement. Orchestrator then registers the runtime, requests Broker bootstrap, and calls the real Environment activation route. Readiness is committed only after current registration, placement, and Host evidence pass. Environment records each provider attempt before an external effect and saves its exact outcome under the owner lock. Unknown or unresolved calls block release and generation advance. Cleanup releases the saved placement and does not delete retained workspace data. Claim expiry permits recovery but does not prove that a provider call stopped.",
   "autonumber": true,
   "participants": [
     {
+      "id": "orchestrator",
+      "label": "Orchestrator",
+      "subLabel": "Accepted run, durable start intent, and readiness commit",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": { "text": "Coordinator", "tone": "neutral" }
+    },
+    {
       "id": "environment",
       "label": "Environment owner",
-      "subLabel": "Manager, lease CAS, and late-resource cleanup queue",
+      "subLabel": "Projects authority, workspace, egress, and pinned placement",
       "icon": "server",
       "fluentIcon": "api",
       "badge": { "text": "Owner", "tone": "neutral" }
     },
     {
-      "id": "projects",
-      "label": "Projects & Config",
-      "subLabel": "Fresh authority and run selection",
+      "id": "broker",
+      "label": "Identity Broker",
+      "subLabel": "Runtime bootstrap grants and receipts",
       "icon": "key",
       "fluentIcon": "identity",
-      "badge": { "text": "Authority", "tone": "lavender" }
+      "badge": { "text": "Credential owner", "tone": "lavender" }
     },
     {
-      "id": "prerequisites",
-      "label": "Workspace / Cilium checks",
-      "subLabel": "Exact PVC and policy generations",
-      "icon": "route",
-      "fluentIcon": "network",
-      "badge": { "text": "Inputs", "tone": "teal" }
-    },
-    {
-      "id": "provider-api",
-      "label": "Agent Sandbox / Kubernetes",
-      "subLabel": "Pinned v1beta1 adapter and resource API",
+      "id": "agenthost",
+      "label": "AgentHost",
+      "subLabel": "Configured runtime; no model turn during first-start",
       "icon": "bot",
       "fluentIcon": "window",
-      "badge": { "text": "Provider", "tone": "teal" }
+      "badge": { "text": "Runtime", "tone": "teal" }
     }
   ],
   "steps": [
     {
       "type": "note",
-      "over": ["environment", "projects"],
-      "label": "Workspace reads retain the lease and exact attached volume. Metadata only: no Storage flush or content checkpoint. Retirement leaves data unchanged."
+      "over": ["orchestrator", "environment"],
+      "label": "Start follows durable root and first-message admission. Direct-root and genuine P1 admission use the same path. A pending response is not readiness."
     },
     {
       "type": "message",
-      "from": "environment",
-      "to": "projects",
-      "label": "Read fresh WriteProjects + ReadRunSelection; resolve exact owner and exclusive Sandbox candidate",
-      "line": "solid",
-      "arrow": "filled"
-    },
-    {
-      "type": "message",
-      "from": "projects",
+      "from": "orchestrator",
       "to": "environment",
-      "label": "Current authorization and immutable run selection (no-store)",
-      "line": "dashed",
-      "arrow": "open"
-    },
-    {
-      "type": "message",
-      "from": "environment",
-      "to": "prerequisites",
-      "label": "Verify exact ready Workspace generation, pinned Storage volume, and policy generation",
+      "label": "After accepted root and first-message admission, send the fenced start request with the run actor and accepted selection",
       "line": "solid",
       "arrow": "filled"
     },
@@ -72,7 +56,7 @@
       "type": "message",
       "from": "environment",
       "to": "environment",
-      "label": "Reserve idempotent write-once 60s operation lease; persist selection, options, request snapshot, and positive fences",
+      "label": "Recheck Projects authority and the accepted selection; derive the Environment and exclusive Sandbox candidate",
       "line": "dashed",
       "arrow": "open"
     },
@@ -80,140 +64,147 @@
       "type": "message",
       "from": "environment",
       "to": "environment",
-      "label": "Persist exact per-call provider attempt under owner lock before external effect",
+      "label": "Create and verify a private 1 GiB RWX workspace at /workspace; Strict, empty consumer allowlist, and both Retain policies; verify network policy",
       "line": "solid",
       "arrow": "filled"
     },
     {
       "type": "message",
       "from": "environment",
-      "to": "projects",
-      "label": "Recheck current authority and selection before dispatch",
-      "line": "solid",
-      "arrow": "filled"
-    },
-    {
-      "type": "message",
-      "from": "environment",
-      "to": "provider-api",
-      "label": "Provision with exact owner, resource/provider fences, candidate, PVC negotiation, and egress selectors",
-      "line": "solid",
-      "arrow": "filled"
-    },
-    {
-      "type": "message",
-      "from": "provider-api",
       "to": "environment",
-      "label": "Verify RuntimeClass/PVC; create owner template, zero-replica pool and v1beta1 claim; return exact UIDs and Sandbox/Pod observations",
+      "label": "Persist selection, options, request, positive fences, and exact provider attempt before external effects",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "environment",
+      "label": "After rechecking authority and selection, provision with the exact owner, provider/resource fences, PVC negotiation, and egress selectors",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "environment",
+      "label": "Verify RuntimeClass/PVC; create a zero-replica pool and v1beta1 claim. Save exact UIDs before resolving the attempt; replay does not renew 600 seconds.",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "environment",
+      "label": "Recheck authority, selection, and the same network policy generation before reporting readiness",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "orchestrator",
+      "label": "Return exact placement UID, lease, fences, expiry, and source profile (static first, else authorized lease, then global default)",
       "line": "dashed",
       "arrow": "open"
     },
     {
       "type": "message",
-      "from": "provider-api",
+      "from": "orchestrator",
       "to": "environment",
-      "label": "Record exact result under owner lock before resolving attempt; valid Active transition sets 600s, replay does not renew",
+      "label": "Resolve the selected source profile and return its current owner-bound placement context",
       "line": "solid",
       "arrow": "filled"
     },
     {
       "type": "message",
-      "from": "environment",
-      "to": "prerequisites",
-      "label": "Reverify same policy generation after provider observation",
+      "from": "orchestrator",
+      "to": "broker",
+      "label": "Bootstrap request with stable operation ID and configuration hash",
       "line": "solid",
       "arrow": "filled"
     },
     {
       "type": "message",
-      "from": "environment",
-      "to": "projects",
-      "label": "Recheck authorization and immutable selection before reporting readiness",
-      "line": "solid",
-      "arrow": "filled"
+      "from": "broker",
+      "to": "orchestrator",
+      "label": "Validated bootstrap delivery receipt",
+      "line": "dashed",
+      "arrow": "open"
     },
     {
       "type": "message",
-      "from": "environment",
+      "from": "orchestrator",
       "to": "environment",
-      "label": "Bootstrap source: static first, else authorized lease + global default",
+      "label": "POST /internal/runtime/v1/activate with exact registration and operation IDs",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "agenthost",
+      "label": "POST /runtime/v1/configure/activate",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "agenthost",
+      "to": "environment",
+      "label": "Return startup phases and exact readiness evidence after Environment revalidates registration, placement, lease, fences, and Pod UID",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "orchestrator",
+      "label": "Return validated Ready evidence",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "orchestrator",
+      "to": "orchestrator",
+      "label": "Commit Ready under current intent fence; no model turn is sent",
       "line": "solid",
       "arrow": "filled"
     },
     {
       "type": "note",
-      "over": ["environment", "provider-api"],
-      "label": "Dispatch readiness requires the exact PVC, VM isolation, and policy generation. This slice has no AgentHost configure handshake or Core run pin."
+      "over": ["orchestrator", "agenthost"],
+      "label": "Cancel releases only the saved placement. It never replaces or activates the Host. Workspace data stays retained, and the intent stores no credential bytes."
     },
     {
-      "type": "fragment",
-      "operator": "alt",
-      "label": "Retire or recover exact owner lease",
-      "sections": [
-        {
-          "label": "Explicit authorized abandon",
-          "steps": [
-            {
-              "type": "message",
-              "from": "environment",
-              "to": "projects",
-              "label": "Read fresh authority and immutable selection",
-              "line": "solid",
-              "arrow": "filled"
-            },
-            {
-              "type": "message",
-              "from": "environment",
-              "to": "environment",
-              "label": "CAS-retire exact resource, increment fence, block revival, and persist release attempt",
-              "line": "solid",
-              "arrow": "filled"
-            },
-            {
-              "type": "message",
-              "from": "environment",
-              "to": "provider-api",
-              "label": "Release original binding idempotently; delete claim with UID precondition and verify children absent",
-              "line": "solid",
-              "arrow": "filled"
-            },
-            {
-              "type": "message",
-              "from": "provider-api",
-              "to": "environment",
-              "label": "Record exact receipt before completing the durable release attempt",
-              "line": "solid",
-              "arrow": "filled"
-            }
-          ]
-        },
-        {
-          "label": "Finished condition or interrupted provider call",
-          "steps": [
-            {
-              "type": "message",
-              "from": "provider-api",
-              "to": "environment",
-              "label": "Exact Finished=True evidence or exact ListOwned operation/fence result",
-              "line": "dashed",
-              "arrow": "open"
-            },
-            {
-              "type": "message",
-              "from": "environment",
-              "to": "environment",
-              "label": "Validate terminal proof; unresolved and legacy-unknown attempts block release and generation advance",
-              "line": "solid",
-              "arrow": "filled"
-            }
-          ]
-        }
-      ]
+      "type": "message",
+      "from": "orchestrator",
+      "to": "environment",
+      "label": "After cancellation, revalidate fresh authority and selection; use the terminal run projection and exact saved placement",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "environment",
+      "label": "Release only the saved resource and provider fence; keep workspace data and require exact completion evidence",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "environment",
+      "label": "Record the exact release receipt; unresolved results remain pending and block replay",
+      "line": "dashed",
+      "arrow": "open"
     },
     {
       "type": "note",
-      "over": ["environment", "prerequisites"],
-      "label": "Active fence authorizes cleanup; saved source fence identifies its provider call. Older cleanup skips Workspace. Expiry permits retry, not quiescence."
+      "over": ["environment"],
+      "label": "Active fence authorizes cleanup. Saved fence identifies the call. Expiry permits retry, not quiescence. Unknown results block release and fence changes."
     }
   ]
 }

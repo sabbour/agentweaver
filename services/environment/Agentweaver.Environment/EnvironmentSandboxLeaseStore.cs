@@ -329,6 +329,24 @@ public sealed class EnvironmentSandboxLeaseStore(
         return lease;
     }
 
+    public async Task<SandboxLeaseSnapshot?> GetByProvisionIdempotencyKeyAsync(
+        EnvironmentGenerationFence fence,
+        string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(fence);
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await EnvironmentLifecycleStore.AcquireOwnerLockAsync(
+            connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
+        await RequireActiveOwnerAsync(connection, transaction, fence, cancellationToken).ConfigureAwait(false);
+        var saved = await ReadByIdempotencyAsync(
+            connection, transaction, fence.Owner, idempotencyKey, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return saved?.Lease;
+    }
+
     /// <summary>Persists the exact provider request before an external Sandbox provisioning attempt.</summary>
     public async Task<SandboxLeaseSnapshot> SaveProviderRequestAsync(
         Guid operationId,
@@ -1725,11 +1743,21 @@ public sealed class EnvironmentSandboxLeaseStore(
     }
 
     /// <summary>Claims the next due late-resource cleanup with a bounded lease for one worker.</summary>
+    public Task<SandboxLateResourceCleanupClaim?> ClaimNextLateResourceCleanupAsync(
+        EnvironmentGenerationFence fence,
+        CancellationToken cancellationToken) =>
+        ClaimNextLateResourceCleanupAsync(fence, cancellationToken, null, null);
+
     public async Task<SandboxLateResourceCleanupClaim?> ClaimNextLateResourceCleanupAsync(
         EnvironmentGenerationFence fence,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? operationId,
+        long? expectedResourceGeneration)
     {
         ArgumentNullException.ThrowIfNull(fence);
+        if ((operationId is null) != (expectedResourceGeneration is null) ||
+            operationId == Guid.Empty || expectedResourceGeneration is < 1)
+            throw new ArgumentException("An exact late-resource operation and generation are required together.");
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await EnvironmentLifecycleStore.AcquireOwnerLockAsync(
@@ -1750,16 +1778,31 @@ public sealed class EnvironmentSandboxLeaseStore(
             SELECT resource_generation, provider_resource_fingerprint, resource_json,
                    release_idempotency_key, provision_attempt_id, release_attempt_id,
                    claim_token, claim_expires_at
-            FROM {LateResourceCleanups}
-            WHERE tenant_id = @tenant_id AND project_id = @project_id
-              AND run_id = @run_id AND environment_id = @environment_id
-              AND release_receipt_json IS NULL
-            ORDER BY created_at, resource_generation, provider_resource_fingerprint
+            FROM {LateResourceCleanups} AS cleanup
+            WHERE cleanup.tenant_id = @tenant_id AND cleanup.project_id = @project_id
+              AND cleanup.run_id = @run_id AND cleanup.environment_id = @environment_id
+              AND cleanup.release_receipt_json IS NULL
+              AND (@operation_id IS NULL OR EXISTS (
+                  SELECT 1
+                  FROM {ProviderAttempts} AS attempt
+                  WHERE attempt.attempt_id = cleanup.provision_attempt_id
+                    AND attempt.tenant_id = cleanup.tenant_id
+                    AND attempt.project_id = cleanup.project_id
+                    AND attempt.run_id = cleanup.run_id
+                    AND attempt.environment_id = cleanup.environment_id
+                    AND attempt.operation_id = @operation_id
+                    AND attempt.resource_generation = @resource_generation
+              ))
+            ORDER BY cleanup.created_at, cleanup.resource_generation, cleanup.provider_resource_fingerprint
             LIMIT 1
             FOR UPDATE
             """, connection, transaction))
         {
             AddOwnerParameters(select, fence.Owner);
+            select.Parameters.AddWithValue("operation_id", NpgsqlDbType.Uuid,
+                (object?)operationId ?? DBNull.Value);
+            select.Parameters.AddWithValue("resource_generation", NpgsqlDbType.Bigint,
+                (object?)expectedResourceGeneration ?? DBNull.Value);
             await using var reader = await select.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
@@ -1890,6 +1933,49 @@ public sealed class EnvironmentSandboxLeaseStore(
         }.Validate();
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return claim;
+    }
+
+    public async Task<bool> HasOutstandingLateResourceCleanupAsync(
+        EnvironmentGenerationFence fence,
+        Guid operationId,
+        long resourceGeneration,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(fence);
+        if (operationId == Guid.Empty || resourceGeneration < 1)
+            throw new ArgumentException("An exact late-resource operation and generation are required.");
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await EnvironmentLifecycleStore.AcquireOwnerLockAsync(
+            connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
+        await RequireActiveOwnerAsync(connection, transaction, fence, cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1
+                FROM {LateResourceCleanups} AS cleanup
+                WHERE cleanup.tenant_id = @tenant_id AND cleanup.project_id = @project_id
+                  AND cleanup.run_id = @run_id AND cleanup.environment_id = @environment_id
+                  AND cleanup.release_receipt_json IS NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM {ProviderAttempts} AS attempt
+                      WHERE attempt.attempt_id = cleanup.provision_attempt_id
+                        AND attempt.tenant_id = cleanup.tenant_id
+                        AND attempt.project_id = cleanup.project_id
+                        AND attempt.run_id = cleanup.run_id
+                        AND attempt.environment_id = cleanup.environment_id
+                        AND attempt.operation_id = @operation_id
+                        AND attempt.resource_generation = @resource_generation
+                  )
+            )
+            """, connection, transaction);
+        AddOwnerParameters(command, fence.Owner);
+        command.Parameters.AddWithValue("operation_id", NpgsqlDbType.Uuid, operationId);
+        command.Parameters.AddWithValue("resource_generation", NpgsqlDbType.Bigint, resourceGeneration);
+        var outstanding = (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)
+            ?? false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return outstanding;
     }
 
     /// <summary>Completes a cleanup claim or records its retry state after provider work.</summary>
