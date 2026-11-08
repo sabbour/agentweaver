@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { GatewayError } from './api';
 import { RemoteMcpConnectionPanel } from './RemoteMcpConnectionPanel';
 
 const mocks = vi.hoisted(() => ({ read: vi.fn(), refresh: vi.fn(), disconnect: vi.fn(), prepare: vi.fn(), register: vi.fn(), list: vi.fn() }));
@@ -78,6 +79,19 @@ describe('Remote MCP settings connection', () => {
     mocks.list.mockRejectedValueOnce(new Error('Listing failed.'));
     fireEvent.click(screen.getByRole('button', { name: 'Refresh list' }));
     expect(await screen.findByText('Listing failed.')).toBeTruthy();
+  });
+
+  it('explains the project role needed for the exact connection read denial without retrying', async () => {
+    mocks.list.mockRejectedValueOnce(new GatewayError(
+      403, { code: 'project_read_not_authorized' }, 'project_read_not_authorized',
+    ));
+    render(<RemoteMcpConnectionPanel projectId="project" configurationRevision={4} />);
+
+    expect(await screen.findByText(
+      'You need a role on this project to see its connections. A tenant admin can open the project, but connections need a project role. Ask a project owner, or add yourself a project role.',
+    )).toBeTruthy();
+    expect(screen.queryByText(/HTTP 403/)).toBeNull();
+    expect(mocks.list).toHaveBeenCalledOnce();
   });
 
   /** Loads owner status and supplies the saved setup digest before starting consent. */

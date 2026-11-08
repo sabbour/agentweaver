@@ -2,7 +2,7 @@ import { Badge, Button, Field, Input, MessageBar, MessageBarBody } from '@fluent
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { PageSection } from '../components/ui/PageSection';
 import { useAuth } from './AuthContext';
-import { gatewayClient } from './api';
+import { GatewayError, gatewayClient } from './api';
 import { isRemoteMcpOAuthConsentPreparation, isRemoteMcpOAuthManagementStatus } from './contracts';
 import type { RemoteMcpConnectionDirectoryEntry, RemoteMcpOAuthManagementStatus } from './contracts';
 import { errorMessage } from './errors';
@@ -100,7 +100,11 @@ export function RemoteMcpConnectionPanel({ projectId, configurationRevision }: {
       setDirectory((previous) => (after && previous ? [...previous, ...usable] : usable));
       setNextConnectionId(page.nextConnectionId);
     } catch (reason) {
-      setDirectoryError(errorMessage(reason));
+      setDirectoryError(
+        reason instanceof GatewayError && reason.status === 403 && reason.code === 'project_read_not_authorized'
+          ? 'You need a role on this project to see its connections. A tenant admin can open the project, but connections need a project role. Ask a project owner, or add yourself a project role.'
+          : errorMessage(reason),
+      );
     } finally {
       setDirectoryLoading(false);
     }
