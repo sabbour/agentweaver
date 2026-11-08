@@ -278,6 +278,11 @@ namespace Agentweaver.Identity.Broker.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
 
+                    b.Property<bool>("NativeRepoAppSelectionReview")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
                     b.Property<string>("Nonce")
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
@@ -290,6 +295,10 @@ namespace Agentweaver.Identity.Broker.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
                         .HasDefaultValue(false);
+
+                    b.Property<string>("ProtectedWorkspaceSelectionPayload")
+                        .HasMaxLength(16384)
+                        .HasColumnType("character varying(16384)");
 
                     b.Property<string>("RedirectUri")
                         .IsRequired()
@@ -311,6 +320,10 @@ namespace Agentweaver.Identity.Broker.Migrations
 
                     b.Property<Guid?>("SubjectUserId")
                         .HasColumnType("uuid");
+
+                    b.Property<string>("WorkspaceSelectionRequest")
+                        .HasMaxLength(8192)
+                        .HasColumnType("character varying(8192)");
 
                     b.HasKey("Id");
 

@@ -43,7 +43,7 @@ internal sealed class AcceptanceFixtureState(string invocationId)
 internal static partial class ApiAcceptanceSupport
 {
     private static readonly HashSet<string> Journeys =
-        ["gate-answer", "gate-approve", "gate-reject", "message", "journal", "session-history-metric"];
+        ["gate-answer", "gate-approve", "gate-reject", "message", "journal", "session-history-metric", "workspace-repository-read"];
 
     private static readonly string[] RequiredReceiptPins =
         ["providerReceipt", "runtimeReceipt", "storageReceipt", "sourceReceipt"];
@@ -77,7 +77,7 @@ internal static partial class ApiAcceptanceSupport
 
     private static readonly Regex SensitiveName = SensitiveNamePattern();
     private static readonly Regex SensitiveDescriptor = new(
-        @"(?:^|[ _-])(?:authorization|cookie|token|credential|secret|password|kubeconfig|storagestate|signedurl)$",
+        @"(?:^|[ _-])(?:authorization|cookie|token|credential|secret|password|kubeconfig|storagestate|signedurl|teamsyncselection|selectioncode)$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex SensitiveKeyDescriptor = new(
         @"(?:^|[ _-])(?:api|execution|provider)[ _-]?key$",
@@ -133,6 +133,11 @@ internal static partial class ApiAcceptanceSupport
 
         string journey = RequireString(root, "journey", "supported acceptance journey");
         bool boardAcceptance = journey is "board-delete" or "board-archived-denial";
+        bool workspaceAcceptance = journey == "workspace-repository-read";
+        if (workspaceAcceptance)
+            RequireExactKeys(root,
+                ["executionIntent", "journey", "environment", "pins", "deploymentEvidence", "fixturePlan"],
+                "Workspace input");
         if (boardAcceptance)
         {
             RequireExactKeys(root, ["executionIntent", "journey", "environment", "pins", "deploymentEvidence", "fixturePlan"], "Board input");
@@ -140,6 +145,8 @@ internal static partial class ApiAcceptanceSupport
 
         JsonObject environment = RequireObject(root["environment"], "The direct Environment target is required.");
         ValidateGatewayTarget(RequireString(environment, "baseUrl", "Gateway origin"));
+        if (workspaceAcceptance)
+            RequireExactKeys(environment, ["baseUrl", "issuer", "audience", "actorId", "tenantId"], "Workspace environment");
         string[] requiredEnvironmentFields = boardAcceptance ? ["issuer", "audience", "tenantId"] : ["issuer", "audience", "actorId", "tenantId"];
         foreach (string field in requiredEnvironmentFields)
         {
@@ -157,6 +164,10 @@ internal static partial class ApiAcceptanceSupport
         }
 
         JsonObject pins = RequireObject(root["pins"], boardAcceptance ? "Pinned Board environment receipts are required." : "Pinned P1 environment receipts are required.");
+        if (workspaceAcceptance)
+            RequireExactKeys(pins,
+                ["context", "namespace", "providerReceipt", "runtimeReceipt", "storageReceipt", "sourceReceipt"],
+                "Workspace pins");
         if (boardAcceptance)
         {
             ValidateBoardPins(pins);
@@ -206,6 +217,10 @@ internal static partial class ApiAcceptanceSupport
             RequireExactKeys(fixturePlan, ["kind"], "Board fixture plan");
             if (GetString(fixturePlan, "kind") != "owned-disposable-board")
                 throw new InvalidDataException("The Board-delete fixture plan must select an owned disposable board.");
+        }
+        else if (workspaceAcceptance)
+        {
+            ValidateWorkspaceFixturePlan(fixturePlan, environment);
         }
         else
         {
@@ -1128,7 +1143,7 @@ internal static partial class ApiAcceptanceSupport
     public static string PathIdentity(string path) =>
         OperatingSystem.IsWindows() ? Path.GetFullPath(path).ToUpperInvariant() : Path.GetFullPath(path);
 
-    [GeneratedRegex(@"authorization|cookie|token|credential|api[ _-]?key|execution[ _-]?key|provider[ _-]?key|secret|password|kubeconfig|storagestate|signedurl", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"authorization|cookie|token|credential|api[ _-]?key|execution[ _-]?key|provider[ _-]?key|secret|password|kubeconfig|storagestate|signedurl|team[ _-]?sync[ _-]?selection|selection[ _-]?code", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex SensitiveNamePattern();
 
     [GeneratedRegex(@"\bBearer\s+[A-Za-z0-9._~+/-]+=*", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]

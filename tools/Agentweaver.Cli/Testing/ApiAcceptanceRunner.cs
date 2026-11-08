@@ -42,12 +42,14 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
         JsonObject observations = NewInitialObservations();
         string surfaceStatus = "blocked";
         string? failure = null;
+        bool workspaceAcceptance = false;
         AcceptanceFixtureState? fixtureState = null;
         AcceptanceFixture? fixture = null;
         string? invocationId = null;
         string? actorId = null;
         bool invocationReserved = false;
         bool boardAcceptance = false;
+        FileStream? workspaceOutput = null;
 
         try
         {
@@ -66,14 +68,18 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
 
             manifest = await ApiAcceptanceSupport.ReadManifestAsync(inputPath, ct).ConfigureAwait(false);
             boardAcceptance = manifest.Journey is "board-delete" or "board-archived-denial";
+            workspaceAcceptance = manifest.Journey == "workspace-repository-read";
             if (OutputOverwritesInput(options, manifest, inputPath, outputPath))
             {
                 outputPath = null;
                 throw new InvalidDataException("The evidence output path must not replace a P1 input or deployment artifact.");
             }
-            if (boardAcceptance && (options.NativeProbeEnvelopePath is not null || options.DispatchRecoveryEnvelopePath is not null))
-                throw new InvalidDataException("Board acceptance does not accept P1 native or recovery probe envelopes.");
-            nativeProbes = boardAcceptance
+            if ((boardAcceptance || workspaceAcceptance) &&
+                (options.NativeProbeEnvelopePath is not null || options.DispatchRecoveryEnvelopePath is not null))
+                throw new InvalidDataException("Feature acceptance does not accept P1 native or recovery probe envelopes.");
+            if (workspaceAcceptance && File.Exists(outputPath))
+                throw new InvalidDataException("Workspace acceptance requires a new evidence output file.");
+            nativeProbes = boardAcceptance || workspaceAcceptance
                 ? []
                 : await ReadNativeProbesAsync(options, inputPath, outputPath, ct).ConfigureAwait(false);
             IReadOnlyDictionary<string, string> proofHashes = await ReadProofHashesAsync(manifest, outputPath, ct).ConfigureAwait(false);
@@ -83,7 +89,9 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
             {
                 await _output.WriteLineAsync(boardAcceptance
                     ? "Dry run only: Board inputs and proof files are valid. No network request, sign-in, evidence file, project, or assignment was created."
-                    : "Dry run only: P1 inputs and proof files are valid. No network request, sign-in, evidence file, project, or assignment was created.")
+                    : workspaceAcceptance
+                        ? "Dry run only: Workspace inputs and proof files are valid. No network request, sign-in, listener, browser, or evidence file was created."
+                        : "Dry run only: P1 inputs and proof files are valid. No network request, sign-in, evidence file, project, or assignment was created.")
                     .ConfigureAwait(false);
                 return 0;
             }
@@ -93,19 +101,22 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                 invocationId = await ReserveInvocationAsync(outputPath, planHash, boardAcceptance, ct).ConfigureAwait(false);
                 invocationReserved = true;
             }
+            else if (workspaceAcceptance)
+            {
+                workspaceOutput = ReserveWorkspaceOutput(outputPath);
+            }
 
             sourceEvidence = await _deploymentEvidence.PrepareAsync(manifest, ct).ConfigureAwait(false);
             ApiAcceptanceSupport.AddStep(steps, "source-deployment-binding", "passed",
                 ("sourceSha", JsonValue.Create(ApiAcceptanceSupport.GetString(sourceEvidence["source"] as JsonObject ?? [], "sourceSha"))),
                 ("sourceTree", JsonValue.Create(ApiAcceptanceSupport.GetString(sourceEvidence["source"] as JsonObject ?? [], "sourceTree"))));
 
-            if (!boardAcceptance)
+            if (!boardAcceptance && !workspaceAcceptance)
             {
                 invocationId = await ReserveInvocationAsync(outputPath, planHash, boardAcceptance, ct).ConfigureAwait(false);
                 invocationReserved = true;
             }
-            string activeInvocationId = invocationId
-                ?? throw new InvalidOperationException("The acceptance invocation was not reserved.");
+            string activeInvocationId = invocationId ?? Guid.NewGuid().ToString("D");
             actorId = ApiAcceptanceSupport.GetString(manifest.Environment, "actorId");
             CliTarget target = new(
                 new Uri(ApiAcceptanceSupport.GetString(manifest.Environment, "baseUrl")!, UriKind.Absolute),
@@ -115,35 +126,42 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                 ApiAcceptanceSupport.GetString(manifest.Environment, "tenantId")!);
             CliIdentity setupIdentity = new(target, ["openid", "api.read", "offline_access", "projects.admin"]);
             IGatewayClient setupApi = _clients.Create(setupIdentity);
-            try
+            if (workspaceAcceptance)
             {
-                _ = await _authentication.GetBearerAsync(setupIdentity, options.Interaction, ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch
-            {
-                throw new AcceptanceBlockedException("Unbound Broker authorization for fixture setup and cleanup is unavailable.");
-            }
-
-            if (boardAcceptance)
-            {
-                BoardExecutionResult board = await ApiAcceptanceBoard.RunAsync(
-                    manifest, activeInvocationId, setupApi, _clients, _authentication, options.Interaction, steps, observations, ct)
+                (surfaceStatus, failure) = await ApiAcceptanceWorkspace.RunAsync(
+                    manifest, setupApi, setupIdentity, _authentication, options, steps, observations, ct)
                     .ConfigureAwait(false);
-                surfaceStatus = board.Status;
-                failure = board.Failure;
             }
             else
             {
-                // Fixture setup starts tenant-scoped; it obtains run-bound authorization only after selection readback.
-                (fixture, IGatewayClient runApi, IGatewayClient cancellationApi, IGatewayClient? deniedApi, fixtureState) =
-                    await ApiAcceptanceFixtureSetup.CreateAsync(
-                        manifest, activeInvocationId, setupApi, _clients, _authentication, options.Interaction, ct)
-                        .ConfigureAwait(false);
+                try
+                {
+                    _ = await _authentication.GetBearerAsync(setupIdentity, options.Interaction, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch
+                {
+                    throw new AcceptanceBlockedException("Unbound Broker authorization for fixture setup and cleanup is unavailable.");
+                }
 
+                if (boardAcceptance)
+                {
+                    BoardExecutionResult board = await ApiAcceptanceBoard.RunAsync(
+                        manifest, activeInvocationId, setupApi, _clients, _authentication, options.Interaction, steps, observations, ct)
+                        .ConfigureAwait(false);
+                    surfaceStatus = board.Status;
+                    failure = board.Failure;
+                }
+                else
+                {
+                    // Fixture setup starts tenant-scoped; it obtains run-bound authorization only after selection readback.
+                    (fixture, IGatewayClient runApi, IGatewayClient cancellationApi, IGatewayClient? deniedApi, fixtureState) =
+                        await ApiAcceptanceFixtureSetup.CreateAsync(
+                            manifest, activeInvocationId, setupApi, _clients, _authentication, options.Interaction, ct)
+                            .ConfigureAwait(false);
                 try
                 {
                     (surfaceStatus, failure) = await ApiAcceptanceJourney.RunAsync(
@@ -184,12 +202,17 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                         surfaceStatus = "failed";
                     }
                 }
+                }
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             fixtureState ??= null;
-            failure = boardAcceptance ? "The Board acceptance run was cancelled." : "The P1 acceptance run was cancelled.";
+            failure = boardAcceptance
+                ? "The Board acceptance run was cancelled."
+                : workspaceAcceptance
+                    ? "The Workspace acceptance run was cancelled."
+                    : "The P1 acceptance run was cancelled.";
             surfaceStatus = "failed";
         }
         catch (AcceptanceFixtureSetupException error)
@@ -245,7 +268,9 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
 
         JsonObject result = boardAcceptance
             ? ApiAcceptanceSupport.BoardResult(surfaceStatus, sourceEvidence, steps, observations, failure)
-            : ApiAcceptanceSupport.Result(surfaceStatus, sourceEvidence, steps, observations, failure, nativeProbes, manifest);
+            : workspaceAcceptance
+                ? ApiAcceptanceSupport.WorkspaceResult(surfaceStatus, sourceEvidence, steps, observations, failure)
+                : ApiAcceptanceSupport.Result(surfaceStatus, sourceEvidence, steps, observations, failure, nativeProbes, manifest);
         // An uncertain setup or cleanup receipt takes precedence over a passed or merely blocked journey result.
         if (fixtureState is not null && ApiAcceptanceSupport.GetString(fixtureState.Cleanup ?? [], "state") == "indeterminate")
         {
@@ -261,7 +286,24 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
         }
 
         int exitCode = TryGetExitCode(result);
-        if (outputPath is not null && (invocationReserved || !File.Exists(outputPath)))
+        if (workspaceAcceptance && outputPath is not null)
+        {
+            try
+            {
+                using CancellationTokenSource persistenceTimeout = new(TimeSpan.FromSeconds(10));
+                await using FileStream stream = workspaceOutput ?? ReserveWorkspaceOutput(outputPath);
+                await WriteWorkspaceResultAsync(stream, result, persistenceTimeout.Token).ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                await _output.WriteLineAsync($"Could not persist P1 evidence: {ApiAcceptanceSupport.RedactText(error.Message)}").ConfigureAwait(false);
+                result = ApiAcceptanceSupport.WorkspaceResult("failed", sourceEvidence, steps, observations,
+                    AppendFailure(failure, error));
+                await _output.WriteLineAsync(ApiAcceptanceSupport.EvidenceJson(ApiAcceptanceSupport.Redact(result))).ConfigureAwait(false);
+                return 1;
+            }
+        }
+        else if (outputPath is not null && (invocationReserved || !File.Exists(outputPath)))
         {
             try
             {
@@ -473,6 +515,35 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
             await ApiAcceptanceSupport.AppendEvidenceAsync(path, disposition, ct).ConfigureAwait(false);
         }
         await ApiAcceptanceSupport.AppendEvidenceAsync(path, result, ct).ConfigureAwait(false);
+    }
+
+    private static FileStream ReserveWorkspaceOutput(string path)
+    {
+        FileStream stream = new(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        try
+        {
+            SetPrivatePermissions(path);
+            return stream;
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
+    }
+
+    private static async Task WriteWorkspaceResultAsync(FileStream stream, JsonObject result, CancellationToken ct)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(ApiAcceptanceSupport.EvidenceJson(result) + "\n");
+        try
+        {
+            await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
+            await stream.FlushAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
     }
 
     private static void SetPrivatePermissions(string path)

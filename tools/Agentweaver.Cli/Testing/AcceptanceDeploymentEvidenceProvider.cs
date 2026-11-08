@@ -25,6 +25,12 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
         ("Agentweaver.Identity.Broker", "identity-broker"),
         ("Agentweaver.Projects.Config", "projects-config"),
     ];
+    private static readonly (string Id, string Name)[] WorkspaceOwnerComponents =
+    [
+        ("Agentweaver.Gateway", "gateway"),
+        ("Agentweaver.Identity.Broker", "identity-broker"),
+        ("Agentweaver.Projects.Config", "projects-config"),
+    ];
     private const string BoardFoundationSha = "fa4c10d40b10b5f06c6333ecfb6e6d86a6a7a8fe";
     private const string BoardFoundationTree = "e235a0f576a26924920130c0c4bb4dbd01d4d567";
     private const string BoardAuthoritySha = "1471e0b6ee4ab2a859231582ed1efa8e86693002";

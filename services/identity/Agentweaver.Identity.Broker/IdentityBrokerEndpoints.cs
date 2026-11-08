@@ -4,6 +4,8 @@ using System.Net;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore;
@@ -11,6 +13,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using OpenIddict.Abstractions;
 using OpenIddict.Server.AspNetCore;
@@ -39,6 +42,7 @@ public static class IdentityBrokerEndpoints
         webEndpoints.MapGet("/authorize/resume", ResumeAsync);
         webEndpoints.MapPost("/consent", ConsentAsync);
         webEndpoints.MapPost("/consent/native", NativeConsentAsync);
+        webEndpoints.MapPost(NativeRepoAppSelectionHandoff.ReviewRoute, NativeRepoAppSelectionReviewAsync);
         webEndpoints.MapPost("/token", TokenAsync);
 
         app.MapGet("/agentweaver.png", () =>
@@ -71,12 +75,19 @@ public static class IdentityBrokerEndpoints
         IOpenIddictAuthorizationManager authorizations, IOpenIddictApplicationManager applications,
         IdentityGrantAuthority grantAuthority, BrokerRunBindingAuthority runBindingAuthority,
         TimeProvider timeProvider, IAntiforgery antiforgery,
+        IDataProtectionProvider dataProtectionProvider, IServiceProvider services,
         CancellationToken ct)
     {
         var request = context.GetOpenIddictServerRequest()
             ?? throw new InvalidOperationException("The OpenIddict request cannot be retrieved.");
         if (!TryGetRequestedRunBinding(context.Request.Query, out var runBinding))
             return Forbid(Errors.InvalidRequest, "The project and run selectors are invalid.");
+        if (!NativeRepoAppSelectionHandoff.TryReadAuthorizationIntent(
+                context.Request.Query, request, runBinding, out var selectionIntent, out var encodedSelectionIntent) ||
+            !NativeRepoAppSelectionHandoff.TryReadCompletionHandle(
+                context.Request.Query, out var selectionCompletionHandle) ||
+            selectionCompletionHandle is not null && selectionIntent is null)
+            return Forbid(Errors.InvalidRequest, "The Workspace selection request is invalid.");
         var requestedScopes = request.GetScopes().ToImmutableArray();
         var usesProjectsAuthority = runBinding is not null &&
             BrokerRunBindingAuthority.UsesProjectsAuthority(requestedScopes);
@@ -87,6 +98,10 @@ public static class IdentityBrokerEndpoints
         var local = await context.AuthenticateAsync(LocalCookieScheme);
         if (!local.Succeeded || local.Principal?.FindFirst(Claims.Subject) is not { } subjectClaim)
         {
+            if (selectionCompletionHandle is not null)
+                return RedirectAuthorizationError(
+                    request.RedirectUri!, request.State, Errors.AccessDenied,
+                    "The repository review could not be completed. Start a new sign-in.");
             var handle = OpaqueHandle.NewHandle();
             db.PendingAuthorizations.Add(new PendingAuthorization
             {
@@ -102,6 +117,7 @@ public static class IdentityBrokerEndpoints
                 PromptNone = silent,
                 ProjectId = runBinding?.ProjectId,
                 RunId = runBinding?.RunId,
+                WorkspaceSelectionRequest = encodedSelectionIntent,
                 CreatedAt = timeProvider.GetUtcNow(),
                 ExpiresAt = timeProvider.GetUtcNow().AddMinutes(10),
             });
@@ -120,6 +136,9 @@ public static class IdentityBrokerEndpoints
 
         if (!Guid.TryParseExact(subjectClaim.Value, "D", out var userId) || userId == Guid.Empty)
             return Forbid(Errors.AccessDenied, "The local account is invalid.");
+        if (selectionIntent is not null &&
+            !string.Equals(selectionIntent.ActorId, userId.ToString("D"), StringComparison.Ordinal))
+            return Forbid(Errors.AccessDenied, "The repository review does not match the signed-in account.");
         var authorityKind = runBinding is null
             ? null
             : usesProjectsAuthority
@@ -152,6 +171,92 @@ public static class IdentityBrokerEndpoints
         var existing = await authorizations.FindAsync(
             subject: subjectClaim.Value, client: applicationId!, status: Statuses.Valid,
             type: AuthorizationTypes.Permanent, scopes: requestedScopes).ToListAsync(ct);
+
+        if (selectionCompletionHandle is not null)
+        {
+            if (existing.Count == 0)
+            {
+                var discarded = await DiscardSelectionCompletionAsync(
+                    db, selectionCompletionHandle, userId, request, encodedSelectionIntent!,
+                    timeProvider.GetUtcNow(), ct);
+                if (!discarded)
+                    return Forbid(Errors.InvalidGrant, "The repository review is invalid or expired.");
+            }
+            else
+            {
+                var now = timeProvider.GetUtcNow();
+                var protectedPayload = await ClaimSelectionCompletionAsync(
+                    db, selectionCompletionHandle, userId, request, encodedSelectionIntent!, now, ct);
+                var protector = NativeRepoAppSelectionHandoff.CreateProtector(dataProtectionProvider);
+                if (!NativeRepoAppSelectionHandoff.TryUnprotectPayload(
+                        protector, protectedPayload, out var payload) ||
+                    payload is null ||
+                    !NativeRepoAppSelectionHandoff.TryReadIntent(encodedSelectionIntent, out var claimedIntent) ||
+                    claimedIntent is null ||
+                    !NativeRepoAppSelectionHandoff.MatchesIntent(payload, claimedIntent, userId) ||
+                    payload.ExpiresAt <= now)
+                    return Forbid(Errors.InvalidGrant, "The repository review is invalid or expired.");
+
+                var connectionService = services.GetService<GitHubRepoAppConnectionService>();
+                if (connectionService is null)
+                    return Forbid(Errors.InvalidGrant, "The repository review is no longer available.");
+                try
+                {
+                    var selectionExpiry = await connectionService.ValidateNativeSelectionAsync(
+                        userId, claimedIntent, payload.Code, ct).ConfigureAwait(false);
+                    if (selectionExpiry != payload.ExpiresAt)
+                        return Forbid(Errors.InvalidGrant, "The repository review is no longer available.");
+                }
+                catch (GitHubRepoAppConnectionException)
+                {
+                    return Forbid(Errors.InvalidGrant, "The repository review is no longer available.");
+                }
+
+                return await SignInAsync(db, scopes, userId, requestedScopes,
+                    runBinding, authorityKind, bindingReceipt, grantAuthority, runBindingAuthority, ct,
+                    NativeRepoAppSelectionHandoff.ProtectPayload(protector, payload),
+                    NativeRepoAppSelectionHandoff.HashIntent(claimedIntent)).ConfigureAwait(false);
+            }
+        }
+
+        if (selectionIntent is not null && selectionCompletionHandle is null && existing.Count > 0)
+        {
+            var reviewHandle = OpaqueHandle.NewHandle();
+            db.PendingAuthorizations.Add(new PendingAuthorization
+            {
+                Id = Guid.NewGuid(),
+                HandleHash = OpaqueHandle.Hash(reviewHandle),
+                ClientId = request.ClientId!,
+                RedirectUri = request.RedirectUri!,
+                Scope = request.Scope ?? string.Empty,
+                State = request.State,
+                CodeChallenge = request.CodeChallenge,
+                CodeChallengeMethod = request.CodeChallengeMethod,
+                Nonce = request.Nonce,
+                WorkspaceSelectionRequest = encodedSelectionIntent,
+                NativeRepoAppSelectionReview = true,
+                SubjectUserId = userId,
+                CreatedAt = timeProvider.GetUtcNow(),
+                ExpiresAt = timeProvider.GetUtcNow().AddMinutes(10),
+            });
+            await db.SaveChangesAsync(ct);
+
+            var callbackSource = BuildNativeConsentCallbackSource(request.RedirectUri);
+            if (callbackSource is null)
+                return Results.BadRequest(new { error = Errors.InvalidRequest });
+            var reviewAntiforgeryToken = antiforgery.GetAndStoreTokens(context).RequestToken;
+            var styleNonce = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(18));
+            context.Response.Headers["Cache-Control"] = "no-store";
+            context.Response.Headers["Content-Security-Policy"] =
+                $"default-src 'none'; img-src 'self'; style-src 'nonce-{styleNonce}'; " +
+                $"form-action 'self' {callbackSource}; base-uri 'none'; frame-ancestors 'none'";
+            context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+            return Results.Content(
+                BuildNativeRepoAppSelectionReviewPage(
+                    reviewHandle, reviewAntiforgeryToken, styleNonce, selectionIntent),
+                "text/html; charset=utf-8");
+        }
+
         if (existing.Count > 0)
             return await SignInAsync(db, scopes, userId, requestedScopes,
                 runBinding, authorityKind, bindingReceipt, grantAuthority, runBindingAuthority, ct);
@@ -175,6 +280,7 @@ public static class IdentityBrokerEndpoints
             Nonce = request.Nonce,
             ProjectId = runBinding?.ProjectId,
             RunId = runBinding?.RunId,
+            WorkspaceSelectionRequest = encodedSelectionIntent,
             SubjectUserId = userId,
             CreatedAt = timeProvider.GetUtcNow(),
             ExpiresAt = timeProvider.GetUtcNow().AddMinutes(10),
@@ -334,7 +440,8 @@ public static class IdentityBrokerEndpoints
         var hash = OpaqueHandle.Hash(decision.ConsentHandle ?? string.Empty);
         var now = timeProvider.GetUtcNow();
         var claimed = await db.PendingAuthorizations
-            .Where(p => p.HandleHash == hash && p.ConsumedAt == null && p.ExpiresAt > now && p.SubjectUserId == userId)
+            .Where(p => p.HandleHash == hash && p.ConsumedAt == null && p.ExpiresAt > now &&
+                p.SubjectUserId == userId && !p.NativeRepoAppSelectionReview)
             .ExecuteUpdateAsync(setters => setters.SetProperty(p => p.ConsumedAt, now), ct);
         if (claimed != 1)
             return Results.BadRequest(new { error = Errors.InvalidRequest, error_description = "The consent transaction is invalid or expired." });
@@ -429,6 +536,181 @@ public static class IdentityBrokerEndpoints
             db, authorizations, applications, timeProvider, antiforgery, ct);
     }
 
+    private static async Task<IResult> NativeRepoAppSelectionReviewAsync(
+        HttpContext context,
+        IdentityBrokerDbContext db,
+        TimeProvider timeProvider,
+        IAntiforgery antiforgery,
+        IDataProtectionProvider dataProtectionProvider,
+        IServiceProvider services,
+        CancellationToken ct)
+    {
+        const int maxFormBytes = 16 * 1024;
+        var maxBodySize = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
+        if (maxBodySize is { IsReadOnly: false })
+            maxBodySize.MaxRequestBodySize = maxFormBytes;
+        if (!string.Equals(context.Request.ContentType?.Split(';', 2)[0].Trim(),
+                "application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase) ||
+            context.Request.ContentLength is > maxFormBytes)
+            return Results.BadRequest(new { error = Errors.InvalidRequest });
+
+        IFormCollection form;
+        try
+        {
+            form = await context.Request.ReadFormAsync(ct);
+        }
+        catch (InvalidDataException)
+        {
+            return Results.BadRequest(new { error = Errors.InvalidRequest });
+        }
+        catch (BadHttpRequestException)
+        {
+            return Results.BadRequest(new { error = Errors.InvalidRequest });
+        }
+        if (form.Keys.Any(key => key is not ("review_handle" or "approve" or "__RequestVerificationToken")) ||
+            form["review_handle"].Count != 1 || form["approve"].Count != 1 ||
+            form["__RequestVerificationToken"].Count != 1 ||
+            form.Any(field => field.Value.Any(value => value is null || value.Length > maxFormBytes)) ||
+            form.Sum(field => Encoding.UTF8.GetByteCount(field.Key) +
+                field.Value.Sum(value => Encoding.UTF8.GetByteCount(value ?? string.Empty))) > maxFormBytes ||
+            form["review_handle"][0] is not { Length: 64 } handle ||
+            handle.Any(character => character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f')) ||
+            !bool.TryParse(form["approve"], out var approve))
+            return Results.BadRequest(new { error = Errors.InvalidRequest });
+
+        var local = await context.AuthenticateAsync(LocalCookieScheme);
+        if (!local.Succeeded ||
+            local.Principal?.FindFirst(Claims.Subject)?.Value is not { } subject ||
+            !Guid.TryParseExact(subject, "D", out var userId) ||
+            userId == Guid.Empty)
+            return Results.Unauthorized();
+        try
+        {
+            await antiforgery.ValidateRequestAsync(context);
+        }
+        catch (AntiforgeryValidationException)
+        {
+            return Results.BadRequest(new { error = Errors.InvalidRequest });
+        }
+
+        var hash = OpaqueHandle.Hash(handle);
+        var now = timeProvider.GetUtcNow();
+        var pending = await db.PendingAuthorizations.AsNoTracking()
+            .SingleOrDefaultAsync(row => row.HandleHash == hash, ct);
+        if (pending is null ||
+            pending.ConsumedAt is not null ||
+            pending.ExpiresAt <= now ||
+            !NativeRepoAppSelectionHandoff.TryReadIntent(
+                pending.WorkspaceSelectionRequest, out var selectionIntent) ||
+            selectionIntent is null ||
+            !NativeRepoAppSelectionHandoff.IsValidReviewContinuation(pending, selectionIntent, userId))
+            return Results.BadRequest(new { error = Errors.InvalidRequest });
+
+        var user = await db.Users.AsNoTracking().SingleOrDefaultAsync(row => row.Id == userId, ct);
+        if (user is null || user.Disabled)
+            return Results.Unauthorized();
+
+        var claimed = await db.PendingAuthorizations
+            .Where(row => row.HandleHash == hash && row.ConsumedAt == null &&
+                row.ExpiresAt > now && row.SubjectUserId == userId &&
+                row.NativeRepoAppSelectionReview)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(row => row.ConsumedAt, now)
+                .SetProperty(row => row.WorkspaceSelectionRequest, (string?)null), ct);
+        if (claimed != 1)
+            return Results.BadRequest(new { error = Errors.InvalidRequest });
+
+        if (!approve)
+            return RedirectAuthorizationError(
+                pending.RedirectUri, pending.State, Errors.AccessDenied,
+                "The repository review was denied.");
+
+        var connectionService = services.GetService<GitHubRepoAppConnectionService>();
+        if (connectionService is null)
+            return RedirectAuthorizationError(
+                pending.RedirectUri, pending.State, Errors.TemporarilyUnavailable,
+                "The requested repository selection is not available.");
+
+        try
+        {
+            var selection = await connectionService.CreateRepositorySelectionAsync(
+                userId, selectionIntent.InstallationId, selectionIntent.RepositoryId, ct).ConfigureAwait(false);
+            if (selection.ConnectionId != selectionIntent.ConnectionId ||
+                selection.ConnectionRevision != selectionIntent.ConnectionRevision ||
+                selection.InstallationId != selectionIntent.InstallationId ||
+                selection.RepositoryId != selectionIntent.RepositoryId ||
+                !string.Equals(
+                    selection.RepositoryFullName, selectionIntent.RepositoryFullName, StringComparison.Ordinal))
+                return RedirectAuthorizationError(
+                    pending.RedirectUri, pending.State, Errors.AccessDenied,
+                    "The requested repository selection changed. Start a new review.");
+
+            var selectionExpiry = await connectionService.ValidateNativeSelectionAsync(
+                userId, selectionIntent, selection.Code, ct).ConfigureAwait(false);
+            var payload = new NativeRepoAppSelectionPayload(
+                1,
+                selectionIntent.ActorId,
+                selectionIntent.TenantId,
+                selectionIntent.ProjectId,
+                selectionIntent.OperationId,
+                selection.Code,
+                selection.ConnectionId,
+                selection.ConnectionRevision,
+                selection.InstallationId,
+                selection.RepositoryId,
+                selection.RepositoryFullName,
+                selectionExpiry);
+            var protector = NativeRepoAppSelectionHandoff.CreateProtector(dataProtectionProvider);
+            var protectedPayload = NativeRepoAppSelectionHandoff.ProtectPayload(protector, payload);
+            var completionHandle = OpaqueHandle.NewHandle();
+            var completionExpiresAt = selectionExpiry < now.AddMinutes(10)
+                ? selectionExpiry
+                : now.AddMinutes(10);
+            if (completionExpiresAt <= now)
+                return RedirectAuthorizationError(
+                    pending.RedirectUri, pending.State, Errors.AccessDenied,
+                    "The repository selection expired. Start a new review.");
+
+            var completion = new PendingAuthorization
+            {
+                Id = Guid.NewGuid(),
+                HandleHash = OpaqueHandle.Hash(completionHandle),
+                ClientId = pending.ClientId,
+                RedirectUri = pending.RedirectUri,
+                Scope = pending.Scope,
+                State = pending.State,
+                CodeChallenge = pending.CodeChallenge,
+                CodeChallengeMethod = pending.CodeChallengeMethod,
+                Nonce = pending.Nonce,
+                WorkspaceSelectionRequest = pending.WorkspaceSelectionRequest,
+                ProtectedWorkspaceSelectionPayload = protectedPayload,
+                SubjectUserId = userId,
+                CreatedAt = now,
+                ExpiresAt = completionExpiresAt,
+            };
+            db.PendingAuthorizations.Add(completion);
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            return Results.Redirect(BuildAuthorizeQuery(
+                completion, scopeOverride: null, selectionCompletionHandle: completionHandle));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (GitHubRepoAppConnectionException)
+        {
+            return RedirectAuthorizationError(
+                pending.RedirectUri, pending.State, Errors.TemporarilyUnavailable,
+                "The requested repository selection is no longer available.");
+        }
+        catch
+        {
+            return RedirectAuthorizationError(
+                pending.RedirectUri, pending.State, Errors.TemporarilyUnavailable,
+                "The repository review could not be completed. Start a new review.");
+        }
+    }
+
     private static string BuildNativeConsentPage(
         string consentHandle, string? antiforgeryToken, string styleNonce, IEnumerable<string> requestedScopes)
     {
@@ -455,6 +737,58 @@ public static class IdentityBrokerEndpoints
             </dl>
             <form method="post" action="/connect/consent/native">
             <input type="hidden" name="consent_handle" value="{WebUtility.HtmlEncode(consentHandle)}">
+            <input type="hidden" name="__RequestVerificationToken" value="{WebUtility.HtmlEncode(antiforgeryToken ?? string.Empty)}">
+            <div class="v1-actions">
+            <button type="submit" class="native-button native-button--primary" name="approve" value="true">Allow</button>
+            <button type="submit" class="native-button native-button--secondary" name="approve" value="false">Deny</button>
+            </div>
+            </form>
+            </section>
+            </main>
+            </body>
+            </html>
+            """;
+    }
+
+    private static string BuildNativeRepoAppSelectionReviewPage(
+        string reviewHandle,
+        string? antiforgeryToken,
+        string styleNonce,
+        NativeRepoAppSelectionIntent intent)
+    {
+        var action = intent.OperationId switch
+        {
+            "listWorkspaceRepositoryRefs" => "list repository branches and tags",
+            "readWorkspaceRepositoryTree" => "read a repository tree",
+            "readWorkspaceRepositoryFile" => "read a repository file",
+            _ => "read the repository",
+        };
+        return $"""
+            <!doctype html>
+            <html lang="en">
+            <head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+            <meta name="color-scheme" content="light">
+            <style nonce="{WebUtility.HtmlEncode(styleNonce)}">{NativeConsentStyles}</style>
+            <title>Review repository access</title></head>
+            <body>
+            <main class="v1-auth-page">
+            <section class="v1-auth-card" aria-labelledby="repo-review-title">
+            <div class="v1-brand"><img src="/agentweaver.png" alt="">Agentweaver</div>
+            <div>
+            <h1 id="repo-review-title">Review repository access</h1>
+            <p>Agentweaver CLI asks to {WebUtility.HtmlEncode(action)} for one Workspace read.</p>
+            </div>
+            <dl class="v1-detail-list">
+            <div><dt>Repository</dt><dd><code>{WebUtility.HtmlEncode(intent.RepositoryFullName)}</code></dd></div>
+            <div><dt>Project</dt><dd><code>{WebUtility.HtmlEncode(intent.ProjectId)}</code></dd></div>
+            <div><dt>Tenant ID</dt><dd><code>{WebUtility.HtmlEncode(intent.TenantId)}</code></dd></div>
+            <div><dt>Connection ID</dt><dd><code>{WebUtility.HtmlEncode(intent.ConnectionId)}</code></dd></div>
+            <div><dt>Connection revision</dt><dd><code>{intent.ConnectionRevision}</code></dd></div>
+            <div><dt>Action</dt><dd>{WebUtility.HtmlEncode(action)}</dd></div>
+            </dl>
+            <p>This review does not grant project access. The current project owner check still applies.</p>
+            <form method="post" action="{NativeRepoAppSelectionHandoff.ReviewPath}">
+            <input type="hidden" name="review_handle" value="{WebUtility.HtmlEncode(reviewHandle)}">
             <input type="hidden" name="__RequestVerificationToken" value="{WebUtility.HtmlEncode(antiforgeryToken ?? string.Empty)}">
             <div class="v1-actions">
             <button type="submit" class="native-button native-button--primary" name="approve" value="true">Allow</button>
@@ -633,6 +967,7 @@ public static class IdentityBrokerEndpoints
     private static async Task<IResult> TokenAsync(
         HttpContext context, IdentityBrokerDbContext db, IdentityGrantAuthority grantAuthority,
         BrokerRunBindingAuthority runBindingAuthority, IdentityBrokerOptions brokerOptions,
+        IDataProtectionProvider dataProtectionProvider, IServiceProvider services, TimeProvider timeProvider,
         CancellationToken ct)
     {
         var request = context.GetOpenIddictServerRequest()
@@ -698,7 +1033,65 @@ public static class IdentityBrokerEndpoints
             }
         }
 
-        return Results.SignIn(result.Principal, authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+        var selectionPayloadClaims = result.Principal.FindAll(NativeRepoAppSelectionHandoff.TicketPayloadClaim).Take(2).ToArray();
+        var selectionIntentHashClaims = result.Principal.FindAll(NativeRepoAppSelectionHandoff.TicketIntentHashClaim).Take(2).ToArray();
+        if (selectionPayloadClaims.Length > 1 || selectionIntentHashClaims.Length > 1 ||
+            (selectionPayloadClaims.Length == 0) != (selectionIntentHashClaims.Length == 0))
+            return Forbid(Errors.InvalidGrant, "The authorization grant is invalid.");
+
+        AuthenticationProperties? properties = null;
+        if (selectionPayloadClaims.Length == 1)
+        {
+            if (!request.IsAuthorizationCodeGrantType() ||
+                request.ClientId != NativeCliClientId ||
+                runBinding is not null ||
+                authorityKind is not null ||
+                receipt is not null ||
+                !HasExactNativeSelectionScopes(result.Principal.GetScopes()))
+                return Forbid(Errors.InvalidGrant, "The authorization grant is invalid.");
+
+            var protector = NativeRepoAppSelectionHandoff.CreateProtector(dataProtectionProvider);
+            if (!NativeRepoAppSelectionHandoff.TryUnprotectPayload(
+                    protector, selectionPayloadClaims[0].Value, out var payload) ||
+                payload is null ||
+                payload.ExpiresAt <= timeProvider.GetUtcNow())
+                return Forbid(Errors.InvalidGrant, "The authorization grant is invalid.");
+
+            var intent = new NativeRepoAppSelectionIntent(
+                1, payload.ActorId, payload.TenantId, payload.ProjectId, payload.ConnectionId,
+                payload.ConnectionRevision, payload.InstallationId, payload.RepositoryId,
+                payload.RepositoryFullName, payload.OperationId);
+            if (!NativeRepoAppSelectionHandoff.MatchesIntent(payload, intent, userId) ||
+                !string.Equals(
+                    selectionIntentHashClaims[0].Value,
+                    NativeRepoAppSelectionHandoff.HashIntent(intent),
+                    StringComparison.Ordinal))
+                return Forbid(Errors.InvalidGrant, "The authorization grant is invalid.");
+
+            var connectionService = services.GetService<GitHubRepoAppConnectionService>();
+            if (connectionService is null)
+                return Forbid(Errors.InvalidGrant, "The authorization grant is no longer active.");
+            try
+            {
+                var selectionExpiry = await connectionService.ValidateNativeSelectionAsync(
+                    userId, intent, payload.Code, ct).ConfigureAwait(false);
+                if (selectionExpiry != payload.ExpiresAt)
+                    return Forbid(Errors.InvalidGrant, "The authorization grant is no longer active.");
+            }
+            catch (GitHubRepoAppConnectionException)
+            {
+                return Forbid(Errors.InvalidGrant, "The authorization grant is no longer active.");
+            }
+
+            properties = new AuthenticationProperties();
+            properties.Parameters["workspace_selection"] =
+                new OpenIddictParameter(BuildWorkspaceSelectionResponse(payload));
+        }
+
+        RemoveNativeRepoAppSelectionClaims(result.Principal);
+        return Results.SignIn(
+            result.Principal, properties,
+            authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
 
     /// <summary>
@@ -712,7 +1105,9 @@ public static class IdentityBrokerEndpoints
         Guid userId, ImmutableArray<string> requestedScopes, RequestedRunBinding? runBinding,
         string? authorityKind, BrokerRunBindingReceipt? bindingReceipt,
         IdentityGrantAuthority grantAuthority, BrokerRunBindingAuthority runBindingAuthority,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? protectedSelectionPayload = null,
+        string? selectionIntentHash = null)
     {
         var user = await db.Users.AsNoTracking().SingleAsync(u => u.Id == userId, ct);
         if (user.Disabled)
@@ -747,8 +1142,52 @@ public static class IdentityBrokerEndpoints
 
         var principal = BuildMinimalPrincipal(
             userId, requestedScopes, runBinding, authorityKind, bindingReceipt);
+        if ((protectedSelectionPayload is null) != (selectionIntentHash is null))
+            throw new InvalidOperationException("The private repository selection ticket is invalid.");
+        if (protectedSelectionPayload is not null && selectionIntentHash is not null)
+        {
+            principal.AddClaim(
+                NativeRepoAppSelectionHandoff.TicketPayloadClaim, protectedSelectionPayload);
+            principal.AddClaim(
+                NativeRepoAppSelectionHandoff.TicketIntentHashClaim, selectionIntentHash);
+        }
         principal.SetResources(await scopes.ListResourcesAsync(requestedScopes, ct).ToListAsync(ct));
         return Results.SignIn(principal, authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+    }
+
+    private static bool HasExactNativeSelectionScopes(IEnumerable<string> scopes)
+    {
+        var values = scopes.ToArray();
+        return values.Length == 4 &&
+            values.ToHashSet(StringComparer.Ordinal).SetEquals(
+                ["openid", "api.read", "offline_access", "projects.admin"]);
+    }
+
+    private static JsonObject BuildWorkspaceSelectionResponse(NativeRepoAppSelectionPayload payload) => new()
+    {
+        ["version"] = payload.Version,
+        ["actorId"] = payload.ActorId,
+        ["tenantId"] = payload.TenantId,
+        ["projectId"] = payload.ProjectId,
+        ["operationId"] = payload.OperationId,
+        ["code"] = payload.Code,
+        ["connectionId"] = payload.ConnectionId,
+        ["connectionRevision"] = payload.ConnectionRevision,
+        ["installationId"] = payload.InstallationId,
+        ["repositoryId"] = payload.RepositoryId,
+        ["repositoryFullName"] = payload.RepositoryFullName,
+        ["expiresAt"] = payload.ExpiresAt.ToString("O", CultureInfo.InvariantCulture),
+    };
+
+    private static void RemoveNativeRepoAppSelectionClaims(ClaimsPrincipal principal)
+    {
+        foreach (var identity in principal.Identities)
+        {
+            foreach (var claim in identity.FindAll(NativeRepoAppSelectionHandoff.TicketPayloadClaim).ToArray())
+                identity.RemoveClaim(claim);
+            foreach (var claim in identity.FindAll(NativeRepoAppSelectionHandoff.TicketIntentHashClaim).ToArray())
+                identity.RemoveClaim(claim);
+        }
     }
 
     /// <summary>
@@ -1022,6 +1461,12 @@ public static class IdentityBrokerEndpoints
     }
 
     private static string BuildAuthorizeQuery(PendingAuthorization pending, string? scopeOverride = null)
+        => BuildAuthorizeQuery(pending, scopeOverride, selectionCompletionHandle: null);
+
+    private static string BuildAuthorizeQuery(
+        PendingAuthorization pending,
+        string? scopeOverride,
+        string? selectionCompletionHandle)
     {
         var query = new Dictionary<string, string?>
         {
@@ -1036,6 +1481,8 @@ public static class IdentityBrokerEndpoints
             ["prompt"] = pending.PromptNone ? "none" : null,
             [SecretRedemptionEndpoints.ProjectIdClaim] = pending.ProjectId,
             [SecretRedemptionEndpoints.RunIdClaim] = pending.RunId,
+            [NativeRepoAppSelectionHandoff.RequestParameter] = pending.WorkspaceSelectionRequest,
+            [NativeRepoAppSelectionHandoff.CompletionParameter] = selectionCompletionHandle,
         };
         var builder = new StringBuilder("/connect/authorize?");
         var first = true;
@@ -1048,6 +1495,63 @@ public static class IdentityBrokerEndpoints
         }
         return builder.ToString();
     }
+
+    private static async Task<string?> ClaimSelectionCompletionAsync(
+        IdentityBrokerDbContext db,
+        string completionHandle,
+        Guid userId,
+        OpenIddictRequest request,
+        string encodedIntent,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var hash = OpaqueHandle.Hash(completionHandle);
+        var pending = await db.PendingAuthorizations.AsNoTracking()
+            .SingleOrDefaultAsync(row => row.HandleHash == hash, ct).ConfigureAwait(false);
+        if (pending is null ||
+            pending.ConsumedAt is not null ||
+            pending.ExpiresAt <= now ||
+            pending.SubjectUserId != userId ||
+            pending.NativeRepoAppSelectionReview ||
+            pending.ProtectedWorkspaceSelectionPayload is not { Length: > 0 } protectedPayload ||
+            pending.WorkspaceSelectionRequest != encodedIntent ||
+            pending.ClientId != request.ClientId ||
+            pending.RedirectUri != request.RedirectUri ||
+            pending.Scope != (request.Scope ?? string.Empty) ||
+            pending.State != request.State ||
+            pending.CodeChallenge != request.CodeChallenge ||
+            pending.CodeChallengeMethod != request.CodeChallengeMethod ||
+            pending.Nonce != request.Nonce ||
+            pending.ProjectId is not null ||
+            pending.RunId is not null)
+            return null;
+
+        var claimed = await db.PendingAuthorizations
+            .Where(row => row.HandleHash == hash &&
+                row.ConsumedAt == null &&
+                row.ExpiresAt > now &&
+                row.SubjectUserId == userId &&
+                !row.NativeRepoAppSelectionReview &&
+                row.ProtectedWorkspaceSelectionPayload != null &&
+                row.WorkspaceSelectionRequest == encodedIntent)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(row => row.ConsumedAt, now)
+                .SetProperty(row => row.ProtectedWorkspaceSelectionPayload, (string?)null)
+                .SetProperty(row => row.WorkspaceSelectionRequest, (string?)null), ct)
+            .ConfigureAwait(false);
+        return claimed == 1 ? protectedPayload : null;
+    }
+
+    private static async Task<bool> DiscardSelectionCompletionAsync(
+        IdentityBrokerDbContext db,
+        string completionHandle,
+        Guid userId,
+        OpenIddictRequest request,
+        string encodedIntent,
+        DateTimeOffset now,
+        CancellationToken ct) =>
+        await ClaimSelectionCompletionAsync(
+            db, completionHandle, userId, request, encodedIntent, now, ct).ConfigureAwait(false) is not null;
 
     private static bool TryGetRequestedRunBinding(
         IQueryCollection query,

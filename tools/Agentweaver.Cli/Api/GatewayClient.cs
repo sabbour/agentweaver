@@ -903,12 +903,16 @@ public sealed partial class GatewayClient : IGatewayClient
                 if (contentType is "application/json" or "application/problem+json")
                 {
                     responseBody = ParseJson(bytes);
-                    evidence["responseBody"] = RedactJson(responseBody);
+                    evidence["responseBody"] = operationId == "readWorkspaceRepositoryFile"
+                        ? "[REDACTED]"
+                        : RedactJson(responseBody);
                 }
                 else
                 {
                     responseBody = JsonValue.Create(textBody);
-                    evidence["responseBody"] = RedactText(textBody);
+                    evidence["responseBody"] = operationId == "readWorkspaceRepositoryFile"
+                        ? "[REDACTED]"
+                        : RedactText(textBody);
                 }
             }
 
@@ -1205,6 +1209,8 @@ public sealed partial class GatewayClient : IGatewayClient
     {
         var normalized = new string(name.Where(char.IsLetterOrDigit).ToArray());
         return normalized.Contains("token", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Equals("xagentweaverteamsyncselection", StringComparison.OrdinalIgnoreCase) ||
+               normalized.EndsWith("selectioncode", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("secret", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("password", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("cookie", StringComparison.OrdinalIgnoreCase) ||

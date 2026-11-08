@@ -1,0 +1,137 @@
+{
+  "$schema": "../sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Native Workspace repository-read check",
+  "alt": "The native .NET CLI opens an exact Workspace review in the browser. The Broker checks its current cookie and antiforgery token, creates an owner-bound Repo App selection, and returns it only after HTTPS code exchange with an S256 verifier. The CLI then reads refs, a tree and a file through typed Gateway operations with current owner checks. The selection is not part of the callback, OAuth tokens, logs or evidence.",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "native-cli",
+      "label": "Native .NET CLI",
+      "subLabel": "S256 verifier and exact loopback callback",
+      "icon": "box",
+      "fluentIcon": "tool",
+      "badge": {
+        "text": "Source check",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "operator-browser",
+      "label": "Operator browser",
+      "subLabel": "Current Broker cookie and antiforgery token",
+      "icon": "window",
+      "fluentIcon": "person",
+      "badge": {
+        "text": "Explicit review",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "broker",
+      "label": "Identity Broker",
+      "subLabel": "Existing OAuth flow and private code ticket",
+      "icon": "server",
+      "fluentIcon": "identity",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "gateway",
+      "label": "Gateway + Orchestrator",
+      "subLabel": "Typed Workspace reads and current owner checks",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": {
+        "text": "Read boundary",
+        "tone": "green"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "note",
+      "over": [
+        "native-cli",
+        "operator-browser",
+        "broker",
+        "gateway"
+      ],
+      "label": "Source-only check. It does not create an Agentweaver project, run, role or test fixture. It does not prove a live deployment or full P1 acceptance."
+    },
+    {
+      "type": "message",
+      "from": "native-cli",
+      "to": "operator-browser",
+      "label": "Open existing authorization request with exact bounded Workspace intent",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "operator-browser",
+      "to": "broker",
+      "label": "Review exact repo and operation with current cookie and antiforgery token",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "broker",
+      "to": "broker",
+      "label": "Create an owner-bound selection through the existing Repo App connection",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "operator-browser",
+      "to": "native-cli",
+      "label": "Exact loopback GET callback carries OAuth code and state only",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "native-cli",
+      "to": "broker",
+      "label": "Exchange code over HTTPS with the S256 verifier",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "broker",
+      "to": "native-cli",
+      "label": "Return OAuth tokens and private workspace_selection response parameter",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "note",
+      "over": [
+        "broker",
+        "native-cli"
+      ],
+      "label": "Selection is not part of the callback, OAuth tokens, logs, vault or evidence. Each repository read gets a new selection."
+    },
+    {
+      "type": "message",
+      "from": "native-cli",
+      "to": "gateway",
+      "label": "Read refs, tree and file with the required selection header",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "gateway",
+      "to": "native-cli",
+      "label": "Return bounded data after current project and repository owner checks",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

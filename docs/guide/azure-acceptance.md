@@ -186,6 +186,78 @@ post-deployment properties.
 See [Test Agentweaver](./testing) for the limits of source and integration
 tests.
 
+## Run the native Workspace repository-read check
+
+This check uses the native .NET CLI to read one file from a configured
+repository. It is separate from the Foundation Probe and Azure deployment
+checks. It does not create an Agentweaver project, run, role, or test fixture.
+
+<figure class="aw-diagram" tabindex="0">
+  <a :href="'/agentweaver/v1/diagrams/flagship/v1-native-workspace-acceptance.png'">
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-native-workspace-acceptance.png'" alt="The native .NET CLI opens an exact Workspace review in the browser. The Broker checks its current cookie and antiforgery token, creates an owner-bound Repo App selection, and returns it only after HTTPS code exchange with an S256 verifier. The CLI then reads refs, a tree and a file through typed Gateway operations with current owner checks. The selection is not part of the callback, OAuth tokens, logs or evidence." />
+  </a>
+  <figcaption>This native source check is separate from the Foundation Probe and Azure deployment checks. It does not prove a live browser, deployment or full P1 acceptance.</figcaption>
+</figure>
+<p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-native-workspace-acceptance.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-native-workspace-acceptance.drawio'">Open editable draw.io source</a></p>
+
+Run it only with an approved non-production target, a signed-in owner who can
+read the project, and the exact configured Repo App connection and repository.
+The check performs normal OAuth sign-in when needed. It also creates a
+short-lived Broker selection record for each repository read. It does not
+change or delete GitHub repository data. Do not run it against production.
+
+Prepare a valid `workspace-repository-read` manifest from the current target.
+Use the source, deployment, and proof inputs required by the standard API
+acceptance manifest. Set `fixturePlan.workspace` to the exact project revision,
+Repo App connection and revision, installation, repository, branch or tag,
+immutable commit, file path, UTF-8 byte length, and SHA-256 digest. The file
+must be a regular text file no larger than 1 MiB. The digest must cover its
+original UTF-8 bytes without newline or Unicode normalization. Do not add a
+selection code or credential to the manifest.
+
+From PowerShell at the repository root, set these values:
+
+```powershell
+$cli = "<path to the exact self-contained Agentweaver apphost>"
+$manifest = "<path to the approved Workspace manifest>"
+$evidence = "<new path for Workspace evidence>"
+```
+
+Replace each placeholder with its full path. Use the apphost published from
+this source, or the exact extracted apphost when checking a distribution
+candidate. The evidence path must not exist and must not replace the manifest
+or any proof file.
+
+First validate the input without network access:
+
+```powershell
+& $cli test --input $manifest --output $evidence --dry-run --interactive
+```
+
+A successful dry run reports that the inputs are valid and does not create the
+evidence file. It does not open a browser, start a callback listener, sign in,
+or contact the target. Fix validation errors locally before proceeding.
+
+After confirming the target and effect scope, run the approved check:
+
+```powershell
+& $cli test --input $manifest --output $evidence --interactive
+```
+
+When the Broker asks, sign in as the expected owner and review the exact
+repository and read operation. The CLI requests a fresh review for each ref
+page, tree read, and file read. The check uses one immutable commit for the
+tree and file. It does not create API fixtures or call model, run, or Sandbox
+operations.
+
+The command reports `featureStatus` as `passed`, `failed`, or `blocked`.
+`fullP1Status` remains `not-evaluated`. Check the new evidence file and the
+reported result. The evidence contains bounded file metadata and digests, not
+the file text or Repo App selection. This result proves only the selected
+Workspace read on the target used. It does not prove denied-actor parity,
+Azure deployment, or full P1 acceptance. Record any check you did not run as
+not run.
+
 ## Expected result
 
 You have recorded each check as passed, failed, or not run against the

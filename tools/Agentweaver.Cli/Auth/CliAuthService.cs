@@ -6,7 +6,7 @@ using Agentweaver.Cli.Vault;
 
 namespace Agentweaver.Cli.Auth;
 
-public sealed class CliAuthService : ICliAuthentication, IDisposable
+public sealed class CliAuthService : ICliAuthentication, INativeRepoAppSelectionHandoff, IDisposable
 {
     private static readonly TimeSpan CallbackTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
@@ -55,6 +55,46 @@ public sealed class CliAuthService : ICliAuthentication, IDisposable
 
     public async Task<CliAuthStatus> LoginAsync(CliIdentity identity, CancellationToken ct)
     {
+        var (status, selection) = await LoginCoreAsync(identity, null, ct).ConfigureAwait(false);
+        selection?.Dispose();
+        return status;
+    }
+
+    public async Task<NativeRepoAppSelection> AcquireRepositorySelectionAsync(
+        CliIdentity identity,
+        NativeRepoAppSelectionIntent intent,
+        InteractionPolicy interaction,
+        CancellationToken ct)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(intent);
+        if (interaction is not (InteractionPolicy.Never or InteractionPolicy.Allow))
+            throw new ArgumentOutOfRangeException(nameof(interaction));
+        if (interaction == InteractionPolicy.Never)
+            throw new CliAuthNeedsLoginException(
+                "A fresh Workspace repository selection requires --interactive.");
+
+        _ = CliAuthIdentity.Create(identity);
+        if (identity.ProjectId is not null ||
+            identity.RunId is not null ||
+            !string.Equals(identity.Target.ClientId, "agentweaver-cli", StringComparison.Ordinal) ||
+            !identity.Scopes.OrderBy(scope => scope, StringComparer.Ordinal)
+                .SequenceEqual(["api.read", "offline_access", "openid", "projects.admin"], StringComparer.Ordinal) ||
+            intent.Version != 1 ||
+            !string.Equals(intent.TenantId, identity.Target.TenantId, StringComparison.Ordinal) ||
+            !NativeRepoAppSelectionIntentValidator.IsValid(intent))
+            throw new InvalidOperationException("The native Workspace selection request is invalid.");
+
+        var (_, selection) = await LoginCoreAsync(identity, intent, ct).ConfigureAwait(false);
+        return selection
+            ?? throw new InvalidOperationException("The Identity Broker did not return the requested Workspace selection.");
+    }
+
+    private async Task<(CliAuthStatus Status, NativeRepoAppSelection? Selection)> LoginCoreAsync(
+        CliIdentity identity,
+        NativeRepoAppSelectionIntent? selectionIntent,
+        CancellationToken ct)
+    {
         ThrowIfDisposed();
         var target = CliAuthIdentity.Create(identity);
         return await _credentialLock.RunAsync(target.Account, async (intent, lockCt) =>
@@ -78,7 +118,7 @@ public sealed class CliAuthService : ICliAuthentication, IDisposable
             try
             {
                 var authorizationUri = OidcProtocol.CreateAuthorizationUri(
-                    metadata, target, callback.RedirectUri, state, nonce, challenge);
+                    metadata, target, callback.RedirectUri, state, nonce, challenge, selectionIntent);
                 await _browser.OpenAsync(authorizationUri, callbackCts.Token).ConfigureAwait(false);
 
                 OAuthCallback result;
@@ -100,6 +140,8 @@ public sealed class CliAuthService : ICliAuthentication, IDisposable
                 var token = await OidcProtocol.ExchangeCodeAsync(
                     _httpClient, metadata, target, callback.RedirectUri, code, verifier, lockCt)
                     .ConfigureAwait(false);
+                try
+                {
                 if (token.RefreshToken is null)
                     throw new InvalidOperationException(
                         "The Identity Broker did not issue a refresh token; check the CLI offline_access registration.");
@@ -110,6 +152,16 @@ public sealed class CliAuthService : ICliAuthentication, IDisposable
                 var actorId = await OidcProtocol.ValidateIdTokenAsync(
                     _httpClient, metadata, token.IdToken, target.Identity, nonce, _timeProvider.GetUtcNow(), lockCt)
                     .ConfigureAwait(false);
+                if (selectionIntent is null && token.WorkspaceSelection is not null ||
+                    selectionIntent is not null &&
+                    (token.WorkspaceSelection is not { } returnedSelection ||
+                     !string.Equals(actorId, selectionIntent.ActorId, StringComparison.Ordinal) ||
+                     returnedSelection.ExpiresAt <= _timeProvider.GetUtcNow() ||
+                     !selectionIntent.Matches(returnedSelection)))
+                {
+                    token.WorkspaceSelection?.Dispose();
+                    throw new InvalidOperationException("The Identity Broker returned an unexpected Workspace selection.");
+                }
                 lockCt.ThrowIfCancellationRequested();
                 var session = CreateSession(token, actorId);
 
@@ -130,11 +182,18 @@ public sealed class CliAuthService : ICliAuthentication, IDisposable
                             "The OS vault could not save or clear the sign-in. Resolve the vault error before retrying login.",
                             cleanupError);
                     }
+                    token.WorkspaceSelection?.Dispose();
                     throw new InvalidOperationException("The OS vault could not save the sign-in. Run login again.", saveError);
                 }
 
                 _tokens[target.Account] = session;
-                return Status(target, isSignedIn: true, actorId);
+                return (Status(target, isSignedIn: true, actorId), token.WorkspaceSelection);
+                }
+                catch
+                {
+                    token.WorkspaceSelection?.Dispose();
+                    throw;
+                }
             }
             finally
             {
@@ -263,6 +322,11 @@ public sealed class CliAuthService : ICliAuthentication, IDisposable
             var metadata = await OidcProtocol.DiscoverAsync(_httpClient, target.Issuer, ct).ConfigureAwait(false);
             token = await OidcProtocol.RefreshAsync(
                 _httpClient, metadata, target, refreshToken, ct).ConfigureAwait(false);
+            if (token.WorkspaceSelection is not null)
+            {
+                token.WorkspaceSelection.Dispose();
+                throw new InvalidOperationException("The Identity Broker returned an invalid refresh response.");
+            }
             if (token.RefreshToken is not { Length: > 0 } replacement ||
                 string.Equals(replacement, refreshToken, StringComparison.Ordinal))
                 throw new InvalidOperationException(

@@ -71,6 +71,11 @@
       "name": "v1-azure-acceptance",
       "concept": "Foundation Probe acceptance evidence",
       "docs": ["docs/architecture/azure.md"]
+    },
+    {
+      "name": "v1-native-workspace-acceptance",
+      "concept": "Native Workspace repository-read check",
+      "docs": ["docs/guide/azure-acceptance.md"]
     }
   ]
 }
