@@ -113,20 +113,6 @@ function hasIdentityCallback(): boolean {
     typeof window.__AGENTWEAVER_IDENTITY_CALLBACK__ === 'string';
 }
 
-function bindingFromCurrentRoute(): RunBinding | null {
-  const match = /^\/projects\/([^/]+)\/(?:runs|orchestrations)\/([^/]+)(?:\/|$)/
-    .exec(window.location.pathname);
-  if (!match) return null;
-  try {
-    return {
-      projectId: decodeURIComponent(match[1]),
-      runId: decodeURIComponent(match[2]),
-    };
-  } catch {
-    return null;
-  }
-}
-
 /** Map key for the session held for one binding; the unbound session uses the empty key. */
 function bindingKey(binding: RunBinding | null): string {
   return binding ? JSON.stringify([binding.projectId, binding.runId]) : '';
@@ -592,8 +578,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (session || !restoringSession || silentAttemptedRef.current) return;
     silentAttemptedRef.current = true;
-    // Restore once on page load, bound to the run in the URL if there is one.
-    void runAuthorization(bindingFromCurrentRoute(), null, true);
+    // Restore the unbound session once on page load. The shell needs it on every page, and
+    // a run page then gets its own run session silently (or asks the user for it).
+    void runAuthorization(null, null, true);
   }, [restoringSession, runAuthorization, session]);
 
   const decideConsent = useCallback(async (approve: boolean) => {

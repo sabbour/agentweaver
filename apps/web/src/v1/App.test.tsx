@@ -10,6 +10,8 @@ import type {
 const mocks = vi.hoisted(() => ({
   binding: null as { projectId: string; runId: string } | null,
   consent: null as BrokerConsentPrompt | null,
+  authError: null as string | null,
+  authorize: vi.fn(),
   authProvider: vi.fn(),
   apiCall: vi.fn(),
   ensureSession: vi.fn(),
@@ -192,7 +194,7 @@ vi.mock('./AuthContext', () => {
       binding: null,
     },
     apiCall: mocks.apiCall,
-    authorize: async () => {},
+    authorize: (binding: unknown) => mocks.authorize(binding),
     // Silent sign-in for a run binding. Tests control whether it succeeds.
     ensureSession: (binding: unknown, activate?: boolean) => mocks.ensureSession(binding, activate),
     signOut: () => {},
@@ -213,6 +215,7 @@ vi.mock('./AuthContext', () => {
       ...auth,
       session: { ...auth.session, binding: mocks.binding },
       consent: mocks.consent,
+      error: mocks.authError,
     }),
   };
 });
@@ -470,6 +473,8 @@ describe('v1 web project scoping', () => {
     // Recent runs live in browser storage, so clear them to keep tests independent.
     clearRecentRuns();
     mocks.consent = null;
+    mocks.authError = null;
+    mocks.authorize.mockReset().mockResolvedValue(undefined);
     mocks.tenantSelector = 'tenant-1';
     mocks.completeRemoteMcpOAuthCallback.mockReset().mockResolvedValue({});
     mocks.listProjects.mockReset().mockResolvedValue([]);
@@ -1465,6 +1470,29 @@ describe('v1 web project scoping', () => {
     expect(mocks.ensureSession).toHaveBeenCalledTimes(1);
     // The message must not use internal terms such as Broker or grant.
     expect(screen.queryByText(/Broker|grant/i)).toBeNull();
+  });
+
+  it('shows why the manual run sign-in failed', async () => {
+    window.history.replaceState({}, '', '/projects/p1/runs/r1');
+    mocks.authError = 'Sign-in failed: access_denied.';
+    render(<App />);
+
+    const button = await screen.findByRole('button', { name: 'Sign in for this project and run' });
+    // An error from an earlier, unrelated sign-in is not shown before this panel tries.
+    expect(screen.queryByText('Sign-in failed: access_denied.')).toBeNull();
+    fireEvent.click(button);
+    expect(mocks.authorize).toHaveBeenCalledWith({ projectId: 'p1', runId: 'r1' });
+    expect(await screen.findByText('Sign-in failed: access_denied.')).toBeTruthy();
+  });
+
+  it('shows the 0.x account summary on Account settings', async () => {
+    window.history.replaceState({}, '', '/settings');
+    render(<App />);
+
+    expect(await screen.findByText('Manage your sign-in and repository access.')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Authentication' })).toBeTruthy();
+    expect(screen.getByText('Signed in as')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeTruthy();
   });
 
   it('shows the run tree and run panel with no alerts on the main path', async () => {

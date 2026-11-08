@@ -173,7 +173,7 @@ Each row says what works and what is still missing. The missing parts link to
 | Create from GitHub | Creates the project, then saves the repository with GitHub App sign-in. | The creator receives Owner authority; repository setup remains a separate operation. |
 | Dashboard | Run-based status and metric tiles, saved setup checks and next actions, archived-project guidance, recent runs with direct links, Team, **Activity** chart, run totals, model usage, and per-agent usage. Unavailable values are named instead of filled with guesses. | Live project health, completed-task counts, agent leaderboard scores, and response-duration percentiles. |
 | Orchestrations | **Active** and **Recent** sections with **Load more**, a state summary, and **Refresh**. | Run delete and archive. |
-| Run page | Two-pane layout with status strip, **Run tree**, and tabs Chat, Topology, Approvals, Activity, Changes, Usage, and Run settings. **Stop run** while the run is open. | Terminal diagnostic and retry. |
+| Run page | Two-pane layout with status strip, **Run tree**, and tabs Chat, Topology, Approvals, Activity, Changes, Usage, and Run settings. **Stop run** while the run is open. If the run sign-in is refused, the panel shows the reason. | Terminal diagnostic and retry. |
 | Run Chat | Journal and a composer for the coordinator or the selected session. | Nothing. |
 | Run Approvals | Shared decision view that rereads each gate before acting. | Nothing. |
 | Run Changes | GitHub App repository access for the run, and **Produced files**: saved file sets, newest first, with **Browse files**, the 0.x file viewer, **Show changes** with the 0.x diff viewer, **Refresh**, and **Load older file sets**. | Nothing. |
@@ -187,6 +187,7 @@ Each row says what works and what is still missing. The missing parts link to
 | Settings > Repository, Platform components, Run limits, Connections, History, Advanced | Saved configuration fields and revisions. | Nothing. |
 | Settings > Models | Default model, reasoning effort, credential, and per-task models. | Model catalog (behavior limit). |
 | Settings > Danger zone | Archive and restore. | Project delete: `DELETE /api/v1/projects/{projectId}`. |
+| Account settings | The 0.x description, an **Authentication** summary with the sign-in method and your name, **Sign out**, and the **GitHub Repo App** connection. | Account AI access. |
 | Platform settings | The web app version and build commit, and all 16 platform component areas with owner, readiness, and the active and available implementations with their versions. | BYOK providers, platform-default Copilot status, account AI access. |
 | Board | **Backlog**, **Ready**, **Active**, and **Done** columns with counts, summary strip, zoom, Intake, title and description edits, queue state, queue order, drag and drop within or between Backlog and Ready, send all to Ready, archive, prerequisite controls, and a revision-checked **Delete task** confirmation for eligible tasks. Known dependents and repository-issue links disable delete with an explanation. | Backlog settings, decompose, and the Human Review and Problems columns. |
 | Flow | Project task notifications, **Needs input** including dismissed gates, **Task stages**, and **Open**, **Working**, and **Done** run groups. | The live agent graph for the project and current provider-side PR state per run. |

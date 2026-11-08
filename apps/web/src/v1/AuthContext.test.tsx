@@ -217,7 +217,7 @@ describe('Broker refresh coordination', () => {
     expect(document.querySelector('iframe[title="Silent sign-in"]')).toBeNull();
   });
 
-  it('keeps the current project and run binding during silent restoration', async () => {
+  it('restores the unbound session on a run page so the shell keeps working', async () => {
     window.history.replaceState({}, '', '/projects/project-1/runs/run-1');
     window.sessionStorage.setItem(SIGNED_IN_BEFORE_STORAGE_KEY, '1');
     render(<AuthProvider><Harness /></AuthProvider>);
@@ -225,14 +225,15 @@ describe('Broker refresh coordination', () => {
     await waitFor(() => expect(mocks.buildAuthorizeUrl).toHaveBeenCalledOnce());
     expect(mocks.buildAuthorizeUrl).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({
-        binding: { projectId: 'project-1', runId: 'run-1' },
-      }),
+      expect.objectContaining({ binding: null }),
       'challenge',
       'none',
     );
-    await completeSilentSignIn({ code: 'silent-run-code' });
+    await completeSilentSignIn({ code: 'silent-code' });
     await screen.findByText('access-1');
+    // Shell reads use the unbound session, so it must be held after a run-page reload.
+    fireEvent.click(screen.getByRole('button', { name: 'Use unbound session' }));
+    await screen.findByText('unbound:access-1');
   });
 
   it('returns to the sign-in screen after one silent error and clears the marker', async () => {

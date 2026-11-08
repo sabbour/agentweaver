@@ -125,4 +125,26 @@ describe('retained DashboardPage v1 reads', () => {
     expect(settingsLinks.every((link) => link.getAttribute('href') === '/projects/p1/settings?section=danger')).toBe(true);
     expect(screen.queryByRole('link', { name: 'Open Board' })).toBeNull();
   });
+
+  it('does not repeat the primary action as a secondary action for a project without runs', async () => {
+    mocks.fetch.mockImplementation(async (input) => {
+      const url = new URL(String(input), 'http://localhost');
+      const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname === '/api/v1/projects/p1/runs') return json({ projectId: 'p1', items: [], nextCursor: null });
+      if (url.pathname === '/api/v1/projects/p1/metrics') {
+        const now = new Date().toISOString();
+        return json({
+          projectId: 'p1', from: now, to: now, activeRuns: 0, blockedRuns: 0,
+          runsInRange: 0, runsTotal: 0, completedRuns: 0, succeededRuns: 0, series: [],
+        });
+      }
+      return gatewayFixtureFetch(input);
+    });
+    renderPage();
+    await screen.findByText('This project has no run activity.');
+    const actions = screen.getByLabelText('Project actions');
+    const labels = within(actions).getAllByRole('link').map((link) => link.textContent);
+    expect(labels.length).toBeGreaterThan(1);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
 });

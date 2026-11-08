@@ -43,7 +43,9 @@ You don't type a run ID. Open a run from a link or a notification, or select
 1. Open the run. The page shows **Opening this run…** while the app signs in
    to the run silently.
 2. If the silent sign-in fails, select **Sign in for this project and run**
-   and complete the sign-in.
+   and complete the sign-in. If that sign-in also fails, the panel shows the
+   error. For example, the Broker refuses a run sign-in when you do not have
+   current authority for that run.
 
 The Broker validates current authority for that project and run. Each run has
 its own sign-in; the app keeps your project sign-in and does not reuse a token
