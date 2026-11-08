@@ -24,7 +24,11 @@ leaves their configuration digests unchanged. The explicit Environment migration
 pending migrations under its existing lock, and regular startup rejects a database with pending
 migrations. PostgreSQL tests check both the model snapshot and the existing-row backfill.
 
-Read routes require current `ReadProjects` authority. Write routes require current `WriteProjects` authority. Environment reads current authorization context from Projects & Config and repeats authority checks around mutations.
+Remote MCP connection routes require a role on the exact project: read routes
+require `ReadProjects`, and write routes require `WriteProjects`. Tenant-level
+administrator authority alone does not grant access to connection data.
+Environment reads current authorization context from Projects & Config and
+repeats authority checks around mutations.
 
 Connection mutation bodies do not accept OAuth codes, access tokens, or client secrets. API calls use the current bearer in the `Authorization` header; Environment forwards it to Projects & Config for authorization and never persists it.
 
