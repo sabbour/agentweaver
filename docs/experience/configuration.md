@@ -55,10 +55,12 @@ is listed under **Saved model references not currently eligible**. The form
 never drops it silently. For a BYOK model, the reasoning select offers only the
 levels that model supports; a saved level outside that list is labeled
 **(saved; not listed for this model)**. For a hosted model, the reasoning
-select offers levels from AgentHost's live SDK catalog when available. If the
-live read is unavailable, the selector does not invent levels; a saved level
-remains visible as **(saved; not listed for this model)**. AgentHost checks the
-selected level against the live model catalog whenever a run starts.
+select offers recent levels that AgentHost published to the project service.
+Settings reads these levels with the existing project choices; it does not
+make a live model or provider call. If no recent publication exists, the
+selector does not invent levels. A saved level remains visible as
+**(saved; not listed for this model)**, and AgentHost checks the selected level
+against the live model catalog when a run starts.
 
 When the project service has no model list, **Models** says so explicitly,
 lists the saved model references as **not verified as eligible**, and keeps
@@ -120,9 +122,9 @@ changes before you assign a skill.
 | State | Result |
 | --- | --- |
 | Loading | The form waits for the owner revision. |
-| Model choices available | Model fields are selects of enabled models. Saved references outside the list stay visible and are labeled not currently eligible. Hosted reasoning levels use the current AgentHost catalog; if unavailable, no generic list is shown. |
+| Model choices available | Model fields are selects of enabled models. Saved references outside the list stay visible and are labeled not currently eligible. Hosted reasoning levels use recent AgentHost publications in the Project choices response; if no recent publication exists, no generic list is shown. |
 | Model choices unavailable | The form states that the project service has no runtime model-binding list configured, lists saved references as not verified, and keeps model reference entry editable; it does not substitute another choice. |
-| Hosted reasoning unavailable | The form says live reasoning levels are unavailable and offers no unverified hosted options. AgentHost still checks each selected effort when a run starts. |
+| Hosted reasoning unavailable | The form says recent hosted levels are unavailable and offers no unverified options. AgentHost checks each selected effort when a run starts. |
 | Invalid JSON or a nonobject value in **Advanced** | The app displays an error and does not send a write. |
 | Stale `expectedRevision` | The owner returns a conflict. Reload, review your changes against the current document, and save again. |
 | Invalid provider, model, or configuration | The owner's validation response remains visible. |

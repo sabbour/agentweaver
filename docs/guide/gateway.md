@@ -172,9 +172,10 @@ configuration revision and model-binding revision. A missing connection,
 unavailable SDK list, or missing model is reported with an explicit
 `unavailable` state. The route has no query parameters and returns
 `Cache-Control: no-store`. If the AgentHost owner is not configured, Gateway
-returns `503 owner_not_configured`. Settings do not substitute a fixed list
-when live hosted levels are unavailable, and AgentHost still verifies the
-selected effort when a run starts.
+returns `503 owner_not_configured`. Project Settings does not call this live
+route. It reads recent AgentHost-published levels from the Project choices
+response. If no recent publication is available, Settings shows no generic
+levels, and AgentHost still verifies a selected effort when a run starts.
 
 ## Read project and Skill data
 

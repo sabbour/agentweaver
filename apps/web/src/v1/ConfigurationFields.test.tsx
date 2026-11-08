@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { ConfigurationFields } from './ConfigurationFields';
 import { needsModelCredential } from './modelCredential';
 import type {
-  HostedModelReasoningCatalogV1,
   ProjectConfiguration,
   ProjectConfigurationChoices,
 } from './contracts';
@@ -134,38 +133,49 @@ describe('readable project configuration', () => {
     expect(screen.queryByText(/checked when a run starts/)).toBeNull();
   });
 
-  it('does not invent hosted reasoning levels when the live catalog is unavailable', () => {
+  it('does not invent hosted reasoning levels when no recent publication is available', () => {
     render(<ConfigurationFields configuration={fixture()} onChange={vi.fn()} choices={ownerChoices()} part="models" />);
     // The planning task uses the hosted "planner" reference.
     const planningEffort = screen.getByLabelText('Planning reasoning effort') as HTMLSelectElement;
     expect(Array.from(planningEffort.options).map((option) => option.textContent)).toEqual([
       'Use default', 'Extra high (saved; not listed for this model)',
     ]);
-    expect(screen.getAllByText('Live reasoning levels are unavailable.').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Recent hosted reasoning levels are unavailable/).length).toBeGreaterThan(0);
+    expect(screen.getByText('Recent hosted reasoning levels are unavailable. AgentHost checks a selected level when a run starts.'))
+      .toBeTruthy();
   });
 
-  it('uses AgentHost live hosted reasoning levels when available', () => {
+  it('uses recent AgentHost-published reasoning levels from Project choices', () => {
     const choices = ownerChoices();
-    const hostedReasoningCatalog: HostedModelReasoningCatalogV1 = {
-      contractVersion: 1,
-      projectId: 'project-1',
-      projectConfigurationRevision: 4,
-      bindingsRevision: 'models-r7',
-      state: 'available',
-      unavailableReason: null,
-      models: {
-        planner: { state: 'available', unavailableReason: null, reasoningEfforts: ['low', 'high'] },
-      },
+    choices.models.choices[1] = {
+      ...choices.models.choices[1],
+      reasoningEffortSource: 'hostedModelCatalog',
+      reasoningEfforts: ['low', 'high'],
     };
 
-    render(<ConfigurationFields configuration={fixture()} onChange={vi.fn()} choices={choices}
-      hostedReasoningCatalog={hostedReasoningCatalog} part="models" />);
+    render(<ConfigurationFields configuration={fixture()} onChange={vi.fn()} choices={choices} part="models" />);
     const planningEffort = screen.getByLabelText('Planning reasoning effort') as HTMLSelectElement;
     expect(Array.from(planningEffort.options).map((option) => option.textContent))
       .toEqual(['Use default', 'Extra high (saved; not listed for this model)', 'Low', 'High']);
-    expect(screen.getByText('Levels come from AgentHost.'))
+    expect(screen.getByText('Recent levels were published by AgentHost. AgentHost checks a selected level when a run starts.'))
       .toBeTruthy();
-    expect(screen.queryByText('Live reasoning levels are unavailable.')).toBeNull();
+    expect(screen.queryByText(/Recent hosted reasoning levels are unavailable/)).toBeNull();
+  });
+
+  it('distinguishes a fresh hosted catalog with no supported levels from a missing publication', () => {
+    const choices = ownerChoices();
+    choices.models.choices[1] = {
+      ...choices.models.choices[1],
+      reasoningEffortSource: 'hostedModelCatalog',
+      reasoningEfforts: [],
+    };
+
+    render(<ConfigurationFields configuration={fixture()} onChange={vi.fn()} choices={choices} part="models" />);
+    const planningEffort = screen.getByLabelText('Planning reasoning effort') as HTMLSelectElement;
+    expect(Array.from(planningEffort.options).map((option) => option.textContent))
+      .toEqual(['Use default', 'Extra high (saved; not listed for this model)']);
+    expect(screen.getByText('AgentHost found no supported reasoning levels for this model.'))
+      .toBeTruthy();
   });
 
   it('uses the platform default model for tasks that inherit both defaults', () => {
@@ -180,24 +190,17 @@ describe('readable project configuration', () => {
       reasoningEfforts: [],
     });
     choices.models.savedReferences.push({ reference: 'platform-hosted', sources: ['platformDefault'] });
-    const hostedReasoningCatalog: HostedModelReasoningCatalogV1 = {
-      contractVersion: 1,
-      projectId: 'project-1',
-      projectConfigurationRevision: 4,
-      bindingsRevision: 'models-r7',
-      state: 'available',
-      unavailableReason: null,
-      models: {
-        'platform-hosted': { state: 'available', unavailableReason: null, reasoningEfforts: ['medium', 'high'] },
-      },
+    choices.models.choices[2] = {
+      ...choices.models.choices[2],
+      reasoningEffortSource: 'hostedModelCatalog',
+      reasoningEfforts: ['medium', 'high'],
     };
 
-    render(<ConfigurationFields configuration={configuration} onChange={vi.fn()} choices={choices}
-      hostedReasoningCatalog={hostedReasoningCatalog} part="models" />);
+    render(<ConfigurationFields configuration={configuration} onChange={vi.fn()} choices={choices} part="models" />);
     const taskEffort = screen.getByLabelText('Code writing reasoning effort') as HTMLSelectElement;
     expect(Array.from(taskEffort.options).map((option) => option.textContent))
       .toEqual(['Use default', 'Medium', 'High']);
-    expect(screen.getAllByText('Levels come from AgentHost.').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Recent levels were published by AgentHost/).length).toBeGreaterThan(0);
   });
 
   it('restores the full saved hosted binding after clearing to the platform default', () => {

@@ -5,7 +5,6 @@ import type {
   ModelTaskKind,
   ProjectConfiguration,
   ProjectConfigurationChoices,
-  HostedModelReasoningCatalogV1,
   ReasoningEffort,
 } from './contracts';
 import { needsModelCredential } from './modelCredential';
@@ -40,7 +39,7 @@ function reasoning(value: string): ReasoningEffort | null {
  * platform component implementation fields; omit it to show both.
  */
 export function ConfigurationFields({ configuration, onChange, readOnly = false, savedSelection, part, choices,
-  choicesError = false, hostedReasoningCatalog, hostedReasoningCatalogError = false }: {
+  choicesError = false }: {
   configuration: ProjectConfiguration;
   onChange: (configuration: ProjectConfiguration) => void;
   readOnly?: boolean;
@@ -51,10 +50,6 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
   choices?: ProjectConfigurationChoices | null;
   /** True when the choices endpoint could not be read. */
   choicesError?: boolean;
-  /** Current AgentHost live catalog; its revisions must match the owner choices. */
-  hostedReasoningCatalog?: HostedModelReasoningCatalogV1 | null;
-  /** True when the live catalog endpoint could not be read. */
-  hostedReasoningCatalogError?: boolean;
 }) {
   const ownerChoicesAvailable = choices?.models.state === 'available';
   const modelChoices = ownerChoicesAvailable ? choices.models.choices : [];
@@ -62,33 +57,22 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
   const ineligibleSavedReferences = ownerChoicesAvailable
     ? choices.models.savedReferences.filter((saved) => !modelReferences.includes(saved.reference))
     : [];
-  const liveCatalogMatches = Boolean(hostedReasoningCatalog && choices &&
-    hostedReasoningCatalog.projectId === choices.projectId &&
-    hostedReasoningCatalog.projectConfigurationRevision === choices.projectConfigurationRevision &&
-    hostedReasoningCatalog.bindingsRevision === choices.models.bindingsRevision &&
-    hostedReasoningCatalog.state === 'available');
   const effortsFor = (reference: string | null | undefined): ReasoningEffort[] => {
     const choice = modelChoices.find((item) => item.reference === reference);
     if (choice?.sourceMode === 'byok')
       return choice.reasoningEffortSource === 'modelBinding' ? choice.reasoningEfforts : [];
-    if (choice?.sourceMode === 'hostedCopilot' && liveCatalogMatches) {
-      const model = hostedReasoningCatalog?.models[reference ?? ''];
-      return model?.state === 'available' ? model.reasoningEfforts : [];
-    }
-    return [];
+    return choice?.sourceMode === 'hostedCopilot' && choice.reasoningEffortSource === 'hostedModelCatalog'
+      ? choice.reasoningEfforts
+      : [];
   };
-  /** Hint shown under a reasoning select when the chosen model is hosted. */
   const effortHint = (reference: string | null | undefined) => {
     const choice = modelChoices.find((item) => item.reference === reference);
     if (choice?.sourceMode !== 'hostedCopilot') return undefined;
-    if (!liveCatalogMatches || hostedReasoningCatalogError)
-      return 'Live reasoning levels are unavailable.';
-    const model = hostedReasoningCatalog?.models[reference ?? ''];
-    if (model?.state !== 'available')
-      return 'Live reasoning levels are unavailable.';
-    if (model.reasoningEfforts.length === 0)
+    if (choice.reasoningEffortSource !== 'hostedModelCatalog')
+      return 'Recent hosted reasoning levels are unavailable. AgentHost checks a selected level when a run starts.';
+    if (choice.reasoningEfforts.length === 0)
       return 'AgentHost found no supported reasoning levels for this model.';
-    return 'Levels come from AgentHost.';
+    return 'Recent levels were published by AgentHost. AgentHost checks a selected level when a run starts.';
   };
   const modelOption = (reference: string) => (
     <option key={reference} value={reference}>
@@ -160,9 +144,11 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
         {choicesError && <p className="v1-muted" role="status">
           Owner-backed model choices could not be loaded. Enter an existing model reference; the runtime checks availability when a run starts.
         </p>}
-        {hostedReasoningCatalogError && <p className="v1-muted" role="status">
-          Live hosted reasoning levels are unavailable.
-        </p>}
+        {modelChoices.some((choice) =>
+          choice.sourceMode === 'hostedCopilot' && choice.reasoningEffortSource !== 'hostedModelCatalog') &&
+          <p className="v1-muted" role="status">
+            Recent hosted reasoning levels are unavailable for some models. AgentHost checks selected levels when a run starts.
+          </p>}
         {choices?.models.state === 'unavailable' && <div role="status">
           <p className="v1-muted">
             {choices.models.unavailableReason === 'model_capability_catalog_unavailable'
