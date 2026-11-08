@@ -662,9 +662,9 @@ owned fixture data, and inspect `CurrentUser\Root`; it does not remove a root
 certificate. Recovery can verify root absence by the recorded thumbprint even
 if the public CA file is missing. If the root is present, recovery needs the
 public CA file and an exact byte match before it can remove the certificate.
-This sidecar is local controlled-test evidence only;
-`nativeJourneyProof` remains `not-run`, and this is not release evidence or
-issue #2449 acceptance.
+This sidecar is local controlled-test evidence only.
+`nativeJourneyProof` remains `not-run`. The sidecar is not release evidence and
+does not prove that the native API journey passed.
 
 ## Run API acceptance with the native CLI
 

@@ -77,7 +77,7 @@ target flags or take its target from environment variables.
 
 The `workspace-repository-read` journey checks the current configured repository
 without creating an Agentweaver project, run, role, or test fixture. It reads
-repository data only. It does not evaluate the full P1 journey.
+repository data only. It does not evaluate the full acceptance journey.
 
 The manifest uses the existing environment, source, and deployment proof
 inputs. Its `fixturePlan` contains only a `workspace` object with these exact
@@ -118,7 +118,8 @@ The result reports `featureStatus` and sets `fullP1Status` to
 `not-evaluated`. It keeps only bounded observations, such as the approved
 repository, commit, file path, byte length, and digests. It does not retain
 the file text or selection code. A passed feature result is not proof of
-denied-actor parity, runtime behavior, deployment, or full P1 acceptance.
+denied-actor parity, runtime behavior, deployment, or the full acceptance
+journey.
 
 The Workspace journey requires explicit `--interactive` permission for a
 fresh browser review. `InteractionPolicy.Never` blocks before authentication,

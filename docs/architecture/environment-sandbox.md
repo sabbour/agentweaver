@@ -24,7 +24,7 @@ connects the lifecycle, placement and recovery views.
 
 After Orchestrator accepts the root and admits its first message, it stores a
 fenced startup intent and runs a bounded continuation in a fresh service scope.
-The same continuation starts direct roots and genuine P1 roots after their
+The same continuation starts direct roots and invocation-bound roots after their
 admission checks pass. The start response and session status expose the saved
 startup state; `pending` does not mean that AgentHost is ready.
 

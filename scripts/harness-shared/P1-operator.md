@@ -1,4 +1,6 @@
-# Run the P1 acceptance harness
+<span id="run-the-p1-acceptance-harness"></span>
+
+# Run the acceptance harness
 
 Use this guide to run a product journey against an approved target. The
 harness signs in once, runs the selected journey, and records a redacted
@@ -46,7 +48,7 @@ authority context confirms tenant-wide project visibility.
 The audit read is bounded to 32 records. A denied, malformed, missing,
 truncated, or otherwise incomplete read produces **needs review**. If a
 project is visible, the role assignments and audit events must match the
-expected P1 Owner and Orchestrator setup before the result can say
+expected Owner and Orchestrator assignments before the result can say
 **safe to clean up**. A complete audit read and tenant-wide visibility with no
 matching project can establish **already clean** only when it proves both the
 setup Owner and Orchestrator assignments were later revoked. An empty audit
@@ -108,7 +110,7 @@ requests, writes, or output.
 Migration 039 validates existing audit links before backfilling them. A live
 inconsistency aborts its PostgreSQL transaction without partial writes,
 including restoring the migration-history state and append-only trigger.
-Resolve it through the reviewed P1 setup/cleanup workflow that owns the
+Resolve it through the reviewed setup and cleanup workflow that owns the
 invocation; do not edit authority-audit or setup-operation rows by hand.
 
 ## Check the manifest without contacting the target
@@ -162,6 +164,6 @@ failed cleanup is not a successful cleanup. If the output says a mutation may
 have completed without a verified receipt, stop and follow its diagnosis.
 Do not retry the mutation or remove unrelated resources.
 
-A passed surface journey is not full P1 acceptance. Missing native or recovery
-evidence remains blocked. A one-account run also cannot pass a check that
+A passed surface journey does not prove complete acceptance. Missing native or
+recovery evidence remains blocked. A one-account run also cannot pass a check that
 requires a distinct denied actor. Controlled tests do not prove a live journey.

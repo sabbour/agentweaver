@@ -2,11 +2,12 @@
 
 This retained adapter uses the released 0.x MCP client pattern and its exact SDK `1.29.0` pin.
 It uses Streamable HTTP at the exact `/mcp` path.
-It does not import remote P2 tools, persona actors, or a second protocol framework.
+The adapter discovers tools from the live MCP server. It does not add persona
+actors or another protocol framework.
 It is not an Agentweaver 1.x MCP product or supported acceptance surface.
-Agentweaver 1.x acceptance uses the native .NET CLI API; its P1 CLI entrypoints
-reject MCP surface selections explicitly. The adapter and its shared legacy
-files remain for compatibility and independent tests.
+Agentweaver 1.x acceptance uses the native .NET CLI API. Its `harness:p1` CLI
+entrypoints reject MCP surface selections explicitly. The adapter and its
+shared legacy files remain for compatibility and independent tests.
 
 Restore this package's locked dependencies when they are missing:
 
@@ -69,7 +70,7 @@ It is SDK message evidence, not a raw network-byte capture.
 It does not archive projects, release Environments, or clean up sessions.
 Product cleanup needs separate current owner authority and observed receipts.
 
-## Legacy 0.x P1 compatibility journey
+## Legacy 0.x MCP compatibility journey
 
 The exported `runP1McpJourney` function reads journal pages through the
 discovered `agentweaver_replayRunEvents` tool. The API client still reads
@@ -92,8 +93,8 @@ context, and the selected gate or message content. A distinct
 `fixturePlan.deniedActor` is optional. When supplied, it must remain a distinct
 actor with its own token. When omitted, the `valid-denied-actor-403` step is
 recorded as blocked with the explicit missing-account reason; the runner
-continues other checks, but the surface and full P1 result cannot pass. Do not
-substitute the signed-in actor or change any role or access grant.
+continues other checks, but the surface and complete acceptance result cannot
+pass. Do not substitute the signed-in actor or change any role or access grant.
 The runner sends that expected revision through the existing run-selection
 request and verifies the accepted and observed owner selection revisions.
 This plan value is not authority or an ownership receipt; the owner
@@ -101,10 +102,10 @@ compare-and-swap checks it against current state. The fixture retains its
 project-configuration read and does not call the PlatformAdmin-only global
 runtime-default endpoint.
 
-See the [P1 operator guide](../harness-shared/P1-operator.md) for the
+See the [operator guide](../harness-shared/P1-operator.md) for the
 prerequisites, dry run, one-account sign-in, and cleanup instructions.
 
-Do not invoke this retained MCP journey through the Agentweaver 1.x P1 CLI:
+Do not invoke this retained MCP journey through the Agentweaver 1.x CLI:
 `--surface mcp` and `--surface api,mcp` are unsupported there and fail
 explicitly. See the [API harness guide](../api-harness/README.md) for the
 supported 1.x acceptance contract.
@@ -121,7 +122,8 @@ Legacy source and fixtures retain the lower-level identity-module and
 idempotency behavior for compatibility tests. These are not supported
 Agentweaver 1.x CLI options or an MCP acceptance route.
 
-Legacy adapter results are separate from full P1 acceptance. Full P1 stays
-blocked until the required native probes have real evidence. Controlled MCP
+Legacy adapter results are separate from the complete acceptance result. The
+complete result remains blocked until the required native probes have real
+evidence. Controlled MCP
 and runner tests use local fixtures; they do not prove a deployed Gateway,
 Broker, owner, native execution, or AKS acceptance.

@@ -321,7 +321,7 @@ no-model fixture and cleanup paths. Distinct-actor and revoked-role checks
 remain blocked without a separate authenticated non-admin actor; TenantAdmin
 authority cannot establish those denials.
 
-The P1 `journal` journey checks the Events journal without dispatching work.
+The `journal` API journey checks the Events journal without dispatching work.
 Omit `selectionContext` from `fixturePlan` to let Projects create a pending run
 from current project configuration. The CLI uses the server-returned run and
 root-session IDs, then reads back the selection and checks the expected platform
@@ -342,7 +342,7 @@ project and empty assignment list. A missing receipt or failed readback remains
 indeterminate; the CLI does not retry an uncertain write or report cleanup as
 complete.
 
-The P1 `session-history-metric` journey creates two child history records
+The `session-history-metric` API journey creates two child history records
 without starting a model turn. It completes and archives one child, detaches
 the other, then reads the current session tree and `readProjectMetrics`. The
 fixture expects exactly two history records (root plus archived child), one
@@ -361,7 +361,7 @@ project before the final Owner revocation and reads back the archived project
 and empty assignment list. An uncertain create, selection, cancellation, or
 readback remains indeterminate; the CLI does not claim that the fixture was
 never created or cleaned. A missing denied actor remains a blocked probe, so
-this narrow feature result is not full P1 acceptance.
+this narrow feature result does not prove the full acceptance journey.
 
 No native Workspace refs/tree/file journey is currently defined. The Gateway
 read operations require the short-lived Repo App selection code in

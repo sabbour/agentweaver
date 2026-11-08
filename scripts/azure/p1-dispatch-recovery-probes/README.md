@@ -1,8 +1,9 @@
-# P1 dispatch and restart checks
+# Dispatch and restart checks
 
-This read-only command checks source-owned runtime receipts for the two required
-P1 probes. It never sends a model turn, provisions or replaces a Host, changes
-Azure or Kubernetes resources, or creates probe evidence on behalf of an owner.
+This read-only command checks source-owned runtime receipts for two dispatch
+and recovery probes. It never sends a model turn, provisions or replaces a
+Host, changes Azure or Kubernetes resources, or creates probe evidence for an
+owner.
 Without inputs it prints a blocked report:
 
 ```powershell
@@ -54,8 +55,8 @@ but it keeps `acceptanceEvidence` false until every required receipt has a
 source-owned producer. Missing, stale, or malformed receipts remain blocked;
 the runner never infers a pass from a scripted result or a missing event.
 Cleanup remains `not-started` because this read-only command creates no
-resources. The full P1 aggregator preserves these two probe statuses alongside
-the four native probes.
+resources. The full acceptance aggregator preserves these two probe statuses
+alongside the four native probes.
 
 ## Missing numeric-dispatch evidence
 
@@ -118,9 +119,9 @@ validate. Missing or rejected cases stay `blocked`, and a valid sibling is
 retained. A stored owner denial proves only the persisted owner/send state.
 It does not prove a native cursor/no-send interval, admitted-turn completion,
 soft-credit warning/floor advance, or replacement no-duplicate behavior.
-Both required probe slots and full P1 acceptance remain blocked until all
+Both required probe slots and full acceptance remain blocked until all
 those independent receipts are genuine. This command never creates denial
-records, sends a model turn/tool call, changes grants, or reruns P1.
+records, sends a model turn/tool call, changes grants, or reruns acceptance.
 
 ### Remaining acceptance prerequisites
 
@@ -167,13 +168,13 @@ and sticky exhaustion rules must remain in force. Estimated counts, a failed
 dispatch response, an old pricing snapshot, or a missing journal event is not
 proof of no send.
 
-## Missing P1 replacement and recovery evidence
+## Missing replacement and recovery evidence
 
-P1 restart proof must use the ordinary Sandbox abandon/reconcile/reprovision,
+Restart proof must use the ordinary Sandbox abandon/reconcile/reprovision,
 new Host registration/bootstrap, and `RuntimeSessionRecovery` path. The
 manifest-based suspend/resume facade and `RuntimeResumeBootstrapRequest` are
-P2 and explicitly excluded; they are not a substitute for a gate/join restart
-check. No same-lease Host restart API is required.
+out of scope; they are not a substitute for a gate/join restart check. No
+same-lease Host restart API is required.
 
 The ordinary Environment bootstrap profile registry is immutable and maps an
 Environment owner plus `ProfileId` to one exact `ProviderResourceRef`.
@@ -182,11 +183,12 @@ and readiness sources. The live command can read the current replacement
 Host's authenticated `/runtime/v1/readiness` receipt when supplied a
 run-bound placement and reader. It does not abandon or reprovision a Host, and
 one current receipt does not prove the before/after gate-join result or absence
-of duplicate effects. `ResumeCache` remains specific to the excluded P2 flow.
+of duplicate effects. `ResumeCache` remains specific to the excluded
+suspend/resume flow.
 The replacement endpoint must also match the receiver's expected audience and
 certificate DNS name.
 
-The ordinary P1 path needs owner receipts for accepted run/actor scope and
+The ordinary recovery path needs owner receipts for accepted run/actor scope and
 gate/join state; MAF checkpoint ID, parent, revision and dispatch result; old
 and replacement Sandbox identities and current Environment/provider fences; a
 verified replacement profile and native endpoint checked against the receiver

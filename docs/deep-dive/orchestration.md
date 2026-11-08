@@ -129,9 +129,9 @@ recorded from that time on. See the [API reference](../reference/api.md#project-
 
 After Orchestrator commits an accepted root and admits the first message, it
 saves a runtime-start intent and queues a bounded background continuation.
-Direct root acceptance uses the same path. P1 admission reaches it only after
-the setup receipt, accepted run selection, root, and first message pass their
-current owner checks. Startup does not create a model turn.
+Direct root acceptance uses the same path. Invocation-bound root admission reaches
+it only after the setup receipt, accepted run selection, root, and first message
+pass their current owner checks. Startup does not create a model turn.
 
 The continuation uses the accepted run selection and its execution fence. It
 asks Environment to register the run's Environment, apply the selected egress

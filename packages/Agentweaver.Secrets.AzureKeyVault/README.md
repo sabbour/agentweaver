@@ -81,8 +81,8 @@ The writer never deletes an attempt version.
 Cleanup requires separate authorization.
 
 The deployed principal requires secret SET and exact-version GET rights at the configured vault scope.
-The existing P0 Key Vault Secrets User role remains read-only.
-This library change grants no Azure permission and changes no P0 role assignment.
+The existing Key Vault Secrets User role remains read-only.
+This library change grants no Azure permission and changes no role assignment.
 The adapter defines no default Secrets Officer role and assumes no secret-name
 prefix scope.
 A host must handle unavailable writer configuration or denied permission before SDK session creation.
