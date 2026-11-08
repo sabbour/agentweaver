@@ -382,6 +382,10 @@ present after a reload, the client makes one hidden-frame authorization request
 with `prompt=none` and PKCE. The Broker returns an authorization code only when
 the same registered client already has valid consent for the requested scopes.
 The silent request does not show a consent screen or create or extend consent.
+This request is for the unbound session, also on a run page. The run page then
+requests its run-bound session silently, as it does after in-app navigation. If
+the Broker refuses the run, the app stays signed in and the run page shows
+**Sign in for this project and run**.
 
 If the Broker or identity provider needs user interaction, the client clears
 the marker and the pending PKCE transaction, then shows the normal sign-in

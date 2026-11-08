@@ -99,6 +99,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXXXL,
+    width: '100%',
     maxWidth: '1480px',
     margin: '0 auto',
     '@media (max-width: 720px)': { gap: tokens.spacingVerticalXL },
@@ -899,7 +900,9 @@ export function DashboardPage() {
         : statusCopy(tone, currentData.summary, success.basis > 0 || modelTelemetry),
       modelTelemetry,
       primaryAction,
-      secondaryActions: archived ? [] : secondaryActionsFor(tone, currentData.summary),
+      secondaryActions: archived
+        ? []
+        : secondaryActionsFor(tone, currentData.summary).filter((action) => action.path !== primaryAction.path),
       archived,
     };
   }, [currentData, currentMetrics, currentUsage]);

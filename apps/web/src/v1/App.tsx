@@ -1538,7 +1538,7 @@ function ProjectKnowledgeMetrics({ projectId, refreshKey }: { projectId: string;
 
 function KnowledgePage() {
   const { projectId = '' } = useParams();
-  const { session, apiCall, authorize, ensureSession } = useAuth();
+  const { session, apiCall, ensureSession } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [runId, setRunId] = useState(searchParams.get('runId') ?? '');
   const [agentId, setAgentId] = useState(searchParams.get('agentId') ?? '');
@@ -2145,7 +2145,7 @@ function KnowledgePage() {
         {binding && !correctlyScoped && (silentBind === 'failed' ? (
           <div className="v1-scope-action">
             <p className="v1-muted">Each run needs its own sign-in. Sign in again to read this run's memories.</p>
-            <Button appearance="primary" onClick={() => void authorize(binding)}>Sign in for this project and run</Button>
+            <RunSignInAction binding={binding} />
           </div>
         ) : <Loading label="Opening this run's memories…" />)}
       </Panel>
@@ -3049,7 +3049,7 @@ function RunGitHubAppPanel({
 function RunPage() {
   const { projectId = '', runId = '' } = useParams();
   const binding = useMemo(() => ({ projectId, runId }), [projectId, runId]);
-  const { session, apiCall, authorize, ensureSession, authorizationContext } = useAuth();
+  const { session, apiCall, ensureSession, authorizationContext } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get('view');
   // Chat is the default tab when ?view= is missing or unknown.
@@ -3296,7 +3296,7 @@ function RunPage() {
         {silentBind === 'failed' ? (
           <Panel title="Sign in to open this run">
             <p>Each run needs its own sign-in. Sign in again to open this run.</p>
-            <Button appearance="primary" onClick={() => void authorize(binding)}>Sign in for this project and run</Button>
+            <RunSignInAction binding={binding} />
           </Panel>
         ) : <Loading label="Opening this run…" />}
       </>
@@ -3558,6 +3558,28 @@ function useTickingNow(enabled: boolean): number {
     return () => window.clearInterval(timer);
   }, [enabled]);
   return now;
+}
+
+/**
+ * The manual run sign-in button. It shows the result of its own last attempt, so a
+ * refused run sign-in does not look like a button that does nothing.
+ */
+function RunSignInAction({ binding }: { binding: RunBinding }) {
+  const { authorize, busy, error } = useAuth();
+  const key = `${binding.projectId}/${binding.runId}`;
+  const [attemptedKey, setAttemptedKey] = useState<string | null>(null);
+  return (
+    <>
+      {attemptedKey === key && !busy && error && <ErrorNotice>{error}</ErrorNotice>}
+      <Button
+        appearance="primary"
+        disabled={busy}
+        onClick={() => { setAttemptedKey(key); void authorize(binding); }}
+      >
+        Sign in for this project and run
+      </Button>
+    </>
+  );
 }
 
 /**
@@ -4103,10 +4125,16 @@ function UnavailablePage({ title, description }: { title: string; description: s
  * panel runs its own server checks; this page stores no identity data itself.
  */
 function AccountSettingsPage() {
-  const { signOut } = useAuth();
+  const { session, signOut } = useAuth();
   return <>
-    <PageHeading title="Account settings" />
-    <Panel title="Sign-in"><Button onClick={signOut}>Sign out</Button></Panel>
+    <PageHeading title="Account settings" description="Manage your sign-in and repository access." />
+    <Panel title="Authentication">
+      <dl className="v1-detail-list">
+        <div><dt>Sign-in method</dt><dd>Agentweaver Identity Broker</dd></div>
+        <div><dt>Signed in as</dt><dd>{session?.displayName ?? 'Name not provided'}</dd></div>
+      </dl>
+      <div><Button onClick={signOut}>Sign out</Button></div>
+    </Panel>
     <ProjectRepoAppConnectionPanel />
     <p>Choose a project in the navigation to manage its Copilot connection in Project settings.</p>
   </>;
