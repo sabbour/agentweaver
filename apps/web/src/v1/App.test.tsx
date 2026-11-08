@@ -2026,9 +2026,7 @@ describe('v1 web project scoping', () => {
     await waitFor(() => expect(mocks.getProjectConfigurationChoices).toHaveBeenCalledWith(
       'broker-token', 'p1', 'tenant-1',
     ));
-    await waitFor(() => expect(mocks.getHostedModelReasoningCatalog).toHaveBeenCalledWith(
-      'broker-token', 'p1', 'tenant-1',
-    ));
+    expect(mocks.getHostedModelReasoningCatalog).not.toHaveBeenCalled();
   });
 
   it('does not show or save an old project configuration after navigation', async () => {

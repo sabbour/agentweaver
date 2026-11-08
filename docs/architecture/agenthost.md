@@ -286,29 +286,35 @@ live SDK check as the authority. The write uses the caller's bearer for current
 project authority and AgentHost's pinned client certificate for service
 identity; an ordinary project reader cannot publish catalog values.
 
-Settings can also request the current hosted levels without waiting for a run.
-AgentHost reads the current project configuration and model choices, then asks
-Identity for the caller-owned connection credential. Identity checks current
-project read authority, tenant scope, connection ownership, and connection
-freshness. AgentHost passes the short-lived token only to the pinned Copilot
-SDK client; it is not returned through Gateway, Projects & Config, or the
-browser. The result maps exact SDK model IDs back to enabled model references,
-includes the project configuration and model-binding revisions, and marks a
-missing connection, unavailable SDK list, or missing model as unavailable.
-AgentHost rereads the project configuration and choices after the SDK call so
-stale revisions do not produce selectable levels. The Gateway response is
-`Cache-Control: no-store`. If the live read is unavailable, settings show no
-invented hosted effort list; run-start validation remains authoritative.
+Project Settings reads current model choices from Projects & Config. That
+response can include recent AgentHost-published hosted levels for the caller,
+project, connection, and binding revision. If no recent publication is
+available, Settings shows no generic hosted levels. Opening Settings does not
+ask Identity for a hosted credential or call the Copilot SDK. AgentHost still
+checks each selected effort against its live catalog when a run starts.
+
+An explicit caller can still request the live catalog endpoint. AgentHost
+reads the current project configuration and model choices, then asks Identity
+for the caller-owned connection credential. Identity checks current project
+read authority, tenant scope, connection ownership, and connection freshness.
+AgentHost passes the short-lived token only to the pinned Copilot SDK client;
+it is not returned through Gateway, Projects & Config, or the browser. The
+result maps exact SDK model IDs back to enabled model references, includes the
+project configuration and model-binding revisions, and marks a missing
+connection, unavailable SDK list, or missing model as unavailable. AgentHost
+rereads the project configuration and choices after the SDK call so stale
+revisions do not produce selectable levels. The Gateway response is
+`Cache-Control: no-store`.
 
 ```mermaid
 sequenceDiagram
-    participant W as Settings
+    participant C as Explicit live API caller
     participant G as Gateway
     participant H as AgentHost
     participant P as Projects & Config
     participant I as Identity
     participant S as Copilot SDK
-    W->>G: GET hosted reasoning catalog with user bearer and tenant selector
+    C->>G: GET hosted reasoning catalog with user bearer and tenant selector
     G->>H: Forward bearer and selector; no-store
     H->>P: Read project configuration and model choices
     H->>I: Read caller-owned hosted connection credential
@@ -317,7 +323,19 @@ sequenceDiagram
     S-->>H: Model IDs and supported reasoning levels
     H->>P: Recheck project configuration and model-binding revisions
     H-->>G: Reference-keyed levels or explicit unavailable states
-    G-->>W: No-store catalog response; no credential
+    G-->>C: No-store catalog response; no credential
+```
+
+```mermaid
+sequenceDiagram
+    participant W as Project Settings
+    participant G as Gateway
+    participant P as Projects & Config
+    W->>G: GET project configuration choices
+    G->>P: Forward bearer and tenant selector
+    P->>P: Read recent hosted catalog publications in caller and binding scope
+    P-->>G: Choices with published levels or verifiedAtRunStart
+    G-->>W: No-store choices; no hosted credential
 ```
 Legacy unpinned factory callers retain their existing API; they do not provide versioned admission proof.
 For configured hosted credit limits, coordination root acceptance and backlog claim
