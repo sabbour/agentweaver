@@ -81,6 +81,9 @@ public sealed class IdentityBrokerDbContext : DbContext
             entity.Property(pending => pending.PromptNone).HasDefaultValue(false);
             entity.Property(pending => pending.ProjectId).HasMaxLength(256);
             entity.Property(pending => pending.RunId).HasMaxLength(256);
+            entity.Property(pending => pending.WorkspaceSelectionRequest).HasMaxLength(8192);
+            entity.Property(pending => pending.ProtectedWorkspaceSelectionPayload).HasMaxLength(16384);
+            entity.Property(pending => pending.NativeRepoAppSelectionReview).HasDefaultValue(false);
             entity.HasIndex(pending => pending.HandleHash).IsUnique();
             entity.HasIndex(pending => pending.ExpiresAt);
         });

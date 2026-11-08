@@ -73,6 +73,62 @@ target flags or take its target from environment variables.
   Keep denied-actor checks, current authority, fixture ownership, and cleanup
   visible rather than inferring them from setup success.
 
+### Workspace repository read
+
+The `workspace-repository-read` journey checks the current configured repository
+without creating an Agentweaver project, run, role, or test fixture. It reads
+repository data only. It does not evaluate the full P1 journey.
+
+The manifest uses the existing environment, source, and deployment proof
+inputs. Its `fixturePlan` contains only a `workspace` object with these exact
+fields:
+
+| Field | Required value |
+| --- | --- |
+| `projectId` | Canonical project GUID |
+| `expectedProjectRevision` | Positive current project configuration revision |
+| `connectionId`, `connectionRevision` | Exact configured Repo App connection and positive revision |
+| `installationId`, `repositoryId`, `repositoryFullName` | Exact approved installation and repository identity |
+| `refKind`, `refName` | `branch` or `tag`, and its exact valid name |
+| `commitSha` | Lowercase 40-character commit SHA |
+| `filePath` | Normalized repository-relative path to a regular file |
+| `expectedByteLength` | File length in UTF-8 bytes, from 0 through 1 MiB |
+| `contentSha256` | Lowercase SHA-256 digest of those exact bytes |
+
+Unknown fields and selection codes are invalid. The environment's actor and
+tenant identify the expected owner context. The manifest values assert what
+the runner must read; they do not grant access.
+
+Before each protected read, the native CLI asks the Broker for a new selection.
+The Broker presents the exact repository and operation in the signed-in user's
+browser. The review uses the existing local cookie and antiforgery checks.
+Reusable OAuth consent does not approve a repository. The CLI sends the
+selection only in `X-Agentweaver-Team-Sync-Selection` for that operation.
+Gateway and Orchestrator still check current project authority and repository
+visibility.
+
+The runner reads the current project configuration, then lists refs with a
+maximum of 100 pages and a maximum of 100 refs per page. It rejects a repeated
+cursor. It reads the tree and file at the same immutable commit. It accepts
+only one regular file of at most 1 MiB. It checks the UTF-8 byte length and
+SHA-256 digest without newline or Unicode normalization. When the tree returns
+a Git blob digest, the runner checks that digest too.
+
+The result reports `featureStatus` and sets `fullP1Status` to
+`not-evaluated`. It keeps only bounded observations, such as the approved
+repository, commit, file path, byte length, and digests. It does not retain
+the file text or selection code. A passed feature result is not proof of
+denied-actor parity, runtime behavior, deployment, or full P1 acceptance.
+
+The Workspace journey requires explicit `--interactive` permission for a
+fresh browser review. `InteractionPolicy.Never` blocks before authentication,
+Gateway discovery, or browser work; a cached bearer is not a fresh selection.
+A successful `--dry-run` validates the manifest and proof files, then returns
+before authentication, network access, listener or browser launch, reservation,
+or evidence creation. The journey does not create, change, or delete GitHub
+repository data. A live review can create a short-lived Broker selection
+record, and normal sign-in can update the operating system's credential store.
+
 ### Journal fixture
 
 The `journal` journey may omit `fixturePlan.selectionContext`. The CLI then

@@ -3,6 +3,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Agentweaver.Cli;
 using Agentweaver.Cli.Auth;
 using Agentweaver.Cli.Vault;
@@ -283,6 +284,172 @@ public sealed class CliAuthTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task NativeWorkspaceSelectionRequiresInteractiveAndValidatesIdentityBeforeVaultPersistence()
+    {
+        const string actorId = "11111111-1111-4111-8111-111111111111";
+        const string tenantId = "22222222-2222-4222-8222-222222222222";
+        const string projectId = "33333333-3333-4333-8333-333333333333";
+        const string code = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        using var signingKey = RSA.Create(2048);
+        var browser = new TestBrowser();
+        var vault = new MemoryVault();
+        var directory = CreateTestDirectory();
+        try
+        {
+            var intent = new NativeRepoAppSelectionIntent(
+                1, actorId, tenantId, projectId, "connection_1", 3, 10, 20, "octo/repo",
+                "listWorkspaceRepositoryRefs");
+            string response = JsonSerializer.Serialize(new
+            {
+                version = 1,
+                actorId,
+                tenantId,
+                projectId,
+                operationId = "listWorkspaceRepositoryRefs",
+                code,
+                connectionId = "connection_1",
+                connectionRevision = 3,
+                installationId = 10,
+                repositoryId = 20,
+                repositoryFullName = "octo/repo",
+                expiresAt = DateTimeOffset.UtcNow.AddMinutes(5),
+            });
+            var oidcHandler = new OidcHandler(
+                signingKey, browser, actorId: actorId, workspaceSelectionJson: response);
+            using var http = new HttpClient(oidcHandler);
+            using var service = CreateService(http, vault, browser, directory);
+            var identity = new CliIdentity(
+                Target() with { TenantId = tenantId },
+                ["openid", "api.read", "offline_access", "projects.admin"]);
+
+            await Assert.ThrowsAsync<CliAuthNeedsLoginException>(() =>
+                service.AcquireRepositorySelectionAsync(
+                    identity, intent, InteractionPolicy.Never, CancellationToken.None));
+            Assert.False(browser.WasOpened);
+            Assert.Empty(vault.Values);
+            Assert.Equal(0, oidcHandler.RequestCount);
+
+            using var selection = await service.AcquireRepositorySelectionAsync(
+                identity, intent, InteractionPolicy.Allow, CancellationToken.None);
+
+            Assert.Equal(code, selection.Code);
+            Assert.Equal(actorId, selection.ActorId);
+            Assert.Equal(projectId, selection.ProjectId);
+            Assert.True(browser.WasOpened);
+            Assert.Equal("rotated-login-token", Assert.Single(vault.Values.Values));
+            var query = ParseQuery(browser.AuthorizationUri!.Query);
+            Assert.Equal("S256", query["code_challenge_method"]);
+            Assert.Equal("agentweaver-cli", query["client_id"]);
+            string encodedIntent = query["workspace_selection_request"];
+            Assert.DoesNotContain(code, encodedIntent, StringComparison.Ordinal);
+            using var intentDocument = JsonDocument.Parse(Convert.FromBase64String(
+                encodedIntent.Replace('-', '+').Replace('_', '/') +
+                new string('=', (4 - encodedIntent.Length % 4) % 4)));
+            Assert.Equal(projectId, intentDocument.RootElement.GetProperty("projectId").GetString());
+            Assert.Equal(actorId, intentDocument.RootElement.GetProperty("actorId").GetString());
+            selection.Dispose();
+            Assert.Throws<ObjectDisposedException>(() => selection.Code);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task NativeWorkspaceSelectionRejectsUnexpectedActorBeforeVaultWrite()
+    {
+        const string actorId = "11111111-1111-4111-8111-111111111111";
+        const string tenantId = "22222222-2222-4222-8222-222222222222";
+        const string projectId = "33333333-3333-4333-8333-333333333333";
+        using var signingKey = RSA.Create(2048);
+        var browser = new TestBrowser();
+        var vault = new MemoryVault();
+        var directory = CreateTestDirectory();
+        try
+        {
+            var intent = new NativeRepoAppSelectionIntent(
+                1, actorId, tenantId, projectId, "connection_1", 3, 10, 20, "octo/repo",
+                "readWorkspaceRepositoryTree");
+            string response = JsonSerializer.Serialize(new
+            {
+                version = 1,
+                actorId,
+                tenantId,
+                projectId,
+                operationId = "readWorkspaceRepositoryTree",
+                code = new string('b', 64),
+                connectionId = "connection_1",
+                connectionRevision = 3,
+                installationId = 10,
+                repositoryId = 20,
+                repositoryFullName = "octo/repo",
+                expiresAt = DateTimeOffset.UtcNow.AddMinutes(5),
+            });
+            using var http = new HttpClient(new OidcHandler(
+                signingKey, browser, actorId: "44444444-4444-4444-8444-444444444444",
+                workspaceSelectionJson: response));
+            using var service = CreateService(http, vault, browser, directory);
+            var identity = new CliIdentity(
+                Target() with { TenantId = tenantId },
+                ["openid", "api.read", "offline_access", "projects.admin"]);
+
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                service.AcquireRepositorySelectionAsync(
+                    identity, intent, InteractionPolicy.Allow, CancellationToken.None));
+
+            Assert.Contains("unexpected Workspace selection", error.Message, StringComparison.Ordinal);
+            Assert.Empty(vault.Values);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task NativeWorkspaceSelectionRejectsExtraResponseFields()
+    {
+        string selection = JsonSerializer.Serialize(new
+        {
+            version = 1,
+            actorId = "11111111-1111-4111-8111-111111111111",
+            tenantId = "22222222-2222-4222-8222-222222222222",
+            projectId = "33333333-3333-4333-8333-333333333333",
+            operationId = "readWorkspaceRepositoryTree",
+            code = new string('b', 64),
+            connectionId = "connection_1",
+            connectionRevision = 3,
+            installationId = 10,
+            repositoryId = 20,
+            repositoryFullName = "octo/repo",
+            expiresAt = DateTimeOffset.UtcNow.AddMinutes(5),
+            unexpected = true,
+        });
+        string response = new JsonObject
+        {
+            ["access_token"] = "access-token",
+            ["token_type"] = "Bearer",
+            ["expires_in"] = 3600,
+            ["workspace_selection"] = JsonNode.Parse(selection),
+        }.ToJsonString();
+        using var http = new HttpClient(new DelegateHandler((_, _) =>
+            Task.FromResult(JsonResponse(response))));
+        var metadata = new OidcMetadata(
+            Issuer,
+            new Uri("https://broker.test/connect/authorize"),
+            new Uri("https://broker.test/connect/token"),
+            new Uri("https://broker.test/.well-known/jwks"));
+        var identity = CliAuthIdentity.Create(new CliIdentity(Target(), Scopes));
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            OidcProtocol.ExchangeCodeAsync(
+                http, metadata, identity, new Uri(CallbackUri), "code", "verifier", CancellationToken.None));
+
+        Assert.Contains("invalid Workspace selection", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -713,11 +880,19 @@ public sealed class CliAuthTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class OidcHandler(RSA signingKey, TestBrowser browser, bool corruptSignature = false) : HttpMessageHandler
+    private sealed class OidcHandler(
+        RSA signingKey,
+        TestBrowser browser,
+        bool corruptSignature = false,
+        string actorId = "actor-123",
+        string? workspaceSelectionJson = null) : HttpMessageHandler
     {
+        public int RequestCount { get; private set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken ct)
         {
+            RequestCount++;
             if (request.RequestUri!.AbsolutePath.EndsWith(".well-known/openid-configuration", StringComparison.Ordinal))
                 return DiscoveryResponse();
             if (request.RequestUri.AbsolutePath == "/.well-known/jwks")
@@ -752,21 +927,24 @@ public sealed class CliAuthTests
                     authorization["code_challenge_method"] != "S256")
                     throw new InvalidOperationException("The CLI did not bind the code exchange to S256 PKCE.");
                 var nonce = authorization["nonce"];
-                var idToken = CreateIdToken(signingKey, nonce);
+                var idToken = CreateIdToken(signingKey, nonce, actorId);
                 if (corruptSignature)
                 {
                     var parts = idToken.Split('.');
                     parts[2] = (parts[2][0] == 'A' ? 'B' : 'A') + parts[2][1..];
                     idToken = string.Join('.', parts);
                 }
-                return JsonResponse(JsonSerializer.Serialize(new
+                var tokenResponse = new JsonObject
                 {
-                    access_token = "memory-only-access-token",
-                    refresh_token = "rotated-login-token",
-                    id_token = idToken,
-                    token_type = "Bearer",
-                    expires_in = 3600,
-                }));
+                    ["access_token"] = "memory-only-access-token",
+                    ["refresh_token"] = "rotated-login-token",
+                    ["id_token"] = idToken,
+                    ["token_type"] = "Bearer",
+                    ["expires_in"] = 3600,
+                };
+                if (workspaceSelectionJson is not null)
+                    tokenResponse["workspace_selection"] = JsonNode.Parse(workspaceSelectionJson);
+                return JsonResponse(tokenResponse.ToJsonString());
             }
             throw new InvalidOperationException("Unexpected Broker request.");
         }
@@ -805,13 +983,13 @@ public sealed class CliAuthTests
         }
     }
 
-    private static string CreateIdToken(RSA key, string nonce)
+    private static string CreateIdToken(RSA key, string nonce, string actorId = "actor-123")
     {
         var header = Base64Url(Encoding.UTF8.GetBytes("""{"alg":"RS256","kid":"test-key","typ":"JWT"}"""));
         var payload = Base64Url(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
         {
             iss = Issuer,
-            sub = "actor-123",
+            sub = actorId,
             aud = ClientId,
             nonce,
             iat = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 1,

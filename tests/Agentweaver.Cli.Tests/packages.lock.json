@@ -100,6 +100,12 @@
         }
       },
       "agentweaver": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[1.7.0, )"
+        }
+      },
+      "agentweaver.abstractions": {
         "type": "Project"
       }
     }

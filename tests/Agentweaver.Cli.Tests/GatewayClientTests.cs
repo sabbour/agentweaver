@@ -10,6 +10,7 @@ namespace Agentweaver.Cli.Tests;
 
 public sealed class GatewayClientTests
 {
+    private const string SelectionCodeHeader = "X-Agentweaver-Team-Sync-Selection";
     private static readonly CliIdentity RunIdentity = new(
         new CliTarget(
             new Uri("https://gateway.example/"),
@@ -560,6 +561,36 @@ public sealed class GatewayClientTests
     }
 
     [Fact]
+    public async Task WorkspaceSelectionHeaderIsSentButNeverAppearsInGatewayEvidence()
+    {
+        var handler = new TestGatewayHandler { IncludeSelectionHeader = true };
+        using var http = new HttpClient(handler);
+        var client = new GatewayClient(http, RunIdentity, new TestAuthentication());
+        await client.DiscoverAsync(CancellationToken.None);
+        const string selectionCode = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+        var response = await client.InvokeAsync(
+            "formulateCastingProposal",
+            new GatewayInvocation(
+                new Dictionary<string, string> { ["projectId"] = "project-1" },
+                new Dictionary<string, string> { ["runId"] = "run-1", ["count"] = "2" },
+                JsonNode.Parse("""{"projectId":"project-1","runId":"run-1"}"""),
+                new Dictionary<string, string>
+                {
+                    ["Idempotency-Key"] = "selection-redaction-test",
+                    [SelectionCodeHeader] = selectionCode,
+                }),
+            CancellationToken.None);
+
+        var request = Assert.Single(handler.Requests, item => item.Path.EndsWith("/casting/proposals", StringComparison.Ordinal));
+        Assert.Equal(selectionCode, request.SelectionCode);
+        string evidence = response.Evidence.ToJsonString() +
+            string.Join("", client.Calls.Select(call => call.ToJsonString()));
+        Assert.DoesNotContain(selectionCode, evidence, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED]", evidence, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task EmbeddedJsonAndExecutionProviderKeysAreRedactedButTransientResponseStaysRaw()
     {
         var handler = new TestGatewayHandler
@@ -587,6 +618,39 @@ public sealed class GatewayClientTests
         })
             Assert.DoesNotContain(secret, evidence, StringComparison.Ordinal);
         Assert.Contains("embeddedJSON-response-canary", response.Body?["content"]?.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WorkspaceFileContentsAndSelectionCodeStayOutOfGatewayEvidence()
+    {
+        const string privateContent = "workspace-private-content-canary";
+        const string selectionCode = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var handler = new TestGatewayHandler
+        {
+            ResponseBody = $$"""{"repository":"octo/widget","path":"README.md","commitSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","content":"{{privateContent}}","isBinary":false,"size":{{privateContent.Length}}}""",
+        };
+        using var http = new HttpClient(handler);
+        var client = new GatewayClient(http, RunIdentity, new TestAuthentication());
+        await client.DiscoverAsync(CancellationToken.None);
+
+        var response = await client.InvokeAsync(
+            "readWorkspaceRepositoryFile",
+            new GatewayInvocation(
+                new Dictionary<string, string> { ["projectId"] = "project-1", ["path"] = "README.md" },
+                new Dictionary<string, string> { ["ref"] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+                Headers: new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    [SelectionCodeHeader] = selectionCode,
+                }),
+            CancellationToken.None);
+
+        Assert.Equal(privateContent, response.Body?["content"]?.GetValue<string>());
+        var request = Assert.Single(handler.Requests, item => item.Path.EndsWith("/source-control/files/README.md", StringComparison.Ordinal));
+        Assert.Equal(selectionCode, request.SelectionCode);
+        string evidence = response.Evidence.ToJsonString() +
+            string.Join("", client.Calls.Select(call => call.ToJsonString()));
+        Assert.DoesNotContain(privateContent, evidence, StringComparison.Ordinal);
+        Assert.DoesNotContain(selectionCode, evidence, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -640,6 +704,7 @@ public sealed class GatewayClientTests
         public bool DuplicateOperationId { get; init; }
         public bool LowercaseBearerScheme { get; init; }
         public bool UnsupportedRequestBodyMediaType { get; init; }
+        public bool IncludeSelectionHeader { get; init; }
         public string? OwnerPermission { get; init; }
         public HttpContent? EventStreamContent { get; init; }
         public HttpContent? ResponseContent { get; init; }
@@ -667,6 +732,9 @@ public sealed class GatewayClientTests
                 request.Headers.TryGetValues("Idempotency-Key", out var idempotencyKey)
                     ? idempotencyKey.Single()
                     : null,
+                request.Headers.TryGetValues(SelectionCodeHeader, out var selectionCode)
+                    ? selectionCode.Single()
+                    : null,
                 body));
 
             if (request.RequestUri.AbsolutePath == "/openapi/v1.json")
@@ -684,6 +752,13 @@ public sealed class GatewayClientTests
                         "\"requestBody\":{\"required\":true,\"content\":{\"text/plain\":",
                         StringComparison.Ordinal);
                 }
+                if (IncludeSelectionHeader)
+                {
+                    openApi = openApi.Replace(
+                        """{"name":"Idempotency-Key","in":"header","required":true,"schema":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9._:-]+$"}}""",
+                        """{"name":"Idempotency-Key","in":"header","required":true,"schema":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9._:-]+$"}},{"name":"X-Agentweaver-Team-Sync-Selection","in":"header","required":false,"schema":{"type":"string","minLength":1,"maxLength":128}}""",
+                        StringComparison.Ordinal);
+                }
                 return Json(HttpStatusCode.OK, openApi);
             }
 
@@ -694,6 +769,9 @@ public sealed class GatewayClientTests
                     ? AuthorizationContext(isAdmin)
                     : AuthorizationContext(OwnerPermission));
             }
+
+            if (request.RequestUri.AbsolutePath.EndsWith("/source-control/files/README.md", StringComparison.Ordinal))
+                return Json(HttpStatusCode.OK, ResponseBody);
 
             if (request.RequestUri.AbsolutePath.StartsWith("/api/v1/p1/invocations/", StringComparison.Ordinal) &&
                 request.RequestUri.AbsolutePath.EndsWith("/setup", StringComparison.Ordinal))
@@ -819,6 +897,20 @@ public sealed class GatewayClientTests
                 "responses":{"201":{"content":{"application/json":{"schema":{"type":"object"}}}}}
               }
             },
+            "/api/v1/projects/{projectId}/source-control/files/{path}":{
+              "get":{
+                "operationId":"readWorkspaceRepositoryFile",
+                "security":[{"Bearer":[]}],
+                "parameters":[
+                  {"name":"projectId","in":"path","required":true,"schema":{"type":"string"}},
+                  {"name":"path","in":"path","required":true,"schema":{"type":"string"}},
+                  {"name":"ref","in":"query","required":true,"schema":{"type":"string","format":"sha"}},
+                  {"name":"X-Agentweaver-Tenant","in":"header","required":true,"schema":{"type":"string"}},
+                  {"name":"X-Agentweaver-Team-Sync-Selection","in":"header","required":true,"schema":{"type":"string","minLength":64,"maxLength":64,"pattern":"^[0-9a-f]{64}$"}}
+                ],
+                "responses":{"200":{"content":{"application/json":{"schema":{"type":"object"}}}}}
+              }
+            },
             "/api/v1/files/{fileId}":{
               "get":{
                 "operationId":"downloadFile",
@@ -879,6 +971,7 @@ public sealed class GatewayClientTests
         string? ProjectAuthorization,
         string? Tenant,
         string? IdempotencyKey,
+        string? SelectionCode,
         string? Body);
 
     private static async Task WaitForTextAsync(StringWriter writer, string expected)

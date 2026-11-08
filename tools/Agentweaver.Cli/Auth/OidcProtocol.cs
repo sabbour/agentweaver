@@ -16,7 +16,8 @@ internal sealed record OAuthTokenResponse(
     string AccessToken,
     string? RefreshToken,
     string? IdToken,
-    double ExpiresIn);
+    double ExpiresIn,
+    NativeRepoAppSelection? WorkspaceSelection);
 
 internal static class OidcProtocol
 {
@@ -68,7 +69,8 @@ internal static class OidcProtocol
         Uri redirectUri,
         string state,
         string nonce,
-        string challenge)
+        string challenge,
+        NativeRepoAppSelectionIntent? selectionIntent = null)
     {
         // Keep the code flow bound to this local callback, random state/nonce, and S256 verifier challenge.
         var query = new List<KeyValuePair<string, string>>
@@ -87,6 +89,8 @@ internal static class OidcProtocol
             query.Add(new("project_id", identity.Identity.ProjectId));
             query.Add(new("run_id", identity.Identity.RunId!));
         }
+        if (selectionIntent is not null)
+            query.Add(new("workspace_selection_request", NativeRepoAppSelectionIntent.Encode(selectionIntent)));
 
         var encoded = string.Join("&", query.Select(field =>
             $"{Uri.EscapeDataString(field.Key)}={Uri.EscapeDataString(field.Value)}"));
@@ -228,12 +232,81 @@ internal static class OidcProtocol
 
         var refreshToken = OptionalString(root, "refresh_token", MaximumTokenLength);
         var idToken = OptionalString(root, "id_token", MaximumIdTokenLength);
+        var workspaceSelection = ParseWorkspaceSelection(root);
         if (!IsOpaqueToken(accessToken) ||
             refreshToken is not null && !IsOpaqueToken(refreshToken) ||
             idToken is not null && idToken.Any(char.IsControl))
             throw new InvalidOperationException("The Identity Broker returned an invalid token response.");
 
-        return new OAuthTokenResponse(accessToken, refreshToken, idToken, lifetime);
+        return new OAuthTokenResponse(accessToken, refreshToken, idToken, lifetime, workspaceSelection);
+    }
+
+    private static NativeRepoAppSelection? ParseWorkspaceSelection(JsonElement response)
+    {
+        JsonElement selection = default;
+        int matches = 0;
+        foreach (var property in response.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, "workspace_selection", StringComparison.Ordinal))
+                continue;
+            selection = property.Value;
+            matches++;
+        }
+        if (matches == 0) return null;
+        if (matches != 1 || selection.ValueKind != JsonValueKind.Object)
+            throw new InvalidOperationException("The Identity Broker returned an invalid Workspace selection.");
+
+        var fields = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        foreach (var property in selection.EnumerateObject())
+        {
+            if (!fields.TryAdd(property.Name, property.Value))
+                throw new InvalidOperationException("The Identity Broker returned an invalid Workspace selection.");
+        }
+        string[] required =
+        [
+            "version", "actorId", "tenantId", "projectId", "operationId", "code",
+            "connectionId", "connectionRevision", "installationId", "repositoryId",
+            "repositoryFullName", "expiresAt",
+        ];
+        if (fields.Count != required.Length || required.Any(name => !fields.ContainsKey(name)) ||
+            !fields["version"].TryGetInt32(out int version) || version != 1 ||
+            !fields["connectionRevision"].TryGetInt64(out long connectionRevision) || connectionRevision < 1 ||
+            !fields["installationId"].TryGetInt64(out long installationId) || installationId < 1 ||
+            !fields["repositoryId"].TryGetInt64(out long repositoryId) || repositoryId < 1 ||
+            !fields["expiresAt"].TryGetDateTimeOffset(out DateTimeOffset expiresAt) ||
+            expiresAt.Offset != TimeSpan.Zero)
+            throw new InvalidOperationException("The Identity Broker returned an invalid Workspace selection.");
+
+        string actorId = RequiredString(fields["actorId"], 36);
+        string tenantId = RequiredString(fields["tenantId"], 36);
+        string projectId = RequiredString(fields["projectId"], 36);
+        string operationId = RequiredString(fields["operationId"], 64);
+        string code = RequiredString(fields["code"], 256);
+        string connectionId = RequiredString(fields["connectionId"], 128);
+        string repositoryFullName = RequiredString(fields["repositoryFullName"], 201);
+        if (!NativeRepoAppSelectionIntentValidator.IsCanonicalGuid(actorId) ||
+            !NativeRepoAppSelectionIntentValidator.IsCanonicalGuid(tenantId) ||
+            !NativeRepoAppSelectionIntentValidator.IsCanonicalGuid(projectId) ||
+            !NativeRepoAppSelectionIntentValidator.IsConnectionId(connectionId) ||
+            !NativeRepoAppSelectionIntentValidator.IsRepositoryFullName(repositoryFullName) ||
+            !NativeRepoAppSelectionIntentValidator.IsOperationId(operationId) ||
+            code.Length != 64 ||
+            code.Any(character => character is not (>= '0' and <= '9' or >= 'a' and <= 'f')))
+            throw new InvalidOperationException("The Identity Broker returned an invalid Workspace selection.");
+
+        return new NativeRepoAppSelection(
+            actorId, tenantId, projectId, operationId, code, connectionId,
+            connectionRevision, installationId, repositoryId, repositoryFullName, expiresAt);
+    }
+
+    private static string RequiredString(JsonElement value, int maximumLength)
+    {
+        if (value.ValueKind != JsonValueKind.String ||
+            value.GetString() is not { Length: > 0 } text ||
+            text.Length > maximumLength ||
+            text.Any(char.IsControl))
+            throw new InvalidOperationException("The Identity Broker returned an invalid Workspace selection.");
+        return text;
     }
 
     private static async Task<bool> VerifySignatureAsync(

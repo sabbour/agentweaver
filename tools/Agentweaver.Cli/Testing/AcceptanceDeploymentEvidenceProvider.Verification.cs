@@ -139,6 +139,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
         CancellationToken ct)
     {
         bool boardDelete = manifest.Journey == "board-delete";
+        bool workspaceRead = manifest.Journey == "workspace-repository-read";
         JsonObject pins = manifest.Pins;
         string context = ApiAcceptanceSupport.GetString(pins, "context")!;
         string namespaceName = ApiAcceptanceSupport.GetString(pins, "namespace")!;
@@ -150,7 +151,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             ?? throw new InvalidDataException("Kubernetes workload evidence has no item list.");
         JsonObject? providerPin = null;
         JsonObject? providerEvidence = null;
-        if (!boardDelete)
+        if (!boardDelete && !workspaceRead)
         {
             providerPin = (JsonObject)pins["providerReceipt"]!;
             if (!Matches(Sha, ApiAcceptanceSupport.GetString(providerPin, "sourceCommit")))
@@ -185,7 +186,9 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
         JsonArray serviceImages = [];
         IEnumerable<(string Id, string Name)> observedComponents = boardDelete
             ? BoardOwnerComponents
-            : ServiceComponents.Where(item => item.Id != "Agentweaver.AgentHost");
+            : workspaceRead
+                ? WorkspaceOwnerComponents
+                : ServiceComponents.Where(item => item.Id != "Agentweaver.AgentHost");
         foreach ((string componentId, string name) in observedComponents)
         {
             JsonObject[] deploymentMatches = deployments.Where(item =>
@@ -228,7 +231,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
         string hostImageReference = "";
         long hostPullBytes = 0;
         JsonObject? hostRegistry = null;
-        if (!boardDelete)
+        if (!boardDelete && !workspaceRead)
         {
         JsonObject[] environmentMatches = deployments.Where(item =>
             ApiAcceptanceSupport.GetString(item["metadata"] as JsonObject ?? [], "name") == "environment")
@@ -328,7 +331,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             if (IdentityServices.Contains(name)
                 && ApiAcceptanceSupport.GetString(templateLabels, "azure.workload.identity/use") != "true")
                 throw new InvalidDataException($"Deployment {name} is missing its admitted workload identity label.");
-            if (!boardDelete && name == "projects-config")
+            if (!boardDelete && !workspaceRead && name == "projects-config")
             {
                 JsonObject annotations = templateMetadata["annotations"] as JsonObject ?? [];
                 JsonObject container = containers[0]!.AsObject();
@@ -392,7 +395,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
                     && ApiAcceptanceSupport.GetString(podLabels, "azure.workload.identity/use") != "true")
                     throw new InvalidDataException($"Pod {podName} is missing its admitted workload identity label.");
                 JsonObject applicationContainer = podContainers[0]!.AsObject();
-                if (!boardDelete && name == "environment"
+                if (!boardDelete && !workspaceRead && name == "environment"
                     && (RequireEnvironmentSetting(
                             applicationContainer["env"] as JsonArray ?? [],
                             "Environment__Sandbox__AgentSandbox__ContainerImage") != hostImageReference
@@ -405,7 +408,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
                             NumberStyles.None, CultureInfo.InvariantCulture, out long podHostPullBytes)
                         || podHostPullBytes != hostPullBytes))
                     throw new InvalidDataException("The running Environment Pod does not use the digest-verified AgentHost image and compressed-byte measurement.");
-                if (!boardDelete && name == "projects-config"
+                if (!boardDelete && !workspaceRead && name == "projects-config"
                     && (!HasExactProviderCatalogBinding(applicationContainer["envFrom"] as JsonArray,
                             ApiAcceptanceSupport.GetString(providerPin!, "configMapName")!)
                         || HasProviderCatalogEnvironmentOverride(applicationContainer["env"] as JsonArray)
@@ -465,7 +468,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             ["sourceTree"] = sourceTree,
             ["providerCatalog"] = providerEvidence?.DeepClone(),
             ["services"] = observedServices,
-            ["agentHostImageMeasurement"] = boardDelete ? null : new JsonObject
+            ["agentHostImageMeasurement"] = boardDelete || workspaceRead ? null : new JsonObject
             {
                 ["status"] = "passed",
                 ["image"] = hostImageReference,
@@ -477,7 +480,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
                 ["measurement"] = "digest-verified platform manifest plus unique config and layer descriptor sizes",
             },
             // API readbacks have no trusted native-owner source for current Sandbox runtime proof.
-            ["agentHostRuntime"] = boardDelete ? null : new JsonObject
+            ["agentHostRuntime"] = boardDelete || workspaceRead ? null : new JsonObject
             {
                 ["status"] = "blocked",
                 ["reason"] = "No exact provider-owned Sandbox lease, AgentHost Pod UID, and phase receipt was observed by the service Deployment readback.",

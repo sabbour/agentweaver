@@ -35,6 +35,12 @@ public sealed class PendingAuthorization
 
     public string? RunId { get; set; }
 
+    public string? WorkspaceSelectionRequest { get; set; }
+
+    public string? ProtectedWorkspaceSelectionPayload { get; set; }
+
+    public bool NativeRepoAppSelectionReview { get; set; }
+
     /// <summary>Set once the caller has authenticated with the external provider.</summary>
     public Guid? SubjectUserId { get; set; }
 

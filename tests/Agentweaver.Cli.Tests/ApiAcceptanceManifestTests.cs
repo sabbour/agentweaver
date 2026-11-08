@@ -252,6 +252,123 @@ public sealed class ApiAcceptanceManifestTests
         }
     }
 
+    [Fact]
+    public async Task WorkspaceReadAcceptsOnlyTheExactRepositoryReadAssertions()
+    {
+        string path = WriteManifest(WorkspaceManifest());
+        try
+        {
+            AcceptanceManifest manifest = await ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None);
+
+            Assert.Equal("workspace-repository-read", manifest.Journey);
+            Assert.Equal("branch", ApiAcceptanceSupport.GetString(
+                manifest.FixturePlan["workspace"]!.AsObject(), "refKind"));
+            Assert.Equal("docs/readme.txt", ApiAcceptanceSupport.GetString(
+                manifest.FixturePlan["workspace"]!.AsObject(), "filePath"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceReadRejectsSecretsAndInvalidBoundsOrReferences()
+    {
+        Action<JsonObject>[] mutations =
+        [
+            root => root["fixturePlan"]!["workspace"]!["selectionCode"] = "secret-selection",
+            root => root["fixturePlan"]!["workspace"]!["refKind"] = "commit",
+            root => root["fixturePlan"]!["workspace"]!["filePath"] = "../outside.txt",
+            root => root["fixturePlan"]!["workspace"]!["expectedByteLength"] = 1024L * 1024 + 1,
+            root => root["fixturePlan"]!["workspace"]!["connectionRevision"] = 0,
+            root => root["fixturePlan"]!["workspace"]!["contentSha256"] = new string('A', 64),
+        ];
+
+        foreach (Action<JsonObject> mutate in mutations)
+        {
+            JsonObject root = WorkspaceManifest();
+            mutate(root);
+            string path = WriteManifest(root);
+            try
+            {
+                await Assert.ThrowsAsync<InvalidDataException>(
+                    () => ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None));
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceReadRejectsRefComponentsEndingInLock()
+    {
+        JsonObject root = WorkspaceManifest();
+        root["fixturePlan"]!["workspace"]!["refName"] = "feature.lock/next";
+        string path = WriteManifest(root);
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(
+                () => ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceReadAcceptsRefComponentsEndingInUppercaseLock()
+    {
+        JsonObject root = WorkspaceManifest();
+        root["fixturePlan"]!["workspace"]!["refName"] = "feature.LOCK/next";
+        string path = WriteManifest(root);
+        try
+        {
+            AcceptanceManifest manifest = await ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None);
+
+            Assert.Equal(
+                "feature.LOCK/next",
+                ApiAcceptanceSupport.GetString(
+                    (JsonObject)manifest.FixturePlan["workspace"]!,
+                    "refName"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    private static JsonObject WorkspaceManifest()
+    {
+        JsonObject root = P1Manifest();
+        root["journey"] = "workspace-repository-read";
+        root["environment"]!["actorId"] = "11111111-1111-4111-8111-111111111111";
+        root["environment"]!["tenantId"] = "22222222-2222-4222-8222-222222222222";
+        root["fixturePlan"] = new JsonObject
+        {
+            ["workspace"] = new JsonObject
+            {
+                ["projectId"] = "33333333-3333-4333-8333-333333333333",
+                ["expectedProjectRevision"] = 4,
+                ["connectionId"] = "connection_1",
+                ["connectionRevision"] = 3,
+                ["installationId"] = 10,
+                ["repositoryId"] = 20,
+                ["repositoryFullName"] = "octo/repo",
+                ["refKind"] = "branch",
+                ["refName"] = "main",
+                ["commitSha"] = new string('a', 40),
+                ["filePath"] = "docs/readme.txt",
+                ["expectedByteLength"] = 1,
+                ["contentSha256"] = new string('b', 64),
+            },
+        };
+        return root;
+    }
+
     private static JsonObject BoardManifest() => new()
     {
         ["executionIntent"] = "execute",

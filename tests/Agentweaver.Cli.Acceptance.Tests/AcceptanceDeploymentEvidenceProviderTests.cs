@@ -137,6 +137,42 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
     }
 
     [Fact]
+    public async Task WorkspaceReadbackChecksOnlyGatewayBrokerAndProjectsWithoutProviderCatalogOrAgentHost()
+    {
+        RegistryFixtureSet registry = CreateRegistryFixtureSet();
+        JsonObject cluster = CreateCluster(registry);
+        HashSet<string> ownerServices = new(StringComparer.Ordinal)
+        {
+            "gateway", "identity-broker", "projects-config",
+        };
+        JsonArray items = cluster["items"]!.AsArray();
+        foreach (JsonObject item in items.OfType<JsonObject>().ToArray())
+        {
+            string kind = item["kind"]!.GetValue<string>();
+            JsonObject metadata = item["metadata"] as JsonObject ?? [];
+            string name = ApiAcceptanceSupport.GetString(metadata["labels"] as JsonObject ?? [], "app.kubernetes.io/name")
+                ?? ApiAcceptanceSupport.GetString(metadata, "name")!;
+            if (kind == "ConfigMap" || !ownerServices.Contains(name))
+                items.Remove(item);
+        }
+
+        using var http = new HttpClient(new RegistryHandler(registry));
+        var provider = CreateProvider(http, cluster);
+        AcceptanceManifest manifest = CreateManifest() with { Journey = "workspace-repository-read" };
+
+        JsonObject evidence = await provider.ObserveServicesEquivalentAsync(
+            manifest, SourceSha, SourceTree, registry.SelectedImages, default);
+
+        Assert.Equal("passed", evidence["status"]?.GetValue<string>());
+        Assert.Equal(
+            ["Agentweaver.Gateway", "Agentweaver.Identity.Broker", "Agentweaver.Projects.Config"],
+            evidence["services"]!.AsArray().OfType<JsonObject>()
+                .Select(service => ApiAcceptanceSupport.GetString(service, "componentId")));
+        Assert.Null(evidence["providerCatalog"]);
+        Assert.Null(evidence["agentHostImageMeasurement"]);
+    }
+
+    [Fact]
     public async Task BoardReadbackRejectsOrchestratorOciSourceCommitAndTreeMismatches()
     {
         foreach (RegistryFixtureSet registry in new[]

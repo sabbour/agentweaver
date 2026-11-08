@@ -14,6 +14,7 @@
     <AgentweaverSourceTree Condition="'$(AgentweaverSourceTree)' == ''">unbound</AgentweaverSourceTree>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\packages\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
     <InternalsVisibleTo Include="Agentweaver.Cli.Tests" />
     <AssemblyMetadata Include="Agentweaver.SourceSha" Value="$(AgentweaverSourceSha)" />
     <AssemblyMetadata Include="Agentweaver.SourceTree" Value="$(AgentweaverSourceTree)" />
