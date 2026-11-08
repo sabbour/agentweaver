@@ -42,7 +42,7 @@
     {
       "type": "note",
       "over": ["orchestrator", "environment"],
-      "label": "Start follows durable root and first-message admission. Direct-root and genuine P1 admission use the same path. A pending response is not readiness."
+      "label": "Start follows durable root and first-message admission. Direct-root and invocation-bound admission use the same path. A pending response is not readiness."
     },
     {
       "type": "message",

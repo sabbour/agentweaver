@@ -1,8 +1,8 @@
-# P1 evidence judge brief
+# Evidence judge brief
 
 Use this brief only with a separately authorized judge.
 The candidate helpers do not launch a model, acquire a token, create another actor, or authorize paid execution.
-The released 0.x judge conventions are a reference, not inherited P0 acceptance.
+The released 0.x judge conventions are a reference, not inherited foundation acceptance.
 
 Assess each criterion as `PASS`, `PARTIAL`, `FAIL`, or `CANNOT_DETERMINE`.
 State the exact evidence reference and the missing boundary.

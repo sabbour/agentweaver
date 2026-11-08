@@ -212,7 +212,7 @@ Hard-credit denial and no-send receipts retain their existing contract.
 
 `/internal/runtime/execution/replacements/compare` currently returns an explicit
 blocked result and writes no success receipt. It validates `invocationId` against
-the current owner-bound P1 setup/core invocation, then resolves the requested
+the current owner-bound setup or Core invocation, then resolves the requested
 dispatch only when its actor, tenant, project, run, root, selection hash, and
 execution fence match that accepted binding. It reads the stored original runtime
 registration facts and the matching checkpoint/result facts; a missing result is

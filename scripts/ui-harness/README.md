@@ -1,4 +1,4 @@
-# P1 UI harness adapter
+# UI harness adapter
 
 This candidate adapts the retained v1 browser client. It does not redesign the UI.
 Supply an already authorized Playwright-compatible page on the exact web origin.
@@ -83,7 +83,9 @@ It does not close the borrowed page, context, or browser.
 Run, session, Environment, and project cleanup require separate current owner authority and verified receipts.
 Closing the adapter is not product-resource cleanup.
 
-## Executable P1 journey
+<span id="executable-p1-journey"></span>
+
+## End-to-end UI journey
 
 The exported `runP1UiJourney` function opens the pinned run and reads the
 committed-event journal through this borrowed UI adapter. It checks the actual
@@ -104,7 +106,7 @@ before accepting UI evidence.
 npm run harness:p1:signin-run -- --surface ui --input <manifest.json> --output <evidence.jsonl>
 ```
 
-Use the [P1 operator guide](../harness-shared/P1-operator.md) for the required
+Use the [operator guide](../harness-shared/P1-operator.md) for the required
 release evidence and cleanup steps. The launcher uses one account only. A
 distinct denied-actor check and any missing native or recovery evidence remain
 blocked; never substitute the signed-in actor or change access.

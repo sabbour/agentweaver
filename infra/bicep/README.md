@@ -1,4 +1,4 @@
-# Dedicated Azure P0 definitions
+# Dedicated Azure infrastructure definitions
 
 These files define infrastructure; their presence does not prove that resources,
 permissions, or workloads are deployed.
@@ -12,15 +12,16 @@ The full-foundation template explicitly enables Kubernetes RBAC separately from
 Azure RBAC and requests AKS Application Routing's managed default domain when
 no custom DNS zones are configured.
 `aks-redeploy.bicep` is a separate, narrow identity-federation refresh for an
-existing P0 foundation. It reads the existing AKS issuer, identity, and
+existing foundation. It reads the existing AKS issuer, identity, and
 Application Routing domain; it updates only the three existing workload-identity
 federated credentials. It does not PUT the AKS resource or change its routing,
 RBAC, network, data-service, private-DNS, or monitoring configuration.
 If AKS omits `defaultDomain` for custom DNS, its diagnostic output uses
 `false` and `null`.
 
-The P0 parameter example keeps the VNet, AKS, PostgreSQL, Key Vault, Blob, and
-their private endpoints in `eastus2euap`. Its required `monitorLocation` places
+The foundation parameter example keeps the VNet, AKS, PostgreSQL, Key Vault,
+Blob, and their private endpoints in `eastus2euap`. Its required
+`monitorLocation` places
 Log Analytics and Application Insights in `eastus2`; the AMPLS remains global,
 and the Monitor Private Endpoint stays in the VNet's `location`. PostgreSQL
 continues to use the delegated subnet in the primary `location`; no cross-region
@@ -128,12 +129,12 @@ migrations or provisions database roles. The
 records the full acceptance boundary. No live database or Azure operation is
 part of these definitions.
 
-The P1 runtime identity definition grants the Events & Sessions identity
+The Events & Sessions runtime identity definition grants that identity
 Storage Blob Data Contributor only on the private `session-material` container.
 It does not grant that identity access to the storage account or other
 containers.
 
-`p1-postgres-migration-identity.bicep` defines the P1 migration identity,
+`p1-postgres-migration-identity.bicep` defines the database migration identity,
 `agentweaver-id-p1-postgres-migration`, and one federated credential for the
 `agentweaver:p1-postgres-migration` ServiceAccount. It assigns no Azure role.
 Its parameters are `namePrefix`, `tags`, and the 40-character `sourceSha`. The
@@ -151,8 +152,10 @@ is federated only to the `projects-config-migration` ServiceAccount in
 RoleBinding for the workflow identity plus the migration ServiceAccount
 annotation. `npm run db:maintenance:setup -- --v1-deploy-only --execute`
 performs that one-time setup for the shared database-maintenance workflow
-identity and namespace permissions without running P1 maintenance setup. It
-sets `AZURE_DB_MAINTENANCE_CLIENT_ID` in the GitHub environment used by that
+identity and namespace permissions. It skips the maintenance runner's
+`prepareOnly` step, which prepares the PostgreSQL migration identity, its
+ServiceAccount and egress policy, and the schema ownership handover. It sets
+`AZURE_DB_MAINTENANCE_CLIENT_ID` in the GitHub environment used by that
 workflow; it does not configure a hosted AKS deployment workflow.
 
 The Projects & Config migration identity must also be mapped to PostgreSQL as
@@ -160,7 +163,7 @@ a schema owner. Its role needs database `CONNECT` and ownership only of the
 `projects_config` schema and its exact planned objects; it must not own the
 database, retain database `CREATE`, or access other schemas. The one-time
 Azure setup does not change PostgreSQL ownership. Do not use the
-DDL-restricted runtime principal or the P1 identity for this job.
+DDL-restricted runtime principal or the PostgreSQL migration identity.
 
 The Projects & Config migration Job uses the projected Workload Identity
 token, applies EF migrations, then reconciles the reviewed runtime grants in

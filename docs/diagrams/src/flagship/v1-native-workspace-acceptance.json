@@ -59,7 +59,7 @@
         "broker",
         "gateway"
       ],
-      "label": "Source-only check. It does not create an Agentweaver project, run, role or test fixture. It does not prove a live deployment or full P1 acceptance."
+      "label": "Source-only check. It does not create an Agentweaver project, run, role or test fixture. It does not prove a live deployment or the full acceptance journey."
     },
     {
       "type": "message",

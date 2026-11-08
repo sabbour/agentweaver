@@ -108,14 +108,14 @@ The registration must be active, unexpired and unchanged. A child registration
 cannot use the root binding as its own invocation provenance.
 
 This is a usable production reader, not a new Host HTTP route or an automatic
-bootstrap requirement. Ordinary runs need not have P1 setup provenance.
-The follow-on integration point is a P1-specific observation path beside
+bootstrap requirement. Ordinary runs need not have setup provenance.
+The follow-on integration point is an invocation-bound observation path beside
 `RuntimeAgentHost.ReadReadinessEvidenceAsync`, once it has retained Host/Events
 cursor-effect acknowledgment and Environment-created lineage to compare.
 Neither exists in this reader. General observation/readiness and generic
-replacement/no-send receipts are unchanged and are not invocation-bound P1
-evidence. The returned Core binding alone proves neither child execution nor
-resource creation.
+replacement/no-send receipts are unchanged and do not provide invocation-bound
+execution evidence. The returned Core binding alone proves neither child
+execution nor resource creation.
 
 The combined local test uses actual Broker, Core, Projects, Environment,
 Orchestrator, SDK, and Events code with disposable PostgreSQL.

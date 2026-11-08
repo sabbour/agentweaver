@@ -1,8 +1,8 @@
-# P1 native acceptance probes
+# Native acceptance probes
 
 `run.mjs` exports the side-effect-free `runP1NativeProbes(input, dependencies)`
 entry point. Importing the module does not start a process, contact a service,
-or read credentials. The runner reports four separate P1 probes and returns
+or read credentials. The runner reports four separate native probes and returns
 `{ kind: "p1-native-acceptance", schemaVersion: 1, overallStatus, startedAt,
 completedAt, probes, receiptSha256 }`. The checksum covers the canonical JSON
 envelope without `receiptSha256`; the aggregator verifies it before using the
@@ -242,7 +242,7 @@ Each owner call rejects redirects, uses no-store, a 10-second transport/body
 deadline, requires `Cache-Control: no-store`, and enforces a streamed 64-KiB response
 limit. The current registration supplies the route identities and must match
 the trusted actor. Core must identify the same root session, accepted selection
-and execution fence. Environment's exact P1 binding, Environment fence, four
+and execution fence. Environment's exact invocation binding, Environment fence, four
 completed creation records and Pod observation must join to that registration.
 The Sandbox creation `resourceId` is the operation GUID; its separate
 `providerResource.resourceId` is the provider-returned SandboxClaim UID and must
@@ -296,7 +296,7 @@ node --test scripts\azure\p1-native-probes\*.test.mjs scripts\harness-shared\tes
 ```
 
 The owner response regressions are synthetic; no database, cluster fixtures or
-live P1 run is performed. The complete subtree suite is also selected by
+live acceptance run is performed. The complete subtree suite is also selected by
 `npm run test:harness` in the existing v1 CI harness job. The CI contract test
 guards that selector against accidentally dropping the native suite.
 
@@ -356,7 +356,7 @@ fields:
 }
 ```
 
-The P1 creation-binding route returns this observation alongside the exact
+The Environment creation-binding route returns this observation alongside the exact
 creation records and full Core binding. The consumer validates those records
 against the current registration, then compares the Host's independently
 observed Pod UID and mounted workspace. This source-only read is not a runner
@@ -470,7 +470,7 @@ creates a denial record.
 The Host bridge source is owned separately and its acceptance is pending.
 Fake-only tests prove the client request and validation behavior; they do not
 prove that the bridge is accepted, that actual current contexts were supplied,
-or that live P1 credit-denial acceptance has run.
+or that live credit-denial acceptance has run.
 
 `processProvider.run` accepts only the runner's fixed recipe IDs:
 
@@ -588,12 +588,14 @@ Each entry is `{ name, status, code?, reason?, evidence, cleanup }`, where
 `{ status, actions }` with per-action `complete` or `uncertain` receipts. The
 runner returns these in
 `{ kind: "p1-native-acceptance", schemaVersion: 1, overallStatus, startedAt,
-completedAt, probes, receiptSha256 }`. `overallStatus` is P1-only; it must not
-overwrite a separate UI/surface status.
+completedAt, probes, receiptSha256 }`. `overallStatus` covers only this probe set;
+it must not overwrite a separate UI/surface status.
 
-## Full P1 aggregation
+<span id="full-p1-aggregation"></span>
 
-The full P1 CLI accepts the exact output envelopes from this runner and the
+## Combine acceptance evidence
+
+The full acceptance CLI accepts the exact output envelopes from this runner and the
 dispatch-recovery runner:
 
 ```powershell

@@ -1,4 +1,4 @@
-# P1 API harness adapter
+# API harness adapter
 
 This candidate reuses the released 0.x HTTP adapter pattern with the v1 Gateway contract.
 It reads the live `/openapi/v1.json` document and invokes only discovered `/api/v1` operations.
@@ -40,7 +40,7 @@ if (evidence.status !== 200) {
 }
 ```
 
-The P1 API runner does not currently provision a direct Orchestrator URL and
+The API runner does not currently provision a direct Orchestrator URL and
 already-authenticated actor source. Supplying both is an explicit prerequisite for
 runner integration; this adapter never falls back to the Gateway. Contract tests use
 controlled loopback HTTP only and do not perform live owner or credential operations.
@@ -160,7 +160,9 @@ Changed owner name, tenant, target, or auth provider stops cleanup.
 Archive is not deletion or Environment/session cleanup.
 Record created resource identities and obtain current revisions and authority before cleanup.
 
-## Executable P1 journey
+<span id="executable-p1-journey"></span>
+
+## End-to-end API journey
 
 The exported `runP1ApiJourney` function reads journal pages through the
 discovered Gateway `replayRunEvents` operation:
@@ -192,10 +194,10 @@ before retrying setup or cleanup. The same shared behavior applies to MCP.
 Supply an `executionIntent: "execute"` JSON manifest with the direct Environment
 identity metadata, pinned provider/runtime/storage/source/image receipts, and
 `deploymentEvidence` containing a published `releaseTag`, `publicationPath`,
-`manifestPath`, and `agentHostArchivePath`. P1 acceptance is separate from the
-ordinary direct-GHCR and Kustomize deployment path; that path emits no deployment
-receipt. The P1 runner verifies the published release and live resource
-readbacks. `agentHostArchivePath` is the exact AgentHost OCI archive from the
+`manifestPath`, and `agentHostArchivePath`. The full acceptance journey is
+separate from the ordinary direct-GHCR and Kustomize deployment path. That path
+emits no deployment receipt. The acceptance runner verifies the published
+release and live resource readbacks. `agentHostArchivePath` is the exact AgentHost OCI archive from the
 release's images artifact. The runner measures it against the original build
 commit recorded in the validated publication when the image is reused;
 otherwise it uses the published source commit. Deployment and service evidence
@@ -209,9 +211,9 @@ only the gate or message content needed by the selected journey. A distinct
 actor and the identity provider must return its separate token. When omitted,
 the `valid-denied-actor-403` step is recorded as blocked with the explicit
 missing-account reason; the runner continues the other checks but the surface
-and full P1 result cannot pass. Do not substitute the signed-in actor or change
-any role or access grant. The runner passes the expected revision through the
-existing run-selection request and verifies the accepted and observed owner
+and complete acceptance result cannot pass. Do not substitute the signed-in actor
+or change any role or access grant. The runner passes the expected revision
+through the existing run-selection request and verifies the accepted and observed owner
 selection revisions. The plan value is not authority or an ownership receipt;
 the owner compare-and-swap checks it against current state. The fixture keeps
 the project-configuration read and does not call the PlatformAdmin-only global
@@ -224,7 +226,7 @@ For a one-account operator run, use the sign-in launcher:
 npm run harness:p1:signin-run -- --surface api --input <manifest.json> --output <evidence.jsonl>
 ```
 
-The [P1 operator guide](../harness-shared/P1-operator.md) lists the required
+The [operator guide](../harness-shared/P1-operator.md) lists the required
 release evidence, safe dry run, one-account sign-in, and automatic fixture
 cleanup steps. This is the supported operator route; it does not require a
 token location or an identity-provider module.
@@ -256,8 +258,8 @@ setup and idempotent actions with the same IDs.
 npm run harness:p1 -- --surface api --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs>
 ```
 
-The output distinguishes the selected surface result from full P1 status.
-Surface actions can pass while full P1 remains blocked by required native
+The output distinguishes the selected surface result from `fullP1Status`.
+Surface actions can pass while `fullP1Status` remains blocked by required native
 probes that the admitted clients cannot perform. Controlled adapter and runner
 tests use local fixtures; they do not prove a deployed Gateway, Broker, owner,
 native model execution, or AKS acceptance.

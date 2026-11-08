@@ -1166,9 +1166,11 @@ the existing `/decisions/gates/{requestId}/answer` route with `approve` or
 `reject` (also used when requesting changes). A matching approval releases the
 gate only after its terminal receipt is saved. Rejection saves a failed gate and
 leaves dependents blocked. An unrelated decision, changed workspace or provider
-pull request head, or revoked run authority cannot complete the gate. A software
-workflow must order build/test before review; a workflow
-with review must put merge after review. Content-only workflows may omit build/test.
+pull request head, or revoked run authority cannot complete the gate. Each
+`IndependentReview` step must have a dependency path from every declared
+`BuildTest` step. Each `Merge` step must have a dependency path from every
+`IndependentReview` and `RubberDuck` step. Content-only workflows may omit
+`BuildTest`.
 
 For `RubberDuck`, dispatch requires the current coordinator-root AgentHost
 registration and action-grant owner; otherwise the platform gate is unavailable
@@ -1370,7 +1372,7 @@ and the exact current registration, proof, action, turn, or receipt binding.
 | POST | `/actions/verify` | Revalidate action proof. |
 | POST | `/actions/credit-denials/read` | Read action credit denial. |
 | POST | `/actions/numeric-denials/read` | Read an immutable numeric-limit denial by attempt. |
-| POST | `/execution/replacements/compare` | Validate a current owner-bound P1 invocation and read matching dispatch, checkpoint, and result facts; remain blocked until required Environment and Host/Events evidence is available. |
+| POST | `/execution/replacements/compare` | Validate a current owner-bound setup or Core invocation and read matching dispatch, checkpoint, and result facts; remain blocked until required Environment and Host/Events evidence is available. |
 | POST | `/remote-tool-results/verify` | Verify reviewed remote result proof. |
 | GET | `/sources/{runtimeInstanceId:guid}` | Read current native usage source. |
 | POST | `/sources/{runtimeInstanceId:guid}` | Save source facts. |
@@ -1384,7 +1386,7 @@ and the exact current registration, proof, action, turn, or receipt binding.
 | POST | `/turns/fixed-credit-denials/no-send` | Record fixed-credit no-send evidence. |
 | POST | `/turns/no-send` | Record no-send evidence. |
 
-Replacement comparison accepts only the current P1 setup or Core invocation
+Replacement comparison accepts only the current setup or Core invocation
 stored in the Orchestrator owner binding. It rechecks current registration,
 Projects selection, and invocation authority around the read. The response may
 include the original and current runtime registrations, the stored checkpoint

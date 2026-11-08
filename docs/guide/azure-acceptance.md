@@ -196,7 +196,7 @@ checks. It does not create an Agentweaver project, run, role, or test fixture.
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-native-workspace-acceptance.png'">
     <img :src="'/agentweaver/v1/diagrams/flagship/v1-native-workspace-acceptance.png'" alt="The native .NET CLI opens an exact Workspace review in the browser. The Broker checks its current cookie and antiforgery token, creates an owner-bound Repo App selection, and returns it only after HTTPS code exchange with an S256 verifier. The CLI then reads refs, a tree and a file through typed Gateway operations with current owner checks. The selection is not part of the callback, OAuth tokens, logs or evidence." />
   </a>
-  <figcaption>This native source check is separate from the Foundation Probe and Azure deployment checks. It does not prove a live browser, deployment or full P1 acceptance.</figcaption>
+  <figcaption>This native source check is separate from the Foundation Probe and Azure deployment checks. It does not prove a live browser, deployment, or the full acceptance journey.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-native-workspace-acceptance.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-native-workspace-acceptance.drawio'">Open editable draw.io source</a></p>
 
@@ -255,8 +255,8 @@ The command reports `featureStatus` as `passed`, `failed`, or `blocked`.
 reported result. The evidence contains bounded file metadata and digests, not
 the file text or Repo App selection. This result proves only the selected
 Workspace read on the target used. It does not prove denied-actor parity,
-Azure deployment, or full P1 acceptance. Record any check you did not run as
-not run.
+Azure deployment, or the full acceptance journey. Record any check you did not
+run as not run.
 
 ## Expected result
 
