@@ -613,8 +613,9 @@ public static class CoordinationOwnerMigrator
                     OR
                     ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 42) = 1
                         AND to_regclass(@runtimeRunStartIntents) IS NOT NULL
-                        AND (SELECT count(*) FROM information_schema.columns
-                             WHERE table_schema = @schema AND table_name = 'runtime_run_start_intents') = 20
+                        AND (SELECT count(*) FROM pg_catalog.pg_attribute
+                             WHERE attrelid = to_regclass(@runtimeRunStartIntents)
+                               AND attnum > 0 AND NOT attisdropped) = 20
                         AND (SELECT count(*) FROM pg_constraint
                              WHERE conrelid = to_regclass(@runtimeRunStartIntents) AND contype = 'p') = 1
                         AND (SELECT count(*) FROM pg_constraint

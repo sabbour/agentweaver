@@ -545,7 +545,7 @@ public sealed class EnvironmentSandboxManager(
             "The Sandbox provider returned no resource.");
         try
         {
-            if (requireCurrent is not null)
+            if (firstStartContext is not null && requireCurrent is not null)
                 await requireCurrent(cancellationToken).ConfigureAwait(false);
             lease = await CompleteProvisionOwnerAsync(
                 exactResource,
@@ -568,12 +568,12 @@ public sealed class EnvironmentSandboxManager(
         }
         catch (RuntimeAuthorizationException) when (firstStartContext is not null)
         {
+            // Authority loss does not make a returned provider effect a failed provider attempt.
             _ = await CompleteProvisionOwnerAsync(
                 exactResource,
                 effectMayHaveApplied: true,
                 CancellationToken.None,
-                providerAttemptId,
-                errorCode: "runtime_start_owner_context_stale").ConfigureAwait(false);
+                providerAttemptId).ConfigureAwait(false);
             throw;
         }
         await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);

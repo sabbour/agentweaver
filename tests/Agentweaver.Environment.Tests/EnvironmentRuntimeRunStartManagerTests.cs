@@ -267,6 +267,53 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
     }
 
     [Fact]
+    public async Task FirstStartAuthorityLossAfterProviderReturnRecordsTheExactResourceWithoutReadiness()
+    {
+        using var fixture = CreateFixture(database, 1);
+        fixture.Sandbox.AfterProvision = () => fixture.OwnerHandler.DenyOwnerContext = true;
+        var environmentId = EnvironmentLifecycleManager.CreateEnvironmentId(
+            fixture.Owner.TenantId, fixture.Owner.ProjectId, fixture.Owner.RunId,
+            RuntimeRunStartKeys.IdempotencyKey(fixture.Owner));
+        var fence = new EnvironmentGenerationFence(
+            new(fixture.Owner.TenantId, fixture.Owner.ProjectId, fixture.Owner.RunId, environmentId), 1);
+        SandboxLeaseState? stateAtDenial = null;
+        fixture.OwnerHandler.BeforeDenial = async () =>
+        {
+            var current = await fixture.LeaseStore.GetAsync(
+                fence, fixture.Sandbox.ProvisionedResource!.Resource.Generation, CancellationToken.None);
+            stateAtDenial = current?.State;
+        };
+        var credential = new SecretCredential(
+            "first-start-token", DateTimeOffset.UtcNow.AddMinutes(2), TimeProvider.System);
+        try
+        {
+            await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => fixture.Manager.ProvisionAsync(
+                new(1, fixture.Owner, null, Guid.NewGuid()),
+                new RuntimeActorAuthorization(credential, fixture.Owner.TenantId),
+                CancellationToken.None));
+        }
+        finally
+        {
+            credential.Invalidate();
+        }
+
+        var resource = Assert.IsType<SandboxProvisionedResource>(fixture.Sandbox.ProvisionedResource);
+        var lease = Assert.IsType<SandboxLeaseSnapshot>(
+            await fixture.LeaseStore.GetAsync(fence, resource.Resource.Generation, CancellationToken.None));
+        Assert.NotNull(lease.ProvisionedResource);
+        Assert.Equal(resource.Resource, lease.ProvisionedResource.Resource);
+        Assert.Equal(resource.Endpoint, lease.ProvisionedResource.Endpoint);
+        Assert.Equal(resource.Placement, lease.ProvisionedResource.Placement);
+        var attempt = Assert.Single(await fixture.LeaseStore.GetProviderAttemptsAsync(
+            fence, lease.OperationId, CancellationToken.None));
+        Assert.Equal(SandboxLeaseState.Provisioning, stateAtDenial);
+        Assert.Equal(SandboxProviderAttemptState.Completed, attempt.State);
+        Assert.Null(attempt.FailureCode);
+        Assert.Equal(1, fixture.Sandbox.ProvisionCalls);
+        Assert.Equal(0, fixture.Sandbox.ReleaseCalls);
+    }
+
+    [Fact]
     public async Task RejectsUnavailableCapacityBeforeNetworkOrWorkspaceProvisioning()
     {
         using var fixture = CreateFixture(database, 0);
@@ -802,8 +849,10 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
     private sealed class OwnerContextHandler(RuntimeOwnerContext owner) : HttpMessageHandler
     {
         public RuntimeRunStartCleanupProjection? CleanupProjection { get; set; }
+        public bool DenyOwnerContext { get; set; }
+        public Func<Task>? BeforeDenial { get; set; }
 
-        protected override Task<HttpResponseMessage> SendAsync(
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
@@ -811,26 +860,29 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
             var tenant = request.Headers.TryGetValues("X-Agentweaver-Tenant", out var tenants)
                 ? tenants.SingleOrDefault()
                 : null;
-            if (bearer is not ("first-start-token" or "cancel-replay-token" or "run-bound-retirement-token") ||
+            if (DenyOwnerContext ||
+                bearer is not ("first-start-token" or "cancel-replay-token" or "run-bound-retirement-token") ||
                 tenant != owner.TenantId)
             {
+                if (BeforeDenial is not null)
+                    await BeforeDenial();
                 var denied = new HttpResponseMessage(HttpStatusCode.Forbidden)
                 {
                     RequestMessage = request,
                     Content = JsonContent.Create(new { code = "runtime_owner_denied" }, options: JsonOptions)
                 };
                 denied.Headers.CacheControl = new() { NoStore = true, NoCache = true };
-                return Task.FromResult(denied);
+                return denied;
             }
             if (request.RequestUri?.AbsolutePath.EndsWith(
                     "/runtime-owner-context", StringComparison.Ordinal) == true &&
                 CleanupProjection is null)
-                return Task.FromResult(Response(request, owner));
+                return Response(request, owner);
             if (CleanupProjection is not null)
-                return Task.FromResult(Response(request, CleanupProjection));
+                return Response(request, CleanupProjection);
             var missing = new HttpResponseMessage(HttpStatusCode.NotFound) { RequestMessage = request };
             missing.Headers.CacheControl = new() { NoStore = true, NoCache = true };
-            return Task.FromResult(missing);
+            return missing;
         }
 
         private static HttpResponseMessage Response(HttpRequestMessage request, object value)
@@ -914,6 +966,7 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
         public int ReleaseCalls { get; private set; }
         public int ReleasePartialCalls { get; private set; }
         public bool LoseNextProvisionResponse { get; set; }
+        public Action? AfterProvision { get; set; }
         public ProviderResourceRef? LastReleasedResource { get; private set; }
         public SandboxProvisionRequest? LastRequest { get; private set; }
 
@@ -945,6 +998,7 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
                     effectMayHaveApplied: true);
             }
 
+            AfterProvision?.Invoke();
             return Task.FromResult(_resource);
         }
 

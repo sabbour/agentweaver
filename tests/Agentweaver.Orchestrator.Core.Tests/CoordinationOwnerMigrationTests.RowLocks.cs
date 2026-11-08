@@ -7,6 +7,54 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 public sealed partial class CoordinationOwnerMigrationTests
 {
     [Fact]
+    public async Task RestrictedRunStartRoleCanInsertReadAndUpdateButCannotDeleteTruncateOrAlter()
+    {
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        var role = "run_start_" + Guid.NewGuid().ToString("N");
+        async Task ExecuteAsync(string sql)
+        {
+            await using var command = new NpgsqlCommand(sql, connection, transaction);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        await ExecuteAsync($"""
+            CREATE ROLE "{role}" NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+            GRANT USAGE ON SCHEMA "{_schema}" TO "{role}";
+            GRANT SELECT, INSERT, UPDATE ON "{_schema}".runtime_run_start_intents TO "{role}";
+            INSERT INTO "{_schema}".accepted_runs
+                (project_id, run_id, accepted_selection, accepted_selection_hash,
+                 accepted_by_issuer, accepted_by_subject)
+            VALUES ('project', 'run', jsonb_build_object(), repeat('a', 64), 'issuer', 'actor');
+            SET LOCAL ROLE "{role}";
+            INSERT INTO "{_schema}".runtime_run_start_intents
+                (tenant_id, project_id, run_id, root_session_id, accepted_selection_hash,
+                 execution_fence, intent_id, bootstrap_operation_id, consume_operation_id, exchange_operation_id)
+            VALUES ('tenant', 'project', 'run', 'root', repeat('a', 64),
+                1, gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), gen_random_uuid());
+            UPDATE "{_schema}".runtime_run_start_intents SET state = 'ready', row_version = row_version + 1;
+            """);
+        await using (var read = new NpgsqlCommand(
+            $"SELECT state FROM \"{_schema}\".runtime_run_start_intents FOR UPDATE", connection, transaction))
+            Assert.Equal("ready", await read.ExecuteScalarAsync());
+
+        foreach (var sql in new[]
+        {
+            $"DELETE FROM \"{_schema}\".runtime_run_start_intents",
+            $"TRUNCATE TABLE \"{_schema}\".runtime_run_start_intents",
+            $"ALTER TABLE \"{_schema}\".runtime_run_start_intents ADD COLUMN unauthorized text"
+        })
+        {
+            await transaction.SaveAsync("before_denied_operation");
+            var failure = await Assert.ThrowsAsync<PostgresException>(() => ExecuteAsync(sql));
+            Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, failure.SqlState);
+            await transaction.RollbackAsync("before_denied_operation");
+        }
+        await transaction.RollbackAsync();
+    }
+
+    [Fact]
     public async Task RuntimeEvidenceLedgerIsInsertReadOnlyAndRejectsEveryMutation()
     {
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
