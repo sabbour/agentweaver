@@ -59,6 +59,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(38)]
     [InlineData(39)]
     [InlineData(40)]
+    [InlineData(41)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         // A partial history must fail verification until every registered resource is installed.
@@ -561,6 +562,60 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.Equal(2L, reader.GetInt64(0));
         Assert.Equal(0L, reader.GetInt64(1));
         Assert.Equal(0L, reader.GetInt64(2));
+    }
+
+    [Theory]
+    [InlineData("column")]
+    [InlineData("constraint")]
+    [InlineData("receipt")]
+    [InlineData("table")]
+    public async Task RuntimeRunStartReadinessRejectsPartialInstallation(string missing)
+    {
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var damage = new NpgsqlCommand(missing switch
+        {
+            "column" => $"ALTER TABLE \"{_schema}\".runtime_run_start_intents DROP COLUMN failure_code",
+            "constraint" => $"ALTER TABLE \"{_schema}\".runtime_run_start_intents DROP CONSTRAINT runtime_run_start_intents_pkey",
+            "receipt" => $"DELETE FROM \"{_schema}\".coordination_schema_migrations WHERE version = 42",
+            _ => $"DROP TABLE \"{_schema}\".runtime_run_start_intents"
+        }, connection);
+        await damage.ExecuteNonQueryAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+    }
+
+    [Fact]
+    public async Task RuntimeRunStartReadinessAcceptsPre042AndInstalled042WithoutTablePrivileges()
+    {
+        await ApplyMigrationsThroughAsync(41);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        var role = "readiness_" + Guid.NewGuid().ToString("N");
+        try
+        {
+            await using (var grants = new NpgsqlCommand($"""
+                CREATE ROLE "{role}" NOLOGIN;
+                GRANT USAGE ON SCHEMA "{_schema}" TO "{role}";
+                GRANT SELECT ON ALL TABLES IN SCHEMA "{_schema}" TO "{role}";
+                REVOKE ALL ON "{_schema}".runtime_run_start_intents FROM "{role}";
+                """, connection))
+                await grants.ExecuteNonQueryAsync();
+            var restrictedConnection = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
+            {
+                Options = $"-c role={role}"
+            };
+            await using var restricted = NpgsqlDataSource.Create(restrictedConnection.ConnectionString);
+            await CoordinationOwnerMigrator.VerifyAsync(restricted, _schema);
+        }
+        finally
+        {
+            await using var cleanup = new NpgsqlCommand(
+                $"DROP OWNED BY \"{role}\"; DROP ROLE \"{role}\"", connection);
+            await cleanup.ExecuteNonQueryAsync();
+        }
     }
 
     [Theory]

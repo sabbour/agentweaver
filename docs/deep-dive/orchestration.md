@@ -153,6 +153,10 @@ authenticated run authority. Replaying a start request can queue recovery
 without sending the first message again. Cancelling a run records a cleanup
 obligation for the saved placement; cleanup releases only that placement and
 does not delete retained workspace data or start a replacement Host.
+First-start provisioning rechecks current authority before it completes the
+Sandbox lease. Resume provisioning records a provider effect that already
+returned before the final authority check. Neither path reports readiness
+after authority is lost; both preserve the exact resource for cleanup.
 
 The continuation and its durable state live in
 `RuntimeRunStartOrchestration.cs` and `CoordinationRuntimeRunStartStore.cs`.

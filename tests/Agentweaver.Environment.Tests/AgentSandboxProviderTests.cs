@@ -366,7 +366,7 @@ public sealed partial class AgentSandboxProviderTests
             new FixedTimeProvider(leaseCreatedAt.AddMilliseconds(1500)));
         var startupEvidenceFailure = await Assert.ThrowsAsync<SandboxProviderException>(
             () => beforeStartedAtProvider.DescribeAsync(describeRequest));
-        Assert.Equal("sandbox_startup_evidence_invalid", startupEvidenceFailure.Code);
+        Assert.Equal("sandbox_startup_evidence_invalid_phase_future", startupEvidenceFailure.Code);
 
         var observation = await provider.DescribeAsync(describeRequest);
 

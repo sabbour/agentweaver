@@ -19,9 +19,9 @@ workload updates. Do not retry an uncertain effect.
 The runner applies these migrations, in this order:
 
 1. Identity Broker EF Core migrations, when you pass a Broker digest.
-2. Environment EF Core migrations 1 to 11.
-3. Orchestrator (Core) migrations 1 to 16, 18 to 33, and 35 to 38. Reserved gaps are not applied.
-4. Events & Sessions migrations 1 to 10.
+2. Environment EF Core migrations 1 to 12.
+3. Orchestrator (Core) migrations 1 to 16, 18 to 33, and 35 to 42. Reserved gaps are not applied.
+4. Events & Sessions migrations 1 to 11.
 
 The reviewed plan fixes these versions by hash. Core migration 017 is not in the
 plan, while 032 is included with its exact runtime table grants. Migration 035
@@ -47,6 +47,11 @@ expected columns and constraints. The runtime role receives exactly
 `SELECT, INSERT, UPDATE` on the 038 table.
 Readiness ordering retains the exact supported Core set so 034 is never treated
 as compatible between 033 and 035.
+Migration 042 adds `runtime_run_start_intents`. The runtime role receives exactly
+`SELECT, INSERT, UPDATE` on that table. Readiness accepts 042 only when the
+migration row and table are both absent, or when the migration is recorded and
+the table has all 20 columns and the expected constraints. The column check
+uses PostgreSQL catalog metadata and does not require access to the table.
 
 ## What one run does
 

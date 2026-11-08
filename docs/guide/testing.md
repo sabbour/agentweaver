@@ -406,6 +406,18 @@ partial.
 
 ## Run focused database checks
 
+Run the run-start readiness and authority regressions against disposable
+PostgreSQL and controlled providers:
+
+```powershell
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --configuration Release --filter FullyQualifiedName~RuntimeRunStartReadiness
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj --configuration Release --filter "FullyQualifiedName~FirstStartAuthorityLossAfterProviderReturnRecordsTheExactResourceWithoutReadiness|FullyQualifiedName~ResumeAuthorityLossAfterReservationPreservesOnlyEffectsThatActuallyStarted"
+```
+
+These tests check complete pre-042 and installed-042 schema shapes, reject
+partial installations, and verify the first-start and resume authority checks.
+They do not establish live API acceptance.
+
 Run the Broker migration/grant and read-only bootstrap regressions against
 disposable PostgreSQL:
 
