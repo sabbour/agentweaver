@@ -116,6 +116,13 @@ SKU, workload runtime, VM size, or subnet, the deployment fails; delete that
 pool and run the deployment again. For the cost, see
 [Kata node pool](https://github.com/sabbour/agentweaver/blob/v1/infra/bicep/README.md#kata-node-pool).
 
+Both templates also end with the AKS Azure Monitor add-on enabled. The
+installer enables the add-on with the `<prefix>-law` workspace, or adopts it
+when it is already enabled. You cannot turn it off. The installer stops if the
+add-on sends to another workspace or uses shared-key authentication. For the
+required permissions and the cost, see
+[Azure Monitor add-on](https://github.com/sabbour/agentweaver/blob/v1/infra/bicep/README.md#azure-monitor-add-on).
+
 The infrastructure installer does not create Kubernetes namespaces or grant
 human AKS permissions. It never creates, requires, or verifies a human
 `Azure Kubernetes Service RBAC Cluster Admin` assignment. Cluster connectivity
@@ -942,13 +949,17 @@ the workspace StorageClass and the sandbox RuntimeClass named in
 - the StorageClass has another provisioner or other mount options;
 - the StorageClass is missing and is not the product class;
 - the RuntimeClass is missing; or
-- no Ready, schedulable node matches the RuntimeClass node selector.
+- no Ready, schedulable node matches the RuntimeClass node selector; or
+- DaemonSet `ama-logs` in `kube-system` (the AKS Azure Monitor add-on agent)
+  is missing or not ready on every scheduled node.
 
 The message for a missing RuntimeClass or node tells you to run the
-infrastructure deployment, which creates the `kata` node pool. When the product
+infrastructure deployment, which creates the `kata` node pool. The message for
+`ama-logs` tells you to run the infrastructure deployment, which enables the
+add-on, and to wait until the agent is ready. When the product
 StorageClass is missing, the helper creates it before the migrations. The
-caller needs `list nodes` at cluster scope, and `create storageclasses` only
-when the class is missing.
+caller needs `list nodes` at cluster scope, `get daemonsets.apps/ama-logs` in
+`kube-system`, and `create storageclasses` only when the class is missing.
 
 After all rollouts, the helper runs an install smoke check. It creates a
 1 GiB workspace PersistentVolumeClaim and a short-lived pod with the AgentHost

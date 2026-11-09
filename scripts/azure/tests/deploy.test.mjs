@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildDeployArgs, cliConfig, cliOptions, deploy, setupIdentityBrokerProviders,
+  buildDeployArgs, cliConfig, cliOptions, deploy, ensureAzureMonitorAddon, setupIdentityBrokerProviders,
 } from '../deploy.mjs';
 import {
   fixture, source, fakeAzure, ids, tags, deploymentOutputs,
@@ -523,8 +523,10 @@ test('deployment checks the approved account and resource group before what-if a
   assert.equal(result.receipt.operatorRoleAssignmentId, undefined);
   assert.deepEqual(calls.map(args => args.slice(0, 3)), [
     ['account', 'show', '-o'], ['group', 'show', '--name'],
-    ['deployment', 'group', 'what-if'], ['deployment', 'group', 'create'],
+    ['deployment', 'group', 'what-if'], ['deployment', 'group', 'create'], ['aks', 'show', '--resource-group'],
   ]);
+  assert.deepEqual(result.receipt.azureMonitorAddon, { action: 'adopted',
+    workspaceResourceId: deploymentOutputs.foundationResources.value.monitorWorkspaceResourceId });
   assert.ok(!calls.some(args => args[0] === 'role' && args[1] === 'assignment' && args[2] === 'list'));
   const deploymentArgs = calls.find(args => args[0] === 'deployment' && args[2] === 'create');
   assert.ok(!deploymentArgs.some(arg => arg.startsWith('operatorObjectId=') ||
@@ -694,4 +696,50 @@ test('deployment receipt rejects substituted resources, identity, workspace and 
     const execAz = fakeAzure({ create: { status: 0, stdout: JSON.stringify(response) } });
     await assert.rejects(deploy({ ...fixture, execute: true }, { sourceResolver: () => source, execAz }));
   }
+});
+
+test('AKS-only deployment enables the missing Azure Monitor add-on with the install workspace and AMPLS', async () => {
+  const workspace = deploymentOutputs.foundationResources.value.monitorWorkspaceResourceId;
+  const calls = [];
+  let enabled = false;
+  const az = fakeAzure({}, calls);
+  const result = await deploy({ ...fixture, execute: true }, {
+    sourceResolver: () => ({ ...source, scope: 'aks-only' }),
+    execAz(args, options) {
+      if (args[1] === 'enable-addons') enabled = true;
+      if (args.includes('addonProfiles.omsagent') && !enabled) return { status: 0, stdout: '', stderr: '' };
+      return az(args, options);
+    },
+  });
+  const enable = calls.find(args => args[1] === 'enable-addons');
+  assert.deepEqual(enable, ['aks', 'enable-addons', '--resource-group', 'agentweaver', '--name', 'agentweaver-aks',
+    '--addons', 'monitoring', '--workspace-resource-id', workspace, '--enable-msi-auth-for-monitoring',
+    '--ampls-resource-id', `${fixture.groupId}/providers/Microsoft.Insights/privateLinkScopes/agentweaver-ampls`,
+    '-o', 'none', '--subscription', ids.subscriptionId]);
+  assert.ok(calls.indexOf(enable) > calls.findIndex(args => args[2] === 'create'));
+  assert.deepEqual(result.receipt.azureMonitorAddon, { workspaceResourceId: workspace, action: 'enabled' });
+});
+
+test('Azure Monitor add-on step stops on another workspace, shared-key auth, or a failed enable', () => {
+  const workspace = deploymentOutputs.foundationResources.value.monitorWorkspaceResourceId;
+  const target = { resourceGroup: 'agentweaver', subscriptionId: ids.subscriptionId };
+  const profile = config => ({ status: 0, stdout: JSON.stringify({ enabled: true, config }), stderr: '' });
+  const cases = [
+    [profile({ logAnalyticsWorkspaceResourceID: `${workspace}-other`, useAADAuth: 'true' }), /another workspace/],
+    [profile({ logAnalyticsWorkspaceResourceID: workspace.toUpperCase() }), /shared-key/],
+  ];
+  for (const [read, message] of cases) {
+    const calls = [];
+    assert.throws(() => ensureAzureMonitorAddon(target, fakeAzure({ monitoringAddon: read }, calls)), message);
+    assert.ok(!calls.some(args => args[1] === 'enable-addons'));
+  }
+  const disabled = { status: 0, stdout: '{"enabled":false}', stderr: '' };
+  assert.throws(() => ensureAzureMonitorAddon(target, fakeAzure({ monitoringAddon: disabled })),
+    /does not show the add-on as enabled/);
+  assert.throws(() => ensureAzureMonitorAddon(target, fakeAzure({ monitoringAddon: disabled,
+    enableAddons: { status: 1, stdout: '', stderr: 'AuthorizationFailed' } })), /enable-addons failed: AuthorizationFailed/);
+  const token = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.c2lnbmF0dXJlc2lnbmF0dXJl';
+  return assert.rejects(deploy({ ...fixture, execute: true }, { sourceResolver: () => source,
+    execAz: fakeAzure({ monitoringAddon: disabled, enableAddons: { status: 1, stdout: '', stderr: `denied ${token}` } }) }),
+  error => /succeeded, but Azure Monitor add-on setup failed: .*\[redacted\]/.test(error.message) && !error.message.includes(token));
 });

@@ -370,7 +370,38 @@ function verifyClusterPrerequisites(exec, context, root, resources) {
         `${nodes.length} matching node(s) found. ${KATA_POOL_REMEDY}`);
     }
   }
+  verifyAzureMonitorAgent(exec, context, root);
   return { storageClassName, runtimeClassName, createStorageClass };
+}
+
+const AZURE_MONITOR_REMEDY = 'Run the infrastructure deployment (node scripts/azure/deploy.mjs --execute) to enable ' +
+  'the AKS Azure Monitor add-on, wait until DaemonSet/ama-logs is ready, then run this deployment again.';
+
+/** Requires the Azure Monitor add-on agent, which forwards container and network logs, to be ready on every node. */
+function verifyAzureMonitorAgent(exec, context, root) {
+  const permission = exec('kubectl', ['auth', 'can-i', 'get', 'daemonsets.apps/ama-logs',
+    '--namespace', 'kube-system', '--context', context], { check: false, cwd: root });
+  if (permission.status !== 0 || permission.stdout.trim().toLowerCase() !== 'yes') {
+    fail('The selected identity cannot get daemonsets.apps/ama-logs in namespace kube-system; ' +
+      'this permission is required to check the AKS Azure Monitor add-on.');
+  }
+  const output = must(exec, 'kubectl', ['get', 'daemonset', 'ama-logs', '--namespace', 'kube-system',
+    '--ignore-not-found=true', '--output=json', '--context', context], { cwd: root },
+  'Could not read DaemonSet/ama-logs').stdout;
+  if (!output.trim()) fail(`DaemonSet/ama-logs is missing in namespace kube-system. ${AZURE_MONITOR_REMEDY}`);
+  let daemonSet;
+  try {
+    daemonSet = JSON.parse(output);
+  } catch {
+    fail('Kubernetes returned invalid JSON for DaemonSet/ama-logs.');
+  }
+  const status = daemonSet.status ?? {};
+  const desired = status.desiredNumberScheduled ?? 0;
+  if (desired < 1 || status.numberReady !== desired || status.numberAvailable !== desired ||
+      status.updatedNumberScheduled !== desired ||
+      (status.observedGeneration ?? 0) < (daemonSet.metadata?.generation ?? 1)) {
+    fail(`DaemonSet/ama-logs is not ready (${status.numberReady ?? 0}/${desired} ready). ${AZURE_MONITOR_REMEDY}`);
+  }
 }
 
 function requireClusterPermission(exec, context, root, verb, resource, purpose) {

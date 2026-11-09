@@ -5,7 +5,7 @@
  */
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { runAz } from './lib/exec.mjs';
+import { redact, runAz } from './lib/exec.mjs';
 import { resolveSource } from './lib/git.mjs';
 import { bootstrapIdentityPostgres } from './lib/identity-postgres-bootstrap.mjs';
 import {
@@ -52,6 +52,41 @@ export function buildDeployArgs({
   if (scope === 'infrastructure-only') args.push(`nodePoolCount=${nodePoolCount ?? 2}`);
   args.push('--mode', 'Incremental', '--name', deploymentName, '--subscription', subscription, '-o', 'json');
   return args;
+}
+
+/**
+ * Enables the AKS Azure Monitor add-on with the install workspace, or adopts it when it is already enabled.
+ * The add-on is always required; a different workspace or shared-key auth stops the install.
+ * execAz must be the target-bound runner, which adds the subscription.
+ */
+export function ensureAzureMonitorAddon({ resourceGroup, subscriptionId }, execAz) {
+  const groupId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}`;
+  const workspaceResourceId = `${groupId}/providers/Microsoft.OperationalInsights/workspaces/${resourceGroup}-law`;
+  const cluster = ['--resource-group', resourceGroup, '--name', `${resourceGroup}-aks`];
+  const read = () => {
+    const result = execAz(['aks', 'show', ...cluster, '--query', 'addonProfiles.omsagent', '-o', 'json'], { check: false });
+    if (result.status !== 0) throw new Error(`Could not read the AKS add-on profile: ${result.stderr}`);
+    return JSON.parse(result.stdout.trim() || 'null');
+  };
+  const state = profile => {
+    if (profile?.enabled !== true) return 'disabled';
+    if (profile.config?.logAnalyticsWorkspaceResourceID?.toLowerCase() !== workspaceResourceId.toLowerCase()) {
+      throw new Error(`The add-on sends to another workspace (${profile.config?.logAnalyticsWorkspaceResourceID}); ` +
+        `expected ${workspaceResourceId}. Disable the add-on, then run the deployment again.`);
+    }
+    if (String(profile.config?.useAADAuth).toLowerCase() !== 'true') {
+      throw new Error('The add-on uses shared-key authentication. Disable the add-on, then run the deployment again.');
+    }
+    return 'enabled';
+  };
+  if (state(read()) === 'enabled') return { workspaceResourceId, action: 'adopted' };
+  const enable = execAz(['aks', 'enable-addons', ...cluster, '--addons', 'monitoring',
+    '--workspace-resource-id', workspaceResourceId, '--enable-msi-auth-for-monitoring',
+    '--ampls-resource-id', `${groupId}/providers/Microsoft.Insights/privateLinkScopes/${resourceGroup}-ampls`,
+    '-o', 'none'], { check: false });
+  if (enable.status !== 0) throw new Error(`az aks enable-addons failed: ${enable.stderr}`);
+  if (state(read()) !== 'enabled') throw new Error('The AKS add-on profile does not show the add-on as enabled.');
+  return { workspaceResourceId, action: 'enabled' };
 }
 
 /**
@@ -243,6 +278,12 @@ export async function deploy(config, {
       ...readFoundationOutputs(outputs, { ...config, ...source }),
     };
   }
+  let azureMonitorAddon;
+  try {
+    azureMonitorAddon = ensureAzureMonitorAddon(config, boundAz);
+  } catch (error) {
+    throw new Error(`Infrastructure deployment succeeded, but Azure Monitor add-on setup failed: ${redact(error.message)}`);
+  }
   let identityPostgresBootstrap;
   if (config.bootstrapIdentityPostgres) {
     try {
@@ -379,7 +420,7 @@ export async function deploy(config, {
   }
   return { ...summary, executed: true, receipt: { scope: source.scope, sourceSha: source.sha,
     sourceTree: source.sourceTree, sourceHash: source.sourceHash, subscriptionId: config.subscriptionId, tenantId: config.tenantId,
-    resourceGroup: config.resourceGroup, deploymentName, deploymentId: deployment.id,
+    resourceGroup: config.resourceGroup, deploymentName, deploymentId: deployment.id, azureMonitorAddon,
     ...(identityPostgresBootstrap ? { identityPostgresBootstrap } : {}),
     ...(identityRouting ? { identityRouting } : {}),
     ...(identityBrokerState ? { identityBrokerState } : {}),

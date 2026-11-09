@@ -349,6 +349,8 @@ function fakeExec(calls, {
   denyEnvironmentPermission, denyRuntimePermission, missingAgentHostTls = false,
   wrongAgentHostTlsType = false,
   liveStorageClass, kataNodes,
+  amaLogs = { metadata: { generation: 2 }, status: { observedGeneration: 2, desiredNumberScheduled: 3,
+    numberReady: 3, numberAvailable: 3, updatedNumberScheduled: 3 } },
   smokePod = { status: { phase: 'Succeeded' } }, smokeLogs = 'SMOKE_OK\n', smokeCreateError,
   liveProviderSetup,
   activateProviderDuringMigration,
@@ -543,6 +545,9 @@ function fakeExec(calls, {
     if (args[0] === 'get' && args[1] === 'nodes') {
       const items = kataNodes ?? [{ spec: {}, status: { conditions: [{ type: 'Ready', status: 'True' }] } }];
       return { status: 0, stdout: JSON.stringify({ items }), stderr: '' };
+    }
+    if (args[0] === 'get' && args[1] === 'daemonset' && args[2] === 'ama-logs') {
+      return { status: 0, stdout: amaLogs ? JSON.stringify(amaLogs) : '', stderr: '' };
     }
     if (args[0] === 'get' && args[1] === 'pod' && args[2].startsWith('agentweaver-install-smoke-')) {
       return { status: 0, stdout: JSON.stringify(smokePod), stderr: '' };
@@ -2422,6 +2427,12 @@ test('cluster prerequisite failures stop before workload effects', async () => {
     [{ denyRuntimePermission: 'delete persistentvolumeclaims' },
       /cannot delete persistentvolumeclaims .*install smoke check/],
     [{ denyRuntimePermission: 'get pods/log' }, /cannot get pods\/log/],
+    [{ amaLogs: null }, /DaemonSet\/ama-logs is missing in namespace kube-system.*deploy\.mjs --execute/],
+    [{ amaLogs: { metadata: { generation: 1 }, status: { observedGeneration: 1, desiredNumberScheduled: 3,
+      numberReady: 2, numberAvailable: 2, updatedNumberScheduled: 3 } } }, /ama-logs is not ready \(2\/3 ready\)/],
+    [{ amaLogs: { metadata: { generation: 1 }, status: {} } }, /ama-logs is not ready \(0\/0 ready\)/],
+    [{ denyRuntimePermission: 'get daemonsets.apps/ama-logs' },
+      /cannot get daemonsets\.apps\/ama-logs in namespace kube-system/],
   ];
   try {
     for (const [settings, expected] of failures) {

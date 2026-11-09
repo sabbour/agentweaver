@@ -135,6 +135,13 @@ export function fakeAzure(overrides = {}, calls = []) {
         properties: { provisioningState: 'Succeeded', outputs },
       }));
     }
+    if (args[0] === 'aks' && args[1] === 'show' && args.includes('addonProfiles.omsagent')) {
+      return overrides.monitoringAddon ?? ok({ enabled: true, config: {
+        logAnalyticsWorkspaceResourceID: deploymentOutputs.foundationResources.value.monitorWorkspaceResourceId,
+        useAADAuth: 'true',
+      } });
+    }
+    if (args[0] === 'aks' && args[1] === 'enable-addons') return overrides.enableAddons ?? ok({});
     if (args[0] === 'aks' && args[1] === 'show' && args.includes('--query')) return overrides.issuerResult ?? {
       status: 0,
       stdout: 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/cluster-id/',
