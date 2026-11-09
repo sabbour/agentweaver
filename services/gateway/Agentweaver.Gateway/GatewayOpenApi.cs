@@ -2155,6 +2155,9 @@ else if (route.OperationId is
             ("kind", Enum("coordinator", "childWork", "scribe", "operatorChat", "childRun")), ("detached", Bool()),
             ("lifecycle", Enum("active", "cancelled", "completed", "archived")), ("executionFence", Int()),
             ("logicalTurnOrdinal", Int()), ("stateVersion", Int()), ("createdAt", Date()), ("archivedAt", NullableDate())),
+        ["RuntimeStartupSummary"] = Obj(["state", "step"],
+            ("state", Enum("pending", "ready", "blocked", "cleanup_pending", "cleanup_complete")),
+            ("step", Str()), ("failureCode", NullableStr())),
         ["SessionStatusSnapshot"] = Obj(["identity", "rootSessionId", "kind", "detached", "activity", "lifecycle", "executionFence", "stateVersion", "blockers", "runtimeEffectsState", "runtimeEffectsUnavailableCode", "interruptionIntent", "runExecution"],
             ("identity", Ref("SessionIdentity")), ("parentSessionId", NullableStr()), ("rootSessionId", Str()),
             ("kind", Enum("coordinator", "childWork", "scribe", "operatorChat", "childRun")), ("detached", Bool()),
@@ -2162,6 +2165,7 @@ else if (route.OperationId is
             ("lifecycle", Enum("active", "cancelled", "completed", "archived")), ("executionFence", Int()),
             ("stateVersion", Int()), ("blockers", Arr(Ref("SessionStatusBlocker"))),
             ("runtimeEffectsState", Str()), ("runtimeEffectsUnavailableCode", Str()),
+            ("runtimeStartup", Nullable(Ref("RuntimeStartupSummary"))),
             ("executionRecovery", Nullable(Ref("MafExecutionRecoverySnapshot"))),
             ("interruptionIntent", Ref("SessionInterruptionIntentSnapshot")), ("runExecution", Ref("OwnerRunExecutionSnapshot"))),
         ["MafExecutionRecoverySnapshot"] = Obj(
