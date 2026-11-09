@@ -44,8 +44,8 @@ function page(captures: SourceControlOutputCaptureSummary[], next: { at: string;
   return { captures, nextBeforeCapturedAt: next?.at ?? null, nextBeforeCaptureId: next?.id ?? null };
 }
 
-function renderPanel() {
-  return render(<RunOutputCapturesPanel projectId="p1" runId="r1" sessionId="s1" />);
+function renderPanel(executionState = 'active') {
+  return render(<RunOutputCapturesPanel projectId="p1" runId="r1" sessionId="s1" executionState={executionState} />);
 }
 
 beforeEach(() => {
@@ -163,7 +163,13 @@ describe('RunOutputCapturesPanel', () => {
 
     mocks.listRunOutputCaptures.mockRejectedValueOnce(new GatewayError(404, {}, 'Not found'));
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
-    expect(await screen.findByText(/^The files of this run are not available\./)).toBeTruthy();
+    expect(await screen.findByText('No files are available while this run is working.')).toBeTruthy();
+  });
+
+  it('uses the failed run state when saved files cannot be read', async () => {
+    mocks.listRunOutputCaptures.mockRejectedValue(new GatewayError(404, {}, 'Not found'));
+    renderPanel('failed');
+    expect(await screen.findByText('Files are unavailable because this run failed.')).toBeTruthy();
   });
 
   it('shows other list errors', async () => {

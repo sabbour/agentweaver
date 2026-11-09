@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   getRunStatus: vi.fn(),
   getRunSelection: vi.fn(),
   getRunUsage: vi.fn(),
+  readSessionTurnContent: vi.fn(),
   getRepoAppStatus: vi.fn(),
   getRepoAppRepositories: vi.fn(),
   createRepoAppSelection: vi.fn(),
@@ -109,6 +110,7 @@ vi.mock('./api', () => ({
     getRunStatus: mocks.getRunStatus,
     getRunSelection: mocks.getRunSelection,
     getRunUsage: mocks.getRunUsage,
+    readSessionTurnContent: mocks.readSessionTurnContent,
     pinSourceControlRepository: mocks.pinSourceControlRepository,
     listRunOutputCaptures: mocks.listRunOutputCaptures,
     readRunOutputCaptureDiff: mocks.readRunOutputCaptureDiff,
@@ -521,6 +523,7 @@ describe('v1 web project scoping', () => {
     mocks.getRunStatus.mockReset();
     mocks.getRunSelection.mockReset();
     mocks.getRunUsage.mockReset();
+    mocks.readSessionTurnContent.mockReset();
     mocks.getRepoAppStatus.mockReset();
     mocks.getRepoAppStatus.mockResolvedValue({
       state: 'not_connected',
@@ -1538,7 +1541,10 @@ describe('v1 web project scoping', () => {
     expect(window.sessionStorage.getItem(PENDING_RUN_STORAGE_KEY)).not.toBeNull();
     expect(window.sessionStorage.getItem(PENDING_CHAT_STORAGE_KEY)).not.toBeNull();
     fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
-    expect(await screen.findByText('AgentHost startup: Starting · activation')).toBeTruthy();
+    const activityHeading = await screen.findByRole('heading', { name: 'Run activity' });
+    const activity = activityHeading.closest('section');
+    expect(activity?.textContent).toContain('No run activity is available yet.');
+    expect(activity?.textContent).not.toMatch(/AgentHost|activation|fence|ordinal/i);
   });
 
   it('clears pending startup recovery when the current runtime becomes ready', async () => {
@@ -1563,7 +1569,7 @@ describe('v1 web project scoping', () => {
     });
   });
 
-  it('shows addressed-message routing details in a run activity journal', async () => {
+  it('shows plain activity without internal journal details', async () => {
     mocks.binding = { projectId: 'p1', runId: 'r1' };
     configureRunSnapshots('p1', 'r1');
     mocks.replayEvents.mockResolvedValue({
@@ -1591,8 +1597,41 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/runs/r1?view=activity');
     render(<App />);
 
-    expect(await screen.findByText(/Addressed-message receipt message-1/)).toBeTruthy();
-    expect(screen.getByText(/agent-a → agent-b · thread 3 · handoff/)).toBeTruthy();
+    expect(await screen.findByText('A message was recorded.')).toBeTruthy();
+    expect(screen.queryByText(/message-1|agent-a|agent-b|thread 3|handoff/i)).toBeNull();
+  });
+
+  it('loads persisted conversation text from the run-bound API in Chat', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    mocks.replayEvents.mockResolvedValue({
+      events: [{
+        schemaVersion: 1,
+        eventVersion: 1,
+        eventId: 'turn-1',
+        identity: { projectId: 'p1', runId: 'r1', sessionId: 's1' },
+        position: 1,
+        occurredAt: '2026-01-01T00:00:00Z',
+        kind: 'turn',
+        payload: { kind: 'turn', role: 'assistant', content: { reference: 'opaque' } },
+        objectReferences: [],
+      }],
+      hasMore: false,
+      nextCursor: null,
+    });
+    mocks.readSessionTurnContent.mockResolvedValue({
+      eventId: 'turn-1',
+      identity: { projectId: 'p1', runId: 'r1', sessionId: 's1' },
+      text: 'The assistant response from the run.',
+    });
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=chat');
+    render(<App />);
+
+    expect(await screen.findByText('The assistant response from the run.')).toBeTruthy();
+    expect(mocks.readSessionTurnContent).toHaveBeenCalledWith(
+      'broker-token', 'p1', 'r1', 's1', 'turn-1', 'tenant-1',
+    );
+    expect(screen.queryByText(/content is stored separately/i)).toBeNull();
   });
 
   it('sends user chat to the coordinator with only one active session', async () => {
@@ -1912,7 +1951,7 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/runs/r1?view=changes');
     render(<App />);
 
-    expect(await screen.findByText(/The files of this run are not available/)).toBeTruthy();
+    expect(await screen.findByText('No files are available while this run is working.')).toBeTruthy();
   });
   it('does not claim the Repo App is disconnected when its status owner is unavailable', async () => {
     mocks.binding = { projectId: 'p1', runId: 'r1' };
@@ -1928,13 +1967,39 @@ describe('v1 web project scoping', () => {
     render(<App />);
 
     expect(await screen.findByText(
-      'GitHub App connection status is unavailable; no connection state is assumed.',
+      'We could not check the GitHub connection. Try again.',
     )).toBeTruthy();
     expect(screen.queryByText('No GitHub App user connection is available for this identity.')).toBeNull();
     expect(screen.queryByRole(
       'link',
       { name: 'Connect GitHub Repo App and configure this project' },
     )).toBeNull();
+  });
+
+  it('uses plain language when the project and account use different GitHub App connections', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    const selection = selectionSnapshot('p1', 'r1');
+    selection.projectConfiguration.sourceControl = {
+      authMode: 'githubApp',
+      appConnectionId: 'project-app-1',
+    };
+    mocks.getRunSelection.mockResolvedValue(selection);
+    mocks.getRepoAppStatus.mockResolvedValue({
+      state: 'connected',
+      localReadiness: 'access_token_available',
+      githubLogin: 'octo',
+      connectionId: 'account-app-2',
+      connectionRevision: 3,
+      accessTokenExpiresAt: '2026-10-08T18:00:00Z',
+      updatedAt: '2026-10-08T17:00:00Z',
+    });
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=changes');
+    render(<App />);
+
+    expect(await screen.findByText(/Your project uses a different GitHub App connection/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'project settings' })).toBeTruthy();
+    expect(screen.queryByText(/sourceControl\.appConnectionId/)).toBeNull();
   });
 
   it('shows an operator action when the Repo App provider is not configured', async () => {
@@ -1950,14 +2015,15 @@ describe('v1 web project scoping', () => {
     mocks.getRepoAppStatus.mockRejectedValue(new RepoAppBrokerError(
       503,
       'github_repo_app_not_configured',
-      'GitHub Repo App is not configured. Ask an operator to configure the Identity Broker provider.',
+      'GitHub Repo App is not configured. Ask an operator to configure the GitHub App provider.',
     ));
     window.history.replaceState({}, '', '/projects/p1/runs/r1?view=changes');
     render(<App />);
 
     expect(await screen.findByText(
-      'GitHub Repo App is not configured. Ask an operator to configure the Identity Broker provider.',
+      'GitHub access is not set up. Ask your administrator to configure it.',
     )).toBeTruthy();
+    expect(screen.queryByText(/Identity Broker|sourceControl\.authMode/)).toBeNull();
   });
 
   it('defaults invalid run view queries to Chat while preserving other query parameters', async () => {
@@ -2512,7 +2578,8 @@ describe('v1 web project scoping', () => {
       expect(within(summary).getByText('4')).toBeTruthy();
       expect(within(summary).getByText('3')).toBeTruthy();
       expect(within(summary).getByText('2')).toBeTruthy();
-      expect(within(summary).getByRole('alert').textContent).toContain('403');
+      expect(within(summary).getByRole('alert').textContent).toContain('You do not have permission to complete this request.');
+      expect(within(summary).getByRole('alert').textContent).not.toContain('403');
     });
     expect(within(summary).getByText('v1 session-history records')).toBeTruthy();
     expect(within(summary).getByText('Unavailable')).toBeTruthy();
@@ -2577,7 +2644,7 @@ describe('v1 web project scoping', () => {
       try { await pending.promise; } catch { /* Expected denied response. */ }
     });
     await waitFor(() => expect(within(summary).getAllByText('Unavailable')).toHaveLength(4));
-    expect(within(summary).getByText(/Forbidden|403/)).toBeTruthy();
+    expect(within(summary).getByText('You do not have permission to complete this request.')).toBeTruthy();
     expect(within(summary).queryByText('0')).toBeNull();
 
     mocks.searchProjectKnowledge.mockRejectedValue(new Error('Counts unavailable'));
@@ -2683,7 +2750,8 @@ describe('v1 web project scoping', () => {
     expect(mocks.getRunStatus).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
-    expect(await screen.findByText('Position 1')).toBeTruthy();
+    expect(await screen.findByText('A message was recorded.')).toBeTruthy();
+    expect(screen.queryByText(/Position 1|event-1|root-1 ·/)).toBeNull();
     expect(mocks.replayProjectRunHistoryEvents).toHaveBeenCalledWith(
       'broker-token', 'p1', 'work-run', null, 100, 'tenant-1',
     );
@@ -2786,7 +2854,7 @@ describe('v1 web project scoping', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     expect(await screen.findByText(/Search unavailable/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
-    expect(await screen.findByText(/Forbidden|403/)).toBeTruthy();
+    expect(await screen.findByText('You do not have permission to complete this request.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Sign in for project-wide search' })).toBeNull();
   });
 
@@ -3114,6 +3182,8 @@ describe('v1 web project scoping', () => {
     render(<App />);
 
     await screen.findByText('No matching records.');
+    expect(screen.getByText(/The current run is included in each request/)).toBeTruthy();
+    expect(screen.queryByText(/Gateway request/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Export scoped Knowledge' }));
     await screen.findByLabelText('Exported Knowledge bundle');
 

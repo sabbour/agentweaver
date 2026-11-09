@@ -665,6 +665,7 @@
       ],
       "required": [
         "docs/reference/web.md",
+        "docs/reference/web-ui-parity.md",
         "docs/experience/README.md",
         "docs/experience/00-overview.md",
         "docs/experience/onboarding-auth.md",

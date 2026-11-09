@@ -23,14 +23,21 @@ const useStyles = makeStyles({
   muted: { color: tokens.colorNeutralForeground3 },
 });
 
-/**
- * Plain message for a failed capture read. 403 means the session is not bound
- * to this run. 404 means no admitted capture is readable, for example while
- * the run is failed or its settings changed.
- */
-function outputCaptureErrorMessage(error: unknown): string {
+/** Plain message for a failed capture read, based on the run's confirmed state. */
+function outputCaptureErrorMessage(error: unknown, executionState: string | null): string {
   if (error instanceof GatewayError && error.status === 403) return 'You do not have permission to read the files of this run.';
-  if (error instanceof GatewayError && error.status === 404) return 'The files of this run are not available. They are hidden while the run is failed or its outcome is unknown.';
+  if (error instanceof GatewayError && error.status === 404) {
+    switch (executionState) {
+      case 'active': return 'No files are available while this run is working.';
+      case 'blocked': return 'No files are available while this run waits for input.';
+      case 'idle': return 'No files are available while this run is open.';
+      case 'failed': return 'Files are unavailable because this run failed.';
+      case 'indeterminate': return 'Files are unavailable because this run outcome is unknown.';
+      case 'completed': return 'No files are available for this completed run.';
+      case 'cancelled': return 'No files are available for this cancelled run.';
+      default: return 'No files are available. The run state could not be confirmed.';
+    }
+  }
   return errorMessage(error);
 }
 
@@ -41,7 +48,17 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function RunOutputCapturesPanel({ projectId, runId, sessionId }: { projectId: string; runId: string; sessionId: string }) {
+export function RunOutputCapturesPanel({
+  projectId,
+  runId,
+  sessionId,
+  executionState,
+}: {
+  projectId: string;
+  runId: string;
+  sessionId: string;
+  executionState: string | null;
+}) {
   const styles = useStyles();
   const { apiCall } = useAuth();
   const binding = useMemo(() => ({ projectId, runId }), [projectId, runId]);
@@ -122,13 +139,13 @@ export function RunOutputCapturesPanel({ projectId, runId, sessionId }: { projec
   let body;
   if (loading) body = <Loading label="Loading run files…" />;
   else if (error != null && captures.length === 0)
-    body = <ErrorNotice code={errorCode(error)}>{outputCaptureErrorMessage(error)}</ErrorNotice>;
+    body = <ErrorNotice code={errorCode(error)}>{outputCaptureErrorMessage(error, executionState)}</ErrorNotice>;
   else if (captures.length === 0)
     body = <EmptyState title="No files yet" description="This run has not saved any produced files." />;
   else
     body = (
       <>
-        {error != null && <ErrorNotice code={errorCode(error)}>{outputCaptureErrorMessage(error)}</ErrorNotice>}
+        {error != null && <ErrorNotice code={errorCode(error)}>{outputCaptureErrorMessage(error, executionState)}</ErrorNotice>}
         <ul className={styles.list} aria-label="Saved file sets">
           {captures.map((capture) => (
             <li key={capture.captureId} className={styles.row}>
@@ -158,7 +175,7 @@ export function RunOutputCapturesPanel({ projectId, runId, sessionId }: { projec
         {browsingCaptureId && (
           <ProducedFilesPanel projectId={projectId} runId={runId} sessionId={sessionId} captureId={browsingCaptureId} />
         )}
-        {diffError != null && <ErrorNotice code={errorCode(diffError)}>{outputCaptureErrorMessage(diffError)}</ErrorNotice>}
+        {diffError != null && <ErrorNotice code={errorCode(diffError)}>{outputCaptureErrorMessage(diffError, executionState)}</ErrorNotice>}
         {diff && (
           diff.patch.length === 0
             ? <Text className={styles.muted}>This file set has no text changes.</Text>

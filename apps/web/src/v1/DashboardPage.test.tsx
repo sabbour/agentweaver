@@ -45,7 +45,7 @@ describe('retained DashboardPage v1 reads', () => {
     expect(screen.getByRole('link', { name: 'Open Team' }).getAttribute('href')).toBe('/projects/p1/team');
     expect(screen.getByRole('table', { name: 'Agent usage' })).toBeDefined();
     expect(screen.getByRole('link', { name: 'Open run Run failed' }).getAttribute('href')).toBe('/projects/p1/runs/r1');
-    expect(screen.getByText(/Agent leaderboard and latency percentiles are unavailable/)).toBeDefined();
+    expect(screen.getByText('Agent scores and response times are not available yet.')).toBeDefined();
     expect(paths().map((path) => new URL(path, 'http://localhost').pathname).sort()).toEqual([
       '/api/v1/projects/p1', '/api/v1/projects/p1/configuration', '/api/v1/projects/p1/runs',
       '/api/v1/projects/p1/metrics',
@@ -138,13 +138,37 @@ describe('retained DashboardPage v1 reads', () => {
           runsInRange: 0, runsTotal: 0, completedRuns: 0, succeededRuns: 0, series: [],
         });
       }
+      if (url.pathname === '/api/v1/projects/p1/usage') {
+        const now = new Date().toISOString();
+        return json({ projectId: 'p1', from: now, to: now, usageByModel: [], usageByAgent: [] });
+      }
       return gatewayFixtureFetch(input);
     });
     renderPage();
     await screen.findByText('This project has no run activity.');
+    expect(screen.getByText('Agent scores are not available yet. Open Flow to review agent runs.')).toBeDefined();
+    expect(screen.queryByText(/Gateway/)).toBeNull();
     const actions = screen.getByLabelText('Project actions');
     const labels = within(actions).getAllByRole('link').map((link) => link.textContent);
     expect(labels.length).toBeGreaterThan(1);
     expect(new Set(labels).size).toBe(labels.length);
+    const startTask = within(actions).getByRole('link', { name: 'Start task' });
+    expect(startTask.getAttribute('href')).toBe('/projects/p1/orchestrations');
+  });
+
+  it('uses singular wording when one run is active', async () => {
+    mocks.fetch.mockImplementation(async (input) => {
+      const response = await gatewayFixtureFetch(input);
+      const url = new URL(String(input), 'http://localhost');
+      if (!url.pathname.endsWith('/metrics')) return response;
+      const metrics = await response.json() as { activeRuns: number };
+      return new Response(JSON.stringify({ ...metrics, activeRuns: 1 }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    renderPage();
+
+    expect(await screen.findByText('1 run is active. Active agent count is unavailable.')).toBeDefined();
+    expect(screen.queryByText(/1 run are active/)).toBeNull();
   });
 });

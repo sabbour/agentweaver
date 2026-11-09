@@ -209,7 +209,7 @@ describe('DecisionView', () => {
     const { refresh } = renderView();
     await click(screen.getByTestId('approval-gate-approve-btn'));
     expect(screen.getByRole('status').textContent).toBe('This request changed while you were viewing it. The view was refreshed.');
-    expect(screen.getByText(/HTTP 409 \(state_version_conflict\): Conflict/)).toBeTruthy();
+    expect(screen.getByText('HTTP 409: Conflict')).toBeTruthy();
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 

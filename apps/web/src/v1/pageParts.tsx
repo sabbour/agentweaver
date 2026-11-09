@@ -34,11 +34,10 @@ const useStyles = makeStyles({
 });
 
 /** Accessible error banner shared by authentication and data pages. */
-export function ErrorNotice({ children, code }: { children: ReactNode; code?: string }) {
+export function ErrorNotice({ children }: { children: ReactNode; code?: string }) {
   return (
     <MessageBar intent="error" role="alert">
       <MessageBarBody>
-        {code && <strong>{code}: </strong>}
         {children}
       </MessageBarBody>
     </MessageBar>

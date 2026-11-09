@@ -545,14 +545,14 @@ function ProjectRepoAppConnectionPanel() {
   return (
     <Panel title="GitHub Repo App">
       <p className="v1-muted">
-        Connect a GitHub account for repository access. Status, repository metadata, and selection codes come directly from the Identity Broker; provider credentials stay with the owner.
+        Connect your GitHub account for repository access. Connection status and repository details appear here. Your sign-in details stay with the service that manages this connection.
       </p>
       {statusLoading ? <Loading label="Checking GitHub Repo App connection…" /> : statusUnavailable ? (
-        <p className="v1-muted">GitHub Repo App connection status is unavailable; no connection state is assumed.</p>
+        <p className="v1-muted">We could not check the GitHub connection. Try again.</p>
       ) : connected ? (
         <p>
           Connected as <strong>{connection.githubLogin ?? 'GitHub user'}</strong>
-          {connection.connectionId && <> · Identity connection <code>{connection.connectionId}</code></>}
+          {connection.connectionId && <> · Connection ID <code>{connection.connectionId}</code></>}
           {connection.localReadiness !== 'access_token_available' && (
             <> · {connection.localReadiness.replaceAll('_', ' ')}</>
           )}
@@ -565,9 +565,8 @@ function ProjectRepoAppConnectionPanel() {
         </p>
       )}
       <p className="v1-muted">
-        To use this connection in a project, set <code>sourceControl.authMode</code> to <code>githubApp</code> and
-        set <code>sourceControl.appConnectionId</code> to the matching Identity connection ID. Existing configurations
-        that omit <code>authMode</code> remain in legacy secret mode.
+        To use this connection, choose GitHub App access in project source-control settings. Projects that use another
+        access method keep it until you change the setting.
       </p>
       {error != null && <ErrorNotice code={errorCode(error)}>{errorMessage(error)}</ErrorNotice>}
       {notice && <MessageBar intent={notice.intent}><MessageBarBody>{notice.text}</MessageBarBody></MessageBar>}
@@ -2374,7 +2373,7 @@ function KnowledgePage() {
             </form>
           </Panel>
           <Panel title="Knowledge transfer">
-            <p className="v1-muted">Transfer uses a versioned bundle for the exact project and agent. The current run is included in each Gateway request; imports are limited to 1 MiB.</p>
+            <p className="v1-muted">Transfer uses a versioned bundle for the exact project and agent. The current run is included in each request; imports are limited to 1 MiB.</p>
             <div className="v1-actions">
               <Button appearance="secondary" onClick={() => void exportKnowledge()}>Export scoped Knowledge</Button>
             </div>
@@ -2509,64 +2508,41 @@ function createTopology(
   return { nodes, edges };
 }
 
-/** Produces a compact activity label for a Broker journal event. */
-function eventSessionLabel(value: unknown): string {
-  if (typeof value !== 'object' || value === null ||
-    !('sessionId' in value) || typeof value.sessionId !== 'string')
-    return 'unknown session';
-  return value.sessionId;
-}
-
 function eventSummary(event: SessionEventEnvelope): string {
   const payload = event.payload;
   if (event.kind === 'turn') {
-    const role = typeof payload.role === 'string' ? payload.role : 'turn';
-    return `${role} content is stored separately. This page cannot show it.`;
+    if (payload.role === 'user') return 'You sent a message.';
+    if (payload.role === 'assistant') return 'The assistant replied.';
+    return 'A message was recorded.';
   }
   if (event.kind === 'toolCall') {
-    const name = typeof payload.toolName === 'string' ? payload.toolName : 'Tool call';
-    const state = typeof payload.state === 'string' ? payload.state : 'state unavailable';
-    return `${name} · ${state}`;
+    if (payload.state === 'started') return 'An action started.';
+    if (payload.state === 'completed' || payload.state === 'succeeded') return 'An action finished.';
+    if (payload.state === 'failed') return 'An action needs attention.';
+    return 'An action was recorded.';
   }
-  if (event.kind === 'decisionAccepted') {
-    const type = typeof payload.decisionType === 'string' ? payload.decisionType : 'Decision';
-    const selected = typeof payload.selectedOption === 'string' ? payload.selectedOption : 'selection content unavailable';
-    return `${type} · ${selected}`;
-  }
-  if (event.kind === 'addressedMessage') {
-    const id = typeof payload.messageId === 'string' ? payload.messageId : 'message reference';
-    const sender = eventSessionLabel(payload.sender);
-    const recipient = eventSessionLabel(payload.recipient);
-    const sequence = typeof payload.threadSequence === 'number' ? ` · thread ${payload.threadSequence}` : '';
-    const purpose = typeof payload.purpose === 'string' ? ` · ${payload.purpose}` : '';
-    const status = typeof payload.status === 'string' ? ` · owner journal status ${payload.status}` : '';
-    return `Addressed-message receipt ${id} · ${sender} → ${recipient}${sequence}${purpose}${status}; receipt is not proof of delivery, task completion, or approval.`;
-  }
-  if (event.kind === 'policyEvaluation') {
-    const outcome = typeof payload.outcome === 'string' ? payload.outcome : 'unknown';
-    const reason = typeof payload.reasonCode === 'string' ? payload.reasonCode : 'reason unavailable';
-    return `Policy evidence · ${outcome} · ${reason}`;
-  }
-  return `${event.kind} event; content is available only through the exact fields returned by the journal DTO.`;
+  if (event.kind === 'decisionAccepted') return 'A decision was accepted.';
+  if (event.kind === 'addressedMessage') return 'A message was recorded.';
+  if (event.kind === 'policyEvaluation') return 'A project rule was checked.';
+  return 'Run activity was recorded.';
 }
 
-/** Renders ordered session events with their compact event summaries. */
+/** Renders run events as a plain activity list without internal identifiers. */
 function JournalList({ events }: { events: SessionEventEnvelope[] }) {
-  if (events.length === 0) return <p className="v1-muted">No committed run events are available yet.</p>;
+  if (events.length === 0) return <p className="v1-muted">No run activity is available yet.</p>;
   return (
     <ol className="v1-event-list">
       {events.slice().reverse().map((event) => (
         <li key={event.eventId}>
-          <div className="v1-event-meta"><Badge appearance="outline">{event.kind}</Badge><span>Position {event.position}</span><time>{new Date(event.occurredAt).toLocaleString()}</time></div>
+          <div className="v1-event-meta"><time dateTime={event.occurredAt}>{new Date(event.occurredAt).toLocaleString()}</time></div>
           <p>{eventSummary(event)}</p>
-          <code>{event.identity.sessionId} · {event.eventId}</code>
         </li>
       ))}
     </ol>
   );
 }
 
-/** Shows the current run snapshot and status-specific blocking information. */
+/** Shows the owner-provided run status in the optional Run details section. */
 function SnapshotDetail({ runStatus }: { runStatus: OwnerRunStatus }) {
   return (
     <dl className="v1-detail-list">
@@ -2577,53 +2553,6 @@ function SnapshotDetail({ runStatus }: { runStatus: OwnerRunStatus }) {
       {runStatus.causeCode && <div><dt>Owner cause</dt><dd>{runStatus.causeCode}</dd></div>}
       {runStatus.reference && <div><dt>Owner reference</dt><dd>{runStatus.reference}</dd></div>}
     </dl>
-  );
-}
-
-/** Combines the run journal and status snapshot for the activity tab. */
-function ActivityView({
-  runStatus,
-  statuses,
-}: {
-  runStatus: OwnerRunStatus | null;
-  statuses: Record<string, SessionStatusSnapshot>;
-}) {
-  return (
-    <div className="v1-stack">
-      {runStatus && <Panel title="Run owner snapshot"><SnapshotDetail runStatus={runStatus} /></Panel>}
-      <Panel title="Session owner snapshots">
-        {Object.values(statuses).length === 0 ? <p className="v1-muted">No session status snapshots are available.</p> : (
-          <div className="v1-record-list">
-            {Object.values(statuses).map((status) => (
-              <article className="v1-record" key={status.identity.sessionId}>
-                <div className="v1-record-title">
-                  <div><h3>{status.kind} · {status.identity.sessionId}</h3><p className="v1-muted">Root: {status.rootSessionId}{status.parentSessionId ? ` · Parent: ${status.parentSessionId}` : ''}</p></div>
-                  <Badge appearance="tint" color={status.activity === 'busy' ? 'informative' : status.activity === 'idle' ? 'success' : 'warning'}>
-                    {status.activity}{status.activityUnavailableCode ? ` · ${status.activityUnavailableCode}` : ''}
-                  </Badge>
-                </div>
-                <p className="v1-muted">Lifecycle: {status.lifecycle} · detached: {String(status.detached)} · fence {status.executionFence} · version {status.stateVersion}</p>
-                <p className="v1-muted">Runtime effects: {status.runtimeEffectsState}{status.runtimeEffectsUnavailableCode ? ` · ${status.runtimeEffectsUnavailableCode}` : ''}</p>
-                {status.runtimeStartup && (
-                  <p className="v1-muted">
-                    AgentHost startup: {{
-                      pending: 'Starting',
-                      ready: 'Ready',
-                      blocked: 'Blocked',
-                      cleanup_pending: 'Cleanup pending',
-                      cleanup_complete: 'Cleanup complete',
-                    }[status.runtimeStartup.state]} · {status.runtimeStartup.step}
-                    {status.runtimeStartup.failureCode ? ` · ${status.runtimeStartup.failureCode}` : ''}
-                  </p>
-                )}
-                <p className="v1-muted">Run owner state: {status.runExecution.state} · state version {status.runExecution.stateVersion}</p>
-                {status.runExecution.causeCode && <p className="v1-muted">Cause: {status.runExecution.causeCode}{status.runExecution.reference ? ` · ${status.runExecution.reference}` : ''}</p>}
-              </article>
-            ))}
-          </div>
-        )}
-      </Panel>
-    </div>
   );
 }
 
@@ -2698,9 +2627,6 @@ function ChatView({
       )}
       {notice && <MessageBar intent="info"><MessageBarBody>{notice}</MessageBarBody></MessageBar>}
       <TranscriptPanel transcript={transcript} />
-      <Panel title="Activity" description="Events from this run, oldest first. Message text is not stored in the event list.">
-        <JournalList events={journalEvents} />
-      </Panel>
       <Panel title={`Message the ${targetName.toLowerCase()}`} description="Your signed-in identity sends the message. By default it goes to the coordinator; choose an active session in the run tree to target it instead.">
         {!target ? (
           <p className="v1-muted">You can send a message when the selected run session is active.</p>
@@ -2958,15 +2884,15 @@ function RunGitHubAppPanel({
   return (
     <Panel title="GitHub App repository access">
       <p className="v1-muted">
-        The accepted run uses Identity App connection <code>{appConnectionId || 'not configured'}</code>.
-        Repository metadata and selection codes come from the Broker; the Gateway receives the opaque code only on this run-bound pin request.
+        This run uses the GitHub App connection <code>{appConnectionId || 'not configured'}</code>.
+        Choose a repository below to use it for this run.
       </p>
       {statusLoading ? <Loading label="Checking GitHub App connection…" /> : statusUnavailable ? (
-        <p className="v1-muted">GitHub App connection status is unavailable; no connection state is assumed.</p>
+        <p className="v1-muted">We could not check the GitHub connection. Try again.</p>
       ) : connection?.state === 'connected' ? (
         <p>
           Connected as <strong>{connection.githubLogin ?? 'GitHub user'}</strong>
-          {connection.connectionId && <> · Identity connection <code>{connection.connectionId}</code></>}
+          {connection.connectionId && <> · GitHub connection <code>{connection.connectionId}</code></>}
         </p>
       ) : (
         <p className="v1-muted">
@@ -2978,8 +2904,8 @@ function RunGitHubAppPanel({
       {connection?.state === 'connected' && connection.connectionId !== appConnectionId && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            This project references a different App connection. Update <code>sourceControl.appConnectionId</code> in{' '}
-            <Link to={`/projects/${encodeURIComponent(projectId)}/settings`}>project settings</Link> to use the displayed Identity connection.
+            Your project uses a different GitHub App connection. Review{' '}
+            <Link to={`/projects/${encodeURIComponent(projectId)}/settings`}>project settings</Link> to confirm the connection for this project.
           </MessageBarBody>
         </MessageBar>
       )}
@@ -3032,7 +2958,7 @@ function RunGitHubAppPanel({
         </div>
       )}
       {repositoriesLoaded && repositories.length === 0 && connectionMatches && !repositoriesLoading && (
-        <p className="v1-muted">No accessible repositories were returned by the Identity Broker. Install the GitHub App for this run, then reload the repository list.</p>
+        <p className="v1-muted">No repositories are available. Install the GitHub App for this run, then refresh the list.</p>
       )}
       {pinnedRepository && (
         <p className="v1-muted">Pinned repository: {pinnedRepository.repository} · {pinnedRepository.defaultBranch}</p>
@@ -3466,15 +3392,11 @@ function RunPage() {
             <DecisionList projectId={projectId} runId={runId} pinned={pinnedDecisionFromSearch(searchParams)} statuses={currentStatuses} decisions={currentDecisions} apiCall={apiCall} refresh={() => refreshRef.current()} snapshotBusy={snapshotBusy} />
           )}
           {tab === 'activity' && (
-            <div className="v1-stack">
-              <Panel title={`Committed event journal · ${journal.connected ? 'live' : journal.loading ? 'loading' : 'reconnecting'}`}>
-                {journal.error && <ErrorNotice code={errorCode(journal.error)}>{errorMessage(journal.error)}</ErrorNotice>}
-                <p className="v1-muted">Earlier events load first. New events appear as they happen, in order, without duplicates.</p>
-                <JournalList events={journal.events} />
-              </Panel>
-              <ActivityView runStatus={currentRunStatus} statuses={currentStatuses} />
-            </div>
-          )}
+                <Panel title="Run activity" description="Earlier activity appears first. New activity appears as it happens.">
+                  {journal.error && <ErrorNotice code={errorCode(journal.error)}>{errorMessage(journal.error)}</ErrorNotice>}
+                  <JournalList events={journal.events} />
+                </Panel>
+              )}
           {tab === 'selection' && (
             <div className="v1-stack">
               <Panel title="Run settings">
@@ -3501,7 +3423,12 @@ function RunPage() {
                 initialCaptureId={searchParams.get('captureId') ?? undefined} />
               {/* Produced files are read from the root session, which every started run has. */}
               {currentRunStatus.rootSessionId && (
-                <RunOutputCapturesPanel projectId={projectId} runId={runId} sessionId={currentRunStatus.rootSessionId} />
+                <RunOutputCapturesPanel
+                  projectId={projectId}
+                  runId={runId}
+                  sessionId={currentRunStatus.rootSessionId}
+                  executionState={currentRunStatus.executionState}
+                />
               )}
             </div>
           )}
@@ -3905,7 +3832,7 @@ function CallbackPage() {
     <div className="v1-auth-page">
       <section className="v1-auth-card">
         <h1>Completing sign-in</h1>
-        {busy ? <Loading label="Exchanging Broker authorization code…" /> : error ? <ErrorNotice>{error}</ErrorNotice> : <p className="v1-muted">Waiting for an Identity Broker response.</p>}
+        {busy ? <Loading label="Finishing sign-in…" /> : error ? <ErrorNotice>{error}</ErrorNotice> : <p className="v1-muted">Waiting for the sign-in response.</p>}
       </section>
     </div>
   );
@@ -4130,7 +4057,7 @@ function AccountSettingsPage() {
     <PageHeading title="Account settings" description="Manage your sign-in and repository access." />
     <Panel title="Authentication">
       <dl className="v1-detail-list">
-        <div><dt>Sign-in method</dt><dd>Agentweaver Identity Broker</dd></div>
+        <div><dt>Sign-in method</dt><dd>Managed sign-in</dd></div>
         <div><dt>Signed in as</dt><dd>{session?.displayName ?? 'Name not provided'}</dd></div>
       </dl>
       <div><Button onClick={signOut}>Sign out</Button></div>
