@@ -524,6 +524,7 @@ public static class CliApplication
               [--dry-run] [--interactive]
           agentweaver models byok prices --region <azure-region> --search <meter-text>
           agentweaver models byok plan --input <byok.json> --source <deploy/k8s> --output <new-plan.json>
+              [--overlay-output <new-model-bindings.json>]
           agentweaver models byok apply --plan <plan.json>
         """;
 }

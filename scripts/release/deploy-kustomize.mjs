@@ -15,6 +15,12 @@ import { IMAGE_REPOSITORIES } from './image-repositories.mjs';
 import { DEFAULT_REGISTRY, measureAgentHostRegistryImage, parseRegistryTarget } from './registry.mjs';
 import { run, redact } from '../azure/lib/exec.mjs';
 import { preserveIdentityBrokerProviderSetup } from '../azure/lib/identity-broker-provider-setup.mjs';
+import {
+  applyModelBindingsOverlay,
+  parseModelBindingsOverlay,
+  requireLiveAzureCostPreserved,
+  stampEventsRuntimeConfigDigest,
+} from './model-bindings-overlay.mjs';
 
 const NAMESPACE = 'agentweaver';
 const BROKER_RUNTIME_CONFIG = 'identity-broker-runtime-config-v3';
@@ -22,6 +28,7 @@ const PROJECTS_CONFIG_RUNTIME_CONFIG = 'projects-config-runtime-config';
 const PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION = 'agentweaver.io/local-deploy-restore-replicas';
 const AGENTHOST_RUNTIME_CONFIG = 'agenthost-runtime-v1';
 const ENVIRONMENT_RUNTIME_CONFIG = 'environment-runtime-config';
+const EVENTS_RUNTIME_CONFIG = 'events-and-sessions-runtime-config';
 const RUNTIME_CONFIG_MAPS = new Set([AGENTHOST_RUNTIME_CONFIG, ENVIRONMENT_RUNTIME_CONFIG]);
 const AGENTHOST_CONFIGURATION_ENDPOINT =
   'https://agenthost-runtime.agentweaver.svc.cluster.local:8443/runtime/v1/configure';
@@ -105,14 +112,19 @@ const REQUIRED_AUTHORIZATION = [
   ['create', 'deployments.apps'],
 ];
 
-export const DEPLOY_KUSTOMIZE_USAGE = `Usage: npm run deploy:kustomize -- --image-manifest <file.json> [--registry <registry>] --execute
-   or: npm run deploy:kustomize -- --image-tag sha-<git-commit> [--registry <registry>] --execute
+export const DEPLOY_KUSTOMIZE_USAGE = `Usage: npm run deploy:kustomize -- --image-manifest <file.json> [--registry <registry>] [model options] --execute
+   or: npm run deploy:kustomize -- --image-tag sha-<git-commit> [--registry <registry>] [model options] --execute
+
+Model options:
+  --model-bindings <file.json>         Add the environment BYOK model bindings in this file.
+  --remove-model-binding <reference>   Remove this live BYOK model binding. You can repeat it.
 
 The manifest selects published images to update; omitted images keep their
 currently deployed references. The command runs migrations for selected services,
 applies namespaced Kustomize resources, and waits for every Deployment rollout.
 `;
 export const DEPLOY_KUSTOMIZE_REGISTRY_OPTION = true;
+export const DEPLOY_KUSTOMIZE_MODEL_BINDINGS_OPTION = true;
 
 function fail(message) {
   throw new Error(`Kustomize deployment: ${message}`);
@@ -124,10 +136,21 @@ export function parseDeployKustomizeArgs(argv) {
   let registry = DEFAULT_REGISTRY;
   let hasRegistry = false;
   let execute = false;
+  let modelBindings;
+  const removeModelBindings = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--execute') execute = true;
-    else if (arg === '--image-tag') {
+    else if (arg === '--model-bindings') {
+      if (modelBindings !== undefined) fail('--model-bindings may be specified only once.');
+      modelBindings = argv[++index];
+      if (!modelBindings || modelBindings.startsWith('--')) fail('--model-bindings requires a file path.');
+    } else if (arg === '--remove-model-binding') {
+      const reference = argv[++index];
+      if (!reference || reference.startsWith('--')) fail('--remove-model-binding requires a model reference.');
+      if (removeModelBindings.includes(reference)) fail(`--remove-model-binding names ${reference} more than once.`);
+      removeModelBindings.push(reference);
+    } else if (arg === '--image-tag') {
       if (imageTag !== undefined) fail('--image-tag may be specified only once.');
       imageTag = argv[++index];
     } else if (arg === '--image-manifest') {
@@ -154,10 +177,14 @@ export function parseDeployKustomizeArgs(argv) {
     fail('--image-tag must be a normal sha-<40-character-commit> image tag.');
   }
   if (!execute) fail('--execute is required to run migrations and apply workloads.');
-  const registryOption = registry === DEFAULT_REGISTRY ? {} : { registry };
+  const options = {
+    ...(registry === DEFAULT_REGISTRY ? {} : { registry }),
+    ...(modelBindings === undefined ? {} : { modelBindings }),
+    ...(removeModelBindings.length ? { removeModelBindings } : {}),
+  };
   return imageManifest === undefined
-    ? { imageTag, ...registryOption }
-    : { imageManifest, ...registryOption };
+    ? { imageTag, ...options }
+    : { imageManifest, ...options };
 }
 
 export function parseImageManifest(source) {
@@ -838,11 +865,16 @@ function preserveLiveAgentHostSettings(resources, settings, tuple) {
 
 /**
  * Stop a deployment that would remove a live BYOK model binding, or change one without a new model
- * binding revision. BYOK bindings are added to the source files with `agentweaver models byok plan`
- * and `apply`, which also set a new revision; the deploy helper never invents them.
+ * binding revision. A removal is allowed only when the operator names the reference and the revision
+ * changes. BYOK bindings come from a model bindings file (`--model-bindings`) or the source files.
  */
-export function requireLiveByokBindingsPreserved(live, desired) {
-  if (!live) return;
+export function requireLiveByokBindingsPreserved(live, desired, removals = []) {
+  if (!live) {
+    if (removals.length) {
+      fail(`--remove-model-binding names ${removals.join(', ')}, but no live ConfigMap/${AGENTHOST_RUNTIME_CONFIG} exists.`);
+    }
+    return;
+  }
   const settings = (resource, label) => {
     try {
       return JSON.parse(resource?.data?.['appsettings.json'] ?? '{}')?.AgentHost ?? {};
@@ -853,17 +885,30 @@ export function requireLiveByokBindingsPreserved(live, desired) {
   const current = settings(live, 'Live');
   const next = settings(desired, 'Rendered');
   const revised = next.ModelBindingsRevision !== current.ModelBindingsRevision;
+  const liveByok = new Set(Object.entries(current.ModelBindings ?? {})
+    .filter(([, binding]) => binding?.SourceMode === 'Byok').map(([reference]) => reference));
+  const invalid = removals.filter(reference =>
+    !liveByok.has(reference) || next.ModelBindings?.[reference]?.SourceMode === 'Byok');
+  if (invalid.length) {
+    fail(`--remove-model-binding names ${invalid.join(', ')}, which is not a live BYOK binding that this ` +
+      'deploy removes.');
+  }
+  if (removals.length && !revised) {
+    fail('A BYOK model binding can be removed only with a new model binding revision.');
+  }
   const lost = Object.entries(current.ModelBindings ?? {})
     .filter(([, binding]) => binding?.SourceMode === 'Byok')
     .filter(([reference, binding]) => {
       const rendered = next.ModelBindings?.[reference];
       return revised ? rendered?.SourceMode !== 'Byok' : !isDeepStrictEqual(rendered, binding);
     })
-    .map(([reference]) => reference);
+    .map(([reference]) => reference)
+    .filter(reference => !removals.includes(reference));
   if (lost.length) {
     fail(`The rendered ConfigMap/${AGENTHOST_RUNTIME_CONFIG} would remove or change live BYOK model ` +
-      `binding(s) ${lost.join(', ')}. Add them to the source files with ` +
-      '`agentweaver models byok plan` and `agentweaver models byok apply`, then deploy again.');
+      `binding(s) ${lost.join(', ')}. To keep them, deploy with --model-bindings <file> and the model ` +
+      'bindings file from `agentweaver models byok plan --overlay-output`. To remove them, deploy with ' +
+      '--remove-model-binding <reference>.');
   }
 }
 
@@ -944,7 +989,7 @@ export function stampAgentHostModelEgress(resources) {
         endpoint.username || endpoint.password || !DNS_NAME.test(host) ||
         !BYOK_HOST_SUFFIXES.some(suffix => host.endsWith(suffix))) {
       fail(`BYOK model binding ${reference} must use an HTTPS Azure OpenAI BaseUrl on port 443. ` +
-        'Fix it with `agentweaver models byok plan` and `agentweaver models byok apply`.');
+        'Fix it with `agentweaver models byok plan`.');
     }
     hosts.add(host);
   }
@@ -1093,6 +1138,9 @@ export async function deployKustomize(options, overrides = {}) {
   } catch {
     fail('registry must be ghcr.io/sabbour or an Azure Container Registry login server.');
   }
+  const removals = options.removeModelBindings ?? [];
+  const modelBindings = options.modelBindings === undefined ? undefined
+    : parseModelBindingsOverlay(readFileSync(path.resolve(root, options.modelBindings), 'utf8'));
   const requestedImages = options.imageManifest === undefined
     ? new Map(IMAGE_REPOSITORIES.map(repository => [repository, options.imageTag]))
     : parseImageManifest(readFileSync(path.resolve(root, options.imageManifest), 'utf8'));
@@ -1157,6 +1205,11 @@ export async function deployKustomize(options, overrides = {}) {
       fail('Kustomize must render exactly the nine named v1 Deployments.');
     }
     if (!agentHostTuple) fail('No validated AgentHost image tuple is available for the runtime ConfigMaps.');
+    if (modelBindings) {
+      const merged = applyModelBindingsOverlay(resources, modelBindings);
+      log(`Added environment model binding(s) ${merged.references.join(', ')} at revision ${merged.revision}.`);
+    }
+    stampEventsRuntimeConfigDigest(resources);
     if (liveAgentHostSettings) {
       preserveLiveAgentHostSettings(resources, liveAgentHostSettings, agentHostTuple);
     }
@@ -1185,7 +1238,9 @@ export async function deployKustomize(options, overrides = {}) {
       name, readExistingNamedRuntimeConfigMap(exec, context, root, name),
     ]));
     requireLiveByokBindingsPreserved(existingRuntimeMaps.get(AGENTHOST_RUNTIME_CONFIG),
-      desiredRuntimeMaps.find(resource => resource.metadata.name === AGENTHOST_RUNTIME_CONFIG));
+      desiredRuntimeMaps.find(resource => resource.metadata.name === AGENTHOST_RUNTIME_CONFIG), removals);
+    requireLiveAzureCostPreserved(readExistingNamedRuntimeConfigMap(exec, context, root, EVENTS_RUNTIME_CONFIG),
+      resources.find(resource => resource.kind === 'ConfigMap' && resource.metadata?.name === EVENTS_RUNTIME_CONFIG));
     const missingRuntimeMaps = new Set([...existingRuntimeMaps]
       .filter(([, resource]) => resource === undefined).map(([name]) => name));
     const runtimeMapManifest = { apiVersion: 'v1', kind: 'List', items: desiredRuntimeMaps };

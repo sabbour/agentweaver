@@ -13,6 +13,12 @@ import {
   requireLiveByokBindingsPreserved,
   stampAgentHostModelEgress,
 } from '../deploy-kustomize.mjs';
+import {
+  applyModelBindingsOverlay,
+  parseModelBindingsOverlay,
+  requireLiveAzureCostPreserved,
+  stampEventsRuntimeConfigDigest,
+} from '../model-bindings-overlay.mjs';
 import { buildIdentityBrokerProviderPlan } from '../../azure/lib/identity-broker-provider-setup.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -29,6 +35,9 @@ const agentHostRuntimeConfig = readYaml('deploy/k8s/profiles/agenthost/runtime-c
 const agentHostModelEgress = readYaml('deploy/k8s/base/agenthost-model-egress.yaml');
 const environmentRuntimeConfig = JSON.parse(readFileSync(
   path.join(root, 'deploy', 'k8s', 'runtime-configs', 'environment-runtime-config.json'), 'utf8',
+));
+const eventsRuntimeConfig = JSON.parse(readFileSync(
+  path.join(root, 'deploy', 'k8s', 'runtime-configs', 'events-and-sessions-runtime-config.json'), 'utf8',
 ));
 const imageDigest = `sha256:${'a'.repeat(64)}`;
 const serviceClientId = '12345678-1234-4123-8123-123456789abc';
@@ -316,6 +325,7 @@ function renderedRoot(kustomizationPath, {
     stringify(runtimeConfig),
     stringify(environmentRuntimeConfig),
     stringify(agentHostRuntimeConfig),
+    stringify(eventsRuntimeConfig),
     stringify(agentHostModelEgress),
     ...resources.map(stringify),
   ].join('---\n');
@@ -693,6 +703,187 @@ test('deploy stops when the rendered AgentHost map drops a live BYOK binding or 
   assert.doesNotThrow(() => requireLiveByokBindingsPreserved(live, map('r2', { byok: changed })));
   for (const desired of [map('r1', { hosted }), map('r2', { hosted }), map('r1', { hosted, byok: changed })]) {
     assert.throws(() => requireLiveByokBindingsPreserved(live, desired), /would remove or change live BYOK model binding\(s\) byok/);
+  }
+
+  assert.doesNotThrow(() => requireLiveByokBindingsPreserved(live, map('r2', { hosted }), ['byok']));
+  assert.throws(() => requireLiveByokBindingsPreserved(live, map('r1', { hosted }), ['byok']),
+    /only with a new model binding revision/);
+  for (const [desired, removals] of [
+    [map('r2', { hosted, byok }), ['byok']],
+    [map('r2', { hosted }), ['byok', 'hosted']],
+    [map('r2', { hosted }), ['missing', 'byok']],
+  ]) {
+    assert.throws(() => requireLiveByokBindingsPreserved(live, desired, removals),
+      /--remove-model-binding names .* which is not a live BYOK binding that this deploy removes/);
+  }
+  assert.throws(() => requireLiveByokBindingsPreserved(undefined, map('r2', { hosted }), ['byok']),
+    /no live ConfigMap\/agenthost-runtime-v1 exists/);
+});
+
+test('model bindings file reproduces the environment BYOK keys in every runtime map', () => {
+  const product = JSON.parse(agentHostRuntimeConfig.data['appsettings.json']).AgentHost;
+  const revision = `${product.ModelBindingsRevision}-byok-20261109`;
+  const binding = {
+    ModelId: 'gpt-5.4', SourceMode: 'Byok',
+    Provider: { Type: 'openai', BaseUrl: 'https://asabbour-demo-resource.openai.azure.com/openai/v1', WireApi: 'responses' },
+    SupportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+  };
+  const file = {
+    kind: 'agentweaver.model-bindings-overlay', schemaVersion: 1,
+    baseRevision: product.ModelBindingsRevision, baseModelBindings: product.ModelBindings,
+    revision, modelBindings: { 'byok-gpt-5.4': binding },
+    rateCard: { id: 'azure-retail-prices.standard.swedencentral', version: '2026-11-09' },
+    modelRates: { 'gpt-5.4': { input: '2.5', cachedInput: '0.25', output: '15' } },
+  };
+  const render = () => structuredClone([agentHostRuntimeConfig, eventsRuntimeConfig, runtimeConfig]);
+  const resources = render();
+  assert.deepEqual(applyModelBindingsOverlay(resources, parseModelBindingsOverlay(JSON.stringify(file))),
+    { revision, references: ['byok-gpt-5.4'] });
+
+  const agentHost = JSON.parse(resources[0].data['appsettings.json']).AgentHost;
+  assert.equal(agentHost.ModelBindingsRevision, revision);
+  assert.deepEqual(agentHost.ModelBindings, { ...product.ModelBindings, 'byok-gpt-5.4': binding });
+  const prefix = 'AgentHost__ModelBindings__byok-gpt-5.4__';
+  const bindingKeys = {
+    [`${prefix}ModelId`]: 'gpt-5.4',
+    [`${prefix}SourceMode`]: 'Byok',
+    [`${prefix}Provider__Type`]: 'openai',
+    [`${prefix}Provider__BaseUrl`]: 'https://asabbour-demo-resource.openai.azure.com/openai/v1',
+    [`${prefix}Provider__WireApi`]: 'responses',
+    [`${prefix}SupportedReasoningEfforts__0`]: 'low',
+    [`${prefix}SupportedReasoningEfforts__1`]: 'medium',
+    [`${prefix}SupportedReasoningEfforts__2`]: 'high',
+    [`${prefix}SupportedReasoningEfforts__3`]: 'xhigh',
+  };
+  const cost = 'EventsAndSessions__Cost__Azure__';
+  const costKeys = {
+    [`${cost}ResourceId`]: `azure-cost:${revision}`,
+    [`${cost}ResourceGeneration`]: '1',
+    [`${cost}OptionsRevision`]: revision,
+    [`${cost}OptionsSchemaVersion`]: '1',
+    [`${cost}PricingModel`]: 'StandardTokens',
+    [`${cost}RateCard__Id`]: 'azure-retail-prices.standard.swedencentral',
+    [`${cost}RateCard__Version`]: '2026-11-09',
+    [`${cost}RateCard__MeterSource`]: 'byok.tokens',
+    [`${cost}RateCard__Unit`]: 'USD',
+    [`${cost}RateCard__NanoUnitsPerUnit`]: '1000000',
+    [`${cost}RateCard__ModelRates__gpt-5.4__input`]: '2.5',
+    [`${cost}RateCard__ModelRates__gpt-5.4__cachedInput`]: '0.25',
+    [`${cost}RateCard__ModelRates__gpt-5.4__output`]: '15',
+  };
+  const added = (before, after) => Object.fromEntries(Object.entries(after).filter(([key]) => !(key in before)));
+  assert.deepEqual(added(eventsRuntimeConfig.data, resources[1].data), { ...bindingKeys, ...costKeys });
+  assert.deepEqual(added(runtimeConfig.data, resources[2].data), {
+    [`${prefix}SourceMode`]: 'Byok',
+    [`${prefix}Enabled`]: 'true',
+    [`${prefix}SupportedReasoningEfforts__0`]: 'low',
+    [`${prefix}SupportedReasoningEfforts__1`]: 'medium',
+    [`${prefix}SupportedReasoningEfforts__2`]: 'high',
+    [`${prefix}SupportedReasoningEfforts__3`]: 'xhigh',
+  });
+  for (const map of [resources[1], resources[2]]) {
+    assert.equal(map.data.AgentHost__ModelBindingsRevision, revision);
+  }
+  const eventsKeys = Object.keys(resources[1].data);
+  assert.equal(eventsKeys.indexOf(`${prefix}ModelId`),
+    eventsKeys.indexOf('AgentHost__ModelBindings__gpt-6-luna__SourceMode') + 1);
+
+  const live = render();
+  applyModelBindingsOverlay(live, parseModelBindingsOverlay(JSON.stringify(file)));
+  assert.doesNotThrow(() => requireLiveAzureCostPreserved(live[1], resources[1]));
+  assert.doesNotThrow(() => requireLiveAzureCostPreserved(undefined, resources[1]));
+  const repriced = structuredClone(resources[1]);
+  repriced.data[`${cost}RateCard__ModelRates__gpt-5.4__output`] = '16';
+  assert.throws(() => requireLiveAzureCostPreserved(live[1], repriced), /would change the live Azure rate card/);
+
+  for (const [change, pattern] of [
+    [overlay => { overlay.baseRevision = 'other'; }, /are not the base of the model/],
+    [overlay => { overlay.baseModelBindings = { coding: product.ModelBindings.coding }; }, /are not the base of the model/],
+    [overlay => { overlay.modelBindings = { coding: binding }; }, /"coding" already exists in the product source/],
+  ]) {
+    const overlay = structuredClone(file);
+    change(overlay);
+    assert.throws(() => applyModelBindingsOverlay(render(), parseModelBindingsOverlay(JSON.stringify(overlay))), pattern);
+  }
+  const byokProduct = structuredClone(resources);
+  assert.throws(() => applyModelBindingsOverlay(byokProduct, parseModelBindingsOverlay(JSON.stringify({
+    ...file, baseRevision: revision, baseModelBindings: agentHost.ModelBindings, revision: `${revision}-2`,
+    modelBindings: { other: binding },
+  }))), /already has a BYOK binding or an Azure rate card/);
+
+  for (const [change, pattern] of [
+    [overlay => { overlay.modelBindings['byok-gpt-5.4'].Provider.ApiKey = 'secret'; }, /unsupported field "ApiKey". Do not put an API key/],
+    [overlay => { overlay.revision = overlay.baseRevision; }, /must differ from its baseRevision/],
+    [overlay => { overlay.modelBindings['byok-gpt-5.4'].SourceMode = 'HostedCopilot'; }, /must have SourceMode Byok/],
+    [overlay => { overlay.modelRates = {}; }, /no modelRates for gpt-5.4/],
+    [overlay => { overlay.modelRates.other = { input: '1', output: '1' }; }, /rates for "other", but no binding uses it/],
+    [overlay => { overlay.modelRates['gpt-5.4'].input = '2.50'; }, /must be a positive decimal string/],
+    [overlay => { overlay.modelRates['gpt-5.4'].output = '0'; }, /must be a positive decimal string/],
+  ]) {
+    const overlay = structuredClone(file);
+    change(overlay);
+    assert.throws(() => parseModelBindingsOverlay(JSON.stringify(overlay)), pattern);
+  }
+});
+
+test('Events rolls out when its runtime map data changes', () => {
+  const render = data => [
+    { kind: 'ConfigMap', metadata: { name: 'events-and-sessions-runtime-config' }, data },
+    { kind: 'Deployment', metadata: { name: 'events-and-sessions' }, spec: { template: { metadata: {} } } },
+  ];
+  const digest = resources => {
+    stampEventsRuntimeConfigDigest(resources);
+    return resources[1].spec.template.metadata.annotations['agentweaver.io/runtime-config-sha256'];
+  };
+  assert.equal(digest(render({ a: '1', b: '2' })), digest(render({ b: '2', a: '1' })));
+  assert.notEqual(digest(render({ a: '1' })), digest(render({ a: '2' })));
+});
+
+test('deploy adds environment model bindings from a file to all runtime maps and rolls out Events', async () => {
+  const directory = scratch();
+  const bindingsFile = path.join(directory, 'model-bindings.json');
+  const product = JSON.parse(agentHostRuntimeConfig.data['appsettings.json']).AgentHost;
+  writeFileSync(bindingsFile, JSON.stringify({
+    kind: 'agentweaver.model-bindings-overlay',
+    schemaVersion: 1,
+    baseRevision: product.ModelBindingsRevision,
+    baseModelBindings: product.ModelBindings,
+    revision: `${product.ModelBindingsRevision}-byok`,
+    modelBindings: {
+      'byok-gpt-5.4': {
+        ModelId: 'gpt-5.4', SourceMode: 'Byok',
+        Provider: { Type: 'openai', BaseUrl: 'https://demo.openai.azure.com/openai/v1', WireApi: 'responses' },
+        SupportedReasoningEfforts: ['low', 'high'],
+      },
+    },
+    rateCard: { id: 'azure-retail-prices.standard.swedencentral', version: '2026-11-09' },
+    modelRates: { 'gpt-5.4': { input: '2.5', output: '15' } },
+  }));
+  try {
+    const calls = [];
+    await deployKustomize({ imageTag: selectedTag, modelBindings: bindingsFile }, {
+      root: directory, exec: fakeExec(calls), log() {},
+    });
+    const applied = parse(calls.find(call => call.command === 'kubectl' && call.args[0] === 'apply').options.input);
+    const item = (kind, name) => applied.items.find(resource => resource.kind === kind && resource.metadata.name === name);
+    const agentHost = JSON.parse(item('ConfigMap', 'agenthost-runtime-v1').data['appsettings.json']).AgentHost;
+    assert.equal(agentHost.ModelBindingsRevision, `${product.ModelBindingsRevision}-byok`);
+    assert.equal(agentHost.ModelBindings['byok-gpt-5.4'].SourceMode, 'Byok');
+    const events = item('ConfigMap', 'events-and-sessions-runtime-config').data;
+    assert.equal(events['AgentHost__ModelBindings__byok-gpt-5.4__Provider__BaseUrl'],
+      'https://demo.openai.azure.com/openai/v1');
+    assert.equal(events.EventsAndSessions__Cost__Azure__ResourceId, `azure-cost:${product.ModelBindingsRevision}-byok`);
+    assert.match(item('Deployment', 'events-and-sessions').spec.template.metadata.annotations[
+      'agentweaver.io/runtime-config-sha256'], /^[a-f0-9]{64}$/);
+    assert.deepEqual(item('CiliumNetworkPolicy', 'agenthost-model-egress').spec.egress[1].toFQDNs,
+      [{ matchName: 'demo.openai.azure.com' }]);
+    const projects = calls.filter(call => call.command === 'kubectl' && call.args[0] === 'create')
+      .map(call => parse(call.options.input))
+      .find(resource => resource.metadata?.name === 'projects-config-runtime-config');
+    assert.equal(projects.data['AgentHost__ModelBindings__byok-gpt-5.4__SourceMode'], 'Byok');
+    assert.equal(projects.data.AgentHost__ModelBindingsRevision, `${product.ModelBindingsRevision}-byok`);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 test('deploy allows AgentHost model egress to exactly the rendered BYOK hosts on TCP 443', () => {
@@ -1280,6 +1471,16 @@ test('image manifest arguments select exactly one input and require execution', 
     '--image-manifest', 'images.json', '--image-tag', selectedTag, '--execute',
   ]), /exactly one/);
   assert.throws(() => parseDeployKustomizeArgs(['--image-manifest', '--execute']), /requires a file path/);
+  assert.deepEqual(parseDeployKustomizeArgs([
+    '--image-tag', selectedTag, '--model-bindings', 'bindings.json',
+    '--remove-model-binding', 'a', '--remove-model-binding', 'b', '--execute',
+  ]), { imageTag: selectedTag, modelBindings: 'bindings.json', removeModelBindings: ['a', 'b'] });
+  assert.throws(() => parseDeployKustomizeArgs([
+    '--image-tag', selectedTag, '--model-bindings', '--execute',
+  ]), /--model-bindings requires a file path/);
+  assert.throws(() => parseDeployKustomizeArgs([
+    '--image-tag', selectedTag, '--remove-model-binding', 'a', '--remove-model-binding', 'a', '--execute',
+  ]), /names a more than once/);
 });
 
 test('image manifest accepts published tags or digests and rejects invalid or duplicate entries', () => {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -82,6 +82,8 @@ function setup({
     deployment = {
       root: overrides.root,
       registry: options.registry,
+      modelBindings: options.modelBindings,
+      removeModelBindings: options.removeModelBindings,
       images: JSON.parse(readFileSync(options.imageManifest, 'utf8')).images,
     };
   };
@@ -91,14 +93,18 @@ function setup({
   };
 }
 
-function runDeploy(fixture, registry = 'ghcr.io/sabbour', registryAwareHelper = true) {
-  return deployFromCommit({ sourceSha, registry }, {
+function runDeploy(fixture, registry = 'ghcr.io/sabbour', registryAwareHelper = true,
+  modelOptions = {}, modelAwareHelper = true) {
+  return deployFromCommit({ sourceSha, registry, ...modelOptions }, {
     root,
     worktreePath: fixture.worktreePath,
     exec: fixture.exec,
     verifyImage: fixture.verifyImage,
     deployKustomize: fixture.deployKustomize,
-    deployModule: { DEPLOY_KUSTOMIZE_REGISTRY_OPTION: registryAwareHelper },
+    deployModule: {
+      DEPLOY_KUSTOMIZE_REGISTRY_OPTION: registryAwareHelper,
+      DEPLOY_KUSTOMIZE_MODEL_BINDINGS_OPTION: modelAwareHelper,
+    },
   });
 }
 
@@ -123,6 +129,43 @@ test('requires one lowercase full commit SHA and explicit execution', () => {
   assert.deepEqual(parseDeployFromCommitArgs([
     sourceSha, '--registry', 'agentweaverasabbour.azurecr.io', '--execute',
   ]), { sourceSha, registry: 'agentweaverasabbour.azurecr.io' });
+});
+
+test('passes an absolute model bindings file and named removals to the exact-source helper', async () => {
+  assert.deepEqual(parseDeployFromCommitArgs([
+    sourceSha, '--model-bindings', 'bindings.json', '--remove-model-binding', 'old', '--execute',
+  ]), { sourceSha, modelBindings: path.resolve('bindings.json'), removeModelBindings: ['old'] });
+  for (const args of [
+    [sourceSha, '--model-bindings', '--execute'],
+    [sourceSha, '--model-bindings', 'a.json', '--model-bindings', 'b.json', '--execute'],
+    [sourceSha, '--remove-model-binding', 'old', '--remove-model-binding', 'old', '--execute'],
+  ]) {
+    assert.throws(() => parseDeployFromCommitArgs(args), /Usage:/);
+  }
+
+  const fixture = setup();
+  const bindings = path.join(fixture.testRoot, 'bindings.json');
+  writeFileSync(bindings, '{}');
+  try {
+    await runDeploy(fixture, undefined, true, { modelBindings: bindings, removeModelBindings: ['old'] });
+    assert.equal(fixture.deployment.modelBindings, bindings);
+    assert.deepEqual(fixture.deployment.removeModelBindings, ['old']);
+  } finally {
+    rmSync(fixture.testRoot, { recursive: true, force: true });
+  }
+});
+
+test('rejects model binding options when the selected source has an older Kustomize helper', async () => {
+  const fixture = setup();
+  try {
+    await assert.rejects(runDeploy(fixture, undefined, true, { removeModelBindings: ['old'] }, false),
+      /predates the Kustomize model binding options/);
+    assert.equal(fixture.deployment, undefined);
+    await assert.rejects(runDeploy(fixture, undefined, true,
+      { modelBindings: path.join(fixture.testRoot, 'missing.json') }), /model bindings file does not exist/);
+  } finally {
+    rmSync(fixture.testRoot, { recursive: true, force: true });
+  }
 });
 
 test('fetches v1, verifies all image labels, passes only digests, and leaves the caller checkout unchanged', async () => {
