@@ -337,11 +337,14 @@ filesystem mounting, storage reads/writes, byte isolation, or actual VM
 execution inside the Host.
 
 The Kubernetes API server omits `readOnly` (on volume mounts and PVC volume
-sources) and `hostNetwork` from a Pod when their value is `false`. The provider
-reads an absent value as `false`, so a writable workspace mount passes. A
-present value must be a JSON boolean. Mounts that must be read-only still fail
-when `readOnly` is absent. Fields that the API server keeps when `false`, such
-as `automountServiceAccountToken`, must be present.
+sources), `hostNetwork`, `hostPID`, and `hostIPC` from a Pod when their value is
+`false`. The provider reads an absent value as `false` for sandbox Pods and for
+BuildTest command, preparation, and collector Pods, so a writable workspace or
+`/state` mount passes. A present value must be a JSON boolean. Mounts that must
+be read-only, such as the BuildTest collector workspace mount and its PVC
+source, still fail when `readOnly` is absent. Fields that the API server keeps
+when `false`, such as `automountServiceAccountToken`, `enableServiceLinks`, and
+`shareProcessNamespace`, must be present.
 
 New AgentHost Pod templates inject `AGENTWEAVER_HOST_POD_UID` exclusively
 through Kubernetes Downward API `fieldRef` (`apiVersion: v1`,

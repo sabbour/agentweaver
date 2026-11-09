@@ -955,8 +955,13 @@ public sealed partial class AgentSandboxProviderTests
 
         public JsonObject PodSpec => _podList!["items"]![0]!["spec"]!.AsObject();
 
-        // The API server omits plain omitempty bools (hostNetwork, readOnly) when they are false.
-        public void OmitKubernetesFalseDefaults()
+        public void OmitKubernetesFalseDefaults() => RemoveFalseDefaults(PodSpec);
+
+        /// <summary>Makes created Pods look like API-server read-backs without false omitempty bools.</summary>
+        public bool OmitPodFalseDefaults { get; set; }
+
+        // The API server omits plain omitempty bools (hostNetwork, hostPID, hostIPC, readOnly) when they are false.
+        private static void RemoveFalseDefaults(JsonObject spec)
         {
             static void RemoveFalse(JsonNode? node, string name)
             {
@@ -964,11 +969,13 @@ public sealed partial class AgentSandboxProviderTests
                     value.TryGetValue<bool>(out var flag) && !flag)
                     owner.Remove(name);
             }
-            RemoveFalse(PodSpec, "hostNetwork");
-            foreach (var volume in PodSpec["volumes"]!.AsArray())
+            foreach (var name in new[] { "hostNetwork", "hostPID", "hostIPC" })
+                RemoveFalse(spec, name);
+            foreach (var volume in spec["volumes"]?.AsArray() ?? [])
                 RemoveFalse(volume!["persistentVolumeClaim"], "readOnly");
-            foreach (var container in PodSpec["containers"]!.AsArray())
-            foreach (var mount in container!["volumeMounts"]!.AsArray())
+            foreach (var containers in new[] { "containers", "initContainers" })
+            foreach (var container in spec[containers]?.AsArray() ?? [])
+            foreach (var mount in container!["volumeMounts"]?.AsArray() ?? [])
                 RemoveFalse(mount, "readOnly");
         }
 
@@ -1162,6 +1169,8 @@ public sealed partial class AgentSandboxProviderTests
                     FailNextClaimCreate = false;
                     return new HttpResponseMessage(HttpStatusCode.InternalServerError);
                 }
+                if (OmitPodFalseDefaults && body["kind"]!.GetValue<string>() == "Pod")
+                    RemoveFalseDefaults(body["spec"]!.AsObject());
                 if (request.RequestUri.Query == "?dryRun=All")
                 {
                     body["metadata"]!["uid"] = "dry-run-uid";

@@ -348,7 +348,7 @@ public sealed partial class AgentSandboxProvider
         if (mounts.GetArrayLength() != 2 ||
             ReadOptionalString(privateMount, "name") != BuildTestPrivateStateVolumeName ||
             ReadOptionalString(privateMount, "mountPath") != "/state" ||
-            !TryGetBoolean(privateMount, "readOnly", out var readOnly) || readOnly ||
+            !TryGetKubernetesBoolean(privateMount, ["readOnly"], out var readOnly) || readOnly ||
             mounts.EnumerateArray().Any(mount => mount.TryGetProperty("subPath", out _) ||
                 mount.TryGetProperty("subPathExpr", out _) || mount.TryGetProperty("mountPropagation", out _)) ||
             TryGetArray(helper, "envFrom") is { } envFrom && envFrom.GetArrayLength() != 0 ||
