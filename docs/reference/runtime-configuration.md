@@ -769,7 +769,7 @@ The `environment-runtime-config.json` map contains:
 | `Environment__Sandbox__AgentSandbox__StartupBudgets__ScheduledSeconds`, `ImageReadySeconds`, `StartedSeconds`, `ConfiguredSeconds`, `ReadySeconds`, `TotalSeconds` | Each value is required with no valid default and must be positive. The total is a separate overall deadline; the validator does not require it to equal the sum of phase values. |
 | `Environment__Storage__AzureFiles__OptionsSchemaVersion` | Must match Azure Files options schema version `1`. |
 | `Environment__Storage__AzureFiles__Namespace` | Valid Kubernetes DNS label matching the target namespace. |
-| `Environment__Storage__AzureFiles__StorageClassName` | Valid Kubernetes DNS label for the installed Azure Files StorageClass. |
+| `Environment__Storage__AzureFiles__StorageClassName` | Valid Kubernetes DNS label for the installed Azure Files StorageClass. The default is `agentweaver-workspace-azurefile` from `deploy/k8s/cluster/workspace-storageclass.yaml`. The class must use `file.csi.azure.com` and exactly the mount options `dir_mode=0755`, `file_mode=0644`, `uid=1000`, `gid=1000`, `mfsymlinks`, `cache=strict`, and `actimeo=30`. The AKS built-in `azurefile-csi` class does not match. |
 | `Environment__Storage__AzureFiles__MaximumCapacityGiB` | Integer of at least `1`; caps the requested workspace volume. |
 | `Environment__Storage__AzureFiles__ProvisioningTimeoutSeconds` | Integer from `1` through `900`. |
 | `Environment__Storage__AzureFiles__PollIntervalMilliseconds` | Integer from `1` through `5000`. |

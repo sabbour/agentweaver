@@ -109,6 +109,14 @@ module aks 'modules/aks.bicep' = {
   }
 }
 
+module kataPool 'modules/aks-kata-pool.bicep' = {
+  name: '${namePrefix}-aks-kata-pool'
+  params: {
+    clusterName: aks.outputs.clusterName
+    nodeSubnetId: network.outputs.aksSubnetId
+  }
+}
+
 module keyVault 'modules/keyvault.bicep' = {
   name: '${namePrefix}-keyvault'
   params: {

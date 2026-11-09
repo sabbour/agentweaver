@@ -100,12 +100,21 @@ Key Vault name, exact source, and Bicep inputs. It does not enumerate existing
 resources or compare their properties after deployment. Use the full-foundation
 template only for an approved initial deployment into an empty managed-resource
 target. For an existing foundation cluster, the AKS-only template refreshes the three
-workload-identity federated credentials without PUTting AKS; its what-if must
-not contain a managed-cluster change. Review the what-if output before execution.
+workload-identity federated credentials and creates or updates the `kata` node
+pool without PUTting AKS. Its what-if must not contain a managed-cluster
+change. Review the what-if output before execution.
 The top-level what-if does not show resources inside the nested workload-identity
-federation deployment. The preflight lists the three federated identity
-credentials that the nested deployment will create or update. It does not query
-existing credentials to distinguish creates from updates.
+federation and Kata node pool deployments. The preflight lists the three
+federated identity credentials and the `kata` node pool that the nested
+deployments will create or update. It does not query existing credentials or
+node pools to distinguish creates from updates.
+
+Both templates create or update the `kata` node pool for sandbox pods (AKS Pod
+Sandboxing, Azure Linux, SSH disabled, 1-2 `Standard_D4s_v5` nodes). You do not
+add the pool manually. If a pool named `kata` already exists with another OS
+SKU, workload runtime, VM size, or subnet, the deployment fails; delete that
+pool and run the deployment again. For the cost, see
+[Kata node pool](https://github.com/sabbour/agentweaver/blob/v1/infra/bicep/README.md#kata-node-pool).
 
 The infrastructure installer does not create Kubernetes namespaces or grant
 human AKS permissions. It never creates, requires, or verifies a human
@@ -186,6 +195,16 @@ step 1.
 
    Confirm that the namespace exists and has the restricted Pod Security
    labels from the manifest. This step does not apply product workloads.
+
+   You do not apply the workspace StorageClass manually. When
+   `agentweaver-workspace-azurefile` is missing, `npm run deploy:kustomize`
+   creates it from `deploy\k8s\cluster\workspace-storageclass.yaml`.
+   Environment requires this class for workspace volumes. The AKS built-in
+   `azurefile-csi` class does not have the required mount options. You cannot
+   change the parameters or mount options of an existing StorageClass. If a
+   class with this name already exists with other values, the deployment stops.
+   Delete that class before any workspace volume uses it, then run the
+   deployment again.
 
 5. Bootstrap the Identity Broker PostgreSQL roles with the reviewed AKS-only
    template and parameter file:
@@ -912,7 +931,42 @@ Deployment. A change to only `agenthost-runtime-v1` does not stop Environment.
 
 The helper checks the caller's exact map and Deployment permissions before
 writing. It also checks the effective Agent Sandbox permissions of the
-Environment ServiceAccount. The proposed rules in
+Environment ServiceAccount. Then, as the Environment ServiceAccount, it reads
+the workspace StorageClass and the sandbox RuntimeClass named in
+`environment-runtime-config`. It stops before writes if:
+
+- the StorageClass has another provisioner or other mount options;
+- the StorageClass is missing and is not the product class;
+- the RuntimeClass is missing; or
+- no Ready, schedulable node matches the RuntimeClass node selector.
+
+The message for a missing RuntimeClass or node tells you to run the
+infrastructure deployment, which creates the `kata` node pool. When the product
+StorageClass is missing, the helper creates it before the migrations. The
+caller needs `list nodes` at cluster scope, and `create storageclasses` only
+when the class is missing.
+
+After all rollouts, the helper runs an install smoke check. It creates a
+1 GiB workspace PersistentVolumeClaim and a short-lived pod with the AgentHost
+labels, so the AgentHost network policies apply. The pod uses the sandbox
+RuntimeClass and the exact AgentHost image. It has no ServiceAccount token,
+Secret, or settings. It checks that:
+
+- `environment.agentweaver.svc.cluster.local` resolves, and a TCP connection
+  to Environment on port 8443 opens through the AgentHost network policies; and
+- a file on the workspace volume can be written, read, and linked, and is
+  owned by UID 1000.
+
+If the check fails or does not finish in 10 minutes, the deployment fails and
+the message names the cause. The helper always deletes the pod and claim, and
+deletes earlier check resources with the label
+`agentweaver.io/install-smoke-check=true` before it starts. The caller needs
+`create`, `get`, `list`, and `delete` on `pods` and `persistentvolumeclaims`,
+and `get pods/log`, in namespace `agentweaver`. The helper checks these
+permissions before it writes. The pod does not check `kubernetes.default.svc`,
+because the AgentHost network policies block the Kubernetes API by design.
+
+The proposed rules in
 `deploy/k8s/proposed/environment-agent-sandbox-rbac.yaml` are not in the active
 Kustomize bundle and are not applied by the helper. If Environment replacement,
 apply, or rollout fails, its recovery annotation remains; rerun the same

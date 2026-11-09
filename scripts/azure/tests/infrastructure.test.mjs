@@ -197,7 +197,28 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.equal(cluster.properties.agentPoolProfiles[0].minCount, "[parameters('nodePoolMinCount')]");
   assert.equal(cluster.properties.agentPoolProfiles[0].maxCount, "[parameters('nodePoolMaxCount')]");
   assert.equal(cluster.properties.agentPoolProfiles[0].count, "[parameters('nodePoolCount')]");
-  assert.deepEqual(template.parameters.nodePoolMinCount.allowedValues, [2]);
+  assert.deepEqual(cluster.properties.agentPoolProfiles.map(pool => pool.name), ['system']);
+  const kataDeployment = template.resources.find(resource =>
+    resource.name === "[format('{0}-aks-kata-pool', parameters('namePrefix'))]");
+  assert.match(kataDeployment.properties.parameters.clusterName.value, /clusterName/);
+  assert.match(kataDeployment.properties.parameters.nodeSubnetId.value, /aksSubnetId/);
+  const redeploy = JSON.parse(runAz(['bicep', 'build', '--file', 'infra/bicep/aks-redeploy.bicep', '--stdout']).stdout);
+  const redeployKata = redeploy.resources.find(resource =>
+    resource.name === "[format('{0}-aks-kata-pool', parameters('namePrefix'))]");
+  assert.match(redeployKata.properties.parameters.nodeSubnetId.value,
+    /resourceId\('Microsoft\.Network\/virtualNetworks\/subnets', format\('\{0\}-vnet', parameters\('namePrefix'\)\), 'aks'\)/);
+  for (const deployment of [kataDeployment, redeployKata]) {
+    const pools = deployment.properties.template.resources.filter(resource =>
+      resource.type === 'Microsoft.ContainerService/managedClusters/agentPools');
+    assert.equal(pools.length, 1);
+    const { name, properties } = pools[0];
+    assert.match(name, /'kata'\)\]$/);
+    assert.deepEqual(properties, {
+      mode: 'User', enableAutoScaling: true, minCount: 1, maxCount: 2, vmSize: 'Standard_D4s_v5',
+      vnetSubnetID: "[parameters('nodeSubnetId')]", osType: 'Linux', osSKU: 'AzureLinux',
+      workloadRuntime: 'KataVmIsolation', type: 'VirtualMachineScaleSets', securityProfile: { sshAccess: 'Disabled' },
+    });
+  }  assert.deepEqual(template.parameters.nodePoolMinCount.allowedValues, [2]);
   assert.deepEqual(template.parameters.nodePoolMaxCount.allowedValues, [3]);
   assert.deepEqual(template.parameters.nodePoolCount.allowedValues, [2, 3]);
   assert.equal(cluster.apiVersion, '2026-07-02-preview');
@@ -348,6 +369,7 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.equal(Object.hasOwn(aksOnly.parameters, 'appRoutingDnsZoneResourceIds'), false);
   assert.deepEqual(aksOnly.resources.map(resource => resource.name), [
     "[format('{0}-workload-identity-federation', parameters('namePrefix'))]",
+    "[format('{0}-aks-kata-pool', parameters('namePrefix'))]",
   ]);
   assert.ok(!aksOnly.resources.some(resource =>
     resource.properties?.template?.resources?.some(child =>

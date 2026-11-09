@@ -120,8 +120,10 @@ Model options:
   --remove-model-binding <reference>   Remove this live BYOK model binding. You can repeat it.
 
 The manifest selects published images to update; omitted images keep their
-currently deployed references. The command runs migrations for selected services,
-applies namespaced Kustomize resources, and waits for every Deployment rollout.
+currently deployed references. The command checks the cluster prerequisites,
+creates the workspace StorageClass when it is missing, runs migrations for
+selected services, applies namespaced Kustomize resources, waits for every
+Deployment rollout, and then runs a sandbox smoke check.
 `;
 export const DEPLOY_KUSTOMIZE_REGISTRY_OPTION = true;
 export const DEPLOY_KUSTOMIZE_MODEL_BINDINGS_OPTION = true;
@@ -268,6 +270,252 @@ function verifyEnvironmentRuntimeAuthorization(exec, context, root) {
         `${subresource ? ` --subresource=${subresource}` : ''}` +
         `${cluster ? ' at cluster scope' : ` in namespace ${NAMESPACE}`}.`);
     }
+  }
+}
+
+const WORKSPACE_MOUNT_OPTIONS = [
+  'dir_mode=0755', 'file_mode=0644', 'uid=1000', 'gid=1000', 'mfsymlinks', 'cache=strict', 'actimeo=30',
+];
+const WORKSPACE_STORAGE_CLASS_FILE = path.join('deploy', 'k8s', 'cluster', 'workspace-storageclass.yaml');
+const KATA_POOL_REMEDY = 'Run the infrastructure deployment (npm run azure:deploy) to create the kata node pool.';
+const SMOKE_LABEL = 'agentweaver.io/install-smoke-check';
+const SMOKE_AUTHORIZATION = [
+  ...['create', 'get', 'list', 'delete'].flatMap(verb => [[verb, 'pods'], [verb, 'persistentvolumeclaims']]),
+  ['get', 'pods/log'],
+];
+const SMOKE_POLLS = 120;
+const SMOKE_POLL_MILLISECONDS = 5000;
+const SMOKE_POD_DEADLINE_SECONDS = 900;
+
+/** Reads one cluster-scoped object with the Environment identity; returns undefined when it does not exist. */
+function readClusterResourceAsEnvironment(exec, context, root, kind, name) {
+  const result = exec('kubectl', ['get', kind, name, '--ignore-not-found=true', '--output=json',
+    '--as', ENVIRONMENT_SERVICE_ACCOUNT, '--context', context], { check: false, cwd: root });
+  if (result.status !== 0) {
+    fail(`Could not read ${kind}/${name} as ${ENVIRONMENT_SERVICE_ACCOUNT}: ` +
+      `${(result.stderr || result.stdout || `exit ${result.status}`).trim()}`);
+  }
+  if (!result.stdout.trim()) return undefined;
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    fail(`Kubernetes returned invalid JSON for ${kind}/${name}.`);
+  }
+}
+
+/**
+ * Checks, before any write, the cluster-scoped prerequisites that Environment needs at run time:
+ * the workspace StorageClass, a Ready node for the sandbox RuntimeClass, and the smoke check permissions.
+ * Returns the product StorageClass to create when it is missing.
+ */
+function verifyClusterPrerequisites(exec, context, root, resources) {
+  const data = resources.find(resource => resource.kind === 'ConfigMap' &&
+    resource.metadata?.name === ENVIRONMENT_RUNTIME_CONFIG)?.data ?? {};
+  const storageClassName = data.Environment__Storage__AzureFiles__StorageClassName;
+  const runtimeClassName = data[`${AGENT_SANDBOX_ENV_PREFIX}RuntimeClassName`];
+  if (!storageClassName || !runtimeClassName) {
+    fail(`ConfigMap/${ENVIRONMENT_RUNTIME_CONFIG} must name the workspace StorageClass and sandbox RuntimeClass.`);
+  }
+
+  for (const [verb, resource] of SMOKE_AUTHORIZATION) {
+    const result = kubectl(exec, context, ['auth', 'can-i', verb, resource], root,
+      `Could not check Kubernetes permission ${verb} ${resource}`);
+    if (result.stdout.trim() !== 'yes') {
+      fail(`The selected identity cannot ${verb} ${resource} in namespace ${NAMESPACE}; ` +
+        'this permission is required for the install smoke check.');
+    }
+  }
+
+  let createStorageClass;
+  const storageClass = readClusterResourceAsEnvironment(exec, context, root, 'storageclass', storageClassName);
+  if (!storageClass) {
+    const productClass = parse(readFileSync(path.join(root, WORKSPACE_STORAGE_CLASS_FILE), 'utf8'));
+    if (productClass?.metadata?.name !== storageClassName) {
+      fail(`StorageClass/${storageClassName} is missing. Create it before the deployment, ` +
+        `or use the product StorageClass in ${WORKSPACE_STORAGE_CLASS_FILE}.`);
+    }
+    requireClusterPermission(exec, context, root, 'create', 'storageclasses',
+      `create the missing StorageClass/${storageClassName}`);
+    createStorageClass = productClass;
+  } else {
+    const mountOptions = storageClass.mountOptions ?? [];
+    if (storageClass.provisioner !== 'file.csi.azure.com' ||
+        mountOptions.length !== WORKSPACE_MOUNT_OPTIONS.length ||
+        WORKSPACE_MOUNT_OPTIONS.some(option => !mountOptions.includes(option))) {
+      fail(`StorageClass/${storageClassName} must use file.csi.azure.com with exactly these mount options: ` +
+        `${WORKSPACE_MOUNT_OPTIONS.join(', ')}. These fields cannot change after creation: ` +
+        'delete the StorageClass when no workspace volume uses it, then run the deployment again.');
+    }
+  }
+
+  const runtimeClass = readClusterResourceAsEnvironment(exec, context, root, 'runtimeclass', runtimeClassName);
+  if (!runtimeClass) fail(`RuntimeClass/${runtimeClassName} is missing. ${KATA_POOL_REMEDY}`);
+  const selector = Object.entries(runtimeClass.scheduling?.nodeSelector ?? {})
+    .map(([key, value]) => `${key}=${value}`).join(',');
+  if (selector) {
+    requireClusterPermission(exec, context, root, 'list', 'nodes',
+      `check for RuntimeClass/${runtimeClassName} nodes`);
+    const output = must(exec, 'kubectl', ['get', 'nodes', '--selector', selector, '--output=json',
+      '--context', context], { cwd: root }, 'Could not list sandbox nodes').stdout;
+    let nodes;
+    try {
+      nodes = JSON.parse(output).items ?? [];
+    } catch {
+      fail('Kubernetes returned invalid JSON for the sandbox node list.');
+    }
+    const schedulable = nodes.filter(node => node.spec?.unschedulable !== true &&
+      node.status?.conditions?.some(condition => condition.type === 'Ready' && condition.status === 'True'));
+    if (!schedulable.length) {
+      fail(`No Ready, schedulable node matches RuntimeClass/${runtimeClassName} (${selector}); ` +
+        `${nodes.length} matching node(s) found. ${KATA_POOL_REMEDY}`);
+    }
+  }
+  return { storageClassName, runtimeClassName, createStorageClass };
+}
+
+function requireClusterPermission(exec, context, root, verb, resource, purpose) {
+  const permission = exec('kubectl', ['auth', 'can-i', verb, resource, '--context', context],
+    { check: false, cwd: root });
+  if (permission.status !== 0 || permission.stdout.trim().toLowerCase() !== 'yes') {
+    fail(`The selected identity cannot ${verb} ${resource} at cluster scope; ` +
+      `this permission is required to ${purpose}.`);
+  }
+}
+
+function smokePodFailure(pod) {
+  const scheduled = pod.status?.conditions?.find(condition => condition.type === 'PodScheduled');
+  if (scheduled?.status === 'False') return `not scheduled: ${scheduled.reason ?? ''} ${scheduled.message ?? ''}`.trim();
+  const waiting = pod.status?.containerStatuses?.find(status => status.state?.waiting)?.state.waiting;
+  if (waiting) return `waiting: ${waiting.reason ?? ''} ${waiting.message ?? ''}`.trim();
+  return `phase ${pod.status?.phase ?? 'unknown'}`;
+}
+
+const SMOKE_FAILURES = {
+  dns: 'could not resolve environment.agentweaver.svc.cluster.local; check cluster DNS and the AgentHost DNS egress rules',
+  'environment-connect': 'could not open TCP 8443 to Environment; check the agenthost-egress and ' +
+    'environment-agenthost-ingress network policies',
+  'storage-write': 'could not write and read a file on the workspace volume',
+  'storage-symlink': 'could not create a symbolic link on the workspace volume; the mfsymlinks mount option is missing',
+  'storage-owner': 'workspace files are not owned by UID 1000; check the uid and gid mount options',
+};
+
+/**
+ * Starts a short-lived pod with the AgentHost labels, sandbox RuntimeClass, and a workspace volume.
+ * The pod uses the same network policies as real AgentHost pods. It has no token, Secret, or settings.
+ */
+async function runInstallSmokeCheck(exec, context, root, prerequisites, image, sleep, log) {
+  const name = `agentweaver-install-smoke-${randomUUID().slice(0, 8)}`;
+  const selector = `${SMOKE_LABEL}=true`;
+  kubectl(exec, context, ['delete', 'pods,persistentvolumeclaims', '--selector', selector,
+    '--ignore-not-found=true', '--wait=false'], root, 'Could not delete earlier install smoke check resources');
+  const labels = {
+    'app.kubernetes.io/name': 'agenthost',
+    'agentweaver.io/service': 'agenthost',
+    'agentweaver.io/workload': 'agenthost',
+    'agentweaver.io/identity-client': 'true',
+    [SMOKE_LABEL]: 'true',
+  };
+  const script = [
+    'fail() { echo "SMOKE_FAIL $1"; exit 1; }',
+    'getent hosts environment.agentweaver.svc.cluster.local >/dev/null || fail dns',
+    'timeout 10 bash -c ": </dev/tcp/environment.agentweaver.svc.cluster.local/8443" || fail environment-connect',
+    'echo ok > /workspace/smoke.txt && [ "$(cat /workspace/smoke.txt)" = ok ] || fail storage-write',
+    'ln -s smoke.txt /workspace/smoke-link && [ "$(cat /workspace/smoke-link)" = ok ] || fail storage-symlink',
+    '[ "$(stat -c %u /workspace/smoke.txt)" = 1000 ] || fail storage-owner',
+    'echo SMOKE_OK',
+  ].join('\n');
+  const manifest = {
+    apiVersion: 'v1',
+    kind: 'List',
+    items: [{
+      apiVersion: 'v1',
+      kind: 'PersistentVolumeClaim',
+      metadata: { name, namespace: NAMESPACE, labels: { [SMOKE_LABEL]: 'true' } },
+      spec: {
+        accessModes: ['ReadWriteMany'],
+        storageClassName: prerequisites.storageClassName,
+        resources: { requests: { storage: '1Gi' } },
+      },
+    }, {
+      apiVersion: 'v1',
+      kind: 'Pod',
+      metadata: { name, namespace: NAMESPACE, labels },
+      spec: {
+        runtimeClassName: prerequisites.runtimeClassName,
+        restartPolicy: 'Never',
+        automountServiceAccountToken: false,
+        enableServiceLinks: false,
+        activeDeadlineSeconds: SMOKE_POD_DEADLINE_SECONDS,
+        securityContext: {
+          runAsUser: 1000,
+          runAsGroup: 1000,
+          fsGroup: 1000,
+          runAsNonRoot: true,
+          seccompProfile: { type: 'RuntimeDefault' },
+        },
+        containers: [{
+          name: 'smoke',
+          image,
+          command: ['/bin/bash', '-c', script],
+          resources: {
+            requests: { cpu: '100m', memory: '128Mi' },
+            limits: { cpu: '250m', memory: '256Mi' },
+          },
+          securityContext: {
+            allowPrivilegeEscalation: false,
+            readOnlyRootFilesystem: true,
+            capabilities: { drop: ['ALL'] },
+          },
+          volumeMounts: [{ name: 'workspace', mountPath: '/workspace' }],
+        }],
+        volumes: [{ name: 'workspace', persistentVolumeClaim: { claimName: name } }],
+      },
+    }],
+  };
+  log(`Starting install smoke check pod ${name} with RuntimeClass/${prerequisites.runtimeClassName}.`);
+  try {
+    const created = exec('kubectl', ['create', '--filename', '-', '--context', context, '--namespace', NAMESPACE],
+      { check: false, cwd: root, input: stringify(manifest) });
+    if (created.status !== 0) {
+      const diagnostic = (created.stderr || created.stdout || `exit ${created.status}`).trim();
+      if (/exceeded quota/i.test(diagnostic)) {
+        fail('The namespace ResourceQuota has no room for the install smoke check (1 pod, 1 PVC, ' +
+          `100m CPU, 128Mi memory). Wait for running sandboxes to finish, then run the deployment again: ${diagnostic}`);
+      }
+      fail(`Could not create the install smoke check: ${diagnostic}`);
+    }
+    let pod;
+    for (let poll = 0; poll < SMOKE_POLLS; poll += 1) {
+      const output = kubectl(exec, context, ['get', 'pod', name, '--output=json'], root,
+        'Could not read the install smoke check pod').stdout;
+      try {
+        pod = JSON.parse(output);
+      } catch {
+        fail('Kubernetes returned invalid JSON for the install smoke check pod.');
+      }
+      if (['Succeeded', 'Failed'].includes(pod.status?.phase)) break;
+      await sleep(SMOKE_POLL_MILLISECONDS);
+    }
+    const phase = pod?.status?.phase;
+    if (!['Succeeded', 'Failed'].includes(phase)) {
+      fail(`The install smoke check pod did not finish in ${SMOKE_POLLS * SMOKE_POLL_MILLISECONDS / 60000} ` +
+        `minutes (${smokePodFailure(pod ?? {})}). Check the Kata node pool and StorageClass/` +
+        `${prerequisites.storageClassName}.`);
+    }
+    const logs = kubectl(exec, context, ['logs', `pod/${name}`], root,
+      'Could not read the install smoke check logs').stdout;
+    if (phase === 'Succeeded' && /^SMOKE_OK$/m.test(logs)) {
+      log('Install smoke check passed: AgentHost DNS and the workspace volume work in the sandbox runtime.');
+      return;
+    }
+    const reason = logs.match(/^SMOKE_FAIL (\S+)$/m)?.[1];
+    fail(`Install smoke check failed: the AgentHost-labelled sandbox pod ` +
+      `${SMOKE_FAILURES[reason] ?? `stopped in phase ${phase} without a result`}.`);
+  } finally {
+    const cleanup = exec('kubectl', ['delete', `pod/${name}`, `persistentvolumeclaim/${name}`,
+      '--ignore-not-found=true', '--wait=false', '--context', context, '--namespace', NAMESPACE],
+    { check: false, cwd: root });
+    if (cleanup.status !== 0) log(`Could not delete install smoke check resources ${name}; delete them manually.`);
   }
 }
 
@@ -1234,6 +1482,7 @@ export async function deployKustomize(options, overrides = {}) {
         desiredRuntimeMaps.some(resource => resource.metadata?.namespace !== NAMESPACE || resource.immutable !== true)) {
       fail('Kustomize must render both immutable AgentHost runtime ConfigMaps in namespace agentweaver.');
     }
+    const prerequisites = verifyClusterPrerequisites(exec, context, root, resources);
     const existingRuntimeMaps = new Map([...RUNTIME_CONFIG_MAPS].map(name => [
       name, readExistingNamedRuntimeConfigMap(exec, context, root, name),
     ]));
@@ -1313,6 +1562,12 @@ export async function deployKustomize(options, overrides = {}) {
     };
     const jobs = migrationJobs(root, exec, context, digests, registries, requestedImages.keys());
 
+    if (prerequisites.createStorageClass) {
+      must(exec, 'kubectl', ['create', '--filename', '-', '--context', context], {
+        cwd: root, input: stringify(prerequisites.createStorageClass),
+      }, `Could not create StorageClass/${prerequisites.storageClassName}`);
+      log(`Created StorageClass/${prerequisites.storageClassName}.`);
+    }
     for (const job of jobs) runMigrationJob(job, exec, context, root, log);
     log('Database migrations completed.');
 
@@ -1366,6 +1621,8 @@ export async function deployKustomize(options, overrides = {}) {
         'annotate', 'deployment/environment', `${PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION}-`,
       ], root, 'Could not clear the Environment AgentHost ConfigMap recovery marker');
     }
+    await runInstallSmokeCheck(exec, context, root, prerequisites, agentHostTuple.image,
+      overrides.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))), log);
     return { context, namespace: NAMESPACE, deployments, images: Object.fromEntries(digests) };
   } finally {
     writeFileSync(kustomizationPath, originalKustomization);
