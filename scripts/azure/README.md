@@ -22,10 +22,10 @@ runtime role receives exactly `SELECT, INSERT, UPDATE` on
 `casting_generation_requests`; this grant is included in the same reviewed plan.
 Source validation does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`fd371c90f8c98ea3d0e5f390458c5baff45310aa7a05b9ae697f1381da48f4b3`.
+`78598665bcf0d8b06f51482483d9803d9ef9a85b6a04efbbf791495e943ca282`.
 It is not an approval receipt. The runner uses its explicit registered
 version list, not contiguous numbering; the absent 017 does not require a
-placeholder. The Core list is 1-16, 18-33, and 35-40; 034 is not in the
+placeholder. The Core list is 1-16, 18-33, and 35-45; 034 is not in the
 catalog. Readiness ordering checks exact supported versions, not only range
 endpoints. Version 027 requires 026 only.
 Version 028 adds the append-only `guardrails_evaluations` table. It requires
@@ -109,7 +109,7 @@ the guards. Readiness accepts the complete pre-040 shape for ordinary runs.
 Projects locks end with the remote receipt read, so revocation can race with
 the later Core commit. No live migration, grants or deployment are performed.
 
-The Core catalog and plan include 032, 033, and 035-040; the maintenance Job
+The Core catalog and plan include 032, 033, and 035-045; the maintenance Job
 applies the included versions in order.
 Existing grants on the Priority link table cover the added columns.
 
