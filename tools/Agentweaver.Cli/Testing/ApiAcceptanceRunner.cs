@@ -52,6 +52,8 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
         string? actorId = null;
         bool invocationReserved = false;
         bool boardAcceptance = false;
+        bool fullFlowAcceptance = false;
+        CancellationTokenSource? fullFlowDeadline = null;
         FileStream? workspaceOutput = null;
 
         try
@@ -72,17 +74,18 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
             manifest = await ApiAcceptanceSupport.ReadManifestAsync(inputPath, ct).ConfigureAwait(false);
             boardAcceptance = manifest.Journey is "board-delete" or "board-archived-denial";
             workspaceAcceptance = manifest.Journey == "workspace-repository-read";
+            fullFlowAcceptance = manifest.Journey == ApiAcceptanceSupport.FullFlowJourney;
             if (OutputOverwritesInput(options, manifest, inputPath, outputPath))
             {
                 outputPath = null;
                 throw new InvalidDataException("The evidence output path must not replace a P1 input or deployment artifact.");
             }
-            if ((boardAcceptance || workspaceAcceptance) &&
+            if ((boardAcceptance || workspaceAcceptance || fullFlowAcceptance) &&
                 (options.NativeProbeEnvelopePath is not null || options.DispatchRecoveryEnvelopePath is not null))
                 throw new InvalidDataException("Feature acceptance does not accept P1 native or recovery probe envelopes.");
             if (workspaceAcceptance && File.Exists(outputPath))
                 throw new InvalidDataException("Workspace acceptance requires a new evidence output file.");
-            nativeProbes = boardAcceptance || workspaceAcceptance
+            nativeProbes = boardAcceptance || workspaceAcceptance || fullFlowAcceptance
                 ? []
                 : await ReadNativeProbesAsync(options, inputPath, outputPath, ct).ConfigureAwait(false);
             IReadOnlyDictionary<string, string> proofHashes = await ReadProofHashesAsync(manifest, outputPath, ct).ConfigureAwait(false);
@@ -94,7 +97,9 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                     ? "Dry run only: Board inputs and proof files are valid. No network request, sign-in, evidence file, project, or assignment was created."
                     : workspaceAcceptance
                         ? "Dry run only: Workspace inputs and proof files are valid. No network request, sign-in, listener, browser, or evidence file was created."
-                        : "Dry run only: P1 inputs and proof files are valid. No network request, sign-in, evidence file, project, or assignment was created.")
+                        : fullFlowAcceptance
+                            ? "Dry run only: Full-flow inputs, BYOK model approval, and run limits are valid. No network request, sign-in, model call, evidence file, project, or assignment was created."
+                            : "Dry run only: P1 inputs and proof files are valid. No network request, sign-in, evidence file, project, or assignment was created.")
                     .ConfigureAwait(false);
                 return 0;
             }
@@ -160,10 +165,17 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                 }
                 else
                 {
+                    if (fullFlowAcceptance)
+                    {
+                        ApiAcceptanceSupport.TryLong(manifest.FixturePlan["fullFlow"]?["maxDurationMinutes"], out long minutes);
+                        fullFlowDeadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        fullFlowDeadline.CancelAfter(TimeSpan.FromMinutes(minutes) - ApiAcceptanceSupport.FullFlowCleanupReserve);
+                    }
+                    CancellationToken workCt = fullFlowDeadline?.Token ?? ct;
                     // Fixture setup starts tenant-scoped; it obtains run-bound authorization only after selection readback.
                     (fixture, IGatewayClient runApi, IGatewayClient cancellationApi, fixtureState) =
                         await ApiAcceptanceFixtureSetup.CreateAsync(
-                            manifest, activeInvocationId, setupApi, _clients, _authentication, options.Interaction, ct)
+                            manifest, activeInvocationId, setupApi, _clients, _authentication, options.Interaction, workCt)
                             .ConfigureAwait(false);
                 try
                 {
@@ -175,11 +187,14 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                         steps,
                         observations,
                         _ => ApiAcceptanceSupport.StableUuid(activeInvocationId, "surface-idempotency"),
-                        ct).ConfigureAwait(false);
+                        workCt,
+                        setupApi).ConfigureAwait(false);
                 }
                 catch (Exception error)
                 {
-                    failure = AppendFailure(failure, error);
+                    failure = fullFlowDeadline?.IsCancellationRequested == true && !ct.IsCancellationRequested
+                        ? AppendFailure(failure, new TimeoutException(FullFlowDeadlineFailure))
+                        : AppendFailure(failure, error);
                     surfaceStatus = "failed";
                 }
                 finally
@@ -225,6 +240,11 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
             fixtureState = error.State;
             failure = ApiAcceptanceSupport.RedactText(error.Message);
             surfaceStatus = "blocked";
+            if (fullFlowDeadline?.IsCancellationRequested == true && !ct.IsCancellationRequested)
+            {
+                failure = FullFlowDeadlineFailure;
+                surfaceStatus = "failed";
+            }
             if (manifest is not null && outputPath is not null && actorId is not null)
             {
                 try
@@ -278,7 +298,9 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
             ? ApiAcceptanceSupport.BoardResult(surfaceStatus, sourceEvidence, steps, observations, failure)
             : workspaceAcceptance
                 ? ApiAcceptanceSupport.WorkspaceResult(surfaceStatus, sourceEvidence, steps, observations, failure)
-                : ApiAcceptanceSupport.Result(surfaceStatus, sourceEvidence, steps, observations, failure, nativeProbes, manifest);
+                : fullFlowAcceptance
+                    ? ApiAcceptanceSupport.FullFlowResult(surfaceStatus, sourceEvidence, steps, observations, failure)
+                    : ApiAcceptanceSupport.Result(surfaceStatus, sourceEvidence, steps, observations, failure, nativeProbes, manifest);
         // An uncertain setup or cleanup receipt takes precedence over a passed or merely blocked journey result.
         if (fixtureState is not null && ApiAcceptanceSupport.GetString(fixtureState.Cleanup ?? [], "state") == "indeterminate")
         {
@@ -293,6 +315,7 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
             };
         }
 
+        fullFlowDeadline?.Dispose();
         int exitCode = TryGetExitCode(result);
         if (workspaceAcceptance && outputPath is not null)
         {
@@ -332,6 +355,9 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
         await _output.WriteLineAsync(ApiAcceptanceSupport.EvidenceJson(ApiAcceptanceSupport.Redact(result))).ConfigureAwait(false);
         return exitCode;
     }
+
+    private const string FullFlowDeadlineFailure =
+        "The full-flow journey reached its time limit before it completed. Check the cleanup observation for the fixture state.";
 
     private static JsonObject NewInitialObservations() => new()
     {

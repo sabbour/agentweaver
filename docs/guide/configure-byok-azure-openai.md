@@ -252,8 +252,6 @@ run would go over the hard limit.
 - To change prices, run the procedure again with a new `revision`. Runs that
   started with the earlier rate card keep it, and their new usage is not
   priced.
-- Orchestrator does not yet allow a coordinated run's coordinator turn when
-  a hard spend budget applies.
 
 ## Related information
 

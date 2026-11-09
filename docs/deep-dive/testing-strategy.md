@@ -87,6 +87,13 @@ network/authentication/browser work and writes no evidence, even when
 See the [CLI guide](../guide/cli.md) and [testing guide](../guide/testing.md)
 for the full input, target and execution contract.
 
+The `full-flow-delivery` journey is the critical-path acceptance journey. It
+uses a real BYOK model and checks outcomes, not exact model text. The file
+`tests/fixtures/critical-paths.json` maps the journey to its watched Gateway
+routes and known gaps. `CriticalPathCoverageTests` fails pull request CI when
+an operation is added under a watched prefix without a classification, when a
+route arrives for a known gap, or when a covered operation is removed. See [Keep critical-path coverage current](../guide/testing.md#keep-critical-path-coverage-current).
+
 The retained `/mcp` harness exercises compatibility code only. It preserves
 `isError`, validates discovery pages/cursors, and distinguishes accepted from
 completed results. It is not a supported product or acceptance surface;

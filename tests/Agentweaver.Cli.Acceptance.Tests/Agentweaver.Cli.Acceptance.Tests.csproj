@@ -18,5 +18,6 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="..\fixtures\p1-json-migration-vectors.json" Link="Fixtures\p1-json-migration-vectors.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\fixtures\critical-paths.json" Link="Fixtures\critical-paths.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

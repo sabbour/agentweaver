@@ -317,7 +317,7 @@ internal static class ApiAcceptanceNativeMaterial
         return material;
     }
 
-    private static async Task<JsonObject> ReadMaterialAsync(
+    internal static async Task<JsonObject> ReadMaterialAsync(
         IGatewayClient api,
         AcceptanceFixture fixture,
         JsonObject material,
@@ -327,7 +327,7 @@ internal static class ApiAcceptanceNativeMaterial
                 ("sessionId", fixture.SessionId), ("eventId", ApiAcceptanceSupport.GetString(material, "eventId")!)),
             null, null, [200], ct).ConfigureAwait(false);
 
-    private static void RequireReadback(
+    internal static void RequireReadback(
         JsonObject readback,
         AcceptanceFixture fixture,
         string expectedText,
@@ -343,7 +343,7 @@ internal static class ApiAcceptanceNativeMaterial
             throw new AcceptanceBlockedException("The public turn-material readback does not match its bound acknowledgment.");
     }
 
-    private static JsonObject MaterialSummary(JsonObject material) => new()
+    internal static JsonObject MaterialSummary(JsonObject material) => new()
     {
         ["eventId"] = material["eventId"]?.DeepClone(),
         ["position"] = material["position"]?.DeepClone(),
@@ -531,7 +531,7 @@ internal static class ApiAcceptanceNativeMaterial
             throw new AcceptanceBlockedException("The native material journey changed coordinator state or the accepted execution fence.");
     }
 
-    private static async Task RequireRootOnlyTreeAsync(
+    internal static async Task RequireRootOnlyTreeAsync(
         IGatewayClient api,
         AcceptanceFixture fixture,
         CancellationToken ct)
@@ -569,14 +569,14 @@ internal static class ApiAcceptanceNativeMaterial
             ? hash
             : throw new AcceptanceBlockedException($"The native receipt has no valid {name} hash.");
 
-    private static string RequireGuid(JsonObject value, string name) =>
+    internal static string RequireGuid(JsonObject value, string name) =>
         ApiAcceptanceSupport.IsUuid(ApiAcceptanceSupport.GetString(value, name))
             ? ApiAcceptanceSupport.GetString(value, name)!
             : throw new AcceptanceBlockedException($"The native receipt has no valid {name}.");
 
-    private static long? Long(JsonObject value, string name) =>
+    internal static long? Long(JsonObject value, string name) =>
         ApiAcceptanceSupport.TryLong(value[name], out long result) ? result : null;
 
-    private static string Hash(byte[] value) =>
+    internal static string Hash(byte[] value) =>
         Convert.ToHexString(SHA256.HashData(value)).ToLowerInvariant();
 }

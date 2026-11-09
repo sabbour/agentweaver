@@ -450,7 +450,7 @@ takes its ID from the `createProject` receipt. Journeys with an explicit
 `selectionContext` derive run and root-session IDs from the invocation. The
 `journal`, `session-history-metric`, and `native-material-recovery` journeys
 may omit that context and then use the run and root-session IDs returned by
-`createProjectRun`. The
+`createProjectRun`. The `full-flow-delivery` journey must omit it. The
 `board-delete` target and input contract are separate and described above.
 
 Interaction is disabled by default (`InteractionPolicy.Never`). Only
@@ -541,3 +541,53 @@ probe evidence is not fabricated or dispatched by this CLI, so the overall
 acceptance can remain blocked even when its API surface passes. The CLI does
 not create or require a second Broker account. Missing independent native
 probes can still keep the overall acceptance blocked.
+
+### Run the full-flow delivery journey
+
+The `full-flow-delivery` journey runs casting, casting confirmation, a backlog
+task, and a run-usage check with a real BYOK model. It does not replace the
+Host. The [testing guide](./testing.md#run-the-full-flow-delivery-journey)
+gives the prerequisites and the steps.
+
+The fixture plan must omit `selectionContext` and contain exactly
+`expectedPlatformRuntimeRevision`, `fullFlow`, `gate`, and `message`. Set
+`gate` and `message` to `null`. The `fullFlow` object must contain exactly
+these fields:
+
+| Field | Required value |
+| --- | --- |
+| `approvedModelSelectionReference` | The approved BYOK model selection reference |
+| `approvedModelSourceMode` | `byok` |
+| `approvedReasoningEffort` | The approved reasoning effort |
+| `approvedMaxPromptTokens` | The approved positive prompt-token limit |
+| `maxRunUsd` | The largest run cost in USD. Use a number more than 0 and not more than `5`. |
+| `maxDurationMinutes` | The time limit for the journey, from `10` to `30` minutes |
+
+For example:
+
+```json
+"fixturePlan": {
+  "expectedPlatformRuntimeRevision": 3,
+  "fullFlow": {
+    "approvedModelSelectionReference": "<byok-model-reference>",
+    "approvedModelSourceMode": "byok",
+    "approvedReasoningEffort": "medium",
+    "approvedMaxPromptTokens": 20000,
+    "maxRunUsd": 5,
+    "maxDurationMinutes": 30
+  },
+  "gate": null,
+  "message": null
+}
+```
+
+Replace `<byok-model-reference>` with the binding reference from your BYOK
+plan. Set `expectedPlatformRuntimeRevision` to the current platform runtime
+revision.
+
+The journey does not accept `--native-probe-envelope` or
+`--dispatch-recovery-envelope`. Before it starts the run, it requires the
+approved BYOK model and a hard run budget on `byok.tokens` in USD that is not
+more than `maxRunUsd`. If either is missing, the result is `blocked` and no
+model request is sent. The result uses `full-flow-acceptance-result` with
+`fullP1Status: "not-evaluated"`; it does not claim full P1 acceptance.

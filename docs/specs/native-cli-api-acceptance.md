@@ -106,6 +106,39 @@ remain separate. The journey is not a prerequisite for
 ordinary CLI use or all-OS archive verification. Archive and OS acceptance
 remain separate under issue #2449.
 
+### Full-flow delivery journey
+
+The optional `full-flow-delivery` journey is the outcome-based acceptance test
+for the main delivery path. Its `fixturePlan.fullFlow` object must contain
+exactly `approvedModelSelectionReference`, `approvedModelSourceMode`,
+`approvedReasoningEffort`, `approvedMaxPromptTokens`, `maxRunUsd`, and
+`maxDurationMinutes`. The source mode must be `byok`. `maxRunUsd` must be more
+than 0 and not more than 5. `maxDurationMinutes` must be from 10 to 30.
+
+- Use the P1 setup path and the server-owned run selection. Before the run
+  starts, require the approved BYOK model and a hard `run` budget on
+  `byok.tokens` in USD that is above 0 and not more than `maxRunUsd`. If either
+  is missing, cancel the unstarted run, clean up, and report `blocked`.
+- Send one casting request. Check its completion receipt and the stored turn
+  text hashes. The draft must have exactly two agents with unique roles from
+  the role catalog and no reserved role.
+- Confirm the draft and require the project configuration revision and casting
+  to match the confirmation.
+- Capture, read back, archive, and read back one backlog task.
+- Read run usage until the BYOK usage is priced, and fail when the total is
+  more than `maxRunUsd`.
+- Stop setup and journey work five minutes before `maxDurationMinutes`,
+  counted from the start of fixture setup. Cleanup runs after that with its own
+  bounded runtime wait.
+- Do not replace the Host. Record only hashes, IDs, and amounts, and report
+  workflow generation and task completion as coverage gaps.
+
+The result uses `full-flow-acceptance-result` with
+`fullP1Status: "not-evaluated"`. `tests/fixtures/critical-paths.json` binds
+the journey to its watched Gateway route prefixes and known gaps.
+`CriticalPathCoverageTests` fails when an operation under a watched prefix is
+not covered or explained, or when a route path contains the text of a gap.
+
 ### Workspace repository read
 
 The `workspace-repository-read` journey checks the current configured repository

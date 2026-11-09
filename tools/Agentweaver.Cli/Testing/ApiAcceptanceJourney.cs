@@ -47,7 +47,8 @@ internal static class ApiAcceptanceJourney
         List<JsonObject> steps,
         JsonObject observations,
         Func<string, string> idempotencyKey,
-        CancellationToken ct)
+        CancellationToken ct,
+        IGatewayClient? ownerApi = null)
     {
         string? failure = null;
         try
@@ -102,6 +103,12 @@ internal static class ApiAcceptanceJourney
                     await ApiAcceptanceNativeMaterial.RunAsync(
                         api, manifest, fixture, snapshot.Run, snapshot.Session, snapshot.Decisions,
                         sourceEvidence, observations, steps, ct)
+                        .ConfigureAwait(false);
+                    break;
+                case ApiAcceptanceSupport.FullFlowJourney:
+                    await ApiAcceptanceFullFlow.RunAsync(
+                        api, ownerApi ?? throw new AcceptanceBlockedException("The full-flow journey has no project owner client."),
+                        manifest, fixture, observations, steps, ct)
                         .ConfigureAwait(false);
                     break;
                 default:
@@ -712,7 +719,7 @@ internal static class ApiAcceptanceJourney
         }
     }
 
-    private static HashSet<string> RequiredOperations(string journey, AcceptanceFixture? fixture)
+    internal static HashSet<string> RequiredOperations(string journey, AcceptanceFixture? fixture)
     {
         HashSet<string> required = ["readRunStatus", "readSessionStatus", "readDecisions"];
         if (journey.StartsWith("gate-", StringComparison.Ordinal))
@@ -742,6 +749,10 @@ internal static class ApiAcceptanceJourney
                 "formulateCastingProposal", "readSessionTurnContent", "readSessionTree",
                 "replaceRuntimeHost", "readRuntimeReplacement",
             ]);
+        }
+        else if (journey == ApiAcceptanceSupport.FullFlowJourney)
+        {
+            required.UnionWith(ApiAcceptanceFullFlow.RequiredOperations);
         }
         else
         {

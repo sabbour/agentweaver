@@ -1686,6 +1686,62 @@ public sealed class ApiAcceptanceRunnerTests
         }
     }
 
+    [Fact]
+    public async Task FullFlowDryRunValidatesOfflineWithoutEvidence()
+    {
+        string workspace = Path.Combine(AppContext.BaseDirectory, "acceptance-work", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+        try
+        {
+            var trace = new ConcurrentQueue<string>();
+            using var http = new HttpClient(new NoRequestsHandler());
+            var authentication = new TestAuthentication(trace);
+            var output = new StringWriter();
+            var factory = new GatewayClientFactory(http, authentication);
+            var runtime = new CliRuntimeOptions(
+                HttpClient: http,
+                GatewayClientFactory: factory,
+                Authentication: authentication,
+                AcceptanceRunner: new ApiAcceptanceRunner(factory, authentication, new TestDeploymentEvidenceProvider(), output),
+                Output: output,
+                Error: output);
+            string inputPath = Path.Combine(workspace, "manifest.json");
+            string evidencePath = Path.Combine(workspace, "evidence.jsonl");
+            await File.WriteAllTextAsync(inputPath,
+                CreateFullFlowManifest(workspace, new Uri("http://127.0.0.1:49241/")).ToJsonString());
+
+            int exitCode = await CliApplication.RunAsync(
+                ["test", "--input", inputPath, "--output", evidencePath, "--dry-run", "--interactive"], runtime);
+
+            Assert.Equal(0, exitCode);
+            Assert.Contains("Full-flow inputs, BYOK model approval, and run limits are valid", output.ToString(), StringComparison.Ordinal);
+            Assert.Empty(trace);
+            Assert.False(File.Exists(evidencePath));
+        }
+        finally
+        {
+            if (Directory.Exists(workspace))
+                Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    private static JsonObject CreateFullFlowManifest(string workspace, Uri gateway)
+    {
+        JsonObject manifest = CreateManifest(workspace, gateway, ApiAcceptanceSupport.FullFlowJourney);
+        JsonObject plan = manifest["fixturePlan"]!.AsObject();
+        plan.Remove("selectionContext");
+        plan["fullFlow"] = new JsonObject
+        {
+            ["approvedModelSelectionReference"] = "approved/byok",
+            ["approvedModelSourceMode"] = "byok",
+            ["approvedReasoningEffort"] = "medium",
+            ["approvedMaxPromptTokens"] = 4096,
+            ["maxRunUsd"] = 5,
+            ["maxDurationMinutes"] = 30,
+        };
+        return manifest;
+    }
+
     private static JsonObject CreateManifest(string workspace, Uri gateway, string journey = "message")
     {
         const string sourceSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

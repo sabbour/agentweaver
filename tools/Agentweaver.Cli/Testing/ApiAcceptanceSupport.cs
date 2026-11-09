@@ -43,7 +43,17 @@ internal sealed class AcceptanceFixtureState(string invocationId)
 internal static partial class ApiAcceptanceSupport
 {
     private static readonly HashSet<string> Journeys =
-        ["gate-answer", "gate-approve", "gate-reject", "message", "journal", "session-history-metric", "workspace-repository-read", "native-material-recovery"];
+        ["gate-answer", "gate-approve", "gate-reject", "message", "journal", "session-history-metric", "workspace-repository-read", "native-material-recovery", FullFlowJourney];
+
+    public const string FullFlowJourney = "full-flow-delivery";
+    public const decimal FullFlowMaxRunUsd = 5m;
+    public const int FullFlowMinDurationMinutes = 10;
+    public const int FullFlowMaxDurationMinutes = 30;
+    public static readonly TimeSpan FullFlowCleanupReserve = TimeSpan.FromMinutes(5);
+
+    /// <summary>Returns the approved model binding for a journey that sends a real model turn.</summary>
+    public static JsonObject? ModelApproval(AcceptanceManifest manifest) =>
+        (manifest.FixturePlan["nativeMaterialRecovery"] ?? manifest.FixturePlan["fullFlow"]) as JsonObject;
 
     private static readonly string[] RequiredReceiptPins =
         ["providerReceipt", "runtimeReceipt", "storageReceipt", "sourceReceipt"];
@@ -310,13 +320,17 @@ internal static partial class ApiAcceptanceSupport
             throw new InvalidDataException("Runner plans cannot contain caller-supplied owner fences or fixture receipts.");
         }
 
-        bool serverOwnedSelection = (journey is "journal" or "session-history-metric" or "native-material-recovery")
+        bool fullFlow = journey == FullFlowJourney;
+        bool serverOwnedSelection = fullFlow
+            || (journey is "journal" or "session-history-metric" or "native-material-recovery")
             && !plan.ContainsKey("selectionContext");
         bool nativeMaterialRecovery = journey == "native-material-recovery";
         string[] fixtureKeys = serverOwnedSelection
             ? nativeMaterialRecovery
                 ? new[] { "expectedPlatformRuntimeRevision", "nativeMaterialRecovery", "gate", "message" }
-                : new[] { "expectedPlatformRuntimeRevision", "gate", "message" }
+                : fullFlow
+                    ? new[] { "expectedPlatformRuntimeRevision", "fullFlow", "gate", "message" }
+                    : new[] { "expectedPlatformRuntimeRevision", "gate", "message" }
             : ["expectedPlatformRuntimeRevision", "selectionContext", "gate", "message"];
         RequireExactKeys(plan, fixtureKeys, "runner fixture plan");
         if (!TryLong(plan["expectedPlatformRuntimeRevision"], out long revision) || revision < 1)
@@ -332,15 +346,33 @@ internal static partial class ApiAcceptanceSupport
                 ["approvedModelSelectionReference", "approvedModelSourceMode", "approvedReasoningEffort",
                     "approvedMaxPromptTokens", "approvedNativeRequestCount", "allowOrdinaryHostReplacement"],
                 "native material recovery approval");
-            RequireString(approval, "approvedModelSelectionReference", "approved model selection reference");
-            RequireString(approval, "approvedReasoningEffort", "approved reasoning effort");
-            if (GetString(approval, "approvedModelSourceMode") != "byok" ||
-                !TryLong(approval["approvedMaxPromptTokens"], out long promptTokens) || promptTokens < 1 ||
+            if (!HasModelApproval(approval) ||
                 !TryLong(approval["approvedNativeRequestCount"], out long nativeRequests) || nativeRequests != 1 ||
                 approval["allowOrdinaryHostReplacement"] is not JsonValue replacementApproval ||
                 !replacementApproval.TryGetValue<bool>(out bool allowReplacement) || !allowReplacement)
                 throw new InvalidDataException(
                     "Native material recovery requires an approved BYOK model, positive prompt capacity, exactly one request, and explicit Host replacement approval.");
+        }
+
+        if (fullFlow)
+        {
+            JsonObject approval = RequireObject(plan["fullFlow"],
+                "The full-flow journey requires a fullFlow approval with a BYOK model and run limits.");
+            RequireExactKeys(approval,
+                ["approvedModelSelectionReference", "approvedModelSourceMode", "approvedReasoningEffort",
+                    "approvedMaxPromptTokens", "maxRunUsd", "maxDurationMinutes"],
+                "full-flow approval");
+            if (!HasModelApproval(approval))
+                throw new InvalidDataException(
+                    "The full-flow journey requires an approved BYOK model selection, reasoning effort, and positive prompt capacity.");
+            if (approval["maxRunUsd"] is not JsonValue usdValue || !usdValue.TryGetValue<decimal>(out decimal maxRunUsd) ||
+                maxRunUsd <= 0 || maxRunUsd > FullFlowMaxRunUsd)
+                throw new InvalidDataException(
+                    $"The full-flow maxRunUsd must be more than 0 and not more than {FullFlowMaxRunUsd} USD.");
+            if (!TryLong(approval["maxDurationMinutes"], out long minutes) ||
+                minutes < FullFlowMinDurationMinutes || minutes > FullFlowMaxDurationMinutes)
+                throw new InvalidDataException(
+                    $"The full-flow maxDurationMinutes must be from {FullFlowMinDurationMinutes} to {FullFlowMaxDurationMinutes}.");
         }
 
         if (!serverOwnedSelection)
@@ -399,6 +431,12 @@ internal static partial class ApiAcceptanceSupport
             throw new InvalidDataException("A message plan is only valid for the message journey.");
         }
     }
+
+    private static bool HasModelApproval(JsonObject approval) =>
+        !string.IsNullOrWhiteSpace(GetString(approval, "approvedModelSelectionReference")) &&
+        !string.IsNullOrWhiteSpace(GetString(approval, "approvedReasoningEffort")) &&
+        GetString(approval, "approvedModelSourceMode") == "byok" &&
+        TryLong(approval["approvedMaxPromptTokens"], out long promptTokens) && promptTokens >= 1;
 
     private static void RequireSha(string? value, string error)
     {
@@ -864,6 +902,26 @@ internal static partial class ApiAcceptanceSupport
         ["kind"] = "board-acceptance-result",
         ["schemaVersion"] = 1,
         ["surface"] = "api",
+        ["featureStatus"] = featureStatus,
+        ["fullP1Status"] = "not-evaluated",
+        ["exitCode"] = featureStatus switch { "passed" => 0, "failed" => 1, _ => 2 },
+        ["sourceEvidence"] = sourceEvidence is null ? null : Redact(sourceEvidence),
+        ["steps"] = ToArray(steps),
+        ["observations"] = Redact(observations),
+        ["failure"] = string.IsNullOrWhiteSpace(failure) ? null : new JsonObject { ["message"] = RedactText(failure) },
+    };
+
+    public static JsonObject FullFlowResult(
+        string featureStatus,
+        JsonObject? sourceEvidence,
+        IEnumerable<JsonObject> steps,
+        JsonObject observations,
+        string? failure) => new()
+    {
+        ["kind"] = "full-flow-acceptance-result",
+        ["schemaVersion"] = 1,
+        ["surface"] = "api",
+        ["journey"] = FullFlowJourney,
         ["featureStatus"] = featureStatus,
         ["fullP1Status"] = "not-evaluated",
         ["exitCode"] = featureStatus switch { "passed" => 0, "failed" => 1, _ => 2 },
