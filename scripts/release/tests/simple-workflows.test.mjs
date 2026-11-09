@@ -12,6 +12,7 @@ import {
   parseImageManifest,
   requireLiveByokBindingsPreserved,
   stampAgentHostModelEgress,
+  byokEndpointProbeUrls,
 } from '../deploy-kustomize.mjs';
 import {
   applyModelBindingsOverlay,
@@ -892,9 +893,22 @@ test('deploy adds environment model bindings from a file to all runtime maps and
   }));
   try {
     const calls = [];
+    const messages = [];
     await deployKustomize({ imageTag: selectedTag, modelBindings: bindingsFile }, {
-      root: directory, exec: fakeExec(calls), log() {},
+      root: directory,
+      exec: fakeExec(calls, { smokeLogs: 'SMOKE_BYOK demo.openai.azure.com 404\nSMOKE_BYOK b.example.com 401\nSMOKE_OK\n' }),
+      log: message => messages.push(message),
     });
+    const smokePod = parse(calls.find(call => call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'List').options.input).items[1];
+    const command = smokePod.spec.containers[0].command;
+    assert.deepEqual(command.slice(3), ['smoke', 'https://demo.openai.azure.com/openai/v1/models']);
+    assert.doesNotMatch(command[2], /demo\.openai/);
+    assert.equal(smokePod.spec.containers[0].env, undefined);
+    assert.ok(messages.some(message =>
+      /Warning: BYOK endpoint demo\.openai\.azure\.com answered HTTP 404 without a key/.test(message)));
+    assert.ok(messages.some(message => /^BYOK endpoint b\.example\.com answered HTTP 401 without a key/.test(message)));
+    assert.equal(messages.some(message => /Warning: .*b\.example\.com/.test(message)), false);
     const applied = parse(calls.find(call => call.command === 'kubectl' && call.args[0] === 'apply').options.input);
     const item = (kind, name) => applied.items.find(resource => resource.kind === kind && resource.metadata.name === name);
     const agentHost = JSON.parse(item('ConfigMap', 'agenthost-runtime-v1').data['appsettings.json']).AgentHost;
@@ -961,6 +975,23 @@ test('deploy allows AgentHost model egress to exactly the rendered BYOK hosts on
   const widened = render({});
   widened[1].spec.egress.push({ toEntities: ['world'] });
   assert.throws(() => stampAgentHostModelEgress(widened), /DNS-only CiliumNetworkPolicy\/agenthost-model-egress/);
+});
+
+test('install smoke check probes one keyless URL per configured BYOK host', () => {
+  const render = bindings => [{ kind: 'ConfigMap', metadata: { name: 'agenthost-runtime-v1' },
+    data: { 'appsettings.json': JSON.stringify({ AgentHost: { ModelBindings: bindings } }) } }];
+  const byok = baseUrl => ({ SourceMode: 'Byok', Provider: { BaseUrl: baseUrl } });
+  assert.deepEqual(byokEndpointProbeUrls(render({
+    hosted: { SourceMode: 'HostedCopilot', Provider: { BaseUrl: 'https://api.githubcopilot.com' } },
+    a: byok('https://demo.openai.azure.com/openai/v1/?api-key=secret#x'),
+    b: byok('https://Demo.openai.azure.com/other'),
+    c: byok('https://models.example.com'),
+  })), ['https://demo.openai.azure.com/openai/v1/models', 'https://models.example.com/models']);
+  assert.deepEqual(byokEndpointProbeUrls(render({})), []);
+  for (const baseUrl of ['http://demo.openai.azure.com', 'https://user@demo.openai.azure.com', 'not a url']) {
+    assert.throws(() => byokEndpointProbeUrls(render({ a: byok(baseUrl) })),
+      /BYOK model binding a must use an HTTPS BaseUrl/, baseUrl);
+  }
 });
 
 test('v1 image workflow builds the ten existing Kustomize images from exact source commits', () => {
@@ -2448,6 +2479,7 @@ test('install smoke check runs an AgentHost-labelled sandbox pod and always clea
     assert.deepEqual(pod.spec.volumes, [{ name: 'workspace', persistentVolumeClaim: { claimName: pod.metadata.name } }]);
     assert.match(container.command[2], /getent hosts environment\.agentweaver\.svc\.cluster\.local/);
     assert.match(container.command[2], /\/dev\/tcp\/environment\.agentweaver\.svc\.cluster\.local\/8443/);
+    assert.deepEqual(container.command.slice(3), ['smoke']);
     const staleCleanup = calls.findIndex(call => call.args[0] === 'delete' &&
       call.args.includes('agentweaver.io/install-smoke-check=true'));
     assert.ok(staleCleanup > lastRollout && staleCleanup < smokeCreate);
@@ -2468,6 +2500,8 @@ test('install smoke check failures name the cause and clean up', async () => {
       /could not open TCP 8443 to Environment/],
     [{ smokePod: { status: { phase: 'Failed' } }, smokeLogs: 'SMOKE_FAIL storage-symlink\n' },
       /mfsymlinks mount option is missing/],
+    [{ smokePod: { status: { phase: 'Failed' } }, smokeLogs: 'SMOKE_FAIL byok:demo.openai.azure.com\n' },
+      /no HTTPS response from BYOK endpoint demo\.openai\.azure\.com \(DNS, connection, or TLS failure/],
     [{ smokePod: { status: { phase: 'Succeeded' } }, smokeLogs: '' }, /without a result/],
     [{ smokePod: { status: { phase: 'Pending', conditions: [{ type: 'PodScheduled', status: 'False',
       reason: 'Unschedulable', message: '0/3 nodes are available' }] } } },

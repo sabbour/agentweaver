@@ -955,7 +955,13 @@ Secret, or settings. It checks that:
 - `environment.agentweaver.svc.cluster.local` resolves, and a TCP connection
   to Environment on port 8443 opens through the AgentHost network policies; and
 - a file on the workspace volume can be written, read, and linked, and is
-  owned by UID 1000.
+  owned by UID 1000; and
+- each BYOK model endpoint host in the applied AgentHost runtime configuration
+  answers one HTTPS `GET <BaseUrl>/models` request that has no key. HTTP 401 or
+  403 passes. Another HTTP status passes with a warning. No response (a DNS,
+  connection, or TLS failure, or a 30-second timeout) fails the deployment and
+  names the host. The helper does not read,
+  mount, or pass the API key, and it drops any query string from the BaseUrl.
 
 If the check fails or does not finish in 10 minutes, the deployment fails and
 the message names the cause. The helper always deletes the pod and claim, and
