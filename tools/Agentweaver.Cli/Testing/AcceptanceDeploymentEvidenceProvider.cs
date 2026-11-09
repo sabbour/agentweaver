@@ -65,6 +65,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
     private readonly HttpClient httpClient;
     private readonly Func<string, string, CancellationToken, Task<JsonObject>> readKubernetesObjects;
     private readonly Func<TimeSpan, CancellationToken, Task> delay;
+    private readonly Func<string, CancellationToken, Task<string>> getAcrLoginToken;
 
     public AcceptanceDeploymentEvidenceProvider(HttpClient httpClient)
         : this(httpClient, ReadKubernetesObjectsAsync)
@@ -74,11 +75,13 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
     internal AcceptanceDeploymentEvidenceProvider(
         HttpClient httpClient,
         Func<string, string, CancellationToken, Task<JsonObject>> readKubernetesObjects,
-        Func<TimeSpan, CancellationToken, Task>? delay = null)
+        Func<TimeSpan, CancellationToken, Task>? delay = null,
+        Func<string, CancellationToken, Task<string>>? getAcrLoginToken = null)
     {
         this.httpClient = httpClient;
         this.readKubernetesObjects = readKubernetesObjects;
         this.delay = delay ?? ((duration, ct) => Task.Delay(duration, ct));
+        this.getAcrLoginToken = getAcrLoginToken ?? RunAcrLoginTokenAsync;
     }
 
     public async Task<JsonObject> PrepareAsync(AcceptanceManifest manifest, CancellationToken ct)
@@ -97,7 +100,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
         JsonObject localManifest = await ReadObjectAsync(manifestFile, "The exact source manifest is missing or malformed.", ct)
             .ConfigureAwait(false);
         (JsonObject imageManifest, byte[] imageManifestBytes) = await ReadObjectBytesAsync(
-            imageManifestFile, "The canonical GHCR image-selection manifest is missing or malformed.", ct)
+            imageManifestFile, "The canonical image-selection manifest is missing or malformed.", ct)
             .ConfigureAwait(false);
         JsonObject? authorityReceipt = null;
         JsonObject? orchestratorReceipt = null;
@@ -137,6 +140,14 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
             throw new InvalidDataException("The supplied foundation manifest does not match the fixed GitHub source identity.");
         }
         await ValidateProjectMetadataAsync(remoteManifest, sourceSha, ct).ConfigureAwait(false);
+        JsonArray sourceComponents = remoteManifest["components"]!.AsArray();
+        Dictionary<string, string> componentVersions = ServiceComponents.ToDictionary(
+            component => component.Id,
+            component => ApiAcceptanceSupport.GetString(
+                sourceComponents.OfType<JsonObject>().Single(item =>
+                    ApiAcceptanceSupport.GetString(item, "id") == component.Id),
+                "version")!,
+            StringComparer.Ordinal);
         JsonObject? authorityEvidence = null;
         if (authorityReceipt is not null)
             authorityEvidence = await VerifyBoardAuthoritySourceAsync(authorityReceipt, ct).ConfigureAwait(false);
@@ -145,7 +156,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider : IAcceptance
             orchestratorEvidence = await VerifyBoardOrchestratorSourceAsync(orchestratorReceipt, ct).ConfigureAwait(false);
 
         JsonObject services = await ObserveServicesEquivalentAsync(
-            manifest, sourceSha, sourceTree, selectedImages, ct).ConfigureAwait(false);
+            manifest, sourceSha, sourceTree, selectedImages, ct, componentVersions).ConfigureAwait(false);
 
         return new JsonObject
         {

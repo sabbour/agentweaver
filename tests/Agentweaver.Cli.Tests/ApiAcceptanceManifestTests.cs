@@ -116,6 +116,38 @@ public sealed class ApiAcceptanceManifestTests
     }
 
     [Fact]
+    public async Task P1InputAcceptsAnApprovedAcrRegistryAndRejectsAnUnapprovedOne()
+    {
+        JsonObject approved = P1Manifest();
+        approved["deploymentEvidence"]!["registry"] = "agentweaverasabbour.azurecr.io";
+        string path = WriteManifest(approved);
+        try
+        {
+            AcceptanceManifest manifest = await ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None);
+            Assert.Equal(
+                "agentweaverasabbour.azurecr.io",
+                ApiAcceptanceSupport.GetString((JsonObject)manifest.Root["deploymentEvidence"]!, "registry"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+
+        JsonObject unapproved = P1Manifest();
+        unapproved["deploymentEvidence"]!["registry"] = "docker.io";
+        path = WriteManifest(unapproved);
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(
+                () => ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task JournalAllowsAnAbsentSelectionContext()
     {
         JsonObject root = JournalManifest();

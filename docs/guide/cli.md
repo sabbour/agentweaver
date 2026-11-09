@@ -241,9 +241,15 @@ of production authentication. None of these checks is an authenticated
 mutation journey through the production apphost.
 
 The production evidence provider verifies the committed source manifest, the
-canonical GHCR image selection, and Kubernetes service readbacks. A non-dry-run
-needs the exact external source manifest and image manifest, and may change API
-state during fixture setup and cleanup; do not use it against production.
+selected registry images, and Kubernetes service readbacks. GHCR is the
+default registry. For an approved Azure Container Registry (ACR), set its
+lowercase login server in `deploymentEvidence.registry`. The CLI uses the
+signed-in Azure CLI identity to request a repository-scoped pull token; the
+token stays in memory and is not written to output or evidence. ACR images
+must match the pinned source commit, Git tree, and component version. A
+non-dry-run needs the exact external source manifest and image manifest, and
+may change API state during fixture setup and cleanup; do not use it against
+production.
 The `native-material-recovery` journey supplies positive session-material
 evidence only when its turn, material, replacement, replay, and cleanup
 receipts all validate. Full API acceptance can still be blocked when other
@@ -251,7 +257,12 @@ required probes or authorized target evidence are unavailable. The manifest
 and evidence are external files; relative proof paths resolve from the
 manifest directory.
 
-`deploymentEvidence` contains exactly `manifestPath` and `imageManifestPath`.
+`deploymentEvidence` contains `manifestPath` and `imageManifestPath`. It can
+also contain `registry`. If you omit `registry`, the CLI uses
+`ghcr.io/sabbour`. Set `registry` to an approved ACR login server, such as
+`<name>.azurecr.io`, to verify ACR images. For a live ACR test, sign in with
+Azure CLI and use an identity that already has pull access. The CLI does not
+create roles or credentials.
 
 The separate `board-delete` journey is a narrow typed API acceptance feature,
 not a complete API acceptance run. Its manifest uses `executionIntent: "execute"`,
@@ -386,19 +397,20 @@ The image-manifest file uses the same sparse JSON contract as
 }
 ```
 
-Repository names are the canonical GHCR names in the Kustomize deployment
-guide. Each value is either a source-commit tag or an immutable digest.
-Selected tags are resolved to digests, and every selected reference must match
-the live workload. Omitted entries are read from Kubernetes and must already
-be immutable references for the exact pinned source. All observed images are
-verified against their registry manifest, platform, config digest, and exact
-source revision; a present source-tree label must match the pinned Git tree.
-The AgentHost measurement is calculated from its digest-verified
-`linux/amd64` platform manifest plus the unique config and layer descriptor
-sizes, then compared with the Environment Deployment and Pod's configured
-compressed-byte value. Missing or inconsistent size evidence blocks the
-provider; it is never replaced with zero or a guessed value. Caller-supplied
-image receipts and local OCI archives are not accepted.
+Repository names are the canonical component image names in the Kustomize
+deployment guide. The registry comes from `deploymentEvidence.registry`, not
+from this image manifest. Each value is either a source-commit tag or an
+immutable digest. Selected tags are resolved to digests, and every selected
+reference must match the live workload. Omitted entries are read from
+Kubernetes and must already be immutable references for the exact pinned
+source. All observed images are verified against their registry manifest,
+platform, config digest, and exact source revision; a present source-tree
+label must match the pinned Git tree. ACR also requires the pinned component
+version label. For AgentHost, the CLI checks the `linux/amd64` platform
+manifest and compares the compressed config and layer sizes with the
+Environment Deployment and Pod settings. Missing or inconsistent size
+evidence blocks the provider; it is never replaced with zero or a guessed
+value. Caller-supplied image receipts and local OCI archives are not accepted.
 
 ```powershell
 agentweaver test --input manifest.json --output evidence.jsonl

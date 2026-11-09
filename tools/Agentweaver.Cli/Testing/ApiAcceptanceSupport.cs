@@ -193,18 +193,24 @@ internal static partial class ApiAcceptanceSupport
 
             if (pins.ContainsKey("imageReceipt"))
             {
-                throw new InvalidDataException("Image evidence is read from the canonical GHCR manifest and Kubernetes; caller-supplied image receipts are not accepted.");
+                throw new InvalidDataException("Image evidence is read from the canonical image manifest and Kubernetes; caller-supplied image receipts are not accepted.");
             }
 
             ValidatePins(pins);
         }
         JsonObject evidence = RequireObject(root["deploymentEvidence"], "Exact source deployment evidence paths are required.");
         string[] requiredPaths = ["manifestPath", "imageManifestPath"];
-        RequireExactKeys(evidence, requiredPaths, "deployment evidence");
+        RequireExactKeys(
+            evidence,
+            evidence.ContainsKey("registry") ? ["manifestPath", "imageManifestPath", "registry"] : requiredPaths,
+            "deployment evidence");
         foreach (string name in requiredPaths)
         {
             RequireString(evidence, name, $"deployment evidence {name}");
         }
+        string imageRegistry = ValidateImageRegistry(evidence);
+        if (boardAcceptance && imageRegistry != DefaultImageRegistry)
+            throw new InvalidDataException("Board image evidence must use the reviewed GHCR registry.");
 
         if (!boardAcceptance && !Journeys.Contains(journey))
         {
@@ -435,6 +441,22 @@ internal static partial class ApiAcceptanceSupport
         {
             throw new InvalidDataException($"The {label} must contain exactly: {string.Join(", ", keys)}.");
         }
+    }
+
+    internal const string DefaultImageRegistry = "ghcr.io/sabbour";
+
+    internal static string ValidateImageRegistry(JsonObject deploymentEvidence)
+    {
+        if (!deploymentEvidence.ContainsKey("registry"))
+            return DefaultImageRegistry;
+
+        string registry = RequireString(deploymentEvidence, "registry", "deployment evidence registry");
+        if (registry == DefaultImageRegistry
+            || Regex.IsMatch(registry, "^[a-z0-9]{5,50}\\.azurecr\\.io$", RegexOptions.CultureInvariant))
+            return registry;
+
+        throw new InvalidDataException(
+            "Deployment evidence registry must be ghcr.io/sabbour or an Azure Container Registry login server.");
     }
 
     private static void RejectSecrets(JsonNode? node)

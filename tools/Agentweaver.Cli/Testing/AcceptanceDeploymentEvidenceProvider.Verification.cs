@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
@@ -12,9 +14,17 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
 {
     private const string RegistryOrigin = "https://ghcr.io";
     private const string RegistryBlobOrigin = "https://pkg-containers.githubusercontent.com";
+    private const string DefaultRegistry = ApiAcceptanceSupport.DefaultImageRegistry;
     private const string RegistryAccept =
         "application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, " +
         "application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json";
+    private static readonly Regex AcrLoginServer = new(
+        "^([a-z0-9]{5,50})\\.azurecr\\.io$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly HashSet<string> CompressedLayerMediaTypes = new(StringComparer.Ordinal)
+    {
+        "application/vnd.oci.image.layer.v1.tar+gzip",
+        "application/vnd.docker.image.rootfs.diff.tar.gzip",
+    };
     private const string ProviderCatalogPrefix = "ProjectsConfig__ProviderCatalog__";
     private const string ProviderCatalogSourceAnnotation = "agentweaver.io/provider-catalog-source";
     private const int MaxRegistryRedirects = 3;
@@ -68,12 +78,13 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
 
     private async Task<string> ResolveImageReferenceAsync(
         string repository,
+        string selectedRegistry,
         string? selectedReference,
         string currentReference,
         string sourceSha,
         CancellationToken ct)
     {
-        string imageRepository = $"ghcr.io/sabbour/{repository}";
+        string imageRepository = $"{selectedRegistry}/{repository}";
         string reference = selectedReference is null ? currentReference : "";
         if (selectedReference is not null)
         {
@@ -85,36 +96,56 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             {
                 Match tag = Regex.Match(selectedReference, "^sha-([a-f0-9]{40})$", RegexOptions.CultureInvariant);
                 if (!tag.Success || tag.Groups[1].Value != sourceSha)
-                    throw new InvalidDataException($"The selected GHCR tag for {repository} is not bound to the exact source commit.");
-                string path = $"sabbour/{repository}";
-                string token = await GetRegistryPullTokenAsync(path, ct).ConfigureAwait(false);
-                Uri tagUri = new($"{RegistryOrigin}/v2/{path}/manifests/{selectedReference}");
-                var tagManifest = await ReadRegistryJsonAsync(tagUri, null, token, RegistryAccept, ct)
+                    throw new InvalidDataException($"The selected registry tag for {repository} is not bound to the exact source commit.");
+                string token = await GetRegistryPullTokenAsync(selectedRegistry, repository, ct).ConfigureAwait(false);
+                Uri tagUri = RegistryUri(selectedRegistry, repository, $"manifests/{selectedReference}");
+                var tagManifest = await ReadRegistryJsonAsync(tagUri, null, token, RegistryAccept, ct, selectedRegistry)
                     .ConfigureAwait(false);
                 reference = $"{imageRepository}@{tagManifest.Digest}";
             }
 
             if (!string.Equals(currentReference, reference, StringComparison.Ordinal))
-                throw new InvalidDataException($"The live Kubernetes image for {repository} does not match the selected immutable GHCR reference.");
+                throw new InvalidDataException($"The live Kubernetes image for {repository} does not match the selected immutable {RegistryDescription(selectedRegistry)} reference.");
         }
 
-        if (!TryImageReference(reference, out string actualRepository, out _)
-            || actualRepository != imageRepository)
-            throw new InvalidDataException($"The live Kubernetes image for {repository} is not the exact immutable GHCR image.");
+        if (!TryImageReference(reference, out string actualRegistry, out string actualRepository, out _)
+            || actualRepository != repository
+            || actualRegistry != selectedRegistry)
+            throw new InvalidDataException($"The live Kubernetes image for {repository} is not an exact immutable image from the selected approved registry.");
         return reference;
     }
 
-    private static bool TryImageReference(string value, out string repository, out string digest)
+    private static bool TryImageReference(
+        string value,
+        out string registry,
+        out string repository,
+        out string digest)
     {
+        registry = "";
         repository = "";
         digest = "";
         int separator = value.LastIndexOf('@');
         if (separator <= 0)
             return false;
-        repository = value[..separator];
+        string namedImage = value[..separator];
+        int slash = namedImage.IndexOf('/');
+        if (slash <= 0)
+            return false;
+        string host = namedImage[..slash];
+        string path = namedImage[(slash + 1)..];
+        if (host == "ghcr.io" && path.StartsWith("sabbour/", StringComparison.Ordinal))
+        {
+            registry = DefaultRegistry;
+            repository = path["sabbour/".Length..];
+        }
+        else if (AcrLoginServer.IsMatch(host))
+        {
+            registry = host;
+            repository = path;
+        }
         digest = value[(separator + 1)..];
-        return repository.StartsWith("ghcr.io/", StringComparison.Ordinal)
-            && repository["ghcr.io/".Length..].Split('/').Length >= 2
+        return repository.Length > 0
+            && !repository.Contains('/')
             && Matches(Digest, digest);
     }
 
@@ -136,10 +167,16 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
         string sourceSha,
         string sourceTree,
         IReadOnlyDictionary<string, string> selectedImages,
-        CancellationToken ct)
+        CancellationToken ct,
+        IReadOnlyDictionary<string, string>? expectedComponentVersions = null)
     {
         bool boardDelete = manifest.Journey == "board-delete";
         bool workspaceRead = manifest.Journey == "workspace-repository-read";
+        string selectedRegistry = manifest.Root["deploymentEvidence"] is JsonObject deploymentEvidence
+            ? ApiAcceptanceSupport.ValidateImageRegistry(deploymentEvidence)
+            : DefaultRegistry;
+        if (boardDelete && selectedRegistry != DefaultRegistry)
+            throw new InvalidDataException("Board image evidence must use the reviewed GHCR registry.");
         JsonObject pins = manifest.Pins;
         string context = ApiAcceptanceSupport.GetString(pins, "context")!;
         string namespaceName = ApiAcceptanceSupport.GetString(pins, "namespace")!;
@@ -206,7 +243,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             string currentImage = ApiAcceptanceSupport.GetString(container, "image")!;
             string repository = ComponentImageRepository(componentId);
             string imageReference = await ResolveImageReferenceAsync(
-                repository, selectedImages.GetValueOrDefault(repository), currentImage, sourceSha, ct)
+                repository, selectedRegistry, selectedImages.GetValueOrDefault(repository), currentImage, sourceSha, ct)
                 .ConfigureAwait(false);
             JsonObject ownerReceipt = boardDelete && componentId == "Agentweaver.Orchestrator"
                 ? (JsonObject)pins["orchestratorSourceReceipt"]!
@@ -248,6 +285,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             environmentVariables, "Environment__Sandbox__AgentSandbox__ContainerImage");
         hostImageReference = await ResolveImageReferenceAsync(
             ComponentImageRepository("Agentweaver.AgentHost"),
+            selectedRegistry,
             selectedImages.GetValueOrDefault(ComponentImageRepository("Agentweaver.AgentHost")),
             hostCurrentImage, sourceSha, ct).ConfigureAwait(false);
         if (RequireEnvironmentSetting(
@@ -260,11 +298,12 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             throw new InvalidDataException("The live Environment configuration must contain the exact linux/amd64 AgentHost image and positive compressed-byte measurement.");
 
         hostRegistry = await VerifyRegistryImageAsync(
-            hostImageReference, hostImageReference, sourceSha, sourceTree, ct).ConfigureAwait(false);
+            hostImageReference, hostImageReference, sourceSha, sourceTree, ct,
+            expectedVersion: expectedComponentVersions?.GetValueOrDefault("Agentweaver.AgentHost")).ConfigureAwait(false);
         hostPullBytes = hostRegistry["compressedPullBytes"]?.GetValue<long>()
-            ?? throw new InvalidDataException("GHCR did not provide AgentHost OCI descriptor sizes.");
+            ?? throw new InvalidDataException("The selected registry did not provide AgentHost OCI descriptor sizes.");
         if (hostPullBytes != configuredHostPullBytes)
-            throw new InvalidDataException("The deployed AgentHost compressed-byte setting does not match the digest-verified GHCR OCI metadata.");
+            throw new InvalidDataException("The deployed AgentHost compressed-byte setting does not match the digest-verified registry metadata.");
         }
 
         JsonArray observedServices = [];
@@ -420,7 +459,8 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
                 string imageId = ApiAcceptanceSupport.GetString(containerStatus, "imageID")!;
                 JsonObject registry = await VerifyRegistryImageAsync(
                     imageReference, imageId, buildSha, buildTree, ct,
-                    requireSourceTree: boardDelete && componentId == "Agentweaver.Orchestrator").ConfigureAwait(false);
+                    requireSourceTree: boardDelete && componentId == "Agentweaver.Orchestrator",
+                    expectedVersion: expectedComponentVersions?.GetValueOrDefault(componentId)).ConfigureAwait(false);
                 podEvidence.Add(new JsonObject
                 {
                     ["name"] = podName,
@@ -494,22 +534,26 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
         string sourceSha,
         string sourceTree,
         CancellationToken ct,
-        bool requireSourceTree = false)
+        bool requireSourceTree = false,
+        string? expectedVersion = null)
     {
-        if (!TryImageReference(imageReference, out string repository, out string requestedDigest)
-            || repository["ghcr.io/".Length..].Split('/').Length < 2)
-            throw new InvalidDataException("A reviewed immutable GHCR image reference is required.");
-        string token = await GetRegistryPullTokenAsync(repository["ghcr.io/".Length..], ct).ConfigureAwait(false);
-        Uri manifestUri = new($"{RegistryOrigin}/v2/{repository["ghcr.io/".Length..]}/manifests/{requestedDigest}");
+        if (!TryImageReference(imageReference, out string registry, out string repository, out string requestedDigest))
+            throw new InvalidDataException("An approved immutable registry image reference is required.");
+        bool isAcr = registry != DefaultRegistry;
+        if (isAcr && string.IsNullOrWhiteSpace(expectedVersion))
+            throw new InvalidDataException("The pinned source component version is required to verify an ACR image.");
+        string registryDescription = RegistryDescription(registry);
+        string token = await GetRegistryPullTokenAsync(registry, repository, ct).ConfigureAwait(false);
+        Uri manifestUri = RegistryUri(registry, repository, $"manifests/{requestedDigest}");
         var rootManifest = await ReadRegistryJsonAsync(
-            manifestUri, requestedDigest, token, RegistryAccept, ct).ConfigureAwait(false);
+            manifestUri, requestedDigest, token, RegistryAccept, ct, registry).ConfigureAwait(false);
         byte[] manifestBytes = rootManifest.Bytes;
         JsonObject manifest = rootManifest.Value;
         string manifestDigest = requestedDigest;
         string platformDigest = requestedDigest;
         string mediaType = ApiAcceptanceSupport.GetString(manifest, "mediaType") ?? "";
         if (!ApiAcceptanceSupport.TryLong(manifest["schemaVersion"], out long schemaVersion) || schemaVersion != 2)
-            throw new InvalidDataException("The immutable GHCR image descriptor is not a schema-version 2 image manifest.");
+            throw new InvalidDataException($"The immutable {registryDescription} image descriptor is not a schema-version 2 image manifest.");
         if (mediaType is "application/vnd.oci.image.index.v1+json"
             or "application/vnd.docker.distribution.manifest.list.v2+json")
         {
@@ -523,8 +567,9 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
                 || platformManifestSize < 1)
                 throw new InvalidDataException("The immutable image index does not contain one linux/amd64 manifest.");
             platformDigest = ApiAcceptanceSupport.GetString(matches[0], "digest")!;
-            Uri platformUri = new($"{RegistryOrigin}/v2/{repository["ghcr.io/".Length..]}/manifests/{platformDigest}");
-            var platformManifest = await ReadRegistryJsonAsync(platformUri, platformDigest, token, RegistryAccept, ct)
+            Uri platformUri = RegistryUri(registry, repository, $"manifests/{platformDigest}");
+            var platformManifest = await ReadRegistryJsonAsync(
+                platformUri, platformDigest, token, RegistryAccept, ct, registry)
                 .ConfigureAwait(false);
             manifestBytes = platformManifest.Bytes;
             manifest = platformManifest.Value;
@@ -550,8 +595,9 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             || !ApiAcceptanceSupport.TryLong(configDescriptor["size"], out long configSize)
             || configSize < 1)
             throw new InvalidDataException("The registry manifest has no valid immutable config descriptor.");
-        Uri configUri = new($"{RegistryOrigin}/v2/{repository["ghcr.io/".Length..]}/blobs/{configDigest}");
-        var configResponse = await ReadRegistryJsonAsync(configUri, configDigest, token, "application/json", ct)
+        Uri configUri = RegistryUri(registry, repository, $"blobs/{configDigest}");
+        var configResponse = await ReadRegistryJsonAsync(
+            configUri, configDigest, token, "application/json", ct, registry)
             .ConfigureAwait(false);
         byte[] configBytes = configResponse.Bytes;
         JsonObject imageConfig = configResponse.Value;
@@ -560,11 +606,19 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
         JsonObject config = imageConfig["config"] as JsonObject ?? [];
         JsonObject labels = config["Labels"] as JsonObject ?? config["labels"] as JsonObject ?? [];
         string? imageSourceTree = ApiAcceptanceSupport.GetString(labels, "io.agentweaver.source-tree");
+        string? imageVersion = ApiAcceptanceSupport.GetString(labels, "org.opencontainers.image.version");
         if (ApiAcceptanceSupport.GetString(imageConfig, "os") != "linux"
             || ApiAcceptanceSupport.GetString(imageConfig, "architecture") != "amd64"
             || ApiAcceptanceSupport.GetString(labels, "org.opencontainers.image.revision") != sourceSha
-            || (requireSourceTree ? imageSourceTree != sourceTree : imageSourceTree is not null && imageSourceTree != sourceTree))
-            throw new InvalidDataException("The running image configuration is not bound to the reviewed source commit and tree.");
+            || (isAcr || requireSourceTree
+                ? imageSourceTree != sourceTree
+                : imageSourceTree is not null && imageSourceTree != sourceTree)
+            || isAcr && imageVersion != expectedVersion)
+        {
+            string sourceBinding = isAcr ? "source commit, tree, and version" : "source commit and tree";
+            throw new InvalidDataException(
+                $"The running {registryDescription} image configuration is not bound to the reviewed {sourceBinding}.");
+        }
 
         JsonArray layers = manifest["layers"] as JsonArray ?? [];
         if (layers.Count == 0 || layers.Count != layers.OfType<JsonObject>().Count())
@@ -579,11 +633,12 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
         foreach (JsonObject descriptor in layers.OfType<JsonObject>())
         {
             string digest = ApiAcceptanceSupport.GetString(descriptor, "digest") ?? "";
-            if (!Matches(Digest, digest)
+            if (!CompressedLayerMediaTypes.Contains(ApiAcceptanceSupport.GetString(descriptor, "mediaType") ?? "")
+                || !Matches(Digest, digest)
                 || !ApiAcceptanceSupport.TryLong(descriptor["size"], out long size)
                 || size < 1
                 || blobs.TryGetValue(digest, out long existingSize) && existingSize != size)
-                throw new InvalidDataException("The OCI platform manifest contains an invalid or conflicting blob descriptor.");
+                throw new InvalidDataException("The image manifest contains an invalid, uncompressed, or conflicting layer descriptor.");
             if (blobs.ContainsKey(digest))
                 continue;
             if (size > 9_007_199_254_740_991L - compressedPullBytes)
@@ -592,7 +647,7 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             compressedPullBytes += size;
         }
 
-        if (repository.EndsWith("/agentweaver-agenthost", StringComparison.Ordinal)
+        if (repository == "agentweaver-agenthost"
             && (ApiAcceptanceSupport.GetString(config, "User") != "1654:1654"
                 || config["Entrypoint"] is not JsonArray { Count: 2 } entrypoint
                 || GetString(entrypoint[0]) != "dotnet"
@@ -610,7 +665,12 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
         };
     }
 
-    private async Task<string> GetRegistryPullTokenAsync(string repository, CancellationToken ct)
+    private Task<string> GetRegistryPullTokenAsync(string registry, string repository, CancellationToken ct) =>
+        registry == DefaultRegistry
+            ? GetGhcrPullTokenAsync($"sabbour/{repository}", ct)
+            : GetAcrPullTokenAsync(registry, repository, ct);
+
+    private async Task<string> GetGhcrPullTokenAsync(string repository, CancellationToken ct)
     {
         string scope = Uri.EscapeDataString($"repository:{repository}:pull");
         Uri uri = new($"{RegistryOrigin}/token?service=ghcr.io&scope={scope}");
@@ -670,12 +730,140 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
         }
     }
 
+    private async Task<string> GetAcrPullTokenAsync(string registry, string repository, CancellationToken ct)
+    {
+        Match target = AcrLoginServer.Match(registry);
+        if (!target.Success)
+            throw new InvalidDataException("An approved Azure Container Registry login server is required.");
+        string refreshToken = await getAcrLoginToken(target.Groups[1].Value, ct).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(refreshToken))
+            throw new InvalidDataException("Azure CLI did not provide an ACR login token.");
+
+        Uri uri = new($"https://{registry}/oauth2/token");
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeout.CancelAfter(TimeSpan.FromSeconds(15));
+                using HttpRequestMessage request = new(HttpMethod.Post, uri);
+                request.Headers.Accept.ParseAdd("application/json");
+                request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
+                {
+                    ["grant_type"] = "refresh_token",
+                    ["service"] = registry,
+                    ["scope"] = $"repository:{repository}:pull",
+                    ["refresh_token"] = refreshToken,
+                });
+                using HttpResponseMessage response = await SendRegistryRequestAsync(request, timeout.Token)
+                    .ConfigureAwait(false);
+                if (response.StatusCode != HttpStatusCode.OK)
+                {
+                    if (IsTransient(response.StatusCode) && attempt < 3)
+                    {
+                        await delay(TimeSpan.FromSeconds(1 << attempt), ct).ConfigureAwait(false);
+                        continue;
+                    }
+                    throw new InvalidDataException($"ACR pull-token exchange returned HTTP {(int)response.StatusCode}.");
+                }
+
+                JsonObject token;
+                try
+                {
+                    token = JsonNode.Parse(await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false))
+                        as JsonObject ?? throw new InvalidDataException();
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception error) when (error is JsonException or InvalidDataException)
+                {
+                    throw new InvalidDataException("ACR returned malformed pull-token data.");
+                }
+                string? value = ApiAcceptanceSupport.GetString(token, "access_token")
+                    ?? ApiAcceptanceSupport.GetString(token, "accessToken");
+                if (string.IsNullOrWhiteSpace(value))
+                    throw new InvalidDataException($"ACR returned no pull token for {repository}.");
+                return value;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception error) when ((error is HttpRequestException
+                    || error is OperationCanceledException) && attempt < 3)
+            {
+                await delay(TimeSpan.FromSeconds(1 << attempt), ct).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is HttpRequestException or OperationCanceledException)
+            {
+                throw new InvalidDataException("ACR pull-token exchange failed after bounded retries.");
+            }
+        }
+    }
+
+    private static async Task<string> RunAcrLoginTokenAsync(string registryName, CancellationToken ct)
+    {
+        if (!Regex.IsMatch(registryName, "^[a-z0-9]{5,50}$", RegexOptions.CultureInvariant))
+            throw new InvalidDataException("An approved Azure Container Registry name is required.");
+
+        ProcessStartInfo startInfo = new("az")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (string argument in new[]
+        {
+            "acr", "login", "--name", registryName, "--expose-token",
+            "--query", "accessToken", "--output", "tsv", "--only-show-errors",
+        })
+            startInfo.ArgumentList.Add(argument);
+
+        using Process process = new() { StartInfo = startInfo };
+        try
+        {
+            if (!process.Start())
+                throw new InvalidDataException("Azure CLI could not provide an ACR login token.");
+            Task<string> output = process.StandardOutput.ReadToEndAsync(ct);
+            Task drainError = process.StandardError.BaseStream.CopyToAsync(Stream.Null, ct);
+            await process.WaitForExitAsync(ct).ConfigureAwait(false);
+            string value = (await output.ConfigureAwait(false)).Trim();
+            await drainError.ConfigureAwait(false);
+            if (process.ExitCode != 0 || value.Length is < 1 or > 8192
+                || value.Contains('\r') || value.Contains('\n'))
+                throw new InvalidDataException("Azure CLI could not provide an ACR login token.");
+            return value;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            if (!process.HasExited)
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            }
+            throw;
+        }
+        catch (Exception error) when (error is Win32Exception or InvalidOperationException)
+        {
+            throw new InvalidDataException("Azure CLI could not provide an ACR login token.");
+        }
+    }
+
     private async Task<(byte[] Bytes, JsonObject Value, string Digest)> ReadRegistryJsonAsync(
         Uri uri,
         string? expectedDigest,
         string? token,
         string accept,
-        CancellationToken ct)
+        CancellationToken ct,
+        string registry)
     {
         Uri current = uri;
         string? authorization = token;
@@ -705,14 +893,17 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             {
                 if (redirects >= MaxRegistryRedirects
                     || response.Headers.Location is not Uri location)
-                    throw new InvalidDataException("GHCR registry redirect limit exceeded or location is missing.");
+                    throw new InvalidDataException($"{RegistryDescription(registry)} registry redirect limit exceeded or location is missing.");
                 Uri next = location.IsAbsoluteUri ? location : new Uri(current, location);
                 string[] allowedOrigins = current.GetLeftPart(UriPartial.Authority) == RegistryOrigin
                     ? [RegistryOrigin, RegistryBlobOrigin]
                     : [RegistryBlobOrigin];
+                bool allowedRedirect = registry == DefaultRegistry
+                    ? allowedOrigins.Contains(next.GetLeftPart(UriPartial.Authority), StringComparer.Ordinal)
+                    : IsAllowedAcrRedirect(registry, current, next);
                 if (next.Scheme != Uri.UriSchemeHttps || next.UserInfo.Length != 0
-                    || next.Fragment.Length != 0 || !allowedOrigins.Contains(next.GetLeftPart(UriPartial.Authority), StringComparer.Ordinal))
-                    throw new InvalidDataException("GHCR redirected registry metadata to a non-allowlisted HTTPS origin.");
+                    || next.Fragment.Length != 0 || !allowedRedirect)
+                    throw new InvalidDataException($"{RegistryDescription(registry)} redirected registry metadata to a non-allowlisted HTTPS origin.");
                 if (next.GetLeftPart(UriPartial.Authority) != current.GetLeftPart(UriPartial.Authority))
                     authorization = null;
                 current = next;
@@ -745,6 +936,47 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
             return (bytes, value, digest);
         }
     }
+
+    private static bool IsAllowedAcrRedirect(string registry, Uri current, Uri next)
+    {
+        if (!next.IsDefaultPort)
+            return false;
+        if (current.Host == registry && current.Port == 443)
+        {
+            return next.Scheme == Uri.UriSchemeHttps && next.Host == registry && next.Port == 443
+                || IsAcrBlobHost(next.Host)
+                || IsAcrDataHost(registry, next.Host);
+        }
+        return current.Scheme == next.Scheme && current.Host == next.Host && current.Port == next.Port
+            && (IsAcrBlobHost(current.Host) || IsAcrDataHost(registry, current.Host));
+    }
+
+    private static bool IsAcrBlobHost(string host) =>
+        host.Length > ".blob.core.windows.net".Length
+        && host.EndsWith(".blob.core.windows.net", StringComparison.Ordinal);
+
+    private static bool IsAcrDataHost(string registry, string host)
+    {
+        Match target = AcrLoginServer.Match(registry);
+        const string suffix = ".data.azurecr.io";
+        if (!target.Success || !host.StartsWith(target.Groups[1].Value + ".", StringComparison.Ordinal)
+            || !host.EndsWith(suffix, StringComparison.Ordinal))
+            return false;
+        string region = host[(target.Groups[1].Value.Length + 1)..^suffix.Length];
+        return region.Length > 0 && !region.Contains('.');
+    }
+
+    private static string RegistryHost(string registry) =>
+        registry == DefaultRegistry ? "ghcr.io" : registry;
+
+    private static string RegistryRepository(string registry, string repository) =>
+        registry == DefaultRegistry ? $"sabbour/{repository}" : repository;
+
+    private static Uri RegistryUri(string registry, string repository, string resource) =>
+        new($"https://{RegistryHost(registry)}/v2/{RegistryRepository(registry, repository)}/{resource}");
+
+    private static string RegistryDescription(string registry) =>
+        registry == DefaultRegistry ? "GHCR" : "ACR";
 
     private async Task<HttpResponseMessage> SendRegistryRequestAsync(HttpRequestMessage request, CancellationToken ct)
     {

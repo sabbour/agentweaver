@@ -811,11 +811,25 @@ dotnet test tests\Agentweaver.Cli.Acceptance.Tests\Agentweaver.Cli.Acceptance.Te
 These regressions use a controlled Gateway and do not prove live authorization,
 deployed source provenance, or production apphost mutation behavior.
 
+Deployment-evidence provider tests verify registry and Kubernetes checks with
+controlled responses. They cover the GHCR default, approved ACR references,
+ACR pull-token exchange, redirects that do not forward bearer tokens,
+rejection of unapproved registries, exact source labels, immutable image
+digests, and AgentHost platform and compressed-byte checks. These tests do
+not contact ACR or prove a live rollout.
+
 Board deployment-provider tests separately verify the mixed source receipts:
 Gateway, Orchestrator, and authority owners keep their own source identity,
 while the selected immutable Orchestrator image digest must match its OCI
 source labels and the running Pod image ID. They use controlled GitHub,
 registry, and Kubernetes responses; they do not prove a live rollout.
+
+Run the focused registry tests with:
+
+```powershell
+dotnet test tests\Agentweaver.Cli.Acceptance.Tests\Agentweaver.Cli.Acceptance.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~AcceptanceDeploymentEvidenceProviderTests
+dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~ApiAcceptanceManifestTests
+```
 
 The one-account API acceptance sign-in launcher also has a real browser regression that
 uses loopback redirects only. Install the Playwright test browser and run it:
