@@ -73,6 +73,58 @@ public sealed partial class AgentSandboxProviderTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BuildTestPodsAcceptApiServerReadBackWithoutFalseDefaults(bool versionTwo)
+    {
+        // Regression for #2625: the API server omits false hostNetwork, hostPID, hostIPC, and readOnly.
+        using var fixture = await CreateBuildTestProviderFixtureAsync(versionTwo);
+        fixture.Handler.OmitPodFalseDefaults = true;
+        var provider = fixture.Provider;
+        var request = fixture.Request;
+        var pod = await provider.CreateGatedAsync(request, CancellationToken.None);
+        var spec = fixture.Handler.GetPod(pod)["spec"]!.AsObject();
+        foreach (var name in new[] { "hostNetwork", "hostPID", "hostIPC" })
+            Assert.False(spec.ContainsKey(name));
+        Assert.False(spec["volumes"]![0]!["persistentVolumeClaim"]!.AsObject().ContainsKey("readOnly"));
+        Assert.False(spec["containers"]![0]!["volumeMounts"]![0]!.AsObject().ContainsKey("readOnly"));
+        await provider.ReleaseSchedulingGateAsync(request, pod, CancellationToken.None);
+        var preparation = CompleteBuildTestCommand(fixture, pod);
+        if (versionTwo)
+        {
+            Assert.False(spec["initContainers"]![0]!["volumeMounts"]![1]!.AsObject().ContainsKey("readOnly"));
+            Assert.Equal(preparation, await provider.PrepareWorkspaceAsync(request, pod, CancellationToken.None));
+        }
+        var collectorRequest = new SandboxBuildTestOutputCollectorRequest(
+            request.AcceptedCommand.OperationId, request.AcceptedCommand.ImmutableHash,
+            fixture.ApiRequest.ComputeRequestFingerprint(request.AcceptedCommand), request.AcceptedCommand.Checkpoint,
+            "/workspace/agentweaver/project", request.AcceptedCommand.ExecutionOptions.MaximumFileOutputBytes,
+            request.AcceptedCommand.Outputs)
+        {
+            AcceptedCommandContractVersion = versionTwo ? 2 : null
+        };
+        var collector = await provider.CreateOutputCollectorGatedAsync(request, collectorRequest, CancellationToken.None);
+        var collectorSpec = fixture.Handler.GetPod(collector)["spec"]!;
+        var collectorClaim = collectorSpec["volumes"]![0]!["persistentVolumeClaim"]!.AsObject();
+        var collectorMount = collectorSpec["containers"]![0]!["volumeMounts"]![0]!.AsObject();
+        Assert.True(collectorClaim["readOnly"]!.GetValue<bool>());
+        Assert.True(collectorMount["readOnly"]!.GetValue<bool>());
+        Assert.Equal(collector, await provider.GetOutputCollectorAsync(request, CancellationToken.None));
+        Assert.NotNull(await provider.GetAsync(request, CancellationToken.None));
+
+        spec["hostPID"] = "false";
+        Assert.Equal("provider_resource_mismatch", (await Assert.ThrowsAsync<SandboxProviderException>(
+            () => provider.GetAsync(request, CancellationToken.None))).Code);
+        foreach (var readOnlyOwner in new[] { collectorClaim, collectorMount })
+        {
+            readOnlyOwner.Remove("readOnly");
+            Assert.Equal("provider_resource_mismatch", (await Assert.ThrowsAsync<SandboxProviderException>(
+                () => provider.GetOutputCollectorAsync(request, CancellationToken.None))).Code);
+            readOnlyOwner["readOnly"] = true;
+        }
+    }
+
     [Fact]
     public async Task VersionTwoProviderPreparesAndRestoresTheCollectorWithNoDeclaredOutputs()
     {

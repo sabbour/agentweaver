@@ -910,11 +910,11 @@ public sealed partial class AgentSandboxProvider
             automount ||
             !TryGetBoolean(spec, "enableServiceLinks", out var serviceLinks) ||
             serviceLinks ||
-            !TryGetBoolean(spec, "hostNetwork", out var hostNetwork) ||
+            !TryGetKubernetesBoolean(spec, ["hostNetwork"], out var hostNetwork) ||
             hostNetwork ||
-            !TryGetBoolean(spec, "hostPID", out var hostPid) ||
+            !TryGetKubernetesBoolean(spec, ["hostPID"], out var hostPid) ||
             hostPid ||
-            !TryGetBoolean(spec, "hostIPC", out var hostIpc) ||
+            !TryGetKubernetesBoolean(spec, ["hostIPC"], out var hostIpc) ||
             hostIpc ||
             !TryGetBoolean(spec, "shareProcessNamespace", out var shareProcessNamespace) ||
             shareProcessNamespace ||
@@ -1054,10 +1054,10 @@ public sealed partial class AgentSandboxProvider
             ReadOptionalString(mount, "name") == BuildTestWorkspaceVolumeName &&
             claim is { } claimObject &&
             ReadOptionalString(claimObject, "claimName") == context.Descriptor.WorkspaceClaimName &&
-            TryGetBoolean(claimObject, "readOnly", out var claimReadOnly) &&
+            TryGetKubernetesBoolean(claimObject, ["readOnly"], out var claimReadOnly) &&
             claimReadOnly == readOnly &&
             ReadOptionalString(mount, "mountPath") == context.Descriptor.WorkspaceMountPath &&
-            TryGetBoolean(mount, "readOnly", out var mountReadOnly) &&
+            TryGetKubernetesBoolean(mount, ["readOnly"], out var mountReadOnly) &&
             mountReadOnly == readOnly;
     }
 
