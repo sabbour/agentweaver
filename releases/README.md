@@ -26,8 +26,10 @@ Packages. Duplicate package versions are skipped. The workflow does not build
 or publish container images.
 
 The CLI build, run, and API-acceptance contract is documented in the
-[CLI guide](../docs/guide/cli.md). This package-publication workflow does not
-publish standalone CLI archives.
+[CLI guide](../docs/guide/cli.md). Native acceptance uses GHCR by default; its
+input manifest can select an approved ACR login server for exact-source image
+checks. This selection does not change the image-publication destination.
+This package-publication workflow does not publish standalone CLI archives.
 
 ## Container images
 

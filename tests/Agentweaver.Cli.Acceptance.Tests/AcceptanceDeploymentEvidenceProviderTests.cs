@@ -20,6 +20,8 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
     private const string BoardAuthoritySha = "1471e0b6ee4ab2a859231582ed1efa8e86693002";
     private const string BoardAuthorityTree = "5846e8524d8d684f78d24518453a4e1348fa7bf4";
     private const string Namespace = "agentweaver";
+    private const string AcrRegistry = "agentweaverasabbour.azurecr.io";
+    private const string ControlledAcrRefreshToken = "controlled-acr-refresh-token";
     private const string HostImageSetting = "Environment__Sandbox__AgentSandbox__ContainerImage";
     private const string HostPlatformSetting = "Environment__Sandbox__AgentSandbox__ContainerImagePlatform";
     private const string HostBytesSetting = "Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes";
@@ -69,6 +71,155 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
             AcceptanceDeploymentEvidenceProvider.ValidateImageManifest(
                 new JsonObject { ["images"] = new JsonObject { [hostRepository] = "ghcr.io/sabbour/agentweaver-agenthost:latest" } },
                 SourceSha));
+    }
+
+    [Fact]
+    public void DeploymentManifestDefaultsToGhcrAndAllowsOnlyAnApprovedRegistryShape()
+    {
+        Assert.Equal(ApiAcceptanceSupport.DefaultImageRegistry,
+            ApiAcceptanceSupport.ValidateImageRegistry(new JsonObject()));
+        Assert.Equal(AcrRegistry, ApiAcceptanceSupport.ValidateImageRegistry(
+            new JsonObject { ["registry"] = AcrRegistry }));
+        Assert.Throws<InvalidDataException>(() => ApiAcceptanceSupport.ValidateImageRegistry(
+            new JsonObject { ["registry"] = "docker.io" }));
+        Assert.Throws<InvalidDataException>(() => ApiAcceptanceSupport.ValidateImageRegistry(
+            new JsonObject { ["registry"] = "agentweaverasabbour.azurecr.io/extra" }));
+    }
+
+    [Fact]
+    public async Task AcrRegistryUsesScopedTokenAndDoesNotForwardBearerToBlobRedirect()
+    {
+        RegistryFixtureSet fixtures = CreateAcrRegistryFixtureSet();
+        RegistryFixture host = fixtures.ByName["agenthost"];
+        var handler = new RegistryHandler(fixtures, redirectAcrConfig: true);
+        using var http = new HttpClient(handler);
+        List<string> registryNames = [];
+        var provider = new AcceptanceDeploymentEvidenceProvider(
+            http,
+            (_, _, _) => throw new InvalidOperationException("No cluster read is expected."),
+            (_, _) => Task.CompletedTask,
+            (registryName, _) =>
+            {
+                registryNames.Add(registryName);
+                return Task.FromResult(ControlledAcrRefreshToken);
+            });
+
+        JsonObject evidence = await provider.VerifyRegistryImageAsync(
+            host.Image, host.Image, SourceSha, SourceTree, default, expectedVersion: "1.0.0");
+
+        Assert.Equal(host.Digest, evidence["manifestDigest"]?.GetValue<string>());
+        Assert.Equal(host.CompressedPullBytes, evidence["compressedPullBytes"]?.GetValue<long>());
+        Assert.Equal(["agentweaverasabbour"], registryNames);
+        RecordedRequest exchange = Assert.Single(
+            handler.Requests, request => request.Uri.AbsolutePath == "/oauth2/token");
+        Assert.Equal(HttpMethod.Post, exchange.Method);
+        Assert.Contains("grant_type=refresh_token", exchange.Body, StringComparison.Ordinal);
+        Assert.Contains($"service={AcrRegistry}", exchange.Body, StringComparison.Ordinal);
+        Assert.Contains("scope=repository%3Aagentweaver-agenthost%3Apull", exchange.Body, StringComparison.Ordinal);
+        Assert.Contains("refresh_token=******", exchange.Body, StringComparison.Ordinal);
+        Assert.True(handler.AcrRefreshTokenWasSent);
+        Assert.All(handler.Requests.Where(request => request.Uri.Host == AcrRegistry
+                && request.Uri.AbsolutePath != "/oauth2/token"),
+            request => Assert.Equal("Bearer controlled-acr-pull-token", request.Authorization));
+        Assert.All(handler.Requests.Where(request => request.Uri.Host == "acrstore.blob.core.windows.net"),
+            request => Assert.Null(request.Authorization));
+        Assert.DoesNotContain(ControlledAcrRefreshToken, evidence.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AcrRegistryAllowsItsDedicatedDataEndpointAndRejectsAnUnpinnedVersion()
+    {
+        RegistryFixtureSet fixtures = CreateAcrRegistryFixtureSet();
+        RegistryFixture host = fixtures.ByName["agenthost"];
+        var handler = new RegistryHandler(
+            fixtures, redirectAcrConfig: true, acrRedirectHost: "agentweaverasabbour.eastus.data.azurecr.io");
+        using var http = new HttpClient(handler);
+        var provider = new AcceptanceDeploymentEvidenceProvider(
+            http,
+            (_, _, _) => throw new InvalidOperationException("No cluster read is expected."),
+            (_, _) => Task.CompletedTask,
+            (_, _) => Task.FromResult(ControlledAcrRefreshToken));
+
+        JsonObject evidence = await provider.VerifyRegistryImageAsync(
+            host.Image, host.Image, SourceSha, SourceTree, default, expectedVersion: "1.0.0");
+
+        Assert.Equal(host.Digest, evidence["manifestDigest"]?.GetValue<string>());
+        Assert.Contains(handler.Requests, request =>
+            request.Uri.Host == "agentweaverasabbour.eastus.data.azurecr.io" && request.Authorization is null);
+
+        RegistryFixtureSet wrongVersion = CreateAcrRegistryFixtureSet(sourceVersion: "1.0.1");
+        using var wrongHttp = new HttpClient(new RegistryHandler(wrongVersion));
+        var wrongProvider = new AcceptanceDeploymentEvidenceProvider(
+            wrongHttp,
+            (_, _, _) => throw new InvalidOperationException("No cluster read is expected."),
+            (_, _) => Task.CompletedTask,
+            (_, _) => Task.FromResult(ControlledAcrRefreshToken));
+        InvalidDataException failure = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            wrongProvider.VerifyRegistryImageAsync(
+                wrongVersion.ByName["agenthost"].Image,
+                wrongVersion.ByName["agenthost"].Image,
+                SourceSha, SourceTree, default, expectedVersion: "1.0.0"));
+        Assert.Contains("source commit, tree, and version", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task KubernetesReadbackAcceptsAcrImagesAndChecksThePinnedComponentVersion()
+    {
+        RegistryFixtureSet fixtures = CreateAcrRegistryFixtureSet();
+        JsonObject cluster = CreateCluster(fixtures);
+        var handler = new RegistryHandler(fixtures);
+        using var http = new HttpClient(handler);
+        var provider = new AcceptanceDeploymentEvidenceProvider(
+            http,
+            (_, _, _) => Task.FromResult((JsonObject)cluster.DeepClone()),
+            (_, _) => Task.CompletedTask,
+            (_, _) => Task.FromResult(ControlledAcrRefreshToken));
+        AcceptanceManifest manifest = CreateManifest() with
+        {
+            Root = new JsonObject
+            {
+                ["deploymentEvidence"] = new JsonObject { ["registry"] = AcrRegistry },
+            },
+        };
+        Dictionary<string, string> selectedImages = new(fixtures.SelectedImages)
+        {
+            ["agentweaver.gateway"] = $"sha-{SourceSha}",
+        };
+        Dictionary<string, string> versions = Services.Append(("Agentweaver.AgentHost", "agenthost"))
+            .ToDictionary(item => item.Item1, _ => "1.0.0", StringComparer.Ordinal);
+
+        JsonObject evidence = await provider.ObserveServicesEquivalentAsync(
+            manifest, SourceSha, SourceTree, selectedImages, default, versions);
+
+        Assert.Equal("passed", evidence["status"]?.GetValue<string>());
+        Assert.All(evidence["services"]!.AsArray().OfType<JsonObject>(),
+            service => Assert.All(service["pods"]!.AsArray().OfType<JsonObject>(),
+                pod => Assert.StartsWith($"{AcrRegistry}/", pod["image"]!.GetValue<string>(), StringComparison.Ordinal)));
+        Assert.Contains(handler.Requests, request =>
+            request.Uri.Host == AcrRegistry && request.Uri.AbsolutePath == $"/v2/agentweaver.gateway/manifests/sha-{SourceSha}");
+        Assert.Equal(fixtures.ByName["agenthost"].CompressedPullBytes,
+            evidence["agentHostImageMeasurement"]?["compressedPullBytes"]?.GetValue<long>());
+    }
+
+    [Fact]
+    public async Task KubernetesReadbackRejectsAnOmittedImageFromAnotherRegistry()
+    {
+        RegistryFixtureSet fixtures = CreateAcrRegistryFixtureSet();
+        JsonObject cluster = CreateCluster(fixtures);
+        using var http = new HttpClient(new RegistryHandler(fixtures));
+        var provider = new AcceptanceDeploymentEvidenceProvider(
+            http,
+            (_, _, _) => Task.FromResult((JsonObject)cluster.DeepClone()),
+            (_, _) => Task.CompletedTask,
+            (_, _) => Task.FromResult(ControlledAcrRefreshToken));
+        Dictionary<string, string> selectedImages = new(fixtures.SelectedImages);
+        selectedImages.Remove("agentweaver.identity.broker");
+
+        InvalidDataException failure = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            provider.ObserveServicesEquivalentAsync(
+                CreateManifest(), SourceSha, SourceTree, selectedImages, default));
+
+        Assert.Contains("selected approved registry", failure.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -396,6 +547,19 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
         await Assert.ThrowsAsync<InvalidDataException>(() => provider.VerifyRegistryImageAsync(
             gateway.Image, gateway.Image, SourceSha, SourceTree, default));
         Assert.DoesNotContain(handler.Requests, request => request.Uri.Host == "attacker.example");
+
+        RegistryFixtureSet acrFixtures = CreateAcrRegistryFixtureSet();
+        RegistryFixture acrHost = acrFixtures.ByName["agenthost"];
+        var acrHandler = new RegistryHandler(acrFixtures, redirectAcrToUntrustedHost: true);
+        using var acrHttp = new HttpClient(acrHandler);
+        var acrProvider = new AcceptanceDeploymentEvidenceProvider(
+            acrHttp,
+            (_, _, _) => throw new InvalidOperationException("No cluster read is expected."),
+            (_, _) => Task.CompletedTask,
+            (_, _) => Task.FromResult(ControlledAcrRefreshToken));
+        await Assert.ThrowsAsync<InvalidDataException>(() => acrProvider.VerifyRegistryImageAsync(
+            acrHost.Image, acrHost.Image, SourceSha, SourceTree, default, expectedVersion: "1.0.0"));
+        Assert.DoesNotContain(acrHandler.Requests, request => request.Uri.Host == "attacker.example");
     }
 
     [Fact]
@@ -534,6 +698,15 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
         foreach ((string id, string name) in Services)
             fixture.Add(id, name);
         fixture.Add("Agentweaver.AgentHost", "agenthost");
+        return fixture;
+    }
+
+    private static RegistryFixtureSet CreateAcrRegistryFixtureSet(string? sourceVersion = "1.0.0")
+    {
+        RegistryFixtureSet fixture = new(AcrRegistry, dockerGzipLayers: true);
+        foreach ((string id, string name) in Services)
+            fixture.Add(id, name, sourceTree: SourceTree, sourceVersion: sourceVersion);
+        fixture.Add("Agentweaver.AgentHost", "agenthost", sourceTree: SourceTree, sourceVersion: sourceVersion);
         return fixture;
     }
 
@@ -776,8 +949,11 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
         string ConfigDigest,
         long CompressedPullBytes);
 
-    private sealed class RegistryFixtureSet
+    private sealed class RegistryFixtureSet(
+        string registry = ApiAcceptanceSupport.DefaultImageRegistry,
+        bool dockerGzipLayers = false)
     {
+        public string Registry { get; } = registry;
         public Dictionary<string, RegistryFixture> ByName { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, byte[]> Bodies { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> SelectedImages { get; } = new(StringComparer.Ordinal);
@@ -787,7 +963,8 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
             string name,
             string? sourceTree = null,
             string? sourceSha = null,
-            int configDescriptorSizeDelta = 0)
+            int configDescriptorSizeDelta = 0,
+            string? sourceVersion = null)
         {
             JsonObject imageConfig = new()
             {
@@ -803,6 +980,8 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
             };
             if (sourceTree is not null)
                 imageConfig["config"]!["Labels"]!["io.agentweaver.source-tree"] = sourceTree;
+            if (sourceVersion is not null)
+                imageConfig["config"]!["Labels"]!["org.opencontainers.image.version"] = sourceVersion;
             if (name == "agenthost")
             {
                 imageConfig["config"]!["User"] = "1654:1654";
@@ -824,15 +1003,20 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
                 },
                 ["layers"] = new JsonArray(new JsonObject
                 {
-                    ["mediaType"] = "application/vnd.oci.image.layer.v1.tar+gzip",
+                    ["mediaType"] = dockerGzipLayers
+                        ? "application/vnd.docker.image.rootfs.diff.tar.gzip"
+                        : "application/vnd.oci.image.layer.v1.tar+gzip",
                     ["digest"] = layerDigest,
                     ["size"] = layerBytes.Length,
                 }),
             };
             byte[] manifestBytes = Encoding.UTF8.GetBytes(manifest.ToJsonString());
             string digest = Digest(manifestBytes);
-            string repository = $"sabbour/{Repository(id)}";
-            string image = $"ghcr.io/{repository}@{digest}";
+            string repository = Registry == ApiAcceptanceSupport.DefaultImageRegistry
+                ? $"sabbour/{Repository(id)}"
+                : Repository(id);
+            string host = Registry == ApiAcceptanceSupport.DefaultImageRegistry ? "ghcr.io" : Registry;
+            string image = $"{host}/{repository}@{digest}";
             long compressedBytes = manifestBytes.Length + configBytes.Length + layerBytes.Length;
             RegistryFixture fixture = new(image, digest, configDigest, compressedBytes);
             ByName.Add(name, fixture);
@@ -840,45 +1024,72 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
             Bodies.Add($"/v2/{repository}/manifests/{digest}", manifestBytes);
             Bodies.Add($"/v2/{repository}/manifests/sha-{SourceSha}", manifestBytes);
             Bodies.Add($"/v2/{repository}/blobs/{configDigest}", configBytes);
+            Bodies.TryAdd($"/{configDigest}", configBytes);
             return fixture;
         }
     }
 
-    private sealed record RecordedRequest(Uri Uri, string? Authorization);
+    private sealed record RecordedRequest(Uri Uri, string? Authorization, HttpMethod Method, string? Body);
 
     private sealed class RegistryHandler(
         RegistryFixtureSet fixtures,
         int tokenFailures = 0,
         bool redirectManifests = false,
-        bool redirectToUntrustedHost = false) : HttpMessageHandler
+        bool redirectToUntrustedHost = false,
+        bool redirectAcrConfig = false,
+        bool redirectAcrToUntrustedHost = false,
+        string acrRedirectHost = "acrstore.blob.core.windows.net") : HttpMessageHandler
     {
         private int tokenAttempts;
         public List<RecordedRequest> Requests { get; } = [];
+        public bool AcrRefreshTokenWasSent { get; private set; }
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
         {
             Uri uri = request.RequestUri!;
-            Requests.Add(new RecordedRequest(uri, request.Headers.Authorization?.ToString()));
-            if (uri.AbsolutePath == "/token")
+            string? requestBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            if (uri.AbsolutePath == "/oauth2/token" && requestBody is not null)
+                AcrRefreshTokenWasSent |= requestBody.Contains(
+                    $"refresh_token={ControlledAcrRefreshToken}", StringComparison.Ordinal);
+            string? safeBody = requestBody?.Replace(
+                $"refresh_token={ControlledAcrRefreshToken}", "refresh_token=******", StringComparison.Ordinal);
+            Requests.Add(new RecordedRequest(uri, request.Headers.Authorization?.ToString(), request.Method, safeBody));
+            if (uri.Host == "ghcr.io" && uri.AbsolutePath == "/token")
             {
                 tokenAttempts++;
                 if (tokenAttempts <= tokenFailures)
-                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
-                return Task.FromResult(JsonResponse("{\"token\":\"controlled-pull-token\"}"));
+                    return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+                return JsonResponse("{\"token\":\"controlled-pull-token\"}");
             }
-            if (redirectToUntrustedHost && uri.Host == "ghcr.io")
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.TemporaryRedirect)
+            if (uri.Host == fixtures.Registry && uri.AbsolutePath == "/oauth2/token")
+                return JsonResponse("{\"access_token\":\"controlled-acr-pull-token\"}");
+            if (redirectToUntrustedHost && uri.Host == "ghcr.io"
+                || redirectAcrToUntrustedHost && uri.Host == fixtures.Registry
+                    && uri.AbsolutePath.StartsWith("/v2/", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.TemporaryRedirect)
                 {
                     Headers = { Location = new Uri("https://attacker.example/metadata") },
-                });
+                };
             if (redirectManifests && uri.Host == "ghcr.io" && uri.AbsolutePath.Contains("/manifests/", StringComparison.Ordinal))
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.TemporaryRedirect)
+                return new HttpResponseMessage(HttpStatusCode.TemporaryRedirect)
                 {
                     Headers = { Location = new Uri($"https://pkg-containers.githubusercontent.com{uri.AbsolutePath}") },
-                });
-            if (fixtures.Bodies.TryGetValue(uri.AbsolutePath, out byte[]? body))
-                return Task.FromResult(JsonResponse(body));
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+                };
+            if (redirectAcrConfig && uri.Host == fixtures.Registry
+                && uri.AbsolutePath.Contains("/blobs/", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.TemporaryRedirect)
+                {
+                    Headers = { Location = new Uri($"https://{acrRedirectHost}/{uri.AbsolutePath[(uri.AbsolutePath.LastIndexOf('/') + 1)..]}") },
+                };
+            }
+            if (fixtures.Bodies.TryGetValue(uri.AbsolutePath, out byte[]? responseBody))
+                return JsonResponse(responseBody);
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
         }
 
         private static HttpResponseMessage JsonResponse(string value) =>
