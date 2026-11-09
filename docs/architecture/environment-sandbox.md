@@ -949,7 +949,11 @@ double-underscore names, for example
 | `CpuRequest`, `MemoryRequest` | Bounded Kubernetes resource quantities used as both requests and limits. |
 | `ReconciliationTimeoutSeconds`, `PollIntervalMilliseconds` | Bounds for provider deletion reconciliation. |
 
-`Kubernetes:ApiServer` defaults to `https://kubernetes.default.svc/`.
+When `Kubernetes:ApiServer` is not set, Environment uses the
+kubelet-injected `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT`
+address. This needs no DNS lookup, so the Cilium DNS rules do not have to
+allow the API server name. Outside a Pod, the default is
+`https://kubernetes.default.svc/`.
 `Kubernetes:ServiceAccountTokenFile` and
 `Kubernetes:CertificateAuthorityFile` default to the in-cluster service-account
 token and CA paths. The adapter requires trusted HTTPS and uses that service
