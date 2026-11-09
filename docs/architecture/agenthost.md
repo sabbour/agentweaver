@@ -241,9 +241,10 @@ before SDK session creation, readiness, or model/tool invocation. A configured `
 when its concrete capacity can be resolved; otherwise activation fails with
 `runtime_model_prompt_capacity_unavailable`. The resolved value is passed to the
 native SDK as its prompt-compaction threshold.
-Coordinator-root model turns fail closed with `runtime_spend_evidence_unavailable` when pinned run or agent budgets, or
-current project budgets, include a hard spend limit. The coordinator-root path does not support hard spend limits because
-it has no atomic Events evidence and exposure-reservation path.
+Coordinator-root model turns use the same spend budget admission as child dispatches. When the pinned run or agent
+budgets, or the current project budgets, apply to the turn, the RuntimeAction owner reads Events evidence and reserves
+exposure in the grant transaction. It issues no grant when the budget denies the turn. The reservation uses the turn ID.
+It retires after the root-turn completion is recorded and Events shows the usage events of that completion.
 Absent values preserve the legacy path. The RuntimeAction owner also rejects unsupported numeric bindings before issuing
 an action grant. Positive workflow-bound Hosted Copilot hard limits use the same prepared
 dispatch and begin checks against observed whole-run priced usage. The source

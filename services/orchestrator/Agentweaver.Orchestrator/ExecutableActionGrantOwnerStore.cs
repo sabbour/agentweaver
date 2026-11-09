@@ -41,6 +41,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
     private readonly RuntimeExecutionEvidenceLedgerStore _executionEvidence = new(options.Schema);
     private readonly CoordinationRuntimeRunStartStore _runStarts = new(dataSource, options.Schema);
     private readonly RuntimeUsageSourceStore _runtimeSources = new(dataSource, options, timeProvider);
+    private readonly SpendBudgetExposureStore _spendBudgets = new(dataSource, options, timeProvider);
 
     /// <summary>Stores the exact generation request that may use the accepted coordinator root.</summary>
     internal async Task AdmitCoordinatorRootModelTurnAsync(
@@ -482,12 +483,14 @@ internal sealed class ExecutableActionGrantOwnerStore(
     /// <param name="request">The runtime action request to authorize.</param>
     /// <param name="cancellationToken">Cancels database and authority reads.</param>
     /// <param name="reserveToolInvocation">When true, reserves a tool call under a run-scoped lock and enforces its limit.</param>
+    /// <param name="readSpendEvidence">Reads Events spend evidence for coordinator root model turns that have spend budgets. Without it, such a turn is denied.</param>
     /// <returns>The grant reference derived from the action event ID.</returns>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when registration, actor, decision, selection, or dispatch admission is stale or invalid.</exception>
-    /// <remarks>Grant creation and any tool-invocation outbox reservation commit together, making retries idempotent by event ID and request hash.</remarks>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when registration, actor, decision, selection, spend budget, or dispatch admission is stale or invalid.</exception>
+    /// <remarks>Grant creation, any spend budget reservation, and any tool-invocation outbox reservation commit together, making retries idempotent by event ID and request hash.</remarks>
     internal async Task<ExecutableActionGrantReference> IssueRuntimeActionGrantAsync(
         HttpContext context, RuntimeRegistration registration, RuntimeActionRequest request,
-        CancellationToken cancellationToken, bool reserveToolInvocation = false)
+        CancellationToken cancellationToken, bool reserveToolInvocation = false,
+        Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>>? readSpendEvidence = null)
     {
         RuntimeActionContract.Validate(request);
         var binding = registration.Binding;
@@ -613,13 +616,17 @@ internal sealed class ExecutableActionGrantOwnerStore(
                 limits.MaxModelTurns != binding.MaxModelTurns ||
                 limits.MaxToolCalls != binding.MaxToolCalls)
                 throw new RuntimeAuthorizationException("runtime_action_selection_changed");
+            SpendBudgetAdmissionContext? rootSpendBudgets = null;
             if (request.ActionId == "model.turn")
             {
+                // Run and agent budgets are pinned in the accepted selection. Project budgets are read again
+                // for each turn, so a lowered project budget applies without restarting the run.
                 var currentProjectSpendBudgets = await projects.ReadCurrentProjectSpendBudgetsAsync(
                     context, binding.ProjectId, binding.RunId, cancellationToken).ConfigureAwait(false);
-                RequireCoordinatorRootSpendBudgetsSupported(
-                    CoordinatorWorkflowCatalog.ReadSpendBudgets(authorized.Selection.Snapshot),
-                    currentProjectSpendBudgets.Budgets);
+                rootSpendBudgets = new SpendBudgetAdmissionContext(
+                    CoordinatorWorkflowCatalog.ReadSpendBudgets(authorized.Selection.Snapshot)
+                        .Where(budget => budget.Scope != SpendBudgetScopes.Project).ToImmutableArray(),
+                    currentProjectSpendBudgets.Budgets.IsDefaultOrEmpty ? null : currentProjectSpendBudgets);
             }
             if (request.ActionId == "model.turn" &&
                 !await HasCoordinatorRootModelTurnAdmissionAsync(
@@ -638,6 +645,26 @@ internal sealed class ExecutableActionGrantOwnerStore(
                         sendStateBefore?.Hash ?? throw new RuntimeAuthorizationException(
                             "runtime_numeric_limit_send_state_unavailable"),
                         sendStateBefore?.IsEmpty ?? false);
+            }
+            // Admit the root turn against its spend budgets like a child dispatch, in this grant transaction.
+            // The turn ID is the reservation ID and the A2A message ID that Events uses for its usage. A retry
+            // with the same event ID reuses the stored reservation.
+            if (rootSpendBudgets is { IsEmpty: false })
+            {
+                var source = await _runtimeSources.ReadCurrentSourceAsync(
+                    connection, transaction, registration, cancellationToken).ConfigureAwait(false);
+                var budgetDenial = await _spendBudgets.AdmitWithinTransactionAsync(
+                    connection, transaction, registration, source.Source.MeterSource, request.EventId,
+                    rootSpendBudgets,
+                    readSpendEvidence ?? throw new RuntimeAuthorizationException(
+                        SpendBudgetAdmissionMath.EvidenceUnavailable),
+                    cancellationToken).ConfigureAwait(false);
+                if (budgetDenial is not null)
+                {
+                    // Keep the denial notification, retirements, and cursor, but write no grant.
+                    await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                    throw new RuntimeAuthorizationException(budgetDenial);
+                }
             }
         }
         if (!isCoordinatorRoot && request.ActionId == "model.turn" && request.DispatchId is { } dispatchId)
@@ -1382,17 +1409,6 @@ internal sealed class ExecutableActionGrantOwnerStore(
         admission.Parameters.AddWithValue("decision", NpgsqlDbType.Uuid, decisionId);
         admission.Parameters.AddWithValue("decisionVersion", NpgsqlDbType.Bigint, decisionVersion);
         return await admission.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
-    }
-
-    internal static void RequireCoordinatorRootSpendBudgetsSupported(
-        IEnumerable<SpendBudget> pinnedBudgets,
-        IEnumerable<SpendBudget> currentProjectBudgets)
-    {
-        // Root turns have no atomic Events evidence and exposure reservation path, so hard budgets must fail closed.
-        if (pinnedBudgets.Any(budget =>
-                budget.Scope != SpendBudgetScopes.Project && budget.HardLimit is not null) ||
-            currentProjectBudgets.Any(budget => budget.HardLimit is not null))
-            throw new RuntimeAuthorizationException(SpendBudgetAdmissionMath.EvidenceUnavailable);
     }
 
     private async Task RequireCoordinatorRootDecisionAsync(

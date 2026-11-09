@@ -1,5 +1,6 @@
 extern alias OrchestratorHost;
 
+using System.Collections.Immutable;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
@@ -141,6 +142,8 @@ public sealed class CoordinatorRootAgentHostOwnerIntegrationTests(PostgresContai
         Assert.Equal(binding.ContextRevision, ownerSelection.Selection.ContextRevision);
         var prompt = "Generate an unconfirmed casting proposal.";
         hostFixture.Sdk.ExpectedPrompt = prompt;
+        // Emit one usage event in the turn, so its completion has a usage event that Events must witness.
+        hostFixture.Sdk.BeforeTurnResponse = _ => hostFixture.Sdk.EmitUsageAsync(hostFixture.Sdk.UsageData());
         var requestId = Guid.NewGuid();
         var promptHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt));
         Assert.Null(await grantStore.ReadRootTurnCompletionAsync(
@@ -226,6 +229,65 @@ public sealed class CoordinatorRootAgentHostOwnerIntegrationTests(PostgresContai
                     connection, transaction, conflicting, timeout.Token));
             await transaction.CommitAsync(timeout.Token);
         }
+
+        // A root turn's spend reservation retires only when Events witnesses the usage events of its recorded
+        // completion. A witness that names them only as source receipt IDs does not retire it.
+        Assert.NotEmpty(completion.NativeTurn.UsageEventIds);
+        var spendBudgets = new SpendBudgetExposureStore(dataSource, options, TimeProvider.System);
+        var runBudget = new SpendBudgetAdmissionContext(
+            [new("run-aic", 1, SpendBudgetScopes.Run, SdkMeterSources.CopilotNanoAiu, "AIC", null, 100m, 1m)], null);
+        var usageIdentities = completion.NativeTurn.UsageEventIds
+            .Select(usageEventId => SdkUsageIdentity.Create(
+                completion.NativeTurn.Source.RuntimeInstanceId, completion.NativeTurn.Source.SdkSessionId,
+                usageEventId.ToString("D")))
+            .ToArray();
+        async Task<string?> AdmitWithWitnessAsync(Guid dispatchId, long cursor, Guid[] sourceReceiptIds, Guid[] eventIds)
+        {
+            await using var connection = await dataSource.OpenConnectionAsync(timeout.Token);
+            await using var transaction = await connection.BeginTransactionAsync(timeout.Token);
+            var denial = await spendBudgets.AdmitWithinTransactionAsync(
+                connection, transaction, registration, SdkMeterSources.CopilotNanoAiu, dispatchId, runBudget,
+                (request, _) =>
+                {
+                    var scope = new UsageDispatchAccountingScope(binding.TenantId, binding.ProjectId, binding.RunId,
+                        request.MeterSource, request.Unit, null);
+                    var total = new UsageSpendTotal(0m, 0, 0);
+                    var witnesses = request.DispatchIds.Select(id =>
+                    {
+                        var items = (id == requestId.ToString("D") ? sourceReceiptIds.Zip(eventIds) : [])
+                            .Select(pair => new UsageDispatchSourceReceiptIdentity(
+                                pair.First, pair.Second, new string('f', 64)))
+                            .ToImmutableArray();
+                        return new UsageDispatchAccountingWitness(id, scope, cursor, items,
+                            UsageDispatchAccountingWitnessContract.ComputeReceiptDigest(id, scope, items),
+                            0m, items.Length, 0,
+                            items.IsEmpty ? UsageDispatchAccountingStatus.Unknown : UsageDispatchAccountingStatus.Partial,
+                            null, null, null);
+                    }).ToImmutableArray();
+                    return Task.FromResult(new UsageSpendEvidence(UsageSpendEvidenceContract.CurrentVersion,
+                        binding.TenantId, binding.ProjectId, binding.RunId, request.MeterSource, request.Unit,
+                        cursor, total, null, null, witnesses) { Agent = request.AgentId is null ? null : total });
+                },
+                timeout.Token);
+            await transaction.CommitAsync(timeout.Token);
+            return denial;
+        }
+        async Task<string?> ReadReservationStateAsync()
+        {
+            await using var connection = await dataSource.OpenConnectionAsync(timeout.Token);
+            await using var command = new NpgsqlCommand(
+                $"SELECT reservation_state FROM \"{schema}\".spend_budget_reservations WHERE dispatch_id = @dispatch",
+                connection);
+            command.Parameters.AddWithValue("dispatch", requestId);
+            return (string?)await command.ExecuteScalarAsync(timeout.Token);
+        }
+        var otherIds = usageIdentities.Select(_ => Guid.NewGuid()).ToArray();
+        Assert.Null(await AdmitWithWitnessAsync(requestId, 1, [], []));
+        Assert.Equal("outstanding", await ReadReservationStateAsync());
+        Assert.Null(await AdmitWithWitnessAsync(Guid.NewGuid(), 2, usageIdentities, otherIds));
+        Assert.Equal("outstanding", await ReadReservationStateAsync());
+        Assert.Null(await AdmitWithWitnessAsync(Guid.NewGuid(), 3, otherIds, usageIdentities));
+        Assert.Equal("retired", await ReadReservationStateAsync());
 
         var replacementOwner = new RuntimeOwnerContext(
             1, registration.Binding.ActorIssuer, registration.Binding.ActorId, registration.Binding.TenantId,

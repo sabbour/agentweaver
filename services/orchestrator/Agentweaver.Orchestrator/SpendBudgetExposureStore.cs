@@ -31,6 +31,18 @@ internal sealed record SpendBudgetAdmissionContext(
 internal sealed record RuntimeNativePreparationOutcome(
     RuntimeNativeCreditDenialReceipt? CreditDenial, string? SpendBudgetDenialCode);
 
+/// <summary>What Events must show for one dispatch before its reservation retires.</summary>
+/// <param name="SourceReceiptIds">Source receipts that a completed child dispatch acknowledged.</param>
+/// <param name="UsageEventIds">Usage ledger event IDs of a completed coordinator root turn.</param>
+internal sealed record SpendBudgetAccountingRequirement(
+    ImmutableHashSet<Guid> SourceReceiptIds, ImmutableHashSet<Guid> UsageEventIds)
+{
+    /// <summary>Whether the Events witness shows every required receipt and usage event.</summary>
+    public bool IsAccounted(UsageDispatchAccountingWitness witness) =>
+        SpendBudgetAdmissionMath.IsAccounted(SourceReceiptIds, witness) &&
+        UsageEventIds.All(required => witness.Receipts.Any(receipt => receipt.EventId == required));
+}
+
 /// <summary>One budget that applies to a dispatch, with its run-qualified bucket key.</summary>
 /// <param name="Budget">The budget.</param>
 /// <param name="BucketKey">Stable bucket identity; run and agent buckets include the run ID.</param>
@@ -198,6 +210,7 @@ internal sealed class SpendBudgetExposureStore(
     private readonly string _dispatches = $"\"{options.Schema}\".maf_execution_dispatches";
     private readonly string _outboxEvents = $"\"{options.Schema}\".outbox_events";
     private readonly PostgresOutbox _outbox = new(dataSource, options.Schema);
+    private readonly RuntimeExecutionEvidenceLedgerStore _executionEvidence = new(options.Schema);
 
     // One evaluated bucket. AlreadyReserved is true when a retry of this dispatch already stored the
     // reservation, so admission doesn't insert it again.
@@ -362,10 +375,10 @@ internal sealed class SpendBudgetExposureStore(
             // A reservation retires only when the dispatch finished accounting locally and Events shows
             // every receipt the dispatch acknowledged. Until then its spend can be missing from the Events
             // total, so the full reserve stays counted as exposure.
-            var required = await ReadAccountedReceiptsAsync(
+            var required = await ReadAccountingRequirementAsync(
                 connection, transaction, binding.ProjectId, witnessed[index].RunId, witnessed[index].DispatchId,
                 cancellationToken).ConfigureAwait(false);
-            if (required is null || !SpendBudgetAdmissionMath.IsAccounted(required, evidence.Dispatches[index]))
+            if (required is null || !required.IsAccounted(evidence.Dispatches[index]))
                 continue;
             // Record the cursor that proved the accounting. The state filter makes the update a no-op
             // if the reservation is already retired.
@@ -389,41 +402,58 @@ internal sealed class SpendBudgetExposureStore(
     }
 
     /// <summary>
-    /// Returns the source receipts that a completed, accounted dispatch acknowledged, or <see langword="null"/>
-    /// while accounting is still pending.
+    /// Returns what Events must show before a reservation retires, or <see langword="null"/> while accounting
+    /// is still pending. A child dispatch requires its acknowledged source receipts. A coordinator root turn has
+    /// no dispatch row, so it requires the usage events of its recorded root-turn completion.
     /// </summary>
-    private async Task<ImmutableHashSet<Guid>?> ReadAccountedReceiptsAsync(
+    private async Task<SpendBudgetAccountingRequirement?> ReadAccountingRequirementAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, string projectId, string runId,
         Guid dispatchId, CancellationToken cancellationToken)
     {
         // Only a completed dispatch whose accounting finished (priced or unpriced) can be retired. A dispatch
-        // that is still running or still accounting returns no row, so its reservation stays outstanding.
-        await using var read = new NpgsqlCommand($"""
-            SELECT acknowledgment_references::text, source_completion_manifest_json::text
+        // that is still running or still accounting returns null, so its reservation stays outstanding.
+        await using (var read = new NpgsqlCommand($"""
+            SELECT dispatch_state = 'completed' AND accounting_status IN ('priced', 'unpriced'),
+                acknowledgment_references::text, source_completion_manifest_json::text
             FROM {_dispatches}
             WHERE project_id = @project AND run_id = @run AND dispatch_id = @dispatch
-                AND dispatch_state = 'completed' AND accounting_status IN ('priced', 'unpriced')
-            """, connection, transaction);
-        read.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
-        read.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, runId);
-        read.Parameters.AddWithValue("dispatch", NpgsqlDbType.Uuid, dispatchId);
-        await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-            return null;
-        // Required receipts are the union of the receipts the dispatch acknowledged and the receipts in its
-        // completion manifest. Events must show all of them before the reservation retires.
-        var required = ImmutableHashSet.CreateBuilder<Guid>();
-        using (var references = JsonDocument.Parse(reader.GetString(0)))
-            foreach (var reference in references.RootElement.EnumerateArray())
-                required.Add(Property(reference, "sourceReceiptId").GetGuid());
-        // The completion manifest column can be NULL. In that case only the acknowledged receipts are required.
-        if (!reader.IsDBNull(1))
+            """, connection, transaction))
         {
-            using var manifest = JsonDocument.Parse(reader.GetString(1));
-            foreach (var receipt in Property(manifest.RootElement, "sourceReceipts").EnumerateArray())
-                required.Add(Property(receipt, "sourceReceiptId").GetGuid());
+            read.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
+            read.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, runId);
+            read.Parameters.AddWithValue("dispatch", NpgsqlDbType.Uuid, dispatchId);
+            await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (reader.IsDBNull(0) || !reader.GetBoolean(0))
+                    return null;
+                // Required receipts are the union of the receipts the dispatch acknowledged and the receipts in
+                // its completion manifest. Events must show all of them before the reservation retires.
+                var required = ImmutableHashSet.CreateBuilder<Guid>();
+                using (var references = JsonDocument.Parse(reader.GetString(1)))
+                    foreach (var reference in references.RootElement.EnumerateArray())
+                        required.Add(Property(reference, "sourceReceiptId").GetGuid());
+                // The completion manifest column can be NULL. In that case only the acknowledged receipts are
+                // required.
+                if (!reader.IsDBNull(2))
+                {
+                    using var manifest = JsonDocument.Parse(reader.GetString(2));
+                    foreach (var receipt in Property(manifest.RootElement, "sourceReceipts").EnumerateArray())
+                        required.Add(Property(receipt, "sourceReceiptId").GetGuid());
+                }
+                return new(required.ToImmutable(), []);
+            }
         }
-        return required.ToImmutable();
+        // No dispatch row: the reservation belongs to a coordinator root turn. It retires only after the turn
+        // completion is recorded. The usage event IDs come from the stored completion source, so they still
+        // match after a runtime replacement.
+        var completion = await _executionEvidence.ReadRootTurnCompletionAsync(
+            connection, transaction, projectId, runId, dispatchId, cancellationToken).ConfigureAwait(false);
+        if (completion is null)
+            return null;
+        var source = completion.Completion.NativeTurn.Source;
+        return new([], [.. completion.Completion.NativeTurn.UsageEventIds.Select(usageEventId =>
+            SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, usageEventId.ToString("D")))]);
     }
 
     // Returns a JSON property by name. The match ignores case so it doesn't depend on the naming policy used
