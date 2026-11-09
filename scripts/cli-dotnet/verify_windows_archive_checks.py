@@ -1671,7 +1671,6 @@ def create_valid_manifest(workspace: Path, gateway: str, issuer: str, tenant: st
             },
             "gate": None,
             "message": {"text": "Controlled archive validation input."},
-            "deniedActor": {"actorId": "archive-denied", "tenantId": "archive-denied-tenant"},
         },
     }
     return json.dumps(manifest, separators=(",", ":")).encode("utf-8")

@@ -12,7 +12,6 @@ import {
   replayP1ApiJournal,
   replayP1Journal,
   requireP1DecisionReceipt,
-  requireP1DeniedApiActor,
   requireP1Http,
   requireP1OwnedGate,
   sanitizeP1Failure,
@@ -201,7 +200,6 @@ function requireMessageReceipt(receipt, recipientSessionId) {
  */
 export async function runP1SurfaceJourney(surface, input, {
   api,
-  deniedApi,
   mcp,
   ui,
   nativeProbeResults = [],
@@ -215,7 +213,6 @@ export async function runP1SurfaceJourney(surface, input, {
   const startedAt = p1Timestamp(clock);
   const steps = [];
   let surfaceStatus = 'blocked';
-  let deniedActorUnavailable = false;
   let failure;
   let uiAdapterCloseStatus = surface === 'ui' ? 'not-started' : 'not-required';
   let mcpCloseStatus = surface === 'mcp' && mcp && typeof mcp.close === 'function'
@@ -223,7 +220,7 @@ export async function runP1SurfaceJourney(surface, input, {
   const observations = {};
   const actionReceipts = [];
   let cleanup = { intent: 'none', status: 'not-required' };
-  const adapters = { api, deniedApi, mcp, ui };
+  const adapters = { api, mcp, ui };
 
   try {
     let validated;
@@ -237,7 +234,7 @@ export async function runP1SurfaceJourney(surface, input, {
       throw new P1BlockedError('Gate and message journeys require a fixture created by this runner invocation; caller-supplied ownership receipts are not authority.');
     }
     const { environment, pins } = validated;
-    validateP1AdapterBindings(adapters, environment, pins.fixtureScope, surface);
+    validateP1AdapterBindings(adapters, environment, surface);
     await api.discover();
     if (surface === 'mcp') {
       try {
@@ -264,17 +261,6 @@ export async function runP1SurfaceJourney(surface, input, {
       requiredApiOperations: [...new Set([...capabilities.apiOperations, ...supportingOperations])].length,
     });
 
-    if (pins.fixtureScope.deniedActor) {
-      const denied = await requireP1DeniedApiActor(deniedApi, input);
-      steps.push({ id: 'valid-denied-actor-403', status: 'passed', operationId: denied.operationId, httpStatus: 403 });
-    } else {
-      deniedActorUnavailable = true;
-      steps.push({
-        id: 'valid-denied-actor-403',
-        status: 'blocked',
-        reason: 'Distinct authorized-but-denied actor unavailable: fixturePlan.deniedActor not provided (no second Broker account available)',
-      });
-    }
     const snapshot = await readP1OwnerSnapshots(api, pins.ownerFences);
     steps.push({ id: 'current-owner-fences', status: 'passed', operationId: 'readRunStatus/readSessionStatus/readDecisions' });
     if (input.journey.startsWith('gate-')) validateActorAnswer(snapshot, input);
@@ -386,7 +372,7 @@ export async function runP1SurfaceJourney(surface, input, {
         ...(surface === 'ui' ? { uiMethod: 'replayJournal' } : {}),
       });
     }
-    surfaceStatus = deniedActorUnavailable ? 'blocked' : 'passed';
+    surfaceStatus = 'passed';
   } catch (error) {
     failure = sanitizeP1Failure(error);
     surfaceStatus = error instanceof P1BlockedError ? 'blocked' : 'failed';

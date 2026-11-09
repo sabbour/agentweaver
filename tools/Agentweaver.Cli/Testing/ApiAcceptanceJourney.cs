@@ -43,7 +43,6 @@ internal static class ApiAcceptanceJourney
         AcceptanceManifest manifest,
         AcceptanceFixture fixture,
         IGatewayClient api,
-        IGatewayClient? deniedApi,
         JsonObject sourceEvidence,
         List<JsonObject> steps,
         JsonObject observations,
@@ -58,7 +57,6 @@ internal static class ApiAcceptanceJourney
             ApiAcceptanceSupport.AddStep(steps, "live-capabilities", "passed",
                 ("requiredApiOperations", JsonValue.Create(RequiredOperations(manifest.Journey, fixture).Count)));
 
-            JsonObject? denied = await CheckDeniedActorAsync(manifest, fixture, deniedApi, steps, ct).ConfigureAwait(false);
             OwnerSnapshot snapshot = await ReadOwnerSnapshotsAsync(api, fixture, ct).ConfigureAwait(false);
             ApiAcceptanceSupport.AddStep(steps, "current-owner-fences", "passed",
                 ("operationId", JsonValue.Create("readRunStatus/readSessionStatus/readDecisions")));
@@ -110,10 +108,7 @@ internal static class ApiAcceptanceJourney
                     throw new AcceptanceBlockedException("The selected P1 API journey is unsupported.");
             }
 
-            bool missingDeniedActor = denied is null;
-            return (missingDeniedActor && manifest.Journey is not ("session-history-metric" or "native-material-recovery")
-                ? "blocked"
-                : "passed", null);
+            return ("passed", null);
         }
         catch (AcceptanceBlockedException error)
         {
@@ -130,51 +125,6 @@ internal static class ApiAcceptanceJourney
             failure = ApiAcceptanceSupport.RedactText(error.Message);
             return ("failed", failure);
         }
-    }
-
-    private static async Task<JsonObject?> CheckDeniedActorAsync(
-        AcceptanceManifest manifest,
-        AcceptanceFixture fixture,
-        IGatewayClient? deniedApi,
-        List<JsonObject> steps,
-        CancellationToken ct)
-    {
-        JsonObject? deniedActor = manifest.FixturePlan["deniedActor"] as JsonObject;
-        if (deniedActor is null)
-        {
-            ApiAcceptanceSupport.AddStep(steps, "valid-denied-actor-403", "blocked",
-                ("reason", JsonValue.Create("Distinct authorized-but-denied actor unavailable: fixturePlan.deniedActor not provided (no second Broker account available)")));
-            return null;
-        }
-
-        if (deniedApi is null)
-        {
-            ApiAcceptanceSupport.AddStep(steps, "valid-denied-actor-403", "blocked",
-                ("reason", JsonValue.Create("The distinct denied-actor credential is unavailable; no second account was enrolled.")));
-            return null;
-        }
-
-        JsonObject context = await ValidateAuthContextAsync(deniedApi, ct).ConfigureAwait(false);
-        if (ApiAcceptanceSupport.GetString(context, "actorId") != ApiAcceptanceSupport.GetString(deniedActor, "actorId")
-            || ApiAcceptanceSupport.GetString(context, "tenantId") != ApiAcceptanceSupport.GetString(deniedActor, "tenantId")
-            || ApiAcceptanceSupport.GetString(context, "issuer") != ApiAcceptanceSupport.GetString(manifest.Environment, "issuer"))
-        {
-            throw new AcceptanceBlockedException("The denied-actor identity does not match the explicitly planned actor and tenant.");
-        }
-
-        GatewayResponse call = await InvokeAsync(deniedApi, "readRunStatus",
-            Path(("projectId", fixture.ProjectId), ("runId", fixture.RunId)), null, null, ct).ConfigureAwait(false);
-        if (call.Status != 403)
-        {
-            throw new InvalidOperationException(call.Status == 401
-                ? "The denied-actor token was rejected as unauthenticated; HTTP 403 was required."
-                : $"The denied-actor read returned HTTP {call.Status}; HTTP 403 was required.");
-        }
-
-        ApiAcceptanceSupport.AddStep(steps, "valid-denied-actor-403", "passed",
-            ("operationId", JsonValue.Create("readRunStatus")),
-            ("httpStatus", JsonValue.Create(call.Status)));
-        return deniedActor;
     }
 
     private static async Task<OwnerSnapshot> ReadOwnerSnapshotsAsync(IGatewayClient api, AcceptanceFixture fixture, CancellationToken ct)

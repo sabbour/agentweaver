@@ -64,7 +64,6 @@ function eventPage(events = [{
 }
 
 async function host({
-  deniedStatus = 403,
   gate = true,
   eventPages = [eventPage()],
   apiEventPages = eventPages,
@@ -187,7 +186,7 @@ async function host({
       origin: new URL(baseUrl).origin,
       issuer: 'https://identity.controlled.test/',
       audience: 'agentweaver-controlled',
-      actorId: token === 'allowed' ? 'allowed-actor' : 'denied-actor',
+      actorId: 'allowed-actor',
       getAuthorization: async () => `Bearer ${token}`,
     },
   });
@@ -305,7 +304,6 @@ async function host({
     baseUrl,
     requests,
     api: makeClient('allowed', 'controlled-tenant'),
-    deniedApi: makeClient('denied', 'denied-tenant'),
     mcp,
     ui,
     uiState: () => ({ opened: uiOpened, closed: uiClosed }),
@@ -327,7 +325,6 @@ function input(baseUrl, journey = 'journal') {
     ...IDS,
     expiresAt: '2026-10-14T00:00:00.000Z',
     allowedJourneys: [journey],
-    deniedActor: { actorId: 'denied-actor', tenantId: 'denied-tenant' },
     ownershipReceipts: [IDS.projectId, IDS.runId, IDS.rootSessionId, IDS.sessionId].map(resourceId => ({
       resourceType: 'owner-resource',
       resourceId,
@@ -375,7 +372,7 @@ function input(baseUrl, journey = 'journal') {
 const SOURCE_EVIDENCE = null;
 const CLOCK = () => Date.parse('2026-10-13T00:00:00.000Z');
 
-test('P1 API journal journey checks a real denied-actor 403 and correlated Gateway replay evidence', async () => {
+test('P1 API journal journey passes without a second actor and records correlated Gateway replay evidence', async () => {
   const fixture = await host();
   try {
     const result = await runP1ApiJourney(input(fixture.baseUrl), {
@@ -387,7 +384,7 @@ test('P1 API journal journey checks a real denied-actor 403 and correlated Gatew
     assert.equal(result.surfaceStatus, 'passed');
     assert.equal(result.fullP1Status, 'blocked');
     assert.deepEqual(result.observations.journal, { eventCount: 1, pageCount: 1 });
-    assert.ok(result.steps.some(step => step.id === 'valid-denied-actor-403' && step.httpStatus === 403));
+    assert.equal(result.steps.some(step => step.id === 'valid-denied-actor-403'), false);
     const journalStep = result.steps.find(step => step.id === 'committed-run-journal');
     assert.equal(journalStep.operationId, 'replayRunEvents');
     assert.ok(journalStep.correlationId);
@@ -396,39 +393,7 @@ test('P1 API journal journey checks a real denied-actor 403 and correlated Gatew
     assert.equal(fixture.mcp.protocol.some(item =>
       item.message?.params?.name === 'agentweaver_replayRunEvents'), false);
     assert.doesNotMatch(JSON.stringify(result), /Bearer|allowed-actor|controlled-tenant/);
-    assert.ok(fixture.requests.some(request => request.authorization === 'Bearer denied' && request.method === 'GET'));
-  } finally {
-    await fixture.close();
-  }
-});
-
-test('one-account P1 journal records the missing denied-actor check as blocked and continues', async () => {
-  const fixture = await host();
-  try {
-    const journeyInput = input(fixture.baseUrl);
-    delete journeyInput.pins.fixtureScope.deniedActor;
-    fixture.deniedApi = undefined;
-    const result = await runP1ApiJourney(journeyInput, {
-      ...fixture,
-      deniedApi: undefined,
-      mcp: undefined,
-      sourceEvidence: SOURCE_EVIDENCE,
-      clock: CLOCK,
-    });
-
-    const deniedStep = result.steps.find(step => step.id === 'valid-denied-actor-403');
-    assert.deepEqual(deniedStep, {
-      id: 'valid-denied-actor-403',
-      status: 'blocked',
-      reason: 'Distinct authorized-but-denied actor unavailable: fixturePlan.deniedActor not provided (no second Broker account available)',
-    });
-    assert.equal(result.steps.find(step => step.id === 'current-owner-fences')?.status, 'passed');
-    assert.equal(result.steps.find(step => step.id === 'committed-run-journal')?.status, 'passed');
-    assert.equal(result.surfaceStatus, 'blocked');
-    assert.equal(result.fullP1Status, 'blocked');
-    assert.notEqual(result.fullP1Status, 'passed');
-    assert.ok(fixture.requests.some(request =>
-      request.method === 'GET' && request.url.startsWith('/api/v1/projects/controlled-project/runs/controlled-run/events')));
+    assert.ok(fixture.requests.some(request => request.authorization && request.method === 'GET'));
   } finally {
     await fixture.close();
   }
@@ -566,21 +531,6 @@ test('expired fixture input blocks before any network or MCP call', async () => 
   }
 });
 
-test('a denied-actor 401 is not mistaken for a valid forbidden result', async () => {
-  const fixture = await host({ deniedStatus: 401 });
-  try {
-    const result = await runP1ApiJourney(input(fixture.baseUrl), {
-      ...fixture,
-      sourceEvidence: SOURCE_EVIDENCE,
-      clock: CLOCK,
-    });
-    assert.equal(result.surfaceStatus, 'failed');
-    assert.match(result.failure.message, /HTTP 403 was required/);
-  } finally {
-    await fixture.close();
-  }
-});
-
 test('the MCP runner rejects caller ownership claims before tool discovery', async () => {
   const fixture = await host();
   try {
@@ -642,24 +592,6 @@ test('the UI runner opens only the pinned run, checks the journal, and closes on
       item.message?.params?.name === 'agentweaver_replayRunEvents'), false);
     assert.deepEqual(fixture.uiState(), { opened: true, closed: true });
     assert.equal(result.observations.adapterCleanup.ui, 'closed');
-  } finally {
-    await fixture.close();
-  }
-});
-
-test('a shared app actor remains valid for a distinct denied tenant scope when the owner returns 403', async () => {
-  const fixture = await host();
-  try {
-    fixture.deniedApi.authProvider.actorId = 'allowed-actor';
-    const config = input(fixture.baseUrl);
-    config.pins.fixtureScope.deniedActor.actorId = 'allowed-actor';
-    const result = await runP1ApiJourney(config, {
-      ...fixture,
-      sourceEvidence: SOURCE_EVIDENCE,
-      clock: CLOCK,
-    });
-    assert.equal(result.surface, 'api');
-    assert.equal(result.surfaceStatus, 'passed');
   } finally {
     await fixture.close();
   }

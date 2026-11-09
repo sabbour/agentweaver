@@ -142,7 +142,7 @@ function validateFixtureOwnership(input, pins, now) {
 }
 
 /** Validate the requested journey and fixture setup plan without accepting caller-supplied ownership. */
-function validatePlan(input, { environment, pins }) {
+function validatePlan(input, { pins }) {
   if (Object.hasOwn(pins, 'ownerFences') || Object.hasOwn(pins, 'fixtureScope')) {
     throw new Error('Runner plans cannot contain caller-supplied owner fences or fixture receipts.');
   }
@@ -153,7 +153,6 @@ function validatePlan(input, { environment, pins }) {
   if (!isRecord(plan)) throw new Error('An explicit runner fixture plan is required.');
   const fixturePlanKeys = [
     'expectedPlatformRuntimeRevision', 'selectionContext', 'gate', 'message',
-    ...(Object.hasOwn(plan, 'deniedActor') ? ['deniedActor'] : []),
   ];
   requireExactKeys(plan, fixturePlanKeys, 'runner fixture plan');
   if (!Number.isSafeInteger(plan.expectedPlatformRuntimeRevision)
@@ -172,16 +171,6 @@ function validatePlan(input, { environment, pins }) {
     || context.providerRequirements.some(value => !isRecord(value))
     || context.requiredEgress.some(value => !isRecord(value))) {
     throw new Error('The run selection context contains an invalid reference or requirement.');
-  }
-
-  if (Object.hasOwn(plan, 'deniedActor')) {
-    const deniedActor = plan.deniedActor;
-    requireExactKeys(deniedActor, ['actorId', 'tenantId'], 'denied actor');
-    requireString(deniedActor.actorId, 'denied actor ID');
-    requireString(deniedActor.tenantId, 'denied actor tenant ID');
-    if (deniedActor.actorId === environment.actorId && deniedActor.tenantId === environment.tenantId) {
-      throw new Error('The denied actor must be different from the selected P1 actor.');
-    }
   }
 
   if (input.journey.startsWith('gate-')) {

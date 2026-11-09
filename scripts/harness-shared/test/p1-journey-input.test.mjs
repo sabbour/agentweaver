@@ -73,7 +73,6 @@ function planInput() {
       providerRequirements: [],
       requiredEgress: [],
     },
-    deniedActor: { actorId: 'different-actor', tenantId: 'controlled-tenant' },
     gate: null,
     message: null,
   };
@@ -136,22 +135,13 @@ test('accepts an execution plan without caller-created owner receipts', () => {
   assert.equal(Object.hasOwn(value.pins, 'ownerFences'), false);
 });
 
-test('allows omitted distinct denied actor while retaining validation when one is supplied', () => {
-  const oneAccount = planInput();
-  delete oneAccount.fixturePlan.deniedActor;
-  const validated = validateP1RunnerPlanInput(oneAccount, { now });
-  assert.equal(Object.hasOwn(validated.fixturePlan, 'deniedActor'), false);
-
-  const sameActor = planInput();
-  sameActor.fixturePlan.deniedActor = {
-    actorId: sameActor.environment.actorId,
-    tenantId: sameActor.environment.tenantId,
+test('rejects the removed denied-actor fixture field', () => {
+  const oldManifest = planInput();
+  oldManifest.fixturePlan.deniedActor = {
+    actorId: 'different-actor',
+    tenantId: 'controlled-tenant',
   };
-  assert.throws(() => validateP1RunnerPlanInput(sameActor, { now }), /must be different/);
-
-  const malformed = planInput();
-  malformed.fixturePlan.deniedActor = { actorId: 'distinct-actor' };
-  assert.throws(() => validateP1RunnerPlanInput(malformed, { now }), /exactly: actorId, tenantId/);
+  assert.throws(() => validateP1RunnerPlanInput(oldManifest, { now }), /runner fixture plan must contain exactly/);
 });
 
 test('requires a positive expected platform-runtime revision in runner fixture plans', () => {

@@ -371,10 +371,6 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
       io.error?.(error.message);
       return 2;
     }
-    if (Object.hasOwn(validated.fixturePlan, 'deniedActor')) {
-      io.error?.('This launcher uses one Broker account only. Omit fixturePlan.deniedActor; distinct-actor coverage remains unavailable with one account.');
-      return 2;
-    }
     return runDotnetCli({
       input: options.input,
       output: options.output,
@@ -397,20 +393,12 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
       io.error?.(error.message);
       return 2;
     }
-    if (Object.hasOwn(validated.fixturePlan, 'deniedActor')) {
-      io.error?.('This launcher uses one Broker account only. Omit fixturePlan.deniedActor; distinct-actor coverage remains unavailable with one account.');
-      return 2;
-    }
     printP1OperatorSteps(io, { dryRun: true });
     return 0;
   }
 
   try {
     const validated = await readP1SignInInput(argv);
-    if (Object.hasOwn(validated.fixturePlan, 'deniedActor')) {
-      io.error?.('This launcher uses one Broker account only. Omit fixturePlan.deniedActor; distinct-actor coverage remains unavailable with one account.');
-      return 2;
-    }
     printP1OperatorSteps(io);
     const browser = chromium ?? await loadChromium();
     return await withBrowserContext({

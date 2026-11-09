@@ -198,7 +198,7 @@ public sealed class ApiAcceptanceNativeMaterialTests
             .Select(value => value!.GetValue<string>())
             .ToArray();
         Assert.Contains(retainedGaps, gap => gap.Contains("Authority revocation", StringComparison.Ordinal));
-        Assert.Contains(retainedGaps, gap => gap.Contains("denied-actor", StringComparison.Ordinal));
+        Assert.DoesNotContain(retainedGaps, gap => gap.Contains("denied-actor", StringComparison.Ordinal));
         Assert.Equal(2, api.CastingRequests.Count);
         Assert.True(JsonNode.DeepEquals(api.CastingRequests[0], api.CastingRequests[1]));
         Assert.Equal(2, api.ReplacementRequests.Count);

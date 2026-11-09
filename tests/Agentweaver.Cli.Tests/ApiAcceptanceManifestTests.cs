@@ -481,6 +481,27 @@ public sealed class ApiAcceptanceManifestTests
         }
     }
 
+    [Fact]
+    public async Task RunnerFixturePlanRejectsTheRemovedDeniedActorField()
+    {
+        JsonObject root = P1Manifest();
+        root["fixturePlan"]!["deniedActor"] = new JsonObject
+        {
+            ["actorId"] = "denied",
+            ["tenantId"] = "tenant-denied",
+        };
+        string path = WriteManifest(root);
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(
+                () => ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     private static JsonObject NativeMaterialManifest()
     {
         JsonObject root = P1Manifest();
@@ -508,7 +529,6 @@ public sealed class ApiAcceptanceManifestTests
         JsonObject plan = root["fixturePlan"]!.AsObject();
         plan["gate"] = null;
         plan["message"] = null;
-        plan.Remove("deniedActor");
         return root;
     }
 

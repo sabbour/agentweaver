@@ -516,30 +516,18 @@ export async function createP1Fixture(plan, {
       audience: environment.audience,
       baseUrl: environment.baseUrl,
     });
-    const hasDeniedActor = Boolean(plan.fixturePlan.deniedActor);
-    if (!identity || typeof identity.token !== 'string'
-      || hasDeniedActor && typeof identity.deniedToken !== 'string') {
-      throw new Error(hasDeniedActor
-        ? 'The identity provider did not return run-bound and distinct denied-actor broker tokens.'
-        : 'The identity provider did not return a run-bound broker token.');
+    if (!identity || typeof identity.token !== 'string') {
+      throw new Error('The identity provider did not return a run-bound broker token.');
     }
     if (!identity.api && typeof identity.createClients === 'function') {
-      Object.assign(identity, identity.createClients(hasDeniedActor
-        ? { deniedActor: plan.fixturePlan.deniedActor }
-        : {}));
+      Object.assign(identity, identity.createClients());
     }
     const runApi = identity.api;
-    const deniedApi = identity.deniedApi;
-    if (!runApi || hasDeniedActor && !deniedApi || !hasDeniedActor && deniedApi) {
-      throw new Error(hasDeniedActor
-        ? 'The identity provider did not create both planned API clients.'
-        : 'The identity provider created an unplanned denied-actor API client.');
-    }
+    if (!runApi) throw new Error('The identity provider did not create the run API client.');
     if (identity.projectId !== projectId || identity.runId !== runId) {
       throw new Error('The identity provider did not retain the exact selected project and run binding.');
     }
     if (!runApi.operations?.size) await runApi.discover();
-    if (deniedApi && !deniedApi.operations?.size) await deniedApi.discover();
     const { value: runAuthorization } = await invoke(
       runApi, 'getAuthorizationContext', {}, undefined, [200]);
     requireContext(runAuthorization, actor, { projectId, runId });
@@ -611,7 +599,6 @@ export async function createP1Fixture(plan, {
       expiresAt,
       allowedJourneys: [plan.journey],
       ownershipReceipts,
-      ...(plan.fixturePlan.deniedActor ? { deniedActor: plan.fixturePlan.deniedActor } : {}),
       ...(gate ? {
         gate: {
           requestId: gate.requestId,
@@ -640,7 +627,6 @@ export async function createP1Fixture(plan, {
     return {
       input: runtimeInput,
       api: runApi,
-      deniedApi,
       identity,
       state,
       async cleanup() {

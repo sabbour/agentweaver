@@ -765,6 +765,9 @@ public sealed class ApiAcceptanceRunnerTests
             }
             if (journey == "journal")
             {
+                Assert.DoesNotContain(
+                    result["steps"]!.AsArray().OfType<JsonObject>(),
+                    step => step["id"]?.GetValue<string>() == "valid-denied-actor-403");
                 Assert.Equal(1, result["observations"]?["journal"]?["eventCount"]?.GetValue<int>());
                 Assert.Equal(1, result["observations"]?["journal"]?["pageCount"]?.GetValue<int>());
                 RecordedRequest[] requests = handler.Requests.ToArray();
@@ -1744,7 +1747,6 @@ public sealed class ApiAcceptanceRunnerTests
                 ["message"] = journey == "message"
                     ? new JsonObject { ["text"] = "Controlled CLI message." }
                     : null,
-                ["deniedActor"] = new JsonObject { ["actorId"] = "denied", ["tenantId"] = "tenant-denied" },
             },
         };
     }
@@ -1753,7 +1755,6 @@ public sealed class ApiAcceptanceRunnerTests
     {
         JsonObject manifest = CreateManifest(workspace, gateway, "session-history-metric");
         JsonObject plan = manifest["fixturePlan"]!.AsObject();
-        plan.Remove("deniedActor");
         if (omitSelectionContext)
             plan.Remove("selectionContext");
         return manifest;

@@ -416,7 +416,6 @@ function plan(journey) {
         providerRequirements: [],
         requiredEgress: [],
       },
-      deniedActor: { actorId: 'denied-actor', tenantId: TENANT_ID },
       gate: journey.startsWith('gate-') ? {
         prompt: 'Continue the controlled acceptance run?',
         allowedChoices: journey === 'gate-answer' ? ['continue'] : [],
@@ -434,7 +433,6 @@ test('execute journal fixture seeds one owner event and the API runner replays t
   assert.equal(journalEvents.length, 0);
   const setupApi = apiFor({ journey: 'journal' });
   let runApi;
-  const deniedApi = apiFor({ actorId: 'denied-actor', journalEvents });
   const fixture = await createP1Fixture(fixturePlan, {
     api: setupApi,
     invocationId: INVOCATION_ID,
@@ -447,11 +445,9 @@ test('execute journal fixture seeds one owner event and the API runner replays t
       });
       return {
         token: 'run-token',
-        deniedToken: 'denied-token',
         projectId: binding.projectId,
         runId: binding.runId,
         api: runApi,
-        deniedApi,
       };
     },
   });
@@ -508,7 +504,6 @@ test('execute journal fixture seeds one owner event and the API runner replays t
 
     const result = await runP1SurfaceJourney('api', fixture.input, {
       api: fixture.api,
-      deniedApi: fixture.deniedApi,
       clock: () => Date.parse('2026-10-13T00:00:00.000Z'),
     });
     assert.equal(result.surfaceStatus, 'passed', JSON.stringify(result));
@@ -521,21 +516,6 @@ test('execute journal fixture seeds one owner event and the API runner replays t
     const replayCall = fixture.api.calls.find(call => call.operationId === 'replayRunEvents');
     assert.deepEqual(replayCall.query, { limit: 100 });
     assert.equal(Object.hasOwn(replayCall.query, 'cursor'), false);
-    assert.strictEqual(fixture.deniedApi.journalEvents, journalEvents);
-    assert.equal(fixture.deniedApi.calls.some(call =>
-      call.operationId === 'sendProjectRunMessage'), false);
-
-    const eventCount = journalEvents.length;
-    const deniedWrite = await fixture.deniedApi.invoke('sendProjectRunMessage', {
-      pathParameters: {
-        projectId: receipt.projectId,
-        runId: receipt.runId,
-      },
-      body: { text: 'Denied actor must not append an event.' },
-      headers: { 'Idempotency-Key': 'denied-actor-write' },
-    });
-    assert.equal(deniedWrite.status, 403);
-    assert.equal(journalEvents.length, eventCount);
     cleanupAttempted = true;
     const cleanup = await fixture.cleanup();
     assert.deepEqual(cleanup, {
@@ -563,11 +543,9 @@ async function createJourneyFixture(journey) {
     invocationId: INVOCATION_ID,
     acquireRunIdentity: async binding => ({
       token: 'run-token',
-      deniedToken: 'denied-token',
       projectId: binding.projectId,
       runId: binding.runId,
       api: apiFor({ bound: true, journey, expectedRunId: binding.runId }),
-      deniedApi: apiFor({ actorId: 'denied-actor' }),
     }),
   });
   return fixture;
@@ -684,7 +662,6 @@ test('fixture setup and cleanup use only the public Projects API with the setup 
     }
     return setupInvoke(operationId, options);
   };
-  const deniedApi = apiFor();
   const fixture = await createP1Fixture(plan('gate-answer'), {
     api: setupApi,
     invocationId: INVOCATION_ID,
@@ -694,7 +671,6 @@ test('fixture setup and cleanup use only the public Projects API with the setup 
       assert.equal(binding.runId, '00000000-0000-4000-8000-000000000021');
       return {
         token: 'run-token',
-        deniedToken: 'denied-token',
         projectId: binding.projectId,
         runId: binding.runId,
         api: apiFor({
@@ -702,7 +678,6 @@ test('fixture setup and cleanup use only the public Projects API with the setup 
           journey: 'gate-answer',
           expectedRunId: binding.runId,
         }),
-        deniedApi,
       };
     },
     createId: purpose => ({
@@ -746,10 +721,8 @@ test('fixture setup and cleanup use only the public Projects API with the setup 
   await assert.rejects(fixture.cleanup(), /never retried/);
 });
 
-test('one-account fixture setup never reads a denied token or creates a denied API', async () => {
+test('fixture setup returns only the run-bound API client', async () => {
   const fixturePlan = plan('journal');
-  delete fixturePlan.fixturePlan.deniedActor;
-  let deniedTokenRead = false;
   const fixture = await createP1Fixture(fixturePlan, {
     api: apiFor(),
     invocationId: INVOCATION_ID,
@@ -764,12 +737,6 @@ test('one-account fixture setup never reads a denied token or creates a denied A
           expectedRunId: binding.runId,
         }),
       };
-      Object.defineProperty(identity, 'deniedToken', {
-        get() {
-          deniedTokenRead = true;
-          throw new Error('denied token must not be read');
-        },
-      });
       return identity;
     },
     createId: purpose => ({
@@ -779,8 +746,7 @@ test('one-account fixture setup never reads a denied token or creates a denied A
     }[purpose] ?? '00000000-0000-4000-8000-000000000027'),
   });
 
-  assert.equal(deniedTokenRead, false);
-  assert.equal(fixture.deniedApi, undefined);
+  assert.equal(Object.hasOwn(fixture, 'deniedApi'), false);
   assert.equal(Object.hasOwn(fixture.input.pins.fixtureScope, 'deniedActor'), false);
   await fixture.cleanup();
 });
@@ -809,11 +775,9 @@ test('TenantAdmin setup with Owner and Orchestrator grants accepts selection wit
     invocationId: INVOCATION_ID,
     acquireRunIdentity: async binding => ({
       token: 'run-token',
-      deniedToken: 'denied-token',
       projectId: binding.projectId,
       runId: binding.runId,
       api: apiFor({ bound: true, journey: 'journal', expectedRunId: binding.runId }),
-      deniedApi: apiFor({ actorId: 'denied-actor' }),
     }),
   });
   try {
@@ -897,11 +861,9 @@ test('same-invocation gate retry verifies and reuses the owner gate after losing
     }[purpose] ?? '00000000-0000-4000-8000-000000000027'),
     acquireRunIdentity: async binding => ({
       token: 'run-token',
-      deniedToken: 'denied-token',
       projectId: binding.projectId,
       runId: binding.runId,
       api: runApi,
-      deniedApi: apiFor({ actorId: 'denied-actor' }),
     }),
   });
 
@@ -935,13 +897,11 @@ test('same-invocation gate retry verifies and reuses the owner gate after losing
 
 test('message setup registers and reads back a same-run child without invoking dispatch', async () => {
   const setupApi = apiFor();
-  const deniedApi = apiFor();
   const fixture = await createP1Fixture(plan('message'), {
     api: setupApi,
     invocationId: INVOCATION_ID,
     acquireRunIdentity: async binding => ({
       token: 'run-token',
-      deniedToken: 'denied-token',
       projectId: binding.projectId,
       runId: binding.runId,
       api: apiFor({
@@ -949,7 +909,6 @@ test('message setup registers and reads back a same-run child without invoking d
         journey: 'message',
         expectedRunId: binding.runId,
       }),
-      deniedApi,
     }),
   });
   const children = fixture.input.pins.fixtureScope.ownershipReceipts
@@ -972,7 +931,6 @@ test('same-invocation fixtures reach the selected API, MCP, and UI gate and mess
         assert.equal(fixture.input.executionIntent, 'execute');
         const result = await runP1SurfaceJourney(surface, fixture.input, {
           api: fixture.api,
-          deniedApi: fixture.deniedApi,
           mcp,
           ui,
           clock: () => Date.parse('2026-10-13T00:00:00.000Z'),
@@ -1083,11 +1041,9 @@ for (const [failureKey, step] of [
         ? 'selected-run' : '00000000-0000-4000-8000-000000000022',
       acquireRunIdentity: async binding => ({
         token: 'run-token',
-        deniedToken: 'denied-token',
         projectId: binding.projectId,
         runId: binding.runId,
         api: apiFor({ bound: true }),
-        deniedApi: apiFor({ actorId: 'denied-actor' }),
       }),
     });
     const invoke = api.invoke.bind(api);
@@ -1147,11 +1103,9 @@ test('journal fixture setup refuses when the discovered owner message operation 
         runApi.operations.delete('sendProjectRunMessage');
         return {
           token: 'run-token',
-          deniedToken: 'denied-token',
           projectId: binding.projectId,
           runId: binding.runId,
           api: runApi,
-          deniedApi: apiFor({ actorId: 'denied-actor' }),
         };
       },
     });
@@ -1193,11 +1147,9 @@ test('invalid accepted journal-message receipt is indeterminate and is never ret
         };
         return {
           token: 'run-token',
-          deniedToken: 'denied-token',
           projectId: binding.projectId,
           runId: binding.runId,
           api: runApi,
-          deniedApi: apiFor({ actorId: 'denied-actor' }),
         };
       },
     });
@@ -1220,7 +1172,6 @@ test('a failed durable UI action marker prevents the UI write', async () => {
   try {
     const result = await runP1SurfaceJourney('ui', fixture.input, {
       api: fixture.api,
-      deniedApi: fixture.deniedApi,
       ui,
       clock: () => Date.parse('2026-10-13T00:00:00.000Z'),
       beforeUiAction: async () => { throw new Error('controlled evidence append failure'); },

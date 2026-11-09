@@ -37,7 +37,6 @@ const ENVIRONMENT = {
 };
 const PROJECT_ID = 'fixture-project';
 const RUN_ID = '00000000-0000-4000-8000-000000000001';
-const DENIED_ACTOR = { actorId: 'denied-actor', tenantId: 'denied-tenant' };
 const NOW = 2_000_000_000_000;
 
 function callbackSession(onFail = () => {}) {
@@ -1271,9 +1270,9 @@ test('launcher reports missing input before loading the browser', async () => {
   assert.match(errors.join('\n'), /input manifest/i);
 });
 
-test('launcher refuses a fixture that asks it to sign in a second actor', async () => {
+test('launcher rejects the removed denied-actor field before sign-in', async () => {
   const input = validInput();
-  input.fixturePlan.deniedActor = DENIED_ACTOR;
+  input.fixturePlan.deniedActor = { actorId: 'denied-actor', tenantId: 'denied-tenant' };
   const manifestPath = path.resolve('scripts/harness-shared/test/p1-signin-second-actor.fixture.json');
   const { writeFile: writeInput, rm } = await import('node:fs/promises');
   await writeInput(manifestPath, JSON.stringify(input), 'utf8');
@@ -1294,7 +1293,7 @@ test('launcher refuses a fixture that asks it to sign in a second actor', async 
     });
     assert.equal(code, 2);
     assert.equal(signIns, 0);
-    assert.match(errors.join('\n'), /one Broker account only/);
+    assert.match(errors.join('\n'), /P1 sign-in input is invalid/);
   } finally {
     await rm(manifestPath, { force: true });
   }

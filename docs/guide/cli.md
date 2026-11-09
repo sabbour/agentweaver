@@ -363,8 +363,9 @@ session tree, and detached session at the advanced fence. Cleanup archives the
 project before the final Owner revocation and reads back the archived project
 and empty assignment list. An uncertain create, selection, cancellation, or
 readback remains indeterminate; the CLI does not claim that the fixture was
-never created or cleaned. A missing denied actor remains a blocked probe, so
-this narrow feature result does not prove the full acceptance journey.
+never created or cleaned. The API journeys use the manifest actor and do not
+run a cross-actor denial probe. `fixturePlan` rejects unknown fields, so older
+manifests that include a second actor are invalid.
 
 No native Workspace refs/tree/file journey is currently defined. The Gateway
 read operations require the short-lived Repo App selection code in
@@ -507,6 +508,6 @@ invocation or reuse the cleaned project/run while cleanup is unresolved. After
 successful cleanup or reconciliation, a new attempt uses
 `--interactive`, a new invocation identity, and a new evidence path. Native
 probe evidence is not fabricated or dispatched by this CLI, so the overall
-acceptance can remain blocked even when its API surface passes. The current
-launcher does not invent a second account; missing independent native probes
-or a second denied-actor result remains blocked.
+acceptance can remain blocked even when its API surface passes. The CLI does
+not create or require a second Broker account. Missing independent native
+probes can still keep the overall acceptance blocked.

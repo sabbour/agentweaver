@@ -38,7 +38,6 @@ function validInput() {
         providerRequirements: [],
         requiredEgress: [],
       },
-      deniedActor: { actorId: 'controlled-denied-actor', tenantId: 'controlled-tenant' },
       gate: null,
       message: null,
     },
@@ -453,17 +452,16 @@ test('P1 CLI resumes the same invocation, runs the selected journey, and records
           assert.equal(options.runId, 'runner-owned-run');
           return {
             token: 'controlled-run-token',
-            deniedToken: 'controlled-denied-token',
             projectId: options.projectId,
             runId: options.runId,
-            createClients: () => ({ api: {}, deniedApi: {} }),
+            createClients: () => ({ api: {} }),
           };
         },
         async createSurfaceAdapters({ surface, identity }) {
           calls.push('adapters');
           assert.equal(surface, 'api');
           assert.equal(identity.projectId, 'runner-owned-project');
-          return { api: {}, deniedApi: {} };
+          return { api: {} };
         },
         async runSurfaceJourney(surface, journeyInput, dependencies) {
           calls.push('journey');
@@ -639,7 +637,7 @@ test('P1 CLI cleans up the owned fixture before a session-material attachment fa
       },
       async createSurfaceAdapters() {
         calls.push('adapters');
-        return { api: {}, deniedApi: {} };
+        return { api: {} };
       },
       async runSurfaceJourney(surface) {
         calls.push('journey');

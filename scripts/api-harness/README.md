@@ -206,13 +206,11 @@ checked image build source into each journey; an older source supplied in JSON
 is not enough. You can run acceptance from a newer reviewed checkout that still
 contains those commits. `fixturePlan` requires a
 positive `expectedPlatformRuntimeRevision` alongside the selection context and
-only the gate or message content needed by the selected journey. A distinct
-`fixturePlan.deniedActor` is optional. When supplied, it must remain a distinct
-actor and the identity provider must return its separate token. When omitted,
-the `valid-denied-actor-403` step is recorded as blocked with the explicit
-missing-account reason; the runner continues the other checks but the surface
-and complete acceptance result cannot pass. Do not substitute the signed-in actor
-or change any role or access grant. The runner passes the expected revision
+only the gate or message content needed by the selected journey. The API
+journeys use the manifest actor and do not run a cross-actor denial probe or
+require a second Broker account. The manifest rejects unknown `fixturePlan`
+fields, including fields for a second actor. Do not change any role or access
+grant. The runner passes the expected revision
 through the existing run-selection request and verifies the accepted and observed owner
 selection revisions. The plan value is not authority or an ownership receipt;
 the owner compare-and-swap checks it against current state. The fixture keeps
@@ -243,14 +241,14 @@ cookie store, or credential cache. The same in-memory browser session
 authorizes the setup and run-bound tokens. The launcher validates the callback
 and redeems its code with a PKCE verifier before the Portal can consume it.
 Token values stay in memory and are not written to output, logs, or evidence.
-The one-account route does not create a distinct denied actor; that check and
-any missing native or recovery evidence remain blocked.
+The route uses one authorized actor and does not run a cross-actor denial
+probe. Missing native or recovery evidence remains blocked.
 
 Advanced invocations may continue to use the lower-level runner with an
 already-authorized identity provider. It requires the setup token in the
-process environment and `--identity-module`; if a distinct denied actor is
-included in the plan, that provider must return a separate token for it. The
-shared runner does not sign in or refresh credentials. Both commands record
+process environment and `--identity-module`. The identity provider returns
+the one run-bound token used by the shared runner. The runner does not sign in
+or refresh credentials. Both commands record
 the invocation ID in JSONL evidence so an unfinished API or MCP run can replay
 setup and idempotent actions with the same IDs.
 

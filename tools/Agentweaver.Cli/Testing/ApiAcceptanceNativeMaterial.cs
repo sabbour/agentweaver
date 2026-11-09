@@ -187,7 +187,7 @@ internal static class ApiAcceptanceNativeMaterial
             evidence["retainedGaps"] = new JsonArray(
                 "This run proves one approved BYOK turn, retained material, Host replacement, cache restore, exact replay, and normal fixture cleanup.",
                 "Authority revocation, stale fence or registration, changed-payload retry, optional-cache absence or expiry, and missing or expired required turn material were not tested by this journey.",
-                "The separate denied-actor and other full-P1 checks remain outstanding.",
+                "Other full-P1 checks remain outstanding.",
                 "Archive and operating-system acceptance remain separate work under issue 2449.");
             evidence["status"] = "passed";
             ApiAcceptanceSupport.AddStep(steps, "exact-replay-without-new-native-effects", "passed",

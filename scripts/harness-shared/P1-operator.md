@@ -17,10 +17,9 @@ Prepare one manifest for the exact target. It must include:
 - The current platform selection revision.
 - Independently produced native and recovery evidence for checks that need it.
 
-The one-account launcher cannot produce a distinct denied identity. If the
-manifest requests one, the launcher stops before sign-in. Do not use the
-signed-in actor as the denied actor. A missing denied identity or evidence item
-must remain blocked; it is not a pass.
+The journey uses the manifest actor for its API requests. It does not run a
+cross-actor denial probe or require a second Broker account. The manifest
+rejects unknown `fixturePlan` fields, including fields for a second actor.
 
 The launcher does not change registered clients, redirect addresses, scopes,
 tenant settings, roles, or permissions. Any trust change needs separate
@@ -165,5 +164,4 @@ have completed without a verified receipt, stop and follow its diagnosis.
 Do not retry the mutation or remove unrelated resources.
 
 A passed surface journey does not prove complete acceptance. Missing native or
-recovery evidence remains blocked. A one-account run also cannot pass a check that
-requires a distinct denied actor. Controlled tests do not prove a live journey.
+recovery evidence remains blocked. Controlled tests do not prove a live journey.

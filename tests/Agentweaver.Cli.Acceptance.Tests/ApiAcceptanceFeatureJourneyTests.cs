@@ -55,7 +55,6 @@ public sealed class ApiAcceptanceFeatureJourneyTests
             manifest,
             fixture,
             api,
-            null,
             new JsonObject(),
             steps,
             observations,
@@ -69,8 +68,7 @@ public sealed class ApiAcceptanceFeatureJourneyTests
             Assert.Equal(2, observations["sessionHistoryMetric"]?["sessionHistoryRecordsTotal"]?.GetValue<int>());
             Assert.Equal(1, observations["sessionHistoryMetric"]?["runsTotal"]?.GetValue<int>());
             Assert.Equal(0, observations["sessionHistoryMetric"]?["runsInRange"]?.GetValue<int>());
-            Assert.Contains(steps, step => step["id"]?.GetValue<string>() == "valid-denied-actor-403"
-                && step["status"]?.GetValue<string>() == "blocked");
+            Assert.DoesNotContain(steps, step => step["id"]?.GetValue<string>() == "valid-denied-actor-403");
         }
         else
         {
