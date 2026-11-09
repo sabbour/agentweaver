@@ -37,14 +37,16 @@ internal static class ApiAcceptanceFixtureSetup
             JsonObject setupContext = await ApiAcceptanceJourney.ValidateAuthContextAsync(setupApi, ct).ConfigureAwait(false);
             ApiAcceptanceJourney.ValidateAuthContext(setupContext, manifest);
 
-            bool nativeMaterialRecovery = manifest.Journey == "native-material-recovery";
+            bool fullFlow = manifest.Journey == ApiAcceptanceSupport.FullFlowJourney;
+            // Both journeys send one real model turn through the P1 setup path; only native-material-recovery replaces the Host.
+            bool nativeP1 = fullFlow || manifest.Journey == "native-material-recovery";
             string? p1SetupInvocationId = null;
             string? nativeMaterialPrompt = null;
             JsonObject created;
             JsonObject owner;
             JsonObject orchestrator;
             string projectId;
-            if (nativeMaterialRecovery)
+            if (nativeP1)
             {
                 var p1Invocation = Guid.Parse(invocationId);
                 JsonObject p1Setup;
@@ -157,7 +159,7 @@ internal static class ApiAcceptanceFixtureSetup
             {
                 throw new InvalidOperationException("The current project configuration revision does not match setup.");
             }
-            if (nativeMaterialRecovery)
+            if (nativeP1)
                 nativeMaterialPrompt = await BuildNativeMaterialPromptAsync(
                     setupApi, projectId, configuration, ct).ConfigureAwait(false);
 
@@ -195,12 +197,12 @@ internal static class ApiAcceptanceFixtureSetup
             {
                 JsonObject createRunBody = new()
                 {
-                    ["firstMessage"] = nativeMaterialRecovery
+                    ["firstMessage"] = nativeP1
                         ? nativeMaterialPrompt
                         : "Acceptance fixture request; no work is dispatched.",
                     ["expectedProjectConfigRevision"] = configurationRevision,
                 };
-                if (nativeMaterialRecovery)
+                if (nativeP1)
                     createRunBody["p1SetupInvocationId"] = p1SetupInvocationId;
                 JsonObject createdRun = await MutatingSetupStepAsync(state, "create-interactive-run", selectionApi,
                     "createProjectRun",
@@ -212,7 +214,8 @@ internal static class ApiAcceptanceFixtureSetup
                             ["Idempotency-Key"] = ApiAcceptanceSupport.StableUuid(invocationId,
                                 manifest.Journey == "session-history-metric"
                                     ? "metric-create-run"
-                                    : nativeMaterialRecovery ? "native-material-create-run" : "journal-create-run"),
+                                    : fullFlow ? "full-flow-create-run"
+                                    : nativeP1 ? "native-material-create-run" : "journal-create-run"),
                         }), [201], ct).ConfigureAwait(false);
                 try
                 {
@@ -241,6 +244,9 @@ internal static class ApiAcceptanceFixtureSetup
                     state.SetupIndeterminate = true;
                     throw;
                 }
+                // The run has not started, so a missing BYOK binding or USD budget blocks before any model call.
+                if (fullFlow)
+                    state.Setup["runBudget"] = RequireFullFlowBudget(observedSelection, manifest);
             }
             else
             {
@@ -327,7 +333,7 @@ internal static class ApiAcceptanceFixtureSetup
             JsonObject? runtimeStartup = null;
             long fence;
             long stateVersion;
-            if (nativeMaterialRecovery)
+            if (nativeP1)
             {
                 rootReceipt = await MutatingSetupStepAsync(state, "start-p1-project-run", runApi, "startProjectRun",
                     new GatewayInvocation(Path(("projectId", projectId), ("runId", runId))), [200], ct)
@@ -699,6 +705,21 @@ internal static class ApiAcceptanceFixtureSetup
             || cancelledAt == default)
         {
             throw new InvalidOperationException("The Orchestrator did not return the exact non-terminal fixture run cancellation receipt.");
+        }
+
+        // The full-flow budget preflight stops before startProjectRun, so no root or runtime can exist.
+        if (!state.RootAccepted && !state.RootAcceptanceAttempted
+            && state.Journey == ApiAcceptanceSupport.FullFlowJourney)
+        {
+            state.Cleanup!["runTerminalization"] = new JsonObject
+            {
+                ["runId"] = runId,
+                ["state"] = "cancelled",
+                ["cancelledAt"] = cancelledAt,
+                ["alreadyTerminal"] = false,
+                ["rootAcceptance"] = "not-attempted",
+            };
+            return;
         }
 
         if (!state.RootAccepted)
@@ -1121,8 +1142,10 @@ internal static class ApiAcceptanceFixtureSetup
         string journey = manifest.Journey;
         bool serverOwnedSelection = RequiresServerOwnedSelection(manifest);
         bool nativeMaterialRecovery = journey == "native-material-recovery";
+        bool fullFlow = journey == ApiAcceptanceSupport.FullFlowJourney;
+        bool nativeP1 = nativeMaterialRecovery || fullFlow;
         IReadOnlySet<string> operations = ApiAcceptanceJourney.GetOperationIds(openApi);
-        List<string> required = nativeMaterialRecovery
+        List<string> required = nativeP1
             ?
         [
             "getAuthorizationContext", "createP1InvocationSetup", "readP1InvocationSetup",
@@ -1131,7 +1154,6 @@ internal static class ApiAcceptanceFixtureSetup
             "readSessionStatus", "readSessionTree", "readDecisions",
             "revokeProjectRoleAssignment", "updateProject", "createProjectRun",
             "listProjectCastingRoles", "formulateCastingProposal", "readSessionTurnContent",
-            "replaceRuntimeHost", "readRuntimeReplacement",
         ]
             :
         [
@@ -1162,6 +1184,10 @@ internal static class ApiAcceptanceFixtureSetup
                 required.Add("createProjectRun");
         }
         if (nativeMaterialRecovery)
+            required.AddRange(["replaceRuntimeHost", "readRuntimeReplacement"]);
+        if (fullFlow)
+            required.AddRange(ApiAcceptanceFullFlow.RequiredOperations);
+        if (nativeP1)
         {
             required.Add("listProjectCastingUniverses");
             ValidateProjectRunOperation(openApi, "createProjectRun", requireP1SetupInvocationId: true);
@@ -1180,7 +1206,7 @@ internal static class ApiAcceptanceFixtureSetup
         {
             ValidateJournalMessageOperation(openApi);
         }
-        if (serverOwnedSelection && !nativeMaterialRecovery)
+        if (serverOwnedSelection && !nativeP1)
             ValidateProjectRunOperation(openApi, "createProjectRun");
         ValidateProjectRunOperation(openApi, "cancelProjectRun");
         ValidateRuntimeCleanupStatusContract(openApi);
@@ -1316,7 +1342,7 @@ internal static class ApiAcceptanceFixtureSetup
             string rootSessionId,
             long executionFence)
         {
-            JsonObject approval = (JsonObject)manifest.FixturePlan["nativeMaterialRecovery"]!;
+            JsonObject approval = ApiAcceptanceSupport.ModelApproval(manifest)!;
             string? registrationHash = ApiAcceptanceSupport.GetString(startup, "acceptedSelectionHash");
             if (ApiAcceptanceSupport.GetString(startup, "state") != "ready" ||
                 ApiAcceptanceSupport.GetString(startup, "p1SetupInvocationId") != p1SetupInvocationId ||
@@ -1337,6 +1363,41 @@ internal static class ApiAcceptanceFixtureSetup
                 throw new AcceptanceBlockedException("The current runtime binding does not match the approved P1 setup, model, Host, and execution fence.");
         }
 
+        // The server can admit a BYOK run without a USD budget, so the journey requires one before it starts the run.
+        internal static JsonObject RequireFullFlowBudget(JsonObject selection, AcceptanceManifest manifest)
+        {
+            JsonObject approval = (JsonObject)manifest.FixturePlan["fullFlow"]!;
+            decimal maxRunUsd = approval["maxRunUsd"]!.GetValue<decimal>();
+            JsonObject? model = selection["modelSelection"] as JsonObject;
+            if (model is null
+                || ApiAcceptanceSupport.GetString(model, "sourceMode") != "byok"
+                || ApiAcceptanceSupport.GetString(model, "reference") !=
+                    ApiAcceptanceSupport.GetString(approval, "approvedModelSelectionReference"))
+                throw new AcceptanceBlockedException(
+                    "The full-flow journey needs the approved BYOK model binding as the run model. No run was started.");
+            decimal? hardLimit = null;
+            foreach (JsonObject budget in (selection["runLimits"]?["spendBudgets"] as JsonArray ?? []).OfType<JsonObject>())
+            {
+                if (ApiAcceptanceSupport.GetString(budget, "scope") == "run"
+                    && ApiAcceptanceSupport.GetString(budget, "meterSource") == "byok.tokens"
+                    && ApiAcceptanceSupport.GetString(budget, "unit") == "USD"
+                    && budget["hardLimit"] is JsonValue value && value.TryGetValue(out decimal limit)
+                    && limit > 0 && limit <= maxRunUsd
+                    && (hardLimit is null || limit < hardLimit))
+                    hardLimit = limit;
+            }
+            if (hardLimit is null)
+                throw new AcceptanceBlockedException(
+                    $"The full-flow journey needs a hard run budget on byok.tokens in USD that is above 0 and at most {maxRunUsd}. No run was started.");
+            return new JsonObject
+            {
+                ["modelSelectionReference"] = ApiAcceptanceSupport.GetString(model, "reference"),
+                ["sourceMode"] = "byok",
+                ["hardLimitUsd"] = hardLimit.Value,
+                ["maxRunUsd"] = maxRunUsd,
+            };
+        }
+
     private static void ValidateRuntimeCleanupStatusContract(JsonObject openApi)
     {
         JsonObject schemas = openApi["components"]?["schemas"] as JsonObject ?? [];
@@ -1351,7 +1412,8 @@ internal static class ApiAcceptanceFixtureSetup
     }
 
     private static bool RequiresServerOwnedSelection(AcceptanceManifest manifest) =>
-        (manifest.Journey is "journal" or "session-history-metric" or "native-material-recovery")
+        manifest.Journey == ApiAcceptanceSupport.FullFlowJourney
+        || (manifest.Journey is "journal" or "session-history-metric" or "native-material-recovery")
         && !manifest.FixturePlan.ContainsKey("selectionContext");
 
     private static void ValidateProjectRunOperation(

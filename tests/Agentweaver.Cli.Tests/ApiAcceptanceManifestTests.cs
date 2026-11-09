@@ -514,6 +514,50 @@ public sealed class ApiAcceptanceManifestTests
     }
 
     [Fact]
+    public async Task FullFlowRequiresByokApprovalAndBoundedRunLimits()
+    {
+        string path = WriteManifest(FullFlowManifest());
+        try
+        {
+            AcceptanceManifest manifest = await ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None);
+            Assert.Equal(ApiAcceptanceSupport.FullFlowJourney, manifest.Journey);
+            Assert.Same(manifest.FixturePlan["fullFlow"], ApiAcceptanceSupport.ModelApproval(manifest));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+
+        foreach (Action<JsonObject> mutate in new Action<JsonObject>[]
+        {
+            plan => plan.Remove("fullFlow"),
+            plan => plan["fullFlow"]!["approvedModelSourceMode"] = "hostedCopilot",
+            plan => plan["fullFlow"]!["approvedModelSelectionReference"] = " ",
+            plan => plan["fullFlow"]!["maxRunUsd"] = 0,
+            plan => plan["fullFlow"]!["maxRunUsd"] = 5.01m,
+            plan => plan["fullFlow"]!["maxRunUsd"] = "5",
+            plan => plan["fullFlow"]!["maxDurationMinutes"] = 9,
+            plan => plan["fullFlow"]!["maxDurationMinutes"] = 31,
+            plan => plan["fullFlow"]!["allowOrdinaryHostReplacement"] = true,
+            plan => plan["selectionContext"] = new JsonObject(),
+        })
+        {
+            JsonObject invalid = FullFlowManifest();
+            mutate(invalid["fixturePlan"]!.AsObject());
+            path = WriteManifest(invalid);
+            try
+            {
+                await Assert.ThrowsAsync<InvalidDataException>(
+                    () => ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None));
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
     public async Task RunnerFixturePlanRejectsTheRemovedDeniedActorField()
     {
         JsonObject root = P1Manifest();
@@ -550,6 +594,26 @@ public sealed class ApiAcceptanceManifestTests
             ["approvedMaxPromptTokens"] = 4096,
             ["approvedNativeRequestCount"] = 1,
             ["allowOrdinaryHostReplacement"] = true,
+        };
+        return root;
+    }
+
+    private static JsonObject FullFlowManifest()
+    {
+        JsonObject root = P1Manifest();
+        root["journey"] = "full-flow-delivery";
+        JsonObject plan = root["fixturePlan"]!.AsObject();
+        plan.Remove("selectionContext");
+        plan["gate"] = null;
+        plan["message"] = null;
+        plan["fullFlow"] = new JsonObject
+        {
+            ["approvedModelSelectionReference"] = "approved/byok",
+            ["approvedModelSourceMode"] = "byok",
+            ["approvedReasoningEffort"] = "medium",
+            ["approvedMaxPromptTokens"] = 4096,
+            ["maxRunUsd"] = 5,
+            ["maxDurationMinutes"] = 30,
         };
         return root;
     }

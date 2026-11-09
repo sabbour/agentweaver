@@ -725,6 +725,111 @@ acceptance only when the bound turn, material readback, replacement, replay,
 and project/run cleanup receipts all validate. This result does not replace the
 separate archive and operating-system checks, or other required P1 probes.
 
+## Run the full-flow delivery journey
+
+The `full-flow-delivery` journey is the end-to-end acceptance test for the
+main delivery path. It uses a real Bring Your Own Key (BYOK) model. It checks
+outcomes, not exact model text. Use it after you change casting, the project
+backlog, run usage, or the run setup that these steps use.
+
+> [!WARNING]
+> This journey sends real model requests, which cost money. It also creates
+> and then removes a project, a run, and role assignments on the target. Run it
+> only on an approved non-production target, and only with an approved BYOK
+> model and spend limit.
+
+Before you run the journey, make sure that:
+
+- The target has the approved BYOK model binding. See
+  [Configure an Azure OpenAI BYOK model](./configure-byok-azure-openai.md).
+- The platform runtime defaults select that BYOK model as `modelSelection`.
+  The journey project starts with an empty configuration, so the run uses the
+  platform defaults. See
+  [Bootstrap the first PlatformAdmin and configure runtime defaults](./deploy-to-azure.md#bootstrap-the-first-platformadmin-and-configure-runtime-defaults).
+- The platform `runLimits.spendBudgets` contains a hard budget with
+  `scope: "run"`, `meterSource: "byok.tokens"`, and `unit: "USD"`. Its
+  `hardLimit` must be more than 0 and not more than the manifest `maxRunUsd`.
+
+Use the same manifest as the other API journeys, with
+`journey: "full-flow-delivery"`. Omit `selectionContext`. Set `gate` and
+`message` to `null`. The [CLI guide](./cli.md#run-the-full-flow-delivery-journey)
+gives the required `fullFlow` fields.
+
+1. Validate the manifest offline:
+
+   ```powershell
+   $cli = (Resolve-Path .\artifacts\cli\win-x64\publish\agentweaver.exe).Path
+   & $cli test --input .\artifacts\full-flow-input.json --output .\artifacts\full-flow-evidence.jsonl --dry-run
+   ```
+
+   A successful dry run makes no network request, sign-in, or model call, and
+   writes no evidence.
+
+2. Run the journey. Use a new evidence path for each run:
+
+   ```powershell
+   & $cli test --input .\artifacts\full-flow-input.json --output .\artifacts\full-flow-evidence.jsonl --interactive
+   ```
+
+The journey does these steps in order:
+
+1. **Run setup.** It creates a project with Owner and Orchestrator
+   assignments, and a run from the platform defaults. Before it starts the
+   run, it reads the run
+   selection. If the selection does not use the approved BYOK model, or has no
+   hard run budget on `byok.tokens` in USD at or below `maxRunUsd`, the result
+   is `blocked` and no run is started.
+2. **Casting.** It sends one casting request to the model. It checks the
+   completion receipt, reads back the stored user and assistant text, and
+   compares their hashes with the receipt. The draft must have exactly two
+   agents with different roles from the role catalog, and no reserved role.
+3. **Casting confirmation.** It confirms the draft and reads the project
+   configuration. The configuration revision and casting must match the
+   confirmation.
+4. **Backlog task.** It captures one task, reads it back, archives it, and
+   reads it back again.
+5. **Usage.** It reads the run usage until the BYOK usage is priced. The total
+   must not be more than `maxRunUsd`.
+6. **Cleanup.** It cancels the run and waits for Host cleanup. It then removes
+   the Orchestrator assignment, archives the project, and removes the Owner
+   assignment last. It reads back each result.
+
+The time limit starts when fixture setup starts, after sign-in. Setup and
+journey work stop five minutes before `maxDurationMinutes`. Cleanup then runs.
+Cleanup has its own bounded wait for runtime cleanup, so the command can run
+a few minutes longer than `maxDurationMinutes`. The hard run budget, not the
+time limit, limits model spend. The result has the kind
+`full-flow-acceptance-result`, and the exit codes are `0` for passed, `1` for
+failed, and `2` for blocked. The evidence contains hashes, IDs, and amounts.
+It does not contain the prompt, the model output, or a credential.
+
+The journey does not yet cover workflow generation, or a model that completes
+a backlog task. The Gateway has no routes for these steps. The evidence lists
+them as gaps in `observations.fullFlow.criticalPathCoverage`, so a passed
+result is not proof of the complete delivery path.
+
+### Keep critical-path coverage current
+
+The file `tests/fixtures/critical-paths.json` lists each critical path, the
+journey that tests it, and the Gateway route prefixes that it watches. The
+`CriticalPathCoverageTests` tests run in the CLI acceptance project in pull
+request CI. They fail when:
+
+- A watched prefix matches no Gateway route.
+- A Gateway route under a watched prefix is not covered by the journey and is
+  not listed in `outOfPath` with a reason.
+- A covered operation is not in the Gateway route catalog or in the journey's
+  list of required operations.
+- An `outOfPath` entry has no reason or is not a watched route.
+- A Gateway route path contains the text of a gap. When this happens, extend the
+  journey to cover the new route, then move the prefix from `gaps` to
+  `watchRoutePrefixes`.
+
+The check finds new and removed operations. It does not find a change to the
+behavior or body of a route that keeps its operation ID. When you add or change
+a feature on a critical path, update the journey and this file in the same pull
+request.
+
 ## Test API, UI, and retained MCP compatibility code
 
 Run the controlled local adapter tests with:
