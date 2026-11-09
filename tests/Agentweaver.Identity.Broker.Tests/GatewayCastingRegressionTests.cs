@@ -7,6 +7,8 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using Agentweaver.Abstractions;
 using GatewayHost::Agentweaver.Gateway;
 using Microsoft.IdentityModel.Tokens;
 using Xunit;
@@ -438,6 +440,27 @@ public sealed class GatewayCastingRegressionTests
             throw new InvalidOperationException($"Unexpected Projects request {request.Method} {path}.");
         });
         var firstExecution = true;
+        const string output = """{"roleIds":["builder","tester"]}""";
+        var promptSha256 = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt));
+        var outputSha256 = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(output));
+        var hash = new string('a', 64);
+        RuntimeMaterialAcknowledgmentEvidence Material(long position, SessionMaterialKind kind) =>
+            new(Guid.NewGuid(), position, kind, hash, hash);
+        // Orchestrator returns the genuine root-turn receipt with every completed casting turn.
+        var nativeCompletion = new RuntimeRootTurnCompletionEvidence(
+            1, requestId, promptSha256, outputSha256, Guid.NewGuid(), 1, hash, 1, hash, hash, hash,
+            Guid.NewGuid(), 1, "model-selection-1", "model-1", "hostedCopilot", null, null,
+            new SandboxImageIdentity("sha256:" + hash, "linux/amd64", 1),
+            Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.Parse(createdAt), hash, hash, hash, 2,
+            [], 0, 0,
+            Material(1, SessionMaterialKind.TurnContent),
+            Material(2, SessionMaterialKind.TurnContent),
+            Material(3, SessionMaterialKind.SdkCache),
+            hash, hash, 2, true);
+        var ownerJsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        };
         await using var gateway = await GatewayResourceServer.StartAsync(
             signingKey,
             () => projectHandler,
@@ -464,8 +487,9 @@ public sealed class GatewayCastingRegressionTests
                 {
                     requestId,
                     runId,
-                    output = """{"roleIds":["builder","tester"]}""",
-                }));
+                    output,
+                    completion = nativeCompletion,
+                }, ownerJsonOptions));
             });
 
         var publicRequestBody = JsonSerializer.Serialize(new
@@ -513,6 +537,11 @@ public sealed class GatewayCastingRegressionTests
         Assert.Equal("pending", result.RootElement.GetProperty("state").GetString());
         Assert.Equal("formulate", result.RootElement.GetProperty("generation").GetProperty("mode").GetString());
         Assert.Equal("completed", result.RootElement.GetProperty("generation").GetProperty("state").GetString());
+        var publicCompletion = result.RootElement.GetProperty("generation").GetProperty("nativeCompletion");
+        Assert.Equal(requestId, publicCompletion.GetProperty("requestId").GetGuid());
+        Assert.Equal(promptSha256, publicCompletion.GetProperty("promptSha256").GetString());
+        Assert.Equal(outputSha256, publicCompletion.GetProperty("outputSha256").GetString());
+        Assert.False(result.RootElement.GetProperty("generation").TryGetProperty("nativeReplay", out _));
         Assert.Equal(2, orchestratorCalls.Count);
         Assert.All(projectCalls, call => Assert.Equal("tenant-1", call.Tenant));
         Assert.Equal(2, projectCalls.Count(call =>

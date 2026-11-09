@@ -158,7 +158,7 @@ internal sealed class RuntimeRunStartDispatcher(
             {
                 var summary = await continuation.RevalidateReadyAsync(intent, actor, cancellationToken)
                     .ConfigureAwait(false);
-                summary = await AddP1ProjectionAsync(context, intent, summary, cancellationToken)
+                summary = await AddP1ProjectionAsync(context, intent, summary, null, cancellationToken)
                     .ConfigureAwait(false);
                 actor.Bearer.Invalidate();
                 return summary;
@@ -173,7 +173,7 @@ internal sealed class RuntimeRunStartDispatcher(
             }
             cancellationToken.ThrowIfCancellationRequested();
             EnqueueOrThrow(queue, new RuntimeRunStartContinueWork(owner, actor));
-            return await AddP1ProjectionAsync(context, intent, intent.Summary, cancellationToken)
+            return await AddP1ProjectionAsync(context, intent, intent.Summary, null, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch
@@ -188,6 +188,7 @@ internal sealed class RuntimeRunStartDispatcher(
         string projectId,
         string runId,
         string rootSessionId,
+        AuthorizedRunSelection selection,
         CancellationToken cancellationToken)
     {
         var intent = await store.ReadIntentForStatusAsync(
@@ -196,7 +197,7 @@ internal sealed class RuntimeRunStartDispatcher(
             return null;
         if (intent.State != "ready")
         {
-            return await AddP1ProjectionAsync(context, intent, intent.Summary, cancellationToken)
+            return await AddP1ProjectionAsync(context, intent, intent.Summary, selection, cancellationToken)
                 .ConfigureAwait(false);
         }
         var actor = await CreateActorAsync(context, timeProvider).ConfigureAwait(false);
@@ -204,7 +205,7 @@ internal sealed class RuntimeRunStartDispatcher(
         {
             var summary = await continuation.RevalidateReadyAsync(intent, actor, cancellationToken)
                 .ConfigureAwait(false);
-            return await AddP1ProjectionAsync(context, intent, summary, cancellationToken)
+            return await AddP1ProjectionAsync(context, intent, summary, selection, cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
@@ -267,10 +268,12 @@ internal sealed class RuntimeRunStartDispatcher(
         HttpContext context,
         RuntimeRunStartIntent intent,
         RuntimeStartupSummary summary,
+        AuthorizedRunSelection? selection,
         CancellationToken cancellationToken)
     {
         var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
-        var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+        // Status passes its own selection so its final authority recheck covers this projection.
+        selection ??= await projects.ReadAcceptedSelectionWithAuthorityAsync(
             context, intent.ProjectId, intent.RunId, cancellationToken).ConfigureAwait(false);
         P1InvocationBinding binding;
         try
