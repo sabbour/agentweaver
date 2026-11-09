@@ -79,9 +79,7 @@ var audience = Required(identity["Audience"], "Environment:Authentication:Audien
 var projectsBaseAddress = EnvironmentHttpTransport.RequireTrustedHttpsBaseUri(
     Required(builder.Configuration["ProjectsConfig:BaseAddress"], "ProjectsConfig:BaseAddress"),
     "ProjectsConfig:BaseAddress");
-var kubernetesBaseAddress = EnvironmentHttpTransport.RequireTrustedHttpsBaseUri(
-    builder.Configuration["Kubernetes:ApiServer"] ?? "https://kubernetes.default.svc/",
-    "Kubernetes:ApiServer");
+var kubernetesBaseAddress = EnvironmentHttpTransport.ResolveKubernetesApiServer(builder.Configuration);
 var serviceAccountToken = builder.Configuration["Kubernetes:ServiceAccountTokenFile"] ??
     "/var/run/secrets/kubernetes.io/serviceaccount/token";
 var serviceAccountCa = builder.Configuration["Kubernetes:CertificateAuthorityFile"] ??
