@@ -384,6 +384,37 @@ Copilot process, in which case the separate cache is not needed. The [Snapshots
 seam](provider-seams.md#snapshots) is optional; the cache-and-checkpoint path is the
 cutover default.
 
+### Ordinary root Host replacement
+
+Ordinary Host replacement is separate from suspend/resume. The Orchestrator
+exposes `replaceRuntimeHost` and `readRuntimeReplacement` for a run's root
+session. The operation keeps the accepted selection, execution fence, and
+workspace volume. It replaces the Host placement, runtime instance, and
+registration through the Environment and Broker owners.
+
+The Orchestrator stores each replacement attempt and its cleanup obligations
+before it performs external effects. It rechecks current authority and blocks
+competing work only while the replacement operation is active. The Environment
+retires the exact old placement and provisions a new Host on the retained
+workspace. The Broker bootstraps the new runtime registration before the
+Environment activates it. Status follows the current attempt; an uncertain
+provider result remains blocked for reconciliation rather than starting an
+unrelated replacement.
+
+The new Host must consume the exact acknowledged SDK cache. Its reconstruction
+interval includes that cache read and must be complete, with no new journal
+event, native model send, or tool effect. Only then can the Orchestrator
+complete the replacement. An exact retry of a completed root request may
+return the original proposal and completion on the new registration only when
+the durable completion and replacement lineage both validate. The replay path
+does not send the request to the model again.
+
+The optional native CLI `native-material-recovery` journey uses these owner
+routes and validates their live receipts. It is not a generic proof mechanism,
+does not add a permanent run latch, and does not make ordinary CLI use or
+all-OS archive verification depend on this journey. A source build or
+controlled test is not deployed acceptance.
+
 ### Playback, resume, and fork
 
 | Operation | What it does | What it does not promise |
@@ -502,7 +533,9 @@ Core first revokes the exact prior registration; a timeout alone never causes re
 Replacement keeps the durable resume operation, accepted selection, retained Workspace, and execution fence unchanged.
 It uses new credential operations, not saved credential values.
 Missing or incompatible SDK caches must reconstruct context from the authenticated journal before dispatch.
-The current Environment source does not claim that the full Core replacement and Host reconstruction path is complete.
+This paragraph describes suspend/resume. Ordinary root Host replacement is the
+separate source path described in [Ordinary root Host replacement](#ordinary-root-host-replacement);
+it does not make this suspend/resume flow complete or authorize a live run.
 
 A provider can suspend or move an environment without a prior Agentweaver request.
 Its lifecycle event enters reconciliation under the same fence. If the required
@@ -890,7 +923,7 @@ than replaying model or tool effects to reconstruct history.
 | --- | --- | --- |
 | Journal order and replay remain stable across sessions and reconnects | Native journal PostgreSQL and cursor tests | Disposable database tests are not deployed replay |
 | Message claim, presentation, acknowledgment, and gate transitions retain their different meanings | Events and Orchestrator owner tests with stale authority and binding cases | Delivery alone does not establish workflow completion |
-| Runtime recovery consumes verified owner material without effect replay | [Session-material acceptance](session-material-acceptance.md) and controlled owner/runtime cases | Deployed acceptance remains blocked where the authorized consumer contract is missing |
+| Runtime recovery consumes verified owner material without effect replay | [Session-material acceptance](session-material-acceptance.md), the native `native-material-recovery` journey, and controlled owner/runtime cases | The selected live row needs real owner receipts; source tests do not establish deployment, full-P1 status, or #2449 archive/OS acceptance |
 
 ## Alternatives considered
 

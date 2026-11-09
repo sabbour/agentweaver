@@ -660,6 +660,44 @@ selection and execution fence are rechecked by the owner CAS. The immutable bind
 is committed with the winning decision, gate, grant, and outbox transaction. The
 caller cannot submit a resource pin or override the durable binding.
 
+### Native root-turn completion and Host replacement
+
+The existing casting-generation response can include
+`RuntimeRootTurnCompletionEvidence` after Orchestrator validates and stores a
+completed native root turn. It binds the request to the current runtime
+registration, accepted selection, execution fence, source, model and image. It
+also records the native event interval, prompt and output hashes, usage event
+IDs, and Events acknowledgments for the user text, assistant text, and SDK
+cache. The cache baseline must be complete and contain no extra event. Read
+user or assistant text through the existing authorized historical-turn route;
+there is no public SDK-cache read route.
+
+The Gateway exposes ordinary Host replacement through
+`POST /api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-replacements`
+and status through the matching `GET` route. The strict
+`RuntimeReplacementRequest` contains `contractVersion`, `operationId`,
+`expectedRuntimeInstanceId`, `expectedRegistrationRevision`,
+`expectedExecutionFence`, and `expectedAcceptedSelectionHash`. Reuse the same
+operation ID and request body after an uncertain result. The owner persists the
+operation before effects, retires the old Host, and provisions a new Pod, lease,
+runtime, and registration through the existing Environment and Broker paths.
+It retains the workspace and does not change the accepted selection or execution
+fence.
+
+`RuntimeReplacementSummary` records operation state, prior and current runtime
+registrations and Pods, retained workspace generations, recovery mode, cache
+acknowledgment, and reconstruction evidence. `pending` or `cleanup_pending`
+does not prove success; query the same operation. Unknown provider outcomes do
+not permit a second replacement.
+
+An exact casting retry after a ready replacement can include
+`RuntimeRootTurnReplayEvidence`. It binds the original completion to the
+verified replacement lineage and current registration. The replay interval and
+native-call sequence must show no new model request or tool effect. Orchestrator
+returns the original completion; it does not send the native request again.
+This receipt path does not relax the general material reader or change the
+hosted hard-credit guard.
+
 | Method and path | Contract |
 | --- | --- |
 | `POST /api/projects/{projectId}/runs` | Create a new chat run. The bearer must not carry a run binding. Requires one `Idempotency-Key`, current project `acceptRunSelection` authority, and a body with `firstMessage` and `expectedProjectConfigRevision`. Persists the request in `project_run_requests`, mints `runId` and `rootSessionId`, and accepts the selection through the Projects `interactive-selection` route. Returns `201` with `awaiting_binding` and the binding selectors. A replay with the same key and body returns the same run; a changed body returns `409 idempotency_conflict`. |

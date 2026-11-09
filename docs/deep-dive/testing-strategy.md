@@ -125,6 +125,12 @@ creation, actual Pod/mount observations and Host evidence. Registration
 readback, readiness receipt, usage read or locator-only no-send result cannot
 replace complete turn, cursor, effect and dispatch/recovery evidence.
 
+The `native-material-recovery` journey joins the current root registration,
+turn-completion and material receipts, ordinary Host replacement, exact replay,
+and cleanup. It can pass the session-material row only when these bound
+receipts validate; it does not pass full-P1 acceptance or prove deployed
+provider behavior.
+
 Native and dispatch-recovery envelopes preserve supplied receipts and reject
 malformed, inconsistent, duplicate or extra fields. `receiptSha256` detects
 content changes, not authorship. `passed` requires nonempty evidence; native

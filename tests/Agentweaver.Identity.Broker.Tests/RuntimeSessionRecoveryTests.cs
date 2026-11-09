@@ -11,6 +11,26 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed partial class RuntimeSessionRecoveryTests
 {
+    [Fact]
+    public void ReplacementCallSequenceRequiresTheCurrentHostRegistrationAndNoCalls()
+    {
+        var registration = RuntimeCopilotSessionTests.Registration();
+        var evidence = new RuntimeHostNativeCallSequenceEvidence(
+            Environment.ProcessId, Guid.NewGuid(), registration.RuntimeInstanceId, registration.Revision,
+            0, 0, 0, 0);
+
+        Assert.Equal(evidence, evidence.ValidateFor(registration, requireZero: true));
+        Assert.Equal("runtime_native_call_sequence_invalid",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                (evidence with { RuntimeInstanceId = Guid.NewGuid() }).ValidateFor(registration)).Code);
+        Assert.Equal("runtime_native_call_sequence_invalid",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                (evidence with { SendSequenceAfter = 1 }).ValidateFor(registration, requireZero: true)).Code);
+        Assert.Equal("runtime_native_call_sequence_invalid",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                (evidence with { ToolEffectSequenceAfter = 1 }).ValidateFor(registration, requireZero: true)).Code);
+    }
+
     [Theory]
     [InlineData(20000, false)]
     [InlineData(8000, true)]

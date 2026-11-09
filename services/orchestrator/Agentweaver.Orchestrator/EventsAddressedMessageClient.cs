@@ -447,12 +447,12 @@ internal sealed class EventsAddressedMessageClient(
     }
 
     /// <summary>
-    /// Reads one recorded SDK cache material item and validates its identity, event position, and content digest.
+    /// Reads one recorded turn or SDK-cache material item and validates its identity, event position, and content digest.
     /// </summary>
     /// <param name="context">The authenticated request context used to locate the Events owner.</param>
     /// <param name="identity">The session that owns the material.</param>
     /// <param name="eventId">The event that recorded the material.</param>
-    /// <param name="kind">The material kind; only SDK cache material is supported.</param>
+    /// <param name="kind">The recorded material kind.</param>
     /// <param name="actor">The runtime actor authorization forwarded to the owner.</param>
     /// <param name="cancellationToken">Cancels the bounded owner read.</param>
     /// <returns>The validated material reference and bytes.</returns>
@@ -469,13 +469,13 @@ internal sealed class EventsAddressedMessageClient(
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(actor);
-        if (eventId == Guid.Empty || kind != SessionMaterialKind.SdkCache)
-            throw new ArgumentException("A recorded SDK cache event is required.");
+        if (eventId == Guid.Empty || kind is not (SessionMaterialKind.TurnContent or SessionMaterialKind.SdkCache))
+            throw new ArgumentException("A recorded turn or SDK-cache event is required.");
         var owner = RequireEventsOwner(context, identity);
         var result = await RuntimeOwnerHttpTransport.SendBoundedAsync<SessionMaterialReadResult>(
             httpClient,
             owner,
-            $"/internal/sessions/{Uri.EscapeDataString(identity.SessionId)}/material/{eventId:D}/SdkCache",
+            $"/internal/sessions/{Uri.EscapeDataString(identity.SessionId)}/material/{eventId:D}/{kind}",
             actor,
             body: null,
             maximumBytes: checked(SessionMaterialValidation.MaximumBytes * 2),

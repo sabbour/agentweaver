@@ -192,6 +192,7 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                             _runtimeCleanupTimeout)
                             .ConfigureAwait(false);
                         observations["cleanup"] = fixtureState.Cleanup?.DeepClone();
+                        AttachMaterialCleanup(observations, fixtureState);
                     }
                     catch (Exception error)
                     {
@@ -202,6 +203,7 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                             ["reason"] = "Cleanup did not return every expected receipt; reconcile this invocation before taking further action.",
                         };
                         observations["cleanup"] = fixtureState.Cleanup.DeepClone();
+                        AttachMaterialCleanup(observations, fixtureState);
                         failure = AppendFailure(failure, error);
                         surfaceStatus = "failed";
                     }
@@ -573,6 +575,18 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
     {
         string safe = ApiAcceptanceSupport.RedactText(error.Message);
         return string.IsNullOrWhiteSpace(failure) ? safe : $"{failure}; {safe}";
+    }
+
+    private static void AttachMaterialCleanup(JsonObject observations, AcceptanceFixtureState state)
+    {
+        if (state.Journey != "native-material-recovery"
+            || observations["sessionMaterialAcceptance"] is not JsonObject acceptance)
+            return;
+        acceptance["cleanup"] = new JsonObject
+        {
+            ["status"] = ApiAcceptanceSupport.GetString(state.Cleanup ?? [], "state") == "cleaned" ? "passed" : "blocked",
+            ["fixture"] = state.Cleanup?.DeepClone(),
+        };
     }
 }
 

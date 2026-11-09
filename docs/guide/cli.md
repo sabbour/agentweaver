@@ -244,9 +244,12 @@ The production evidence provider verifies the committed source manifest, the
 canonical GHCR image selection, and Kubernetes service readbacks. A non-dry-run
 needs the exact external source manifest and image manifest, and may change API
 state during fixture setup and cleanup; do not use it against production.
-Full API acceptance remains blocked when required native/session-material proof
-or authorized target evidence is unavailable. The manifest and evidence are
-external files; relative proof paths resolve from the manifest directory.
+The `native-material-recovery` journey supplies positive session-material
+evidence only when its turn, material, replacement, replay, and cleanup
+receipts all validate. Full API acceptance can still be blocked when other
+required probes or authorized target evidence are unavailable. The manifest
+and evidence are external files; relative proof paths resolve from the
+manifest directory.
 
 `deploymentEvidence` contains exactly `manifestPath` and `imageManifestPath`.
 
@@ -414,8 +417,9 @@ For API acceptance journeys, the manifest's `environment` object must provide `b
 variables. For each API acceptance invocation, the runner creates its owned project and
 takes its ID from the `createProject` receipt. Journeys with an explicit
 `selectionContext` derive run and root-session IDs from the invocation. The
-`journal` and `session-history-metric` journeys may omit that context and then
-use the run and root-session IDs returned by `createProjectRun`. The
+`journal`, `session-history-metric`, and `native-material-recovery` journeys
+may omit that context and then use the run and root-session IDs returned by
+`createProjectRun`. The
 `board-delete` target and input contract are separate and described above.
 
 Interaction is disabled by default (`InteractionPolicy.Never`). Only
@@ -431,6 +435,47 @@ background. Read the run's session status to check whether startup is still
 pending, ready, blocked, or cleaning up. Starting AgentHost does not send a
 model turn. A controlled CLI journey or a `pending` result does not prove that
 the Host is ready.
+
+The `native-material-recovery` journey uses the Projects P1 setup receipt and
+the server-owned run selection. It sends one read-only casting request to the
+approved Bring Your Own Key (BYOK) model. It reads the stored user and
+assistant turn text, checks their hashes against the runtime completion
+receipt, replaces the Host through the ordinary replacement operation, and
+checks that the new Host restores the same saved SDK cache without model calls
+or tool effects. It then sends the same request again and checks the
+Orchestrator replay receipt and unchanged run state.
+
+This journey does not test authority revocation, stale-binding denial,
+changed-payload retry, optional-cache absence or expiry, or missing or expired
+required turn material. A passed session-material row does not imply that
+these separate checks or full API acceptance passed.
+
+This journey performs a model request and a Host replacement. Use it only on
+an approved non-production target, with an approved model and spend limit and
+explicit approval for Host replacement. Do not use `--dry-run` as live
+acceptance: it validates the manifest only and does not create evidence or
+contact the target.
+
+The `native-material-recovery` fixture plan must omit `selectionContext` and
+contain exactly `expectedPlatformRuntimeRevision`, `nativeMaterialRecovery`,
+`gate`, and `message`. Set `gate` and `message` to `null`. Use the current
+platform runtime revision from the approved platform receipt.
+
+The `nativeMaterialRecovery` object must contain exactly these fields:
+
+| Field | Required value |
+| --- | --- |
+| `approvedModelSelectionReference` | The approved model selection reference |
+| `approvedModelSourceMode` | `byok` |
+| `approvedReasoningEffort` | The approved reasoning effort |
+| `approvedMaxPromptTokens` | The approved positive prompt-token limit |
+| `approvedNativeRequestCount` | `1` |
+| `allowOrdinaryHostReplacement` | `true` |
+
+The runner rejects a model source other than `byok`, a request count other than
+`1`, or a false replacement approval. A passed session-material result also
+requires the ordinary project and run cleanup receipts. Other required probes
+or deployment evidence can still keep full P1 acceptance blocked.
 
 For API journeys that accept a root run, the CLI cancels the run during
 cleanup. It then waits up to two minutes for the root session status to report

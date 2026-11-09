@@ -55,6 +55,26 @@ public static class EnvironmentRuntimeBootstrapEndpoints
                 actor => manager.RetireFailedBootstrapAsync(request, actor, token), token)
                 .ConfigureAwait(false))
             .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/run-start/replacement-placement", async (
+            RuntimeReplacementPlacementRequest request,
+            HttpContext context,
+            [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimeRunStartManager manager,
+            TimeProvider timeProvider,
+            CancellationToken token) =>
+            await ExecuteAsync(context, timeProvider,
+                actor => manager.ProvisionReplacementAsync(request, actor, token), token)
+                .ConfigureAwait(false))
+            .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/run-start/replacement-retire", async (
+            RuntimeReplacementRetirementRequest request,
+            HttpContext context,
+            [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimeRunStartManager manager,
+            TimeProvider timeProvider,
+            CancellationToken token) =>
+            await ExecuteAsync(context, timeProvider,
+                actor => manager.RetireReplacementAsync(request, actor, token), token)
+                .ConfigureAwait(false))
+            .RequireAuthorization();
         endpoints.MapPost(
             "/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}" +
             "/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}/resolve",

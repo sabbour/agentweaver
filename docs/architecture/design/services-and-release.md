@@ -226,6 +226,13 @@ AgentHost scheduler.
 The runtime library commits authorized SDK observations to immutable Orchestrator receipts.
 Events fetches those receipts through a reference-only route and uses the existing keyed Cost resolver.
 Its append-only ledger preserves exact totals and immutable rate-card history.
+The existing root casting path can return a source-, registration-, and
+fence-bound native completion with turn and SDK-cache acknowledgments.
+Ordinary root Host replacement keeps the accepted selection, execution fence,
+and workspace volume while it replaces the placement and runtime registration.
+The owner permits exact request replay on the new registration only when the
+completion and replacement lineage validate. This bounded path does not add a
+background scheduler or establish deployment or live acceptance.
 Gateway source and authenticated AgentHost routes exist.
 Deployment, automatic scheduling, and cloud acceptance remain separate work.
 

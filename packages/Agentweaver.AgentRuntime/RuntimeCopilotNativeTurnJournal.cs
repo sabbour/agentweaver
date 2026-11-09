@@ -10,7 +10,22 @@ namespace Agentweaver.AgentRuntime;
 /// <summary>Response and event receipt captured for one native Copilot turn.</summary>
 internal sealed record RuntimeCopilotNativeTurnResult(
     string Response,
-    RuntimeNativeTurnObservation Receipt);
+    RuntimeNativeTurnObservation Receipt,
+    int SuccessfulToolCount,
+    int FailedToolCount,
+    string CursorBeforeHash,
+    string CursorAfterHash,
+    string EventIntervalHash,
+    int EventCount);
+
+internal sealed record RuntimeNativeTurnJournalResult(
+    RuntimeNativeTurnObservation Observation,
+    int SuccessfulToolCount,
+    int FailedToolCount,
+    string CursorBeforeHash,
+    string CursorAfterHash,
+    string EventIntervalHash,
+    int EventCount);
 
 /// <summary>Evidence that the native event cursor remained empty during a rejected turn attempt.</summary>
 internal sealed record RuntimeNativeEmptyRangeEvidence(
@@ -65,6 +80,16 @@ internal static class RuntimeCopilotNativeTurnJournal
         string startCursor,
         string nativeMessageId,
         string response,
+        CancellationToken cancellationToken) =>
+        (await ReadWithCountsAsync(session, source, startCursor, nativeMessageId, response, cancellationToken)
+            .ConfigureAwait(false)).Observation;
+
+    internal static async Task<RuntimeNativeTurnJournalResult> ReadWithCountsAsync(
+        CopilotSession session,
+        SdkSessionFacts source,
+        string startCursor,
+        string nativeMessageId,
+        string response,
         CancellationToken cancellationToken)
     {
         ValidateCursor(startCursor);
@@ -88,7 +113,23 @@ internal static class RuntimeCopilotNativeTurnJournal
             events.AddRange(batch.Events);
             cursor = batch.Cursor;
             if (!batch.HasMore)
-                return Create(source, nativeMessageId, response, cursor, events.ToImmutable());
+            {
+                var observed = events.ToImmutable();
+                var receipt = Create(source, nativeMessageId, response, cursor, observed);
+                var completion = observed.OfType<SessionCompletionReceiptEvent>()
+                    .Single(item => item.AgentId is null && item.Data.EventRange?.StartEventId == nativeMessageId);
+                if (completion.Data.SuccessfulToolCount is < 0 or > int.MaxValue ||
+                    completion.Data.FailedToolCount is < 0 or > int.MaxValue)
+                    throw Unavailable();
+                var interval = string.Join('\n', observed.Select(item =>
+                    $"{item.Id:N}:{item.GetType().Name}"));
+                return new(receipt, (int)completion.Data.SuccessfulToolCount,
+                    (int)completion.Data.FailedToolCount,
+                    RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(startCursor)),
+                    RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(cursor)),
+                    RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(interval)),
+                    observed.Length);
+            }
         }
         throw new RuntimeAuthorizationException("runtime_native_turn_journal_limit_exceeded");
     }

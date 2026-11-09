@@ -173,6 +173,7 @@ public sealed class RuntimeCopilotSessionFactory : IRuntimeHostedModelReasoningC
             });
         var promptCapacityObserver = new RuntimeNativePromptCapacityObserver();
         var turns = new RuntimeCopilotTurnObserver();
+        var nativeCalls = new RuntimeNativeCallSequence();
         var nativeFiles = new RuntimeNativeSessionFiles(
             [token, (_connection as UriRuntimeConnection)?.ConnectionToken ?? ""], _workingDirectory);
         RuntimeCopilotToolCallAuthorization? toolAuthorization = null;
@@ -228,7 +229,7 @@ public sealed class RuntimeCopilotSessionFactory : IRuntimeHostedModelReasoningC
             var sdkSessionId = RuntimeContractValidation.NativeSessionId(binding);
             toolAuthorization = requireActionAuthority is null ? null :
                 new RuntimeCopilotToolCallAuthorization(
-                    registration, sdkSessionId, requireActionAuthority, turns);
+                    registration, sdkSessionId, requireActionAuthority, turns, nativeCalls);
             if (recovery is not null)
             {
                 var recordedLimit = recovery.Cache?.Material.Reference.Material?.MaxPromptTokens;
@@ -367,6 +368,7 @@ public sealed class RuntimeCopilotSessionFactory : IRuntimeHostedModelReasoningC
                         Mode = SystemMessageMode.Append, Content = context
                     };
             }
+            var creationCallSequenceBefore = nativeCalls.Snapshot();
             if (recoveryMode == RuntimeSessionRecoveryMode.NativeCache)
             {
                 var options = new ResumeSessionConfig { ContinuePendingWork = false };
@@ -387,6 +389,8 @@ public sealed class RuntimeCopilotSessionFactory : IRuntimeHostedModelReasoningC
 #pragma warning restore GHCP001
             if (session.SessionId != sdkSessionId)
                 throw new RuntimeAuthorizationException("runtime_sdk_session_mismatch");
+            var creationCallSequence = nativeCalls.Evidence(
+                registration, creationCallSequenceBefore, nativeCalls.Snapshot());
             if (!sdkCredential.IsUsable())
                 throw new RuntimeAuthorizationException("runtime_sdk_credential_unavailable");
             var facts = new SdkSessionFacts(
@@ -420,7 +424,8 @@ public sealed class RuntimeCopilotSessionFactory : IRuntimeHostedModelReasoningC
                 ? recovery?.JournalEvidence
                 : null;
             return new RuntimeCopilotSession(client, session, facts, usage, promptCapacityObserver, turns,
-                nativeFiles, recoveryMode, recoveryReason, recovery?.JournalRebuild,
+                nativeFiles, nativeCalls, creationCallSequenceBefore, creationCallSequence,
+                recoveryMode, recoveryReason, recovery?.JournalRebuild,
                 consumedNativeCacheAcknowledgment, journalEvidence, _abortDrainTimeout,
                 verifiedHostedReasoningEfforts, verifiedHostedReasoningCatalogAt);
         }

@@ -29,6 +29,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
         var sessionId = RuntimeContractValidation.NativeSessionId(registration.Binding);
         var callId = "native-call-" + toolName;
         var calls = new ConcurrentQueue<RuntimeActionRequest>();
+        var nativeCalls = new RuntimeNativeCallSequence();
         var authorization = new RuntimeCopilotToolCallAuthorization(
             registration, sessionId,
             (request, token) =>
@@ -37,7 +38,8 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
                 calls.Enqueue(request);
                 return Task.CompletedTask;
             },
-            ActiveTurn());
+            ActiveTurn(),
+            nativeCalls);
         var input = Create<PreToolUseHookInput>(new
         {
             sessionId,
@@ -51,11 +53,13 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
         var hook = await authorization.OnPreToolUseAsync(input, hookInvocation);
         Assert.Equal("ask", hook?.PermissionDecision);
         Assert.False(Assert.Single(calls).IsToolInvocation);
+        Assert.Equal(0, nativeCalls.Snapshot().ToolEffectSequence);
 
         var request = PermissionRequest(toolName, callId);
         var permissionInvocation = CreatePermissionInvocation(sessionId);
         var decision = await authorization.OnPermissionRequestAsync(request, permissionInvocation);
         Assert.Equal(PermissionDecision.ApproveOnce().Kind, decision.Kind);
+        Assert.Equal(1, nativeCalls.Snapshot().ToolEffectSequence);
         var shellDecision = await authorization.OnPermissionRequestAsync(
             SecondaryPermission(toolName, callId), permissionInvocation);
         Assert.Equal(PermissionDecision.ApproveOnce().Kind, shellDecision.Kind);
@@ -67,6 +71,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
 
         var invocations = calls.Where(call => call.IsToolInvocation).ToArray();
         Assert.Equal(4, invocations.Length);
+        Assert.Equal(2, nativeCalls.Snapshot().ToolEffectSequence);
         Assert.All(invocations, call => Assert.Equal(invocations[0], call));
         var first = invocations[0];
         Assert.Equal(expectedAction, first.ActionId);
@@ -92,6 +97,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
         var registration = RuntimeCopilotSessionTests.Registration();
         var sessionId = RuntimeContractValidation.NativeSessionId(registration.Binding);
         var calls = new ConcurrentDictionary<Guid, string>();
+        var nativeCalls = new RuntimeNativeCallSequence();
         var authorization = new RuntimeCopilotToolCallAuthorization(
             registration, sessionId,
             (request, _) =>
@@ -100,7 +106,8 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
                     Assert.True(calls.TryAdd(request.EventId, request.ActionId));
                 return Task.CompletedTask;
             },
-            ActiveTurn());
+            ActiveTurn(),
+            nativeCalls);
 
         var readInput = Create<PreToolUseHookInput>(HookInput(sessionId, "read_bash"));
         var writeInput = Create<PreToolUseHookInput>(HookInput(sessionId, "write_bash"));
@@ -119,6 +126,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
         Assert.Equal(2, calls.Count);
         Assert.Contains(calls, call => call.Value == "exec.read");
         Assert.Contains(calls, call => call.Value == "exec.write");
+        Assert.Equal(2, nativeCalls.Snapshot().ToolEffectSequence);
     }
 
     [Fact]
@@ -127,6 +135,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
         var registration = RuntimeCopilotSessionTests.Registration();
         var sessionId = RuntimeContractValidation.NativeSessionId(registration.Binding);
         var calls = 0;
+        var nativeCalls = new RuntimeNativeCallSequence();
         var authorization = new RuntimeCopilotToolCallAuthorization(
             registration, sessionId,
             (request, _) =>
@@ -136,7 +145,8 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
                 calls++;
                 throw new RuntimeAuthorizationException("runtime_action_denied");
             },
-            ActiveTurn());
+            ActiveTurn(),
+            nativeCalls);
         var hookInvocation = CreateHookInvocation(sessionId);
         var permissionInvocation = CreatePermissionInvocation(sessionId);
         var hook = await authorization.OnPreToolUseAsync(
@@ -157,6 +167,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
             PermissionRequest("read_bash", "call-1"), permissionInvocation);
         Assert.Equal(PermissionDecision.Reject("runtime_action_denied").Kind, denied.Kind);
         Assert.Equal(1, calls);
+        Assert.Equal(1, nativeCalls.Snapshot().ToolEffectSequence);
 
         var unregistered = await authorization.OnPreToolUseAsync(
             Create<PreToolUseHookInput>(HookInput(sessionId, "unregistered-tool")), hookInvocation);
@@ -173,11 +184,14 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
     {
         var calls = new List<RuntimeActionRequest>();
         var turns = ActiveTurn(readOnlyToolsOnly: true);
-        var authorization = Authorization((request, _) =>
-        {
-            calls.Add(request);
-            return Task.CompletedTask;
-        }, turns);
+        var nativeCalls = new RuntimeNativeCallSequence();
+        var authorization = new RuntimeCopilotToolCallAuthorization(
+            RuntimeCopilotSessionTests.Registration(), SessionId(),
+            (request, _) =>
+            {
+                calls.Add(request);
+                return Task.CompletedTask;
+            }, turns, nativeCalls);
         var hookInvocation = CreateHookInvocation(SessionId());
         var permissionInvocation = CurrentInvocation();
 
@@ -186,6 +200,7 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
         Assert.Equal("ask", viewHook?.PermissionDecision);
         Approved(await authorization.OnPermissionRequestAsync(
             PermissionRequest("view", "read-only-view"), permissionInvocation));
+        Assert.Equal(1, nativeCalls.Snapshot().ToolEffectSequence);
         Approved(await authorization.OnPermissionRequestAsync(
             SecondaryPermission("view", "read-only-view"), permissionInvocation));
 
@@ -294,7 +309,8 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
             PermissionRequest("view", "native-call-1"), CurrentInvocation()));
         var registration = RuntimeCopilotSessionTests.Registration() with { Revision = 2 };
         var recovered = new RuntimeCopilotToolCallAuthorization(
-            registration, SessionId(), (request, _) => { requests.Add(request); return Task.CompletedTask; }, turns);
+            registration, SessionId(), (request, _) => { requests.Add(request); return Task.CompletedTask; }, turns,
+            new RuntimeNativeCallSequence());
         Rejected(await recovered.OnPermissionRequestAsync(
             SecondaryPermission("view", "native-call-1"), CurrentInvocation()));
         Approved(await recovered.OnPermissionRequestAsync(
@@ -304,7 +320,8 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
 
     private static RuntimeCopilotToolCallAuthorization Authorization(
         Func<RuntimeActionRequest, CancellationToken, Task> authority, RuntimeCopilotTurnObserver? turns = null) =>
-        new(RuntimeCopilotSessionTests.Registration(), SessionId(), authority, turns ?? ActiveTurn());
+        new(RuntimeCopilotSessionTests.Registration(), SessionId(), authority, turns ?? ActiveTurn(),
+            new RuntimeNativeCallSequence());
 
     private static RuntimeCopilotTurnObserver ActiveTurn(bool readOnlyToolsOnly = false)
     {

@@ -43,7 +43,7 @@ internal sealed class AcceptanceFixtureState(string invocationId)
 internal static partial class ApiAcceptanceSupport
 {
     private static readonly HashSet<string> Journeys =
-        ["gate-answer", "gate-approve", "gate-reject", "message", "journal", "session-history-metric", "workspace-repository-read"];
+        ["gate-answer", "gate-approve", "gate-reject", "message", "journal", "session-history-metric", "workspace-repository-read", "native-material-recovery"];
 
     private static readonly string[] RequiredReceiptPins =
         ["providerReceipt", "runtimeReceipt", "storageReceipt", "sourceReceipt"];
@@ -304,10 +304,13 @@ internal static partial class ApiAcceptanceSupport
             throw new InvalidDataException("Runner plans cannot contain caller-supplied owner fences or fixture receipts.");
         }
 
-        bool serverOwnedSelection = (journey is "journal" or "session-history-metric")
+        bool serverOwnedSelection = (journey is "journal" or "session-history-metric" or "native-material-recovery")
             && !plan.ContainsKey("selectionContext");
+        bool nativeMaterialRecovery = journey == "native-material-recovery";
         string[] fixtureKeys = (serverOwnedSelection
-            ? new[] { "expectedPlatformRuntimeRevision", "gate", "message" }
+            ? nativeMaterialRecovery
+                ? new[] { "expectedPlatformRuntimeRevision", "nativeMaterialRecovery", "gate", "message" }
+                : new[] { "expectedPlatformRuntimeRevision", "gate", "message" }
             : new[] { "expectedPlatformRuntimeRevision", "selectionContext", "gate", "message" })
             .Concat(plan.ContainsKey("deniedActor") ? new[] { "deniedActor" } : [])
             .ToArray();
@@ -315,6 +318,25 @@ internal static partial class ApiAcceptanceSupport
         if (!TryLong(plan["expectedPlatformRuntimeRevision"], out long revision) || revision < 1)
         {
             throw new InvalidDataException("A positive expected platform runtime revision is required in the runner fixture plan.");
+        }
+
+        if (nativeMaterialRecovery)
+        {
+            JsonObject approval = RequireObject(plan["nativeMaterialRecovery"],
+                "The native material recovery approval is required.");
+            RequireExactKeys(approval,
+                ["approvedModelSelectionReference", "approvedModelSourceMode", "approvedReasoningEffort",
+                    "approvedMaxPromptTokens", "approvedNativeRequestCount", "allowOrdinaryHostReplacement"],
+                "native material recovery approval");
+            RequireString(approval, "approvedModelSelectionReference", "approved model selection reference");
+            RequireString(approval, "approvedReasoningEffort", "approved reasoning effort");
+            if (GetString(approval, "approvedModelSourceMode") != "byok" ||
+                !TryLong(approval["approvedMaxPromptTokens"], out long promptTokens) || promptTokens < 1 ||
+                !TryLong(approval["approvedNativeRequestCount"], out long nativeRequests) || nativeRequests != 1 ||
+                approval["allowOrdinaryHostReplacement"] is not JsonValue replacementApproval ||
+                !replacementApproval.TryGetValue<bool>(out bool allowReplacement) || !allowReplacement)
+                throw new InvalidDataException(
+                    "Native material recovery requires an approved BYOK model, positive prompt capacity, exactly one request, and explicit Host replacement approval.");
         }
 
         if (!serverOwnedSelection)
@@ -798,7 +820,29 @@ internal static partial class ApiAcceptanceSupport
             result["failure"] = new JsonObject { ["message"] = RedactText(failure) };
         }
 
-        AddSessionMaterialBlocker(result, manifest);
+        JsonObject resultObservations = result["observations"] as JsonObject ?? [];
+        if (manifest?.Journey == "native-material-recovery"
+            && resultObservations["sessionMaterialAcceptance"] is JsonObject materialAcceptance)
+        {
+            bool accepted = GetString(materialAcceptance, "status") == "passed"
+                && GetString(materialAcceptance["cleanup"] as JsonObject ?? [], "status") == "passed";
+            if (!accepted)
+            {
+                if (GetString(materialAcceptance, "status") == "passed")
+                    materialAcceptance["status"] = "blocked";
+                materialAcceptance["blockers"] = new JsonArray(
+                    "Native material acceptance requires valid turn, material, replacement, replay, and fixture-cleanup receipts bound to this run.");
+                if (GetString(result, "fullP1Status") != "failed")
+                {
+                    result["fullP1Status"] = "blocked";
+                    result["exitCode"] = 2;
+                }
+            }
+        }
+        else
+        {
+            AddSessionMaterialBlocker(result, manifest);
+        }
         return result;
     }
 
@@ -826,10 +870,10 @@ internal static partial class ApiAcceptanceSupport
         JsonObject observations = (JsonObject)result["observations"]!;
         string[] blockers =
         [
-            "The authorized P1 client exposes Gateway operations, while session-material routes are internal Events owner routes requiring runtime authorization that this identity provider does not issue.",
-            "The runner-owned fixture permits only its selected P1 surface journey; it has no approved session-material fixture creation or bounded material cleanup boundary.",
-            "The authorized P1 flow has no native Host replacement boundary or receipt for compatible cache restore, journal rebuild, or proving that recovery did not invoke a model turn or repeat external effects.",
-            "The authorized P1 flow has no supported fault hook for current-authority revocation, stale fence or registration, duplicate or changed retry, or missing required turn material.",
+            "The selected P1 journey did not run native-material-recovery, so it has no turn-material readback bound to a native completion receipt.",
+            "The selected journey did not create the approved native turn fixture or verify its normal project and run cleanup.",
+            "No compatible Host replacement receipt was collected for this run, so cache restore and a no-call recovery interval are not proven.",
+            "This journey did not test revoked authority, stale bindings, changed retries, or missing required material; it has no live denial receipt for those cases.",
         ];
         JsonObject? sourceEvidence = result["sourceEvidence"] as JsonObject;
         JsonObject environment = manifest?.Environment ?? [];
@@ -847,7 +891,7 @@ internal static partial class ApiAcceptanceSupport
             ["executionFence"] = observations["fixtureSetup"]?["executionFence"]?.DeepClone(),
             ["fixtureId"] = null,
             ["invocationId"] = observations["fixtureSetup"]?["invocationId"]?.DeepClone(),
-            ["allowedJourneys"] = new JsonArray("journal"),
+            ["allowedJourneys"] = new JsonArray("native-material-recovery"),
             ["platformRuntimeRevision"] = fixturePlan["expectedPlatformRuntimeRevision"]?.DeepClone(),
             ["selectionContextRevision"] = fixturePlan["selectionContext"]?["revision"]?.DeepClone(),
             ["runtimeInstanceId"] = null,
@@ -871,7 +915,7 @@ internal static partial class ApiAcceptanceSupport
             ["turn"] = new JsonObject
             {
                 ["status"] = "blocked",
-                ["request"] = new JsonObject { ["status"] = "not-sent", ["method"] = "POST", ["route"] = "/internal/sessions/{sessionId}/material", ["materialKind"] = "TurnContent", ["redactedBody"] = null },
+                ["request"] = new JsonObject { ["status"] = "not-sent", ["method"] = "GET", ["route"] = "/api/projects/{projectId}/runs/{runId}/sessions/{sessionId}/turns/{eventId}", ["operationId"] = "readSessionTurnContent", ["materialKind"] = "turnContent", ["redactedBody"] = null },
                 ["result"] = new JsonObject { ["status"] = "not-observed", ["redactedBody"] = null },
                 ["acknowledgment"] = new JsonObject { ["status"] = "not-observed", ["redactedReceipt"] = null },
                 ["event"] = new JsonObject { ["eventId"] = null, ["committedPosition"] = null, ["cursor"] = null },

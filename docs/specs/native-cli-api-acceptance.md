@@ -73,6 +73,38 @@ target flags or take its target from environment variables.
   Keep denied-actor checks, current authority, fixture ownership, and cleanup
   visible rather than inferring them from setup success.
 
+### Native material recovery journey
+
+The optional `native-material-recovery` journey uses the existing native CLI
+and owner routes. Its `fixturePlan.nativeMaterialRecovery` object must contain
+exactly these approval fields: `approvedModelSelectionReference`,
+`approvedModelSourceMode`, `approvedReasoningEffort`,
+`approvedMaxPromptTokens`, `approvedNativeRequestCount`, and
+`allowOrdinaryHostReplacement`. The source mode must be `byok`, the prompt
+capacity must be positive, the request count must be one, and Host replacement
+must be approved. The runner uses the accepted setup invocation and current
+owner bindings. The manifest cannot supply owner fences or receipts.
+
+The journey submits one production read-only casting request, validates its
+native completion and ordered user, assistant, and SDK-cache acknowledgments,
+then reads the user and assistant turn content through the Gateway. It
+replaces the Host through the ordinary owner lifecycle and checks that the
+replacement restores the acknowledged cache on the retained workspace without
+a new event, model send, or tool effect. It then retries the exact casting
+request and checks that the owner returns the original proposal and completion
+with current-registration replay evidence and no new native send.
+
+The `sessionMaterialAcceptance` row passes only after its turn, material
+readback, replacement, replay, and fixture-cleanup receipts match this run.
+Other journeys keep their session-material blocker. This journey does not test
+authority revocation, stale-fence or stale-registration denial,
+changed-payload retry, absent or expired optional cache, or missing or expired
+required turn material. Those cases remain unexecuted, not passed. A
+session-material row does not by itself pass full P1; the denied-actor and
+other P1 obligations remain separate. The journey is not a prerequisite for
+ordinary CLI use or all-OS archive verification. Archive and OS acceptance
+remain separate under issue #2449.
+
 ### Workspace repository read
 
 The `workspace-repository-read` journey checks the current configured repository
@@ -209,9 +241,10 @@ invocation-owned resource through its owner before retrying or cleaning it up.
 Do not broaden cleanup to resources merely named in input.
 
 The [session-material scenario](../architecture/design/session-material-acceptance.md)
-has a missing accepted-invocation-to-authorized-readback consumer boundary.
-Its blocked result prevents full acceptance success; narrower surface results
-remain separate. This specification does not declare that gap resolved.
+has an optional native-material-recovery journey in source. A source build or
+controlled test does not prove a deployed run. Keep its receipts, remaining
+fault checks, full-P1 status, and #2449 archive/OS work separate. The journey
+does not authorize live execution.
 
 ## Acceptance and validation
 

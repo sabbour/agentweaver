@@ -157,6 +157,34 @@ public sealed class EnvironmentSandboxManager(
         RuntimeOwnerContext expectedOwner,
         SandboxProvisionApiRequest request,
         Func<CancellationToken, Task> requireCurrent,
+        CancellationToken cancellationToken) =>
+        await ProvisionCoordinatorRootAsync(
+            caller, expectedOwner, request, requireCurrent, cancellationToken).ConfigureAwait(false);
+
+    internal Task<EnvironmentSandboxResult> ProvisionCoordinatorReplacementAsync(
+        CurrentCallerRequest caller,
+        RuntimeReplacementPlacementRequest request,
+        SandboxProvisionApiRequest provision,
+        Func<CancellationToken, Task> requireCurrent,
+        CancellationToken cancellationToken)
+    {
+        request.Validate();
+        if (provision.VolumeId != request.PreviousPlacement.WorkspaceVolumeId ||
+            provision.VolumeResourceGeneration != request.PreviousPlacement.WorkspaceResourceGeneration ||
+            provision.DataGeneration != request.PreviousPlacement.WorkspaceDataGeneration ||
+            provision.NetworkPolicyGeneration != request.PreviousPlacement.NetworkPolicyGeneration ||
+            provision.IdempotencyKey != RuntimeRunStartKeys.SandboxIdempotencyKey(
+                request.Owner, request.BootstrapOperationId))
+            throw new RuntimeAuthorizationException("runtime_replacement_request_invalid");
+        return ProvisionCoordinatorRootAsync(
+            caller, request.Owner, provision, requireCurrent, cancellationToken);
+    }
+
+    private async Task<EnvironmentSandboxResult> ProvisionCoordinatorRootAsync(
+        CurrentCallerRequest caller,
+        RuntimeOwnerContext expectedOwner,
+        SandboxProvisionApiRequest request,
+        Func<CancellationToken, Task> requireCurrent,
         CancellationToken cancellationToken)
     {
         var owner = new EnvironmentOwnerIdentity(
@@ -871,11 +899,30 @@ public sealed class EnvironmentSandboxManager(
             caller, context, lease, cancellationToken, beforeCommitCheck).ConfigureAwait(false);
     }
 
-    internal async Task<EnvironmentSandboxResult> RetireCoordinatorFirstStartAsync(
+    internal Task<EnvironmentSandboxResult> RetireCoordinatorFirstStartAsync(
         CurrentCallerRequest caller,
         RuntimeRunStartRetirementRequest request,
         Func<CancellationToken, Task> requireCurrent,
+        CancellationToken cancellationToken) =>
+        RetireCoordinatorPlacementAsync(caller, request, requireCurrent, cancellationToken);
+
+    internal Task<EnvironmentSandboxResult> RetireCoordinatorReplacementAsync(
+        CurrentCallerRequest caller,
+        RuntimeReplacementRetirementRequest request,
+        Func<CancellationToken, Task> requireCurrent,
         CancellationToken cancellationToken)
+    {
+        request.Validate();
+        return RetireCoordinatorPlacementAsync(
+            caller, request.Retirement, requireCurrent, cancellationToken, request.IntentId);
+    }
+
+    private async Task<EnvironmentSandboxResult> RetireCoordinatorPlacementAsync(
+        CurrentCallerRequest caller,
+        RuntimeRunStartRetirementRequest request,
+        Func<CancellationToken, Task> requireCurrent,
+        CancellationToken cancellationToken,
+        Guid? cleanupIntentId = null)
     {
         request.Validate();
         var owner = new EnvironmentOwnerIdentity(
@@ -912,7 +959,9 @@ public sealed class EnvironmentSandboxManager(
         var recovery = JsonSerializer.Deserialize<SandboxProviderRecoveryIntent>(
             lease.ProvisionIntent.ProviderRequest.GetRawText(), JsonOptions);
         var attachment = recovery?.Workspace.Negotiation;
-        var releaseKey = $"coordinator-bootstrap-retire-{request.BootstrapOperationId:N}";
+        var releaseKey = cleanupIntentId is { } intentId
+            ? $"coordinator-release-{intentId:N}"
+            : $"coordinator-bootstrap-retire-{request.BootstrapOperationId:N}";
         var advancedRetirementFence =
             lease.State is SandboxLeaseState.Releasing or SandboxLeaseState.Released &&
             lease.ReleaseIdempotencyKey == releaseKey &&

@@ -170,6 +170,11 @@ internal sealed class RuntimeRegistrationOwner(
             expected.RuntimeInstanceId, expected.Revision, cancellationToken).ConfigureAwait(false);
     }
 
+    internal Task<RuntimeRegistration?> ReadAsync(
+        Guid runtimeInstanceId,
+        CancellationToken cancellationToken) =>
+        registrations.ReadAsync(runtimeInstanceId, cancellationToken);
+
     /// <summary>
     /// Replaces a released registration after resume, requiring the execution fence to advance exactly once.
     /// </summary>
@@ -214,6 +219,48 @@ internal sealed class RuntimeRegistrationOwner(
         var final = await DeriveCurrentBindingAsync(
             context, projectId, runId, sessionId, resolvedRequest, cancellationToken).ConfigureAwait(false);
         RequireSame(derived, final);
+        return replacement;
+    }
+
+    internal async Task<RuntimeRegistration> ReplaceOrdinaryAsync(
+        RuntimeActorAuthorization actor,
+        RuntimeRegistration releasedRegistration,
+        Guid operationId,
+        RuntimeOwnerContext owner,
+        string environmentId,
+        string sourceProfileId,
+        CancellationToken cancellationToken)
+    {
+        RuntimeContractValidation.Validate(releasedRegistration);
+        if (operationId == Guid.Empty ||
+            releasedRegistration.State != RuntimeRegistrationState.Active ||
+            releasedRegistration.Revision == long.MaxValue ||
+            releasedRegistration.Binding.ProjectId != owner.ProjectId ||
+            releasedRegistration.Binding.RunId != owner.RunId ||
+            releasedRegistration.Binding.SessionId != owner.SessionId ||
+            releasedRegistration.Binding.ExecutionFence != owner.ExecutionFence)
+            throw new RuntimeAuthorizationException("runtime_registration_stale");
+
+        var profileId = await environment.ResolveProfileIdAsync(
+            actor, owner.ProjectId, owner.RunId, owner.SessionId,
+            environmentId, sourceProfileId, cancellationToken).ConfigureAwait(false);
+        var request = new RegisterRuntimeRequest(environmentId, profileId);
+        var derived = await DeriveCurrentBindingAsync(
+            actor, owner, request, cancellationToken).ConfigureAwait(false);
+        RequireOrdinaryReplacement(releasedRegistration.Binding, owner, derived.Binding);
+        var replacement = await registrations.ReplaceAsync(
+            releasedRegistration, operationId, derived.Binding, derived.ExpiresAt, cancellationToken,
+            async token =>
+            {
+                var current = await DeriveCurrentBindingAsync(
+                    actor, owner, request, token).ConfigureAwait(false);
+                RequireSame(derived, current);
+                RequireOrdinaryReplacement(releasedRegistration.Binding, owner, current.Binding);
+            }).ConfigureAwait(false);
+        var final = await DeriveCurrentBindingAsync(
+            actor, owner, request, cancellationToken).ConfigureAwait(false);
+        RequireSame(derived, final);
+        RequireOrdinaryReplacement(releasedRegistration.Binding, owner, final.Binding);
         return replacement;
     }
 
@@ -523,6 +570,55 @@ internal sealed class RuntimeRegistrationOwner(
             replacement.SessionId != source.SessionId ||
             replacement.AcceptedSelectionHash != source.AcceptedSelectionHash)
             throw new RuntimeAuthorizationException("runtime_registration_stale");
+    }
+
+    internal static void RequireOrdinaryReplacement(
+        RuntimeBinding previous,
+        RuntimeOwnerContext owner,
+        RuntimeBinding current)
+    {
+        if (previous.ActorIssuer != owner.ActorIssuer || previous.ActorId != owner.ActorId ||
+            previous.TenantId != owner.TenantId || previous.ProjectId != owner.ProjectId ||
+            previous.RunId != owner.RunId || previous.SessionId != owner.SessionId ||
+            previous.AgentId != owner.AgentId || previous.TurnId != owner.TurnId ||
+            previous.ProjectRevision != owner.ProjectRevision ||
+            previous.ProjectConfigurationRevision != owner.ProjectConfigurationRevision ||
+            previous.PlatformRuntimeRevision != owner.PlatformRuntimeRevision ||
+            previous.ContextRevision != owner.ContextRevision ||
+            previous.AcceptedSelectionHash != owner.AcceptedSelectionHash ||
+            previous.ExecutionFence != owner.ExecutionFence ||
+            previous.WorkflowStepId != owner.WorkflowStepId ||
+            previous.ModelSelectionReference != owner.ModelSelectionReference ||
+            previous.ModelCredentialReference != owner.ModelCredentialReference ||
+            previous.ModelSourceMode != owner.ModelSourceMode ||
+            previous.ModelConnectionId != owner.ModelConnectionId ||
+            previous.ModelConnectionScope != owner.ModelConnectionScope ||
+            previous.ReasoningEffort != owner.ReasoningEffort ||
+            previous.MaxPromptTokens != owner.MaxPromptTokens ||
+            current.ActorIssuer != previous.ActorIssuer || current.ActorId != previous.ActorId ||
+            current.TenantId != previous.TenantId || current.ProjectId != previous.ProjectId ||
+            current.RunId != previous.RunId || current.SessionId != previous.SessionId ||
+            current.AgentId != previous.AgentId || current.TurnId != previous.TurnId ||
+            current.ProjectRevision != previous.ProjectRevision ||
+            current.ProjectConfigurationRevision != previous.ProjectConfigurationRevision ||
+            current.PlatformRuntimeRevision != previous.PlatformRuntimeRevision ||
+            current.ContextRevision != previous.ContextRevision ||
+            current.AcceptedSelectionHash != previous.AcceptedSelectionHash ||
+            current.ExecutionFence != previous.ExecutionFence ||
+            current.WorkflowStepId != previous.WorkflowStepId ||
+            current.ModelSelectionReference != previous.ModelSelectionReference ||
+            current.ModelCredentialReference != previous.ModelCredentialReference ||
+            current.ModelSourceMode != previous.ModelSourceMode ||
+            current.ModelConnectionId != previous.ModelConnectionId ||
+            current.ModelConnectionScope != previous.ModelConnectionScope ||
+            current.ReasoningEffort != previous.ReasoningEffort ||
+            current.MaxPromptTokens != previous.MaxPromptTokens ||
+            current.EnvironmentId != previous.EnvironmentId ||
+            current.PlacementUid == previous.PlacementUid ||
+            current.PlacementGeneration == previous.PlacementGeneration ||
+            current.EnvironmentCurrentFencingGeneration == previous.EnvironmentCurrentFencingGeneration ||
+            current.EnvironmentProviderFencingGeneration == previous.EnvironmentProviderFencingGeneration)
+            throw new RuntimeAuthorizationException("runtime_registration_replacement_stale");
     }
 
     /// <summary>

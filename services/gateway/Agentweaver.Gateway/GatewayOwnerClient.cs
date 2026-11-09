@@ -7,8 +7,10 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
@@ -299,18 +301,11 @@ public sealed partial class GatewayOwnerClient(
                 generation.Mode != mode)
                 throw OwnerContractFailure("casting_generation_owner_contract_invalid");
 
-            // Replaying a completed generation returns its stored proposal instead of running the model again.
-            if (generation.State == "completed")
-            {
-                await WriteCastingProposalAsync(
-                    context, projectBearer, projectId, generation, mode, false, timeout.Token)
-                    .ConfigureAwait(false);
-                return;
-            }
-            if (generation.State != "pending")
+            var replayingCompleted = generation.State == "completed";
+            if (!replayingCompleted && generation.State != "pending")
                 throw CastingGenerationConflict("casting_generation_not_pending");
 
-            // Replays use the same owner request; a timeout or lost response must not make it terminally failed.
+            // Replays ask the owner for the stored receipt; an absent receipt never permits another model send.
             var executionBody = JsonSerializer.SerializeToUtf8Bytes(
                 new { requestId = generation.RequestId, prompt = input.Prompt },
                 JsonOptions);
@@ -324,8 +319,26 @@ public sealed partial class GatewayOwnerClient(
                 HttpStatusCode.OK,
                 timeout.Token).ConfigureAwait(false);
             var execution = ParseCastingGenerationExecutionResponse(executionBytes);
-            if (execution.RequestId != generation.RequestId || execution.RunId != input.RunId)
+            if (execution.RequestId != generation.RequestId ||
+                execution.RunId != input.RunId ||
+                execution.Completion is not { ContractVersion: 1 } completion ||
+                completion.RequestId != generation.RequestId ||
+                completion.PromptSha256 != RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(input.Prompt)) ||
+                completion.OutputSha256 != RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(execution.Output)) ||
+                execution.Replay is { } replay &&
+                (replay.RequestId != generation.RequestId ||
+                 replay.PromptSha256 != completion.PromptSha256 ||
+                 replay.OutputSha256 != completion.OutputSha256))
                 throw OwnerContractFailure("casting_generation_owner_contract_invalid");
+
+            if (replayingCompleted)
+            {
+                await WriteCastingProposalAsync(
+                    context, projectBearer, projectId, generation, mode, false, completion,
+                    execution.Replay, timeout.Token)
+                    .ConfigureAwait(false);
+                return;
+            }
 
             var selectableRoleIds = roles
                 .Where(role => !GatewayCastingGenerationContract.IsReservedRole(role.Id))
@@ -374,7 +387,8 @@ public sealed partial class GatewayOwnerClient(
                 throw OwnerContractFailure("casting_generation_owner_contract_invalid");
 
             await WriteCastingProposalAsync(
-                context, projectBearer, projectId, completed, mode, true, timeout.Token)
+                context, projectBearer, projectId, completed, mode, true, completion,
+                execution.Replay, timeout.Token)
                 .ConfigureAwait(false);
         }
         catch (GatewayOwnerFailureException exception)
@@ -625,6 +639,8 @@ public sealed partial class GatewayOwnerClient(
         CastingGenerationOwnerRequest generation,
         string mode,
         bool requirePending,
+        RuntimeRootTurnCompletionEvidence completion,
+        RuntimeRootTurnReplayEvidence? replay,
         CancellationToken cancellationToken)
     {
         // Re-read the owner proposal so the Gateway never assembles a client-facing draft from model output itself.
@@ -660,12 +676,24 @@ public sealed partial class GatewayOwnerClient(
             generationView.GetProperty("state").GetString() != "completed")
             throw OwnerContractFailure("casting_generation_proposal_contract_invalid");
 
+        var response = JsonNode.Parse(body) as JsonObject
+            ?? throw OwnerContractFailure("casting_generation_proposal_contract_invalid");
+        var responseGeneration = response["generation"] as JsonObject
+            ?? throw OwnerContractFailure("casting_generation_proposal_contract_invalid");
+        responseGeneration["nativeCompletion"] =
+            JsonSerializer.SerializeToNode(completion, GatewayCastingGenerationContract.StrictJsonOptions);
+        if (replay is not null)
+            responseGeneration["nativeReplay"] =
+                JsonSerializer.SerializeToNode(replay, GatewayCastingGenerationContract.StrictJsonOptions);
+        var responseBody = JsonSerializer.SerializeToUtf8Bytes(
+            response, GatewayCastingGenerationContract.StrictJsonOptions);
+
         context.Response.StatusCode = StatusCodes.Status200OK;
         context.Response.ContentType = "application/json";
-        context.Response.ContentLength = body.Length;
+        context.Response.ContentLength = responseBody.Length;
         context.Response.Headers.CacheControl = "no-store";
         context.Response.Headers.XContentTypeOptions = "nosniff";
-        await context.Response.Body.WriteAsync(body, cancellationToken).ConfigureAwait(false);
+        await context.Response.Body.WriteAsync(responseBody, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task MarkCastingGenerationFailedAsync(
@@ -783,7 +811,10 @@ public sealed partial class GatewayOwnerClient(
     {
         // Accept only the response shape that binds generated output to this request and run.
         using var document = JsonDocument.Parse(body, new JsonDocumentOptions { MaxDepth = 8 });
-        if (!HasExactPropertyNames(document.RootElement, ["requestId", "runId", "output"]))
+        if (!HasRequiredAllowedPropertyNames(
+                document.RootElement,
+                ["requestId", "runId", "output", "completion"],
+                ["requestId", "runId", "output", "completion", "replay"]))
             throw OwnerContractFailure("casting_generation_owner_contract_invalid");
         return document.RootElement.Deserialize<CastingGenerationExecutionOwnerResponse>(
                 GatewayCastingGenerationContract.StrictJsonOptions)
@@ -2071,7 +2102,9 @@ public sealed partial class GatewayOwnerClient(
     private sealed record CastingGenerationExecutionOwnerResponse(
         Guid RequestId,
         string RunId,
-        string Output);
+        string Output,
+        RuntimeRootTurnCompletionEvidence? Completion,
+        RuntimeRootTurnReplayEvidence? Replay);
 
     private sealed record GatewayCastingProjectConfiguration(
         ImmutableArray<GatewayCastingAgentCharter> AgentCharters,

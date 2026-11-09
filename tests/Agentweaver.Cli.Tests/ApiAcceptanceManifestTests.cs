@@ -450,6 +450,57 @@ public sealed class ApiAcceptanceManifestTests
         },
     };
 
+    [Fact]
+    public async Task NativeMaterialRecoveryRequiresExplicitOneRequestAndReplacementApproval()
+    {
+        JsonObject root = NativeMaterialManifest();
+        string path = WriteManifest(root);
+        try
+        {
+            AcceptanceManifest manifest = await ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None);
+            Assert.Equal("native-material-recovery", manifest.Journey);
+            Assert.Equal("byok", ApiAcceptanceSupport.GetString(
+                (JsonObject)manifest.FixturePlan["nativeMaterialRecovery"]!, "approvedModelSourceMode"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+
+        JsonObject invalid = NativeMaterialManifest();
+        invalid["fixturePlan"]!["nativeMaterialRecovery"]!["approvedNativeRequestCount"] = 2;
+        path = WriteManifest(invalid);
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(
+                () => ApiAcceptanceSupport.ReadManifestAsync(path, CancellationToken.None));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    private static JsonObject NativeMaterialManifest()
+    {
+        JsonObject root = P1Manifest();
+        root["journey"] = "native-material-recovery";
+        JsonObject plan = root["fixturePlan"]!.AsObject();
+        plan.Remove("selectionContext");
+        plan["gate"] = null;
+        plan["message"] = null;
+        plan["nativeMaterialRecovery"] = new JsonObject
+        {
+            ["approvedModelSelectionReference"] = "approved/byok",
+            ["approvedModelSourceMode"] = "byok",
+            ["approvedReasoningEffort"] = "medium",
+            ["approvedMaxPromptTokens"] = 4096,
+            ["approvedNativeRequestCount"] = 1,
+            ["allowOrdinaryHostReplacement"] = true,
+        };
+        return root;
+    }
+
     private static JsonObject SessionHistoryMetricManifest()
     {
         JsonObject root = P1Manifest();

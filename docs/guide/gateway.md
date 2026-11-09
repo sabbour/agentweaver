@@ -50,6 +50,12 @@ decision.
 4. Check the owning service's response. A Gateway-accepted request does not
    prove that an asynchronous operation completed.
 
+To replace a coordinator root Host, use the Orchestrator coordination routes in
+the [HTTP API reference](../reference/api.md#coordination). Reuse the same
+operation ID and request after an uncertain result. Read the saved operation
+until it reaches a terminal state; `pending` and `cleanup_pending` do not mean
+that replacement is complete.
+
 Project-wide Knowledge search uses
 `GET /api/v1/projects/{projectId}/knowledge/records`. Use a Broker token that
 is not bound to a run. The Knowledge owner checks current effective

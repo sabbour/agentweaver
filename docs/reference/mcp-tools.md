@@ -198,6 +198,8 @@ staged proposal with the casting tools. See [AgentSuite import and export](./age
 | `proposeOutcome` | Propose an outcome decision. |
 | `readRunStatus` | Read current run owner state. |
 | `recoverRun` | Request owner recovery. |
+| `replaceRuntimeHost` | Request a guarded runtime Host replacement. |
+| `readRuntimeReplacement` | Read the status of a runtime replacement operation. |
 | `proposeOutcomeSpec` | Submit an outcome specification. |
 | `selectWorkflow` | Select a workflow. |
 | `proposeWorkPlan` | Submit a work plan. |

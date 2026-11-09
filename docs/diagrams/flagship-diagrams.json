@@ -34,7 +34,7 @@
     },
     {
       "name": "v1-sessions-journal",
-      "concept": "Durable Sessions provider pin, journal append, and cursor replay",
+      "concept": "Durable Sessions provider pin, native material acknowledgments, and journal replay",
       "docs": ["docs/architecture/events-sessions.md", "docs/guide/testing.md"]
     },
     {

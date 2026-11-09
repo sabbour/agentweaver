@@ -39,6 +39,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
     private readonly string _schema = $"\"{options.Schema}\"";
     private readonly PostgresOutbox _outbox = new(dataSource, options.Schema);
     private readonly RuntimeExecutionEvidenceLedgerStore _executionEvidence = new(options.Schema);
+    private readonly CoordinationRuntimeRunStartStore _runStarts = new(dataSource, options.Schema);
     private readonly RuntimeUsageSourceStore _runtimeSources = new(dataSource, options, timeProvider);
 
     /// <summary>Stores the exact generation request that may use the accepted coordinator root.</summary>
@@ -110,6 +111,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         var owner = await ReadCoordinatorRootDecisionAsync(
             connection, transaction, binding, cancellationToken).ConfigureAwait(false);
+        await RequireNoRuntimeReplacementAsync(connection, transaction, binding, cancellationToken)
+            .ConfigureAwait(false);
         if (owner.StateVersion != decisionStateVersion)
             throw new RuntimeAuthorizationException("runtime_model_turn_admission_stale");
         await RequireCoordinatorRootDecisionAsync(
@@ -158,6 +161,317 @@ internal sealed class ExecutableActionGrantOwnerStore(
                 throw new RuntimeAuthorizationException("runtime_model_turn_admission_conflict");
         }
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task RequireNoRuntimeReplacementAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RuntimeBinding binding,
+        CancellationToken cancellationToken)
+    {
+        await using (var available = new NpgsqlCommand("SELECT to_regclass(@table) IS NOT NULL", connection, transaction))
+        {
+            available.Parameters.AddWithValue(
+                "table", NpgsqlDbType.Text, $"{_schema}.runtime_run_start_intents");
+            if (!(bool)(await available.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!)
+                return;
+        }
+        await using var command = new NpgsqlCommand($"""
+            SELECT current_step, cleanup_obligation
+            FROM {_schema}.runtime_run_start_intents
+            WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
+              AND root_session_id = @root AND accepted_selection_hash = @selection
+              AND execution_fence = @fence
+            FOR UPDATE
+            """, connection, transaction);
+        command.Parameters.AddWithValue("tenant", binding.TenantId);
+        command.Parameters.AddWithValue("project", binding.ProjectId);
+        command.Parameters.AddWithValue("run", binding.RunId);
+        command.Parameters.AddWithValue("root", binding.SessionId);
+        command.Parameters.AddWithValue("selection", binding.AcceptedSelectionHash);
+        command.Parameters.AddWithValue("fence", binding.ExecutionFence);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false) &&
+            !reader.GetBoolean(1) &&
+            reader.GetString(0).StartsWith("replacement-", StringComparison.Ordinal))
+            throw new RuntimeAuthorizationException("runtime_replacement_in_progress");
+    }
+
+    internal async Task<RuntimeRootTurnCompletionLedgerReceipt> RecordRootTurnCompletionAsync(
+        HttpContext context,
+        RuntimeRegistration registration,
+        RuntimeRootTurnCompletionReceipt completion,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(registration);
+        ArgumentNullException.ThrowIfNull(completion);
+        completion.Validate();
+        if (registration != completion.Registration)
+            throw new RuntimeAuthorizationException("runtime_root_turn_completion_conflict");
+
+        var binding = registration.Binding;
+        var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        if (actor.Issuer != binding.ActorIssuer ||
+            actor.Subject != binding.ActorId ||
+            registration.ExpiresAt <= timeProvider.GetUtcNow())
+            throw new RuntimeAuthorizationException("runtime_action_actor_invalid");
+        var authorized = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+            context, binding.ProjectId, binding.RunId, cancellationToken).ConfigureAwait(false);
+        var selectionHash = RuntimeContractValidation.Hash(
+            Encoding.UTF8.GetBytes(authorized.Selection.Snapshot.GetRawText()));
+        var roleRevisions = authorized.Authorization.EffectiveAuthority
+            .Where(item => item.ResourceType == "project" && item.ResourceId == binding.ProjectId)
+            .SelectMany(item => item.Permissions)
+            .Where(item => item.Permission == "acceptRunSelection")
+            .Select(item => item.RoleRevision).Distinct().Take(2).ToArray();
+        if (authorized.Authorization.ActorId != binding.ActorId ||
+            authorized.Authorization.Issuer != binding.ActorIssuer ||
+            authorized.Authorization.TenantId != binding.TenantId ||
+            roleRevisions.Length != 1 ||
+            authorized.Selection.ProjectRevision != binding.ProjectRevision ||
+            authorized.Selection.ProjectConfigurationRevision != binding.ProjectConfigurationRevision ||
+            authorized.Selection.PlatformRuntimeRevision != binding.PlatformRuntimeRevision ||
+            authorized.Selection.ContextRevision != binding.ContextRevision ||
+            selectionHash != binding.AcceptedSelectionHash)
+            throw new RuntimeAuthorizationException("runtime_action_selection_changed");
+        var selectedModel = RuntimeAcceptedModelSelection.Read(authorized.Selection.Snapshot);
+        var limits = CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(authorized.Selection.Snapshot);
+        if (selectedModel.Reference != binding.ModelSelectionReference ||
+            selectedModel.SourceMode != binding.ModelSourceMode ||
+            selectedModel.CredentialReference != binding.ModelCredentialReference ||
+            selectedModel.ConnectionId != binding.ModelConnectionId ||
+            selectedModel.ConnectionScope != binding.ModelConnectionScope ||
+            selectedModel.ReasoningEffort != binding.ReasoningEffort ||
+            limits.MaxModelTurns != binding.MaxModelTurns ||
+            limits.MaxToolCalls != binding.MaxToolCalls)
+            throw new RuntimeAuthorizationException("runtime_action_selection_changed");
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var owner = await ReadCoordinatorRootDecisionAsync(
+            connection, transaction, binding, cancellationToken).ConfigureAwait(false);
+        var request = new RuntimeActionRequest(
+            1,
+            registration.RuntimeInstanceId,
+            registration.Revision,
+            binding.ExecutionFence,
+            completion.RequestId,
+            "model.turn",
+            completion.PromptHash)
+        {
+            DispatchId = completion.RequestId
+        };
+        if (!await HasCoordinatorRootModelTurnAdmissionAsync(
+                connection, transaction, binding, request, owner.DecisionId, owner.StateVersion, cancellationToken)
+                .ConfigureAwait(false))
+            throw new RuntimeAuthorizationException("runtime_root_turn_admission_missing");
+        await RequireCoordinatorRootDecisionAsync(
+            connection, transaction, owner.DecisionJson, registration, owner.StateVersion,
+            completion.RequestId, completion.PromptHash, "model.turn", cancellationToken).ConfigureAwait(false);
+
+        var receipt = RuntimeRootTurnCompletionLedgerReceipt.Create(completion, timeProvider.GetUtcNow());
+        var stored = await _executionEvidence.AppendRootTurnCompletionAsync(
+            connection, transaction, receipt, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return stored;
+    }
+
+    internal async Task<RuntimeRootTurnCompletionLedgerReceipt?> ReadRootTurnCompletionAsync(
+        HttpContext context,
+        RuntimeRegistration registration,
+        Guid requestId,
+        string promptHash,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(registration);
+        RuntimeContractValidation.Validate(registration);
+        RuntimeContractValidation.ValidateHash(promptHash);
+        var binding = registration.Binding;
+        if (requestId == Guid.Empty ||
+            binding.AgentId != RuntimeActionContract.CoordinatorRootStepId ||
+            binding.WorkflowStepId is not null)
+            throw new RuntimeAuthorizationException("runtime_action_binding_invalid");
+
+        var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        if (actor.Issuer != binding.ActorIssuer ||
+            actor.Subject != binding.ActorId ||
+            registration.ExpiresAt <= timeProvider.GetUtcNow())
+            throw new RuntimeAuthorizationException("runtime_action_actor_invalid");
+        var authorized = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+            context, binding.ProjectId, binding.RunId, cancellationToken).ConfigureAwait(false);
+        var selectionHash = RuntimeContractValidation.Hash(
+            Encoding.UTF8.GetBytes(authorized.Selection.Snapshot.GetRawText()));
+        if (authorized.Authorization.ActorId != binding.ActorId ||
+            authorized.Authorization.Issuer != binding.ActorIssuer ||
+            authorized.Authorization.TenantId != binding.TenantId ||
+            authorized.Selection.ProjectRevision != binding.ProjectRevision ||
+            authorized.Selection.ProjectConfigurationRevision != binding.ProjectConfigurationRevision ||
+            authorized.Selection.PlatformRuntimeRevision != binding.PlatformRuntimeRevision ||
+            authorized.Selection.ContextRevision != binding.ContextRevision ||
+            selectionHash != binding.AcceptedSelectionHash)
+            throw new RuntimeAuthorizationException("runtime_action_selection_changed");
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var admissionExists = false;
+        var admissionFound = false;
+        await using (var admission = new NpgsqlCommand($"""
+            SELECT root_session_id, actor_issuer, actor_id, tenant_id, accepted_selection_hash,
+                   prompt_hash, execution_fence, decision_id, decision_state_version
+            FROM {_schema}.{RootModelTurnAdmissionTable}
+            WHERE project_id = @project AND run_id = @run AND request_id = @request
+            """, connection, transaction))
+        {
+            admission.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
+            admission.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, binding.RunId);
+            admission.Parameters.AddWithValue("request", NpgsqlDbType.Uuid, requestId);
+            await using var reader = await admission.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                admissionExists = true;
+                admissionFound =
+                    reader.GetString(0) == binding.SessionId &&
+                    reader.GetString(1) == binding.ActorIssuer &&
+                    reader.GetString(2) == binding.ActorId &&
+                    reader.GetString(3) == binding.TenantId &&
+                    reader.GetString(4).Trim() == binding.AcceptedSelectionHash &&
+                    reader.GetString(5).Trim() == promptHash &&
+                    reader.GetInt64(6) == binding.ExecutionFence &&
+                    reader.GetGuid(7) != Guid.Empty &&
+                    reader.GetInt64(8) > 0;
+                if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    throw new RuntimeAuthorizationException("runtime_model_turn_admission_conflict");
+            }
+        }
+        var stored = await _executionEvidence.ReadRootTurnCompletionAsync(
+            connection, transaction, binding.ProjectId, binding.RunId, requestId, cancellationToken)
+            .ConfigureAwait(false);
+        if (!admissionExists)
+        {
+            if (stored is not null)
+                throw new RuntimeAuthorizationException("runtime_root_turn_admission_missing");
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+        if (!admissionFound)
+            throw new RuntimeAuthorizationException("runtime_model_turn_admission_conflict");
+        if (stored is not null &&
+            (stored.Completion.PromptHash != promptHash ||
+             stored.Completion.Registration.Binding.SessionId != binding.SessionId ||
+             stored.Completion.Registration.Binding.ExecutionFence != binding.ExecutionFence ||
+             stored.Completion.Registration.Binding.AcceptedSelectionHash != binding.AcceptedSelectionHash))
+            throw new RuntimeAuthorizationException("runtime_root_turn_completion_conflict");
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return stored;
+    }
+
+    internal async Task<RuntimeRootTurnReplayLedgerReceipt> RecordRootTurnReplayAsync(
+        HttpContext context,
+        RuntimeRootTurnCompletionLedgerReceipt completion,
+        RuntimeRegistration previous,
+        RuntimeRegistration current,
+        Guid replacementOperationId,
+        RuntimeRootTurnReplayEvidence replay,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(completion);
+        ArgumentNullException.ThrowIfNull(previous);
+        ArgumentNullException.ThrowIfNull(current);
+        ArgumentNullException.ThrowIfNull(replay);
+        completion.Validate();
+        replay.ValidateFor(completion.Completion.ToEvidence(), previous, current);
+        if (completion.Completion.Registration != previous || current.Binding.SessionId != previous.Binding.SessionId)
+            throw new RuntimeAuthorizationException("runtime_root_turn_replay_invalid");
+
+        var storedCompletion = await ReadRootTurnCompletionAsync(
+            context, current, completion.RequestId, completion.Completion.PromptHash, cancellationToken)
+            .ConfigureAwait(false);
+        if (storedCompletion is null || !storedCompletion.HasSameReceipt(completion))
+            throw new RuntimeAuthorizationException("runtime_root_turn_completion_conflict");
+
+        var receipt = RuntimeRootTurnReplayLedgerReceipt.Create(
+            completion, replacementOperationId, replay, previous, current, timeProvider.GetUtcNow());
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var stored = await _executionEvidence.ReadRootTurnCompletionAsync(
+            connection, transaction, completion.ProjectId, completion.RunId, completion.RequestId, cancellationToken)
+            .ConfigureAwait(false);
+        if (stored is null || !stored.HasSameReceipt(completion))
+            throw new RuntimeAuthorizationException("runtime_root_turn_completion_conflict");
+        var recorded = await _executionEvidence.AppendRootTurnReplayAsync(
+            connection, transaction, receipt, completion, previous, current, replacementOperationId,
+            cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return recorded;
+    }
+
+    internal async Task<RuntimeRootTurnCompletionLedgerReceipt> ReadReplacementEligibleRootCompletionAsync(
+        HttpContext context,
+        RuntimeRegistration registration,
+        RuntimeRunStartIntent intent,
+        CancellationToken cancellationToken)
+    {
+        var binding = registration.Binding;
+        var lineage = new Dictionary<Guid, bool>();
+        var admissions = new List<(Guid RequestId, string PromptHash)>();
+        await using (var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false))
+        await using (var command = new NpgsqlCommand($"""
+            SELECT request_id, prompt_hash
+            FROM {_schema}.{RootModelTurnAdmissionTable}
+            WHERE project_id = @project AND run_id = @run AND root_session_id = @root
+              AND actor_issuer = @issuer AND actor_id = @actor AND tenant_id = @tenant
+              AND accepted_selection_hash = @selection AND execution_fence = @fence
+            ORDER BY created_at DESC, request_id DESC
+            LIMIT 65
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", binding.ProjectId);
+            command.Parameters.AddWithValue("run", binding.RunId);
+            command.Parameters.AddWithValue("root", binding.SessionId);
+            command.Parameters.AddWithValue("issuer", binding.ActorIssuer);
+            command.Parameters.AddWithValue("actor", binding.ActorId);
+            command.Parameters.AddWithValue("tenant", binding.TenantId);
+            command.Parameters.AddWithValue("selection", binding.AcceptedSelectionHash);
+            command.Parameters.AddWithValue("fence", binding.ExecutionFence);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                admissions.Add((reader.GetGuid(0), reader.GetString(1).Trim()));
+        }
+
+        if (admissions.Count is 0 or > 64)
+            throw new RuntimeAuthorizationException("runtime_replacement_root_work_unavailable");
+        RuntimeRootTurnCompletionLedgerReceipt? latest = null;
+        foreach (var admission in admissions)
+        {
+            var completion = await ReadRootTurnCompletionAsync(
+                context, registration, admission.RequestId, admission.PromptHash, cancellationToken)
+                .ConfigureAwait(false);
+            if (completion is null ||
+                completion.Completion.SuccessfulToolCount != 0 ||
+                completion.Completion.FailedToolCount != 0 ||
+                completion.Completion.Registration != registration &&
+                !await HasVerifiedLineageAsync(completion.Completion.Registration).ConfigureAwait(false))
+                throw new RuntimeAuthorizationException("runtime_replacement_root_work_pending");
+            if (latest is null)
+                latest = completion;
+        }
+
+        if (latest is null)
+            throw new RuntimeAuthorizationException("runtime_replacement_root_work_stale");
+        return latest;
+
+        async Task<bool> HasVerifiedLineageAsync(RuntimeRegistration source)
+        {
+            if (!lineage.TryGetValue(source.RuntimeInstanceId, out var verified))
+            {
+                verified = await _runStarts.HasVerifiedReplacementLineageAsync(
+                    intent, source, registration, cancellationToken).ConfigureAwait(false);
+                lineage.Add(source.RuntimeInstanceId, verified);
+            }
+            return verified;
+        }
     }
 
     /// <summary>

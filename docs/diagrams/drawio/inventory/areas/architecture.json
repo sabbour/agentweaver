@@ -120,7 +120,7 @@
       "disposition": "retain",
       "owner": null,
       "replacement": null,
-      "notes": "Current Events & Sessions host candidate: resolve and persist the native provider pin, append durably, and return reconnectable cursors.",
+      "notes": "Current Events & Sessions host candidate: resolve and persist the native provider pin, append durably, return reconnectable cursors, and acknowledge root turn/cache material against the current runtime binding.",
       "paths": {
         "input": "docs/diagrams/src/flagship/v1-sessions-journal.json",
         "drawio": "docs/diagrams/drawio/generated/flagship/v1-sessions-journal.drawio",

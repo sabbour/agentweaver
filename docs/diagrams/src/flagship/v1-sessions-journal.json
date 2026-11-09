@@ -1,8 +1,8 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Session journal and private reviewed tool results",
-  "alt": "Events & Sessions uses native PostgreSQL as its default Sessions journal. Project history reads require fresh Projects read authority and preserve exact run-bound narrowing. The current host requires SessionsCapabilities.All and cannot select the optional AgentSessions package. It verifies the run's provider binding before committing a session. Private tool result routes require direct mutual TLS and the original current actor. Orchestrator verifies the full selected call and native action admission. Events inventories object keys before writes, commits references and retention deadlines with journal events, and deletes expired bytes or aged orphans while retaining journal history. Saved reads require exact proof, source, length and digest, with current checks before return. Public replay hides private result references and bytes. Native remote-tool dispatch remains disabled; this source does not prove deployment or a real remote call.",
+  "title": "Session journal, native material, and tool results",
+  "alt": "Events & Sessions uses native PostgreSQL as its default Sessions journal. Project history reads require fresh Projects read authority and preserve exact run-bound narrowing. The current host requires SessionsCapabilities.All and cannot select the optional AgentSessions package. It verifies the run's provider binding before committing a session. AgentHost writes root user, assistant, and SDK-cache material with current runtime bindings; Orchestrator accepts completion only with source, registration, and fence-bound evidence. Public turn-content reads use current Projects authority. Private tool result routes require direct mutual TLS and the original current actor. Orchestrator verifies the full selected call and native action admission. Events inventories object keys before writes, commits references and retention deadlines with journal events, and deletes expired bytes or aged orphans while retaining journal history. Saved reads require exact proof, source, length and digest, with current checks before return. Public replay hides private result references and bytes. Native remote-tool dispatch remains disabled; this source does not prove deployment or a real remote call.",
   "autonumber": true,
   "participants": [
     {
@@ -183,7 +183,7 @@
     {
       "type": "note",
       "over": ["core", "api", "postgres"],
-      "label": "Current checks repeat after waits and retries. Native remote-tool dispatch stays disabled; live TLS acceptance remains open."
+      "label": "Native material receipts bind source, registration and fence. Turn reads recheck authority. Live TLS acceptance remains open."
     }
   ]
 }

@@ -369,6 +369,7 @@ public sealed class RuntimeCopilotSessionTests
         Assert.Equal(external.NativeTurnEndEventId, result.Receipt.NativeTurnEndEventId);
         Assert.Equal(external.NativeCompletionReceiptEventId, result.Receipt.NativeCompletionReceiptEventId);
         Assert.Null(result.Receipt.AccountingCheckpoint);
+        Assert.Equal(1, session.CaptureNativeCallSequence().SendSequence);
         Assert.Equal(
             ["session.eventLog.tail", "session.send", "session.eventLog.read"],
             external.Requests.Where(request => request.Method is

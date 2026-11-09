@@ -16,7 +16,8 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
     RuntimeRegistration registration,
     string sessionId,
     Func<RuntimeActionRequest, CancellationToken, Task> requireAuthority,
-    RuntimeCopilotTurnObserver turns)
+    RuntimeCopilotTurnObserver turns,
+    RuntimeNativeCallSequence nativeCalls)
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, NativeToolCall> _calls = new(StringComparer.Ordinal);
@@ -76,6 +77,7 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
                     RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(request)),
                     isInvocation: true);
                 call = GetOrAdd(context, hook.ToolCallId!, ownerRequest);
+                nativeCalls.RecordToolEffectCall();
             }
             else if (TryReadSecondary(request, out var kind, out var callId) && IsValidCallId(callId))
             {
