@@ -241,7 +241,8 @@ public static partial class CoordinationEndpoints
                 status = status with
                 {
                     RuntimeStartup = await runtimeStart.ReadSummaryAsync(
-                        context, projectId, runId, status.RootSessionId, cancellationToken).ConfigureAwait(false)
+                        context, projectId, runId, status.RootSessionId, selection, cancellationToken)
+                        .ConfigureAwait(false)
                 };
             if (status.Kind == CoordinationSessionKind.Coordinator &&
                 status.Lifecycle == CoordinationLifecycleState.Active)
