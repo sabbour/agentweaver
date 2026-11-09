@@ -340,6 +340,8 @@ function fakeExec(calls, {
   liveAgentHostSettings = {}, failApplyCount = 0, remainingPodPolls = 0, podList, state,
   denyEnvironmentPermission, denyRuntimePermission, missingAgentHostTls = false,
   wrongAgentHostTlsType = false,
+  liveStorageClass, kataNodes,
+  smokePod = { status: { phase: 'Succeeded' } }, smokeLogs = 'SMOKE_OK\n', smokeCreateError,
   liveProviderSetup,
   activateProviderDuringMigration,
   selectedAgentHostImage = selectedAgentHostRegistry,
@@ -518,6 +520,25 @@ function fakeExec(calls, {
         },
       } }), stderr: '' };
     }
+    if (args[0] === 'get' && args[1] === 'storageclass') {
+      const storageClass = liveStorageClass === undefined ? {
+        metadata: { name: args[2] }, provisioner: 'file.csi.azure.com', mountOptions: [
+          'actimeo=30', 'cache=strict', 'dir_mode=0755', 'file_mode=0644', 'gid=1000', 'mfsymlinks', 'uid=1000',
+        ],
+      } : liveStorageClass;
+      return { status: 0, stdout: storageClass ? JSON.stringify(storageClass) : '', stderr: '' };
+    }
+    if (args[0] === 'get' && args[1] === 'runtimeclass') {
+      return { status: 0, stdout: JSON.stringify({ metadata: { name: args[2] }, handler: 'kata',
+        scheduling: { nodeSelector: { 'kubernetes.azure.com/kata-vm-isolation': 'true' } } }), stderr: '' };
+    }
+    if (args[0] === 'get' && args[1] === 'nodes') {
+      const items = kataNodes ?? [{ spec: {}, status: { conditions: [{ type: 'Ready', status: 'True' }] } }];
+      return { status: 0, stdout: JSON.stringify({ items }), stderr: '' };
+    }
+    if (args[0] === 'get' && args[1] === 'pod' && args[2].startsWith('agentweaver-install-smoke-')) {
+      return { status: 0, stdout: JSON.stringify(smokePod), stderr: '' };
+    }
     if (args[0] === 'get') {
       const name = args[2];
       return { status: 0, stdout: JSON.stringify({ kind: args[1], metadata: { name } }), stderr: '' };
@@ -543,6 +564,9 @@ function fakeExec(calls, {
     }
     if (args[0] === 'create') {
       const resource = parse(options.input);
+      if (resource.kind === 'List' && smokeCreateError) {
+        return { status: 1, stdout: '', stderr: smokeCreateError };
+      }
       if (resource.kind === 'ConfigMap') {
         const name = resource.metadata.name;
         resource.metadata.uid ??= `uid-${name}-new`;
@@ -610,6 +634,9 @@ function fakeExec(calls, {
           withIdentity(activateProviderDuringMigration.configMap);
       }
       return { status: 0, stdout: 'condition met\n', stderr: '' };
+    }
+    if (args[0] === 'logs' && args[1]?.startsWith('pod/agentweaver-install-smoke-')) {
+      return { status: 0, stdout: smokeLogs, stderr: '' };
     }
     if (args[0] === 'logs') return { status: 0, stdout: 'migration failed safely\n', stderr: '' };
     if (args[0] === 'patch' && args[1] === 'deployment/identity-broker') {
@@ -684,6 +711,10 @@ function fakeExec(calls, {
 function kubernetesWriteCalls(calls) {
   const writes = new Set(['create', 'delete', 'apply', 'scale', 'annotate', 'patch', 'replace']);
   return calls.filter(call => call.command === 'kubectl' && writes.has(call.args[0]));
+}
+
+function isSmokeCall(call) {
+  return call.args.some(arg => /agentweaver-install-smoke|install-smoke-check/.test(arg));
 }
 
 test('deploy stops when the rendered AgentHost map drops a live BYOK binding or changes it without a new revision', () => {
@@ -1535,7 +1566,7 @@ test('partial deployment preserves unselected live images and skips unrelated mi
       .map(call => parse(call.options.input)).some(resource => resource.kind === 'Job'), false);
     assert.equal(calls.some(call => call.command === 'az'), false);
     assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
-      ['jobs.batch', 'pods', 'pods/log'].includes(call.args[3]) &&
+      (call.args[3] === 'jobs.batch' || call.args[2] === 'watch' && call.args[3] === 'pods') &&
       !call.args.includes('system:serviceaccount:agentweaver:environment')), false);
     assert.equal(calls.filter(call => call.command === 'kubectl' && call.args[0] === 'rollout').length, 9);
 
@@ -1912,7 +1943,8 @@ test('selective deployment replaces the Projects ConfigMap with run-binding TLS 
       call.args[0] === 'get' && call.args[1] === 'configmap' && call.args[2] === brokerRuntimeConfigName);
     const retryFirstWrite = retryCalls.findIndex(call => kubernetesWriteCalls([call]).length > 0);
     assert.ok(retryBrokerRead >= 0 && retryBrokerRead < retryFirstWrite);
-    assert.equal(retryCalls.some(call => call.command === 'kubectl' && call.args[0] === 'delete'), false);
+    assert.equal(retryCalls.some(call => call.command === 'kubectl' && call.args[0] === 'delete' &&
+      !isSmokeCall(call)), false);
     assert.equal(retryCalls.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
       parse(call.options.input).kind === 'ConfigMap'), false);
     assert.deepEqual(retryCalls.filter(call => call.command === 'kubectl' && call.args[0] === 'scale')
@@ -1988,9 +2020,9 @@ test('retained completed Projects migration Pod does not block ConfigMap activat
     assert.equal(fixture.state.deployments['projects-config'].spec.replicas, 3);
     assert.equal(fixture.state.deployments['projects-config'].metadata.annotations[restoreReplicasAnnotation], undefined);
     assert.ok(logs.includes(`Migration Job ${migrationJob.metadata.name} completed.`));
-    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'logs'), false);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'logs' && !isSmokeCall(call)), false);
     assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'delete' &&
-      ['job', 'pod'].includes(call.args[1])), false);
+      ['job', 'pod'].includes(call.args[1]) && !isSmokeCall(call)), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -2316,6 +2348,142 @@ test('TLS metadata and effective Environment RBAC failures stop before workload 
       assert.equal(secretReads[0].args.includes('--output=wide'), true);
       assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
         call.args.includes('secrets')), false);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('cluster prerequisite failures stop before workload effects', async () => {
+  const directory = scratch();
+  const failures = [
+    [{ liveStorageClass: { metadata: { name: 'x' }, provisioner: 'file.csi.azure.com',
+      mountOptions: ['mfsymlinks', 'actimeo=30', 'nosharesock'] } },
+    /must use file\.csi\.azure\.com with exactly these mount options.*cannot change after creation/],
+    [{ liveStorageClass: null, denyRuntimePermission: 'create storageclasses' },
+      /cannot create storageclasses at cluster scope/],
+    [{ kataNodes: [] }, /No Ready, schedulable node matches RuntimeClass\/kata-vm-isolation \(kubernetes\.azure\.com\/kata-vm-isolation=true\); 0 matching.*npm run azure:deploy/],
+    [{ kataNodes: [
+      { spec: { unschedulable: true }, status: { conditions: [{ type: 'Ready', status: 'True' }] } },
+      { spec: {}, status: { conditions: [{ type: 'Ready', status: 'False' }] } },
+    ] }, /No Ready, schedulable node .*2 matching node\(s\)/],
+    [{ denyRuntimePermission: 'list nodes' }, /cannot list nodes at cluster scope/],
+    [{ denyRuntimePermission: 'delete persistentvolumeclaims' },
+      /cannot delete persistentvolumeclaims .*install smoke check/],
+    [{ denyRuntimePermission: 'get pods/log' }, /cannot get pods\/log/],
+  ];
+  try {
+    for (const [settings, expected] of failures) {
+      const calls = [];
+      await assert.rejects(deployKustomize({ imageTag: selectedTag }, {
+        root: directory, exec: fakeExec(calls, settings), log() {},
+      }), expected);
+      assert.deepEqual(kubernetesWriteCalls(calls), []);
+    }
+    const calls = [];
+    await assert.rejects(deployKustomize({ imageTag: selectedTag }, {
+      root: directory, exec: fakeExec(calls, { kataNodes: [] }), log() {},
+    }));
+    const storageClassRead = calls.find(call => call.args[0] === 'get' && call.args[1] === 'storageclass');
+    assert.equal(storageClassRead.args[storageClassRead.args.indexOf('--as') + 1],
+      'system:serviceaccount:agentweaver:environment');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('deploy creates only a missing product StorageClass before migrations', async () => {
+  const directory = scratch();
+  try {
+    const calls = [];
+    await deployKustomize({ imageTag: selectedTag }, {
+      root: directory, exec: fakeExec(calls, { liveStorageClass: null }), log() {},
+    });
+    const creates = calls.filter(call => call.command === 'kubectl' && call.args[0] === 'create');
+    const storageClass = parse(creates[0].options.input);
+    assert.equal(storageClass.kind, 'StorageClass');
+    assert.equal(storageClass.metadata.name, 'agentweaver-workspace-azurefile');
+    assert.equal(creates[0].args.includes('--namespace'), false);
+    assert.equal(creates.filter(call => parse(call.options.input).kind === 'StorageClass').length, 1);
+
+    const existing = [];
+    await deployKustomize({ imageTag: selectedTag }, { root: directory, exec: fakeExec(existing), log() {} });
+    assert.equal(existing.some(call => call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'StorageClass'), false);
+    assert.equal(existing.some(call => call.args[0] === 'auth' && call.args.includes('storageclasses')), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('install smoke check runs an AgentHost-labelled sandbox pod and always cleans up', async () => {
+  const directory = scratch();
+  try {
+    const calls = [];
+    const messages = [];
+    await deployKustomize({ imageTag: selectedTag }, {
+      root: directory, exec: fakeExec(calls), log: message => messages.push(message),
+    });
+    const smokeCreate = calls.findIndex(call => call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'List');
+    const lastRollout = calls.findLastIndex(call => call.args[0] === 'rollout');
+    assert.ok(smokeCreate > lastRollout);
+    const [claim, pod] = parse(calls[smokeCreate].options.input).items;
+    assert.equal(claim.spec.storageClassName, 'agentweaver-workspace-azurefile');
+    assert.deepEqual(claim.spec.accessModes, ['ReadWriteMany']);
+    assert.match(pod.metadata.name, /^agentweaver-install-smoke-[0-9a-f]{8}$/);
+    assert.deepEqual(pod.metadata.labels, {
+      'app.kubernetes.io/name': 'agenthost',
+      'agentweaver.io/service': 'agenthost',
+      'agentweaver.io/workload': 'agenthost',
+      'agentweaver.io/identity-client': 'true',
+      'agentweaver.io/install-smoke-check': 'true',
+    });
+    assert.equal(pod.spec.runtimeClassName, 'kata-vm-isolation');
+    assert.equal(pod.spec.automountServiceAccountToken, false);
+    const [container] = pod.spec.containers;
+    assert.equal(container.image, `${REGISTRY}/agentweaver-agenthost@${selectedAgentHostRegistry.childDigest}`);
+    assert.equal(container.env, undefined);
+    assert.equal(container.envFrom, undefined);
+    assert.deepEqual(pod.spec.volumes, [{ name: 'workspace', persistentVolumeClaim: { claimName: pod.metadata.name } }]);
+    assert.match(container.command[2], /getent hosts environment\.agentweaver\.svc\.cluster\.local/);
+    assert.match(container.command[2], /\/dev\/tcp\/environment\.agentweaver\.svc\.cluster\.local\/8443/);
+    const staleCleanup = calls.findIndex(call => call.args[0] === 'delete' &&
+      call.args.includes('agentweaver.io/install-smoke-check=true'));
+    assert.ok(staleCleanup > lastRollout && staleCleanup < smokeCreate);
+    assert.ok(calls.some(call => call.args[0] === 'delete' && call.args[1] === `pod/${pod.metadata.name}` &&
+      call.args[2] === `persistentvolumeclaim/${pod.metadata.name}`));
+    assert.ok(messages.some(message => /Install smoke check passed/.test(message)));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('install smoke check failures name the cause and clean up', async () => {
+  const directory = scratch();
+  const failures = [
+    [{ smokePod: { status: { phase: 'Failed' } }, smokeLogs: 'SMOKE_FAIL dns\n' },
+      /could not resolve environment\.agentweaver\.svc\.cluster\.local/],
+    [{ smokePod: { status: { phase: 'Failed' } }, smokeLogs: 'SMOKE_FAIL environment-connect\n' },
+      /could not open TCP 8443 to Environment/],
+    [{ smokePod: { status: { phase: 'Failed' } }, smokeLogs: 'SMOKE_FAIL storage-symlink\n' },
+      /mfsymlinks mount option is missing/],
+    [{ smokePod: { status: { phase: 'Succeeded' } }, smokeLogs: '' }, /without a result/],
+    [{ smokePod: { status: { phase: 'Pending', conditions: [{ type: 'PodScheduled', status: 'False',
+      reason: 'Unschedulable', message: '0/3 nodes are available' }] } } },
+    /did not finish in 10 minutes \(not scheduled: Unschedulable 0\/3 nodes are available\)/],
+    [{ smokeCreateError: 'pods "x" is forbidden: exceeded quota: agentweaver-quota' },
+      /ResourceQuota has no room for the install smoke check/],
+  ];
+  try {
+    for (const [settings, expected] of failures) {
+      const calls = [];
+      const clock = boundedClock();
+      await assert.rejects(deployKustomize({ imageTag: selectedTag }, {
+        root: directory, exec: fakeExec(calls, settings), log() {}, sleep: clock.sleep,
+      }), expected);
+      assert.ok(calls.some(call => call.args[0] === 'delete' &&
+        call.args[1]?.startsWith('pod/agentweaver-install-smoke-')));
     }
   } finally {
     rmSync(directory, { recursive: true, force: true });

@@ -47,7 +47,9 @@ test('AKS-only what-if lists the nested federated credential create-or-update op
 
   assert.deepEqual(output.changes, []);
   assert.match(nestedChanges.note, /top-level what-if omits resources/);
-  assert.match(nestedChanges.note, /existing FIC state was not queried/);
+  assert.match(nestedChanges.note, /existing FIC and node pool state was not queried/);
+  assert.deepEqual(nestedChanges.agentPools.map(pool => [pool.name, pool.workloadRuntime, pool.sshAccess]),
+    [['kata', 'KataVmIsolation', 'Disabled']]);
   assert.deepEqual(nestedChanges.federatedIdentityCredentials, [
     {
       operation: 'createOrUpdate',

@@ -11,11 +11,12 @@ PostgreSQL has a delegated subnet and private DNS.
 The full-foundation template explicitly enables Kubernetes RBAC separately from
 Azure RBAC and requests AKS Application Routing's managed default domain when
 no custom DNS zones are configured.
-`aks-redeploy.bicep` is a separate, narrow identity-federation refresh for an
-existing foundation. It reads the existing AKS issuer, identity, and
-Application Routing domain; it updates only the three existing workload-identity
-federated credentials. It does not PUT the AKS resource or change its routing,
-RBAC, network, data-service, private-DNS, or monitoring configuration.
+`aks-redeploy.bicep` is a separate, narrow refresh for an existing foundation.
+It reads the existing AKS issuer, identity, and Application Routing domain. It
+updates only the three existing workload-identity federated credentials and
+creates or updates the `kata` node pool. It does not PUT the AKS resource or
+change its routing, RBAC, network, data-service, private-DNS, or monitoring
+configuration.
 If AKS omits `defaultDomain` for custom DNS, its diagnostic output uses
 `false` and `null`.
 
@@ -49,6 +50,55 @@ Private Logs queries require an approved VNet-connected Job, VM, or VPN and
 correct private DNS. An ARM query cannot use Private Link.
 The default-deny Kubernetes base does not provide exporter egress.
 The foundation probe Job overlay owns explicit egress and executable runtime proof.
+
+## Kata node pool
+
+AKS has two node pools:
+
+| Pool | Mode | VM size | Autoscale | Purpose |
+| --- | --- | --- | --- | --- |
+| `system` | System | `Standard_D2s_v5` | 2-3 nodes | Product services and AKS add-ons. |
+| `kata` | User | `Standard_D4s_v5` | 1-2 nodes | Sandbox pods that use RuntimeClass `kata-vm-isolation`. |
+
+The `kata` pool uses Azure Linux with `workloadRuntime: KataVmIsolation`
+(AKS Pod Sandboxing). SSH access to its nodes is disabled. The pool has no
+taint, because sandbox pods do not have a toleration. Other pods can also run
+on a `kata` node, which can reduce the space for sandboxes.
+
+The pool keeps at least one node. A node scale-up takes longer than the
+30-second sandbox scheduling budget, so a sandbox cannot wait for a new node.
+
+Cost: `Standard_D4s_v5` Linux pay-as-you-go in `eastus2` is USD 0.192 per hour
+(Azure retail price, November 2026). That is about USD 140 per node per month,
+plus the managed OS disk. The pool has a maximum of two nodes. Check the
+[Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/)
+for your region and agreement.
+
+Quota: the `system` pool can use up to 6 vCPUs and the `kata` pool up to 8
+vCPUs, both in the DSv5 family. Make sure that the regional DSv5 vCPU quota of
+the subscription is at least 14. Otherwise the autoscaler cannot add nodes.
+
+Both `main.bicep` and `aks-redeploy.bicep` create or update the pool with
+`modules/aks-kata-pool.bicep`. The module is a nested deployment, so the
+top-level what-if does not show it. For the AKS-only scope, `npm run azure:plan`
+adds the pool declaration to `nestedDeploymentChanges.agentPools`. To add the
+pool to an existing cluster, run the AKS-only deployment. You do not need a
+manual `az aks nodepool add`.
+
+The agent pool PUT does not set a node count, so a later deployment keeps the
+autoscaler's current count. The OS SKU, workload runtime, VM size, and subnet
+of a node pool cannot change. If an existing pool named `kata` has other
+values, the deployment fails. Delete that pool, then run the deployment again.
+
+After the deployment, a Ready node has the label
+`kubernetes.azure.com/kata-vm-isolation=true`:
+
+```powershell
+kubectl get nodes --selector kubernetes.azure.com/kata-vm-isolation=true
+```
+
+`npm run deploy:kustomize` checks for this node before it writes to the
+cluster.
 
 ## Local compilation
 

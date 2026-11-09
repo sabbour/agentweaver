@@ -576,6 +576,14 @@ count and does not prove scale-up or regional capacity.
 The two-node baseline remains unchanged. Three nodes can increase node compute
 cost by 50%, plus per-node service charges. Quota headroom does not prove regional capacity.
 
+## Kata node pool
+
+Both templates create or update a `kata` user node pool for sandbox pods:
+Azure Linux, `workloadRuntime: KataVmIsolation`, `Standard_D4s_v5`, autoscale
+1-2 nodes, and SSH disabled. The deployment does not submit a node count for
+this pool. For the cost and recovery from a conflicting pool, see
+[Kata node pool](../../infra/bicep/README.md#kata-node-pool).
+
 ## ACNS security source setting
 
 AKS opts into Advanced Container Networking Services (ACNS) with security
@@ -975,8 +983,9 @@ Contributor assignment remain scoped to their required resources.
 The AKS-only template reads the issuer URL and managed routing-domain state
 from the deployed cluster without PUTting AKS. It updates the three existing
 workload-identity federated credentials and preserves
-their ServiceAccount subjects and `api://AzureADTokenExchange` audience. Its
-source-bound receipt covers only the federation refresh and is not a full-foundation
+their ServiceAccount subjects and `api://AzureADTokenExchange` audience. It also
+creates or updates the `kata` node pool. Its
+source-bound receipt covers only the federation refresh and the node pool and is not a full-foundation
 receipt for the Foundation Probe acceptance collector.
 
 After separate approval, the operator command shape is:
@@ -1004,10 +1013,10 @@ the guarded what-if before Incremental create. The source guard requires a
 clean HEAD equal to the fetched admitted `origin/v1` tip; deployment does not
 accept a caller-selected `--expected-sha`.
 For the AKS-only template, the top-level what-if does not show resources inside
-the nested workload-identity federation deployment. The preflight lists the
-three federated identity credentials that the nested deployment will create or
-update. It does not query existing credentials to distinguish creates from
-updates.
+the nested workload-identity federation and Kata node pool deployments. The
+preflight lists the three federated identity credentials and the `kata` node
+pool that the nested deployments will create or update. It does not query
+existing credentials or node pools to distinguish creates from updates.
 Bicep source parameters and outputs bind the receipt to exact reviewed inputs.
 No unsupported deployment tags occur.
 

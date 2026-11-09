@@ -38,17 +38,21 @@ prerequisites:
    procedure so AKS creates `identity-broker-tls`.
 4. Confirm the database and Entra workload identities are ready. The deploy
    command runs the selected service migrations before it applies workloads.
-5. After the product Services exist, configure the separate managed Gateway
+5. Run the infrastructure deployment so that the cluster has the `kata` node
+   pool. RuntimeClass `kata-vm-isolation` needs a Ready node in this pool.
+6. After the product Services exist, configure the separate managed Gateway
    and routing resources using the Azure operator guide.
 
 The deployment command does not provision Azure resources, certificates,
-runtime configuration, or external permissions.
+runtime configuration, or external permissions. It creates only the
+cluster-scoped workspace StorageClass in `cluster/` when that class is missing.
 
 ## Kustomize layout
 
 | Path | Purpose |
 | --- | --- |
 | `base/` | Product namespace, ServiceAccounts, Deployments, Services, and network policies. |
+| `cluster/` | Cluster-scoped workspace StorageClass, excluded from the root bundle. The deploy command creates it when it is missing. |
 | `runtime-configs/` | Non-secret ConfigMap inputs for service hosts and Environment settings. |
 | `provider-catalogs/` | Projects & Config provider catalog snapshot and ConfigMap. |
 | `profiles/` | Optional runtime profiles, including the AgentHost runtime ConfigMap. |
@@ -108,6 +112,36 @@ migration Job and fails closed if it is missing.
 The migration Job applies EF migrations, then reconciles the reviewed
 runtime-grant plan transactionally. Runtime privilege errors keep the rollout
 from reporting success.
+
+### Cluster checks and install smoke check
+
+Before any write, the command checks the cluster prerequisites for sandboxes:
+
+- StorageClass `agentweaver-workspace-azurefile` uses `file.csi.azure.com` and
+  the required mount options. If the class is missing, the command creates it
+  from `cluster/workspace-storageclass.yaml` before the migrations. If it
+  exists with other values, the command stops.
+- RuntimeClass `kata-vm-isolation` exists, and at least one Ready,
+  schedulable node matches its node selector. If not, the command stops and
+  tells you to run the infrastructure deployment, which creates the `kata`
+  node pool.
+
+After all Deployments are ready, the command starts a short-lived pod with the
+AgentHost labels, the sandbox RuntimeClass, the exact AgentHost image, and a
+1 GiB workspace claim. The AgentHost network policies apply to this pod. The
+pod has no ServiceAccount token, Secret, or settings. It checks that
+`environment.agentweaver.svc.cluster.local` resolves, that a TCP connection to
+Environment on port 8443 opens, and that the workspace
+volume supports write, read, symbolic links, and UID 1000 ownership. A failure
+or a 10-minute timeout fails the command with the cause. The command always
+deletes the pod and claim.
+
+The caller needs these extra permissions:
+
+| Scope | Permissions |
+| --- | --- |
+| Cluster | `list nodes`; `create storageclasses` only when the class is missing. |
+| Namespace `agentweaver` | `create`, `get`, `list`, and `delete` on `pods` and `persistentvolumeclaims`; `get pods/log`. |
 
 ## Verify workloads
 

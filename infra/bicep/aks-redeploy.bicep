@@ -1,5 +1,6 @@
 // Existing-cluster path for an approved P0 foundation. It refreshes workload
-// identity federation without PUTting the AKS resource or its managed fields.
+// identity federation and creates or updates the Kata node pool without
+// PUTting the AKS resource or its managed fields.
 targetScope = 'resourceGroup'
 
 @description('Azure region for the existing P0 network and AKS cluster.')
@@ -43,6 +44,14 @@ module workloadIdentityFederation 'modules/workload-identity-federation.bicep' =
   params: {
     namePrefix: namePrefix
     oidcIssuerUrl: aks.properties.oidcIssuerProfile.issuerURL
+  }
+}
+
+module kataPool 'modules/aks-kata-pool.bicep' = {
+  name: '${namePrefix}-aks-kata-pool'
+  params: {
+    clusterName: aks.name
+    nodeSubnetId: resourceId('Microsoft.Network/virtualNetworks/subnets', '${namePrefix}-vnet', 'aks')
   }
 }
 

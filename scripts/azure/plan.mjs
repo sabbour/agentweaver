@@ -34,6 +34,19 @@ const AKS_ONLY_FEDERATED_CREDENTIALS = [
     audiences: ['api://AzureADTokenExchange'],
   },
 ];
+// Keep this declaration aligned with infra/bicep/modules/aks-kata-pool.bicep.
+const AKS_ONLY_AGENT_POOLS = [
+  {
+    operation: 'createOrUpdate',
+    name: 'kata',
+    mode: 'User',
+    osSKU: 'AzureLinux',
+    workloadRuntime: 'KataVmIsolation',
+    vmSize: 'Standard_D4s_v5',
+    autoscale: { minCount: 1, maxCount: 2 },
+    sshAccess: 'Disabled',
+  },
+];
 
 /** Converts deployment arguments into the non-mutating Azure what-if command form. */
 export function buildWhatIfArgs(options) {
@@ -67,8 +80,10 @@ function addNestedDeploymentChanges(result, source) {
       ...whatIf,
       nestedDeploymentChanges: {
         note: 'The top-level what-if omits resources in the nested workload-identity federation ' +
-          'deployment. These declarations are create-or-update operations; existing FIC state was not queried.',
+          'and Kata node pool deployments. These declarations are create-or-update operations; ' +
+          'existing FIC and node pool state was not queried.',
         federatedIdentityCredentials: AKS_ONLY_FEDERATED_CREDENTIALS,
+        agentPools: AKS_ONLY_AGENT_POOLS,
       },
     }, null, 2),
   };

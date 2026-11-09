@@ -330,7 +330,16 @@ test('P0 service addresses and source-backed provider defaults are exact', () =>
   });
   assert.equal(env.Environment__Storage__AzureFiles__OptionsSchemaVersion, '1');
   assert.equal(env.Environment__Storage__AzureFiles__Namespace, namespace);
-  assert.equal(env.Environment__Storage__AzureFiles__StorageClassName, 'azurefile-csi');
+  assert.equal(env.Environment__Storage__AzureFiles__StorageClassName, 'agentweaver-workspace-azurefile');
+  const storageClass = parse(readFileSync(
+    path.join(root, 'deploy', 'k8s', 'cluster', 'workspace-storageclass.yaml'), 'utf8'));
+  assert.equal(storageClass.metadata.name, env.Environment__Storage__AzureFiles__StorageClassName);
+  assert.equal(storageClass.provisioner, 'file.csi.azure.com');
+  assert.deepEqual([...storageClass.mountOptions].sort(), [
+    'actimeo=30', 'cache=strict', 'dir_mode=0755', 'file_mode=0644', 'gid=1000', 'mfsymlinks', 'uid=1000',
+  ]);
+  assert.equal(parse(readFileSync(path.join(root, 'deploy', 'k8s', 'kustomization.yaml'), 'utf8'))
+    .resources.some(resource => resource.startsWith('cluster')), false);
   assert.equal(env.Environment__Storage__AzureFiles__MaximumCapacityGiB, '100');
   assert.equal(env.Environment__Storage__AzureFiles__ProvisioningTimeoutSeconds, '600');
   assert.equal(env.Environment__Storage__AzureFiles__PollIntervalMilliseconds, '250');
