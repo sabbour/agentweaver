@@ -26,7 +26,7 @@ for ConfigMap keys, defaults, and value sources.
 Select the approved cluster context and complete the environment-specific
 prerequisites:
 
-1. Select the published GHCR image tags or digests in an operator-supplied JSON manifest.
+1. Select the published image tags or digests in an operator-supplied JSON manifest. GHCR is the default registry.
 2. Complete the workload runtime ConfigMaps and Projects & Config provider
    catalog. Follow the runtime configuration reference; do not put credentials
    or private keys in ConfigMaps.
@@ -76,7 +76,14 @@ Deployments. A migration failure stops before the root overlay is applied.
 Run it from the operator machine after selecting the approved Azure CLI
 subscription and AKS kubeconfig context; it uses the local interactive Azure
 CLI identity, not a GitHub-hosted deployment identity. Builds still publish
-images automatically to GHCR.
+images automatically to GHCR. To select ACR images, add `--registry <acr-login-server>`;
+use the login server form `<name>.azurecr.io`. Sign in with Azure CLI and run
+`az acr login --name <acr-name>` first. The local identity must already have
+pull access to the selected registry. This option applies to images selected
+by the manifest or `--image-tag`; omitted manifest images keep their live
+references and registries. `az acr login` stores Docker credentials in the
+configured credential store; remove them with `az acr logout --name <acr-name>`
+when finished.
 
 Before a migration or Kubernetes write, the helper checks that the live
 `identity-broker-runtime-config-v3` ConfigMap exactly matches the rendered
@@ -150,7 +157,7 @@ even when the Projects image is omitted.
 
 ## Select images with a manifest
 
-The local deploy command accepts an operator-supplied JSON file mapping GHCR
+The local deploy command accepts an operator-supplied JSON file mapping image
 repository names to published `sha-<40-character-commit>` tags or
 `sha256:<64-hex-digest>` references:
 
@@ -163,22 +170,25 @@ repository names to published `sha-<40-character-commit>` tags or
 }
 ```
 
-Run the same deployment helper with that file:
+Run the deployment helper with that file. It uses GHCR unless you select an
+ACR login server:
 
 ```powershell
 npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --execute
+npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --registry <acr-login-server> --execute
 ```
 
 The v1 image workflow pushes tags and lists digests in its run summary; it does
 not produce an image-manifest artifact. This file is only the image selection
 input, not a publication receipt or source-claim gate. Its repository names
-match the GHCR names in the image workflow and are unrelated to the
+match the repository names in the image workflow and are unrelated to the
 component-version manifest at `releases/foundation.json`.
 
-Include only the images to update. For omitted repositories, the helper reads
-the current references from the live Deployments, including the AgentHost
-image configured in the Environment Deployment, and pins them to their
-resolved digests. It fails if any omitted image cannot be read or validated;
+Include only the images to update. The `--registry` option applies only to
+repositories in the manifest. For omitted repositories, the helper reads the
+current references and registries from the live Deployments, including the
+AgentHost image configured in the Environment Deployment, and pins them to
+their resolved digests. It fails if any omitted image cannot be read or validated;
 it never falls back to the checked-in Kustomize pins. A full ten-image
 manifest also works when no live Deployment refs are available. The existing
 `--image-tag sha-<commit>` form remains available to update all ten images.

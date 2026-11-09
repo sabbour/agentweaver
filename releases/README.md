@@ -50,6 +50,31 @@ The manual run stops if the commit is not an ancestor of `origin/v1`. The
 workflow summary lists each pushed image digest. There are no image archives,
 publication receipts, or source-claim gates.
 
+To build the same ten images from an exact `v1` commit into Azure Container
+Registry (ACR), use the local candidate builder. Run it from the repository
+root with Node.js 24, .NET, Docker Buildx, Azure CLI, and an Azure CLI identity
+that already has push access to the target registry:
+
+```powershell
+az login
+az account set --subscription <approved-subscription>
+npm run azure:build-acr-candidate -- <full-lowercase-40-character-commit-sha> <acr-login-server>
+```
+
+Use the ACR login server in the form `<name>.azurecr.io`. The builder fetches
+`origin/v1`, stops unless the selected commit is an ancestor, and uses a
+detached worktree at that commit. It uses the same Docker and .NET container
+build paths and the same source, tree, and version labels as the v1 image
+workflow. It logs in with `az acr login`, pushes `sha-<commit>` tags, and
+verifies all ten image identities and digests. The result includes the source
+tree, each ACR digest, and AgentHost's `linux/amd64` compressed pull-byte
+measurement. All candidate images target `linux/amd64`, as the workflow does
+on its Ubuntu builder. The builder does not create role assignments. If the
+identity does not have push access, stop and ask an authorized ACR administrator.
+`az acr login` stores Docker credentials in the configured credential store.
+After the ACR work is complete, remove that login with
+`az acr logout --name <acr-name>`.
+
 ## Deploy an exact v1 source commit
 
 Use this command for intermediate acceptance of a commit whose ten images are
@@ -63,16 +88,31 @@ command requires the same AKS and namespace permissions as the local
 deployment command.
 
 Replace the placeholder with the commit's full lowercase 40-character SHA.
+The default registry is GHCR. To use ACR, sign in with Azure CLI, select the
+approved subscription with `az account set --subscription <approved-subscription>`,
+and run `az acr login --name <acr-name>` so Docker Buildx can inspect the images.
+Add `--registry <acr-login-server>` to the command. The exact-source helper
+uses an ACR pull token for its OCI checks; it does not print or store that
+token. `az acr login` stores Docker credentials in the configured credential
+store; remove them with `az acr logout --name <acr-name>` when finished.
 
 ```powershell
 npm run azure:deploy-from-commit -- <full-lowercase-40-character-commit-sha> --execute
 ```
 
+For ACR, use:
+
+```powershell
+npm run azure:deploy-from-commit -- <full-lowercase-40-character-commit-sha> --registry <acr-login-server> --execute
+```
+
 The command fetches the current `origin/v1` and stops unless the selected
 commit is an ancestor. It creates a detached worktree at that exact commit,
-runs locked `npm ci` there, resolves all ten `sha-<commit>` GHCR tags to
-digests, and checks each image's OCI source commit and Git tree. It passes
-those immutable digests to the existing Kustomize deployment helper.
+runs locked `npm ci` there, resolves all ten `sha-<commit>` tags in the selected
+registry to digests, and checks each image's OCI source commit and Git tree.
+It passes those immutable digests and the registry to the existing Kustomize
+deployment helper. ACR deployment stops if the selected source commit does not
+include registry-aware Kustomize support.
 
 The command does not switch branches or change tracked files in your current
 worktree. It runs the existing migration-first deployment, permission checks,
@@ -90,8 +130,13 @@ image manifest described in the
 
 Run deployment from a machine with Azure CLI, `kubectl`, `kubelogin`,
 Docker Buildx, and Node.js 24. The helper uses Buildx to resolve image
-references and reads AgentHost manifests and blob descriptors from GHCR to
-measure the selected platform image; it does not download the image layers.
+references and reads AgentHost manifests and blob descriptors from the
+selected registry to measure the selected platform image; it does not download
+the image layers. The default registry is GHCR. For ACR, sign in with Azure
+CLI and run `az acr login --name <acr-name>` before deployment. The ACR reader
+uses a pull token for its OCI checks without printing or storing the token.
+The Docker login uses the configured credential store; remove it with
+`az acr logout --name <acr-name>` when finished.
 Select the published references you want to update in the operator-supplied
 manifest; the helper keeps live references for omitted images. The legacy
 `--image-tag` option still updates all ten images.
@@ -112,8 +157,10 @@ approved target before executing. The local Azure CLI identity must already
 have the required AKS and namespace permissions; the deployment does not
 grant access or provision Azure resources.
 
-The command resolves selected manifest references to GHCR digests and keeps
-live references for omitted repositories. For AgentHost, it verifies the
+The command resolves selected manifest references to digests in the selected
+registry and keeps live references, including their registries, for omitted
+repositories. Use `--registry <acr-login-server>` to select ACR for the images
+in the manifest; without that option, the command uses GHCR. For AgentHost, it verifies the
 `linux/amd64` image manifest and measures the compressed image bytes. It
 stamps the same digest, platform, and byte count into the AgentHost runtime
 profile and Environment Sandbox options. An omitted AgentHost image keeps the

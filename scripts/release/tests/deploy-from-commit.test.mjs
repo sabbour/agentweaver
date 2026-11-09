@@ -26,7 +26,10 @@ function checkoutState() {
   ];
 }
 
-function setup({ ancestor = true, mismatch, addFailure = false, cleanupFailure = false } = {}) {
+function setup({
+  ancestor = true, mismatch, addFailure = false, cleanupFailure = false,
+  registry = 'ghcr.io/sabbour',
+} = {}) {
   const testRoot = path.join(root, `.deploy-from-commit-test-${randomUUID()}`);
   const worktreePath = path.join(testRoot, 'source');
   mkdirSync(testRoot);
@@ -58,7 +61,7 @@ function setup({ ancestor = true, mismatch, addFailure = false, cleanupFailure =
     }
     if (name === 'docker' && args[0] === 'buildx') {
       assert.equal(options.cwd, worktreePath);
-      const repository = args[3].slice('ghcr.io/sabbour/'.length).split(':')[0];
+      const repository = args[3].slice(`${registry}/`.length).split(':')[0];
       return { status: 0, stdout: `${digests[repository]}\n`, stderr: '' };
     }
     assert.fail(`unexpected ${name} ${args.join(' ')}`);
@@ -66,7 +69,7 @@ function setup({ ancestor = true, mismatch, addFailure = false, cleanupFailure =
   const verifiedImages = [];
   const verifyImage = async image => {
     verifiedImages.push(image);
-    const repository = image.slice('ghcr.io/sabbour/'.length).split('@')[0];
+    const repository = image.slice(`${registry}/`.length).split('@')[0];
     return {
       sourceSha: mismatch === 'sha' && repository === IMAGE_REPOSITORIES[0]
         ? 'c'.repeat(40) : sourceSha,
@@ -78,6 +81,7 @@ function setup({ ancestor = true, mismatch, addFailure = false, cleanupFailure =
   const deployKustomize = async (options, overrides) => {
     deployment = {
       root: overrides.root,
+      registry: options.registry,
       images: JSON.parse(readFileSync(options.imageManifest, 'utf8')).images,
     };
   };
@@ -87,13 +91,14 @@ function setup({ ancestor = true, mismatch, addFailure = false, cleanupFailure =
   };
 }
 
-function runDeploy(fixture) {
-  return deployFromCommit({ sourceSha }, {
+function runDeploy(fixture, registry = 'ghcr.io/sabbour', registryAwareHelper = true) {
+  return deployFromCommit({ sourceSha, registry }, {
     root,
     worktreePath: fixture.worktreePath,
     exec: fixture.exec,
     verifyImage: fixture.verifyImage,
     deployKustomize: fixture.deployKustomize,
+    deployModule: { DEPLOY_KUSTOMIZE_REGISTRY_OPTION: registryAwareHelper },
   });
 }
 
@@ -110,9 +115,14 @@ test('requires one lowercase full commit SHA and explicit execution', () => {
     [`${sourceSha}0`, '--execute'],
     [sourceSha],
     [sourceSha, '--execute', '--execute'],
+    [sourceSha, '--registry', 'bad', '--execute'],
+    [sourceSha, '--registry', 'ghcr.io/sabbour', '--registry', 'agentweaverasabbour.azurecr.io', '--execute'],
   ]) {
-    assert.throws(() => parseDeployFromCommitArgs(args), /Usage:/);
+    assert.throws(() => parseDeployFromCommitArgs(args), /Usage:|registry must/);
   }
+  assert.deepEqual(parseDeployFromCommitArgs([
+    sourceSha, '--registry', 'agentweaverasabbour.azurecr.io', '--execute',
+  ]), { sourceSha, registry: 'agentweaverasabbour.azurecr.io' });
 });
 
 test('fetches v1, verifies all image labels, passes only digests, and leaves the caller checkout unchanged', async () => {
@@ -141,6 +151,31 @@ test('fetches v1, verifies all image labels, passes only digests, and leaves the
     rmSync(fixture.testRoot, { recursive: true, force: true });
   }
   assert.deepEqual(checkoutState(), before);
+});
+
+test('selects ACR images and passes the registry to the exact-source helper', async () => {
+  const registry = 'agentweaverasabbour.azurecr.io';
+  const fixture = setup({ registry });
+  try {
+    await runDeploy(fixture, registry);
+    assert.deepEqual(fixture.verifiedImages, IMAGE_REPOSITORIES.map(repository =>
+      `${registry}/${repository}@${fixture.digests[repository]}`));
+    assert.equal(fixture.deployment.registry, registry);
+  } finally {
+    rmSync(fixture.testRoot, { recursive: true, force: true });
+  }
+});
+
+test('rejects ACR deployment when the selected source has an older Kustomize helper', async () => {
+  const registry = 'agentweaverasabbour.azurecr.io';
+  const fixture = setup({ registry });
+  try {
+    await assert.rejects(runDeploy(fixture, registry, false),
+      /predates registry-aware Kustomize deployment/);
+    assert.equal(fixture.deployment, undefined);
+  } finally {
+    rmSync(fixture.testRoot, { recursive: true, force: true });
+  }
 });
 
 test('rejects a commit outside origin/v1 before creating a worktree', async () => {

@@ -4,9 +4,12 @@
  */
 import { createHash } from 'node:crypto';
 import { readRegistry } from './registry-read.mjs';
+import { runAzAcrLoginToken } from '../azure/lib/exec.mjs';
 
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
 const SHA = /^[a-f0-9]{40}$/;
+export const DEFAULT_REGISTRY = 'ghcr.io/sabbour';
+const ACR_LOGIN_SERVER = /^([a-z0-9]{5,50})\.azurecr\.io$/;
 const registryManifestAccept = [
   'application/vnd.oci.image.index.v1+json',
   'application/vnd.oci.image.manifest.v1+json',
@@ -30,6 +33,15 @@ function fail(message) {
   throw new Error(`release deployment: ${message}`);
 }
 
+export function parseRegistryTarget(registry = DEFAULT_REGISTRY) {
+  if (registry === DEFAULT_REGISTRY) {
+    return { registry, host: 'ghcr.io', kind: 'ghcr', repositoryPrefix: 'sabbour/' };
+  }
+  const acr = ACR_LOGIN_SERVER.exec(registry ?? '');
+  if (acr) return { registry, host: registry, kind: 'acr', name: acr[1], repositoryPrefix: '' };
+  fail(`registry must be ${DEFAULT_REGISTRY} or an Azure Container Registry login server.`);
+}
+
 function digest(bytes) {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 }
@@ -44,14 +56,20 @@ function parseJson(text, description) {
 
 function splitImageReference(image) {
   const separator = typeof image === 'string' ? image.lastIndexOf('@') : -1;
-  const repository = separator < 0 ? '' : image.slice(0, separator);
+  const namedImage = separator < 0 ? '' : image.slice(0, separator);
+  const slash = namedImage.indexOf('/');
   const imageDigest = separator < 0 ? '' : image.slice(separator + 1);
-  if (!repository.startsWith('ghcr.io/') ||
-      repository.slice('ghcr.io/'.length).split('/').length < 2 ||
-      repository.includes('@') || !DIGEST.test(imageDigest)) {
-    fail(`invalid immutable GHCR image reference "${image}"`);
+  const host = slash < 0 ? '' : namedImage.slice(0, slash);
+  const target = host === 'ghcr.io'
+    ? parseRegistryTarget(DEFAULT_REGISTRY)
+    : parseRegistryTarget(host);
+  const path = slash < 0 ? '' : namedImage.slice(slash + 1);
+  const repository = path.startsWith(target.repositoryPrefix)
+    ? path.slice(target.repositoryPrefix.length) : '';
+  if (!repository || path.includes('@') || !DIGEST.test(imageDigest)) {
+    fail(`invalid immutable ${target.kind === 'acr' ? 'ACR' : 'GHCR'} image reference "${image}"`);
   }
-  return { repository: repository.slice('ghcr.io/'.length), digest: imageDigest };
+  return { repository: `${target.repositoryPrefix}${repository}`, digest: imageDigest, target };
 }
 
 /**
@@ -102,11 +120,79 @@ async function registryReader(repository, fetchImpl, delay) {
   };
 }
 
+async function acrRegistryReader(reference, fetchImpl, delay, options = {}) {
+  const { repository, target } = reference;
+  const refreshToken = await (options.getAcrLoginToken ?? runAzAcrLoginToken)(target.name);
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    service: target.host,
+    scope: `repository:${repository}:pull`,
+    refresh_token: refreshToken,
+  });
+  const { value: tokenJson } = await readRegistry(`https://${target.host}/oauth2/token`, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+    body,
+  }, response => response.json(), { fetchImpl, delay });
+  const token = tokenJson?.access_token ?? tokenJson?.accessToken;
+  if (typeof token !== 'string' || !token) fail(`ACR returned no pull token for ${repository}`);
+  return {
+    async manifest(imageDigest, expectedSize) {
+      const { value: text } = await readRegistry(
+        `https://${target.host}/v2/${repository}/manifests/${imageDigest}`, {
+          headers: { accept: registryManifestAccept, authorization: `Bearer ${token}` },
+        }, response => {
+          if (response.headers.get('docker-content-digest') !== imageDigest) {
+            fail(`ACR manifest bytes do not match the exact published digest for ${repository}@${imageDigest}`);
+          }
+          return response.text();
+        }, { fetchImpl, delay });
+      const bytes = Buffer.from(text, 'utf8');
+      if (digest(bytes) !== imageDigest ||
+          (expectedSize !== undefined && bytes.length !== expectedSize)) {
+        fail(`ACR manifest bytes do not match the exact published digest for ${repository}@${imageDigest}`);
+      }
+      return { bytes, value: parseJson(bytes.toString('utf8'), `ACR manifest ${imageDigest}`) };
+    },
+    async blob(imageDigest, expectedSize) {
+      const { value } = await readRegistry(
+        `https://${target.host}/v2/${repository}/blobs/${imageDigest}`, {
+          headers: { authorization: `Bearer ${token}` },
+        }, response => response.arrayBuffer(), { fetchImpl, delay });
+      const bytes = Buffer.from(value);
+      if (bytes.length !== expectedSize || digest(bytes) !== imageDigest) {
+        fail('published image config bytes do not match their manifest descriptor');
+      }
+      return bytes;
+    },
+  };
+}
+
+function registryReaderFor(reference, fetchImpl, delay, options) {
+  return reference.target.kind === 'acr'
+    ? acrRegistryReader(reference, fetchImpl, delay, options)
+    : registryReader(reference.repository, fetchImpl, delay);
+}
+
 /**
  * Verifies a registry image reference and its manifest digest without downloading image layers.
  * Only transient reads retry; digest mismatches fail immediately.
  */
-export async function verifyRegistryImage(image, fetchImpl = globalThis.fetch, delay) {
+export async function verifyRegistryImage(image, fetchImpl = globalThis.fetch, delay, options = {}) {
+  const parsed = splitImageReference(image);
+  if (parsed.target.kind === 'acr') {
+    const reader = await registryReaderFor(parsed, fetchImpl, delay, options);
+    const { value } = await reader.manifest(parsed.digest);
+    const acceptedDigests = new Set([parsed.digest]);
+    if (Array.isArray(value.manifests)) {
+      const amd64 = value.manifests.filter((entry) =>
+        entry.platform?.os === 'linux' && entry.platform?.architecture === 'amd64' &&
+        DIGEST.test(entry.digest ?? ''));
+      if (amd64.length === 0) fail(`published image ${image} has no linux/amd64 manifest`);
+      for (const entry of amd64) acceptedDigests.add(entry.digest);
+    }
+    return acceptedDigests;
+  }
   const separator = image.indexOf('/', 'ghcr.io/'.length);
   const repository = image.slice('ghcr.io/'.length, image.lastIndexOf('@'));
   const imageDigest = image.slice(image.lastIndexOf('@') + 1);
@@ -135,9 +221,9 @@ export async function verifyRegistryImage(image, fetchImpl = globalThis.fetch, d
  * Verifies service image manifests and their platform-specific child manifests.
  * Transient reads retry without weakening source, digest, or size checks.
  */
-export async function verifyServiceRegistryImage(image, fetchImpl = globalThis.fetch, delay) {
+export async function verifyServiceRegistryImage(image, fetchImpl = globalThis.fetch, delay, options = {}) {
   const reference = splitImageReference(image);
-  const reader = await registryReader(reference.repository, fetchImpl, delay);
+  const reader = await registryReaderFor(reference, fetchImpl, delay, options);
   const top = await reader.manifest(reference.digest);
   let childDigest = reference.digest;
   let child = top;
@@ -176,7 +262,7 @@ export async function verifyServiceRegistryImage(image, fetchImpl = globalThis.f
   }
 
   return {
-    image: `ghcr.io/${reference.repository}@${childDigest}`,
+    image: `${reference.target.host}/${reference.repository}@${childDigest}`,
     digest: childDigest,
     acceptedDigests: new Set([reference.digest, childDigest]),
     configDigest: manifest.config.digest,
@@ -189,9 +275,9 @@ export async function verifyServiceRegistryImage(image, fetchImpl = globalThis.f
 /**
  * Resolves the AgentHost linux/amd64 image and measures its unique compressed pull descriptors.
  */
-export async function measureAgentHostRegistryImage(image, fetchImpl = globalThis.fetch, delay) {
+export async function measureAgentHostRegistryImage(image, fetchImpl = globalThis.fetch, delay, options = {}) {
   const reference = splitImageReference(image);
-  const reader = await registryReader(reference.repository, fetchImpl, delay);
+  const reader = await registryReaderFor(reference, fetchImpl, delay, options);
   const top = await reader.manifest(reference.digest);
   let platformDigest = reference.digest;
   let platformManifest = top;
@@ -251,14 +337,14 @@ export async function measureAgentHostRegistryImage(image, fetchImpl = globalThi
     platform: 'linux/amd64',
     compressedPullBytes,
     configDigest: manifest.config.digest,
-    image: `ghcr.io/${reference.repository}@${platformDigest}`,
+    image: `${reference.target.host}/${reference.repository}@${platformDigest}`,
   };
 }
 
 /** Reads only the OCI revision label used to parse a migration image's schema support. */
-export async function readServiceImageRevision(image, fetchImpl = globalThis.fetch, delay) {
+export async function readServiceImageRevision(image, fetchImpl = globalThis.fetch, delay, options = {}) {
   const reference = splitImageReference(image);
-  const reader = await registryReader(reference.repository, fetchImpl, delay);
+  const reader = await registryReaderFor(reference, fetchImpl, delay, options);
   const top = await reader.manifest(reference.digest);
   let childDigest = reference.digest;
   let child = top;

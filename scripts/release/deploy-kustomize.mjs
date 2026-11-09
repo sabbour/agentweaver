@@ -11,11 +11,10 @@ import {
   verifyImmutableRuntimeConfigMapReplacementPermissions,
 } from './immutable-runtime-config-maps.mjs';
 import { IMAGE_REPOSITORIES } from './image-repositories.mjs';
-import { measureAgentHostRegistryImage } from './registry.mjs';
+import { DEFAULT_REGISTRY, measureAgentHostRegistryImage, parseRegistryTarget } from './registry.mjs';
 import { run, redact } from '../azure/lib/exec.mjs';
 import { preserveIdentityBrokerProviderSetup } from '../azure/lib/identity-broker-provider-setup.mjs';
 
-const REGISTRY = 'ghcr.io/sabbour';
 const NAMESPACE = 'agentweaver';
 const BROKER_RUNTIME_CONFIG = 'identity-broker-runtime-config-v3';
 const PROJECTS_CONFIG_RUNTIME_CONFIG = 'projects-config-runtime-config';
@@ -105,13 +104,14 @@ const REQUIRED_AUTHORIZATION = [
   ['create', 'deployments.apps'],
 ];
 
-export const DEPLOY_KUSTOMIZE_USAGE = `Usage: npm run deploy:kustomize -- --image-manifest <file.json> --execute
-   or: npm run deploy:kustomize -- --image-tag sha-<git-commit> --execute
+export const DEPLOY_KUSTOMIZE_USAGE = `Usage: npm run deploy:kustomize -- --image-manifest <file.json> [--registry <registry>] --execute
+   or: npm run deploy:kustomize -- --image-tag sha-<git-commit> [--registry <registry>] --execute
 
 The manifest selects published images to update; omitted images keep their
 currently deployed references. The command runs migrations for selected services,
 applies namespaced Kustomize resources, and waits for every Deployment rollout.
 `;
+export const DEPLOY_KUSTOMIZE_REGISTRY_OPTION = true;
 
 function fail(message) {
   throw new Error(`Kustomize deployment: ${message}`);
@@ -120,6 +120,8 @@ function fail(message) {
 export function parseDeployKustomizeArgs(argv) {
   let imageTag;
   let imageManifest;
+  let registry = DEFAULT_REGISTRY;
+  let hasRegistry = false;
   let execute = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -131,6 +133,17 @@ export function parseDeployKustomizeArgs(argv) {
       if (imageManifest !== undefined) fail('--image-manifest may be specified only once.');
       imageManifest = argv[++index];
       if (!imageManifest || imageManifest.startsWith('--')) fail('--image-manifest requires a file path.');
+    } else if (arg === '--registry') {
+      if (hasRegistry || argv[index + 1] === undefined || argv[index + 1].startsWith('--')) {
+        fail('--registry requires a registry login server.');
+      }
+      hasRegistry = true;
+      registry = argv[++index];
+      try {
+        parseRegistryTarget(registry);
+      } catch {
+        fail('registry must be ghcr.io/sabbour or an Azure Container Registry login server.');
+      }
     } else fail(`unknown argument "${arg}".`);
   }
   if ((imageTag === undefined) === (imageManifest === undefined)) {
@@ -140,7 +153,10 @@ export function parseDeployKustomizeArgs(argv) {
     fail('--image-tag must be a normal sha-<40-character-commit> image tag.');
   }
   if (!execute) fail('--execute is required to run migrations and apply workloads.');
-  return imageManifest === undefined ? { imageTag } : { imageManifest };
+  const registryOption = registry === DEFAULT_REGISTRY ? {} : { registry };
+  return imageManifest === undefined
+    ? { imageTag, ...registryOption }
+    : { imageManifest, ...registryOption };
 }
 
 export function parseImageManifest(source) {
@@ -669,14 +685,18 @@ function prepareJob(resource, { image, name }) {
   return job;
 }
 
-function migrationImage(digests, repository) {
-  const digest = digests.get(repository);
-  if (!digest) fail(`No published image digest was resolved for ${repository}.`);
-  return `${REGISTRY}/${repository}@${digest}`;
+function imageName(registry, repository) {
+  return `${registry}/${repository}`;
 }
 
-function resolveImageDigest(exec, root, repository, reference) {
-  const image = `${REGISTRY}/${repository}${IMAGE_DIGEST.test(reference) ? `@${reference}` : `:${reference}`}`;
+function migrationImage(digests, repository, registries) {
+  const digest = digests.get(repository);
+  if (!digest) fail(`No published image digest was resolved for ${repository}.`);
+  return `${imageName(registries.get(repository), repository)}@${digest}`;
+}
+
+function resolveImageDigest(exec, root, repository, reference, registry) {
+  const image = `${imageName(registry, repository)}${IMAGE_DIGEST.test(reference) ? `@${reference}` : `:${reference}`}`;
   const result = must(exec, 'docker', [
     'buildx', 'imagetools', 'inspect', image, '--format', '{{.Manifest.Digest}}',
   ], { cwd: root }, `Could not read ${image}`);
@@ -688,18 +708,28 @@ function resolveImageDigest(exec, root, repository, reference) {
 }
 
 function deployedImageReference(value) {
-  if (typeof value !== 'string' || !value.startsWith(`${REGISTRY}/`)) return undefined;
-  const reference = value.slice(`${REGISTRY}/`.length);
+  if (typeof value !== 'string') return undefined;
+  const slash = value.indexOf('/');
+  if (slash < 0) return undefined;
+  const host = value.slice(0, slash);
+  const registry = host === 'ghcr.io' ? DEFAULT_REGISTRY : host;
+  try {
+    parseRegistryTarget(registry);
+  } catch {
+    return undefined;
+  }
+  if (!value.startsWith(`${registry}/`)) return undefined;
+  const reference = value.slice(`${registry}/`.length);
   for (const repository of IMAGE_REPOSITORIES) {
     if (reference.startsWith(`${repository}:`)) {
       const tag = reference.slice(repository.length + 1);
       if (!IMAGE_TAG.test(tag)) fail(`Current deployment has an invalid image tag for ${repository}.`);
-      return { repository, reference: tag };
+      return { repository, reference: tag, registry };
     }
     if (reference.startsWith(`${repository}@`)) {
       const digest = reference.slice(repository.length + 1);
       if (!IMAGE_DIGEST.test(digest)) fail(`Current deployment has an invalid image digest for ${repository}.`);
-      return { repository, reference: digest };
+      return { repository, reference: digest, registry };
     }
   }
   return undefined;
@@ -730,10 +760,10 @@ function currentImageReferences(exec, context, root, repositories) {
       const image = deployedImageReference(value);
       if (!image || !needed.has(image.repository)) continue;
       const existing = found.get(image.repository);
-      if (existing && existing !== image.reference) {
+      if (existing && (existing.reference !== image.reference || existing.registry !== image.registry)) {
         fail(`Current deployment has conflicting image references for ${image.repository}; include it in the manifest.`);
       }
-      found.set(image.repository, image.reference);
+      found.set(image.repository, { reference: image.reference, registry: image.registry });
     }
   }
   for (const repository of needed) {
@@ -744,7 +774,7 @@ function currentImageReferences(exec, context, root, repositories) {
   return { references: found, agentHostSettings };
 }
 
-function liveAgentHostTuple(settings, digest) {
+function liveAgentHostTuple(settings, digest, registry) {
   const values = new Map();
   for (const setting of settings) {
     if (values.has(setting.name)) fail(`Current deployment has duplicate AgentHost environment setting ${setting.name}.`);
@@ -772,7 +802,7 @@ function liveAgentHostTuple(settings, digest) {
     digest,
     platform,
     compressedPullBytes,
-    image: `${REGISTRY}/agentweaver-agenthost@${digest}`,
+    image: `${imageName(registry, 'agentweaver-agenthost')}@${digest}`,
   };
 }
 
@@ -857,7 +887,7 @@ function findJob(resources, name) {
   return matches[0];
 }
 
-function migrationJobs(root, exec, context, digests, selectedRepositories) {
+function migrationJobs(root, exec, context, digests, registries, selectedRepositories) {
   const selected = new Set(selectedRepositories);
   const jobs = [];
   if (selected.has('agentweaver.identity.broker')) {
@@ -868,7 +898,7 @@ function migrationJobs(root, exec, context, digests, selectedRepositories) {
     readResource(exec, context, 'serviceaccount', 'identity-broker-migration', root);
     readResource(exec, context, 'configmap', 'identity-broker-migration-config', root);
     jobs.push(prepareJob(findJob(resources, 'identity-broker-migration'), {
-      image: migrationImage(digests, 'agentweaver.identity.broker'),
+      image: migrationImage(digests, 'agentweaver.identity.broker', registries),
       name: `identity-broker-migration-${randomUUID().slice(0, 8)}`,
     }));
   }
@@ -886,7 +916,7 @@ function migrationJobs(root, exec, context, digests, selectedRepositories) {
     }
     jobs.push(...p1Selected.map(([name, repository]) => {
       const job = prepareJob(findJob(resources, name), {
-        image: migrationImage(digests, repository),
+        image: migrationImage(digests, repository, registries),
         name: `${name}-${randomUUID().slice(0, 8)}`,
       });
       for (const entry of job.spec.template.spec.containers[0].env ?? []) {
@@ -909,7 +939,7 @@ function migrationJobs(root, exec, context, digests, selectedRepositories) {
       fail('ServiceAccount/projects-config-migration does not name the approved migration identity.');
     }
     const job = prepareJob(projectsConfig, {
-      image: migrationImage(digests, 'agentweaver.projects.config'),
+      image: migrationImage(digests, 'agentweaver.projects.config', registries),
       name: `projects-config-migration-${randomUUID().slice(0, 8)}`,
     });
     const setting = job.spec.template.spec.containers[0].env
@@ -921,7 +951,7 @@ function migrationJobs(root, exec, context, digests, selectedRepositories) {
   return jobs;
 }
 
-function applyImageDigests(kustomization, digests) {
+function applyImageDigests(kustomization, digests, registries) {
   if (!Array.isArray(kustomization?.images) || kustomization.images.length !== IMAGE_REPOSITORIES.length) {
     fail('deploy/k8s must pin exactly the ten published image repositories.');
   }
@@ -931,15 +961,15 @@ function applyImageDigests(kustomization, digests) {
       fail('deploy/k8s contains an invalid or duplicate image pin.');
     }
     seen.add(image.name);
-    const repository = image.name.slice(`${REGISTRY}/`.length);
-    if (!IMAGE_REPOSITORIES.includes(repository) || image.name !== `${REGISTRY}/${repository}`) {
+    const repository = image.name.slice(`${DEFAULT_REGISTRY}/`.length);
+    if (!IMAGE_REPOSITORIES.includes(repository) || image.name !== `${DEFAULT_REGISTRY}/${repository}`) {
       fail(`Unexpected Kustomize image repository ${image.name}.`);
     }
-    image.newName = image.name;
+    image.newName = imageName(registries.get(repository), repository);
     image.digest = digests.get(repository);
     delete image.newTag;
   }
-  if (IMAGE_REPOSITORIES.some(repository => !seen.has(`${REGISTRY}/${repository}`))) {
+  if (IMAGE_REPOSITORIES.some(repository => !seen.has(`${DEFAULT_REGISTRY}/${repository}`))) {
     fail('deploy/k8s is missing a published image repository.');
   }
 }
@@ -968,12 +998,20 @@ export async function deployKustomize(options, overrides = {}) {
   const fetchImpl = overrides.fetchImpl ?? exec.fetchImpl ?? globalThis.fetch;
   const log = overrides.log ?? (message => console.log(message));
   const now = overrides.now ?? Date.now;
+  const selectedRegistry = options.registry ?? DEFAULT_REGISTRY;
+  try {
+    parseRegistryTarget(selectedRegistry);
+  } catch {
+    fail('registry must be ghcr.io/sabbour or an Azure Container Registry login server.');
+  }
   const requestedImages = options.imageManifest === undefined
     ? new Map(IMAGE_REPOSITORIES.map(repository => [repository, options.imageTag]))
     : parseImageManifest(readFileSync(path.resolve(root, options.imageManifest), 'utf8'));
   const digests = new Map();
+  const registries = new Map();
   for (const [repository, reference] of requestedImages) {
-    digests.set(repository, resolveImageDigest(exec, root, repository, reference));
+    registries.set(repository, selectedRegistry);
+    digests.set(repository, resolveImageDigest(exec, root, repository, reference, selectedRegistry));
   }
 
   const context = must(exec, 'kubectl', ['config', 'current-context'], { cwd: root },
@@ -988,18 +1026,21 @@ export async function deployKustomize(options, overrides = {}) {
   let agentHostTuple;
   if (missingRepositories.length) {
     const current = currentImageReferences(exec, context, root, missingRepositories);
-    for (const [repository, reference] of current.references) {
-      digests.set(repository, resolveImageDigest(exec, root, repository, reference));
+    for (const [repository, { reference, registry }] of current.references) {
+      registries.set(repository, registry);
+      digests.set(repository, resolveImageDigest(exec, root, repository, reference, registry));
     }
     if (!requestedImages.has('agentweaver-agenthost')) {
       liveAgentHostSettings = current.agentHostSettings;
       agentHostTuple = liveAgentHostTuple(liveAgentHostSettings,
-        digests.get('agentweaver-agenthost'));
+        digests.get('agentweaver-agenthost'), registries.get('agentweaver-agenthost'));
     }
   }
   if (requestedImages.has('agentweaver-agenthost')) {
     const measured = await measureAgentHostRegistryImage(
-      `${REGISTRY}/agentweaver-agenthost@${digests.get('agentweaver-agenthost')}`, fetchImpl);
+      `${imageName(registries.get('agentweaver-agenthost'), 'agentweaver-agenthost')}@` +
+        digests.get('agentweaver-agenthost'),
+      fetchImpl, undefined, overrides.registryOptions);
     agentHostTuple = {
       digest: measured.digest,
       platform: measured.platform,
@@ -1013,7 +1054,7 @@ export async function deployKustomize(options, overrides = {}) {
   const originalKustomization = readFileSync(kustomizationPath, 'utf8');
   try {
     const kustomization = parse(originalKustomization);
-    applyImageDigests(kustomization, digests);
+    applyImageDigests(kustomization, digests, registries);
     writeFileSync(kustomizationPath, stringify(kustomization));
 
     const rendered = must(exec, 'kubectl', ['kustomize', path.join(root, 'deploy', 'k8s')], { cwd: root },
@@ -1120,7 +1161,7 @@ export async function deployKustomize(options, overrides = {}) {
       items: resources.filter(resource => resource.kind !== 'Namespace' &&
         resource !== brokerRuntimeConfig && resource !== brokerDeployment),
     };
-    const jobs = migrationJobs(root, exec, context, digests, requestedImages.keys());
+    const jobs = migrationJobs(root, exec, context, digests, registries, requestedImages.keys());
 
     for (const job of jobs) runMigrationJob(job, exec, context, root, log);
     log('Database migrations completed.');

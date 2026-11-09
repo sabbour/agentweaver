@@ -199,6 +199,32 @@ export function runAz(args, options = {}) {
   return run('az', args, options);
 }
 
+/** Reads the short-lived ACR login token into memory without returning it to diagnostics. */
+export function runAzAcrLoginToken(registryName, options = {}) {
+  if (!/^[a-z0-9]{5,50}$/.test(registryName ?? '')) {
+    throw new Error('ACR registry name must contain 5 to 50 lowercase letters or digits.');
+  }
+  const { cwd, env, timeout, maxBuffer = DEFAULT_MAX_BUFFER } = options;
+  const result = spawnPlatformSafe('az', [
+    'acr', 'login', '--name', registryName, '--expose-token', '--query', 'accessToken', '--output', 'tsv',
+  ], {
+    cwd,
+    env,
+    timeout,
+    maxBuffer,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.error) throw new Error(`Could not obtain an ACR login token: ${redact(result.error.message)}`);
+  const stderr = redact(result.stderr ?? '').trim();
+  if (result.status !== 0) {
+    throw new Error(`Could not obtain an ACR login token (${result.status})${stderr ? `: ${stderr}` : ''}`);
+  }
+  const token = (result.stdout ?? '').trim();
+  if (!token || /\s/.test(token)) throw new Error('Azure CLI returned no valid ACR login token.');
+  return token;
+}
+
 /** Invokes Git through run(), preserving its validation and redaction behavior. */
 export function runGit(args, options = {}) {
   return run('git', args, options);

@@ -43,6 +43,12 @@ Each image carries its source commit, Git tree, and component version in the
 `org.opencontainers.image.revision`, `io.agentweaver.source-tree`, and
 `org.opencontainers.image.version` labels.
 
+For an ACR candidate, the release runbook provides
+`npm run azure:build-acr-candidate`. It builds the same ten images from an
+exact `v1` commit, pushes `sha-<commit>` tags to the selected ACR, and verifies
+the source labels and image digests. This local build does not change the
+automatic GHCR workflow or publish a product release.
+
 The checked-in release and Kustomize composition includes the MCP compatibility
 image, workload, and ingress resources. Their presence does not make MCP a
 supported product or acceptance surface. Supported client paths are the
@@ -54,14 +60,16 @@ separate.
 Image publication does not deploy workloads. The operator runs the local
 deployment command from an approved Azure CLI and Kubernetes context. The
 operator-supplied JSON image manifest selects repositories to update; omitted
-repositories keep their live image references. The legacy `--image-tag` form
-updates all ten images.
+repositories keep their live image references and registries. GHCR is the
+default registry. The `--registry <acr-login-server>` option selects ACR for
+the images in the manifest or for all images in the legacy `--image-tag` form.
+The legacy form updates all ten images.
 
 ```powershell
 npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --execute
 ```
 
-The command resolves selected GHCR references to digests, runs the selected
+The command resolves selected references in the chosen registry to digests, runs the selected
 services' migration Jobs, applies the namespaced Kustomize overlay, and checks
 the nine Deployment rollouts. It does not provision Azure resources, grant
 access, read Secrets, or manage Namespaces. A migration failure stops before
