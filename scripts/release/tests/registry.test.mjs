@@ -20,6 +20,7 @@ function digest(bytes) {
 function serviceFixture({
   duplicateAmd64 = false, mutateConfig = () => {}, tamper, missingToken = false,
   registry = 'ghcr.io/sabbour', repository = 'agentweaver-events-and-sessions',
+  layerMediaType = 'application/vnd.oci.image.layer.v1.tar+gzip',
 } = {}) {
   const topReference = `${registry}/${repository}@`;
   const config = {
@@ -49,7 +50,7 @@ function serviceFixture({
       size: configBytes.length,
     },
     layers: [{
-      mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
+      mediaType: layerMediaType,
       digest: layerDigest,
       size: layerBytes.length,
     }],
@@ -157,9 +158,13 @@ test('ACR verification exchanges a login token and uses it only for pull request
     request.headers.authorization === 'Bearer registry-pull-token'));
 });
 
-test('ACR AgentHost measurement reads its OCI descriptors and returns the compressed pull size', async () => {
+test('ACR AgentHost measurement accepts Docker gzip layers and returns the compressed pull size', async () => {
   const registry = 'agentweaverasabbour.azurecr.io';
-  const fixture = serviceFixture({ registry, repository: 'agentweaver-agenthost' });
+  const fixture = serviceFixture({
+    registry,
+    repository: 'agentweaver-agenthost',
+    layerMediaType: 'application/vnd.docker.image.rootfs.diff.tar.gzip',
+  });
   const result = await measureAgentHostRegistryImage(
     `${fixture.topReference}${fixture.topDigest}`, fixture.fetchImpl, undefined, {
       getAcrLoginToken: () => 'memory-only-refresh-token',

@@ -28,6 +28,10 @@ const configTypes = new Set([
   'application/vnd.oci.image.config.v1+json',
   'application/vnd.docker.container.image.v1+json',
 ]);
+const compressedLayerTypes = new Set([
+  'application/vnd.oci.image.layer.v1.tar+gzip',
+  'application/vnd.docker.image.rootfs.diff.tar.gzip',
+]);
 
 function fail(message) {
   throw new Error(`release deployment: ${message}`);
@@ -298,7 +302,7 @@ export async function measureAgentHostRegistryImage(image, fetchImpl = globalThi
   const manifest = platformManifest.value;
   if (manifest.schemaVersion !== 2 || !manifestTypes.has(manifest.mediaType) ||
       !Array.isArray(manifest.layers) || manifest.layers.length === 0 ||
-      manifest.layers.some(layer => layer.mediaType !== 'application/vnd.oci.image.layer.v1.tar+gzip') ||
+      manifest.layers.some(layer => !compressedLayerTypes.has(layer.mediaType)) ||
       !configTypes.has(manifest.config?.mediaType) || !DIGEST.test(manifest.config?.digest ?? '') ||
       !Number.isSafeInteger(manifest.config.size) || manifest.config.size <= 0) {
     fail('published AgentHost platform manifest has invalid config or compressed-layer descriptors');
