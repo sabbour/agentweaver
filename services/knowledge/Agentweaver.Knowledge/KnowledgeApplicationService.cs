@@ -99,6 +99,7 @@ public sealed class KnowledgeApplicationService(
 
         var authority = await projects.GetCurrentProjectAuthorityAsync(projectId, cancellationToken)
             .ConfigureAwait(false);
+        // This project-wide read uses the private-knowledge grant, not general run-selection access.
         ProjectsConfigClient.RequireProjectPermission(
             authority, projectId, ProjectAuthorizationPermission.AccessPrivateKnowledge);
         return await SearchAuthorizedProjectRunsAsync(

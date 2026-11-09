@@ -431,6 +431,7 @@ internal static class ApiAcceptanceFixtureSetup
                 state.Cleanup["reason"] = "The fixture lacks its unbound cancellation client.";
                 return state.Cleanup;
             }
+            // Cancellation can precede runtime teardown; verify cleanup before revoking roles or archiving the project.
             await VerifyAcceptedRunCleanupAsync(
                 cancellationApi, runApi, state, projectId, ct, runtimeCleanupTimeout).ConfigureAwait(false);
             if (state.SetupIndeterminate)
@@ -747,6 +748,7 @@ internal static class ApiAcceptanceFixtureSetup
                     new GatewayInvocation(Path(("projectId", projectId), ("runId", runId), ("sessionId", rootSessionId))),
                     linked.Token).ConfigureAwait(false);
                 JsonObject identity = status["identity"] as JsonObject ?? [];
+                // Reject stale or cross-run status; only the cancelled root at the advanced fence can prove this fixture is safe to tear down.
                 if (identity.Count != 3
                     || ApiAcceptanceSupport.GetString(identity, "projectId") != projectId
                     || ApiAcceptanceSupport.GetString(identity, "runId") != runId
