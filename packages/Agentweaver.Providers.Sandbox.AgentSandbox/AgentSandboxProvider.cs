@@ -1515,6 +1515,11 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         if (options.AgentHost is null)
             return;
         var actual = JsonNode.Parse(podSpec.GetRawText())!.AsObject();
+        // VolumeMount.readOnly is a Kubernetes omitempty bool; the API server omits it when false.
+        foreach (var actualContainer in actual["containers"] as JsonArray ?? [])
+        foreach (var actualMount in actualContainer?["volumeMounts"] as JsonArray ?? [])
+            if (actualMount is JsonObject mountObject && !mountObject.ContainsKey("readOnly"))
+                mountObject["readOnly"] = false;
         var volumes = RequiredArray(podSpec, "volumes");
         var mounts = RequiredArray(container, "volumeMounts");
         var workspaceVolume = volumes.EnumerateArray().Single(volume => ReadOptionalString(volume, "name") == WorkspaceVolumeName);
@@ -1743,9 +1748,9 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             mount.ValueKind != JsonValueKind.Object ||
             ReadOptionalString(volume, "persistentVolumeClaim", "claimName") != descriptor.WorkspaceClaimName ||
             ReadOptionalString(mount, "mountPath") != descriptor.WorkspaceMountPath ||
-            !TryGetBoolean(volume, "persistentVolumeClaim", "readOnly", out var volumeReadOnly) ||
+            !TryGetKubernetesBoolean(volume, ["persistentVolumeClaim", "readOnly"], out var volumeReadOnly) ||
             volumeReadOnly != descriptor.WorkspaceReadOnly ||
-            !TryGetBoolean(mount, "readOnly", out var mountReadOnly) ||
+            !TryGetKubernetesBoolean(mount, ["readOnly"], out var mountReadOnly) ||
             mountReadOnly != descriptor.WorkspaceReadOnly)
             return false;
 
@@ -1805,7 +1810,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                 StringComparison.Ordinal) ||
             !TryGetBoolean(podSpec, "automountServiceAccountToken", out var automount) ||
             automount ||
-            !TryGetBoolean(podSpec, "hostNetwork", out var hostNetwork) ||
+            !TryGetKubernetesBoolean(podSpec, ["hostNetwork"], out var hostNetwork) ||
             hostNetwork)
             return false;
         if (options.AgentHost is not null)
@@ -2625,6 +2630,20 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             return false;
         value = element.GetBoolean();
         return true;
+    }
+
+    /// <summary>
+    /// Reads a Kubernetes non-pointer <c>bool</c> marked <c>omitempty</c>. The API server omits it when
+    /// false, so an absent final property reads as false; a present value must be a JSON boolean.
+    /// </summary>
+    private static bool TryGetKubernetesBoolean(JsonElement parent, string[] path, out bool value)
+    {
+        value = false;
+        var owner = parent;
+        if (path.Length > 1 && !TryGetPropertyPath(parent, path[..^1], out owner))
+            return false;
+        return owner.ValueKind == JsonValueKind.Object &&
+            (!owner.TryGetProperty(path[^1], out _) || TryGetBoolean(owner, path[^1], out value));
     }
 
     /// <summary>Reads an integer-valued JSON number without treating strings as numbers.</summary>

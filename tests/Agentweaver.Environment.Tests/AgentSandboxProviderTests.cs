@@ -472,6 +472,42 @@ public sealed partial class AgentSandboxProviderTests
             Assert.True(rootObservation.WorkspaceAttachmentVerified);
             Assert.Equal("/workspace", rootObservation.PodObservation!.WorkspaceAttachment!.MountPath);
         }
+        var readOnlyOperationId = Guid.NewGuid();
+        var readOnlyPlannedResource = SandboxResourceIdentity.CreatePlannedReference(
+            candidate.ProviderId, candidate.OptionsRevision, fence,
+            resourceGeneration: 1, fencingGeneration: 1, readOnlyOperationId);
+        var readOnlyDeclaration = new WorkspaceVolumeMountDeclaration(workspaceReference, "/workspace", ReadOnly: true);
+        var readOnlyNegotiation = WorkspaceVolumeAttachmentNegotiator.Negotiate(
+            owner.ProjectId, owner.EnvironmentId, owner.RunId, rootWorkspaceSpec, rootStorage,
+            new WorkspaceVolumeMountManifest([readOnlyDeclaration]), readOnlyDeclaration,
+            readOnlyPlannedResource, fence, dataGeneration: 0,
+            profile with { Resource = readOnlyPlannedResource },
+            WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim);
+        var readOnlyHandler = new FakeKubernetesHandler();
+        using (var readOnlyHttp = new HttpClient(readOnlyHandler) { BaseAddress = new Uri("https://kubernetes.example/") })
+        {
+            var readOnlyProvider = new AgentSandboxProvider(
+                options,
+                new KubernetesAgentSandboxClient(readOnlyHttp, KubernetesTestCaCertificate.Primary),
+                new FixedTimeProvider(leaseCreatedAt.AddSeconds(2)));
+            var readOnlyResource = await readOnlyProvider.ProvisionAsync(request with
+            {
+                OperationId = readOnlyOperationId,
+                Workspace = request.Workspace with { Negotiation = readOnlyNegotiation }
+            });
+            readOnlyHandler.AddReadySandbox(readOnlyResource.Resource.ResourceId, leaseCreatedAt);
+            readOnlyHandler.OmitKubernetesFalseDefaults();
+            var readOnlyDescribe = new SandboxDescribeRequest(
+                fence, readOnlyResource.Resource, 1, readOnlyResource.ProviderBinding, leaseCreatedAt);
+            var readOnlyObservation = await readOnlyProvider.DescribeAsync(readOnlyDescribe);
+            Assert.True(readOnlyObservation.WorkspaceAttachmentVerified);
+            Assert.True(readOnlyObservation.PodObservation!.WorkspaceAttachment!.ReadOnly);
+            // A read-only workspace must stay explicit; an omitted readOnly means writable.
+            var workspaceMount = readOnlyHandler.PodSpec["containers"]![0]!["volumeMounts"]!.AsArray()
+                .Single(item => (string?)item!["mountPath"] == "/workspace")!.AsObject();
+            workspaceMount.Remove("readOnly");
+            Assert.False((await readOnlyProvider.DescribeAsync(readOnlyDescribe)).WorkspaceAttachmentVerified);
+        }
         foreach (var fault in new[] { "missing", "uid", "resourceVersion" })
         {
             handler.PodReadbackFault = fault;
@@ -561,6 +597,44 @@ public sealed partial class AgentSandboxProviderTests
                 new(fence, provisioned.Resource, 1, provisioned.ProviderBinding, leaseCreatedAt)));
             Assert.Equal("provider_resource_mismatch", mismatch.Code);
             handler.SetPodStateMount("/state");
+        }
+
+        // Regression for #2621: a real API server omits false omitempty bools from the Pod read-back.
+        var apiServerSpec = handler.PodSpec.DeepClone().AsObject();
+        handler.OmitKubernetesFalseDefaults();
+        Assert.False(handler.PodSpec.ContainsKey("hostNetwork"));
+        var omittedRequest = new SandboxDescribeRequest(
+            fence, provisioned.Resource, 1, provisioned.ProviderBinding, leaseCreatedAt)
+        {
+            RequireRuntimeEndpoint = agentHostProfile
+        };
+        var omitted = await provider.DescribeAsync(omittedRequest);
+        Assert.True(omitted.VmIsolationVerified);
+        Assert.True(omitted.WorkspaceAttachmentVerified);
+        Assert.False(omitted.PodObservation!.WorkspaceAttachment!.ReadOnly);
+        if (agentHostProfile)
+            Assert.NotNull(omitted.RuntimeEndpoint);
+        handler.PodSpec["hostNetwork"] = "false";
+        Assert.False((await provider.DescribeAsync(omittedRequest)).VmIsolationVerified);
+        handler.PodSpec.Remove("hostNetwork");
+        if (agentHostProfile)
+        {
+            foreach (var readOnlyMount in new[] { "agenthost-configuration", "agenthost-tls" })
+            {
+                var observedMount = handler.PodSpec["containers"]![0]!["volumeMounts"]!.AsArray()
+                    .Single(item => (string?)item!["name"] == readOnlyMount)!.AsObject();
+                observedMount.Remove("readOnly");
+                var readOnlyFailure = await Assert.ThrowsAsync<SandboxProviderException>(
+                    () => provider.DescribeAsync(omittedRequest));
+                Assert.Equal("provider_resource_mismatch", readOnlyFailure.Code);
+                observedMount["readOnly"] = true;
+            }
+        }
+        handler.PodSpec.Clear();
+        foreach (var property in apiServerSpec.ToArray())
+        {
+            apiServerSpec.Remove(property.Key);
+            handler.PodSpec[property.Key] = property.Value;
         }
 
         handler.SetPodImageId(
@@ -878,6 +952,25 @@ public sealed partial class AgentSandboxProviderTests
 
         public void SetPodStateMount(string path) =>
             _podList!["items"]![0]!["spec"]!["containers"]![0]!["volumeMounts"]![1]!["mountPath"] = path;
+
+        public JsonObject PodSpec => _podList!["items"]![0]!["spec"]!.AsObject();
+
+        // The API server omits plain omitempty bools (hostNetwork, readOnly) when they are false.
+        public void OmitKubernetesFalseDefaults()
+        {
+            static void RemoveFalse(JsonNode? node, string name)
+            {
+                if (node is JsonObject owner && owner[name] is JsonValue value &&
+                    value.TryGetValue<bool>(out var flag) && !flag)
+                    owner.Remove(name);
+            }
+            RemoveFalse(PodSpec, "hostNetwork");
+            foreach (var volume in PodSpec["volumes"]!.AsArray())
+                RemoveFalse(volume!["persistentVolumeClaim"], "readOnly");
+            foreach (var container in PodSpec["containers"]!.AsArray())
+            foreach (var mount in container!["volumeMounts"]!.AsArray())
+                RemoveFalse(mount, "readOnly");
+        }
 
         public void EnableRuntimeEndpoint()
         {
