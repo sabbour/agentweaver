@@ -189,8 +189,10 @@ remote effects require durable intents, idempotency and reconciliation. Shared
 libraries reduce duplicated plumbing without becoming shared domain databases.
 
 The Knowledge source candidate supports project-wide discovery through existing,
-authorized run-provider bindings. Its native Memory boundary and provider rules are
-described in the [Knowledge and Memory reference](knowledge-memory.md).
+authorized run-provider bindings. Project-wide reads require current effective
+`AccessPrivateKnowledge`; run-scoped provider resolution uses
+`ReadRunSelection`. Its native Memory boundary and provider rules are described
+in the [Knowledge and Memory reference](knowledge-memory.md).
 
 ## Use these views
 

@@ -66,7 +66,8 @@ are forwarded, not interpreted as approval.
 Project-wide Knowledge search is the explicit
 `GET /api/v1/projects/{projectId}/knowledge/records` route. It requires an
 unbound Broker token; the Knowledge owner checks current project
-`AccessPrivateKnowledge` and direct project `ReadRunSelection` authority.
+`AccessPrivateKnowledge` authority for the project or its tenant and reads only
+existing Memory selections through its private Knowledge-selection route.
 Gateway does not add an arbitrary proxy path or make the authorization
 decision.
 

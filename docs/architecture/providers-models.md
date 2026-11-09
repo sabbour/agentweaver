@@ -128,8 +128,10 @@ See [Knowledge and Memory](knowledge-memory.md) for the service and its integrat
 limits.
 
 Project-wide search uses the same selected Memory provider through existing
-run-provider bindings. The provider query filters by project and searches all
-agents; discovery does not create or change a run binding.
+run-provider bindings. It requires current effective `AccessPrivateKnowledge`
+and reads each existing Memory selection through the private
+Knowledge-selection route. The provider query filters by project and searches
+all agents; discovery does not create or change a run binding.
 
 Native PostgreSQL remains the default. Cosmos negotiation validates the existing
 container identity, `/projectId` partition key, required search composite index, and

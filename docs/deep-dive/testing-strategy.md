@@ -67,7 +67,9 @@ during rollout; the project list returns
 
 Knowledge discovery tests verify project isolation, all-agent search, one
 global order across resources, and history access through `accessRunId`.
-That access binding is not `sourceRunId` provenance or deployed discovery.
+They also verify that project-wide search requires `AccessPrivateKnowledge`
+but not `ReadRunSelection`. That access binding is not `sourceRunId` provenance
+or deployed discovery.
 
 ### Separate canonical acceptance from compatibility tests
 

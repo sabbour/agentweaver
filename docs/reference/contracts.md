@@ -1399,24 +1399,27 @@ Each privileged request forwards its original validated bearer token to Projects
 Config for a fresh authorization-context check; Knowledge does not keep memberships,
 roles, or authorization caches. Private content reads and writes require fresh effective
 `AccessPrivateKnowledge` for the target project; `ReadProjects` alone is metadata-only
-and does not authorize private Knowledge records, revisions, or context. A run-bound
-project Owner with `projects.admin` retains this Knowledge-specific permission but
-not generic `WriteProjects`. A run-bound Owner also receives it with `api.read` and
+and does not authorize private Knowledge records, revisions, or context. A
+run-bound project Owner with `projects.admin` retains this Knowledge-specific
+permission but not generic `WriteProjects`. A run-bound Owner also receives it with `api.read` and
 `projects.orchestrator` when the same current project has an Orchestrator assignment
-and the token is bound to the exact project/run. Memory-provider
-resolution additionally requires effective project `ReadRunSelection`. If the validated
-caller token is already bound to a project/run, those bindings must match the requested
-route and the authority response.
+and the token is bound to the exact project/run. Memory-provider resolution for run-scoped routes additionally requires effective
+project `ReadRunSelection`. If the validated caller token is already bound to
+a project/run, those bindings must match the requested route and the authority
+response.
 
-Project-wide discovery uses an unbound Broker token and additionally requires direct
-project `ReadRunSelection`. It searches all agents through existing run-provider
-bindings; it does not create a binding for a run that has no Knowledge pin.
+Project-wide discovery uses an unbound Broker token with current effective
+`AccessPrivateKnowledge` for the project or its tenant. It searches all agents
+through existing run-provider bindings and reads each Memory selection through
+the private Knowledge-selection route. It does not require `ReadRunSelection`,
+grant general run-selection access, or create a binding for a run that has no
+Knowledge pin.
 
 | Method and path | Contract |
 | --- | --- |
 | `GET /health/live` | Process liveness. |
 | `GET /health/ready` | PostgreSQL and current owned-schema readiness; returns `503` when migrations, tables, or required runtime grants are missing. |
-| `GET /api/projects/{projectId}/knowledge/records?kind={kind}&state={state}&q={text}&includeInactive={bool}&page={n}&pageSize={n}` (Gateway: `/api/v1/projects/{projectId}/knowledge/records`) | Search every agent across existing run-provider bindings and globally page the merged results. `state=pending` is supported only with `kind=proposal`, and includes pending proposals regardless of `includeInactive`; other state filters return 400. Rejects run-bound tokens. Each item returns `accessRunId`, the existing run binding used to authorize history reads, separately from `record.sourceRunId` provenance. |
+| `GET /api/projects/{projectId}/knowledge/records?kind={kind}&state={state}&q={text}&includeInactive={bool}&page={n}&pageSize={n}` (Gateway: `/api/v1/projects/{projectId}/knowledge/records`) | Search every agent across existing run-provider bindings and globally page the merged results. Requires current effective `AccessPrivateKnowledge`; `ReadRunSelection` is not required. `state=pending` is supported only with `kind=proposal`, and includes pending proposals regardless of `includeInactive`; other state filters return 400. Rejects run-bound tokens. Each item returns `accessRunId`, the existing run binding used to authorize history reads, separately from `record.sourceRunId` provenance. |
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records` | Create a Memory, SessionContext, or Proposal record. Requires one `Idempotency-Key`; a new write returns `201`, an identical retry returns `200`, and reuse with different request content returns `409`. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records?kind={kind}&q={text}&includeInactive={bool}&page={n}&pageSize={n}` | Search only the requested project and agent, with bounded pages; requires current `AccessPrivateKnowledge` for private content. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}` | Read one record in the requested project/agent scope; requires current `AccessPrivateKnowledge` for private content. |

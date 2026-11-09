@@ -7,8 +7,9 @@ provider used for scoped changes.
 
 ## Prerequisites
 
-- Have current project access to `AccessPrivateKnowledge` and
-  `ReadRunSelection`.
+- Have current effective `AccessPrivateKnowledge` for the project or its
+  tenant to search across the project.
+- Have current project `ReadRunSelection` for run-scoped provider operations.
 - Use a Broker token that is not bound to a run for project-wide discovery.
 - Have existing run-provider bindings in the project to discover their records.
 
@@ -140,9 +141,10 @@ shown below.
 | --- | --- |
 | Search across existing run bindings | `GET /records` |
 
-The project-wide route requires current project `AccessPrivateKnowledge` and
-`ReadRunSelection` authority with a token that is not bound to a run. It
-searches only through existing provider bindings.
+The project-wide route requires current effective `AccessPrivateKnowledge` for
+the project or its tenant and a token that is not bound to a run. It reads only
+existing Memory selections through the private Knowledge-selection route. It
+does not require `ReadRunSelection` or expose general run selections.
 
 Scoped operations use this prefix:
 `/api/v1/projects/{projectId}/runs/{runId}/agents/{agentId}`.

@@ -101,10 +101,9 @@ public sealed class KnowledgeApplicationService(
             .ConfigureAwait(false);
         ProjectsConfigClient.RequireProjectPermission(
             authority, projectId, ProjectAuthorizationPermission.AccessPrivateKnowledge);
-        // Broad discovery still requires run-selection permission; agent history uses its narrower private read.
-        ProjectsConfigClient.RequireRunSelectionPermission(authority, projectId);
         return await SearchAuthorizedProjectRunsAsync(
             projectId, null, kind, query, includeInactive, page, pageSize, cancellationToken,
+            requirePrivateKnowledgePermission: true,
             pendingProposalsOnly: state is not null)
             .ConfigureAwait(false);
     }

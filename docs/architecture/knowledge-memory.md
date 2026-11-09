@@ -15,7 +15,7 @@ binding, context compilation and accepted-effect delivery.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'" alt="Project-wide Knowledge search requires an unbound project token, checks current authority and existing run-provider pins, and searches all agents without creating pins. Knowledge rechecks current project authority and run selection, commits an accepted proposal receipt and delivery intent through the selected Memory provider, then relays only the receipt ID and versions to Events. Events fetches the receipt from the fixed Knowledge owner, rechecks current authority, and commits a separate project fact with its sequence and inbox receipt. Native PostgreSQL remains the default; Cosmos and Redis are optional source candidates." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'" alt="Project-wide Knowledge search requires an unbound project token with current AccessPrivateKnowledge authority for the project or its tenant. It reads existing Memory provider selections and searches all agents without creating pins. Knowledge rechecks current project authority and run selection, commits an accepted proposal receipt and delivery intent through the selected Memory provider, then relays only the receipt ID and versions to Events. Events fetches the receipt from the fixed Knowledge owner, rechecks current authority, and commits a separate project fact with its sequence and inbox receipt. Native PostgreSQL remains the default; Cosmos and Redis are optional source candidates." />
   </a>
   <figcaption>Accepted project facts are durably admitted by Events before Knowledge marks provider-owned delivery state complete. The Knowledge run pin and Sessions journal remain in PostgreSQL; project facts do not append to or change the run-bound journal.</figcaption>
 </figure>
@@ -101,12 +101,12 @@ A caller's existing signed project/run bindings, when present, must exactly matc
 requested project/run and the Projects authority response. Knowledge keeps no
 membership table, role table, authorization cache, or authorization pin.
 
-Provider resolution also requires current effective project `ReadRunSelection`.
-Knowledge fetches the immutable run-selection snapshot from Projects & Config with
-that same caller token. It checks the returned project, run, and revisions before
-binding a Memory provider. Redirects, owner errors, malformed or mismatched responses,
-and missing permissions fail explicitly; Knowledge does not mint a token or infer
-authority from path values.
+Run-scoped provider resolution also requires current effective project
+`ReadRunSelection`. Knowledge fetches the immutable run-selection snapshot from
+Projects & Config with that same caller token. It checks the returned project,
+run, and revisions before binding a Memory provider. Redirects, owner errors,
+malformed or mismatched responses, and missing permissions fail explicitly;
+Knowledge does not mint a token or infer authority from path values.
 
 Context composition always observes Knowledge's configured `DefaultContextTokens`
 ceiling. When the accepted run selection has a prompt-token cap, the lower of that
@@ -122,18 +122,21 @@ when the token is not run-bound. These admins can inspect any agent's records in
 authorized project through project-wide search or by explicitly selecting an agent
 for scoped operations. The route's
 `agentId` selects rows; it does not prove the caller is that agent, and an admin
-grant does not extend to another project or tenant. Before provider resolution,
-Knowledge also requires `ReadRunSelection` for the exact project and reads its
-accepted run selection from Projects & Config.
+grant does not extend to another project or tenant. Run-scoped routes require
+`ReadRunSelection` for the exact project and read the accepted run selection
+from Projects & Config. Project-wide search uses the private Memory-selection
+read described below.
 
 Project-wide discovery uses a separate Gateway route and requires an unbound
-Broker token with current project `AccessPrivateKnowledge` and direct project
-`ReadRunSelection`. Run-bound tokens are rejected. Knowledge enumerates only
-existing run-provider bindings, resolves each without creating a pin, groups
-bindings that share the same provider resource, and searches all agents in each
-resource. It rechecks authority and bindings before returning results; an
-inaccessible or unavailable binding fails the request. Each result identifies an
-access run: the existing run binding that authorizes revision-history reads.
+Broker token with current effective `AccessPrivateKnowledge` for the project or
+its tenant.
+Run-bound tokens are rejected. Knowledge enumerates only existing run-provider
+bindings and reads each through the private Knowledge-selection route, which
+returns only the Memory provider selection. It does not create a pin. Knowledge
+groups bindings that share the same provider resource and searches all agents
+in each resource. It rechecks authority and bindings before returning results;
+an inaccessible or unavailable binding fails the request. Each result identifies
+an access run: the existing run binding that authorizes revision-history reads.
 The record's `sourceRunId`, when present, remains separate provenance. Results
 from all resources are globally ordered before the requested page is selected.
 The optional `kind=proposal&state=pending` search filters the stored proposal
