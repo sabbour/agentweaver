@@ -170,6 +170,21 @@ native state, and flushes the mounted workspace before returning evidence.
 Resume verifies saved configuration, cache or journal input, current
 registration, and restored workspace through the owner-controlled path.
 
+For an approved read-only coordinator-root turn, Orchestrator stores a
+completion receipt only after the Host reports the native event range and the
+Events acknowledgments for user text, assistant text, and SDK cache. The
+receipt binds the request and content hashes to the source, model, image,
+registration, accepted selection, and execution fence. It also records a
+complete cache-baseline cursor for replacement checks.
+
+An ordinary Host replacement passes that receipt and its cache binding through
+the normal activation path. The new Host must restore the same compatible SDK
+cache and report a complete reconstruction interval with no new native event
+or tool effect before Orchestrator marks the operation ready. An exact retry
+afterward uses replacement-lineage evidence and returns the saved completion;
+it does not call native `Send` again. The general material reader does not gain
+permission to read SDK cache bytes.
+
 ### Diagnose runtime failures
 
 Authentication failure returns `401`; current-authority rejection returns

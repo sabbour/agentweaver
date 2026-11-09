@@ -138,6 +138,8 @@ internal sealed class RuntimeRunStartDispatcher(
     CoordinationRuntimeRunStartStore store,
     RuntimeRunStartWorkQueue queue,
     RuntimeRunStartContinuation continuation,
+    ProjectsRunSelectionClient projects,
+    CoordinationOwnerStore sessions,
     TimeProvider timeProvider,
     OrchestratorOptions options)
 {
@@ -156,9 +158,14 @@ internal sealed class RuntimeRunStartDispatcher(
             {
                 var summary = await continuation.RevalidateReadyAsync(intent, actor, cancellationToken)
                     .ConfigureAwait(false);
+                summary = await AddP1ProjectionAsync(context, intent, summary, cancellationToken)
+                    .ConfigureAwait(false);
                 actor.Bearer.Invalidate();
                 return summary;
             }
+            if (intent.CurrentStep.StartsWith("replacement-", StringComparison.Ordinal))
+                throw new CoordinationException(
+                    "runtime_replacement_in_progress", StatusCodes.Status409Conflict);
             if (intent.CleanupObligation)
             {
                 actor.Bearer.Invalidate();
@@ -166,7 +173,8 @@ internal sealed class RuntimeRunStartDispatcher(
             }
             cancellationToken.ThrowIfCancellationRequested();
             EnqueueOrThrow(queue, new RuntimeRunStartContinueWork(owner, actor));
-            return intent.Summary;
+            return await AddP1ProjectionAsync(context, intent, intent.Summary, cancellationToken)
+                .ConfigureAwait(false);
         }
         catch
         {
@@ -184,12 +192,19 @@ internal sealed class RuntimeRunStartDispatcher(
     {
         var intent = await store.ReadIntentForStatusAsync(
             projectId, runId, rootSessionId, cancellationToken).ConfigureAwait(false);
-        if (intent is null || intent.State != "ready")
-            return intent?.Summary;
+        if (intent is null)
+            return null;
+        if (intent.State != "ready")
+        {
+            return await AddP1ProjectionAsync(context, intent, intent.Summary, cancellationToken)
+                .ConfigureAwait(false);
+        }
         var actor = await CreateActorAsync(context, timeProvider).ConfigureAwait(false);
         try
         {
-            return await continuation.RevalidateReadyAsync(intent, actor, cancellationToken)
+            var summary = await continuation.RevalidateReadyAsync(intent, actor, cancellationToken)
+                .ConfigureAwait(false);
+            return await AddP1ProjectionAsync(context, intent, summary, cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
@@ -229,7 +244,7 @@ internal sealed class RuntimeRunStartDispatcher(
             "runtime_start_queue_full", StatusCodes.Status503ServiceUnavailable);
     }
 
-    private static async Task<RuntimeActorAuthorization> CreateActorAsync(
+    internal static async Task<RuntimeActorAuthorization> CreateActorAsync(
         HttpContext context, TimeProvider timeProvider)
     {
         var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
@@ -246,6 +261,89 @@ internal sealed class RuntimeRunStartDispatcher(
         return new RuntimeActorAuthorization(
             new SecretCredential(header.Parameter, expiresAt, timeProvider),
             tenant.SingleOrDefault());
+    }
+
+    private async Task<RuntimeStartupSummary> AddP1ProjectionAsync(
+        HttpContext context,
+        RuntimeRunStartIntent intent,
+        RuntimeStartupSummary summary,
+        CancellationToken cancellationToken)
+    {
+        var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+            context, intent.ProjectId, intent.RunId, cancellationToken).ConfigureAwait(false);
+        P1InvocationBinding binding;
+        try
+        {
+            binding = await sessions.ReadCurrentP1InvocationBindingAsync(
+                actor, selection, cancellationToken).ConfigureAwait(false);
+        }
+        catch (CoordinationException exception) when (exception.Code == "p1_invocation_binding_not_found")
+        {
+            return summary;
+        }
+        if (binding.RootSessionId != intent.RootSessionId ||
+            binding.TenantId != intent.TenantId ||
+            binding.AcceptedSelectionHash != intent.AcceptedSelectionHash ||
+            binding.ExecutionFence != intent.ExecutionFence ||
+            binding.ActorIssuer != actor.Issuer ||
+            binding.ActorSubject != actor.Subject)
+            throw new CoordinationException(
+                "p1_invocation_binding_stale", StatusCodes.Status409Conflict);
+
+        RuntimeRegistration? registration = null;
+        RuntimeRunStartPlacementReceipt? placement = null;
+        RuntimeHostReadinessReceipt? readiness = null;
+        if (summary.State == "ready")
+        {
+            using var links = JsonDocument.Parse(intent.ReceiptLinks);
+            if (!links.RootElement.TryGetProperty("registration", out var value) ||
+                !links.RootElement.TryGetProperty("placement", out var placementValue) ||
+                !links.RootElement.TryGetProperty("activation", out var activationValue))
+                throw new CoordinationException(
+                    "runtime_start_readiness_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+            registration = value.Deserialize<RuntimeRegistration>(JsonOptions)
+                ?? throw new CoordinationException(
+                    "runtime_start_readiness_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+            placement = placementValue.Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions)
+                ?? throw new CoordinationException(
+                    "runtime_start_readiness_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+            readiness = activationValue.Deserialize<RuntimeHostReadinessReceipt>(JsonOptions)
+                ?? throw new CoordinationException(
+                    "runtime_start_readiness_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+            if (registration.State != RuntimeRegistrationState.Active ||
+                registration.Binding.SessionId != intent.RootSessionId ||
+                registration.Binding.AcceptedSelectionHash != intent.AcceptedSelectionHash ||
+                registration.Binding.ExecutionFence != intent.ExecutionFence ||
+                readiness.RuntimeInstanceId != registration.RuntimeInstanceId ||
+                readiness.RegistrationRevision != registration.Revision ||
+                readiness.ExecutionFence != intent.ExecutionFence ||
+                string.IsNullOrWhiteSpace(placement.PodUid))
+                throw new CoordinationException(
+                    "runtime_start_readiness_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+        }
+
+        return summary with
+        {
+            P1CoreInvocationId = binding.CoreInvocationId,
+            P1SetupInvocationId = binding.SetupInvocationId,
+            RuntimeInstanceId = registration?.RuntimeInstanceId,
+            RegistrationRevision = registration?.Revision,
+            AcceptedSelectionHash = registration?.Binding.AcceptedSelectionHash,
+            ExecutionFence = registration?.Binding.ExecutionFence,
+            ModelSelectionReference = registration?.Binding.ModelSelectionReference,
+            ModelSourceMode = registration?.Binding.ModelSourceMode switch
+            {
+                ModelSourceMode.Byok => "byok",
+                ModelSourceMode.HostedCopilot => "hostedCopilot",
+                _ => null
+            },
+            ReasoningEffort = registration?.Binding.ReasoningEffort,
+            MaxPromptTokens = registration?.Binding.MaxPromptTokens,
+            ImageDigest = readiness?.Image.Digest,
+            ImagePlatform = readiness?.Image.Platform,
+            PodUid = placement?.PodUid
+        };
     }
 }
 
@@ -441,6 +539,392 @@ internal sealed class RuntimeRunStartContinuation(
         }
     }
 
+    public async Task<RuntimeReplacementSummary> ReplaceAsync(
+        RuntimeOwnerContext owner,
+        RuntimeActorAuthorization actor,
+        RuntimeReplacementRequest request,
+        RuntimeRegistration registration,
+        RuntimeRunStartPlacementReceipt placement,
+        RuntimeRootTurnCompletionLedgerReceipt completion,
+        CancellationToken cancellationToken)
+    {
+        request.Validate();
+        RuntimeContractValidation.Validate(registration);
+        placement.Validate();
+        completion.Validate();
+        var intent = await store.EnsureIntentAsync(owner, cancellationToken).ConfigureAwait(false);
+        await using var lease = await store.AcquireAsync(intent, cancellationToken).ConfigureAwait(false);
+        intent = await store.ReadAsync(intent, cancellationToken).ConfigureAwait(false) ?? intent;
+        var (updatedIntent, operation) = await store.BeginReplacementAsync(
+            intent, owner, request, registration, placement, completion, cancellationToken).ConfigureAwait(false);
+        intent = updatedIntent;
+        var operationLinks = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+            operation.ReceiptLinks, JsonOptions) ?? new(StringComparer.Ordinal);
+        var intentLinks = ReadReceiptLinks(intent);
+        var previousRegistration = ReadReceipt<RuntimeRegistration>(operationLinks, "previousRegistration");
+        var previousPlacement = ReadReceipt<RuntimeRunStartPlacementReceipt>(operationLinks, "previousPlacement");
+        var rootCompletion = ReadReceipt<RuntimeRootTurnCompletionLedgerReceipt>(operationLinks, "completion");
+        var previousBootstrapId = ReadGuid(operationLinks, "previousBootstrapOperationId");
+        var bootstrapId = RuntimeRunStartKeys.ReplacementOperationId(request.OperationId, "bootstrap");
+        var consumeId = RuntimeRunStartKeys.ReplacementOperationId(request.OperationId, "consume");
+        var exchangeId = RuntimeRunStartKeys.ReplacementOperationId(request.OperationId, "exchange");
+
+        if (operation.State == "ready")
+            return CreateReplacementSummary(operation, previousRegistration, previousPlacement);
+
+        async Task PersistAsync(
+            string step,
+            string? failure = null,
+            string? environmentId = null,
+            Guid? runtimeInstanceId = null)
+        {
+            (intent, operation) = await store.UpdateReplacementProgressAsync(
+                intent,
+                operation,
+                "pending",
+                step,
+                failure,
+                JsonSerializer.Serialize(operationLinks, JsonOptions),
+                JsonSerializer.Serialize(intentLinks, JsonOptions),
+                step == "replacement-retirement" ? null : bootstrapId,
+                step == "replacement-retirement" ? null : consumeId,
+                step == "replacement-retirement" ? null : exchangeId,
+                environmentId ?? intent.EnvironmentId,
+                runtimeInstanceId ?? intent.RuntimeInstanceId,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!operationLinks.TryGetValue("retirement", out var retirementElement) ||
+            retirementElement.Deserialize<RuntimeRunStartRetirementReceipt>(JsonOptions)?.State != "released")
+        {
+            var retirementRequest = new RuntimeRunStartRetirementRequest(
+                1,
+                owner,
+                previousBootstrapId,
+                previousRegistration.RuntimeInstanceId,
+                previousRegistration.Revision,
+                previousPlacement).Validate();
+            var retirement = await RuntimeOwnerHttpTransport.SendRuntimeRunStartAsync<
+                    RuntimeRunStartRetirementReceipt>(
+                clients.CreateClient("runtime-run-start-environment"),
+                options.EnvironmentOwnerAddress,
+                "/internal/runtime/run-start/replacement-retire",
+                actor,
+                new RuntimeReplacementRetirementRequest(
+                    1, request.OperationId, intent.IntentId, retirementRequest),
+                cancellationToken).ConfigureAwait(false);
+            retirement.ValidateFor(retirementRequest);
+            operationLinks["retirement"] = JsonSerializer.SerializeToElement(retirement, JsonOptions);
+            if (retirement.State != "released")
+            {
+                await PersistAsync(
+                    "replacement-retirement",
+                    "runtime_replacement_retirement_pending",
+                    previousPlacement.EnvironmentId,
+                    previousRegistration.RuntimeInstanceId).ConfigureAwait(false);
+                return CreateReplacementSummary(operation, previousRegistration, previousPlacement);
+            }
+
+            var priorAttempt = new
+            {
+                bootstrapOperationId = previousBootstrapId,
+                consumeOperationId = ReadGuid(operationLinks, "previousConsumeOperationId"),
+                exchangeOperationId = ReadGuid(operationLinks, "previousExchangeOperationId"),
+                registration = previousRegistration,
+                placement = previousPlacement,
+                completion = rootCompletion,
+                retirement
+            };
+            intentLinks["previousReplacementAttempt"] =
+                JsonSerializer.SerializeToElement(priorAttempt, JsonOptions);
+            foreach (var key in new[] { "placement", "registration", "bootstrap", "activation", "readiness" })
+                intentLinks.Remove(key);
+            intentLinks["replacementOperationId"] =
+                JsonSerializer.SerializeToElement(request.OperationId, JsonOptions);
+            intentLinks["replacementCompletion"] =
+                JsonSerializer.SerializeToElement(rootCompletion, JsonOptions);
+            intentLinks["replacementRetirement"] =
+                JsonSerializer.SerializeToElement(retirement, JsonOptions);
+            var newBootstrapId = bootstrapId;
+            intent = (await store.UpdateReplacementProgressAsync(
+                intent,
+                operation,
+                "pending",
+                "replacement-placement",
+                null,
+                JsonSerializer.Serialize(operationLinks, JsonOptions),
+                JsonSerializer.Serialize(intentLinks, JsonOptions),
+                newBootstrapId,
+                consumeId,
+                exchangeId,
+                previousPlacement.EnvironmentId,
+                null,
+                cancellationToken).ConfigureAwait(false)).Intent;
+            operation = await store.ReadReplacementOperationAsync(intent, request.OperationId, cancellationToken)
+                .ConfigureAwait(false)
+                ?? throw new CoordinationException(
+                    "runtime_replacement_operation_not_found", StatusCodes.Status503ServiceUnavailable);
+        }
+
+        if (!operationLinks.TryGetValue("currentPlacement", out var currentPlacementElement))
+        {
+            var replacementPlacement = await RuntimeOwnerHttpTransport.SendRuntimeRunStartAsync<
+                    RuntimeRunStartPlacementReceipt>(
+                clients.CreateClient("runtime-run-start-environment"),
+                options.EnvironmentOwnerAddress,
+                "/internal/runtime/run-start/replacement-placement",
+                actor,
+                new RuntimeReplacementPlacementRequest(
+                    1, request.OperationId, owner, previousBootstrapId, bootstrapId, previousPlacement),
+                cancellationToken).ConfigureAwait(false);
+            RequireReplacementPlacement(previousPlacement, replacementPlacement, bootstrapId, owner);
+            operationLinks["currentPlacement"] =
+                JsonSerializer.SerializeToElement(replacementPlacement, JsonOptions);
+            intentLinks["placement"] = JsonSerializer.SerializeToElement(replacementPlacement, JsonOptions);
+            await PersistAsync(
+                "replacement-registration", null, replacementPlacement.EnvironmentId).ConfigureAwait(false);
+            currentPlacementElement = operationLinks["currentPlacement"];
+        }
+        var currentPlacement = currentPlacementElement.Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions)
+            ?? throw new RuntimeAuthorizationException("runtime_replacement_placement_invalid");
+        RequireReplacementPlacement(previousPlacement, currentPlacement, bootstrapId, owner);
+
+        RuntimeRegistration currentRegistration;
+        if (operationLinks.TryGetValue("currentRegistration", out var currentRegistrationElement))
+        {
+            currentRegistration = currentRegistrationElement.Deserialize<RuntimeRegistration>(JsonOptions)
+                ?? throw new RuntimeAuthorizationException("runtime_replacement_registration_invalid");
+        }
+        else
+        {
+            currentRegistration = await registrations.ReplaceOrdinaryAsync(
+                actor,
+                previousRegistration,
+                request.OperationId,
+                owner,
+                currentPlacement.EnvironmentId,
+                currentPlacement.SourceProfileId,
+                cancellationToken).ConfigureAwait(false);
+            RequireReplacementRegistration(owner, currentPlacement, currentRegistration);
+            operationLinks["currentRegistration"] =
+                JsonSerializer.SerializeToElement(currentRegistration, JsonOptions);
+            intentLinks["registration"] = JsonSerializer.SerializeToElement(currentRegistration, JsonOptions);
+            await PersistAsync(
+                "replacement-bootstrap", null,
+                currentPlacement.EnvironmentId, currentRegistration.RuntimeInstanceId).ConfigureAwait(false);
+        }
+        RequireReplacementRegistration(owner, currentPlacement, currentRegistration);
+
+        RuntimeBootstrapDeliveryReceipt bootstrap;
+        if (operationLinks.TryGetValue("currentBootstrap", out var bootstrapElement))
+        {
+            bootstrap = bootstrapElement.Deserialize<RuntimeBootstrapDeliveryReceipt>(JsonOptions)
+                ?? throw new RuntimeAuthorizationException("runtime_replacement_bootstrap_invalid");
+        }
+        else
+        {
+            using var configuration = JsonDocument.Parse("{}");
+            var configurationHash = RuntimeContractValidation.Hash(
+                Encoding.UTF8.GetBytes(configuration.RootElement.GetRawText()));
+            bootstrap = await RuntimeOwnerHttpTransport.SendRuntimeRunStartAsync<
+                    RuntimeBootstrapDeliveryReceipt>(
+                clients.CreateClient("runtime-run-start-broker"),
+                options.BrokerOwnerAddress,
+                "/internal/runtime/bootstrap/request",
+                actor,
+                new RuntimeBootstrapRequest(
+                    currentRegistration.RuntimeInstanceId, bootstrapId, configurationHash),
+                cancellationToken).ConfigureAwait(false);
+            RequireBootstrapReceipt(
+                intent with { BootstrapOperationId = bootstrapId }, currentRegistration, bootstrap, configurationHash);
+            operationLinks["currentBootstrap"] =
+                JsonSerializer.SerializeToElement(BootstrapReceipt(bootstrap), JsonOptions);
+            intentLinks["bootstrap"] = operationLinks["currentBootstrap"];
+            await PersistAsync(
+                "replacement-activation", null,
+                currentPlacement.EnvironmentId, currentRegistration.RuntimeInstanceId).ConfigureAwait(false);
+        }
+
+        var environmentContext = await environment.ReadAsync(
+            actor, owner.ProjectId, owner.RunId, owner.SessionId,
+            currentPlacement.EnvironmentId, currentRegistration.Binding.ProfileId, cancellationToken)
+            .ConfigureAwait(false);
+        RequirePlacement(currentPlacement, currentRegistration, environmentContext);
+        RuntimeHostReadinessReceipt activated;
+        if (operationLinks.TryGetValue("currentActivation", out var activationElement))
+        {
+            activated = activationElement.Deserialize<RuntimeHostReadinessReceipt>(JsonOptions)
+                ?? throw new RuntimeAuthorizationException("runtime_replacement_activation_invalid");
+        }
+        else
+        {
+            var activationRequest = new RuntimeHostConfigureRequest(
+                1, currentRegistration, consumeId, exchangeId, JsonDocument.Parse("{}").RootElement.Clone())
+            {
+                McpServer = environmentContext.McpServer,
+                ReplacementRecovery = new RuntimeHostReplacementRecovery(
+                    rootCompletion.Completion.Registration,
+                    rootCompletion.Completion.ToEvidence(),
+                    rootCompletion.Completion.CacheBaselineCursor)
+                    .ValidateFor(currentRegistration)
+            };
+            activated = await RuntimeOwnerHttpTransport.SendRuntimeRunStartAsync<RuntimeHostReadinessReceipt>(
+                clients.CreateClient("runtime-run-start-environment"),
+                options.EnvironmentOwnerAddress,
+                "/internal/runtime/v1/activate",
+                actor,
+                activationRequest,
+                cancellationToken).ConfigureAwait(false);
+            CoordinationEndpoints.ValidateHostReadiness(activated, currentRegistration, timeProvider);
+            var recovery = activated.Recovery?.ValidateFor(currentRegistration);
+            if (recovery?.RecoveryMode != RuntimeHostRecoveryMode.NativeCache ||
+                recovery.NativeCacheAcknowledgment?.Reference != rootCompletion.Completion.CacheMaterial.Reference ||
+                !MatchesReplacementReconstructionInterval(
+                    recovery, rootCompletion.Completion.CacheBaselineCursorHash))
+                throw new RuntimeAuthorizationException("runtime_replacement_cache_recovery_invalid");
+            operationLinks["currentActivation"] =
+                JsonSerializer.SerializeToElement(activated, JsonOptions);
+            intentLinks["activation"] = operationLinks["currentActivation"];
+            await PersistAsync(
+                "replacement-readiness", null,
+                currentPlacement.EnvironmentId, currentRegistration.RuntimeInstanceId).ConfigureAwait(false);
+        }
+        var recovered = activated.Recovery?.ValidateFor(currentRegistration);
+        if (recovered?.RecoveryMode != RuntimeHostRecoveryMode.NativeCache ||
+            recovered.NativeCacheAcknowledgment?.Reference != rootCompletion.Completion.CacheMaterial.Reference ||
+            !MatchesReplacementReconstructionInterval(
+                recovered, rootCompletion.Completion.CacheBaselineCursorHash))
+            throw new RuntimeAuthorizationException("runtime_replacement_cache_recovery_invalid");
+
+        EnvironmentRuntimeReadinessContext readiness;
+        if (operationLinks.TryGetValue("currentReadiness", out var readinessElement))
+        {
+            readiness = readinessElement.Deserialize<EnvironmentRuntimeReadinessContext>(JsonOptions)
+                ?? throw new RuntimeAuthorizationException("runtime_replacement_readiness_invalid");
+        }
+        else
+        {
+            readiness = await environment.ReadReadinessAsync(
+                actor, owner.ProjectId, owner.RunId, owner.SessionId,
+                currentPlacement.EnvironmentId, currentRegistration.Binding.ProfileId, cancellationToken)
+                .ConfigureAwait(false);
+            RequireCurrentReadiness(currentPlacement, currentRegistration, activated, readiness);
+            operationLinks["currentReadiness"] =
+                JsonSerializer.SerializeToElement(readiness, JsonOptions);
+            intentLinks["readiness"] = operationLinks["currentReadiness"];
+        }
+        RequireCurrentReadiness(currentPlacement, currentRegistration, activated, readiness);
+        (intent, operation) = await store.UpdateReplacementProgressAsync(
+            intent,
+            operation,
+            "ready",
+            "ready",
+            null,
+            JsonSerializer.Serialize(operationLinks, JsonOptions),
+            JsonSerializer.Serialize(intentLinks, JsonOptions),
+            bootstrapId,
+            consumeId,
+            exchangeId,
+            currentPlacement.EnvironmentId,
+            currentRegistration.RuntimeInstanceId,
+            cancellationToken).ConfigureAwait(false);
+        return CreateReplacementSummary(operation, previousRegistration, previousPlacement);
+    }
+
+    internal static void RequireReplacementPlacement(
+        RuntimeRunStartPlacementReceipt previous,
+        RuntimeRunStartPlacementReceipt current,
+        Guid bootstrapOperationId,
+        RuntimeOwnerContext owner)
+    {
+        current.Validate();
+        if (current.EnvironmentId != RuntimeRunStartKeys.EnvironmentId(owner) ||
+            current.WorkspaceVolumeId != previous.WorkspaceVolumeId ||
+            current.WorkspaceResourceGeneration != previous.WorkspaceResourceGeneration ||
+            current.WorkspaceDataGeneration != previous.WorkspaceDataGeneration ||
+            current.SandboxIdempotencyKey != RuntimeRunStartKeys.SandboxIdempotencyKey(owner, bootstrapOperationId) ||
+            current.SandboxOperationId == previous.SandboxOperationId ||
+            current.SandboxResource == previous.SandboxResource ||
+            string.IsNullOrWhiteSpace(previous.PodUid) ||
+            string.IsNullOrWhiteSpace(current.PodUid) ||
+            string.Equals(previous.PodUid, current.PodUid, StringComparison.Ordinal) ||
+            current.CurrentFencingGeneration == previous.CurrentFencingGeneration ||
+            current.ProviderFencingGeneration == previous.ProviderFencingGeneration ||
+            current.LifecycleGeneration != previous.LifecycleGeneration ||
+            current.NetworkPolicyGeneration != previous.NetworkPolicyGeneration)
+            throw new RuntimeAuthorizationException("runtime_replacement_placement_invalid");
+    }
+
+    internal static bool MatchesReplacementReconstructionInterval(
+        RuntimeHostRecoveryReceipt recovery,
+        string expectedCursorHash) =>
+        recovery.ReplacementReconstructionInterval is
+            { EventCount: 0, IsComplete: true } interval &&
+        interval.StartCursorSha256 == expectedCursorHash &&
+        interval.EndCursorSha256 == expectedCursorHash;
+
+    internal static RuntimeReplacementSummary CreateReplacementSummary(
+        RuntimeReplacementOperation operation,
+        RuntimeRegistration previousRegistration,
+        RuntimeRunStartPlacementReceipt previousPlacement)
+    {
+        var links = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(operation.ReceiptLinks, JsonOptions)
+            ?? new(StringComparer.Ordinal);
+        RuntimeRegistration? currentRegistration = null;
+        RuntimeRunStartPlacementReceipt? currentPlacement = null;
+        RuntimeHostReadinessReceipt? currentActivation = null;
+        if (links.TryGetValue("currentRegistration", out var registration))
+            currentRegistration = registration.Deserialize<RuntimeRegistration>(JsonOptions);
+        if (links.TryGetValue("currentPlacement", out var placement))
+            currentPlacement = placement.Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions);
+        if (links.TryGetValue("currentActivation", out var activation))
+            currentActivation = activation.Deserialize<RuntimeHostReadinessReceipt>(JsonOptions);
+        var recovery = currentActivation?.Recovery;
+        return new RuntimeReplacementSummary(
+            1,
+            operation.OperationId,
+            operation.State,
+            operation.CurrentStep,
+            operation.FailureCode,
+            previousRegistration.RuntimeInstanceId,
+            previousRegistration.Revision,
+            currentRegistration?.RuntimeInstanceId,
+            currentRegistration?.Revision,
+            operation.ExecutionFence,
+            operation.AcceptedSelectionHash,
+            previousPlacement.PodUid,
+            currentPlacement?.PodUid,
+            currentPlacement?.WorkspaceVolumeId ?? previousPlacement.WorkspaceVolumeId,
+            currentPlacement?.WorkspaceResourceGeneration ?? previousPlacement.WorkspaceResourceGeneration,
+            currentPlacement?.WorkspaceDataGeneration ?? previousPlacement.WorkspaceDataGeneration,
+            recovery?.RecoveryMode,
+            recovery?.NativeCacheAcknowledgment is { } cache
+                ? ProjectMaterial(cache)
+                : null,
+            recovery?.ReplacementReconstructionInterval,
+            recovery?.ReplacementCallSequence).Validate();
+    }
+
+    private static RuntimeMaterialAcknowledgmentEvidence ProjectMaterial(
+        SessionMaterialAcknowledgment acknowledgment)
+    {
+        var material = acknowledgment.Reference.Material
+            ?? throw new RuntimeAuthorizationException("runtime_replacement_summary_invalid");
+        return new RuntimeMaterialAcknowledgmentEvidence(
+            acknowledgment.EventId,
+            acknowledgment.Position,
+            material.Kind,
+            material.Sha256,
+            RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(
+                acknowledgment.Reference, JsonOptions)));
+    }
+
+    private static Guid ReadGuid(Dictionary<string, JsonElement> links, string key) =>
+        links.TryGetValue(key, out var value) && value.ValueKind == JsonValueKind.String &&
+        value.TryGetGuid(out var result) && result != Guid.Empty
+            ? result
+            : throw new RuntimeAuthorizationException("runtime_replacement_receipt_invalid");
+
     private async Task<RuntimeRunStartIntent?> RetireFailedBootstrapAsync(
         RuntimeRunStartIntent intent,
         RuntimeOwnerContext owner,
@@ -612,9 +1096,48 @@ internal sealed class RuntimeRunStartContinuation(
         RuntimeRunStartPlacementReceipt placement,
         RuntimeRegistration registration)
     {
+        RequireRegistration(owner, placement, registration, requireEmptyWorkspace: true);
+    }
+
+    internal static void RequireReplacementRegistration(
+        RuntimeOwnerContext owner,
+        RuntimeRunStartPlacementReceipt placement,
+        RuntimeRegistration registration)
+    {
+        RequireRegistration(owner, placement, registration, requireEmptyWorkspace: false);
+    }
+
+    internal static RuntimeOwnerContext CreateOwnerContext(RuntimeBinding binding) =>
+        new(
+            1,
+            binding.ActorIssuer,
+            binding.ActorId,
+            binding.TenantId,
+            binding.ProjectId,
+            binding.RunId,
+            binding.SessionId,
+            binding.AgentId,
+            binding.ModelSelectionReference!,
+            binding.TurnId,
+            binding.ProjectRevision,
+            binding.ProjectConfigurationRevision,
+            binding.PlatformRuntimeRevision,
+            binding.ContextRevision,
+            binding.AcceptedSelectionHash,
+            binding.ExecutionFence,
+            0,
+            1,
+            1);
+
+    private static void RequireRegistration(
+        RuntimeOwnerContext owner,
+        RuntimeRunStartPlacementReceipt placement,
+        RuntimeRegistration registration,
+        bool requireEmptyWorkspace)
+    {
         RuntimeContractValidation.Validate(registration);
         var binding = registration.Binding;
-        if (placement.WorkspaceDataGeneration != 0)
+        if (requireEmptyWorkspace && placement.WorkspaceDataGeneration != 0)
             throw new RuntimeAuthorizationException("runtime_start_workspace_not_empty");
         if (registration.State != RuntimeRegistrationState.Active ||
             binding.ActorIssuer != owner.ActorIssuer || binding.ActorId != owner.ActorId ||
@@ -773,6 +1296,7 @@ internal sealed class RuntimeRunStartContinuation(
 internal sealed class RuntimeRunStartCleanupContinuation(
     CoordinationRuntimeRunStartStore store,
     ProjectsRunSelectionClient projects,
+    RuntimeRegistrationOwner registrations,
     RuntimeRunStartOptions options,
     IHttpClientFactory clients)
 {
@@ -833,10 +1357,97 @@ internal sealed class RuntimeRunStartCleanupContinuation(
         if (!work.Actor.Bearer.IsUsable())
             return;
         if (receipt.CleanupDisposition == "cleanup_complete")
+        {
+            await RevokeOwnedRegistrationsAsync(
+                intent, projection, cancellationToken).ConfigureAwait(false);
             _ = await store.MarkCleanupCompleteAsync(
                 intent, intent.RowVersion, receipt, cancellationToken).ConfigureAwait(false);
+        }
         else
             _ = await store.RecordCleanupPendingAsync(
                 intent, intent.RowVersion, receipt, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task RevokeOwnedRegistrationsAsync(
+        RuntimeRunStartIntent intent,
+        RuntimeRunStartCleanupProjection projection,
+        CancellationToken cancellationToken)
+    {
+        var owned = new Dictionary<Guid, RuntimeRegistration>();
+        if (projection.ReceiptLinks.TryGetProperty("registration", out var currentRegistrationElement) &&
+            currentRegistrationElement.Deserialize<RuntimeRegistration>(JsonOptions) is { } current)
+            owned[current.RuntimeInstanceId] = current;
+        if (projection.ReceiptLinks.TryGetProperty("replacementOperationId", out var operationElement) &&
+            operationElement.TryGetGuid(out var operationId) && operationId != Guid.Empty)
+        {
+            var operation = await store.ReadReplacementOperationAsync(
+                intent, operationId, cancellationToken).ConfigureAwait(false)
+                ?? throw new RuntimeAuthorizationException("runtime_replacement_cleanup_receipt_missing");
+            using var links = JsonDocument.Parse(operation.ReceiptLinks);
+            if (!links.RootElement.TryGetProperty("previousRegistration", out var previousValue) ||
+                previousValue.Deserialize<RuntimeRegistration>(JsonOptions) is not { } previous ||
+                !links.RootElement.TryGetProperty("previousPlacement", out var previousPlacementValue) ||
+                previousPlacementValue.Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions) is not { } previousPlacement ||
+                operation.ExpectedRuntimeInstanceId != previous.RuntimeInstanceId ||
+                operation.ExpectedRegistrationRevision != previous.Revision ||
+                previous.Binding.TenantId != intent.TenantId ||
+                previous.Binding.ProjectId != intent.ProjectId ||
+                previous.Binding.RunId != intent.RunId ||
+                previous.Binding.SessionId != intent.RootSessionId ||
+                previous.Binding.ExecutionFence != intent.ExecutionFence ||
+                previous.Binding.AcceptedSelectionHash != intent.AcceptedSelectionHash)
+                throw new RuntimeAuthorizationException("runtime_replacement_cleanup_registration_invalid");
+            previousPlacement.Validate();
+            var replacementOwner = RuntimeRunStartContinuation.CreateOwnerContext(previous.Binding);
+            RuntimeRunStartContinuation.RequireReplacementRegistration(
+                replacementOwner, previousPlacement, previous);
+            owned[previous.RuntimeInstanceId] = previous;
+            if (links.RootElement.TryGetProperty("currentRegistration", out var currentValue) &&
+                currentValue.Deserialize<RuntimeRegistration>(JsonOptions) is { } replacementRegistration)
+            {
+                if (!links.RootElement.TryGetProperty("currentPlacement", out var currentPlacementValue) ||
+                    currentPlacementValue.Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions) is not { } currentPlacement ||
+                    RuntimeRegistrationStore.CreateReplacementId(previous.RuntimeInstanceId, operationId) !=
+                        replacementRegistration.RuntimeInstanceId)
+                    throw new RuntimeAuthorizationException("runtime_replacement_cleanup_registration_invalid");
+                RuntimeRunStartContinuation.RequireReplacementPlacement(
+                    previousPlacement,
+                    currentPlacement,
+                    RuntimeRunStartKeys.ReplacementOperationId(operationId, "bootstrap"),
+                    replacementOwner);
+                RuntimeRunStartContinuation.RequireReplacementRegistration(
+                    replacementOwner, currentPlacement, replacementRegistration);
+                owned[replacementRegistration.RuntimeInstanceId] = replacementRegistration;
+            }
+            else if (links.RootElement.TryGetProperty("currentPlacement", out var recoveredPlacementValue) &&
+                recoveredPlacementValue.Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions) is { } recoveredPlacement)
+            {
+                RuntimeRunStartContinuation.RequireReplacementPlacement(
+                    previousPlacement,
+                    recoveredPlacement,
+                    RuntimeRunStartKeys.ReplacementOperationId(operationId, "bootstrap"),
+                    replacementOwner);
+                var recovered = await registrations.ReadAsync(
+                    RuntimeRegistrationStore.CreateReplacementId(previous.RuntimeInstanceId, operationId),
+                    cancellationToken).ConfigureAwait(false);
+                if (recovered is not null)
+                {
+                    RuntimeRunStartContinuation.RequireReplacementRegistration(
+                        replacementOwner, recoveredPlacement, recovered);
+                    owned[recovered.RuntimeInstanceId] = recovered;
+                }
+            }
+        }
+
+        foreach (var registration in owned.Values)
+        {
+            if (registration.State != RuntimeRegistrationState.Active)
+                throw new RuntimeAuthorizationException("runtime_replacement_cleanup_registration_invalid");
+            var revoked = await registrations.RevokeAfterPlacementReleaseAsync(
+                registration, cancellationToken).ConfigureAwait(false);
+            if (revoked.State != RuntimeRegistrationState.Revoked ||
+                revoked.RuntimeInstanceId != registration.RuntimeInstanceId)
+                throw new RuntimeAuthorizationException("runtime_replacement_cleanup_registration_invalid");
+        }
     }
 }

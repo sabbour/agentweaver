@@ -14,6 +14,7 @@ internal sealed class CoordinationRuntimeRunStartStore
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly NpgsqlDataSource _dataSource;
     private readonly string _schema;
+    private readonly RuntimeExecutionEvidenceLedgerStore _executionEvidence;
 
     public CoordinationRuntimeRunStartStore(NpgsqlDataSource dataSource, string schema)
     {
@@ -23,6 +24,7 @@ internal sealed class CoordinationRuntimeRunStartStore
             throw new ArgumentException("The Orchestrator schema name is invalid.", nameof(schema));
         _dataSource = dataSource;
         _schema = schema;
+        _executionEvidence = new(schema);
     }
 
     public async Task<RuntimeRunStartIntent> EnsureIntentAsync(
@@ -145,6 +147,473 @@ internal sealed class CoordinationRuntimeRunStartStore
         if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             throw new CoordinationException("runtime_start_intent_ambiguous", StatusCodes.Status409Conflict);
         return intent;
+    }
+
+    public async Task<(RuntimeRunStartIntent Intent, RuntimeReplacementOperation Operation)> BeginReplacementAsync(
+        RuntimeRunStartIntent intent,
+        RuntimeOwnerContext owner,
+        RuntimeReplacementRequest request,
+        RuntimeRegistration registration,
+        RuntimeRunStartPlacementReceipt placement,
+        RuntimeRootTurnCompletionLedgerReceipt completion,
+        CancellationToken cancellationToken)
+    {
+        request.Validate();
+        placement.Validate();
+        RuntimeContractValidation.Validate(registration);
+        completion.Validate();
+        if (owner.TenantId != intent.TenantId || owner.ProjectId != intent.ProjectId ||
+            owner.RunId != intent.RunId || owner.SessionId != intent.RootSessionId ||
+            owner.AcceptedSelectionHash != intent.AcceptedSelectionHash ||
+            owner.ExecutionFence != intent.ExecutionFence ||
+            request.ExpectedExecutionFence != intent.ExecutionFence ||
+            request.ExpectedAcceptedSelectionHash != intent.AcceptedSelectionHash ||
+            request.ExpectedRuntimeInstanceId != registration.RuntimeInstanceId ||
+            request.ExpectedRegistrationRevision != registration.Revision ||
+            completion.Completion.SuccessfulToolCount != 0 ||
+            completion.Completion.FailedToolCount != 0 ||
+            !completion.Completion.CacheBaselineIsComplete ||
+            completion.Completion.Registration.Binding.SessionId != intent.RootSessionId ||
+            completion.Completion.Registration.Binding.ExecutionFence != intent.ExecutionFence ||
+            completion.Completion.Registration.Binding.AcceptedSelectionHash != intent.AcceptedSelectionHash ||
+            registration.Binding.SessionId != intent.RootSessionId ||
+            registration.Binding.ExecutionFence != intent.ExecutionFence ||
+            registration.Binding.AcceptedSelectionHash != intent.AcceptedSelectionHash)
+            throw new CoordinationException("runtime_replacement_request_stale", StatusCodes.Status409Conflict);
+
+        var requestHash = RuntimeContractValidation.Hash(
+            JsonSerializer.SerializeToUtf8Bytes(request, JsonOptions));
+        var initialLinks = new Dictionary<string, object>(StringComparer.Ordinal)
+        {
+            ["previousPlacement"] = placement,
+            ["previousRegistration"] = registration,
+            ["completion"] = completion,
+            ["previousBootstrapOperationId"] = intent.BootstrapOperationId,
+            ["previousConsumeOperationId"] = intent.ConsumeOperationId,
+            ["previousExchangeOperationId"] = intent.ExchangeOperationId
+        };
+        var linksJson = JsonSerializer.Serialize(initialLinks, JsonOptions);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await RequireCurrentRootAsync(connection, transaction, owner, cancellationToken).ConfigureAwait(false);
+        var currentIntent = await ReadIntentAsync(
+            connection, transaction, intent, forUpdate: true, cancellationToken).ConfigureAwait(false)
+            ?? throw new CoordinationException("runtime_start_intent_unavailable", StatusCodes.Status503ServiceUnavailable);
+        if (currentIntent.CleanupObligation ||
+            currentIntent.ExecutionFence != owner.ExecutionFence ||
+            currentIntent.AcceptedSelectionHash != owner.AcceptedSelectionHash)
+            throw new CoordinationException("runtime_replacement_request_stale", StatusCodes.Status409Conflict);
+
+        var existing = await ReadReplacementOperationAsync(
+            connection, transaction, currentIntent, request.OperationId, cancellationToken).ConfigureAwait(false);
+        if (existing is not null)
+        {
+            if (existing.RequestHash != requestHash ||
+                existing.ExpectedRuntimeInstanceId != request.ExpectedRuntimeInstanceId ||
+                existing.ExpectedRegistrationRevision != request.ExpectedRegistrationRevision)
+                throw new CoordinationException("runtime_replacement_operation_conflict", StatusCodes.Status409Conflict);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return (currentIntent, existing);
+        }
+
+        if (currentIntent.State != "ready" ||
+            currentIntent.RuntimeInstanceId != request.ExpectedRuntimeInstanceId)
+            throw new CoordinationException("runtime_replacement_in_progress", StatusCodes.Status409Conflict);
+        var currentLinks = ReadReceiptLinks(currentIntent);
+        if (!currentLinks.TryGetValue("registration", out var currentRegistrationElement) ||
+            currentRegistrationElement.Deserialize<RuntimeRegistration>(JsonOptions) != registration ||
+            !currentLinks.TryGetValue("placement", out var currentPlacementElement) ||
+            currentPlacementElement.Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions) != placement)
+            throw new CoordinationException("runtime_replacement_request_stale", StatusCodes.Status409Conflict);
+
+        await RequireCompleteRootWorkAsync(
+            connection, transaction, currentIntent, registration, completion, cancellationToken)
+            .ConfigureAwait(false);
+
+        await using (var pending = new NpgsqlCommand($"""
+            SELECT 1 FROM {_schema}.runtime_replacement_operations
+            WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
+              AND root_session_id = @root AND state = 'pending'
+            LIMIT 1
+            """, connection, transaction))
+        {
+            AddKey(pending, currentIntent);
+            await using var reader = await pending.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                throw new CoordinationException("runtime_replacement_in_progress", StatusCodes.Status409Conflict);
+        }
+
+        var operation = new RuntimeReplacementOperation(
+            intent.TenantId, intent.ProjectId, intent.RunId, intent.RootSessionId,
+            request.OperationId, requestHash, request.ExpectedRuntimeInstanceId,
+            request.ExpectedRegistrationRevision, request.ExpectedAcceptedSelectionHash,
+            request.ExpectedExecutionFence, "pending", "replacement-retirement", null, linksJson, 1);
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO {_schema}.runtime_replacement_operations
+                (tenant_id, project_id, run_id, root_session_id, operation_id, request_hash,
+                 expected_runtime_instance_id, expected_registration_revision,
+                 accepted_selection_hash, execution_fence, state, current_step, receipt_links)
+            VALUES (@tenant, @project, @run, @root, @operation, @hash, @runtime,
+                    @revision, @selection, @fence, 'pending', 'replacement-retirement', @receipts)
+            """, connection, transaction))
+        {
+            AddKey(insert, currentIntent);
+            insert.Parameters.AddWithValue("operation", request.OperationId);
+            insert.Parameters.AddWithValue("hash", NpgsqlDbType.Char, requestHash);
+            insert.Parameters.AddWithValue("runtime", request.ExpectedRuntimeInstanceId);
+            insert.Parameters.AddWithValue("revision", request.ExpectedRegistrationRevision);
+            insert.Parameters.AddWithValue("receipts", NpgsqlDbType.Jsonb, linksJson);
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        currentLinks["replacementOperationId"] =
+            JsonSerializer.SerializeToElement(request.OperationId, JsonOptions);
+        var updatedIntent = await UpdateInTransactionAsync(
+            connection, transaction, currentIntent, currentIntent.RowVersion,
+            "pending", "replacement-retirement", null, currentIntent.EnvironmentId,
+            currentIntent.RuntimeInstanceId, currentLinks, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return (updatedIntent, operation);
+    }
+
+    private async Task RequireCompleteRootWorkAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RuntimeRunStartIntent intent,
+        RuntimeRegistration registration,
+        RuntimeRootTurnCompletionLedgerReceipt expectedLatest,
+        CancellationToken cancellationToken)
+    {
+        var binding = registration.Binding;
+        var admissions = new List<(Guid RequestId, string PromptHash)>();
+        await using (var command = new NpgsqlCommand($"""
+            SELECT request_id, prompt_hash
+            FROM {_schema}.maf_root_model_turn_admissions
+            WHERE project_id = @project AND run_id = @run AND root_session_id = @root
+              AND actor_issuer = @issuer AND actor_id = @actor AND tenant_id = @tenant
+              AND accepted_selection_hash = @selection AND execution_fence = @fence
+            ORDER BY created_at DESC, request_id DESC
+            LIMIT 65
+            """, connection, transaction))
+        {
+            command.Parameters.AddWithValue("project", binding.ProjectId);
+            command.Parameters.AddWithValue("run", binding.RunId);
+            command.Parameters.AddWithValue("root", binding.SessionId);
+            command.Parameters.AddWithValue("issuer", binding.ActorIssuer);
+            command.Parameters.AddWithValue("actor", binding.ActorId);
+            command.Parameters.AddWithValue("tenant", binding.TenantId);
+            command.Parameters.AddWithValue("selection", binding.AcceptedSelectionHash);
+            command.Parameters.AddWithValue("fence", binding.ExecutionFence);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                admissions.Add((reader.GetGuid(0), reader.GetString(1).Trim()));
+        }
+
+        if (admissions.Count is 0 or > 64)
+            throw new CoordinationException("runtime_replacement_root_work_unavailable", StatusCodes.Status409Conflict);
+        RuntimeRootTurnCompletionLedgerReceipt? latest = null;
+        foreach (var admission in admissions)
+        {
+            var stored = await _executionEvidence.ReadRootTurnCompletionAsync(
+                connection, transaction, intent.ProjectId, intent.RunId, admission.RequestId, cancellationToken)
+                .ConfigureAwait(false);
+            if (stored is null ||
+                stored.Completion.PromptHash != admission.PromptHash ||
+                stored.Completion.SuccessfulToolCount != 0 ||
+                stored.Completion.FailedToolCount != 0 ||
+                !await HasVerifiedReplacementLineageAsync(
+                    intent, stored.Completion.Registration, registration, cancellationToken)
+                    .ConfigureAwait(false))
+                throw new CoordinationException("runtime_replacement_root_work_pending", StatusCodes.Status409Conflict);
+            if (latest is null)
+                latest = stored;
+        }
+
+        if (latest is null || !latest.HasSameReceipt(expectedLatest))
+            throw new CoordinationException("runtime_replacement_root_work_stale", StatusCodes.Status409Conflict);
+    }
+
+    public async Task<RuntimeReplacementOperation?> ReadReplacementOperationAsync(
+        RuntimeRunStartIntent intent, Guid operationId, CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await ReadReplacementOperationAsync(
+            connection, null, intent, operationId, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<bool> HasVerifiedReplacementLineageAsync(
+        RuntimeRunStartIntent intent,
+        RuntimeRegistration source,
+        RuntimeRegistration current,
+        CancellationToken cancellationToken)
+    {
+        RuntimeContractValidation.Validate(source);
+        RuntimeContractValidation.Validate(current);
+        if (source == current)
+            return true;
+
+        var sourceBinding = source.Binding;
+        var currentBinding = current.Binding;
+        if (sourceBinding.TenantId != intent.TenantId || currentBinding.TenantId != intent.TenantId ||
+            sourceBinding.ProjectId != intent.ProjectId || currentBinding.ProjectId != intent.ProjectId ||
+            sourceBinding.RunId != intent.RunId || currentBinding.RunId != intent.RunId ||
+            sourceBinding.SessionId != intent.RootSessionId || currentBinding.SessionId != intent.RootSessionId ||
+            sourceBinding.ExecutionFence != intent.ExecutionFence ||
+            currentBinding.ExecutionFence != intent.ExecutionFence ||
+            sourceBinding.AcceptedSelectionHash != intent.AcceptedSelectionHash ||
+            currentBinding.AcceptedSelectionHash != intent.AcceptedSelectionHash)
+            return false;
+
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var operations = new List<RuntimeReplacementOperation>();
+        await using (var command = new NpgsqlCommand($"""
+            SELECT operation_id, request_hash, expected_runtime_instance_id,
+                   expected_registration_revision, accepted_selection_hash, execution_fence,
+                   state, current_step, failure_code, receipt_links::text, row_version
+            FROM {_schema}.runtime_replacement_operations
+            WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
+              AND root_session_id = @root AND accepted_selection_hash = @selection
+              AND execution_fence = @fence AND state = 'ready'
+            """, connection, transaction))
+        {
+            AddKey(command, intent);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                operations.Add(new RuntimeReplacementOperation(
+                    intent.TenantId, intent.ProjectId, intent.RunId, intent.RootSessionId,
+                    reader.GetGuid(0), reader.GetString(1).Trim(), reader.GetGuid(2), reader.GetInt64(3),
+                    reader.GetString(4).Trim(), reader.GetInt64(5), reader.GetString(6),
+                    reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8),
+                    reader.GetString(9), reader.GetInt64(10)));
+            }
+        }
+
+        var pending = new List<(
+            RuntimeReplacementOperation Operation,
+            RuntimeRegistration Previous,
+            RuntimeRegistration Replacement,
+            RuntimeRootTurnCompletionLedgerReceipt Completion)>();
+        foreach (var operation in operations)
+        {
+            using var links = JsonDocument.Parse(operation.ReceiptLinks);
+            var root = links.RootElement;
+            if (!root.TryGetProperty("previousRegistration", out var previousValue) ||
+                !root.TryGetProperty("currentRegistration", out var currentValue) ||
+                !root.TryGetProperty("previousPlacement", out var previousPlacementValue) ||
+                !root.TryGetProperty("currentPlacement", out var currentPlacementValue) ||
+                !root.TryGetProperty("completion", out var completionValue) ||
+                !root.TryGetProperty("currentActivation", out var activationValue))
+                return false;
+
+            var previous = previousValue.Deserialize<RuntimeRegistration>(JsonOptions);
+            var replacement = currentValue.Deserialize<RuntimeRegistration>(JsonOptions);
+            var previousPlacement = previousPlacementValue.Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions);
+            var currentPlacement = currentPlacementValue.Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions);
+            var completion = completionValue.Deserialize<RuntimeRootTurnCompletionLedgerReceipt>(JsonOptions);
+            var activation = activationValue.Deserialize<RuntimeHostReadinessReceipt>(JsonOptions);
+            if (previous is null || replacement is null || previousPlacement is null ||
+                currentPlacement is null || completion is null || activation?.Recovery is null ||
+                operation.State != "ready" || operation.CurrentStep != "ready" ||
+                operation.ExpectedRuntimeInstanceId != previous.RuntimeInstanceId ||
+                operation.ExpectedRegistrationRevision != previous.Revision ||
+                RuntimeRegistrationStore.CreateReplacementId(
+                    previous.RuntimeInstanceId, operation.OperationId) != replacement.RuntimeInstanceId ||
+                previous.Binding.TenantId != intent.TenantId ||
+                previous.Binding.ProjectId != intent.ProjectId ||
+                previous.Binding.RunId != intent.RunId ||
+                previous.Binding.SessionId != intent.RootSessionId ||
+                previous.Binding.ExecutionFence != intent.ExecutionFence ||
+                previous.Binding.AcceptedSelectionHash != intent.AcceptedSelectionHash ||
+                replacement.Binding.TenantId != intent.TenantId ||
+                replacement.Binding.ProjectId != intent.ProjectId ||
+                replacement.Binding.RunId != intent.RunId ||
+                replacement.Binding.SessionId != intent.RootSessionId ||
+                replacement.Binding.ExecutionFence != intent.ExecutionFence ||
+                replacement.Binding.AcceptedSelectionHash != intent.AcceptedSelectionHash)
+                return false;
+
+            previousPlacement.Validate();
+            currentPlacement.Validate();
+            var owner = RuntimeRunStartContinuation.CreateOwnerContext(previous.Binding);
+            RuntimeRunStartContinuation.RequireReplacementRegistration(owner, previousPlacement, previous);
+            RuntimeRunStartContinuation.RequireReplacementPlacement(
+                previousPlacement,
+                currentPlacement,
+                RuntimeRunStartKeys.ReplacementOperationId(operation.OperationId, "bootstrap"),
+                owner);
+            RuntimeRunStartContinuation.RequireReplacementRegistration(owner, currentPlacement, replacement);
+            _ = RuntimeRunStartContinuation.CreateReplacementSummary(
+                operation, previous, previousPlacement);
+            completion.Validate();
+            _ = new RuntimeHostReplacementRecovery(
+                completion.Completion.Registration,
+                completion.Completion.ToEvidence(),
+                completion.Completion.CacheBaselineCursor).ValidateFor(replacement);
+            var recovery = activation.Recovery.ValidateFor(replacement);
+            if (recovery.RecoveryMode != RuntimeHostRecoveryMode.NativeCache ||
+                recovery.NativeCacheAcknowledgment?.Reference != completion.Completion.CacheMaterial.Reference ||
+                !RuntimeRunStartContinuation.MatchesReplacementReconstructionInterval(
+                    recovery, completion.Completion.CacheBaselineCursorHash))
+                return false;
+            var storedCompletion = await _executionEvidence.ReadRootTurnCompletionAsync(
+                connection, transaction, completion.ProjectId, completion.RunId,
+                completion.RequestId, cancellationToken).ConfigureAwait(false);
+            if (storedCompletion is null || !storedCompletion.HasSameReceipt(completion))
+                return false;
+            pending.Add((operation, previous, replacement, completion));
+        }
+
+        var edges = new List<(RuntimeRegistration Previous, RuntimeRegistration Current)>();
+        while (pending.Count > 0)
+        {
+            var progressed = false;
+            for (var index = pending.Count - 1; index >= 0; index--)
+            {
+                var candidate = pending[index];
+                var completionRegistration = candidate.Completion.Completion.Registration;
+                if (completionRegistration != candidate.Previous &&
+                    (!edges.Any(edge =>
+                        edge.Previous == completionRegistration || edge.Current == completionRegistration) ||
+                     !HasPath(completionRegistration.RuntimeInstanceId, candidate.Previous.RuntimeInstanceId, edges)))
+                    continue;
+                if (edges.Any(edge =>
+                    edge.Previous.RuntimeInstanceId == candidate.Previous.RuntimeInstanceId ||
+                    edge.Current.RuntimeInstanceId == candidate.Replacement.RuntimeInstanceId))
+                    return false;
+                edges.Add((candidate.Previous, candidate.Replacement));
+                pending.RemoveAt(index);
+                progressed = true;
+            }
+            if (!progressed)
+                return false;
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return HasPath(source.RuntimeInstanceId, current.RuntimeInstanceId, edges) &&
+            edges.Any(edge => edge.Previous == source) &&
+            edges.Any(edge => edge.Current == current);
+    }
+
+    public async Task<(RuntimeRunStartIntent Intent, RuntimeReplacementOperation Operation)>
+        UpdateReplacementProgressAsync(
+            RuntimeRunStartIntent intent,
+            RuntimeReplacementOperation operation,
+            string state,
+            string step,
+            string? failureCode,
+            string operationReceiptLinks,
+            string intentReceiptLinks,
+            Guid? bootstrapOperationId,
+            Guid? consumeOperationId,
+            Guid? exchangeOperationId,
+            string? environmentId,
+            Guid? runtimeInstanceId,
+            CancellationToken cancellationToken)
+    {
+        if (state is not ("pending" or "ready" or "blocked" or "failed") ||
+            string.IsNullOrWhiteSpace(step) || step.Length > 48 ||
+            failureCode is { Length: > 96 })
+            throw new ArgumentException("The runtime replacement update is invalid.");
+        using var opDocument = JsonDocument.Parse(operationReceiptLinks);
+        using var intentDocument = JsonDocument.Parse(intentReceiptLinks);
+        if (opDocument.RootElement.ValueKind != JsonValueKind.Object ||
+            intentDocument.RootElement.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException("Runtime replacement receipt links must be objects.");
+
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var currentIntent = await ReadIntentAsync(
+            connection, transaction, intent, forUpdate: true, cancellationToken).ConfigureAwait(false)
+            ?? throw new CoordinationException("runtime_start_intent_unavailable", StatusCodes.Status503ServiceUnavailable);
+        var currentOperation = await ReadReplacementOperationAsync(
+            connection, transaction, intent, operation.OperationId, cancellationToken).ConfigureAwait(false)
+            ?? throw new CoordinationException("runtime_replacement_operation_not_found", StatusCodes.Status404NotFound);
+        if (currentOperation.RowVersion != operation.RowVersion ||
+            currentOperation.RequestHash != operation.RequestHash ||
+            currentIntent.CleanupObligation ||
+            currentIntent.RowVersion != intent.RowVersion)
+            throw new CoordinationException("runtime_replacement_operation_stale", StatusCodes.Status409Conflict);
+
+        await using (var updateOperation = new NpgsqlCommand($"""
+            UPDATE {_schema}.runtime_replacement_operations
+            SET state = @state, current_step = @step, failure_code = @failure,
+                receipt_links = @receipts, row_version = row_version + 1,
+                updated_at = clock_timestamp()
+            WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
+              AND root_session_id = @root AND operation_id = @operation
+              AND row_version = @version AND state = 'pending'
+            RETURNING row_version
+            """, connection, transaction))
+        {
+            AddKey(updateOperation, currentIntent);
+            updateOperation.Parameters.AddWithValue("operation", operation.OperationId);
+            updateOperation.Parameters.AddWithValue("state", state);
+            updateOperation.Parameters.AddWithValue("step", step);
+            updateOperation.Parameters.AddWithValue("failure", NpgsqlDbType.Varchar, (object?)failureCode ?? DBNull.Value);
+            updateOperation.Parameters.AddWithValue("receipts", NpgsqlDbType.Jsonb, operationReceiptLinks);
+            updateOperation.Parameters.AddWithValue("version", operation.RowVersion);
+            _ = await updateOperation.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)
+                as long? ?? throw new CoordinationException(
+                    "runtime_replacement_operation_stale", StatusCodes.Status409Conflict);
+        }
+
+        var intentState = state == "ready" ? "ready" : "pending";
+        await using (var updateIntent = new NpgsqlCommand($"""
+            UPDATE {_schema}.runtime_run_start_intents
+            SET bootstrap_operation_id = COALESCE(@bootstrap, bootstrap_operation_id),
+                consume_operation_id = COALESCE(@consume, consume_operation_id),
+                exchange_operation_id = COALESCE(@exchange, exchange_operation_id),
+                state = @state, current_step = @step, failure_code = @failure,
+                environment_id = @environment, runtime_instance_id = @runtime,
+                receipt_links = @receipts, row_version = row_version + 1,
+                updated_at = clock_timestamp()
+            WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
+              AND root_session_id = @root AND accepted_selection_hash = @selection
+              AND execution_fence = @fence AND row_version = @version AND NOT cleanup_obligation
+            RETURNING row_version
+            """, connection, transaction))
+        {
+            AddKey(updateIntent, currentIntent);
+            updateIntent.Parameters.AddWithValue("bootstrap", NpgsqlDbType.Uuid, (object?)bootstrapOperationId ?? DBNull.Value);
+            updateIntent.Parameters.AddWithValue("consume", NpgsqlDbType.Uuid, (object?)consumeOperationId ?? DBNull.Value);
+            updateIntent.Parameters.AddWithValue("exchange", NpgsqlDbType.Uuid, (object?)exchangeOperationId ?? DBNull.Value);
+            updateIntent.Parameters.AddWithValue("state", intentState);
+            updateIntent.Parameters.AddWithValue("step", step);
+            updateIntent.Parameters.AddWithValue("failure", NpgsqlDbType.Varchar, (object?)failureCode ?? DBNull.Value);
+            updateIntent.Parameters.AddWithValue("environment", NpgsqlDbType.Varchar, (object?)environmentId ?? DBNull.Value);
+            updateIntent.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, (object?)runtimeInstanceId ?? DBNull.Value);
+            updateIntent.Parameters.AddWithValue("receipts", NpgsqlDbType.Jsonb, intentReceiptLinks);
+            updateIntent.Parameters.AddWithValue("version", intent.RowVersion);
+            _ = await updateIntent.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)
+                as long? ?? throw new CoordinationException(
+                    "runtime_start_intent_stale", StatusCodes.Status409Conflict);
+        }
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+        return (
+            currentIntent with
+            {
+                BootstrapOperationId = bootstrapOperationId ?? currentIntent.BootstrapOperationId,
+                ConsumeOperationId = consumeOperationId ?? currentIntent.ConsumeOperationId,
+                ExchangeOperationId = exchangeOperationId ?? currentIntent.ExchangeOperationId,
+                State = intentState,
+                CurrentStep = step,
+                FailureCode = failureCode,
+                EnvironmentId = environmentId,
+                RuntimeInstanceId = runtimeInstanceId,
+                ReceiptLinks = intentReceiptLinks,
+                RowVersion = currentIntent.RowVersion + 1
+            },
+            operation with
+            {
+                State = state,
+                CurrentStep = step,
+                FailureCode = failureCode,
+                ReceiptLinks = operationReceiptLinks,
+                RowVersion = operation.RowVersion + 1
+            });
     }
 
     public async Task<RuntimeRunStartCleanupProjection> ReadCleanupProjectionAsync(
@@ -616,6 +1085,48 @@ internal sealed class CoordinationRuntimeRunStartStore
         };
     }
 
+    private async Task<RuntimeReplacementOperation?> ReadReplacementOperationAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        RuntimeRunStartIntent intent,
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT request_hash, expected_runtime_instance_id, expected_registration_revision,
+                   accepted_selection_hash, execution_fence, state, current_step, failure_code,
+                   receipt_links::text, row_version
+            FROM {_schema}.runtime_replacement_operations
+            WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
+              AND root_session_id = @root AND operation_id = @operation
+            """, connection, transaction);
+        AddKey(command, intent);
+        command.Parameters.AddWithValue("operation", operationId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return null;
+        var operation = new RuntimeReplacementOperation(
+            intent.TenantId,
+            intent.ProjectId,
+            intent.RunId,
+            intent.RootSessionId,
+            operationId,
+            reader.GetString(0).Trim(),
+            reader.GetGuid(1),
+            reader.GetInt64(2),
+            reader.GetString(3).Trim(),
+            reader.GetInt64(4),
+            reader.GetString(5),
+            reader.GetString(6),
+            reader.IsDBNull(7) ? null : reader.GetString(7),
+            reader.GetString(8),
+            reader.GetInt64(9));
+        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException(
+                "runtime_replacement_operation_ambiguous", StatusCodes.Status409Conflict);
+        return operation;
+    }
+
     private async Task<RuntimeRunStartIntent> UpdateInTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRunStartIntent intent,
         long expectedVersion, string state, string step, string? failureCode, string? environmentId,
@@ -691,6 +1202,27 @@ internal sealed class CoordinationRuntimeRunStartStore
     private static Dictionary<string, JsonElement> ReadReceiptLinks(RuntimeRunStartIntent intent) =>
         JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(intent.ReceiptLinks, JsonOptions)
         ?? new(StringComparer.Ordinal);
+
+    private static bool HasPath(
+        Guid source,
+        Guid target,
+        IReadOnlyList<(RuntimeRegistration Previous, RuntimeRegistration Current)> edges)
+    {
+        var visited = new HashSet<Guid> { source };
+        var pending = new Queue<Guid>();
+        pending.Enqueue(source);
+        while (pending.TryDequeue(out var current))
+        {
+            if (current == target)
+                return true;
+            foreach (var edge in edges.Where(edge => edge.Previous.RuntimeInstanceId == current))
+            {
+                if (visited.Add(edge.Current.RuntimeInstanceId))
+                    pending.Enqueue(edge.Current.RuntimeInstanceId);
+            }
+        }
+        return false;
+    }
 
     private static string LockKey(RuntimeRunStartIntent intent) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\0',

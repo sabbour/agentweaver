@@ -163,6 +163,80 @@ The continuation and its durable state live in
 Environment owns first placement in `EnvironmentRuntimeRunStartManager.cs`.
 The real activation route is in `EnvironmentRuntimeBootstrapEndpoints.cs`.
 
+### Replace a coordinator root Host
+
+The run-bound replacement request names the current runtime instance,
+registration revision, execution fence, accepted-selection hash, and one
+operation ID. Orchestrator accepts it only for the current coordinator root and
+after it verifies a completed native-turn receipt. The request ID stays the
+same when the caller checks or retries an uncertain operation.
+
+Orchestrator records the replacement operation and cleanup obligation before
+provider effects. Environment retires the old Host placement before it creates
+the new Pod and lease. The new placement uses the same workspace volume and
+resource/data generations. Orchestrator creates a new runtime registration
+without changing the accepted selection or execution fence, then uses the
+normal Broker bootstrap and Environment activation paths.
+
+The replacement reaches `ready` only after the new Host restores the exact
+acknowledged SDK cache and reports a complete reconstruction interval with no
+native events or tool effects. The status route returns the saved operation.
+`pending` or `cleanup_pending` means the caller must keep checking that
+operation; it must not start another replacement. Cancellation follows the
+saved attempt and keeps unresolved resource cleanup visible.
+
+After replacement, an exact retry of the original casting request is checked
+against the completion receipt and the saved replacement lineage. Orchestrator
+returns the original completion with current-registration replay evidence. It
+does not send another native request or repeat a tool effect. These operations
+are implemented in `RuntimeRunStartOrchestration.cs`,
+`CoordinationRuntimeRunStartStore.cs`, and `ProjectRunEndpoints.cs`.
+
+```mermaid
+sequenceDiagram
+    actor CLI as Native CLI
+    participant Gateway
+    participant Core as Orchestrator
+    participant Environment
+    participant Broker
+    participant Host as AgentHost
+    participant Events
+    Note over CLI,Events: Source flow; it does not prove a deployed acceptance run.
+    CLI->>Gateway: Submit one approved read-only casting request
+    Gateway->>Core: Forward current run-bound request
+    Core->>Host: Admit native root turn
+    Host->>Events: Append user, assistant and cache material
+    Events-->>Host: Return typed material acknowledgments
+    Host-->>Core: Return native completion evidence
+    Core-->>Gateway: Return proposal and stored completion receipt
+    Gateway-->>CLI: Return nativeCompletion
+    CLI->>Gateway: Read user and assistant turn text
+    Gateway->>Events: Check current read authority and material binding
+    Events-->>Gateway: Return the bound turn text
+    Gateway-->>CLI: Return authorized text
+    CLI->>Gateway: Request Host replacement with current binding
+    Gateway->>Core: Forward stable operation ID and expected values
+    Core->>Environment: Retire the exact old placement
+    Environment-->>Core: Return release receipt
+    Core->>Environment: Provision a new placement on the retained workspace
+    Environment-->>Core: Return new lease and Pod identity
+    Core->>Broker: Bootstrap the new runtime registration
+    Broker-->>Core: Return current bootstrap receipt
+    Core->>Environment: Activate the new Host
+    Environment->>Host: Configure and resume the saved SDK cache
+    Host->>Events: Read the exact acknowledged cache reference
+    Events-->>Host: Return cache bytes
+    Host-->>Environment: Return readiness and empty reconstruction evidence
+    Environment-->>Core: Return current readiness
+    Core-->>Gateway: Return ready replacement summary
+    Gateway-->>CLI: Return the saved operation state
+    CLI->>Gateway: Retry the exact casting request
+    Gateway->>Core: Forward the original request identity
+    Core->>Core: Validate completion and replacement lineage
+    Core-->>Gateway: Return original completion and no-call replay evidence
+    Gateway-->>CLI: Return nativeReplay without a new native send
+```
+
 ### Understand workflows, plans, and gates
 
 A workflow is a versioned catalog of steps. Its step mode defines who creates

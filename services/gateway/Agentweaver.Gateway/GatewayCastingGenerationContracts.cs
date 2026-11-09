@@ -171,6 +171,7 @@ internal static class GatewayCastingGenerationContract
         // OpenAPI numeric fields accept JSON numbers, not string coercions such as "4".
         NumberHandling = JsonNumberHandling.Strict,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: false) },
     };
 
     // Keep orchestration-only roles out of both model suggestions and proposed teams.

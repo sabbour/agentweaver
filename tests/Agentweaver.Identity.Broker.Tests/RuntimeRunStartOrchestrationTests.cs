@@ -86,6 +86,111 @@ public sealed class RuntimeRunStartOrchestrationTests
         var contentFailure = Assert.Throws<RuntimeAuthorizationException>(() =>
             RuntimeRunStartContinuation.RequireRegistration(owner, retainedContents, registration));
         Assert.Equal("runtime_start_workspace_not_empty", contentFailure.Code);
+        RuntimeRunStartContinuation.RequireReplacementRegistration(owner, retainedContents, registration);
+
+        var changedFence = retainedContents with { CurrentFencingGeneration = retainedContents.CurrentFencingGeneration + 1,
+            ProviderFencingGeneration = retainedContents.ProviderFencingGeneration + 1 };
+        var replacementBinding = registration with
+        {
+            Binding = registration.Binding with
+            {
+                EnvironmentCurrentFencingGeneration = changedFence.CurrentFencingGeneration,
+                EnvironmentProviderFencingGeneration = changedFence.ProviderFencingGeneration
+            }
+        };
+        RuntimeRunStartContinuation.RequireReplacementRegistration(owner, changedFence, replacementBinding);
+        var ordinaryStartFailure = Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeRunStartContinuation.RequireRegistration(owner, changedFence, replacementBinding));
+        Assert.Equal("runtime_start_workspace_not_empty", ordinaryStartFailure.Code);
+    }
+
+    [Fact]
+    public void ReplacementPlacementRequiresANewPodAndTheExactRetainedWorkspace()
+    {
+        var source = RuntimeCopilotSessionTests.Registration();
+        var binding = source.Binding with
+        {
+            AgentId = RuntimeActionContract.CoordinatorRootStepId,
+            EnvironmentProviderFencingGeneration = source.Binding.EnvironmentCurrentFencingGeneration
+        };
+        var owner = new RuntimeOwnerContext(
+            1, binding.ActorIssuer, binding.ActorId, binding.TenantId, binding.ProjectId,
+            binding.RunId, binding.SessionId, binding.AgentId, binding.ModelSelectionReference!,
+            binding.TurnId, binding.ProjectRevision, binding.ProjectConfigurationRevision,
+            binding.PlatformRuntimeRevision, binding.ContextRevision, binding.AcceptedSelectionHash,
+            binding.ExecutionFence, 0, 1, 1);
+        var oldBootstrap = Guid.NewGuid();
+        var previous = new RuntimeRunStartPlacementReceipt(
+            1, RuntimeRunStartKeys.EnvironmentId(owner), "profile", "workspace",
+            RuntimeRunStartKeys.SandboxIdempotencyKey(owner, oldBootstrap),
+            4, 2, 1, Guid.NewGuid(),
+            new ProviderResourceRef(ProviderSeam.Sandbox, "sandbox", "old", 4),
+            3, 5, 6, 6, DateTimeOffset.UtcNow.AddMinutes(2))
+        {
+            PodUid = "old-pod"
+        };
+        var replacementId = Guid.NewGuid();
+        var newBootstrap = RuntimeRunStartKeys.ReplacementOperationId(replacementId, "bootstrap");
+        var current = previous with
+        {
+            SandboxIdempotencyKey = RuntimeRunStartKeys.SandboxIdempotencyKey(owner, newBootstrap),
+            SandboxOperationId = Guid.NewGuid(),
+            SandboxResource = new ProviderResourceRef(ProviderSeam.Sandbox, "sandbox", "new", 5),
+            LeaseRevision = previous.LeaseRevision,
+            CurrentFencingGeneration = 7,
+            ProviderFencingGeneration = 7,
+            PodUid = "new-pod"
+        };
+
+        RuntimeRunStartContinuation.RequireReplacementPlacement(previous, current, newBootstrap, owner);
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeRunStartContinuation.RequireReplacementPlacement(
+                previous, current with { WorkspaceDataGeneration = 3 }, newBootstrap, owner));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeRunStartContinuation.RequireReplacementPlacement(
+                previous, current with { SandboxOperationId = previous.SandboxOperationId }, newBootstrap, owner));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeRunStartContinuation.RequireReplacementPlacement(
+                previous, current with { PodUid = previous.PodUid }, newBootstrap, owner));
+    }
+
+    [Fact]
+    public void OrdinaryReplacementCanReuseAnEnvironmentLeaseRevision()
+    {
+        var source = RuntimeCopilotSessionTests.Registration();
+        var previous = source.Binding with
+        {
+            AgentId = RuntimeActionContract.CoordinatorRootStepId,
+            PlacementUid = "previous-placement",
+            PlacementGeneration = 2,
+            EnvironmentLeaseRevision = 3,
+            EnvironmentCurrentFencingGeneration = 5,
+            EnvironmentProviderFencingGeneration = 5
+        };
+        var owner = new RuntimeOwnerContext(
+            1, previous.ActorIssuer, previous.ActorId, previous.TenantId, previous.ProjectId,
+            previous.RunId, previous.SessionId, previous.AgentId, previous.ModelSelectionReference!,
+            previous.TurnId, previous.ProjectRevision, previous.ProjectConfigurationRevision,
+            previous.PlatformRuntimeRevision, previous.ContextRevision, previous.AcceptedSelectionHash,
+            previous.ExecutionFence, 0, 1, 1)
+        {
+            ModelCredentialReference = previous.ModelCredentialReference,
+            ModelSourceMode = previous.ModelSourceMode,
+            ReasoningEffort = previous.ReasoningEffort,
+            ModelBindingPin = previous.ModelBindingPin,
+            ModelConnectionId = previous.ModelConnectionId,
+            ModelConnectionScope = previous.ModelConnectionScope,
+            MaxPromptTokens = previous.MaxPromptTokens
+        };
+        var current = previous with
+        {
+            PlacementUid = "current-placement",
+            PlacementGeneration = 3,
+            EnvironmentCurrentFencingGeneration = 6,
+            EnvironmentProviderFencingGeneration = 6
+        };
+
+        RuntimeRegistrationOwner.RequireOrdinaryReplacement(previous, owner, current);
     }
 
     [Fact]
@@ -99,6 +204,7 @@ public sealed class RuntimeRunStartOrchestrationTests
         clock.Advance(TimeSpan.FromSeconds(2));
         var actor = new RuntimeActorAuthorization(credential, "tenant");
         var continuation = new RuntimeRunStartCleanupContinuation(
+            null!,
             null!,
             null!,
             new RuntimeRunStartOptions(new Uri("https://environment.test/"), new Uri("https://broker.test/")),

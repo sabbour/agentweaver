@@ -586,6 +586,37 @@ Lost Host state still requires the exact replacement proof.
 The pure checks cover request, receipt, actor, authority, attempt identity, explicit loss proof, schema metadata, and controlled Kubernetes routing behavior.
 They do not prove PostgreSQL execution, native TLS, actual remount contents, Cilium traffic enforcement, or a deployed resume.
 
+## Ordinary root Host replacement
+
+Ordinary Host replacement is separate from suspend/resume. The caller uses the
+run-bound `replaceRuntimeHost` and `readRuntimeReplacement` operations for the
+accepted root. The request names the expected runtime instance, registration
+revision, execution fence, accepted-selection hash, and one stable operation
+ID.
+
+The Orchestrator saves the operation and cleanup obligations before provider
+effects. It rechecks current authority and blocks competing work only while
+that replacement is active. Environment retires the exact prior placement and
+provisions a new Pod and lease on the same workspace volume. Broker bootstraps
+the new runtime; Environment activates that exact registration. The operation
+keeps the accepted selection, execution fence, workspace volume, and workspace
+generations unchanged. Uncertain provider outcomes block a competing
+replacement until the owner reconciles the recorded attempt.
+
+The new Host must consume the exact acknowledged SDK cache. The replacement
+receipt includes the full reconstruction interval, including SDK resume; the
+interval must show no new journal event, native model send, or tool effect.
+Orchestrator promotes readiness only after the current Host, registration,
+placement, and recovery evidence match. It accepts an exact prior root request
+on the new registration only when the durable completion and completed
+replacement lineage both validate. The replay does not send another model
+request.
+
+The optional native CLI `native-material-recovery` journey uses these
+operations. It validates source evidence but does not prove a deployed
+replacement. See the [testing guide](../guide/testing.md)
+for its scope and remaining checks.
+
 ## Workspace, network, and readiness
 
 Provisioning accepts a Workspace volume ID and exact resource/data generations,

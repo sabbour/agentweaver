@@ -130,6 +130,14 @@ replacement. Release uses the saved provider binding and exact UID
 preconditions to retain or delete the intended resource. An attached or bound
 volume cannot be released as if unused.
 
+Replacing a coordinator root Host does not replace its workspace volume. The
+owner retires the saved Sandbox placement, then provisions a new Pod and lease
+against the same workspace volume and its unchanged resource/data generations.
+Environment rechecks the owner and selected egress binding before it reports
+the new placement. Orchestrator keeps the operation pending when retirement or
+provisioning is uncertain; a retry uses the saved operation identity instead
+of creating a second placement.
+
 BuildTest commands use a separate stable operation tied to Core's accepted
 checkpoint. Version 2 prepares the saved repository seed and uses a separate
 read-only collector. Native output remains retained until the verified Events

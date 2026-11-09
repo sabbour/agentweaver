@@ -623,6 +623,15 @@ configuration revision.
 These operations are browser-only and are excluded from MCP discovery. The
 separate project-writer bearer is never exposed as an MCP tool argument.
 
+When a native casting request completes, its generation result can include
+`nativeCompletion`. This receipt binds the request to its runtime registration,
+accepted selection, execution fence, native turn, and typed material
+acknowledgments. An exact retry after verified Host replacement can also
+include `nativeReplay`; it identifies the previous and current registrations
+and proves that the retry produced no new native event. These fields do not
+replace the public turn-text read route below. SDK cache contents remain
+private.
+
 Create requests carry `expectedConfigurationRevision` and either `draft`,
 `templateId`, or `roleIds`. Scenario and manual requests may also include
 `universe`, one of the names returned by the project-scoped universe route;
@@ -1096,6 +1105,8 @@ accepting owner state does not start an automatic scheduler.
 | POST | `/root` | Accept root owner state. | Yes |
 | GET | `/status` | Read owner run status. | Yes |
 | POST | `/recovery` | Recover owner execution state. | Yes |
+| POST | `/sessions/{sessionId}/runtime-replacements` | Replace the coordinator root Host using a completed native-turn receipt. | Yes |
+| GET | `/sessions/{sessionId}/runtime-replacements/{operationId}` | Read the saved Host-replacement operation. | Yes |
 | POST | `/sessions/{sessionId}/decisions/outcome` | Propose an outcome decision. | Yes |
 | POST | `/sessions/{sessionId}/actions/propose_outcome_spec` | Propose outcome specification. | Yes |
 | POST | `/sessions/{sessionId}/actions/select_workflow` | Select workflow. | Yes |
@@ -1135,6 +1146,21 @@ accepting owner state does not start an automatic scheduler.
 | POST | `/sessions/{sessionId}/build-test/commands/{checkpointId}/{stepId}/workspace-capture/verify` | Verify produced Workspace capture. | No |
 | POST | `/sessions/{sessionId}/suspend` | Request fenced suspend. | No |
 | POST | `/sessions/{sessionId}/resume` | Request retained-Workspace resume. | No |
+
+`POST /api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-replacements`
+requires the current coordinator-root authority and a `RuntimeReplacementRequest`
+with `contractVersion`, a stable `operationId`, and the expected runtime instance,
+registration revision, execution fence, and accepted-selection hash. The owner
+checks those values against current state before it replaces the Host. Reuse the
+same operation ID and body to retry an uncertain request.
+
+The response and matching `GET` route return a `RuntimeReplacementSummary`.
+`pending` and `cleanup_pending` are not completion. Read the same operation until
+it reaches a terminal state; do not start a second replacement while the first
+operation is unresolved. A ready summary includes the old and new runtime
+registrations, Pod identities, retained workspace generations, cache receipt,
+and reconstruction evidence. See [runtime contracts](./contracts.md#orchestrator-coordination-owner)
+for the receipt rules.
 
 Active coordinator sessions also receive `executionRecovery`, a read-only view
 of the latest bound MAF checkpoint. A failed or indeterminate run still receives

@@ -700,6 +700,27 @@ AgentHost is ready. This lifecycle check does not send a model turn. Do not
 count a controlled test, an HTTP request to an owner route, or a successful
 dry run as native API acceptance or proof of a running AgentHost.
 
+The `native-material-recovery` journey uses the Projects P1 setup receipt and
+the server-owned run selection. It sends one read-only casting request to the
+approved Bring Your Own Key (BYOK) model. The runner reads the stored user and
+assistant turn text and checks each text hash against its completion receipt.
+It then uses the ordinary Host replacement operation and checks that the new
+Host restores the same saved SDK cache. The replacement receipt must show no
+native send or tool effect. The runner sends the same casting request again
+and checks the Orchestrator replay receipt.
+
+This journey does not test authority revocation, stale-binding denial,
+changed-payload retry, optional-cache absence or expiry, or missing or expired
+required turn material. A passed session-material row does not imply that
+these separate checks or full API acceptance passed.
+
+This journey performs one model request and replaces the Host. Use it only on
+an approved non-production target, with an approved model and spend limit and
+explicit approval for Host replacement. The runner reports session-material
+acceptance only when the bound turn, material readback, replacement, replay,
+and project/run cleanup receipts all validate. This result does not replace the
+separate archive and operating-system checks, or other required P1 probes.
+
 ## Test API, UI, and retained MCP compatibility code
 
 Run the controlled local adapter tests with:

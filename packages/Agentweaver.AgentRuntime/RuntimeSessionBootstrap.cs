@@ -24,7 +24,8 @@ public sealed class RuntimeSessionBootstrap(
     Func<RuntimeRegistration, CancellationToken, Task>? requireReadiness = null,
     RuntimeMcpServerEndpoint? capturedMcpServer = null,
     RuntimeHostedModelReasoningCatalogHttpClient? hostedReasoningCatalog = null,
-    ILogger? logger = null)
+    ILogger? logger = null,
+    RuntimeHostReplacementRecovery? replacementRecovery = null)
 {
     /// <summary>
     /// Creates a session only while owner registration, credentials, model binding, skills,
@@ -59,6 +60,7 @@ public sealed class RuntimeSessionBootstrap(
         var registration = await owner.ReadCurrentAsync(
             bootstrap.RuntimeInstanceId, actor, cancellationToken);
         RequireCurrent(registration, actor, timeProvider);
+        replacementRecovery?.ValidateFor(registration);
         if (resumeBootstrap is not null && resumeBootstrap.Registration != registration)
             throw new RuntimeAuthorizationException("runtime_resume_registration_stale");
         if (expectedImage is { } image)
@@ -212,7 +214,7 @@ public sealed class RuntimeSessionBootstrap(
             await RequireSourceAuthorityAsync(cancellationToken);
             authorized = new AuthorizedRuntimeSession(registration, source.Receipt, source.Credential,
                 session, modelCredential, owner, broker, actor, timeProvider, actions, requireReadiness,
-                RequireSkillContentCurrentAsync);
+                RequireSkillContentCurrentAsync, replacementRecovery);
             return authorized;
         }
         catch (Exception failure)

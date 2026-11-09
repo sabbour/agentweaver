@@ -327,7 +327,27 @@ The Broker integration checks current role revocation, exact run registration,
 and persisted recovery context. Recovered logical run state does not prove
 that physical SDK effects were replayed or that an SDK process is ready.
 
-## 8. Build the Environment service
+## 8. Test ordinary root Host replacement
+
+Run the focused owner and runtime tests:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj `
+  --filter "FullyQualifiedName~CoordinatorRootAgentHostOwnerIntegrationTests|FullyQualifiedName~RuntimeRunStartOrchestrationTests|FullyQualifiedName~RuntimeAgentHostTests" `
+  --configuration Release --no-restore --verbosity quiet
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj `
+  --filter FullyQualifiedName~EnvironmentRuntimeRunStartManagerTests `
+  --configuration Release --no-restore --verbosity quiet
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj `
+  --filter FullyQualifiedName~RuntimeReplacementComparisonTests `
+  --configuration Release --no-restore --verbosity quiet
+```
+
+The Broker integration tests use disposable PostgreSQL. These tests check the
+ordinary owner replacement path and its runtime evidence. They do not prove a
+live Host replacement or API acceptance run.
+
+## 9. Build the Environment service
 
 Build the service and its referenced provider projects with:
 

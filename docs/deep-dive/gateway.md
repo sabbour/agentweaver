@@ -76,6 +76,11 @@ Gateway preserves the owner's response status and body. In particular,
 resource, model turn, or workflow finished. Gateway has no domain database and
 does not reconstruct current state from a cached response.
 
+Coordinator root Host replacement is an Orchestrator-owned operation. Gateway
+forwards its saved status and receipt; callers must read the same operation
+until it is terminal instead of treating an accepted or pending response as
+completion.
+
 ### Follow a catalog request
 
 Before calling a product route, obtain a valid Broker bearer and use a catalog

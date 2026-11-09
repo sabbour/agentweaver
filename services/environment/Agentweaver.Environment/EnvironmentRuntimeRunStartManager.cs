@@ -226,7 +226,159 @@ internal sealed class EnvironmentRuntimeRunStartManager(
             currentPlacement.LeaseRevision,
             currentPlacement.CurrentFencingGeneration,
             currentPlacement.ProviderFencingGeneration,
-            currentPlacement.LeaseExpiresAt).Validate();
+            currentPlacement.LeaseExpiresAt)
+        {
+            PodUid = endpoint.PodUid
+        }.Validate();
+    }
+
+    public async Task<RuntimeRunStartPlacementReceipt> ProvisionReplacementAsync(
+        RuntimeReplacementPlacementRequest request,
+        RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken)
+    {
+        request.Validate();
+        if (!actor.Bearer.IsUsable())
+            throw new RuntimeAuthorizationException("runtime_start_actor_expired");
+        var owner = request.Owner;
+        var previous = request.PreviousPlacement;
+        var caller = new CurrentCallerRequest(actor.Bearer.GetValue(), actor.TenantSelector);
+        var lifecycleResult = await lifecycle.RegisterCoordinatorRootAsync(
+            actor, owner, cancellationToken).ConfigureAwait(false);
+        var fence = lifecycleResult.Snapshot.Fence;
+        if (fence.Owner.EnvironmentId != RuntimeRunStartKeys.EnvironmentId(owner))
+            throw new RuntimeAuthorizationException("runtime_start_environment_binding_invalid");
+
+        async Task RequireCurrentAsync(CancellationToken token)
+        {
+            if (!actor.Bearer.IsUsable())
+                throw new RuntimeAuthorizationException("runtime_start_actor_expired");
+            var current = await ownerContexts.ReadAsync(
+                actor, owner.ProjectId, owner.RunId, owner.SessionId, token).ConfigureAwait(false);
+            if (current != owner)
+                throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
+            var selection = await egress.GetAuthorizedRunEnvironmentSelectionAsync(
+                caller, fence.Owner, token).ConfigureAwait(false);
+            if (selection.Authorization.TenantId != owner.TenantId ||
+                selection.Authorization.Issuer != owner.ActorIssuer ||
+                selection.Authorization.ActorId != owner.ActorId ||
+                selection.RunSelection.ProjectRevision != owner.ProjectRevision ||
+                selection.RunSelection.ProjectConfigurationRevision != owner.ProjectConfigurationRevision ||
+                selection.RunSelection.PlatformRuntimeRevision != owner.PlatformRuntimeRevision ||
+                selection.RunSelection.ContextRevision != owner.ContextRevision)
+                throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
+            await lifecycleStore.RequireActiveAsync(fence, token).ConfigureAwait(false);
+        }
+
+        var egressResult = await egress.ApplyCoordinatorFirstStartAndVerifyAsync(
+            caller,
+            owner,
+            new ApplyEnvironmentEgressRequest(
+                fence, 1, 0, RuntimeRunStartKeys.IdempotencyKey(owner) + ":network"),
+            cancellationToken,
+            RequireCurrentAsync).ConfigureAwait(false);
+        if (!egressResult.ReadyForDispatch ||
+            egressResult.Binding?.AppliedIntentGeneration != previous.NetworkPolicyGeneration)
+            throw new RuntimeAuthorizationException("runtime_start_network_unavailable");
+
+        var currentVolume = await lifecycleStore.GetWorkspaceVolumeAsync(
+            fence, previous.WorkspaceVolumeId, cancellationToken).ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_start_workspace_unavailable");
+        var expectedSpec = new WorkspaceVolumeSpec(
+            previous.WorkspaceVolumeId,
+            owner.ProjectId,
+            new WorkspaceVolumeOwner(WorkspaceVolumeOwnerKind.Run, owner.RunId),
+            fence.Owner.EnvironmentId,
+            WorkspaceVolumeBindingMode.Environment,
+            WorkspaceVolumeAccessMode.ReadWriteMany,
+            FirstStartCapacityGiB,
+            storageOptions.StorageClassName,
+            WorkspaceVolumeConsistency.Strict,
+            WorkspaceVolumeReclaimPolicy.Retain,
+            WorkspaceVolumeOwnerDeletionPolicy.Retain,
+            ImmutableArray<string>.Empty);
+        if (currentVolume.Phase is not (EnvironmentWorkspaceVolumeState.Bound or
+                EnvironmentWorkspaceVolumeState.Attached) ||
+            currentVolume.Resource is null ||
+            currentVolume.ResourceGeneration != previous.WorkspaceResourceGeneration ||
+            currentVolume.DataGeneration != previous.WorkspaceDataGeneration ||
+            !HasFirstStartWorkspaceSpec(currentVolume.Specification, expectedSpec))
+            throw new RuntimeAuthorizationException("runtime_start_workspace_stale");
+
+        var sandbox = await sandboxes.ProvisionCoordinatorReplacementAsync(
+            caller,
+            request,
+            new SandboxProvisionApiRequest(
+                previous.WorkspaceVolumeId,
+                previous.WorkspaceResourceGeneration,
+                previous.WorkspaceDataGeneration,
+                "/workspace",
+                ReadOnly: false,
+                previous.NetworkPolicyGeneration,
+                RuntimeRunStartKeys.SandboxIdempotencyKey(owner, request.BootstrapOperationId)),
+            RequireCurrentAsync,
+            cancellationToken).ConfigureAwait(false);
+        if (sandbox.Resource is null || sandbox.Resource.Seam != ProviderSeam.Sandbox ||
+            sandbox.State != SandboxLeaseState.Active)
+            throw new RuntimeAuthorizationException("runtime_start_sandbox_unavailable");
+        var placement = await sandboxes.GetCurrentRunBoundPlacementAsync(
+                caller, owner.ProjectId, owner.RunId, fence.Owner.EnvironmentId, cancellationToken,
+                includeRuntimeReadiness: true,
+                includeRuntimeEndpoint: true)
+                .ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_start_placement_unavailable");
+        var endpoint = placement.RuntimeReadiness?.Observation.RuntimeEndpoint?.Validate();
+        if (!IsUsableFirstStartPlacement(
+                placement, owner, sandbox.Resource, previous.NetworkPolicyGeneration,
+                timeProvider.GetUtcNow()) ||
+            endpoint is null)
+            throw new RuntimeAuthorizationException("runtime_start_placement_stale");
+        await endpointVerifier.VerifyLiveAsync(endpoint, cancellationToken).ConfigureAwait(false);
+        await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+        var verifiedVolume = await lifecycleStore.GetWorkspaceVolumeAsync(
+            fence, previous.WorkspaceVolumeId, cancellationToken).ConfigureAwait(false);
+        var currentPlacement = await sandboxes.GetCurrentRunBoundPlacementAsync(
+                caller, owner.ProjectId, owner.RunId, fence.Owner.EnvironmentId, cancellationToken,
+                includeRuntimeReadiness: true,
+                includeRuntimeEndpoint: true).ConfigureAwait(false);
+        if (verifiedVolume is null ||
+            verifiedVolume.Phase != EnvironmentWorkspaceVolumeState.Attached ||
+            verifiedVolume.ResourceGeneration != previous.WorkspaceResourceGeneration ||
+            verifiedVolume.DataGeneration != previous.WorkspaceDataGeneration ||
+            currentPlacement is null ||
+            !IsUsableFirstStartPlacement(
+                currentPlacement, owner, sandbox.Resource, previous.NetworkPolicyGeneration,
+                timeProvider.GetUtcNow()) ||
+            currentPlacement.LifecycleGeneration != placement.LifecycleGeneration ||
+            currentPlacement.LeaseRevision != placement.LeaseRevision ||
+            currentPlacement.Resource != placement.Resource ||
+            currentPlacement.Endpoint != placement.Endpoint ||
+            currentPlacement.Placement != placement.Placement ||
+            currentPlacement.CurrentFencingGeneration != placement.CurrentFencingGeneration ||
+            currentPlacement.ProviderFencingGeneration != placement.ProviderFencingGeneration ||
+            currentPlacement.LeaseExpiresAt != placement.LeaseExpiresAt ||
+            currentPlacement.RuntimeReadiness?.Observation.RuntimeEndpoint != endpoint)
+            throw new RuntimeAuthorizationException("runtime_start_placement_stale");
+
+        return new RuntimeRunStartPlacementReceipt(
+            1,
+            fence.Owner.EnvironmentId,
+            profiles.DefaultSourceProfileId,
+            previous.WorkspaceVolumeId,
+            RuntimeRunStartKeys.SandboxIdempotencyKey(owner, request.BootstrapOperationId),
+            previous.WorkspaceResourceGeneration,
+            previous.WorkspaceDataGeneration,
+            previous.NetworkPolicyGeneration,
+            sandbox.OperationId,
+            currentPlacement.Resource,
+            currentPlacement.LifecycleGeneration,
+            currentPlacement.LeaseRevision,
+            currentPlacement.CurrentFencingGeneration,
+            currentPlacement.ProviderFencingGeneration,
+            currentPlacement.LeaseExpiresAt)
+        {
+            PodUid = endpoint.PodUid
+        }.Validate();
     }
 
     public async Task<RuntimeRunStartCleanupReceipt> CleanupAsync(
@@ -358,6 +510,48 @@ internal sealed class EnvironmentRuntimeRunStartManager(
             placement.SandboxIdempotencyKey,
             result.State == SandboxLeaseState.Released ? "released" : "pending")
             .ValidateFor(request);
+    }
+
+    public async Task<RuntimeRunStartRetirementReceipt> RetireReplacementAsync(
+        RuntimeReplacementRetirementRequest request,
+        RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken)
+    {
+        request.Validate();
+        if (!actor.Bearer.IsUsable())
+            throw new RuntimeAuthorizationException("runtime_start_actor_expired");
+        var retirement = request.Retirement;
+        var caller = new CurrentCallerRequest(actor.Bearer.GetValue(), actor.TenantSelector);
+        async Task RequireCurrentAsync(CancellationToken token)
+        {
+            if (!actor.Bearer.IsUsable())
+                throw new RuntimeAuthorizationException("runtime_start_actor_expired");
+            var current = await ownerContexts.ReadAsync(
+                actor, retirement.Owner.ProjectId, retirement.Owner.RunId,
+                retirement.Owner.SessionId, token).ConfigureAwait(false);
+            if (current != retirement.Owner)
+                throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
+        }
+
+        await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+        var result = await sandboxes.RetireCoordinatorReplacementAsync(
+            caller, request, RequireCurrentAsync, cancellationToken).ConfigureAwait(false);
+        if (result.OperationId != retirement.Placement.SandboxOperationId ||
+            result.ResourceGeneration != retirement.Placement.SandboxResource.Generation ||
+            result.ProviderFencingGeneration != retirement.Placement.ProviderFencingGeneration ||
+            result.Resource != retirement.Placement.SandboxResource)
+            throw new RuntimeAuthorizationException("runtime_start_retirement_receipt_invalid");
+        return new RuntimeRunStartRetirementReceipt(
+            1,
+            retirement.BootstrapOperationId,
+            retirement.RuntimeInstanceId,
+            retirement.RegistrationRevision,
+            result.OperationId,
+            result.ResourceGeneration,
+            result.ProviderFencingGeneration,
+            retirement.Placement.SandboxIdempotencyKey,
+            result.State == SandboxLeaseState.Released ? "released" : "pending")
+            .ValidateFor(retirement);
     }
 
     private static bool HasFirstStartWorkspaceSpec(JsonElement value, WorkspaceVolumeSpec expected)

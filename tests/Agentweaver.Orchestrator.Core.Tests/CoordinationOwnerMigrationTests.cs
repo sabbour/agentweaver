@@ -60,6 +60,10 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(39)]
     [InlineData(40)]
     [InlineData(41)]
+    [InlineData(42)]
+    [InlineData(43)]
+    [InlineData(44)]
+    [InlineData(45)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         // A partial history must fail verification until every registered resource is installed.
@@ -255,7 +259,9 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                     receipt_kind IN (
                         'numeric-limit-denial',
                         'replacement-comparison',
-                        'numeric-limit-native-no-send'));
+                        'numeric-limit-native-no-send',
+                        'native-root-turn-completion',
+                        'native-root-turn-replay'));
             """, connection))
             await restore.ExecuteNonQueryAsync();
         await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
@@ -265,12 +271,14 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         {
             await InsertEvidenceAsync(connection, "numeric-limit-native-no-send",
                 companionAttempt, new string('c', 64));
+            await InsertEvidenceAsync(connection, "native-root-turn-completion",
+                Guid.NewGuid(), new string('d', 64));
             var unknownKind = await Assert.ThrowsAsync<PostgresException>(() =>
                 InsertEvidenceAsync(connection, "unexpected-evidence-kind",
                     Guid.NewGuid(), new string('d', 64)));
             Assert.Equal(PostgresErrorCodes.CheckViolation, unknownKind.SqlState);
         }
-        Assert.Equal(3, (await ReadEvidenceRowsAsync()).Length);
+        Assert.Equal(4, (await ReadEvidenceRowsAsync()).Length);
         await AssertAppendOnlyAsync($"""
             UPDATE "{_schema}".maf_runtime_evidence_receipts
             SET payload_hash = repeat('e', 64)
@@ -513,7 +521,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                       AND created_at = '2026-10-20T00:00:00Z'),
                 -- A pre-033 owner rejects repository identity and later Core migrations.
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations
-                    WHERE version NOT IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32)),
+                    WHERE version NOT IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,43,44,45)),
                 to_regclass(@obsolete) IS NULL
             """, connection);
         check.Parameters.AddWithValue("obsolete", $"{_schema}.uq_chief_of_staff_priority_links_target");
@@ -891,7 +899,10 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (39, "039_runtime_execution_evidence.sql"),
             (40, "040_p1_run_request_provenance.sql"),
             (41, "041_runtime_numeric_native_no_send.sql"),
-            (42, "042_runtime_run_start.sql")
+            (42, "042_runtime_run_start.sql"),
+            (43, "043_runtime_root_turn_completion.sql"),
+            (44, "044_runtime_replacement_operations.sql"),
+            (45, "045_runtime_root_turn_replay.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""
@@ -1019,7 +1030,12 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                  WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
                    AND conname = 'maf_runtime_evidence_receipts_receipt_kind_check'),
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 42),
-                to_regclass(@runtimeRunStartIntents) IS NOT NULL
+                to_regclass(@runtimeRunStartIntents) IS NOT NULL,
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 43),
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 44),
+                to_regclass(@runtimeReplacementOperations) IS NOT NULL,
+                to_regclass(@runtimeReplacementActiveIndex) IS NOT NULL,
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 45)
             """, connection);
         command.Parameters.AddWithValue("projectRunRequests", $"{_schema}.project_run_requests");
         command.Parameters.AddWithValue("projectRunCancellations", $"{_schema}.project_run_cancellations");
@@ -1053,6 +1069,10 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             $"{_schema}.p1_invocation_bindings");
         command.Parameters.AddWithValue("runtimeRunStartIntents",
             $"{_schema}.runtime_run_start_intents");
+        command.Parameters.AddWithValue("runtimeReplacementOperations",
+            $"{_schema}.runtime_replacement_operations");
+        command.Parameters.AddWithValue("runtimeReplacementActiveIndex",
+            $"{_schema}.uq_runtime_replacement_one_active");
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(1L, reader.GetInt64(0));
@@ -1076,7 +1096,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
         // The default history skips reserved versions 017 and 034.
         Assert.Equal(
-            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42]),
+            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45]),
             reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
@@ -1111,8 +1131,15 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.True(reader.GetBoolean(39));
         Assert.Equal(1L, reader.GetInt64(40));
         Assert.Contains("numeric-limit-native-no-send", reader.GetString(41));
+        Assert.Contains("native-root-turn-completion", reader.GetString(41));
         Assert.Equal(1L, reader.GetInt64(42));
         Assert.True(reader.GetBoolean(43));
+        Assert.Equal(1L, reader.GetInt64(44));
+        Assert.Equal(1L, reader.GetInt64(45));
+        Assert.True(reader.GetBoolean(46));
+        Assert.True(reader.GetBoolean(47));
+        Assert.Contains("native-root-turn-replay", reader.GetString(41));
+        Assert.Equal(1L, reader.GetInt64(48));
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version, bool includePreviouslyUnregistered = true)

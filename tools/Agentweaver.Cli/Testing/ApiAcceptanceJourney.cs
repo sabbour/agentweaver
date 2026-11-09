@@ -20,7 +20,12 @@ internal sealed record AcceptanceFixture(
     JsonObject OwnerAssignment,
     JsonObject OrchestratorAssignment,
     JsonObject Selection,
-    JsonObject? GateReceipt);
+    JsonObject? GateReceipt)
+{
+    public string? P1SetupInvocationId { get; init; }
+    public string? NativeMaterialPrompt { get; init; }
+    public JsonObject? RuntimeStartup { get; init; }
+}
 
 internal static class ApiAcceptanceJourney
 {
@@ -95,12 +100,20 @@ internal static class ApiAcceptanceJourney
                 case "session-history-metric":
                     await RunSessionHistoryMetricAsync(api, fixture, steps, observations, ct).ConfigureAwait(false);
                     break;
+                case "native-material-recovery":
+                    await ApiAcceptanceNativeMaterial.RunAsync(
+                        api, manifest, fixture, snapshot.Run, snapshot.Session, snapshot.Decisions,
+                        sourceEvidence, observations, steps, ct)
+                        .ConfigureAwait(false);
+                    break;
                 default:
                     throw new AcceptanceBlockedException("The selected P1 API journey is unsupported.");
             }
 
             bool missingDeniedActor = denied is null;
-            return (missingDeniedActor && manifest.Journey != "session-history-metric" ? "blocked" : "passed", null);
+            return (missingDeniedActor && manifest.Journey is not ("session-history-metric" or "native-material-recovery")
+                ? "blocked"
+                : "passed", null);
         }
         catch (AcceptanceBlockedException error)
         {
@@ -771,6 +784,13 @@ internal static class ApiAcceptanceJourney
             required.UnionWith([
                 "readSessionTree", "registerChild", "advanceTurnBoundary", "completeTurn",
                 "archiveChild", "detachSession", "readProjectMetrics",
+            ]);
+        }
+        else if (journey == "native-material-recovery")
+        {
+            required.UnionWith([
+                "formulateCastingProposal", "readSessionTurnContent", "readSessionTree",
+                "replaceRuntimeHost", "readRuntimeReplacement",
             ]);
         }
         else

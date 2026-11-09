@@ -434,7 +434,7 @@ internal sealed class RuntimeRegistrationStore
     /// <summary>
     /// Derives the stable replacement ID from the released runtime and resume operation IDs.
     /// </summary>
-    private static Guid CreateReplacementId(Guid releasedRuntimeInstanceId, Guid operationId)
+    internal static Guid CreateReplacementId(Guid releasedRuntimeInstanceId, Guid operationId)
     {
         var input = Encoding.UTF8.GetBytes(
             $"agentweaver.runtime-registration.resume.v1:{releasedRuntimeInstanceId:D}:{operationId:D}");

@@ -13,6 +13,11 @@ public sealed record RuntimeSessionRefreshReceipt(
     RuntimeGrantReceipt SourceGrant,
     DateTimeOffset EffectiveSessionExpiresAt);
 
+internal sealed record RuntimeNativeCacheCommit(
+    SessionMaterialAcknowledgment Acknowledgment,
+    string Cursor,
+    RuntimeNativeEmptyRangeEvidence Range);
+
 /// <summary>
 /// Runs the Copilot session only while its registration, source grant, model credential,
 /// placement readiness, action authority, and accepted skill projection remain current.
@@ -30,10 +35,14 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
     private readonly RuntimeActionHttpClient? _actions;
     private readonly Func<RuntimeRegistration, CancellationToken, Task>? _requireReadiness;
     private readonly Func<CancellationToken, Task>? _requireSkillContent;
+    private readonly RuntimeHostReplacementRecovery? _replacementRecovery;
     private readonly SemaphoreSlim _executionGate = new(1, 1);
     private readonly SemaphoreSlim _authorityGate = new(1, 1);
     private RuntimeSessionRefreshReceipt? _refreshReplay;
     private RuntimeNativeTurnRecordedReceipt? _lastNativeTurn;
+    internal RuntimeRootTurnCompletionReceipt? LastRootTurnCompletion { get; private set; }
+    internal RuntimeRootTurnReplayEvidence? LastRootTurnReplay { get; private set; }
+    internal RuntimeNativeEmptyRangeEvidence? ReplacementReconstructionInterval { get; private set; }
     private RuntimeHostSuspendReceipt? _suspendReceipt;
     private RuntimeHostSuspendRequest? _suspendRequest;
     private int _suspended;
@@ -46,7 +55,8 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         RuntimeBrokerCredentialClient broker, RuntimeActorAuthorization actor, TimeProvider timeProvider,
         RuntimeActionHttpClient? actions = null,
         Func<RuntimeRegistration, CancellationToken, Task>? requireReadiness = null,
-        Func<CancellationToken, Task>? requireSkillContent = null)
+        Func<CancellationToken, Task>? requireSkillContent = null,
+        RuntimeHostReplacementRecovery? replacementRecovery = null)
     {
         Registration = registration;
         _source = new(sourceGrant, sourceCredential, isReplay: false);
@@ -60,6 +70,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         _actions = actions;
         _requireReadiness = requireReadiness;
         _requireSkillContent = requireSkillContent;
+        _replacementRecovery = replacementRecovery?.ValidateFor(registration);
     }
 
     /// <summary>The immutable runtime registration pinned when the session was configured.</summary>
@@ -80,6 +91,28 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
     internal SessionMaterialAcknowledgment? ConsumedNativeCacheAcknowledgment =>
         _session.ConsumedNativeCacheAcknowledgment;
     internal RuntimeSessionJournalEvidence? JournalEvidence => _session.JournalEvidence;
+
+    internal async Task VerifyReplacementReconstructionNoSendAsync(CancellationToken cancellationToken)
+    {
+        if (_replacementRecovery is not { } replacement)
+            return;
+        var recovery = replacement.ValidateFor(Registration);
+        var cache = _session.ConsumedNativeCacheAcknowledgment;
+        _session.CreationCallSequence.ValidateFor(Registration, requireZero: true);
+        if (_session.RecoveryMode != RuntimeSessionRecoveryMode.NativeCache ||
+            cache is null ||
+            !MatchesReplacementMaterial(
+                cache, recovery.Completion.CacheMaterial, SessionMaterialKind.SdkCache))
+            throw new RuntimeAuthorizationException("runtime_replacement_cache_recovery_invalid");
+        ReplacementReconstructionInterval = await _session.RequireNoNativeEventsSinceAsync(
+            recovery.NativeCacheBaselineCursor, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal RuntimeHostNativeCallSequenceEvidence? CaptureReplacementCallSequence() =>
+        ReplacementReconstructionInterval is null
+            ? null
+            : _session.CaptureNativeCallSequence(Registration, _session.CreationCallSequenceStart)
+                .ValidateFor(Registration, requireZero: true);
 
     /// <summary>
     /// Sends one bounded user turn after recording user and assistant content, rechecking owner
@@ -103,6 +136,8 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         {
             RequireTurnAdmission();
             _lastNativeTurn = null;
+            LastRootTurnCompletion = null;
+            LastRootTurnReplay = null;
             var turnId = userEventId ?? Guid.NewGuid();
             if (userEventId is { } recordedId)
             {
@@ -115,10 +150,10 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
                     return recorded;
             }
             RequireSupportedCostTurnAffinity();
-            await CommitTurnContentAsync(material, turnId, "user", prompt, cancellationToken)
-                .ConfigureAwait(false);
             var coordinatorRoot = Registration.Binding.AgentId == RuntimeActionContract.CoordinatorRootStepId &&
                 Registration.Binding.WorkflowStepId is null;
+            var userMaterial = await CommitTurnContentAsync(material, turnId, "user", prompt, cancellationToken)
+                .ConfigureAwait(false);
             RuntimeNumericLimitSourceSnapshot? numericLimitSource = null;
             string? nativeCursor = null;
             RuntimeActionRequest? rootModelAction = null;
@@ -158,15 +193,52 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
                 throw;
             }
             // Preserve the A2A caller's read-only restriction through the authorized runtime wrapper.
-            var answer = await _session.SendTurnAsync(
-                prompt, cancellationToken, userEventId, readOnlyToolsOnly).ConfigureAwait(false);
-            await CommitTurnContentAsync(
+            RuntimeCopilotNativeTurnResult? nativeTurn = null;
+            string answer;
+            if (coordinatorRoot && userEventId is not null)
+            {
+                nativeTurn = await _session.SendTurnWithNativeReceiptAsync(
+                    prompt, cancellationToken, userEventId, readOnlyToolsOnly).ConfigureAwait(false);
+                answer = nativeTurn.Response;
+            }
+            else
+                answer = await _session.SendTurnAsync(
+                    prompt, cancellationToken, userEventId, readOnlyToolsOnly).ConfigureAwait(false);
+            var assistantMaterial = await CommitTurnContentAsync(
                 material,
                 userEventId is { } messageId ? CreateA2AAssistantEventId(messageId) : Guid.NewGuid(),
                 "assistant",
                 answer,
                 cancellationToken).ConfigureAwait(false);
-            await CommitNativeCacheAsync(material, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+            if (nativeTurn is not null)
+            {
+                var cache = await CommitNativeCacheWithBaselineAsync(
+                    material, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+                LastRootTurnCompletion = new RuntimeRootTurnCompletionReceipt(
+                    1,
+                    turnId,
+                    RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(prompt)),
+                    Registration,
+                    Facts,
+                    SourceGrant,
+                    nativeTurn.Receipt,
+                    nativeTurn.CursorBeforeHash,
+                    nativeTurn.CursorAfterHash,
+                    nativeTurn.EventIntervalHash,
+                    nativeTurn.EventCount,
+                    userMaterial,
+                    assistantMaterial,
+                    cache.Acknowledgment,
+                    nativeTurn.SuccessfulToolCount,
+                    nativeTurn.FailedToolCount,
+                    cache.Cursor,
+                    cache.Range.BeforeCursorHash,
+                    cache.Range.AfterCursorHash,
+                    cache.Range.ObservedEventCount,
+                    cache.Range.IsComplete).Validate();
+            }
+            else
+                await CommitNativeCacheAsync(material, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
             return answer;
         }
         finally
@@ -181,24 +253,116 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         string prompt,
         CancellationToken cancellationToken)
     {
-        var user = await material.ReadOptionalTurnAsync(
-            Registration, Facts, messageId, cancellationToken).ConfigureAwait(false);
-        var assistant = await material.ReadOptionalTurnAsync(
-            Registration, Facts, CreateA2AAssistantEventId(messageId), cancellationToken)
-            .ConfigureAwait(false);
-        await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+        RuntimeNativeCallSequenceSnapshot callSequenceBefore = default;
+        string cursor = string.Empty;
+        SessionMaterialReadResult? user;
+        SessionMaterialReadResult? assistant;
+        var replacement = _replacementRecovery;
+        if (replacement is not null)
+        {
+            replacement.ValidateFor(Registration);
+            if (replacement.Completion.RequestId != messageId)
+                return null;
+            callSequenceBefore = _session.CaptureNativeCallSequence();
+            cursor = await _session.CaptureNativeEventCursorAsync(cancellationToken).ConfigureAwait(false);
+            var identity = new SessionIdentity(
+                Registration.Binding.ProjectId, Registration.Binding.RunId, Registration.Binding.SessionId);
+            user = await material.ReadRecordedAsync(
+                identity, messageId, SessionMaterialKind.TurnContent, cancellationToken).ConfigureAwait(false);
+            assistant = await material.ReadRecordedAsync(
+                identity, CreateA2AAssistantEventId(messageId),
+                SessionMaterialKind.TurnContent, cancellationToken).ConfigureAwait(false);
+            RequireReplacementReplayMaterial(user, replacement.Completion.UserMaterial);
+            RequireReplacementReplayMaterial(assistant, replacement.Completion.AssistantMaterial);
+        }
+        else
+        {
+            user = await material.ReadOptionalTurnAsync(
+                Registration, Facts, messageId, cancellationToken).ConfigureAwait(false);
+            assistant = await material.ReadOptionalTurnAsync(
+                Registration, Facts, CreateA2AAssistantEventId(messageId), cancellationToken)
+                .ConfigureAwait(false);
+        }
         if (user is null && assistant is null)
             return null;
         if (user is null || assistant is null)
             throw new RuntimeAuthorizationException("runtime_turn_already_recorded");
+        if (replacement is null)
+        {
+            callSequenceBefore = _session.CaptureNativeCallSequence();
+            cursor = await _session.CaptureNativeEventCursorAsync(cancellationToken).ConfigureAwait(false);
+        }
+        await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+        if (replacement is not null)
+            await _session.FlushUsageAsync(cancellationToken).ConfigureAwait(false);
+        var noSend = await _session.RequireNoNativeEventsSinceAsync(cursor, cancellationToken)
+            .ConfigureAwait(false);
 
         var recordedPrompt = System.Text.Encoding.UTF8.GetString(user.Bytes);
-        if (!string.Equals(recordedPrompt, prompt, StringComparison.Ordinal))
+        if (!string.Equals(recordedPrompt, prompt, StringComparison.Ordinal) ||
+            replacement is not null &&
+            RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(prompt)) !=
+                replacement.Completion.PromptSha256)
             throw new RuntimeAuthorizationException("runtime_a2a_message_conflict");
         var recordedAnswer = System.Text.Encoding.UTF8.GetString(assistant.Bytes);
         if (string.IsNullOrWhiteSpace(recordedAnswer))
             throw new RuntimeAuthorizationException("runtime_turn_record_invalid");
+        if (replacement is not null)
+        {
+            var replayCallSequence = _session.CaptureNativeCallSequence(Registration, callSequenceBefore)
+                .ValidateFor(Registration);
+            var original = replacement.Completion;
+            var previous = replacement.PreviousRegistration;
+            LastRootTurnReplay = new RuntimeRootTurnReplayEvidence(
+                1,
+                messageId,
+                previous.RuntimeInstanceId,
+                previous.Revision,
+                RuntimeContractValidation.RegistrationHash(previous),
+                Registration.RuntimeInstanceId,
+                Registration.Revision,
+                RuntimeContractValidation.RegistrationHash(Registration),
+                Registration.Binding.ExecutionFence,
+                Registration.Binding.AcceptedSelectionHash,
+                original.PromptSha256,
+                original.OutputSha256,
+                original.UserMaterial,
+                original.AssistantMaterial,
+                new RuntimeHostNativeEmptyIntervalEvidence(
+                    noSend.BeforeCursorHash,
+                    noSend.AfterCursorHash,
+                    noSend.ObservedEventCount,
+                    noSend.IsComplete))
+            {
+                NativeCallSequence = replayCallSequence
+            }
+                .ValidateFor(original, previous, Registration);
+        }
         return recordedAnswer;
+    }
+
+    private static void RequireReplacementReplayMaterial(
+        SessionMaterialReadResult actual,
+        RuntimeMaterialAcknowledgmentEvidence expected)
+    {
+        if (!MatchesReplacementMaterial(actual.Material, expected, SessionMaterialKind.TurnContent))
+            throw new RuntimeAuthorizationException("runtime_replacement_replay_material_invalid");
+    }
+
+    private static bool MatchesReplacementMaterial(
+        SessionMaterialAcknowledgment actual,
+        RuntimeMaterialAcknowledgmentEvidence expected,
+        SessionMaterialKind kind)
+    {
+        var bindingHash = RuntimeContractValidation.Hash(
+            System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
+                actual.Reference,
+                new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
+        return actual.ContractVersion == 1 && actual.EventId == expected.EventId &&
+            actual.Position == expected.Position &&
+            actual.Reference.Material?.Kind == kind && expected.Kind == kind &&
+            actual.Reference.Material.Sha256 == expected.ContentSha256 &&
+            bindingHash == expected.BindingSha256;
     }
 
     private static Guid CreateA2AAssistantEventId(Guid messageId)
@@ -627,6 +791,36 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
     public Task<SessionMaterialAcknowledgment> CommitNativeCacheAsync(
         RuntimeSessionMaterialHttpClient material, Guid eventId, CancellationToken cancellationToken) =>
         CommitNativeCacheCoreAsync(material, eventId, cancellationToken, requireCurrentSuspend: null);
+
+    private async Task<RuntimeNativeCacheCommit> CommitNativeCacheWithBaselineAsync(
+        RuntimeSessionMaterialHttpClient material,
+        Guid eventId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(material);
+        await _authorityGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            RequireTurnAdmission();
+            await RequireCurrentCoreAsync(cancellationToken).ConfigureAwait(false);
+            var cursor = await _session.CaptureNativeEventCursorAsync(cancellationToken).ConfigureAwait(false);
+            var bytes = await _session.CaptureNativeCacheAsync(cancellationToken).ConfigureAwait(false);
+            await RequireCurrentCoreAsync(cancellationToken).ConfigureAwait(false);
+            var acknowledgment = await material.WriteCacheAsync(
+                this, eventId, bytes, cancellationToken).ConfigureAwait(false);
+            await RequireCurrentCoreAsync(cancellationToken).ConfigureAwait(false);
+            var range = await _session.RequireNoNativeEventsSinceAsync(cursor, cancellationToken)
+                .ConfigureAwait(false);
+            if (!range.IsComplete || range.ObservedEventCount != 0 ||
+                range.BeforeCursorHash != range.AfterCursorHash)
+                throw new RuntimeAuthorizationException("runtime_native_cache_baseline_invalid");
+            return new(acknowledgment, cursor, range);
+        }
+        finally
+        {
+            _authorityGate.Release();
+        }
+    }
 
     /// <summary>Shared cache writer that can also require current suspend authority at each boundary.</summary>
     private async Task<SessionMaterialAcknowledgment> CommitNativeCacheCoreAsync(

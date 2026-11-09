@@ -156,6 +156,53 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
     }
 
     [Fact]
+    public async Task ReplacementRetryReusesTheAttachedWorkspaceAndReleaseKey()
+    {
+        using var fixture = CreateFixture(database, 1);
+        var firstBootstrap = Guid.NewGuid();
+        var replacementOperation = Guid.NewGuid();
+        var intentId = Guid.NewGuid();
+        var credential = new SecretCredential(
+            "first-start-token", DateTimeOffset.UtcNow.AddMinutes(2), TimeProvider.System);
+        var actor = new RuntimeActorAuthorization(credential, fixture.Owner.TenantId);
+
+        try
+        {
+            var previous = await fixture.Manager.ProvisionAsync(
+                new(1, fixture.Owner, null, firstBootstrap), actor, CancellationToken.None);
+            var retirement = new RuntimeRunStartRetirementRequest(
+                1, fixture.Owner, firstBootstrap, Guid.NewGuid(), 1, previous).Validate();
+            var released = await fixture.Manager.RetireReplacementAsync(
+                new RuntimeReplacementRetirementRequest(1, replacementOperation, intentId, retirement),
+                actor,
+                CancellationToken.None);
+            Assert.Equal("released", released.State);
+
+            var replacementRequest = new RuntimeReplacementPlacementRequest(
+                1,
+                replacementOperation,
+                fixture.Owner,
+                firstBootstrap,
+                RuntimeRunStartKeys.ReplacementOperationId(replacementOperation, "bootstrap"),
+                previous);
+            var firstReplacement = await fixture.Manager.ProvisionReplacementAsync(
+                replacementRequest, actor, CancellationToken.None);
+            var retriedReplacement = await fixture.Manager.ProvisionReplacementAsync(
+                replacementRequest, actor, CancellationToken.None);
+
+            Assert.Equal(firstReplacement.SandboxOperationId, retriedReplacement.SandboxOperationId);
+            Assert.Equal(firstReplacement.SandboxResource, retriedReplacement.SandboxResource);
+            Assert.Equal(firstReplacement.WorkspaceVolumeId, retriedReplacement.WorkspaceVolumeId);
+            Assert.Equal(1, fixture.Storage.ProvisionCalls);
+            Assert.Equal(2, fixture.Sandbox.ProvisionCalls);
+        }
+        finally
+        {
+            credential.Invalidate();
+        }
+    }
+
+    [Fact]
     public async Task FailedBootstrapRetirementUsesRunReadAuthorityAndExactPlacement()
     {
         using var fixture = CreateFixture(database, 1);

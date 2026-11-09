@@ -1,7 +1,7 @@
 # Specification: Integrated session-material acceptance
 
-**Status:** Scenario requirements and blocked evidence producer in source.
-Controlled coverage does not complete the deployed scenario.
+**Status:** The native-material-recovery source journey is implemented.
+No deployed session-material acceptance evidence is claimed here.
 
 ## Problem and goals
 
@@ -31,78 +31,79 @@ redacted JSONL result. It also records the authorized actor and tenant selectors
 the runner-owned project/run/session fence, invocation and fixture IDs, and
 available selection revisions. It never retains bearer credentials.
 
-The existing Host producer path is supported: accepted workflow-bound dispatch
-reaches `RuntimeAgentHost.DispatchAsync`, which calls
-`AuthorizedRuntimeSession.SendNativeTurnAsync` and commits user/assistant
-turns and SDK cache through the Events owner. The public native dispatch proof
-also observes the native sends and joined results.
+The optional `native-material-recovery` CLI journey now joins the accepted
+invocation to real production evidence. It submits one approved, read-only
+casting request through `formulateCastingProposal`, validates the native
+completion and turn/cache acknowledgments, and reads the user and assistant
+turns through `readSessionTurnContent`. The runner then uses
+`replaceRuntimeHost` and `readRuntimeReplacement` to verify ordinary Host
+replacement, cache restoration, and an exact request retry on the new
+registration.
 
-The acceptance consumer still lacks a contract that binds its accepted invocation to
-that dispatch and correlates the resulting material acknowledgment/readback.
-`run-p1` does not invoke Orchestrator dispatch, the native CLI stops after its
-read-only authority join, and the Host readiness evidence is not a
-post-turn material receipt. Events material reads use current Projects
-authorization, a provider-binding pin, and an authority recheck; TurnContent
-also requires the bound-project read entitlement, while SDK cache uses the
-stronger `NativeUsage.RequireReadAuthority` rule. These read paths are not
-exposed by the current acceptance provider. Events writes separately validate the
-caller bearer against current runtime registration, source, and fence.
-Therefore the integrated acceptance flow cannot yet prove that its own accepted turn produced the
-observed acknowledgment, committed position, and cursor. This is a missing
-accepted-invocation-to-authorized-readback consumer contract, not a missing
-production material producer.
+The completion receipt binds the request to its source, image, actor, tenant,
+project, run, root session, execution fence, runtime registration, accepted
+selection, and approved BYOK model. The runner checks that the public turn
+readbacks match their material acknowledgments. It checks that replacement
+uses the saved cache material, retains the workspace and logical execution
+binding, and has a complete reconstruction interval with no new event, model
+send, or tool effect. The retry must return the original proposal and
+completion with current-registration replay evidence and no new native send.
+The existing fixture cleanup must also pass.
 
-Compatible replacement/recovery, missing or expired material, and
-revocation/stale/retry fault hooks are separate unsupported acceptance
-boundaries; they remain blocked rather than inferred from the producer path or
-controlled tests. Existing journal-owned material remains under its current
-retention policy. The acceptance fixture's own cleanup is recorded separately; this
-scenario does not require or imply a new material-deletion endpoint.
+This source path does not add a capture-only route, a permanent run latch, a
+generic proof framework, new roles or grants, or a new material-deletion
+endpoint. It does not weaken the hosted hard-credit guard. Existing Events
+reads and writes still enforce their current authorization, registration,
+source, and fence checks. Journal-owned material remains under its current
+retention policy.
 
-These boundaries leave the deployed session-material scenario **blocked**.
-The result records the intended typed turn route as not sent, its result as not
-observed, and event ID, committed position, cursor, and runtime registration
-revision as unavailable. It does not infer successful execution from a session
-identifier, source receipt, or controlled fixture. The full integrated result cannot be
-success-shaped while this required scenario is blocked; the selected surface
-status remains independent.
+The native journey does not test authority revocation, stale-fence or stale-
+registration denial, changed-payload retry, absent or expired optional cache,
+or missing or expired required turn material. Those checks remain unexecuted;
+the result must not report them as passed. A separate denied-actor check also
+remains a full-P1 obligation. Archive and operating-system acceptance remain
+separate work under #2449. A passed native-material row is not a passed full
+P1 result and is not evidence that a deployed run has occurred.
 
 ## Intended behavior and requirements
 
-### Required scenario when the authorized boundary exists
+### Native-material-recovery journey
 
-An authorized implementation must use the current owner routes and native
-runtime path, bound to the same exact source, image, actor, tenant, project,
-run, session, invocation, and current execution fence:
+The journey requires the exact source and runtime proof inputs used by the
+native CLI acceptance runner. Its `fixturePlan.nativeMaterialRecovery` approval
+must name a BYOK model selection, reasoning effort, positive prompt capacity,
+exactly one native request, and explicit approval for ordinary Host
+replacement. It uses the setup-owned invocation and current owner bindings;
+the client cannot supply owner fences or receipts.
 
-1. Submit one typed turn and retain redacted request and response evidence,
-   the current runtime instance and registration revision, the owner
-   acknowledgment, and the committed event position/cursor.
-2. Replace the runtime through the supported owner lifecycle and prove that a
-   compatible native cache restores the recorded session without another
-   model turn.
-3. Independently exercise absent and expired optional SDK cache. Both may
-   rebuild from retained turns. Verify that rebuilding invokes no model turn
-   and repeats no tool or external effect.
-4. Separately prove that absent or expired required turn material fails the
-   turn; it is not an optional cache miss.
-5. Exercise current-authority revocation, stale fence/registration, exact
-   duplicate retry and changed-payload retry, and the required-material
-   failure through supported owner boundaries. If an authorized fault or
-   restart boundary is unavailable, preserve the exact gap as blocked.
-6. Record cleanup of the invocation-owned acceptance fixture through its existing
-   owner path. Keep its result visible; retained journal material follows the
-   existing retention policy and is not deleted by this scenario.
+For the selected journey, the runner:
+
+1. Submits one production read-only casting request and validates the actual
+   native completion, source and image pins, runtime registration, model
+   approval, and ordered user, assistant, and SDK-cache acknowledgments.
+2. Reads the user and assistant turn material through the public Gateway
+   operation and compares each response with its acknowledgment.
+3. Replaces the Host through the ordinary owner lifecycle. It checks the old
+   and new Pod and runtime identities, retained workspace generations, the
+   current accepted selection and execution fence, the restored cache
+   acknowledgment, and the complete no-event reconstruction interval.
+4. Retries the exact original casting request. It checks the original
+   proposal and completion against replacement lineage and current
+   registration, with no new native send or tool effect.
+5. Cancels and independently verifies the owned fixture through its existing
+   cleanup path. Cleanup failure keeps the session-material row blocked.
+
+The result contains redacted identifiers, counts, positions, and hashes. It
+does not retain the turn text or bearer credentials. Only the native
+session-material row can pass after its receipts and cleanup validate. Other
+journeys retain the material blocker. Full-P1 status remains separate.
 
 ## Acceptance and validation
 
 ### Controlled evidence
 
-The scenario lists the precise existing controlled test cases for the owner
-turn/acknowledgment, replacement restore, cache rebuild, retry, and required
-material boundaries. These references are a coverage map, not test receipts:
-`controlledEvidence.status` stays `not-executed` in the integrated result because this
-runner does not execute or consume .NET test results.
+The controlled tests cover source behavior only. They are not deployed
+receipts, and the native runner does not consume their results.
 
 Run the controlled cases from the repository root:
 
@@ -111,31 +112,36 @@ dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.
 dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-restore --configuration Release --filter "FullyQualifiedName~ActualSdkFilesystemCallbacksCaptureOpaqueFilesAndResumeTheSameLogicalSession|FullyQualifiedName~LostOrIncompatibleCacheRebuildsNativeContextWithoutReplayingATurn"
 dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --configuration Release --filter FullyQualifiedName~SessionMaterialEndpointRetentionTests
 dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --configuration Release --filter "FullyQualifiedName~ExactMaterialRetriesAndRestartReturnOriginalRecordedAcknowledgment|FullyQualifiedName~ExpiredRequiredTurnsFailAndOnlyExpiredOptionalCacheMapsToNotFound"
+dotnet test tests\Agentweaver.Cli.Acceptance.Tests\Agentweaver.Cli.Acceptance.Tests.csproj --configuration Release --filter FullyQualifiedName~ApiAcceptanceNativeMaterialTests
 ```
 
 The Broker integration case and Events/Postgres cases use disposable
 Testcontainers PostgreSQL and fail when a Docker-compatible engine is
 unavailable. The two `RuntimeSessionRecoveryTests` cases and the endpoint
 retention tests are controlled local tests without that database fixture.
-None is deployed acceptance. Source tests do not attest a live actor,
-deployment, image, owner receipt, repeated external-effect behavior, or
-cleanup result, and their presence never changes the integrated session-material
-status.
+None is deployed acceptance. The native-material tests use controlled inputs;
+they check journey receipt validation, replay, and cleanup precedence. Source
+tests do not attest a live actor, deployment, image, owner receipt, repeated
+external-effect behavior, or cleanup result. They do not change the result of a
+live journey.
 
-The JSONL scenario records non-attempted operations explicitly, distinguishes
-optional-cache recovery from required-turn failure, and preserves the precise
-authorized-boundary blockers. It performs no live operation and creates no
-additional fixture, identity, or cleanup work.
+The native journey is not run by dry-run. A live run needs the exact apphost
+and manifest, approved non-production target and actor, valid source and
+provider receipts, the approved BYOK model and cost, and approval to replace
+the runner-owned Host. This source change did not run live acceptance.
 
 ## Failure and recovery
 
-Keep a missing authorized dispatch, readback, replacement, or fault boundary
-blocked. Do not send an unbound turn, reinterpret required-turn failure as optional
-cache absence, or infer cleanup from fixture creation.
+Keep a missing, stale, or mismatched completion, material, replacement, replay,
+or cleanup receipt blocked. Do not send an unbound turn, treat a required-turn
+failure as optional cache absence, or infer cleanup from fixture creation.
+Keep the separate fault, denied-actor, and #2449 obligations visible; do not
+clear them because this journey passed.
 
 ## Rollout and compatibility
 
-Use the existing result and native probe envelope. Implementing a missing consumer
-boundary requires its own reviewed contract; these criteria do not authorize a new
-route or a live run. Keep surface, controlled-test, and deployed scenario outcomes
-independently visible.
+Use the existing result and native probe envelope. The optional native journey
+does not become a prerequisite for ordinary CLI use or all-OS archive
+verification. Keep its deployed receipts, source-test results, full-P1 status,
+and #2449 archive/OS work independently visible. This specification does not
+authorize a live run.

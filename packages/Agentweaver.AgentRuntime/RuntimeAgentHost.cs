@@ -596,7 +596,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                 }, capturedMcpServer: capturedMcpServer.Endpoint,
                 hostedReasoningCatalog: new(
                     _hostedCatalogPublicationHttp ?? _http, _options.ProjectsConfigAddress, retained),
-                logger: _logger);
+                logger: _logger,
+                replacementRecovery: request.ReplacementRecovery);
             _session = await receiver.ConfigureAsync(
                 bootstrap, configurationBytes, request.ConsumeOperationId, request.ExchangeOperationId,
                 token, resumeBootstrap).ConfigureAwait(false);
@@ -627,7 +628,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             }
             else
             {
-                _recoveryReceipt = CreateRecoveryReceipt(configuredSession);
+                _recoveryReceipt = null;
             }
             _configuredAt ??= _time.GetUtcNow();
             var source = _usageSource ??= new(_http, _options.OrchestratorAddress, retained);
@@ -681,6 +682,41 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             await configuredSession.RequireCurrentAsync(token).ConfigureAwait(false);
             if (resumeBootstrap is not null)
                 await RequireCurrentResumeBootstrapAsync(resumeBootstrap, retained, token).ConfigureAwait(false);
+            if (resumeBootstrap is null)
+            {
+                try
+                {
+                    await configuredSession.VerifyReplacementReconstructionNoSendAsync(token)
+                        .ConfigureAwait(false);
+                    _recoveryReceipt = CreateRecoveryReceipt(configuredSession);
+                }
+                catch (Exception failure) when (failure is not OutOfMemoryException)
+                {
+                    var prepared = _receiver;
+                    var usage = _usage;
+                    _receiver = null;
+                    _session = null;
+                    _usage = null;
+                    _usageSource = null;
+                    _configurationAcknowledgment = null;
+                    _recoveryReceipt = null;
+                    _readyAt = null;
+                    try
+                    {
+                        if (prepared is not null)
+                            await prepared.DisposeAsync().ConfigureAwait(false);
+                        if (usage is not null)
+                            await usage.ConfigureAwait(false);
+                    }
+                    catch (Exception cleanupFailure) when (cleanupFailure is not OutOfMemoryException)
+                    {
+                        throw new AggregateException(
+                            "Runtime recovery validation failed and its prepared session could not be cleaned up.",
+                            failure, cleanupFailure);
+                    }
+                    throw;
+                }
+            }
             _readyAt ??= _time.GetUtcNow();
             return await ReadinessAsync(token).ConfigureAwait(false);
         }
@@ -1235,7 +1271,15 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             NativeCacheAcknowledgment = session.ConsumedNativeCacheAcknowledgment,
             Journal = session.JournalEvidence is { } journal
                 ? new RuntimeHostJournalRecoveryEvidence(journal.ThroughPosition, journal.JournalSha256)
-                : null
+                : null,
+            ReplacementReconstructionInterval = session.ReplacementReconstructionInterval is { } interval
+                ? new RuntimeHostNativeEmptyIntervalEvidence(
+                    interval.BeforeCursorHash,
+                    interval.AfterCursorHash,
+                    interval.ObservedEventCount,
+                    interval.IsComplete)
+                : null,
+            ReplacementCallSequence = session.CaptureReplacementCallSequence()
         }.ValidateFor(session.Registration);
     }
 
@@ -1565,7 +1609,11 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                             .ConfigureAwait(false);
                     }
                     pending.Completion.TrySetResult(new(
-                        "message", Guid.NewGuid(), session.Facts.SdkSessionId, "agent", [new("text", answer)]));
+                        "message", Guid.NewGuid(), session.Facts.SdkSessionId, "agent", [new("text", answer)])
+                    {
+                        RootCompletion = session.LastRootTurnCompletion,
+                        RootReplay = session.LastRootTurnReplay
+                    });
                 }
                 catch (OperationCanceledException) when (turn.IsCancellationRequested)
                 {

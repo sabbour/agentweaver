@@ -114,6 +114,30 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Fact]
+    public async Task CoordinatorRootByokCompletionUsesCanonicalSourceEvidence()
+    {
+        await using var fixture = new HostFixture(
+            sourceMode: ModelSourceMode.Byok, maxModelTurns: 1, maxToolCalls: 1, coordinatorRoot: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var readiness = await fixture.ConfigureAsync(timeout.Token);
+        var message = fixture.Message(fixture.Proof(readiness));
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        using var response = await client.PostAsJsonAsync(
+            "/runtime/v1/a2a/message:send", message, HostFixture.Json, timeout.Token);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = (await response.Content.ReadFromJsonAsync<RuntimeA2AResponse>(
+            HostFixture.Json, timeout.Token))!;
+        Assert.Equal("byok", Assert.IsType<RuntimeRootTurnCompletionReceipt>(result.RootCompletion)
+            .ToEvidence().ModelSourceMode);
+    }
+
+    [Fact]
     public async Task CoordinatorRootNumericTurnDenialRecordsTheExactNoSendCompanionBeforeReturningTheDenial()
     {
         await using var fixture = new HostFixture(maxModelTurns: 1, coordinatorRoot: true);
@@ -3317,7 +3341,7 @@ public sealed class RuntimeAgentHostTests
                 EmitUsageAfterCreate = false,
                 ExpectedAvailableToolsCount = 7,
                 PersistNativeSessionState = true,
-                EmitNativeCompletionReceipt = workflowBound,
+                EmitNativeCompletionReceipt = workflowBound || coordinatorRoot,
                 Byok = sourceMode == ModelSourceMode.Byok
             };
             var modelBindings = new RuntimeModelBindingsResolver("legacy-unversioned",

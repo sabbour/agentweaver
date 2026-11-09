@@ -2,12 +2,145 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Http;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 
 namespace Agentweaver.Orchestrator;
 
 /// <summary>Maps durable new-chat admission, first-message delivery, and fenced run cancellation.</summary>
 public static partial class CoordinationEndpoints
 {
+    private static Task<IResult> ReplaceRuntimeAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        RuntimeReplacementRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore sessions,
+        CoordinatorDecisionOwnerStore decisions,
+        CoordinatorRunSelectionContextStore runSelectionContexts,
+        PostgresMafCheckpointStore checkpoints,
+        ExecutableActionGrantOwnerStore grants,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken) => ExecuteAsync(async () =>
+    {
+        RequireProjectRunRequestShape(context);
+        context.Response.Headers.CacheControl = "no-store";
+        request.Validate();
+        var starts = context.RequestServices.GetService<CoordinationRuntimeRunStartStore>()
+            ?? throw new CoordinationException("runtime_replacement_unavailable", StatusCodes.Status409Conflict);
+        var continuation = context.RequestServices.GetService<RuntimeRunStartContinuation>()
+            ?? throw new CoordinationException("runtime_replacement_unavailable", StatusCodes.Status409Conflict);
+        var owner = await ReadRuntimeOwnerContextCoreAsync(
+            projectId, runId, sessionId, context, options, projects, sessions, decisions,
+            runSelectionContexts, checkpoints, cancellationToken, allowCoordinatorRoot: true)
+            .ConfigureAwait(false);
+        if (owner.AgentId != CoordinatorRuntimeAgentId || owner.LogicalTurnOrdinal != 0)
+            throw new CoordinationException("runtime_replacement_owner_invalid", StatusCodes.Status409Conflict);
+        var intent = await starts.ReadIntentForStatusAsync(
+            projectId, runId, sessionId, cancellationToken).ConfigureAwait(false)
+            ?? throw new CoordinationException("runtime_replacement_not_ready", StatusCodes.Status409Conflict);
+        if (intent.TenantId != owner.TenantId ||
+            intent.AcceptedSelectionHash != owner.AcceptedSelectionHash ||
+            intent.ExecutionFence != owner.ExecutionFence)
+            throw new CoordinationException("runtime_replacement_not_ready", StatusCodes.Status409Conflict);
+        RuntimeRegistration registration;
+        RuntimeRunStartPlacementReceipt placement;
+        RuntimeRootTurnCompletionLedgerReceipt completion;
+        var existing = await starts.ReadReplacementOperationAsync(
+            intent, request.OperationId, cancellationToken).ConfigureAwait(false);
+        if (existing is not null)
+        {
+            using var operationLinks = JsonDocument.Parse(existing.ReceiptLinks);
+            if (!operationLinks.RootElement.TryGetProperty("previousRegistration", out var savedRegistration) ||
+                !operationLinks.RootElement.TryGetProperty("previousPlacement", out var savedPlacement) ||
+                !operationLinks.RootElement.TryGetProperty("completion", out var savedCompletion))
+                throw new CoordinationException("runtime_replacement_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+            registration = savedRegistration.Deserialize<RuntimeRegistration>(JsonOptions)
+                ?? throw new CoordinationException("runtime_replacement_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+            placement = savedPlacement.Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions)
+                ?? throw new CoordinationException("runtime_replacement_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+            completion = savedCompletion.Deserialize<RuntimeRootTurnCompletionLedgerReceipt>(JsonOptions)
+                ?? throw new CoordinationException("runtime_replacement_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+        }
+        else
+        {
+            using var currentLinks = JsonDocument.Parse(intent.ReceiptLinks);
+            if (intent.State != "ready" ||
+                !currentLinks.RootElement.TryGetProperty("registration", out var registrationElement) ||
+                !currentLinks.RootElement.TryGetProperty("placement", out var placementElement))
+                throw new CoordinationException("runtime_replacement_not_ready", StatusCodes.Status409Conflict);
+            registration = registrationElement.Deserialize<RuntimeRegistration>(JsonOptions)
+                ?? throw new CoordinationException("runtime_start_readiness_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+            placement = placementElement.Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions)
+                ?? throw new CoordinationException("runtime_start_readiness_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+            completion = await grants.ReadReplacementEligibleRootCompletionAsync(
+                context, registration, intent, cancellationToken).ConfigureAwait(false);
+        }
+        if (registration.RuntimeInstanceId != request.ExpectedRuntimeInstanceId ||
+            registration.Revision != request.ExpectedRegistrationRevision ||
+            registration.Binding.ExecutionFence != request.ExpectedExecutionFence ||
+            registration.Binding.AcceptedSelectionHash != request.ExpectedAcceptedSelectionHash)
+            throw new CoordinationException("runtime_replacement_request_stale", StatusCodes.Status409Conflict);
+        var actor = await RuntimeRunStartDispatcher.CreateActorAsync(context, timeProvider).ConfigureAwait(false);
+        try
+        {
+            var result = await continuation.ReplaceAsync(
+                owner, actor, request, registration, placement, completion, cancellationToken)
+                .ConfigureAwait(false);
+            return Results.Ok(result.Validate());
+        }
+        finally
+        {
+            actor.Bearer.Invalidate();
+        }
+    }, cancellationToken);
+
+    private static Task<IResult> ReadRuntimeReplacementAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        Guid operationId,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore sessions,
+        CoordinatorDecisionOwnerStore decisions,
+        CoordinatorRunSelectionContextStore runSelectionContexts,
+        PostgresMafCheckpointStore checkpoints,
+        CancellationToken cancellationToken) => ExecuteAsync(async () =>
+    {
+        RequireProjectRunRequestShape(context, noBody: true);
+        context.Response.Headers.CacheControl = "no-store";
+        var starts = context.RequestServices.GetService<CoordinationRuntimeRunStartStore>()
+            ?? throw new CoordinationException("runtime_replacement_unavailable", StatusCodes.Status409Conflict);
+        var owner = await ReadRuntimeOwnerContextCoreAsync(
+            projectId, runId, sessionId, context, options, projects, sessions, decisions,
+            runSelectionContexts, checkpoints, cancellationToken, allowCoordinatorRoot: true)
+            .ConfigureAwait(false);
+        var intent = await starts.ReadIntentForStatusAsync(
+            projectId, runId, sessionId, cancellationToken).ConfigureAwait(false)
+            ?? throw new CoordinationException("runtime_replacement_operation_not_found", StatusCodes.Status404NotFound);
+        if (intent.TenantId != owner.TenantId ||
+            intent.AcceptedSelectionHash != owner.AcceptedSelectionHash ||
+            intent.ExecutionFence != owner.ExecutionFence)
+            throw new CoordinationException("runtime_replacement_operation_not_found", StatusCodes.Status404NotFound);
+        var operation = await starts.ReadReplacementOperationAsync(intent, operationId, cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new CoordinationException("runtime_replacement_operation_not_found", StatusCodes.Status404NotFound);
+        using var links = JsonDocument.Parse(operation.ReceiptLinks);
+        if (!links.RootElement.TryGetProperty("previousRegistration", out var previousRegistrationElement) ||
+            !links.RootElement.TryGetProperty("previousPlacement", out var previousPlacementElement))
+            throw new CoordinationException("runtime_replacement_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+        var previousRegistration = previousRegistrationElement.Deserialize<RuntimeRegistration>(JsonOptions)
+            ?? throw new CoordinationException("runtime_replacement_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+        var previousPlacement = previousPlacementElement.Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions)
+            ?? throw new CoordinationException("runtime_replacement_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+        return Results.Ok(RuntimeRunStartContinuation.CreateReplacementSummary(
+            operation, previousRegistration, previousPlacement));
+    }, cancellationToken);
+
     /// <summary>Persists browser input before creating the selection needed by the existing Broker binding flow.</summary>
     private static Task<IResult> CreateProjectRunAsync(
         string projectId, CreateProjectRunRequest request, HttpContext context,

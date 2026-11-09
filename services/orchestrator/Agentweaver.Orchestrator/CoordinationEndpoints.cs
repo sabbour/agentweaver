@@ -35,6 +35,12 @@ public static partial class CoordinationEndpoints
         coordination.MapGet("/status", ReadOwnerRunStatusAsync);
         coordination.MapPost("/recovery", RecoverRunExecutionAsync);
         coordination.MapPost(
+            "/sessions/{sessionId}/runtime-replacements",
+            ReplaceRuntimeAsync);
+        coordination.MapGet(
+            "/sessions/{sessionId}/runtime-replacements/{operationId:guid}",
+            ReadRuntimeReplacementAsync);
+        coordination.MapPost(
             "/sessions/{sessionId}/actions/propose_outcome_spec",
             ProposeCoordinatorOutcomeAsync);
         coordination.MapPost(

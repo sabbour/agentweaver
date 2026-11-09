@@ -8,6 +8,28 @@ using GitHub.Copilot;
 
 namespace Agentweaver.AgentRuntime;
 
+internal readonly record struct RuntimeNativeCallSequenceSnapshot(long SendSequence, long ToolEffectSequence);
+
+internal sealed class RuntimeNativeCallSequence
+{
+    private static readonly Guid HostProcessInstanceId = Guid.NewGuid();
+    private long _sendSequence;
+    private long _toolEffectSequence;
+
+    internal RuntimeNativeCallSequenceSnapshot Snapshot() =>
+        new(Volatile.Read(ref _sendSequence), Volatile.Read(ref _toolEffectSequence));
+
+    internal void RecordSendCall() => Interlocked.Increment(ref _sendSequence);
+    internal void RecordToolEffectCall() => Interlocked.Increment(ref _toolEffectSequence);
+
+    internal RuntimeHostNativeCallSequenceEvidence Evidence(
+        RuntimeRegistration registration,
+        RuntimeNativeCallSequenceSnapshot before,
+        RuntimeNativeCallSequenceSnapshot after) =>
+        new(Environment.ProcessId, HostProcessInstanceId, registration.RuntimeInstanceId, registration.Revision,
+            before.SendSequence, after.SendSequence, before.ToolEffectSequence, after.ToolEffectSequence);
+}
+
 /// <summary>Token and model details captured when native prompt compaction begins.</summary>
 internal sealed record RuntimeNativePromptCompactionStart(
     long? CurrentTokens,
@@ -188,6 +210,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
     private readonly RuntimeNativePromptCapacityObserver _promptCapacityObserver;
     private readonly RuntimeCopilotTurnObserver _turns;
     private readonly RuntimeNativeSessionFiles _nativeFiles;
+    private readonly RuntimeNativeCallSequence _nativeCalls;
     private readonly SemaphoreSlim _turnGate = new(1, 1);
     private readonly CancellationTokenSource _stop = new();
     private readonly TimeSpan _abortDrainTimeout;
@@ -205,6 +228,9 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         RuntimeNativePromptCapacityObserver promptCapacityObserver,
         RuntimeCopilotTurnObserver turns,
         RuntimeNativeSessionFiles nativeFiles,
+        RuntimeNativeCallSequence nativeCalls,
+        RuntimeNativeCallSequenceSnapshot creationCallSequenceStart,
+        RuntimeHostNativeCallSequenceEvidence creationCallSequence,
         RuntimeSessionRecoveryMode recoveryMode,
         string? recoveryReason,
         RuntimeResumeJournalRebuildReceipt? journalRebuildReceipt,
@@ -221,6 +247,9 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         _promptCapacityObserver = promptCapacityObserver;
         _turns = turns;
         _nativeFiles = nativeFiles;
+        _nativeCalls = nativeCalls;
+        CreationCallSequenceStart = creationCallSequenceStart;
+        CreationCallSequence = creationCallSequence;
         RecoveryMode = recoveryMode;
         RecoveryReason = recoveryReason;
         JournalRebuildReceipt = journalRebuildReceipt;
@@ -245,6 +274,14 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
 
     /// <summary>Indicates whether the session was created fresh, from native cache, or by journal rebuild.</summary>
     public RuntimeSessionRecoveryMode RecoveryMode { get; }
+
+    internal RuntimeHostNativeCallSequenceEvidence CreationCallSequence { get; }
+    internal RuntimeNativeCallSequenceSnapshot CreationCallSequenceStart { get; }
+    internal RuntimeNativeCallSequenceSnapshot CaptureNativeCallSequence() => _nativeCalls.Snapshot();
+    internal RuntimeHostNativeCallSequenceEvidence CaptureNativeCallSequence(
+        RuntimeRegistration registration,
+        RuntimeNativeCallSequenceSnapshot before) =>
+        _nativeCalls.Evidence(registration, before, _nativeCalls.Snapshot());
 
     /// <summary>Safe reason explaining why a native cache was not reused, when applicable.</summary>
     public string? RecoveryReason { get; }
@@ -441,20 +478,24 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
 
     /// <summary>Sends a turn and returns the SDK event evidence tied to its native message ID.</summary>
     internal async Task<RuntimeCopilotNativeTurnResult> SendTurnWithNativeReceiptAsync(
-        string prompt, CancellationToken cancellationToken, Guid? a2aMessageId = null)
+        string prompt, CancellationToken cancellationToken, Guid? a2aMessageId = null,
+        bool readOnlyToolsOnly = false)
     {
         var result = await SendTurnCoreAsync(
-            prompt, captureNativeReceipt: true, cancellationToken, a2aMessageId, readOnlyToolsOnly: false)
+            prompt, captureNativeReceipt: true, cancellationToken, a2aMessageId, readOnlyToolsOnly)
             .ConfigureAwait(false);
-        return new(result.Response, result.Receipt ??
-            throw new RuntimeAuthorizationException("runtime_native_turn_receipt_unavailable"));
+        var receipt = result.Receipt
+            ?? throw new RuntimeAuthorizationException("runtime_native_turn_receipt_unavailable");
+        return new(result.Response, receipt.Observation,
+            receipt.SuccessfulToolCount, receipt.FailedToolCount,
+            receipt.CursorBeforeHash, receipt.CursorAfterHash, receipt.EventIntervalHash, receipt.EventCount);
     }
 
     /// <summary>
     /// Serializes the turn, optionally captures native events, and aborts/drains a failed call;
     /// an unconfirmed drain marks the session unusable.
     /// </summary>
-    private async Task<(string Response, RuntimeNativeTurnObservation? Receipt)> SendTurnCoreAsync(
+    private async Task<(string Response, RuntimeNativeTurnJournalResult? Receipt)> SendTurnCoreAsync(
         string prompt,
         bool captureNativeReceipt,
         CancellationToken cancellationToken,
@@ -480,11 +521,12 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
             var completion = _turns.Begin(active.Token, a2aMessageId, readOnlyToolsOnly);
             try
             {
+                _nativeCalls.RecordSendCall();
                 var nativeMessageId = await _session.SendAsync(new MessageOptions { Prompt = prompt }, active.Token)
                     .ConfigureAwait(false);
                 var response = await completion.WaitAsync(active.Token).ConfigureAwait(false);
                 var receipt = captureNativeReceipt
-                    ? await RuntimeCopilotNativeTurnJournal.ReadAsync(
+                    ? await RuntimeCopilotNativeTurnJournal.ReadWithCountsAsync(
                         _session, Facts, startCursor!, nativeMessageId, response, active.Token)
                         .ConfigureAwait(false)
                     : null;

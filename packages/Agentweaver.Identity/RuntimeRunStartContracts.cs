@@ -43,6 +43,102 @@ public sealed record RuntimeRunStartPlacementRequest(
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeReplacementRequest(
+    int ContractVersion,
+    Guid OperationId,
+    Guid ExpectedRuntimeInstanceId,
+    long ExpectedRegistrationRevision,
+    long ExpectedExecutionFence,
+    string ExpectedAcceptedSelectionHash)
+{
+    public RuntimeReplacementRequest Validate()
+    {
+        RuntimeContractValidation.ValidateHash(ExpectedAcceptedSelectionHash);
+        if (ContractVersion != 1 || OperationId == Guid.Empty ||
+            ExpectedRuntimeInstanceId == Guid.Empty ||
+            ExpectedRegistrationRevision < 1 || ExpectedExecutionFence < 1)
+            throw new RuntimeAuthorizationException("runtime_replacement_request_invalid");
+        return this;
+    }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeReplacementSummary(
+    int ContractVersion,
+    Guid OperationId,
+    string State,
+    string Step,
+    string? FailureCode,
+    Guid PreviousRuntimeInstanceId,
+    long PreviousRegistrationRevision,
+    Guid? CurrentRuntimeInstanceId,
+    long? CurrentRegistrationRevision,
+    long ExecutionFence,
+    string AcceptedSelectionHash,
+    string? PreviousPodUid,
+    string? CurrentPodUid,
+    string? WorkspaceVolumeId,
+    long? WorkspaceResourceGeneration,
+    long? WorkspaceDataGeneration,
+    RuntimeHostRecoveryMode? RecoveryMode = null,
+    RuntimeMaterialAcknowledgmentEvidence? RecoveryCacheMaterial = null,
+    RuntimeHostNativeEmptyIntervalEvidence? ReconstructionInterval = null,
+    RuntimeHostNativeCallSequenceEvidence? ReconstructionCallSequence = null)
+{
+    public RuntimeReplacementSummary Validate()
+    {
+        RuntimeContractValidation.ValidateHash(AcceptedSelectionHash);
+        if (ContractVersion != 1 || OperationId == Guid.Empty ||
+            State is not ("pending" or "ready" or "blocked" or "failed" or "cleanup_pending" or "cleanup_complete") ||
+            string.IsNullOrWhiteSpace(Step) || Step.Length > 48 ||
+            FailureCode is { Length: > 96 } ||
+            PreviousRuntimeInstanceId == Guid.Empty || PreviousRegistrationRevision < 1 ||
+            ExecutionFence < 1 ||
+            (CurrentRuntimeInstanceId is null) != (CurrentRegistrationRevision is null) ||
+            CurrentRuntimeInstanceId == Guid.Empty || CurrentRegistrationRevision < 1 ||
+            WorkspaceResourceGeneration < 1 || WorkspaceDataGeneration < 0)
+            throw new RuntimeAuthorizationException("runtime_replacement_summary_invalid");
+        if (PreviousPodUid is not null)
+            RuntimeContractValidation.ValidateIdentifier(PreviousPodUid);
+        if (CurrentPodUid is not null)
+            RuntimeContractValidation.ValidateIdentifier(CurrentPodUid);
+        if (WorkspaceVolumeId is not null)
+            RuntimeContractValidation.ValidateIdentifier(WorkspaceVolumeId);
+        if (RecoveryCacheMaterial is { } cache)
+        {
+            RuntimeContractValidation.ValidateHash(cache.ContentSha256);
+            RuntimeContractValidation.ValidateHash(cache.BindingSha256);
+            if (cache.EventId == Guid.Empty || cache.Position < 1 ||
+                cache.Kind != SessionMaterialKind.SdkCache)
+                throw new RuntimeAuthorizationException("runtime_replacement_summary_invalid");
+        }
+        if (ReconstructionInterval is { } interval)
+        {
+            RuntimeContractValidation.ValidateHash(interval.StartCursorSha256);
+            RuntimeContractValidation.ValidateHash(interval.EndCursorSha256);
+        }
+        if (ReconstructionCallSequence is { } callSequence)
+        {
+            if (CurrentRuntimeInstanceId is not { } runtimeInstanceId ||
+                CurrentRegistrationRevision is not { } registrationRevision)
+                throw new RuntimeAuthorizationException("runtime_replacement_summary_invalid");
+            callSequence.ValidateFor(runtimeInstanceId, registrationRevision, requireZero: true);
+        }
+        if (State == "ready" &&
+            (RecoveryMode != RuntimeHostRecoveryMode.NativeCache ||
+             RecoveryCacheMaterial is null ||
+             ReconstructionCallSequence is null ||
+             ReconstructionInterval is not { EventCount: 0, IsComplete: true } ||
+             ReconstructionInterval.StartCursorSha256 != ReconstructionInterval.EndCursorSha256 ||
+             string.IsNullOrWhiteSpace(PreviousPodUid) ||
+             string.IsNullOrWhiteSpace(CurrentPodUid) ||
+             string.Equals(PreviousPodUid, CurrentPodUid, StringComparison.Ordinal)))
+            throw new RuntimeAuthorizationException("runtime_replacement_summary_invalid");
+        return this;
+    }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeRunStartCleanupProjection(
     int ContractVersion,
     string TenantId,
@@ -168,6 +264,8 @@ public sealed record RuntimeRunStartPlacementReceipt(
     long ProviderFencingGeneration,
     DateTimeOffset LeaseExpiresAt)
 {
+    public string? PodUid { get; init; }
+
     public RuntimeRunStartPlacementReceipt Validate()
     {
         RuntimeContractValidation.ValidateIdentifier(EnvironmentId);
@@ -184,6 +282,8 @@ public sealed record RuntimeRunStartPlacementReceipt(
             ProviderFencingGeneration != CurrentFencingGeneration ||
             LeaseExpiresAt <= DateTimeOffset.MinValue)
             throw new RuntimeAuthorizationException("runtime_start_placement_receipt_invalid");
+        if (PodUid is { } podUid)
+            RuntimeContractValidation.ValidateIdentifier(podUid);
         return this;
     }
 }
@@ -210,6 +310,52 @@ public sealed record RuntimeRunStartRetirementRequest(
                 RuntimeRunStartKeys.SandboxIdempotencyKey(Owner, BootstrapOperationId) ||
             Placement.CurrentFencingGeneration != Placement.ProviderFencingGeneration)
             throw new RuntimeAuthorizationException("runtime_start_retirement_request_invalid");
+        return this;
+    }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeReplacementRetirementRequest(
+    int ContractVersion,
+    Guid OperationId,
+    Guid IntentId,
+    RuntimeRunStartRetirementRequest Retirement)
+{
+    public RuntimeReplacementRetirementRequest Validate()
+    {
+        if (ContractVersion != 1 || OperationId == Guid.Empty || IntentId == Guid.Empty)
+            throw new RuntimeAuthorizationException("runtime_replacement_request_invalid");
+        Retirement.Validate();
+        return this;
+    }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeReplacementPlacementRequest(
+    int ContractVersion,
+    Guid OperationId,
+    RuntimeOwnerContext Owner,
+    Guid PreviousBootstrapOperationId,
+    Guid BootstrapOperationId,
+    RuntimeRunStartPlacementReceipt PreviousPlacement)
+{
+    public RuntimeReplacementPlacementRequest Validate()
+    {
+        ArgumentNullException.ThrowIfNull(Owner);
+        ArgumentNullException.ThrowIfNull(PreviousPlacement);
+        PreviousPlacement.Validate();
+        if (ContractVersion != 1 || OperationId == Guid.Empty ||
+            PreviousBootstrapOperationId == Guid.Empty ||
+            BootstrapOperationId == Guid.Empty ||
+            BootstrapOperationId == PreviousBootstrapOperationId ||
+            Owner.ContractVersion != 1 ||
+            Owner.AgentId != RuntimeActionContract.CoordinatorRootStepId ||
+            Owner.LogicalTurnOrdinal != 0 ||
+            Owner.ExecutionFence <= 0 ||
+            PreviousPlacement.EnvironmentId != RuntimeRunStartKeys.EnvironmentId(Owner) ||
+            PreviousPlacement.WorkspaceVolumeId != RuntimeRunStartKeys.WorkspaceVolumeId(Owner) ||
+            PreviousPlacement.CurrentFencingGeneration != PreviousPlacement.ProviderFencingGeneration)
+            throw new RuntimeAuthorizationException("runtime_replacement_request_invalid");
         return this;
     }
 }
@@ -244,6 +390,18 @@ public sealed record RuntimeRunStartRetirementReceipt(
 
 public static class RuntimeRunStartKeys
 {
+    public static Guid ReplacementOperationId(Guid replacementOperationId, string purpose)
+    {
+        if (replacementOperationId == Guid.Empty)
+            throw new ArgumentException("A replacement operation ID is required.", nameof(replacementOperationId));
+        if (string.IsNullOrWhiteSpace(purpose) || purpose.Length > 32 ||
+            purpose.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '-'))
+            throw new ArgumentException("A replacement operation purpose is invalid.", nameof(purpose));
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"agentweaver:runtime-replacement:{replacementOperationId:N}:{purpose}"));
+        return new Guid(hash.AsSpan(0, 16));
+    }
+
     public static string IdempotencyKey(RuntimeOwnerContext owner)
     {
         ArgumentNullException.ThrowIfNull(owner);

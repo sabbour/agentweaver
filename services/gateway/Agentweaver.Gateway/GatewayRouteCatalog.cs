@@ -524,6 +524,17 @@ public static class GatewayRouteCatalog
             "proposeOutcome", "Propose an outcome", body: true);
         Coordination("GET", "/status", "readRunStatus", "Read run status");
         Coordination("POST", "/recovery", "recoverRun", "Request run recovery", body: true);
+        Coordination(
+            "POST",
+            "/sessions/{sessionId}/runtime-replacements",
+            "replaceRuntimeHost",
+            "Replace a compatible runtime Host",
+            body: true);
+        Coordination(
+            "GET",
+            "/sessions/{sessionId}/runtime-replacements/{operationId}",
+            "readRuntimeReplacement",
+            "Read runtime replacement status");
         Coordination("POST", "/sessions/{sessionId}/actions/propose_outcome_spec",
             "proposeOutcomeSpec", "Propose an outcome specification", body: true);
         Coordination("POST", "/sessions/{sessionId}/actions/select_workflow",
