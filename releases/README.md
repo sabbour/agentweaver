@@ -75,7 +75,7 @@ The size check accepts OCI and Docker gzip-layer descriptors and reads their
 sizes without downloading the image layers.
 `az acr login` stores Docker credentials in the configured credential store.
 After the ACR work is complete, remove that login with
-`az acr logout --name <acr-name>`.
+`docker logout <acr-login-server>`.
 
 ## Deploy an exact v1 source commit
 
@@ -96,7 +96,7 @@ and run `az acr login --name <acr-name>` so Docker Buildx can inspect the images
 Add `--registry <acr-login-server>` to the command. The exact-source helper
 uses an ACR pull token for its OCI checks; it does not print or store that
 token. `az acr login` stores Docker credentials in the configured credential
-store; remove them with `az acr logout --name <acr-name>` when finished.
+store; remove them with `docker logout <acr-login-server>` when finished.
 
 ```powershell
 npm run azure:deploy-from-commit -- <full-lowercase-40-character-commit-sha> --execute
@@ -138,7 +138,7 @@ the image layers. The default registry is GHCR. For ACR, sign in with Azure
 CLI and run `az acr login --name <acr-name>` before deployment. The ACR reader
 uses a pull token for its OCI checks without printing or storing the token.
 The Docker login uses the configured credential store; remove it with
-`az acr logout --name <acr-name>` when finished.
+`docker logout <acr-login-server>` when finished.
 Select the published references you want to update in the operator-supplied
 manifest; the helper keeps live references for omitted images. The legacy
 `--image-tag` option still updates all ten images.
