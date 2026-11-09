@@ -24,7 +24,7 @@ data:
           "Audience": "https://agenthost-runtime.agentweaver.svc.cluster.local:8443/runtime/v1/configure"
         },
         "MaximumPendingTurns": 4,
-        "ModelBindingsRevision": "p1-v1.0.1",
+        "ModelBindingsRevision": "p1-v1.0.1-byok-20261109",
         "ModelBindings": {
           "reasoning": {
             "ModelId": "gpt-6.1-sol",
@@ -41,6 +41,21 @@ data:
           "gpt-6-luna": {
             "ModelId": "gpt-6-luna",
             "SourceMode": "HostedCopilot"
+          },
+          "byok-gpt-5.4": {
+            "ModelId": "gpt-5.4",
+            "SourceMode": "Byok",
+            "Provider": {
+              "Type": "openai",
+              "BaseUrl": "https://asabbour-demo-resource.openai.azure.com/openai/v1",
+              "WireApi": "responses"
+            },
+            "SupportedReasoningEfforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
           }
         }
       }
