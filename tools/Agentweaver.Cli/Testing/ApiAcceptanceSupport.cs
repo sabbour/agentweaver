@@ -224,7 +224,7 @@ internal static partial class ApiAcceptanceSupport
         }
         else
         {
-            ValidateFixturePlan(fixturePlan, environment, journey, pins);
+            ValidateFixturePlan(fixturePlan, journey, pins);
         }
         return new(root, environment, pins, fixturePlan, journey, fullPath, Path.GetDirectoryName(fullPath)!);
     }
@@ -297,7 +297,7 @@ internal static partial class ApiAcceptanceSupport
 
     }
 
-    private static void ValidateFixturePlan(JsonObject plan, JsonObject environment, string journey, JsonObject pins)
+    private static void ValidateFixturePlan(JsonObject plan, string journey, JsonObject pins)
     {
         if (pins.ContainsKey("ownerFences") || pins.ContainsKey("fixtureScope"))
         {
@@ -307,13 +307,11 @@ internal static partial class ApiAcceptanceSupport
         bool serverOwnedSelection = (journey is "journal" or "session-history-metric" or "native-material-recovery")
             && !plan.ContainsKey("selectionContext");
         bool nativeMaterialRecovery = journey == "native-material-recovery";
-        string[] fixtureKeys = (serverOwnedSelection
+        string[] fixtureKeys = serverOwnedSelection
             ? nativeMaterialRecovery
                 ? new[] { "expectedPlatformRuntimeRevision", "nativeMaterialRecovery", "gate", "message" }
                 : new[] { "expectedPlatformRuntimeRevision", "gate", "message" }
-            : new[] { "expectedPlatformRuntimeRevision", "selectionContext", "gate", "message" })
-            .Concat(plan.ContainsKey("deniedActor") ? new[] { "deniedActor" } : [])
-            .ToArray();
+            : ["expectedPlatformRuntimeRevision", "selectionContext", "gate", "message"];
         RequireExactKeys(plan, fixtureKeys, "runner fixture plan");
         if (!TryLong(plan["expectedPlatformRuntimeRevision"], out long revision) || revision < 1)
         {
@@ -358,18 +356,6 @@ internal static partial class ApiAcceptanceSupport
                 {
                     throw new InvalidDataException("The run selection context contains an invalid reference or requirement.");
                 }
-            }
-        }
-
-        if (plan.ContainsKey("deniedActor"))
-        {
-            JsonObject denied = RequireObject(plan["deniedActor"], "The denied actor is invalid.");
-            RequireExactKeys(denied, ["actorId", "tenantId"], "denied actor");
-            string actor = RequireString(denied, "actorId", "denied actor ID");
-            string tenant = RequireString(denied, "tenantId", "denied actor tenant ID");
-            if (actor == GetString(environment, "actorId") && tenant == GetString(environment, "tenantId"))
-            {
-                throw new InvalidDataException("The denied actor must be different from the selected P1 actor.");
             }
         }
 

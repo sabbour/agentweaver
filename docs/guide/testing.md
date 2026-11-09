@@ -693,6 +693,10 @@ entrypoint is compatibility delegation only. If used, set
 runner. The CLI `rest` command makes individual Gateway requests and is not a
 substitute for this acceptance journey.
 
+The API journeys use the manifest actor. They do not run a cross-actor denial
+probe or require a second Broker account. The manifest rejects unknown
+`fixturePlan` fields, including fields for a second actor.
+
 An accepted root and first message can queue AgentHost startup. The start
 response may report `runtimeStartup.state` as `pending`; check the run's
 session status for the current startup state. `pending` does not mean that

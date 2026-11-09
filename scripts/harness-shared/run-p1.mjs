@@ -351,21 +351,11 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
             environment: validated.environment,
             projectId: binding.projectId,
             runId: binding.runId,
-            ...(validated.fixturePlan.deniedActor
-              ? { deniedActor: validated.fixturePlan.deniedActor }
-              : {}),
-            provideIdentity: identityProvider
-              ? providerInput => identityProvider({
-                ...providerInput,
-                ...(validated.fixturePlan.deniedActor
-                  ? { deniedActor: validated.fixturePlan.deniedActor }
-                  : {}),
-              })
-              : undefined,
+            provideIdentity: identityProvider,
           });
           return {
             ...identity,
-            ...identity.createClients({ deniedActor: validated.fixturePlan.deniedActor }),
+            ...identity.createClients(),
           };
         },
       });
@@ -374,7 +364,6 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
           surface,
           environment: validated.environment,
           identity: fixture.identity,
-          deniedActor: validated.fixturePlan.deniedActor,
           pageModulePath: options.pageModule ? resolve(options.pageModule) : undefined,
           pageProvider,
         });

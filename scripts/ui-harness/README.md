@@ -107,9 +107,9 @@ npm run harness:p1:signin-run -- --surface ui --input <manifest.json> --output <
 ```
 
 Use the [operator guide](../harness-shared/P1-operator.md) for the required
-release evidence and cleanup steps. The launcher uses one account only. A
-distinct denied-actor check and any missing native or recovery evidence remain
-blocked; never substitute the signed-in actor or change access.
+release evidence and cleanup steps. The launcher uses one account only. Missing
+native or recovery evidence remains blocked; never substitute the signed-in
+actor or change access.
 
 The required `fixturePlan.expectedPlatformRuntimeRevision` is a positive
 expected value passed through the existing run-selection request and verified

@@ -27,25 +27,20 @@ function jwt({ actorId = ENVIRONMENT.actorId, projectId, runId } = {}) {
   ].join('.');
 }
 
-test('run identity provider receives the exact selected binding and creates origin-bound clients', async () => {
+test('run identity provider receives the selected binding and creates one origin-bound client', async () => {
   let providerCalls = 0;
   const identity = await acquireP1RunIdentity({
     modulePath: 'authorized-identity-provider.mjs',
     environment: ENVIRONMENT,
     projectId: PROJECT_ID,
     runId: RUN_ID,
-    deniedActor: { actorId: 'denied-actor', tenantId: 'other-tenant' },
     importModule: async () => ({
       default: async binding => {
         providerCalls += 1;
         assert.equal(binding.projectId, PROJECT_ID);
         assert.equal(binding.runId, RUN_ID);
-        assert.equal(binding.deniedActor.actorId, 'denied-actor');
         assert.equal(Object.hasOwn(binding, 'setupToken'), false);
-        return {
-          token: jwt({ projectId: PROJECT_ID, runId: RUN_ID }),
-          deniedToken: jwt({ actorId: 'denied-actor' }),
-        };
+        return { token: jwt({ projectId: PROJECT_ID, runId: RUN_ID }) };
       },
     }),
   });
@@ -53,23 +48,17 @@ test('run identity provider receives the exact selected binding and creates orig
   assert.equal(providerCalls, 1);
   assert.equal(identity.projectId, PROJECT_ID);
   assert.equal(identity.runId, RUN_ID);
-  const clients = identity.createClients({
-    deniedActor: { actorId: 'denied-actor', tenantId: 'other-tenant' },
-  });
+  const clients = identity.createClients();
   assert.equal(clients.api.target.origin, new URL(ENVIRONMENT.baseUrl).origin);
   assert.equal(clients.api.tenantId, ENVIRONMENT.tenantId);
   assert.equal(clients.api.authProvider.actorId, ENVIRONMENT.actorId);
-  assert.equal(clients.deniedApi.tenantId, 'other-tenant');
-  assert.equal(clients.deniedApi.authProvider.actorId, 'denied-actor');
 
   const adapters = await createP1SurfaceAdapters({
     surface: 'api',
     environment: ENVIRONMENT,
     identity: { ...identity, ...clients },
-    deniedActor: { actorId: 'denied-actor', tenantId: 'other-tenant' },
   });
   assert.equal(adapters.api, clients.api);
-  assert.equal(adapters.deniedApi, clients.deniedApi);
   assert.equal(adapters.mcp, undefined);
   assert.equal(adapters.ui, undefined);
 });
@@ -80,38 +69,31 @@ test('run identity provider rejects a token for another project or run', async (
     environment: ENVIRONMENT,
     projectId: PROJECT_ID,
     runId: RUN_ID,
-    deniedActor: { actorId: 'denied-actor', tenantId: 'controlled-tenant' },
     importModule: async () => ({
       default: async () => ({
         token: jwt({ projectId: PROJECT_ID, runId: '00000000-0000-4000-8000-000000000002' }),
-        deniedToken: jwt({ actorId: 'denied-actor' }),
       }),
     }),
   }), /exact authorized actor and selected run/);
 });
 
-test('run identity provider accepts only a bound token and never reads denied-token material without a planned actor', async () => {
-  const identity = await acquireP1RunIdentity({
-    modulePath: 'one-actor-identity-provider.mjs',
+test('run identity provider rejects extra credentials', async () => {
+  await assert.rejects(acquireP1RunIdentity({
+    modulePath: 'extra-credential-identity-provider.mjs',
     environment: ENVIRONMENT,
     projectId: PROJECT_ID,
     runId: RUN_ID,
     importModule: async () => ({
       default: async binding => {
-        assert.equal(Object.hasOwn(binding, 'deniedActor'), false);
-        const credentials = { token: jwt({ projectId: PROJECT_ID, runId: RUN_ID }) };
-        Object.defineProperty(credentials, 'deniedToken', {
-          get() { throw new Error('denied token must not be read'); },
-        });
-        return credentials;
+        assert.equal(binding.projectId, PROJECT_ID);
+        assert.equal(binding.runId, RUN_ID);
+        return {
+          token: jwt({ projectId: PROJECT_ID, runId: RUN_ID }),
+          extraToken: 'unexpected',
+        };
       },
     }),
-  });
-
-  assert.equal(Object.hasOwn(identity, 'deniedToken'), false);
-  const clients = identity.createClients();
-  assert.ok(clients.api);
-  assert.equal(Object.hasOwn(clients, 'deniedApi'), false);
+  }), /only the run token/);
 });
 
 test('setup API rejects a token for a different selected actor', () => {

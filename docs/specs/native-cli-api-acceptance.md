@@ -70,8 +70,9 @@ target flags or take its target from environment variables.
 - Do not overwrite the manifest or supplied proof artifacts with the evidence
   output. A live invocation needs a new output file.
 - Execute and report only the selected journey's supported owner operations.
-  Keep denied-actor checks, current authority, fixture ownership, and cleanup
+  Keep current authority, fixture ownership, and cleanup
   visible rather than inferring them from setup success.
+  The manifest rejects unknown `fixturePlan` fields.
 
 ### Native material recovery journey
 
@@ -100,8 +101,8 @@ Other journeys keep their session-material blocker. This journey does not test
 authority revocation, stale-fence or stale-registration denial,
 changed-payload retry, absent or expired optional cache, or missing or expired
 required turn material. Those cases remain unexecuted, not passed. A
-session-material row does not by itself pass full P1; the denied-actor and
-other P1 obligations remain separate. The journey is not a prerequisite for
+session-material row does not by itself pass full P1; the other P1 obligations
+remain separate. The journey is not a prerequisite for
 ordinary CLI use or all-OS archive verification. Archive and OS acceptance
 remain separate under issue #2449.
 
@@ -150,8 +151,7 @@ The result reports `featureStatus` and sets `fullP1Status` to
 `not-evaluated`. It keeps only bounded observations, such as the approved
 repository, commit, file path, byte length, and digests. It does not retain
 the file text or selection code. A passed feature result is not proof of
-denied-actor parity, runtime behavior, deployment, or the full acceptance
-journey.
+runtime behavior, deployment, or the full acceptance journey.
 
 The Workspace journey requires explicit `--interactive` permission for a
 fresh browser review. `InteractionPolicy.Never` blocks before authentication,

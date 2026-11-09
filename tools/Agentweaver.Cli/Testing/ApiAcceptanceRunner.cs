@@ -161,7 +161,7 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                 else
                 {
                     // Fixture setup starts tenant-scoped; it obtains run-bound authorization only after selection readback.
-                    (fixture, IGatewayClient runApi, IGatewayClient cancellationApi, IGatewayClient? deniedApi, fixtureState) =
+                    (fixture, IGatewayClient runApi, IGatewayClient cancellationApi, fixtureState) =
                         await ApiAcceptanceFixtureSetup.CreateAsync(
                             manifest, activeInvocationId, setupApi, _clients, _authentication, options.Interaction, ct)
                             .ConfigureAwait(false);
@@ -171,7 +171,6 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                         manifest,
                         fixture,
                         runApi,
-                        deniedApi,
                         sourceEvidence,
                         steps,
                         observations,

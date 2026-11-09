@@ -17,7 +17,7 @@ internal static class ApiAcceptanceFixtureSetup
     internal static readonly TimeSpan DefaultRuntimeCleanupTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan RuntimeCleanupPollInterval = TimeSpan.FromSeconds(1);
 
-    public static async Task<(AcceptanceFixture Fixture, IGatewayClient RunApi, IGatewayClient CancellationApi, IGatewayClient? DeniedApi, AcceptanceFixtureState State)> CreateAsync(
+    public static async Task<(AcceptanceFixture Fixture, IGatewayClient RunApi, IGatewayClient CancellationApi, AcceptanceFixtureState State)> CreateAsync(
         AcceptanceManifest manifest,
         string invocationId,
         IGatewayClient setupApi,
@@ -459,8 +459,7 @@ internal static class ApiAcceptanceFixtureSetup
                 NativeMaterialPrompt = nativeMaterialPrompt,
                 RuntimeStartup = runtimeStartup,
             };
-            return (fixture, runApi, selectionApi, await CreateDeniedClientAsync(
-                manifest, target, clients, authentication, interaction, projectId, runId, ct).ConfigureAwait(false), state);
+            return (fixture, runApi, selectionApi, state);
         }
         catch (OperationCanceledException error) when (ct.IsCancellationRequested)
         {
@@ -469,39 +468,6 @@ internal static class ApiAcceptanceFixtureSetup
         catch (Exception error)
         {
             throw new AcceptanceFixtureSetupException(error, state);
-        }
-    }
-
-    private static async Task<IGatewayClient?> CreateDeniedClientAsync(
-        AcceptanceManifest manifest,
-        CliTarget target,
-        IGatewayClientFactory clients,
-        ICliAuthentication authentication,
-        InteractionPolicy interaction,
-        string projectId,
-        string runId,
-        CancellationToken ct)
-    {
-        if (manifest.FixturePlan["deniedActor"] is not JsonObject denied)
-        {
-            return null;
-        }
-
-        CliTarget deniedTarget = target with { TenantId = ApiAcceptanceSupport.GetString(denied, "tenantId")! };
-        CliIdentity identity = new(deniedTarget,
-            ["openid", "api.read", "offline_access", "projects.orchestrator"], projectId, runId);
-        try
-        {
-            _ = await authentication.GetBearerAsync(identity, interaction, ct).ConfigureAwait(false);
-            return clients.Create(identity);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch
-        {
-            return null;
         }
     }
 

@@ -73,10 +73,10 @@ Product cleanup needs separate current owner authority and observed receipts.
 ## Legacy 0.x MCP compatibility journey
 
 The exported `runP1McpJourney` function reads journal pages through the
-discovered `agentweaver_replayRunEvents` tool. The API client still reads
-owner snapshots and verifies a denied-actor `403`, but API replay does not
-count as MCP evidence. Gate-answer, approval, rejection, and addressed-message
-journeys call the corresponding discovered Gateway-derived MCP tool.
+discovered `agentweaver_replayRunEvents` tool. The API client reads owner
+snapshots; API replay does not count as MCP evidence. Gate-answer, approval,
+rejection, and addressed-message journeys call the corresponding discovered
+Gateway-derived MCP tool.
 
 The retained legacy CLI creates and verifies an invocation-owned project, grants,
 selection, and sessions before it supplies those receipts to the selected
@@ -89,13 +89,11 @@ indeterminate and is not retried. The runner does not invoke an Orchestrator dis
 Supply the same `executionIntent: "execute"` manifest and four
 `deploymentEvidence` paths documented by the API harness. `fixturePlan`
 requires a positive `expectedPlatformRuntimeRevision`, the exact selection
-context, and the selected gate or message content. A distinct
-`fixturePlan.deniedActor` is optional. When supplied, it must remain a distinct
-actor with its own token. When omitted, the `valid-denied-actor-403` step is
-recorded as blocked with the explicit missing-account reason; the runner
-continues other checks, but the surface and complete acceptance result cannot
-pass. Do not substitute the signed-in actor or change any role or access grant.
-The runner sends that expected revision through the existing run-selection
+context, and the selected gate or message content. The API journeys do not run
+a cross-actor denial probe or require a second
+Broker account. The manifest rejects unknown `fixturePlan` fields, including
+fields for a second actor. Do not change any role or access grant. The runner
+sends that expected revision through the existing run-selection
 request and verifies the accepted and observed owner selection revisions.
 This plan value is not authority or an ownership receipt; the owner
 compare-and-swap checks it against current state. The fixture retains its

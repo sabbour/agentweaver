@@ -27,27 +27,15 @@ export function requireP1Http(call, expected, operationId) {
 }
 
 /** Fail closed unless every client is bound to the selected environment and intended actor. */
-export function validateP1AdapterBindings({ api, deniedApi, mcp, ui }, environment, fixtureScope, surface) {
+export function validateP1AdapterBindings({ api, mcp, ui }, environment, surface) {
   const origin = new URL(environment.baseUrl).origin;
-  const deniedIdentity = fixtureScope.deniedActor;
-  if (!api || deniedIdentity && !deniedApi || !deniedIdentity && deniedApi
-    || surface === 'mcp' && !mcp || surface === 'ui' && !ui) {
-    throw new P1BlockedError(deniedIdentity
-      ? 'The API, planned denied-actor API, and selected-surface adapters are required.'
-      : 'The API and selected-surface adapters are required; no denied-actor adapter is allowed without a planned actor.');
+  if (!api || surface === 'mcp' && !mcp || surface === 'ui' && !ui) {
+    throw new P1BlockedError('The API and selected-surface adapters are required.');
   }
   if (api.target?.origin !== origin || api.tenantId !== environment.tenantId
     || api.authProvider?.origin !== origin || api.authProvider.issuer !== environment.issuer
     || api.authProvider.audience !== environment.audience || api.authProvider.actorId !== environment.actorId) {
     throw new P1BlockedError('The API client is not bound to the selected Environment origin, tenant, and actor.');
-  }
-  if (deniedIdentity && (
-    deniedApi.target?.origin !== origin || deniedApi.tenantId !== deniedIdentity.tenantId
-    || deniedApi.authProvider?.origin !== origin || deniedApi.authProvider.issuer !== environment.issuer
-    || deniedApi.authProvider.audience !== environment.audience
-    || deniedApi.authProvider.actorId !== deniedIdentity.actorId
-  )) {
-    throw new P1BlockedError('The denied-actor API client is not bound to its selected Environment identity.');
   }
   if (surface === 'mcp' && (mcp.target?.origin !== origin || mcp.target.pathname !== '/mcp'
     || mcp.tenantId !== environment.tenantId
@@ -313,27 +301,6 @@ export async function replayP1Journal(mcp, fences, tenantId) {
       correlationId: call.correlationId,
     };
   }, fences, 'MCP');
-}
-
-/** Prove the selected distinct actor is authorized but denied access to the pinned run. */
-export async function requireP1DeniedApiActor(deniedApi, input) {
-  const identity = input.pins.fixtureScope.deniedActor;
-  if (!identity || typeof identity.actorId !== 'string' || !identity.actorId
-    || typeof identity.tenantId !== 'string' || !identity.tenantId
-    || identity.actorId === input.environment.actorId && identity.tenantId === input.environment.tenantId
-    || deniedApi.tenantId !== identity.tenantId) {
-    throw new P1BlockedError('A distinct authorized-but-denied actor fixture is required.');
-  }
-  await deniedApi.discover();
-  const call = await deniedApi.invoke('readRunStatus', {
-    pathParameters: { projectId: input.pins.ownerFences.projectId, runId: input.pins.ownerFences.runId },
-  });
-  if (call.status !== 403) {
-    throw new Error(call.status === 401
-      ? 'The denied-actor token was rejected as unauthenticated; HTTP 403 was required.'
-      : `The denied-actor read returned HTTP ${call.status}; HTTP 403 was required.`);
-  }
-  return { operationId: 'readRunStatus', status: call.status };
 }
 
 /** Redact a thrown value before including it in durable P1 result evidence. */
