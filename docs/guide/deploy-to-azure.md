@@ -335,9 +335,13 @@ separate.
    protection key-ring volume.
 2. Provide the operator-owned Gateway and MCP compatibility backend TLS
    Secrets, plus the public backend CA ConfigMap. Each certificate must match
-   the service DNS name required by the manifests. AKS creates
-   `identity-broker-tls` from a managed `DefaultDomainCertificate`; do not
-   create that Secret manually.
+   the service DNS name required by the manifests. Also provide
+   `identity-broker-internal-tls` in namespace `agentweaver` as a
+   `kubernetes.io/tls` Secret. Its certificate must match
+   `identity-broker.agentweaver.svc.cluster.local` and chain to
+   `service-backend-ca`. AKS creates the separate public
+   `identity-broker-tls` Secret from a managed `DefaultDomainCertificate`; do
+   not create that Secret manually.
 3. When using the AgentHost profile, provide `agenthost-tls` in namespace
    `agentweaver` as a `kubernetes.io/tls` Secret for the configured HTTPS
    endpoint. The deployment helper checks only its name and type through

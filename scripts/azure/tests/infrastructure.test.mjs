@@ -4,6 +4,35 @@ import { readFileSync } from 'node:fs';
 import { parse } from 'yaml';
 import { runAz, run } from '../lib/exec.mjs';
 
+test('Broker uses its internal certificate for service SNI and keeps the public wildcard fallback', () => {
+  const config = JSON.parse(readFileSync(
+    'services/identity/Agentweaver.Identity.Broker/appsettings.Production.json',
+    'utf8',
+  ));
+  const sni = config.Kestrel.Endpoints.Https.Sni;
+  assert.deepEqual(Object.keys(sni).sort(), ['*', 'identity-broker.agentweaver.svc.cluster.local']);
+  assert.deepEqual(sni['identity-broker.agentweaver.svc.cluster.local'].Certificate, {
+    Path: '/var/run/identity-broker-internal-tls/tls.crt',
+    KeyPath: '/var/run/identity-broker-internal-tls/tls.key',
+  });
+  assert.deepEqual(sni['*'].Certificate, {
+    Path: '/var/run/identity-broker-tls/tls.crt',
+    KeyPath: '/var/run/identity-broker-tls/tls.key',
+  });
+
+  const deployment = parse(readFileSync('deploy/k8s/base/identity-broker/deployment.yaml', 'utf8'));
+  const pod = deployment.spec.template.spec;
+  const container = pod.containers.find(item => item.name === 'identity-broker');
+  assert.ok(container.volumeMounts.some(mount =>
+    mount.name === 'internal-tls-certificate' &&
+    mount.mountPath === '/var/run/identity-broker-internal-tls' &&
+    mount.readOnly === true));
+  const secret = pod.volumes.find(volume => volume.name === 'internal-tls-certificate').secret;
+  assert.equal(secret.secretName, 'identity-broker-internal-tls');
+  assert.equal(secret.optional, false);
+  assert.deepEqual(secret.items.map(item => item.key), ['tls.crt', 'tls.key']);
+});
+
 test('Broker container includes the canonical embedded runtime grants before its build', () => {
   const dockerfile = readFileSync('services/identity/Agentweaver.Identity.Broker/Dockerfile', 'utf8');
   const project = readFileSync('services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj', 'utf8');
