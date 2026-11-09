@@ -71,6 +71,8 @@ tree, each ACR digest, and AgentHost's `linux/amd64` compressed pull-byte
 measurement. All candidate images target `linux/amd64`, as the workflow does
 on its Ubuntu builder. The builder does not create role assignments. If the
 identity does not have push access, stop and ask an authorized ACR administrator.
+The size check accepts OCI and Docker gzip-layer descriptors and reads their
+sizes without downloading the image layers.
 `az acr login` stores Docker credentials in the configured credential store.
 After the ACR work is complete, remove that login with
 `az acr logout --name <acr-name>`.
