@@ -222,12 +222,30 @@ The deploy helper restarts Events & Sessions when its runtime map changes, so
 that it reads the new binding map and rate card. You do not have to restart
 it.
 
-The deploy helper also lets AgentHost reach the BYOK endpoints. It reads the
-host of each BYOK binding in the rendered AgentHost map, and adds the host to
-the `agenthost-model-egress` Cilium network policy as an exact DNS name on TCP
-port 443. It adds no other host. If you remove all BYOK bindings, the policy
-allows only DNS. The deploy stops if a BYOK `BaseUrl` is not an HTTPS Azure
-OpenAI endpoint on port 443. Do not edit the policy by hand.
+The deploy helper also lets AgentHost reach the model services. It reads the
+model bindings in the rendered AgentHost map, and adds hosts to the
+`agenthost-model-egress` Cilium network policy as exact DNS names on TCP port
+443:
+
+- For each BYOK binding, it adds the host of the binding `BaseUrl`.
+- If at least one binding uses the GitHub Copilot provider (`SourceMode`
+  `HostedCopilot`), it adds the GitHub Copilot hosts in the table that follows.
+
+| Host | Use |
+|---|---|
+| `api.github.com` | The Copilot CLI reads the Copilot user record. The record gives the Copilot API host for the plan of the user. |
+| `api.githubcopilot.com` | Default Copilot API host. |
+| `api.individual.githubcopilot.com` | Copilot API host for individual plans. |
+| `api.business.githubcopilot.com` | Copilot API host for Copilot Business. |
+| `api.enterprise.githubcopilot.com` | Copilot API host for Copilot Enterprise. |
+
+The helper adds no other host and no wildcard. Copilot telemetry,
+experiment, and public-code matching hosts are not in the list, because a model
+turn does not need them. GitHub Enterprise Cloud with data residency
+(`ghe.com`) is not supported. If the map has no BYOK binding and no GitHub
+Copilot binding, the policy allows only DNS. The deploy stops if a BYOK
+`BaseUrl` is not an HTTPS Azure OpenAI endpoint on port 443. Do not edit the
+policy by hand.
 
 Source commits before this change cannot use `--model-bindings`.
 `npm run azure:deploy-from-commit` stops when the commit does not support it.

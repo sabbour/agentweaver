@@ -1262,11 +1262,21 @@ function stampAgentHostRuntime(resources, tuple) {
 
 const AGENTHOST_MODEL_EGRESS_POLICY = 'agenthost-model-egress';
 const BYOK_HOST_SUFFIXES = ['.openai.azure.com', '.cognitiveservices.azure.com', '.services.ai.azure.com'];
+// The Copilot CLI reads endpoints.api from api.github.com/copilot_internal/user. The value depends
+// on the Copilot plan of the user; api.githubcopilot.com is the default.
+const COPILOT_MODEL_HOSTS = [
+  'api.github.com',
+  'api.githubcopilot.com',
+  'api.individual.githubcopilot.com',
+  'api.business.githubcopilot.com',
+  'api.enterprise.githubcopilot.com',
+];
 const DNS_NAME = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
 /**
  * Allow AgentHost to reach exactly the HTTPS hosts of the BYOK model bindings in the rendered
- * AgentHost runtime map. The checked-in policy allows only DNS, so this derives the hosts from
+ * AgentHost runtime map, and the GitHub Copilot hosts when the map has a HostedCopilot binding.
+ * The checked-in policy allows only DNS, so this derives the hosts from
  * the same map that AgentHost reads and removes hosts when bindings are removed.
  */
 export function stampAgentHostModelEgress(resources) {
@@ -1280,6 +1290,10 @@ export function stampAgentHostModelEgress(resources) {
   }
   const hosts = new Set();
   for (const [reference, binding] of Object.entries(bindings)) {
+    if (binding?.SourceMode === 'HostedCopilot') {
+      for (const host of COPILOT_MODEL_HOSTS) hosts.add(host);
+      continue;
+    }
     if (binding?.SourceMode !== 'Byok') continue;
     let endpoint;
     try {
@@ -1519,8 +1533,8 @@ export async function deployKustomize(options, overrides = {}) {
     stampAgentHostRuntime(resources, agentHostTuple);
     const modelHosts = stampAgentHostModelEgress(resources);
     log(modelHosts.length
-      ? `Allowed AgentHost BYOK model egress to ${modelHosts.join(', ')} on TCP 443.`
-      : 'No BYOK model bindings; AgentHost model egress allows DNS only.');
+      ? `Allowed AgentHost model egress to ${modelHosts.join(', ')} on TCP 443.`
+      : 'No HostedCopilot or BYOK model bindings; AgentHost model egress allows DNS only.');
     const probeUrls = byokEndpointProbeUrls(resources);
     const brokerRuntimeConfig = findBrokerRuntimeConfig(resources);
     const providerSetup = preflightBrokerRuntimeConfig(exec, context, root, brokerRuntimeConfig, resources);

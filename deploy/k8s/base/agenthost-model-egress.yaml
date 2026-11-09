@@ -1,7 +1,8 @@
-# AgentHost model egress for BYOK model bindings.
+# AgentHost model egress for HostedCopilot and BYOK model bindings.
 # The source form allows only DNS, which allow-dns-egress already allows.
 # `npm run deploy:kustomize` adds the HTTPS host of each SourceMode Byok binding in
 # ConfigMap/agenthost-runtime-v1 as an exact DNS and toFQDNs name on TCP 443.
+# If the map has a SourceMode HostedCopilot binding, it also adds the exact GitHub Copilot hosts.
 # Do not add hosts here; add BYOK bindings with a model bindings file (deploy:kustomize --model-bindings).
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
