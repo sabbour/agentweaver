@@ -2532,7 +2532,7 @@ function JournalList({ events }: { events: SessionEventEnvelope[] }) {
   if (events.length === 0) return <p className="v1-muted">No run activity is available yet.</p>;
   return (
     <ol className="v1-event-list">
-      {events.slice().reverse().map((event) => (
+      {events.map((event) => (
         <li key={event.eventId}>
           <div className="v1-event-meta"><time dateTime={event.occurredAt}>{new Date(event.occurredAt).toLocaleString()}</time></div>
           <p>{eventSummary(event)}</p>

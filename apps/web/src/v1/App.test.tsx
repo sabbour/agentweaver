@@ -1590,6 +1590,16 @@ describe('v1 web project scoping', () => {
           purpose: 'handoff',
         },
         objectReferences: [],
+      }, {
+        schemaVersion: 1,
+        eventVersion: 1,
+        eventId: 'action-event',
+        identity: { projectId: 'p1', runId: 'r1', sessionId: 'agent-a' },
+        position: 2,
+        occurredAt: '2026-01-01T00:01:00Z',
+        kind: 'toolCall',
+        payload: { kind: 'toolCall', state: 'failed' },
+        objectReferences: [],
       }],
       hasMore: false,
       nextCursor: null,
@@ -1597,7 +1607,11 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/runs/r1?view=activity');
     render(<App />);
 
-    expect(await screen.findByText('A message was recorded.')).toBeTruthy();
+    const activityHeading = await screen.findByRole('heading', { name: 'Run activity' });
+    const activity = activityHeading.closest('section');
+    const items = within(activity!).getAllByRole('listitem');
+    expect(items[0].textContent).toContain('A message was recorded.');
+    expect(items[1].textContent).toContain('An action needs attention.');
     expect(screen.queryByText(/message-1|agent-a|agent-b|thread 3|handoff/i)).toBeNull();
   });
 

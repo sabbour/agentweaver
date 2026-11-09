@@ -53,7 +53,9 @@ Open `/projects/:projectId`. The **Dashboard** shows:
 - A readiness card based on the saved configuration. It checks the default
   model, repository, team, and skills. Its status is **Ready**, **Setup
   needed**, or **Archived**. The main action opens the next setup step.
-- Quick actions: **Open Orchestrations** and **Open Memories**.
+- Quick actions follow the project status. A quiet project shows **Start task**
+  and opens **Orchestrations**. Other actions open the Board, Flow,
+  Orchestrations, or Memories, as available.
 - Summary tiles: **Active runs**, **Needs input**, **Runs in range**, and
   **Success**. **Success** is succeeded runs out of completed runs in the
   range. With no completed runs, it shows a dash. Each tile opens
@@ -80,6 +82,10 @@ and the metrics.
 **Prerequisites:** Permission to view the project. Capturing, editing,
 queueing, archiving, and changing prerequisites need permission to change the
 project. Deleting also requires a project token that is not bound to a run.
+
+The Board shows run counts from the same project metrics as the Dashboard.
+It also shows **Open runs**, **Human review**, **Problems**, and **Run history**
+above the task columns. **Refresh** reloads the backlog, metrics, and run lists.
 
 1. Select **Board** in the project rail, or open `/projects/:projectId/board`.
    A backlog promotion notification opens the same page.
@@ -129,7 +135,7 @@ later** on an open Backlog or Ready task to change its position when that
 action is available. If you can change the project and eligible backlog tasks
 exist, select **Send all to Ready** to queue them together. These actions
 change project backlog state; they do not start a run. The **Human Review**
-and **Problems** columns are not available.
+and **Problems** run lists appear above the task columns.
 
 ## Open an existing run
 
