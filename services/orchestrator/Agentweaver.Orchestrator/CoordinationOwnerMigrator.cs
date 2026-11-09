@@ -215,7 +215,7 @@ public static class CoordinationOwnerMigrator
         // record, the spend_budget_reservations table, and the spend_budget_accounting_cursors table.
         // Six columns cover version 030: its migration record, its two tables, and its three unique indexes.
         // Two columns cover version 031: its migration record and the promotion dismissal table.
-        // Additive migrations 032, 036, 037, 038, 039, 040, 041, 042, and 043 remain optional to readiness
+        // Additive migrations 032, 033, and 035-045 remain optional to readiness.
         // so the owner can start before maintenance applies the reviewed plan; accept only complete shapes.
         await using var command = new NpgsqlCommand($"""
             SELECT
@@ -862,10 +862,7 @@ public static class CoordinationOwnerMigrator
             Enumerable.Range(50, 4).Any(column => !reader.GetBoolean(column)) ||
             !reader.GetBoolean(53) || !reader.GetBoolean(54) ||
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
-            // Columns 57 onward are boolean checks. The three version 028 checks, the three version 029
-            // checks, the six version 030 checks, and the two version 031 checks precede the
-            // optional-033, optional-032, optional-036, optional-035, optional-037, and optional-038 shape checks.
-            // A partial apply never counts as ready.
+            // Columns 57 onward are boolean checks for complete migration shapes. A partial apply never counts as ready.
                 Enumerable.Range(57, 54).Any(column => !reader.GetBoolean(column)))
                     throw new InvalidOperationException(
                         "Orchestrator coordination schema is not current; run the explicit --migrate command.");

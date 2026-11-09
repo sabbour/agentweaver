@@ -9,8 +9,8 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests for the plan gates. They need no database: every gate throws before a connection opens.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "fd371c90f8c98ea3d0e5f390458c5baff45310aa7a05b9ae697f1381da48f4b3";
-    private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38, 39, 40, 41, 42];
+    private const string ReviewedPlanSha256 = "78598665bcf0d8b06f51482483d9803d9ef9a85b6a04efbbf791495e943ca282";
+    private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 11)];
     private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 12)];
 
@@ -37,12 +37,17 @@ public sealed class PlannedRuntimeGrantsTests
         Assert.Contains(40, core.Versions);
         Assert.Contains(41, core.Versions);
         Assert.Contains(42, core.Versions);
+        Assert.Contains(43, core.Versions);
+        Assert.Contains(44, core.Versions);
+        Assert.Contains(45, core.Versions);
         Assert.DoesNotContain(34, core.Versions);
         Assert.Contains(35, core.Versions);
         Assert.NotEmpty(core.Tables);
         var runStartIntents = Assert.Single(core.Tables, table => table.Table == "runtime_run_start_intents");
         Assert.Equal(["SELECT", "INSERT", "UPDATE"], runStartIntents.Privileges);
         Assert.Null(runStartIntents.LockColumn);
+        var replacements = Assert.Single(core.Tables, table => table.Table == "runtime_replacement_operations");
+        Assert.Equal(["SELECT", "INSERT", "UPDATE"], replacements.Privileges);
         var pullRequestRecords = Assert.Single(core.Tables, table => table.Table == "source_control_pull_requests");
         Assert.Equal(["SELECT", "INSERT", "UPDATE"], pullRequestRecords.Privileges);
         var pullRequestOperations = Assert.Single(core.Tables, table => table.Table == "source_control_pull_request_operations");

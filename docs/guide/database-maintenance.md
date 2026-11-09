@@ -20,7 +20,7 @@ The runner applies these migrations, in this order:
 
 1. Identity Broker EF Core migrations, when you pass a Broker digest.
 2. Environment EF Core migrations 1 to 12.
-3. Orchestrator (Core) migrations 1 to 16, 18 to 33, and 35 to 42. Reserved gaps are not applied.
+3. Orchestrator (Core) migrations 1 to 16, 18 to 33, and 35 to 45. Reserved gaps are not applied.
 4. Events & Sessions migrations 1 to 11.
 
 The reviewed plan fixes these versions by hash. Core migration 017 is not in the
@@ -52,6 +52,13 @@ Migration 042 adds `runtime_run_start_intents`. The runtime role receives exactl
 migration row and table are both absent, or when the migration is recorded and
 the table has all 20 columns and the expected constraints. The column check
 uses PostgreSQL catalog metadata and does not require access to the table.
+
+Migrations 043 and 045 add the native root-turn completion and replay evidence
+kinds to `maf_runtime_evidence_receipts`. The existing runtime role keeps its
+`SELECT, INSERT` access to that append-only table. Migration 044 adds
+`runtime_replacement_operations`; the runtime role receives exactly
+`SELECT, INSERT, UPDATE` on that table. Readiness checks each migration and its
+complete table or constraint shape before it accepts the schema.
 
 ## What one run does
 
