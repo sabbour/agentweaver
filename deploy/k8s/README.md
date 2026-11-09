@@ -82,7 +82,7 @@ use the login server form `<name>.azurecr.io`. Sign in with Azure CLI and run
 pull access to the selected registry. This option applies to images selected
 by the manifest or `--image-tag`; omitted manifest images keep their live
 references and registries. `az acr login` stores Docker credentials in the
-configured credential store; remove them with `az acr logout --name <acr-name>`
+configured credential store; remove them with `docker logout <acr-login-server>`
 when finished.
 
 Before a migration or Kubernetes write, the helper checks that the live
