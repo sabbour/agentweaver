@@ -11,6 +11,7 @@ import {
   parseDeployKustomizeArgs,
   parseImageManifest,
   requireLiveByokBindingsPreserved,
+  stampAgentHostModelEgress,
 } from '../deploy-kustomize.mjs';
 import { buildIdentityBrokerProviderPlan } from '../../azure/lib/identity-broker-provider-setup.mjs';
 
@@ -25,6 +26,7 @@ const brokerRuntimeConfig = JSON.parse(readFileSync(
 const brokerRuntimeConfigName = 'identity-broker-runtime-config-v3';
 const readYaml = relativePath => parse(readFileSync(path.join(root, relativePath), 'utf8'));
 const agentHostRuntimeConfig = readYaml('deploy/k8s/profiles/agenthost/runtime-config.example.yaml');
+const agentHostModelEgress = readYaml('deploy/k8s/base/agenthost-model-egress.yaml');
 const environmentRuntimeConfig = JSON.parse(readFileSync(
   path.join(root, 'deploy', 'k8s', 'runtime-configs', 'environment-runtime-config.json'), 'utf8',
 ));
@@ -314,6 +316,7 @@ function renderedRoot(kustomizationPath, {
     stringify(runtimeConfig),
     stringify(environmentRuntimeConfig),
     stringify(agentHostRuntimeConfig),
+    stringify(agentHostModelEgress),
     ...resources.map(stringify),
   ].join('---\n');
 }
@@ -692,6 +695,52 @@ test('deploy stops when the rendered AgentHost map drops a live BYOK binding or 
     assert.throws(() => requireLiveByokBindingsPreserved(live, desired), /would remove or change live BYOK model binding\(s\) byok/);
   }
 });
+test('deploy allows AgentHost model egress to exactly the rendered BYOK hosts on TCP 443', () => {
+  const render = bindings => [
+    { kind: 'ConfigMap', metadata: { name: 'agenthost-runtime-v1' },
+      data: { 'appsettings.json': JSON.stringify({ AgentHost: { ModelBindings: bindings } }) } },
+    structuredClone(agentHostModelEgress),
+  ];
+  const byok = baseUrl => ({ SourceMode: 'Byok', Provider: { BaseUrl: baseUrl } });
+  const hosted = { SourceMode: 'HostedCopilot', Provider: { BaseUrl: 'https://api.githubcopilot.com' } };
+
+  const none = render({ hosted });
+  assert.deepEqual(stampAgentHostModelEgress(none), []);
+  assert.deepEqual(none[1].spec, agentHostModelEgress.spec);
+
+  const resources = render({
+    hosted,
+    a: byok('https://Demo.openai.azure.com/openai/v1'),
+    b: byok('https://demo.openai.azure.com:443/openai/v1/'),
+    c: byok('https://other.cognitiveservices.azure.com'),
+  });
+  const names = [{ matchName: 'demo.openai.azure.com' }, { matchName: 'other.cognitiveservices.azure.com' }];
+  assert.deepEqual(stampAgentHostModelEgress(resources),
+    ['demo.openai.azure.com', 'other.cognitiveservices.azure.com']);
+  assert.deepEqual(resources[1].spec.egress, [
+    { ...agentHostModelEgress.spec.egress[0],
+      toPorts: [{ ...agentHostModelEgress.spec.egress[0].toPorts[0], rules: { dns: names } }] },
+    { toFQDNs: names, toPorts: [{ ports: [{ port: '443', protocol: 'TCP' }] }] },
+  ]);
+
+  for (const baseUrl of [
+    'http://demo.openai.azure.com/openai/v1',
+    'https://demo.openai.azure.com:8443/openai/v1',
+    'https://user@demo.openai.azure.com/openai/v1',
+    'https://example.com/openai/v1',
+    'https://openai.azure.com.example.com/openai/v1',
+    'not a url',
+  ]) {
+    assert.throws(() => stampAgentHostModelEgress(render({ a: byok(baseUrl) })),
+      /BYOK model binding a must use an HTTPS Azure OpenAI BaseUrl on port 443/, baseUrl);
+  }
+  const missing = render({ a: byok('https://demo.openai.azure.com/openai/v1') }).slice(0, 1);
+  assert.throws(() => stampAgentHostModelEgress(missing), /DNS-only CiliumNetworkPolicy\/agenthost-model-egress/);
+  const widened = render({});
+  widened[1].spec.egress.push({ toEntities: ['world'] });
+  assert.throws(() => stampAgentHostModelEgress(widened), /DNS-only CiliumNetworkPolicy\/agenthost-model-egress/);
+});
+
 test('v1 image workflow builds the ten existing Kustomize images from exact source commits', () => {
   const workflow = readYaml('.github/workflows/v1-integration-images.yml');
   const entries = workflow.jobs['build-and-push'].strategy.matrix.include;
@@ -1054,6 +1103,8 @@ test('active installer stamps the selected AgentHost platform digest and measure
       assert.equal(Number(envSettings.Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes),
         tuple.CompressedPullBytes);
       assert.notEqual(tuple.CompressedPullBytes, 322214685);
+      assert.deepEqual(applied.items.find(resource => resource.kind === 'CiliumNetworkPolicy' &&
+        resource.metadata.name === 'agenthost-model-egress')?.spec, agentHostModelEgress.spec);
       facts.push({ digest: tuple.Digest, bytes: tuple.CompressedPullBytes });
     }
     assert.notEqual(facts[0].digest, facts[1].digest);

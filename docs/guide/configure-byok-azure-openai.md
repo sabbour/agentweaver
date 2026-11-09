@@ -40,8 +40,8 @@ Azure OpenAI has two endpoint forms. Both forms support both wire APIs.
 | Versioned API | `azure` | `https://<resource>.openai.azure.com/` | Required, for example `2025-04-01-preview`. |
 
 The host must end in `.openai.azure.com`, `.cognitiveservices.azure.com`, or
-`.services.ai.azure.com`. The endpoint must use HTTPS. It cannot contain user
-information, a query, or a fragment.
+`.services.ai.azure.com`. The endpoint must use HTTPS on port 443. It cannot
+contain user information, a query, or a fragment.
 
 ## Find the token prices
 
@@ -203,8 +203,16 @@ The deploy helper stops if the rendered AgentHost map would remove a live
 BYOK binding, or change it without a new model-binding revision. Add or change
 the binding in the source with this procedure before you deploy.
 
-AgentHost must also be able to reach the Azure OpenAI endpoint through the
-cluster network policy.
+The deploy helper also lets AgentHost reach the BYOK endpoints. It reads the
+host of each BYOK binding in the rendered AgentHost map, and adds the host to
+the `agenthost-model-egress` Cilium network policy as an exact DNS name on TCP
+port 443. It adds no other host. If you remove all BYOK bindings, the policy
+allows only DNS. The deploy stops if a BYOK `BaseUrl` is not an HTTPS Azure
+OpenAI endpoint on port 443. Do not edit the policy by hand.
+
+After you select the model for a project, run one turn in the project. Make
+sure that the turn gets a model response. A connection error or a time-out can
+show that the AgentHost pod cannot reach the endpoint.
 
 ## Select the model for a project
 

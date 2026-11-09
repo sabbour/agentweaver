@@ -463,11 +463,11 @@ internal static class ByokModelCommands
                 throw new CliUsageException("'wireApi' must be responses or completions.");
             var apiVersion = OptionalString(input, "azureApiVersion");
             if (!Uri.TryCreate(String(input, "endpoint"), UriKind.Absolute, out var endpoint) ||
-                endpoint.Scheme != Uri.UriSchemeHttps || endpoint.UserInfo.Length != 0 ||
+                endpoint.Scheme != Uri.UriSchemeHttps || endpoint.Port != 443 || endpoint.UserInfo.Length != 0 ||
                 endpoint.Query.Length != 0 || endpoint.Fragment.Length != 0 ||
                 !AzureHostSuffixes.Any(suffix => endpoint.Host.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)))
                 throw new CliUsageException(
-                    "'endpoint' must be an HTTPS Azure OpenAI endpoint without user information, query, or fragment.");
+                    "'endpoint' must be an HTTPS Azure OpenAI endpoint on port 443 without user information, query, or fragment.");
             var path = endpoint.AbsolutePath.TrimEnd('/');
             var validShape = providerType switch
             {

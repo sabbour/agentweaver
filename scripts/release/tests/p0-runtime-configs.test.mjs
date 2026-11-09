@@ -1047,6 +1047,16 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
   ];
   for (const name of requiredCiliumPolicies)
     assert.ok(ciliumPolicyNames.has(name), `${name} must be rendered by the P0 prerequisite overlay`);
+  // The deploy helper adds BYOK hosts; the source form must allow DNS only.
+  const modelEgress = resources.find(resource => resource.kind === 'CiliumNetworkPolicy' &&
+    resource.metadata.name === 'agenthost-model-egress');
+  assert.deepEqual(modelEgress?.spec, {
+    endpointSelector: { matchLabels: { 'agentweaver.io/workload': 'agenthost' } },
+    egress: [{
+      toEndpoints: [{ matchLabels: { 'k8s:io.kubernetes.pod.namespace': 'kube-system', 'k8s:k8s-app': 'kube-dns' } }],
+      toPorts: [{ ports: [{ port: '53', protocol: 'UDP' }, { port: '53', protocol: 'TCP' }] }],
+    }],
+  });
   assert.deepEqual([...namesFor('NetworkPolicy')].sort(), ['allow-dns-egress', 'default-deny-all']);
   const sharedServices = [
     'events-and-sessions', 'gateway', 'identity-broker', 'knowledge', 'mcp',

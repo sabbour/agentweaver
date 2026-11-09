@@ -1,0 +1,27 @@
+# AgentHost model egress for BYOK model bindings.
+# The source form allows only DNS, which allow-dns-egress already allows.
+# `npm run deploy:kustomize` adds the HTTPS host of each SourceMode Byok binding in
+# ConfigMap/agenthost-runtime-v1 as an exact DNS and toFQDNs name on TCP 443.
+# Do not add hosts here; add BYOK bindings with `agentweaver models byok plan` and `apply`.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: agenthost-model-egress
+  namespace: agentweaver
+  labels:
+    agentweaver.io/service: agenthost
+spec:
+  endpointSelector:
+    matchLabels:
+      agentweaver.io/workload: agenthost
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
