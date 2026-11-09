@@ -52,10 +52,11 @@ decision.
 
 Project-wide Knowledge search uses
 `GET /api/v1/projects/{projectId}/knowledge/records`. Use a Broker token that
-is not bound to a run. The Knowledge owner checks current `AccessPrivateKnowledge`
-and direct project `ReadRunSelection` authority, then searches existing provider
-bindings across agents. Run-scoped create and update operations continue to use
-the run-and-agent routes.
+is not bound to a run. The Knowledge owner checks current effective
+`AccessPrivateKnowledge` for the project or its tenant, then reads existing
+Memory selections through the private Knowledge-selection route. This search
+does not require `ReadRunSelection`. Run-scoped create and update operations
+continue to use the run-and-agent routes.
 
 ## Configure the Gateway
 

@@ -113,7 +113,7 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
     }
 
     [Fact]
-    public async Task ProjectSearchDiscoversRecordsAcrossExistingRunsAndAgents()
+    public async Task ProjectSearchDiscoversRecordsAcrossExistingRunsAndAgentsWithoutRunSelectionPermission()
     {
         await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
         var owner = new FakeProjectsOwnerHandler(database.Options, writeAllowed: true, bindCaller: false);
@@ -145,6 +145,8 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
 
         await CreateRecordAsync("run-a", "agent-a", "project-search-a", "first run");
         await CreateRecordAsync("run-b", "agent-b", "project-search-b", "second run");
+        owner.DenyRunSelectionPermission();
+        owner.ClearPaths();
         using var search = new HttpRequestMessage(
             HttpMethod.Get,
             "/api/projects/project-a/knowledge/records?includeInactive=true&page=1&pageSize=50");
@@ -160,9 +162,29 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             ["agent-a", "agent-b"],
             items.Select(item => item.GetProperty("record").GetProperty("agentId").GetString())
                 .Order(StringComparer.Ordinal));
-        Assert.Contains(owner.Paths, path => path == "/api/projects/project-a/runs/run-a/selection");
-        Assert.Contains(owner.Paths, path => path == "/api/projects/project-a/runs/run-b/selection");
+        Assert.Contains(owner.Paths, path => path == "/internal/projects/project-a/runs/run-a/knowledge-selection");
+        Assert.Contains(owner.Paths, path => path == "/internal/projects/project-a/runs/run-b/knowledge-selection");
+        Assert.DoesNotContain(owner.Paths, path => path.StartsWith(
+            "/api/projects/project-a/runs/", StringComparison.Ordinal));
         Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+    }
+
+    [Fact]
+    public async Task ProjectSearchRequiresPrivateKnowledgePermission()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var owner = new FakeProjectsOwnerHandler(database.Options, writeAllowed: false, bindCaller: false);
+        await using var app = await CreateAppAsync(database, owner);
+        using var client = app.GetTestClient();
+        using var search = new HttpRequestMessage(HttpMethod.Get, "/api/projects/project-a/knowledge/records");
+        search.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+
+        using var response = await client.SendAsync(search);
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Contains("AccessPrivateKnowledge", body);
+        Assert.Equal(["/api/authorization/context"], owner.Paths.ToArray());
     }
 
     [Fact]
@@ -279,9 +301,14 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
         using var unbound = new HttpRequestMessage(HttpMethod.Get,
             "/api/projects/project-a/knowledge/records?kind=proposal&state=pending");
         unbound.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
-        using var revoked = await client.SendAsync(unbound);
-        Assert.Equal(HttpStatusCode.Forbidden, revoked.StatusCode);
-        Assert.Equal(["/api/authorization/context"], owner.Paths);
+        using var unboundResponse = await client.SendAsync(unbound);
+        using var unboundBody = JsonDocument.Parse(await unboundResponse.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, unboundResponse.StatusCode);
+        Assert.Equal(2, unboundBody.RootElement.GetProperty("totalCount").GetInt32());
+        Assert.Contains(owner.Paths, path =>
+            path == "/internal/projects/project-a/runs/run-a/knowledge-selection");
+        Assert.DoesNotContain(owner.Paths, path => path.StartsWith(
+            "/api/projects/project-a/runs/", StringComparison.Ordinal));
     }
 
     [Theory]

@@ -106,7 +106,8 @@ npm --prefix apps/web test
 ```
 
 These tests use test-owned stores and owner responses. They do not prove that
-Knowledge or the Gateway is deployed.
+Knowledge or the Gateway is deployed. The Knowledge suite checks that project
+search works without `ReadRunSelection` and still requires `AccessPrivateKnowledge`.
 
 ## Test native two-host dispatch and joining
 

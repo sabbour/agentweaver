@@ -121,9 +121,11 @@ signed project/run bindings when present. Every privileged request rechecks
 current membership and role state. Revocation takes effect without refreshing
 the broker token.
 
-Knowledge project-wide search requires direct project `ReadRunSelection`
-authority with an unbound Broker token. Knowledge uses it to verify existing
-run selections and provider pins; it does not create a run selection.
+Knowledge project-wide search requires an unbound Broker token and current
+effective `AccessPrivateKnowledge` for the project or its tenant. Knowledge
+reads only existing Memory provider selections through the private
+Knowledge-selection route. This does not grant access to general run selections
+or create a provider pin.
 
 The Identity broker validates upstream identity but does not forward upstream tenant or role claims or assign application roles. OAuth scopes remain necessary route permissions, but they are not authority by themselves. Role claims and request headers never create authority; missing, ambiguous, stale, or foreign memberships fail closed.
 

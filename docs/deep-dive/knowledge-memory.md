@@ -41,15 +41,16 @@ All listed files are under `services/knowledge/Agentweaver.Knowledge/`.
 
 An agent ID selects a row; it does not prove caller identity. Knowledge obtains
 fresh `AccessPrivateKnowledge` permission from Projects & Config for the
-project. `ReadProjects` allows metadata access, not private records. The caller
-also needs `ReadRunSelection` before Knowledge resolves the run's Memory
+project. `ReadProjects` allows metadata access, not private records. Run-scoped
+requests also need `ReadRunSelection` before Knowledge resolves the run's Memory
 provider.
 
 The service forwards the original bearer and optional tenant selector; it
 keeps no membership or role cache. Signed project/run bindings must match the
 request and owner response. Project-wide search uses an unbound bearer with
-current project `AccessPrivateKnowledge` and direct project `ReadRunSelection`.
-It searches all agents through existing run-provider bindings, rechecks those
+current effective `AccessPrivateKnowledge` for the project or its tenant. It
+reads each existing Memory selection through the private Knowledge-selection route,
+searches all agents through existing run-provider bindings, rechecks those
 bindings before returning results, and never creates a provider pin. Scoped
 search filters by project and agent before counting or returning results.
 Direct reads return the same not-found result
