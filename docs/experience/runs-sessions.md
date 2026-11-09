@@ -97,11 +97,11 @@ pass. Select **Refresh** for an immediate read.
 
 | Tab | What you can read or do |
 | --- | --- |
-| **Chat** | Read the run's **Activity** and message the coordinator, or the session you select in the run tree. This tab opens by default. |
+| **Chat** | Read recorded user and assistant messages when their text is available, and message the coordinator or a session you select in the run tree. This tab opens by default. |
 | **Topology** | Inspect the root and child sessions in an interactive graph. Select a node to read activity, lifecycle, blockers, and detach state. |
 | **Approvals** | Answer questions and approve or reject pending outcome, plan, or step approvals. The tab label shows the number of pending decisions. |
-| **Activity** | Read committed events, execution state, lifecycle, and blockers. |
-| **Changes** | Manage GitHub App repository access for the run. If the project doesn't use a GitHub App, the tab shows **No repository changes**. |
+| **Activity** | Read short summaries of messages, actions, decisions, and project rules. Internal journal fields are hidden. |
+| **Changes** | Manage GitHub App repository access and read produced files when available. A message about unavailable files reflects the current run state. |
 | **Usage** | Read owner usage and accounting totals. Missing or unpriced usage is not a zero-cost measurement. |
 | **Run settings** | Read the model, the revisions the run started with, and the platform components it can use. |
 
@@ -139,9 +139,10 @@ message under the composer. The list is local to the page; reloading clears
 it. The receipt means the owner accepted the message; it does not confirm
 delivery or run completion. If a send fails and you retry the same text, the
 app reuses the same request, so the message isn't sent twice. The **Messages**
-panel in **Chat** separately reads recorded user and assistant turns. The
-**Activity** view shows journal events and opaque object references, not chat
-text.
+panel in **Chat** reads recorded user and assistant turns from the run API.
+It shows message text only when the API returns it. Otherwise, it shows the
+message state without inventing text. The **Activity** view shows short event
+summaries, not chat text or internal journal fields.
 
 ## Answer a gate
 
@@ -195,7 +196,11 @@ partially priced usage summary does not mean that unpriced usage cost zero.
 - Snapshot errors appear on the affected area, such as run, run settings,
   usage, or session. A failed topology read does not fabricate a tree.
 - An empty tree or pending-request list reflects the owner response.
-- Activity displays loading, live, or reconnecting journal state.
+- The run status strip shows **Live**, **Connecting**, or **Reconnecting** for
+  journal updates. The **Activity** tab shows short event summaries, not
+  internal journal fields.
+- The **Messages** panel shows a state when recorded text is missing or cannot
+  be read. It does not show invented message text.
 - The app rejects responses for a different project, run, or session.
 
 ## Requests

@@ -835,7 +835,12 @@ function RunListGroup({
   return (
     <div>
       {data.error != null && <ErrorNotice>{runListErrorMessage(data.error)}</ErrorNotice>}
-      <RunList title={title} description={description} data={data} emptyText={data.loading ? 'Loading runs…' : emptyText} />
+      <RunList
+        title={title}
+        description={description}
+        data={data}
+        emptyText={data.loading ? 'Loading runs…' : data.error != null ? 'Run list could not be loaded.' : emptyText}
+      />
     </div>
   );
 }

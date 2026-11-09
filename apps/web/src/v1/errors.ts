@@ -5,11 +5,17 @@ import { RepoAppBrokerError } from './repoApp';
 /** Formats errors for display in page-level notices without exposing internal codes. */
 export function errorMessage(error: unknown): string {
   if (error instanceof GatewayError) {
-    if (error.status === 401) return 'Sign in to continue.';
-    if (error.status === 403) return 'You do not have permission to complete this request.';
-    if (error.status === 404) return 'The requested item could not be found.';
     const detail = error.message.trim();
-    if (detail && detail !== error.code && !/^The request failed with HTTP \d+\.$/.test(detail))
+    const normalizedDetail = detail.toLowerCase();
+    const hasUserDetail = detail.length > 0
+      && normalizedDetail !== error.code?.toLowerCase()
+      && !['unauthorized', 'forbidden', 'not found'].includes(normalizedDetail)
+      && !/^The request failed with HTTP \d+\.$/.test(detail);
+    if (error.status === 401) return hasUserDetail ? detail : 'Sign in to continue.';
+    if (error.status === 403)
+      return hasUserDetail ? detail : 'You do not have permission to complete this request.';
+    if (error.status === 404) return 'The requested item could not be found.';
+    if (hasUserDetail)
       return `HTTP ${error.status}: ${detail}`;
     return 'The request could not be completed. Try again.';
   }

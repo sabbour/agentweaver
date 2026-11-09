@@ -75,9 +75,9 @@ The client uses these routes:
 | `/sessions` | Reopen private conversations, list runs across projects, and start a new session. `/projects/:projectId/sessions` opens the same page. |
 | `/assistant` | Start a new session: choose a project and send the first message. `/console` opens the same page. |
 | `/projects` | Browse project tiles and create a project. The creator becomes its Owner. |
-| `/projects/:projectId` | Read the project **Dashboard**: setup readiness, metrics, usage, recent runs, team, and quick actions. |
+| `/projects/:projectId` | Read the project **Dashboard**: setup readiness, metrics, usage, recent runs, team, and quick actions. A quiet project offers **Start task**. |
 | `/projects/:projectId/orchestrations` | List this project's active and finished runs and open a run. |
-| `/projects/:projectId/board` | Read the project **Board**: backlog tasks in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture, edit, reorder, queue, archive, and manage prerequisites; delete eligible tasks after confirmation. |
+| `/projects/:projectId/board` | Read the project **Board**: run counts and run lists above backlog tasks in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture, edit, reorder, queue, archive, and manage prerequisites; delete eligible tasks after confirmation. |
 | `/projects/:projectId/team` | Read agents, edit an agent's role and charter, add a member, and export or import the team. |
 | `/projects/:projectId/team/cast` | Formulate a team from a goal, analyze read-only project signals, or start from a template; review a pending proposal before confirmation. |
 | `/projects/:projectId/settings?section=<key>` | Edit project settings by section, manage members, read history, and manage connections. |
@@ -144,8 +144,8 @@ Within a project, use these destinations:
 
 | Destination | Route | What you can do |
 | --- | --- | --- |
-| Dashboard | `/projects/:projectId` | Read setup readiness from the saved configuration, metric tiles, the **Activity** chart, run totals, model and agent usage, recent runs, and the team. Use quick actions to finish setup or open Orchestrations and Memories. |
-| Board | `/projects/:projectId/board` | Read the project backlog in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture and edit tasks, drag open tasks within or between **Backlog** and **Ready**, change queue state and order, manage prerequisites, archive or delete eligible tasks, and select **Refresh** to reload. |
+| Dashboard | `/projects/:projectId` | Read setup readiness from the saved configuration, metric tiles, the **Activity** chart, run totals, model and agent usage, recent runs, and the team. Status-based actions open Board, Flow, or Orchestrations. A quiet project offers **Start task**; other quick actions include Memories when available. |
+| Board | `/projects/:projectId/board` | Read run counts and **Open runs**, **Human review**, **Problems**, and **Run history** above the project backlog. Read tasks in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture and edit tasks, drag open tasks within or between **Backlog** and **Ready**, change queue state and order, manage prerequisites, archive or delete eligible tasks, and select **Refresh** to reload the backlog, metrics, and run lists. |
 | Orchestrations | `/projects/:projectId/orchestrations` | List the project's runs in **Active** and **Recent** sections, with a status summary. Select **Refresh** to reload. |
 | Agents | `/projects/:projectId/team` | Read the **Total**, **In the team**, and **Not in the team** counts. Filter the agent tiles. Open an agent to read its ID, team position, and skills, or edit its role and charter. Use **Cast team**, **Add member**, and **Sync**. |
 | Skills | `/projects/:projectId/skills` | Browse marketplace sources, preview and import Skills, read the inventory, and assign Skills to agents. |
@@ -162,8 +162,11 @@ the footer shows **Account**.
 
 ### Board and Start task
 
-The **Board** shows the project's backlog. It reads the backlog graph and
-the repository issues synced to tasks:
+The **Board** shows project runs and the project's backlog. Above the task
+columns, it shows run counts from the same project metrics as the Dashboard,
+plus **Open runs**, **Human review**, **Problems**, and **Run history**.
+**Refresh** reloads the backlog, metrics, and run lists. The task columns read
+the backlog graph and repository issues synced to tasks:
 
 - **Backlog** holds captured tasks. **Ready** holds tasks waiting to be
   claimed. **Active** holds claimed tasks. **Done** holds tasks whose issue or
@@ -196,16 +199,17 @@ the repository issues synced to tasks:
   first, a capture retries once with the new revision. Other revision
   conflicts reload the Board and ask you to try again.
 - Select **Send all to Ready** to queue eligible Backlog tasks when you can
-  change the project. **Human Review** and **Problems** columns aren't
-  available.
+  change the project. The **Human review** and **Problems** run lists appear
+  above the task columns; they are not task columns.
 - Without read access, the Board says you don't have permission to view it.
   A failed read shows the reason and **Try again**.
 
-**Start task** is the floating button at the top of every project page. It
-appears only when you can change the project. It opens **Start a task**, adds
-the task to that project's **Backlog**, and then opens the Board with a
-confirmation. Unlike 0.x, it doesn't start a run; open **New session** for
-that.
+**Start task** is the floating button at the top of a project page. It appears
+only when you can change the project. On **Overview**, it uses the most
+recently updated active project and appears only when you can change that
+project. The button opens **Start a task**, adds the task to the project's
+**Backlog**, and opens the Board with a confirmation. It does not start a run;
+open **New session** for that.
 
 ### Find a run
 
@@ -738,7 +742,6 @@ missing measurements with zero.
 
 These features are not available in this version:
 
-- The **Human Review** and **Problems** columns on the **Board**.
 - The count strip on **Memories**.
 - Metrics totaled across projects. **Overview** shows one project at a time.
 - Deleting, archiving, and retrying runs.

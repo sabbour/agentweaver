@@ -27,7 +27,8 @@ Gateway. The Gateway forwards each request to its owner.
 
 1. [Sign in](./onboarding-auth.md) through the Identity Broker.
 2. Read **Overview** for your projects, recent runs, metrics, and items that
-   need your input.
+   need your input. You can also start a task in the most recently updated
+   active project when you can change it.
 3. [Choose or create a project](./projects.md).
 4. [Edit project settings](./configuration.md), [manage Skills](./skills.md),
    and [connect accounts](./connections.md).
@@ -45,7 +46,7 @@ first, and load more rows with **Load more**.
 | Route | What you can do |
 | --- | --- |
 | `/` | Opens `/overview`. |
-| `/overview` | Read project metrics, recent runs, and items that need your input. |
+| `/overview` | Read project metrics, recent runs, and items that need your input. Start a task in the most recently updated active project when you can change it. |
 | `/sessions` | List runs across projects you can read and start a new session. |
 | `/assistant` | Start a session by choosing a project and writing the first message. `/console` opens the same page. |
 | `/projects` | Browse project tiles and create a project. |
@@ -81,8 +82,10 @@ notification links to the project Board. **Dismiss** hides a notification
 for you; it does not answer a request.
 
 On project pages, **Start task** adds a task to the project's Backlog and
-opens the Board. It appears only when you can change the project. It does not
-start a run. See [Projects](./projects.md#use-the-project-board).
+opens the Board. It appears only when you can change the project. On Overview,
+the button uses the most recently updated active project and appears only when
+you can change that project. **Start task** does not start a run. See
+[Projects](./projects.md#use-the-project-board).
 
 ## Model defaults
 

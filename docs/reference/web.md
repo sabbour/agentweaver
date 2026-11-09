@@ -33,16 +33,16 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/RunOutputCaptures.tsx` | **Produced files** on the run Changes tab: saved file sets and their patches. |
 | `src/v1/RemoteMcpOAuthCallbackPage.tsx` | Remote MCP OAuth popup return handling. |
 | `src/v1/RemoteMcpConnectionPanel.tsx` | Remote MCP saved connection list, connection status, sign-in, refresh, and disconnect in project settings. |
-| `src/v1/RetainedShell.tsx` | 0.x rail, project switcher, breadcrumbs, notification bell, and persona menu filled with Gateway projects and the Broker session. The rail also links to the Chief of Staff section on Overview. |
-| `src/v1/OverviewPage.tsx` | Cross-project home: Chief of Staff (Priorities, New chat, and My conversations), operations summary, recent projects, metrics for one selected project, recent runs, and items that need input. |
+| `src/v1/RetainedShell.tsx` | 0.x rail, project switcher, breadcrumbs, notification bell, and persona menu filled with Gateway projects and the Broker session. The rail links to the Chief of Staff section on Overview. The shell also provides **Start task** for the most recently updated active project when the user can change it. |
+| `src/v1/OverviewPage.tsx` | Cross-project home: operations summary, recent projects, metrics for one selected project, recent runs, and items that need input, followed by Chief of Staff (Priorities, New chat, and My conversations). |
 | `src/v1/SessionsPage.tsx` | Runs across all visible projects, newest first, with **Load more** and **New session**. |
 | `src/v1/NewSessionPage.tsx`, `src/v1/pendingRun.ts` | New session: create a run, sign in silently for that run, and start it. The pending run is kept in session storage across the sign-in. |
 | `src/v1/StopRunButton.tsx` | **Stop run** with a confirmation dialog and one idempotency key per dialog. |
 | `src/v1/ProjectMetricsSections.tsx`, `src/v1/projectMetrics.ts` | Project run metrics and usage over 7, 30, or 90 days. Costs show one subtotal for each price unit and disposition and are never added together. |
 | `src/v1/DashboardPage.tsx` | Project dashboard: readiness from configuration, metrics and usage, recent runs, team summary, and quick actions. |
 | `src/v1/OrchestrationsPage.tsx` | Project **Active** and **Recent** run lists with a status summary. |
-| `src/v1/BoardPage.tsx`, `src/v1/boardData.ts` | Project Board: backlog graph and synced issues in **Backlog**, **Ready**, **Active**, and **Done** columns, task capture, and title and description edits with revision checks. Column moves are disabled because no move operation exists. |
-| `src/v1/StartTaskAction.tsx` | Floating **Start task** button and dialog on project pages. It captures a task into the project backlog with the retained `CaptureTaskForm` and opens the Board. Hidden without permission to change the project. |
+| `src/v1/BoardPage.tsx`, `src/v1/boardData.ts` | Project Board: run metrics, **Open runs**, **Human review**, **Problems**, and **Run history** lists above the backlog graph and synced issues in **Backlog**, **Ready**, **Active**, and **Done** columns. Includes task capture, revision-checked edits, and refresh of backlog, metrics, and run lists. Column moves are disabled because no move operation exists. |
+| `src/v1/StartTaskAction.tsx` | **Start task** button and dialog on project pages and Overview. It captures a task into the project backlog with the retained `CaptureTaskForm` and opens the Board. On Overview, it uses the most recently updated active project. Hidden without permission to change the project. |
 | `src/v1/RunList.tsx`, `src/v1/runListData.ts` | Shared run list and its data source: the project run list API, with state filters and cursor paging. |
 | `src/v1/DecisionView.tsx`, `src/v1/decisionTitles.ts` | Shared decision view that rereads a gate before it approves or rejects. |
 | `src/v1/AttentionList.tsx`, `src/v1/runAttention.ts` | Caller notifications across projects, for Overview and the notification bell: pending gates and backlog promotions, each with **Dismiss**. |
@@ -72,14 +72,14 @@ data hooks are not mounted.
 | Browser route | Handler |
 | --- | --- |
 | `/` | Redirect to `/overview`. |
-| `/overview` | `OverviewPage`; the **Chief of Staff** rail link opens `/overview#chief-of-staff`. |
+| `/overview` | `OverviewPage`; the **Chief of Staff** rail link opens `/overview#chief-of-staff`. Operations summary, projects, metrics, recent runs, and items needing input come before Chief of Staff. The shell can start a task for the most recently updated active project. |
 | `/projects` | `ProjectsPage`. |
 | `/projects/:projectId` | `DashboardPage`. |
 | `/projects/:projectId/settings` | `ProjectConfigurationPage`; `section` selects `general`, `access`, `repository`, `models`, `components`, `limits`, `connections`, `history`, `danger`, or `advanced`. Missing or unknown values open `general`. |
 | `/projects/:projectId/skills` | `ProjectConfigurationPage` on its Skills section. |
 | `/projects/:projectId/team` | `ProjectConfigurationPage` on its Agents section. |
 | `/projects/:projectId/orchestrations` | `OrchestrationsPage`. |
-| `/projects/:projectId/board` | `BoardPage`. Each navigation reloads the backlog, so backlog promotion links and **Start task** show current tasks. |
+| `/projects/:projectId/board` | `BoardPage`. Each navigation reloads the backlog, run metrics, and run lists, so **Refresh** updates the full Board view. |
 | `/projects/:projectId/knowledge`, `/projects/:projectId/memories` | `KnowledgePage`; project-wide discovery globally pages records across accessible provider resources. Each project run links to its Session tree and Activity journal; `runId` and `agentId` query values prefill scoped record management. |
 | `/projects/:projectId/team/:agentName/memory` | Redirect to Memories with `agentId` prefilled. |
 | `/settings` | Account settings: clear the session and manage the Repo App account. |

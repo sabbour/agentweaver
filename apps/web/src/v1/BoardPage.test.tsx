@@ -265,6 +265,19 @@ describe('BoardPage', () => {
     expect(screen.getByText('Metrics are unavailable.')).toBeTruthy();
   });
 
+  it('does not report an empty run lane when its list read fails', async () => {
+    mocks.useProjectRunList.mockImplementation((_projectId: string, options?: { states?: string[] }) => {
+      if (options?.states?.[0] === 'active')
+        return { ...runList(), error: new Error('Run list failed.') };
+      return runList();
+    });
+    renderBoard();
+
+    expect(await screen.findByText('Run list failed.')).toBeTruthy();
+    expect(screen.getByText('Run list could not be loaded.')).toBeTruthy();
+    expect(screen.queryByText('No open runs.')).toBeNull();
+  });
+
   it('refreshes run metrics and every run lane with the Board', async () => {
     const reloadMetrics = vi.fn().mockResolvedValue(undefined);
     const reloads = {
