@@ -136,6 +136,17 @@ volume supports write, read, symbolic links, and UID 1000 ownership. A failure
 or a 10-minute timeout fails the command with the cause. The command always
 deletes the pod and claim.
 
+For each BYOK model endpoint host in the applied AgentHost runtime
+configuration, the pod also sends one HTTPS `GET <BaseUrl>/models` request with
+no key. The command does not read, mount, or pass the API key, and it drops any
+query string from the BaseUrl. The results are:
+
+- HTTP 401 or 403: pass. DNS, the egress policy, and TLS work for the host.
+- Another HTTP status: pass with a warning. Make sure that the BaseUrl is
+  correct.
+- No HTTP response (a DNS, connection, or TLS failure, or a 30-second
+  timeout): the command fails and names the host.
+
 The caller needs these extra permissions:
 
 | Scope | Permissions |

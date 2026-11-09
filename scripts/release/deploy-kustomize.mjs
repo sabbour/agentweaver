@@ -400,10 +400,44 @@ const SMOKE_FAILURES = {
 };
 
 /**
+ * Returns one keyless probe URL (`<BaseUrl path>/models`) for each BYOK endpoint host in the applied
+ * AgentHost runtime map. It reads only the configured BaseUrls, not the egress policy, and drops
+ * any query string or fragment so that no value from them reaches the network.
+ */
+export function byokEndpointProbeUrls(resources) {
+  const runtimeConfig = resources.find(resource =>
+    resource.kind === 'ConfigMap' && resource.metadata?.name === AGENTHOST_RUNTIME_CONFIG);
+  let bindings;
+  try {
+    bindings = JSON.parse(runtimeConfig?.data?.['appsettings.json'])?.AgentHost?.ModelBindings ?? {};
+  } catch {
+    fail(`ConfigMap/${AGENTHOST_RUNTIME_CONFIG} must contain valid appsettings.json.`);
+  }
+  const urls = new Map();
+  for (const [reference, binding] of Object.entries(bindings)) {
+    if (binding?.SourceMode !== 'Byok') continue;
+    let endpoint;
+    try {
+      endpoint = new URL(binding.Provider?.BaseUrl);
+    } catch {
+      endpoint = undefined;
+    }
+    if (!endpoint || endpoint.protocol !== 'https:' || endpoint.username || endpoint.password ||
+        !DNS_NAME.test(endpoint.hostname)) {
+      fail(`BYOK model binding ${reference} must use an HTTPS BaseUrl with a DNS host name.`);
+    }
+    if (!urls.has(endpoint.host)) {
+      urls.set(endpoint.host, `${endpoint.origin}${endpoint.pathname.replace(/\/+$/, '')}/models`);
+    }
+  }
+  return [...urls.values()];
+}
+
+/**
  * Starts a short-lived pod with the AgentHost labels, sandbox RuntimeClass, and a workspace volume.
  * The pod uses the same network policies as real AgentHost pods. It has no token, Secret, or settings.
  */
-async function runInstallSmokeCheck(exec, context, root, prerequisites, image, sleep, log) {
+async function runInstallSmokeCheck(exec, context, root, prerequisites, image, probeUrls, sleep, log) {
   const name = `agentweaver-install-smoke-${randomUUID().slice(0, 8)}`;
   const selector = `${SMOKE_LABEL}=true`;
   kubectl(exec, context, ['delete', 'pods,persistentvolumeclaims', '--selector', selector,
@@ -422,6 +456,17 @@ async function runInstallSmokeCheck(exec, context, root, prerequisites, image, s
     'echo ok > /workspace/smoke.txt && [ "$(cat /workspace/smoke.txt)" = ok ] || fail storage-write',
     'ln -s smoke.txt /workspace/smoke-link && [ "$(cat /workspace/smoke-link)" = ok ] || fail storage-symlink',
     '[ "$(stat -c %u /workspace/smoke.txt)" = 1000 ] || fail storage-owner',
+    // Keyless HTTPS GET for each BYOK URL (positional arguments). git has no credential or prompt here.
+    // The trailing "#" makes libcurl drop the "/info/refs?service=..." suffix that git appends,
+    // so the endpoint receives exactly GET <url> and answers 401 or 403 before routing.
+    'for url in "$@"; do',
+    '  host="${url#https://}"; host="${host%%/*}"',
+    '  status="$(GIT_TRACE_CURL=1 GIT_TRACE_CURL_NO_DATA=1 GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false ' +
+      'GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null timeout 30 git ls-remote "$url#" 2>&1 >/dev/null ' +
+      '| sed -n -E \'s#.*Recv header: HTTP/[0-9.]+ ([0-9]{3}).*#\\1#p\' | head -n 1)"',
+    '  [ -n "$status" ] || fail "byok:$host"',
+    '  echo "SMOKE_BYOK $host $status"',
+    'done',
     'echo SMOKE_OK',
   ].join('\n');
   const manifest = {
@@ -456,7 +501,7 @@ async function runInstallSmokeCheck(exec, context, root, prerequisites, image, s
         containers: [{
           name: 'smoke',
           image,
-          command: ['/bin/bash', '-c', script],
+          command: ['/bin/bash', '-c', script, 'smoke', ...probeUrls],
           resources: {
             requests: { cpu: '100m', memory: '128Mi' },
             limits: { cpu: '250m', memory: '256Mi' },
@@ -504,13 +549,23 @@ async function runInstallSmokeCheck(exec, context, root, prerequisites, image, s
     }
     const logs = kubectl(exec, context, ['logs', `pod/${name}`], root,
       'Could not read the install smoke check logs').stdout;
+    for (const [, host, status] of logs.matchAll(/^SMOKE_BYOK (\S+) (\d{3})$/gm)) {
+      log(['401', '403'].includes(status)
+        ? `BYOK endpoint ${host} answered HTTP ${status} without a key: DNS, egress, and TLS work.`
+        : `Warning: BYOK endpoint ${host} answered HTTP ${status} without a key (expected 401 or 403). ` +
+          'DNS, egress, and TLS work; check that the BaseUrl is correct.');
+    }
     if (phase === 'Succeeded' && /^SMOKE_OK$/m.test(logs)) {
       log('Install smoke check passed: AgentHost DNS and the workspace volume work in the sandbox runtime.');
       return;
     }
     const reason = logs.match(/^SMOKE_FAIL (\S+)$/m)?.[1];
+    const byokHost = reason?.startsWith('byok:') ? reason.slice(5) : undefined;
     fail(`Install smoke check failed: the AgentHost-labelled sandbox pod ` +
-      `${SMOKE_FAILURES[reason] ?? `stopped in phase ${phase} without a result`}.`);
+      (byokHost
+        ? `got no HTTPS response from BYOK endpoint ${byokHost} (DNS, connection, or TLS failure, or a ` +
+          '30-second timeout); check DNS for the host, the AgentHost model egress policy, and TLS.'
+        : `${SMOKE_FAILURES[reason] ?? `stopped in phase ${phase} without a result`}.`));
   } finally {
     const cleanup = exec('kubectl', ['delete', `pod/${name}`, `persistentvolumeclaim/${name}`,
       '--ignore-not-found=true', '--wait=false', '--context', context, '--namespace', NAMESPACE],
@@ -1466,6 +1521,7 @@ export async function deployKustomize(options, overrides = {}) {
     log(modelHosts.length
       ? `Allowed AgentHost BYOK model egress to ${modelHosts.join(', ')} on TCP 443.`
       : 'No BYOK model bindings; AgentHost model egress allows DNS only.');
+    const probeUrls = byokEndpointProbeUrls(resources);
     const brokerRuntimeConfig = findBrokerRuntimeConfig(resources);
     const providerSetup = preflightBrokerRuntimeConfig(exec, context, root, brokerRuntimeConfig, resources);
     if (providerSetup?.configMap) {
@@ -1621,7 +1677,7 @@ export async function deployKustomize(options, overrides = {}) {
         'annotate', 'deployment/environment', `${PROJECTS_CONFIG_RESTORE_REPLICAS_ANNOTATION}-`,
       ], root, 'Could not clear the Environment AgentHost ConfigMap recovery marker');
     }
-    await runInstallSmokeCheck(exec, context, root, prerequisites, agentHostTuple.image,
+    await runInstallSmokeCheck(exec, context, root, prerequisites, agentHostTuple.image, probeUrls,
       overrides.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))), log);
     return { context, namespace: NAMESPACE, deployments, images: Object.fromEntries(digests) };
   } finally {
