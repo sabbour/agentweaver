@@ -12,6 +12,8 @@ internal sealed class AcceptanceFixtureSetupException(Exception inner, Acceptanc
 internal static class ApiAcceptanceFixtureSetup
 {
     private static readonly Regex ProblemCode = new("^[a-z][a-z0-9_]{0,63}$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    internal static readonly TimeSpan DefaultRuntimeCleanupTimeout = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan RuntimeCleanupPollInterval = TimeSpan.FromSeconds(1);
 
     public static async Task<(AcceptanceFixture Fixture, IGatewayClient RunApi, IGatewayClient CancellationApi, IGatewayClient? DeniedApi, AcceptanceFixtureState State)> CreateAsync(
         AcceptanceManifest manifest,
@@ -24,7 +26,7 @@ internal static class ApiAcceptanceFixtureSetup
     {
         AcceptanceFixtureState state = new(invocationId);
         state.Journey = manifest.Journey;
-        state.VerifyCleanupReadback = manifest.Journey is "journal" or "session-history-metric";
+        state.VerifyCleanupReadback = true;
         JsonObject environment = manifest.Environment;
         try
         {
@@ -381,7 +383,8 @@ internal static class ApiAcceptanceFixtureSetup
         IGatewayClient? runApi,
         AcceptanceFixtureState state,
         string actorId,
-        CancellationToken ct)
+        CancellationToken ct,
+        TimeSpan? runtimeCleanupTimeout = null)
     {
         if (!state.SetupAttempted)
         {
@@ -391,8 +394,7 @@ internal static class ApiAcceptanceFixtureSetup
                 ["state"] = "not-created",
             };
         }
-        if ((!state.VerifyCleanupReadback && state.SetupIndeterminate)
-            || !state.SetupComplete || state.Setup is null)
+        if (!state.SetupComplete || state.Setup is null)
         {
             return state.Cleanup = new JsonObject
             {
@@ -429,11 +431,12 @@ internal static class ApiAcceptanceFixtureSetup
                 state.Cleanup["reason"] = "The fixture lacks its unbound cancellation client.";
                 return state.Cleanup;
             }
-            await VerifyAcceptedRunCleanupAsync(cancellationApi, runApi, state, projectId, ct).ConfigureAwait(false);
-            if (state.Journey == "journal" && state.SetupIndeterminate)
+            await VerifyAcceptedRunCleanupAsync(
+                cancellationApi, runApi, state, projectId, ct, runtimeCleanupTimeout).ConfigureAwait(false);
+            if (state.SetupIndeterminate)
             {
                 state.Cleanup["reason"] =
-                    "The accepted run was contained, but setup remains uncertain; retain project authority for reconciliation.";
+                    "The accepted run and runtime cleanup were verified, but setup remains uncertain; retain project authority for reconciliation.";
                 return state.Cleanup;
             }
         }
@@ -570,12 +573,17 @@ internal static class ApiAcceptanceFixtureSetup
         IGatewayClient? runApi,
         AcceptanceFixtureState state,
         string projectId,
-        CancellationToken ct)
+        CancellationToken ct,
+        TimeSpan? runtimeCleanupTimeout)
     {
         string runId = state.RunId!;
         string rootSessionId = state.RootSessionId!;
-        string cancellationKey = ApiAcceptanceSupport.StableUuid(state.InvocationId,
-            state.Journey == "session-history-metric" ? "metric-cancel-run" : "journal-cancel-run");
+        string cancellationKey = ApiAcceptanceSupport.StableUuid(state.InvocationId, state.Journey switch
+        {
+            "journal" => "journal-cancel-run",
+            "session-history-metric" => "metric-cancel-run",
+            _ => "fixture-cancel-run",
+        });
         JsonObject cancellation = await CleanupStepAsync(state, "cancel-accepted-run", cancellationApi,
             "cancelProjectRun",
             new GatewayInvocation(
@@ -667,6 +675,8 @@ internal static class ApiAcceptanceFixtureSetup
             throw new InvalidOperationException("The retained session tree did not confirm the exact cancelled root and advanced run fence.");
         }
 
+        JsonObject runtimeCleanup = await WaitForRuntimeCleanupCompleteAsync(
+            runApi, state, projectId, runId, rootSessionId, ct, runtimeCleanupTimeout).ConfigureAwait(false);
         JsonObject runTerminalization = new()
         {
             ["runId"] = runId,
@@ -678,6 +688,7 @@ internal static class ApiAcceptanceFixtureSetup
             ["acceptedRunReadback"] = "verified",
             ["rootSessionReadback"] = "verified",
             ["attachedHistoryReadback"] = "verified",
+            ["runtimeCleanup"] = runtimeCleanup.DeepClone(),
         };
         if (state.Journey == "session-history-metric")
         {
@@ -688,6 +699,138 @@ internal static class ApiAcceptanceFixtureSetup
         }
 
         state.Cleanup!["runTerminalization"] = runTerminalization;
+    }
+
+    private static async Task<JsonObject> WaitForRuntimeCleanupCompleteAsync(
+        IGatewayClient runApi,
+        AcceptanceFixtureState state,
+        string projectId,
+        string runId,
+        string rootSessionId,
+        CancellationToken ct,
+        TimeSpan? timeout)
+    {
+        TimeSpan waitTimeout = timeout ?? DefaultRuntimeCleanupTimeout;
+        if (waitTimeout < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout));
+
+        using CancellationTokenSource deadline = new(waitTimeout);
+        using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+        string? lastState = null;
+        string? lastStep = null;
+        string? lastFailureCode = null;
+        int pollCount = 0;
+        long expectedFence = (state.RootExecutionFence
+            ?? throw new InvalidOperationException("The fixture root admission did not acknowledge its execution fence.")) + 1;
+
+        void RecordTimeout(Exception? error = null)
+        {
+            string reason = $"Runtime cleanup did not report cleanup_complete before the {waitTimeout.TotalSeconds:0}-second deadline.";
+            state.Cleanup!["runtimeCleanup"] = new JsonObject
+            {
+                ["state"] = "timed-out",
+                ["pollCount"] = pollCount,
+                ["lastState"] = lastState,
+                ["lastStep"] = lastStep,
+                ["failureCode"] = lastFailureCode,
+                ["reason"] = error is null ? reason : $"{reason} {ApiAcceptanceSupport.RedactText(error.Message)}",
+            };
+            state.Cleanup["reason"] = reason;
+        }
+
+        while (true)
+        {
+            JsonObject status;
+            try
+            {
+                status = await CleanupStepAsync(state, "wait-runtime-cleanup", runApi, "readSessionStatus",
+                    new GatewayInvocation(Path(("projectId", projectId), ("runId", runId), ("sessionId", rootSessionId))),
+                    linked.Token).ConfigureAwait(false);
+                JsonObject identity = status["identity"] as JsonObject ?? [];
+                if (identity.Count != 3
+                    || ApiAcceptanceSupport.GetString(identity, "projectId") != projectId
+                    || ApiAcceptanceSupport.GetString(identity, "runId") != runId
+                    || ApiAcceptanceSupport.GetString(identity, "sessionId") != rootSessionId
+                    || ApiAcceptanceSupport.GetString(status, "rootSessionId") != rootSessionId
+                    || status["detached"]?.GetValue<bool>() != false
+                    || ApiAcceptanceSupport.GetString(status, "lifecycle") != "cancelled"
+                    || GetLong(status, "executionFence") != expectedFence)
+                {
+                    throw new InvalidOperationException(
+                        "The runtime cleanup status readback did not match the cancelled fixture root.");
+                }
+            }
+            catch (OperationCanceledException error) when (deadline.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                RecordTimeout(error);
+                throw new TimeoutException(
+                    $"Runtime cleanup did not report cleanup_complete before the {waitTimeout.TotalSeconds:0}-second deadline.",
+                    error);
+            }
+            catch (Exception error)
+            {
+                state.Cleanup!["runtimeCleanup"] = new JsonObject
+                {
+                    ["state"] = "failed",
+                    ["pollCount"] = pollCount,
+                    ["lastState"] = lastState,
+                    ["lastStep"] = lastStep,
+                    ["failureCode"] = lastFailureCode,
+                    ["reason"] = ApiAcceptanceSupport.RedactText(error.Message),
+                };
+                state.Cleanup["reason"] = "Runtime cleanup status could not be verified.";
+                throw;
+            }
+
+            pollCount++;
+            JsonObject startup = status["runtimeStartup"] as JsonObject ?? [];
+            lastState = ApiAcceptanceSupport.GetString(startup, "state");
+            lastStep = ApiAcceptanceSupport.GetString(startup, "step");
+            lastFailureCode = ApiAcceptanceSupport.GetString(startup, "failureCode");
+            if (lastState is null || lastStep is null)
+            {
+                state.Cleanup!["runtimeCleanup"] = new JsonObject
+                {
+                    ["state"] = "unavailable",
+                    ["pollCount"] = pollCount,
+                    ["lastState"] = lastState,
+                    ["lastStep"] = lastStep,
+                    ["reason"] = "The session status did not include a complete runtime startup summary.",
+                };
+                state.Cleanup["reason"] = "Runtime cleanup status could not be verified.";
+                throw new InvalidOperationException(
+                    "The session status did not include a complete runtime startup summary.");
+            }
+            if (deadline.IsCancellationRequested)
+            {
+                RecordTimeout();
+                throw new TimeoutException(
+                    $"Runtime cleanup did not report cleanup_complete before the {waitTimeout.TotalSeconds:0}-second deadline.");
+            }
+
+            JsonObject evidence = new()
+            {
+                ["state"] = lastState,
+                ["step"] = lastStep,
+                ["pollCount"] = pollCount,
+                ["failureCode"] = lastFailureCode,
+            };
+            state.Cleanup!["runtimeCleanup"] = evidence.DeepClone();
+            if (lastState == "cleanup_complete")
+                return evidence;
+
+            try
+            {
+                await Task.Delay(RuntimeCleanupPollInterval, linked.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException error) when (deadline.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                RecordTimeout(error);
+                throw new TimeoutException(
+                    $"Runtime cleanup did not report cleanup_complete before the {waitTimeout.TotalSeconds:0}-second deadline.",
+                    error);
+            }
+        }
     }
 
     private static async Task<JsonObject> VerifyMetricRunHistoryCleanupAsync(
@@ -884,7 +1027,7 @@ internal static class ApiAcceptanceFixtureSetup
         List<string> required =
         [
             "getAuthorizationContext", "createProject", "assignProjectRole", "listProjectRoleAssignments", "getProjectConfiguration",
-            "getRunSelection", "acceptRunRoot", "readRunStatus", "readSessionStatus",
+            "getRunSelection", "acceptRunRoot", "cancelProjectRun", "readRunStatus", "readSessionStatus",
             "readSessionTree", "readDecisions", "revokeProjectRoleAssignment", "updateProject",
         ];
         if (!serverOwnedSelection)
@@ -892,7 +1035,7 @@ internal static class ApiAcceptanceFixtureSetup
         if (journey == "journal")
         {
             required.AddRange([
-                "sendProjectRunMessage", "replayRunEvents", "cancelProjectRun", "getProject",
+                "sendProjectRunMessage", "replayRunEvents", "getProject",
                 "listProjectRoleAssignments",
             ]);
             if (serverOwnedSelection)
@@ -925,8 +1068,21 @@ internal static class ApiAcceptanceFixtureSetup
         }
         if (serverOwnedSelection)
             ValidateProjectRunOperation(openApi, "createProjectRun");
-        if (journey is "journal" or "session-history-metric")
-            ValidateProjectRunOperation(openApi, "cancelProjectRun");
+        ValidateProjectRunOperation(openApi, "cancelProjectRun");
+        ValidateRuntimeCleanupStatusContract(openApi);
+    }
+
+    private static void ValidateRuntimeCleanupStatusContract(JsonObject openApi)
+    {
+        JsonObject schemas = openApi["components"]?["schemas"] as JsonObject ?? [];
+        JsonObject statusProperties = schemas["SessionStatusSnapshot"]?["properties"] as JsonObject ?? [];
+        JsonArray states = schemas["RuntimeStartupSummary"]?["properties"]?["state"]?["enum"] as JsonArray ?? [];
+        if (statusProperties["runtimeStartup"] is null
+            || !states.OfType<JsonValue>().Any(state => state.GetValue<string>() == "cleanup_complete"))
+        {
+            throw new AcceptanceBlockedException(
+                "The selected Gateway does not advertise runtime startup status that can confirm cleanup completion.");
+        }
     }
 
     private static bool RequiresServerOwnedSelection(AcceptanceManifest manifest) =>
@@ -1357,6 +1513,7 @@ internal static class ApiAcceptanceFixtureSetup
                 ["detached"] = receipt["detached"]?.DeepClone(),
                 ["lifecycle"] = receipt["lifecycle"]?.DeepClone(),
                 ["executionFence"] = receipt["executionFence"]?.DeepClone(),
+                ["runtimeStartup"] = receipt["runtimeStartup"]?.DeepClone(),
             },
             "getProject" => new JsonObject
             {

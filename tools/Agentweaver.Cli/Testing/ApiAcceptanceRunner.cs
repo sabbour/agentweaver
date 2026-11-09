@@ -10,6 +10,7 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
     private readonly ICliAuthentication _authentication;
     private readonly IAcceptanceDeploymentEvidenceProvider _deploymentEvidence;
     private readonly TextWriter _output;
+    private readonly TimeSpan? _runtimeCleanupTimeout;
 
     public ApiAcceptanceRunner(
         HttpClient httpClient,
@@ -23,12 +24,14 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
         IGatewayClientFactory gatewayClients,
         ICliAuthentication authentication,
         IAcceptanceDeploymentEvidenceProvider deploymentEvidence,
-        TextWriter? output = null)
+        TextWriter? output = null,
+        TimeSpan? runtimeCleanupTimeout = null)
     {
         _clients = gatewayClients ?? throw new ArgumentNullException(nameof(gatewayClients));
         _authentication = authentication ?? throw new ArgumentNullException(nameof(authentication));
         _deploymentEvidence = deploymentEvidence ?? throw new ArgumentNullException(nameof(deploymentEvidence));
         _output = output ?? Console.Out;
+        _runtimeCleanupTimeout = runtimeCleanupTimeout;
     }
 
     public async Task<int> RunAsync(ApiTestOptions options, CancellationToken ct)
@@ -185,7 +188,8 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                     try
                     {
                         await ApiAcceptanceFixtureSetup.CleanupAsync(
-                            setupApi, cancellationApi, runApi, fixtureState, actorId!, CancellationToken.None)
+                            setupApi, cancellationApi, runApi, fixtureState, actorId!, CancellationToken.None,
+                            _runtimeCleanupTimeout)
                             .ConfigureAwait(false);
                         observations["cleanup"] = fixtureState.Cleanup?.DeepClone();
                     }
@@ -239,10 +243,11 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                             manifest, fixtureState, _clients, _authentication, options.Interaction, CancellationToken.None)
                             .ConfigureAwait(false);
                     await ApiAcceptanceFixtureSetup.CleanupAsync(
-                        cleanupApi, cancellationApi, runApi, fixtureState, actorId, CancellationToken.None).ConfigureAwait(false);
+                        cleanupApi, cancellationApi, runApi, fixtureState, actorId, CancellationToken.None,
+                        _runtimeCleanupTimeout).ConfigureAwait(false);
                     observations["cleanup"] = fixtureState.Cleanup?.DeepClone();
                 }
-                catch
+                catch (Exception cleanupError)
                 {
                     fixtureState.Cleanup ??= new JsonObject
                     {
@@ -251,6 +256,8 @@ public sealed class ApiAcceptanceRunner : IApiAcceptanceRunner
                         ["reason"] = "Setup failed after fixture writes; reconcile the invocation before taking further action.",
                     };
                     observations["cleanup"] = fixtureState.Cleanup.DeepClone();
+                    failure = AppendFailure(failure, cleanupError);
+                    surfaceStatus = "failed";
                 }
             }
         }

@@ -523,6 +523,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     "awaitingInput",
                     statusPayload.RootElement.GetProperty("blockers")[0].GetProperty("kind").GetString());
             }
+            var runtimeStartup = schemas.GetProperty("SessionStatusSnapshot")
+                .GetProperty("properties").GetProperty("runtimeStartup");
+            Assert.Contains(runtimeStartup.GetProperty("anyOf").EnumerateArray(),
+                variant => variant.TryGetProperty("$ref", out var reference)
+                    && reference.GetString() == "#/components/schemas/RuntimeStartupSummary");
+            Assert.Contains("cleanup_complete",
+                schemas.GetProperty("RuntimeStartupSummary").GetProperty("properties")
+                    .GetProperty("state").GetProperty("enum").EnumerateArray()
+                    .Select(state => state.GetString()));
         }
 
         var ownerRequestCountBeforeLiveSse = ownerRequests.Count;

@@ -432,6 +432,14 @@ pending, ready, blocked, or cleaning up. Starting AgentHost does not send a
 model turn. A controlled CLI journey or a `pending` result does not prove that
 the Host is ready.
 
+For API journeys that accept a root run, the CLI cancels the run during
+cleanup. It then waits up to two minutes for the root session status to report
+`runtimeStartup.state: "cleanup_complete"`. The CLI waits before it revokes
+project roles or archives the fixture project. If cleanup does not complete,
+or the CLI cannot read its status, the evidence records the failure and the
+CLI stops before it removes access or archives the project. Reconcile that
+invocation before you retry.
+
 `--dry-run` validates the manifest without network calls, authentication,
 browser launch, or evidence creation, even when `--interactive` is present.
 The intended distributed runner does not need Node.js, a .NET SDK/runtime,

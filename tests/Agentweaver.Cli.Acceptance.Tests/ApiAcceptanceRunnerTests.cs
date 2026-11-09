@@ -574,20 +574,27 @@ public sealed class ApiAcceptanceRunnerTests
     }
 
     [Theory]
-    [InlineData("message", false, false, false)]
-    [InlineData("message", true, false, false)]
-    [InlineData("message", false, true, false)]
-    [InlineData("journal", false, false, false)]
-    [InlineData("journal", false, false, true)]
-    [InlineData("gate-answer", false, false, false)]
-    [InlineData("gate-approve", false, false, false)]
-    [InlineData("gate-reject", false, false, false)]
+    [InlineData("message", false, false, false, "none")]
+    [InlineData("message", true, false, false, "none")]
+    [InlineData("message", false, true, false, "none")]
+    [InlineData("journal", false, false, false, "none")]
+    [InlineData("journal", false, false, true, "none")]
+    [InlineData("gate-answer", false, false, false, "none")]
+    [InlineData("gate-approve", false, false, false, "none")]
+    [InlineData("gate-reject", false, false, false, "none")]
+    [InlineData("gate-answer", false, false, false, "timeout")]
+    [InlineData("gate-answer", false, false, false, "missing-status")]
+    [InlineData("gate-answer", false, false, false, "wrong-identity")]
     public async Task TestCommandRunsSelectedJourneyThroughGatewayTransportAndPersistsCleanupOutcome(
         string journey,
         bool interactive,
         bool failCleanup,
-        bool omitSelectionContext)
+        bool omitSelectionContext,
+        string runtimeCleanupFault)
     {
+        bool timeoutRuntimeCleanup = runtimeCleanupFault == "timeout";
+        bool omitRuntimeStartupAfterCancel = runtimeCleanupFault == "missing-status";
+        bool wrongRuntimeCleanupIdentityAfterCancel = runtimeCleanupFault == "wrong-identity";
         string workspace = Path.Combine(AppContext.BaseDirectory, "acceptance-work", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workspace);
         try
@@ -602,12 +609,18 @@ public sealed class ApiAcceptanceRunnerTests
             JsonObject openApi = JsonNode.Parse(await artifactResponse.Content.ReadAsStringAsync())!.AsObject();
 
             var trace = new ConcurrentQueue<string>();
-            var handler = new AcceptanceGatewayHandler(openApi, trace, failCleanup);
+            var handler = new AcceptanceGatewayHandler(openApi, trace, failCleanup,
+                runtimeCleanupPendingReads: timeoutRuntimeCleanup
+                    ? int.MaxValue
+                    : journey == "gate-answer" ? 1 : 0,
+                omitRuntimeStartupAfterCancel: omitRuntimeStartupAfterCancel,
+                wrongRuntimeCleanupIdentityAfterCancel: wrongRuntimeCleanupIdentityAfterCancel);
             using var http = new HttpClient(handler);
             var authentication = new TestAuthentication(trace);
             var factory = new GatewayClientFactory(http, authentication);
             var output = new StringWriter();
-            var runner = new ApiAcceptanceRunner(factory, authentication, new TestDeploymentEvidenceProvider(), output);
+            var runner = new ApiAcceptanceRunner(factory, authentication, new TestDeploymentEvidenceProvider(), output,
+                timeoutRuntimeCleanup ? TimeSpan.FromMilliseconds(50) : null);
             var runtime = new CliRuntimeOptions(
                 HttpClient: http,
                 GatewayClientFactory: factory,
@@ -632,15 +645,16 @@ public sealed class ApiAcceptanceRunnerTests
             JsonObject result = JsonNode.Parse((await File.ReadAllLinesAsync(evidencePath)).Last())!.AsObject();
 
             Assert.Equal("p1-acceptance-result", result["kind"]?.GetValue<string>());
-            Assert.True(exitCode == (failCleanup ? 1 : 2),
+            bool cleanupFailed = failCleanup || runtimeCleanupFault != "none";
+            Assert.True(exitCode == (cleanupFailed ? 1 : 2),
                 $"Unexpected CLI result {exitCode}; surface={result["surfaceStatus"]}; full={result["fullP1Status"]}; " +
                 $"recorded={result["exitCode"]}; failure={result["failure"]?["message"]}; " +
                 $"persistenceError={output.ToString().Split('\n').FirstOrDefault(line => line.StartsWith("Could not persist", StringComparison.Ordinal))}; " +
                 $"operations={string.Join(",", handler.Requests.Select(request => request.OperationId))}");
             Assert.Equal(exitCode, result["exitCode"]?.GetValue<int>());
-            Assert.Equal(failCleanup ? "failed" : "passed", result["surfaceStatus"]?.GetValue<string>());
-            Assert.Equal(failCleanup ? "failed" : "blocked", result["fullP1Status"]?.GetValue<string>());
-            Assert.Equal(failCleanup ? "indeterminate" : "cleaned",
+            Assert.Equal(cleanupFailed ? "failed" : "passed", result["surfaceStatus"]?.GetValue<string>());
+            Assert.Equal(cleanupFailed ? "failed" : "blocked", result["fullP1Status"]?.GetValue<string>());
+            Assert.Equal(cleanupFailed ? "indeterminate" : "cleaned",
                 result["observations"]?["fixtureSetup"]?["cleanup"]?["state"]?.GetValue<string>());
             string journeyOperation = journey switch
             {
@@ -651,6 +665,73 @@ public sealed class ApiAcceptanceRunnerTests
                 _ => "rejectGate",
             };
             Assert.Contains(handler.Requests, request => request.OperationId == journeyOperation);
+            JsonObject cleanupEvidence = result["observations"]?["fixtureSetup"]?["cleanup"] as JsonObject ?? [];
+            RecordedRequest[] cleanupRequests = handler.Requests.ToArray();
+            if (runtimeCleanupFault != "none")
+            {
+                Assert.Equal(runtimeCleanupFault switch
+                {
+                    "timeout" => "timed-out",
+                    "missing-status" => "unavailable",
+                    _ => "failed",
+                },
+                    cleanupEvidence["runtimeCleanup"]?["state"]?.GetValue<string>());
+                if (timeoutRuntimeCleanup)
+                {
+                    Assert.Contains("deadline", cleanupEvidence["runtimeCleanup"]?["reason"]?.GetValue<string>() ?? "",
+                        StringComparison.OrdinalIgnoreCase);
+                    Assert.Equal("cleanup_pending",
+                        cleanupEvidence["runtimeCleanup"]?["lastState"]?.GetValue<string>());
+                    Assert.True(cleanupEvidence["runtimeCleanup"]?["pollCount"]?.GetValue<int>() > 0);
+                }
+                else if (omitRuntimeStartupAfterCancel)
+                {
+                    Assert.Contains("startup summary",
+                        cleanupEvidence["runtimeCleanup"]?["reason"]?.GetValue<string>() ?? "",
+                        StringComparison.OrdinalIgnoreCase);
+                }
+                else
+                {
+                    Assert.Contains("did not match the cancelled fixture root",
+                        cleanupEvidence["runtimeCleanup"]?["reason"]?.GetValue<string>() ?? "",
+                        StringComparison.OrdinalIgnoreCase);
+                }
+                Assert.DoesNotContain(cleanupRequests, request => request.OperationId == "revokeProjectRoleAssignment");
+                Assert.DoesNotContain(cleanupRequests, request =>
+                    request.OperationId == "updateProject" && request.Body?["state"]?.GetValue<string>() == "archived");
+                if (timeoutRuntimeCleanup)
+                {
+                    Assert.Contains(cleanupEvidence["steps"]!.AsArray().OfType<JsonObject>(), step =>
+                        step["step"]?.GetValue<string>() == "wait-runtime-cleanup"
+                        && step["status"]?.GetValue<string>() == "passed"
+                        && step["receipt"]?["runtimeStartup"]?["state"]?.GetValue<string>() == "cleanup_pending");
+                }
+            }
+            else
+            {
+                RecordedRequest cancel = Assert.Single(cleanupRequests,
+                    request => request.OperationId == "cancelProjectRun");
+                string invocationId = ApiAcceptanceSupport.GetString(
+                    cleanupEvidence, "invocationId")!;
+                Assert.Equal(ApiAcceptanceSupport.StableUuid(invocationId, journey switch
+                {
+                    "journal" => "journal-cancel-run",
+                    "session-history-metric" => "metric-cancel-run",
+                    _ => "fixture-cancel-run",
+                }), cancel.Headers["Idempotency-Key"]);
+                int cancelIndex = Array.FindIndex(cleanupRequests, request => request.OperationId == "cancelProjectRun");
+                int finalSessionRead = Array.FindLastIndex(cleanupRequests, request =>
+                    request.OperationId == "readSessionStatus" && request.RunId == cancel.RunId);
+                int firstRevoke = Array.FindIndex(cleanupRequests,
+                    request => request.OperationId == "revokeProjectRoleAssignment");
+                Assert.True(cancelIndex < finalSessionRead && finalSessionRead < firstRevoke,
+                    $"Runtime cleanup must complete before authority removal: {string.Join(",", cleanupRequests.Select(request => request.OperationId))}");
+                JsonObject runtimeCleanup = cleanupEvidence["runtimeCleanup"] as JsonObject ?? [];
+                Assert.Equal("cleanup_complete", runtimeCleanup["state"]?.GetValue<string>());
+                Assert.Contains(cleanupEvidence["steps"]!.AsArray().OfType<JsonObject>(), step =>
+                    step["step"]?.GetValue<string>() == "wait-runtime-cleanup"
+                    && step["receipt"]?["runtimeStartup"]?["state"]?.GetValue<string>() == "cleanup_complete");
+            }
             if (journey == "message")
             {
                 Assert.Contains(handler.Requests, request =>
@@ -794,10 +875,14 @@ public sealed class ApiAcceptanceRunnerTests
                     or "detachSession" or "readProjectMetrics");
 
                 int cancellationIndex = Array.FindIndex(requests, request => request.OperationId == "cancelProjectRun");
-                int terminalRunReadback = Array.FindLastIndex(requests, request => request.OperationId == "readRunStatus");
-                int terminalRootReadback = Array.FindLastIndex(requests, request =>
-                    request.OperationId == "readSessionStatus" && request.RunId == runId);
-                int terminalTreeReadback = Array.FindLastIndex(requests, request => request.OperationId == "readSessionTree");
+                int terminalRunReadback = Array.FindIndex(requests, cancellationIndex + 1,
+                    request => request.OperationId == "readRunStatus");
+                int terminalRootReadback = Array.FindIndex(requests, terminalRunReadback + 1,
+                    request => request.OperationId == "readSessionStatus" && request.RunId == runId);
+                int terminalTreeReadback = Array.FindIndex(requests, terminalRootReadback + 1,
+                    request => request.OperationId == "readSessionTree");
+                int runtimeCleanupReadback = Array.FindIndex(requests, terminalTreeReadback + 1,
+                    request => request.OperationId == "readSessionStatus" && request.RunId == runId);
                 int firstRevoke = Array.FindIndex(requests, request => request.OperationId == "revokeProjectRoleAssignment");
                 int archive = Array.FindIndex(requests, request =>
                     request.OperationId == "updateProject" && request.Body?["state"]?.GetValue<string>() == "archived");
@@ -805,7 +890,8 @@ public sealed class ApiAcceptanceRunnerTests
                 int finalProjectReadback = Array.FindLastIndex(requests, request => request.OperationId == "getProject");
                 int finalAssignmentsReadback = Array.FindLastIndex(requests, request => request.OperationId == "listProjectRoleAssignments");
                 Assert.True(cancellationIndex < terminalRunReadback && terminalRunReadback < terminalRootReadback
-                    && terminalRootReadback < terminalTreeReadback && terminalTreeReadback < firstRevoke
+                    && terminalRootReadback < terminalTreeReadback && terminalTreeReadback < runtimeCleanupReadback
+                    && runtimeCleanupReadback < firstRevoke
                     && firstRevoke < archive && archive < ownerRevoke && ownerRevoke < finalProjectReadback
                     && finalProjectReadback < finalAssignmentsReadback,
                     $"The full journal cleanup order was incorrect: {string.Join(", ", requests.Select(request => request.OperationId))}");
@@ -874,8 +960,9 @@ public sealed class ApiAcceptanceRunnerTests
                 Assert.Contains("projects.admin", credential[4].Split(',', StringSplitOptions.RemoveEmptyEntries));
                 Assert.DoesNotContain("projects.orchestrator", credential[4].Split(',', StringSplitOptions.RemoveEmptyEntries));
             }
-            Assert.Equal(!failCleanup, handler.Requests.Any(request => request.OperationId == "updateProject"));
-            Assert.Equal(failCleanup ? 1 : 2,
+            Assert.Equal(!failCleanup && runtimeCleanupFault == "none",
+                handler.Requests.Any(request => request.OperationId == "updateProject"));
+            Assert.Equal(runtimeCleanupFault != "none" ? 0 : failCleanup ? 1 : 2,
                 handler.Requests.Count(request => request.OperationId == "revokeProjectRoleAssignment"));
             if (failCleanup)
             {
@@ -943,14 +1030,19 @@ public sealed class ApiAcceptanceRunnerTests
             Assert.NotEmpty(result["failure"]?["message"]?.GetValue<string>() ?? "");
             RecordedRequest[] requests = handler.Requests.ToArray();
             int cancel = Array.FindIndex(requests, request => request.OperationId == "cancelProjectRun");
-            int terminalRun = Array.FindLastIndex(requests, request => request.OperationId == "readRunStatus");
-            int terminalRoot = Array.FindLastIndex(requests, request => request.OperationId == "readSessionStatus");
-            int terminalTree = Array.FindLastIndex(requests, request => request.OperationId == "readSessionTree");
+            int terminalRun = Array.FindIndex(requests, cancel + 1,
+                request => request.OperationId == "readRunStatus");
+            int terminalRoot = Array.FindIndex(requests, terminalRun + 1,
+                request => request.OperationId == "readSessionStatus");
+            int terminalTree = Array.FindIndex(requests, terminalRoot + 1,
+                request => request.OperationId == "readSessionTree");
+            int runtimeCleanup = Array.FindIndex(requests, terminalTree + 1,
+                request => request.OperationId == "readSessionStatus");
             int firstRevoke = Array.FindIndex(requests, request => request.OperationId == "revokeProjectRoleAssignment");
             int archive = Array.FindIndex(requests, request =>
                 request.OperationId == "updateProject" && request.Body?["state"]?.GetValue<string>() == "archived");
             Assert.True(cancel < terminalRun && terminalRun < terminalRoot && terminalRoot < terminalTree
-                && terminalTree < firstRevoke && firstRevoke < archive,
+                && terminalTree < runtimeCleanup && runtimeCleanup < firstRevoke && firstRevoke < archive,
                 $"Malformed replay must still complete verified pre-archive cleanup: {string.Join(", ", requests.Select(request => request.OperationId))}");
         }
         finally
@@ -1840,6 +1932,10 @@ public sealed class ApiAcceptanceRunnerTests
         private readonly string? _metricScenario;
         private readonly string? _journalScenario;
         private readonly int _metricCount;
+        private readonly int _runtimeCleanupPendingReads;
+        private readonly bool _omitRuntimeStartupAfterCancel;
+        private readonly bool _wrongRuntimeCleanupIdentityAfterCancel;
+        private int _runtimeCleanupStatusReads;
         private int _revokeCalls;
         private string? _rootSessionId;
         private string? _runId;
@@ -1891,7 +1987,10 @@ public sealed class ApiAcceptanceRunnerTests
             string? ownerDenialScenario = null,
             string? metricScenario = null,
             int metricCount = 2,
-            string? journalScenario = null)
+            string? journalScenario = null,
+            int runtimeCleanupPendingReads = 0,
+            bool omitRuntimeStartupAfterCancel = false,
+            bool wrongRuntimeCleanupIdentityAfterCancel = false)
         {
             _openApi = (JsonObject)openApi.DeepClone();
             _operations = GatewayContract.Parse(_openApi);
@@ -1909,6 +2008,9 @@ public sealed class ApiAcceptanceRunnerTests
             _metricScenario = metricScenario;
             _journalScenario = journalScenario;
             _metricCount = metricCount;
+            _runtimeCleanupPendingReads = runtimeCleanupPendingReads;
+            _omitRuntimeStartupAfterCancel = omitRuntimeStartupAfterCancel;
+            _wrongRuntimeCleanupIdentityAfterCancel = wrongRuntimeCleanupIdentityAfterCancel;
             GatewayOrigin = new Uri("http://127.0.0.1:49241/");
         }
 
@@ -2244,19 +2346,38 @@ public sealed class ApiAcceptanceRunnerTests
                         : _stateVersion;
             if (_journalScenario == "terminal-root-mismatch" && _runCancelled && sessionId == _rootSessionId)
                 lifecycle = "active";
+            int cleanupStatusRead = sessionId == _rootSessionId && _runCancelled
+                ? Interlocked.Increment(ref _runtimeCleanupStatusReads)
+                : 0;
+            JsonObject? runtimeStartup = sessionId != _rootSessionId || (_runCancelled && _omitRuntimeStartupAfterCancel)
+                ? null
+                : new JsonObject
+                {
+                    ["state"] = !_runCancelled
+                        ? "pending"
+                        : cleanupStatusRead <= _runtimeCleanupPendingReads
+                            ? "cleanup_pending"
+                            : "cleanup_complete",
+                    ["step"] = _runCancelled ? "cleanup" : "startup",
+                    ["failureCode"] = null,
+                };
             return Json(HttpStatusCode.OK, new JsonObject
             {
                 ["identity"] = new JsonObject
                 {
                     ["projectId"] = projectId,
                     ["runId"] = runId,
-                    ["sessionId"] = sessionId,
+                    ["sessionId"] = _runCancelled && _wrongRuntimeCleanupIdentityAfterCancel
+                        && cleanupStatusRead > 1
+                            ? ApiAcceptanceSupport.StableUuid(runId, "wrong-runtime-cleanup-session")
+                            : sessionId,
                 },
                 ["rootSessionId"] = rootSessionId,
                 ["detached"] = sessionId == _metricDetachedChildId && _metricDetached,
                 ["lifecycle"] = lifecycle,
                 ["executionFence"] = _executionFence,
                 ["stateVersion"] = stateVersion,
+                ["runtimeStartup"] = runtimeStartup,
                 ["blockers"] = _pendingGate is null
                     ? new JsonArray()
                     : new JsonArray(new JsonObject

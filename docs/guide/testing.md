@@ -765,16 +765,17 @@ dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configura
 dotnet test tests\Agentweaver.Cli.Acceptance.Tests\Agentweaver.Cli.Acceptance.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~BoardDelete
 ```
 
-The journal and `session-history-metric` regressions exercise both explicit
-raw-context selection and interactive pending-run creation through the real
-CLI runner. They check server-returned identities, effective selection
-revisions, the absence of start or dispatch calls, cancellation with an
-unbound Orchestrator client, advanced-fence run/root/tree readbacks, and
-cleanup ordering before role removal. Metric tests also retain the archived
-and detached child checks and metric counts. Lost create or seed responses,
-invalid selection revisions, unavailable run-bound reads, and failed
-cancellation or terminal readbacks must remain indeterminate and must not
-remove project authority. Run the focused tests with:
+The message, journal, gate, and `session-history-metric` regressions exercise
+accepted-root cleanup through the real CLI runner. They check cancellation
+with an unbound Orchestrator client, advanced-fence run/root/tree readbacks,
+and the runtime cleanup wait before role removal. A delayed cleanup check
+reports `cleanup_pending` before `cleanup_complete`. A timeout check confirms
+that the CLI records failure and does not remove roles or archive the project.
+Metric tests also retain the archived and detached child checks and metric
+counts. Lost create or seed responses, invalid selection revisions,
+unavailable run-bound reads, and failed cancellation or terminal readbacks
+must remain indeterminate and must not remove project authority. Run the
+focused tests with:
 
 ```powershell
 dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~ApiAcceptanceManifestTests
