@@ -10,6 +10,7 @@ import {
   ENVIRONMENT_RBAC_REQUIREMENTS,
   parseDeployKustomizeArgs,
   parseImageManifest,
+  requireLiveByokBindingsPreserved,
 } from '../deploy-kustomize.mjs';
 import { buildIdentityBrokerProviderPlan } from '../../azure/lib/identity-broker-provider-setup.mjs';
 
@@ -672,6 +673,25 @@ function kubernetesWriteCalls(calls) {
   return calls.filter(call => call.command === 'kubectl' && writes.has(call.args[0]));
 }
 
+test('deploy stops when the rendered AgentHost map drops a live BYOK binding or changes it without a new revision', () => {
+  const map = (revision, bindings) => ({
+    data: { 'appsettings.json': JSON.stringify({ AgentHost: { ModelBindingsRevision: revision, ModelBindings: bindings } }) },
+  });
+  const hosted = { ModelId: 'hosted', SourceMode: 'HostedCopilot' };
+  const byok = {
+    ModelId: 'gpt-5.4', SourceMode: 'Byok',
+    Provider: { Type: 'openai', BaseUrl: 'https://example.openai.azure.com/openai/v1', WireApi: 'responses' },
+  };
+  const changed = { ...byok, Provider: { ...byok.Provider, WireApi: 'completions' } };
+  const live = map('r1', { hosted, byok });
+
+  assert.doesNotThrow(() => requireLiveByokBindingsPreserved(undefined, map('r1', { hosted })));
+  assert.doesNotThrow(() => requireLiveByokBindingsPreserved(live, map('r1', { hosted, byok })));
+  assert.doesNotThrow(() => requireLiveByokBindingsPreserved(live, map('r2', { byok: changed })));
+  for (const desired of [map('r1', { hosted }), map('r2', { hosted }), map('r1', { hosted, byok: changed })]) {
+    assert.throws(() => requireLiveByokBindingsPreserved(live, desired), /would remove or change live BYOK model binding\(s\) byok/);
+  }
+});
 test('v1 image workflow builds the ten existing Kustomize images from exact source commits', () => {
   const workflow = readYaml('.github/workflows/v1-integration-images.yml');
   const entries = workflow.jobs['build-and-push'].strategy.matrix.include;

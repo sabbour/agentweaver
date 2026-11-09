@@ -102,6 +102,11 @@ checked-in application catalog:
   ```
 
   Rates are per million tokens. Use your own reviewed retail or negotiated prices.
+  An optional `<model>|cachedInput` rate prices cached input tokens; without
+  it, usage with cached input tokens stays `Unpriced`. A ConfigMap key can't
+  contain `|`, so environment keys use the
+  `EventsAndSessions__Cost__Azure__RateCard__ModelRates__<model>__<category>`
+  form instead. The `agentweaver models byok plan` command writes these keys.
   To change rates, publish a new `Version`. Runs that already pinned the earlier
   card keep it, and their new usage stays `Unpriced`.
 - Foundation Probe registrations such as `azure-blob`, `azure-key-vault`, and
@@ -188,7 +193,9 @@ secrets in the model-binding ConfigMap or headers. An optional
 `PromptCapacityTokens` value must be positive. Optional
 `SupportedReasoningEfforts` entries must be unique values from `low`,
 `medium`, `high`, or `xhigh`. These contracts describe source support; the
-checked-in deployment profile does not select BYOK.
+checked-in deployment profile does not select BYOK. To add an Azure OpenAI
+BYOK binding, see
+[Configure an Azure OpenAI BYOK model](./configure-byok-azure-openai.md).
 
 Projects & Config receives a read-only copy of each binding's source mode,
 enabled state, and BYOK reasoning efforts, plus the same revision, so project

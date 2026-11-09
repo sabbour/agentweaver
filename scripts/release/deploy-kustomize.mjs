@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import { parse, stringify } from 'yaml';
 import { parseKustomizeResources } from './kustomize-runtime.mjs';
 import {
@@ -835,6 +836,37 @@ function preserveLiveAgentHostSettings(resources, settings, tuple) {
   ];
 }
 
+/**
+ * Stop a deployment that would remove a live BYOK model binding, or change one without a new model
+ * binding revision. BYOK bindings are added to the source files with `agentweaver models byok plan`
+ * and `apply`, which also set a new revision; the deploy helper never invents them.
+ */
+export function requireLiveByokBindingsPreserved(live, desired) {
+  if (!live) return;
+  const settings = (resource, label) => {
+    try {
+      return JSON.parse(resource?.data?.['appsettings.json'] ?? '{}')?.AgentHost ?? {};
+    } catch {
+      fail(`${label} ConfigMap/${AGENTHOST_RUNTIME_CONFIG} must contain valid appsettings.json.`);
+    }
+  };
+  const current = settings(live, 'Live');
+  const next = settings(desired, 'Rendered');
+  const revised = next.ModelBindingsRevision !== current.ModelBindingsRevision;
+  const lost = Object.entries(current.ModelBindings ?? {})
+    .filter(([, binding]) => binding?.SourceMode === 'Byok')
+    .filter(([reference, binding]) => {
+      const rendered = next.ModelBindings?.[reference];
+      return revised ? rendered?.SourceMode !== 'Byok' : !isDeepStrictEqual(rendered, binding);
+    })
+    .map(([reference]) => reference);
+  if (lost.length) {
+    fail(`The rendered ConfigMap/${AGENTHOST_RUNTIME_CONFIG} would remove or change live BYOK model ` +
+      `binding(s) ${lost.join(', ')}. Add them to the source files with ` +
+      '`agentweaver models byok plan` and `agentweaver models byok apply`, then deploy again.');
+  }
+}
+
 function stampAgentHostRuntime(resources, tuple) {
   const environment = resources.find(resource =>
     resource.kind === 'Deployment' && resource.metadata?.name === 'environment');
@@ -1091,6 +1123,8 @@ export async function deployKustomize(options, overrides = {}) {
     const existingRuntimeMaps = new Map([...RUNTIME_CONFIG_MAPS].map(name => [
       name, readExistingNamedRuntimeConfigMap(exec, context, root, name),
     ]));
+    requireLiveByokBindingsPreserved(existingRuntimeMaps.get(AGENTHOST_RUNTIME_CONFIG),
+      desiredRuntimeMaps.find(resource => resource.metadata.name === AGENTHOST_RUNTIME_CONFIG));
     const missingRuntimeMaps = new Set([...existingRuntimeMaps]
       .filter(([, resource]) => resource === undefined).map(([name]) => name));
     const runtimeMapManifest = { apiVersion: 'v1', kind: 'List', items: desiredRuntimeMaps };

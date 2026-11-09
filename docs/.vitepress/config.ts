@@ -57,6 +57,7 @@ export default defineConfig({
           text: 'Configure and deploy',
           items: [
             { text: 'Configure Knowledge memory', link: '/guide/configure-knowledge' },
+            { text: 'Configure an Azure OpenAI BYOK model', link: '/guide/configure-byok-azure-openai' },
             { text: 'Build and configure the web client', link: '/guide/web-client' },
             { text: 'Read and dismiss notifications', link: '/guide/notifications' },
             { text: 'Use the Gateway', link: '/guide/gateway' },

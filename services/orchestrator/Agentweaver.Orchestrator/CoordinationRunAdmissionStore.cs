@@ -32,6 +32,13 @@ internal sealed partial class CoordinationOwnerStore
         try
         {
             var model = RuntimeAcceptedModelSelection.Read(selection);
+            // A BYOK run is not billed in Copilot credits. It is admitted without the Copilot receipt
+            // only when a hard USD run budget on BYOK tokens limits it instead.
+            if (model.SourceMode == ModelSourceMode.Byok &&
+                CoordinatorWorkflowCatalog.ReadSpendBudgets(selection).Any(budget =>
+                    budget is { Scope: SpendBudgetScopes.Run, MeterSource: SdkMeterSources.ByokTokens,
+                        Unit: "USD", HardLimit: not null }))
+                return false;
             if (model.SourceMode != ModelSourceMode.HostedCopilot ||
                 model.ConnectionId is null || model.CredentialReference is not null)
                 throw new CoordinationException(

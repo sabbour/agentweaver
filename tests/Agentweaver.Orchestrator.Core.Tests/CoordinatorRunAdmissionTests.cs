@@ -59,6 +59,37 @@ public sealed class CoordinatorRunAdmissionTests
         Assert.Equal(409, failure.StatusCode);
     }
 
+    [Theory]
+    [InlineData("""{"hardLimit":5}""", false)]
+    [InlineData("""{"softLimit":5}""", true)]
+    [InlineData("""{"hardLimit":5,"unit":"AIC"}""", true)]
+    public void ByokUsesAHardUsdRunBudgetInsteadOfCopilotCreditAdmission(string budgetOverride, bool rejected)
+    {
+        var budget = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>("""
+            {"budgetId":"byok-run-usd","revision":1,"scope":"run","meterSource":"byok.tokens","unit":"USD",
+             "softLimit":null,"hardLimit":null,"reservePerDispatch":0.5}
+            """)!;
+        foreach (var (key, value) in JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(budgetOverride)!)
+            budget[key] = value;
+        var selection = JsonSerializer.SerializeToElement(new
+        {
+            runLimits = new { copilotHardCreditLimit = 10m, spendBudgets = new[] { budget } },
+            modelSelection = new
+            {
+                reference = "azure-gpt", sourceMode = "byok",
+                credentialReference = new { id = "byok-azure-openai-key", version = "0123456789abcdef0123456789abcdef" }
+            }
+        });
+
+        if (!rejected)
+        {
+            Assert.False(CoordinationOwnerStore.RequiresRunAdmission(selection));
+            return;
+        }
+        Assert.Equal("runtime_cost_budget_model_unavailable", Assert.Throws<CoordinationException>(() =>
+            CoordinationOwnerStore.RequiresRunAdmission(selection)).Code);
+    }
+
     internal static JsonElement Selection(string projectId, string runId, decimal hard = 10) =>
         JsonSerializer.SerializeToElement(new
         {

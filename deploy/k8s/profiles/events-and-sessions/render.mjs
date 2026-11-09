@@ -44,7 +44,14 @@ const requiredConfiguration = [
   'EventsAndSessions__SessionMaterial__ContainerUri',
 ];
 const modelBindingFieldPattern =
-  /^AgentHost__ModelBindings__([A-Za-z0-9._:-]{1,256})__(ModelId|SourceMode)$/;
+  /^AgentHost__ModelBindings__([A-Za-z0-9._:-]{1,256})__(ModelId|SourceMode|Enabled|PromptCapacityTokens|Provider__Type|Provider__BaseUrl|Provider__WireApi|Provider__AzureApiVersion|SupportedReasoningEfforts__[0-9]+)$/;
+const azureCostPrefix = 'EventsAndSessions__Cost__Azure__';
+const azureCostFields = ['ResourceId', 'ResourceGeneration', 'OptionsRevision', 'OptionsSchemaVersion',
+  'PricingModel', 'RateCard__Id', 'RateCard__Version', 'RateCard__MeterSource', 'RateCard__Unit',
+  'RateCard__NanoUnitsPerUnit'];
+const azureModelRatePattern =
+  /^EventsAndSessions__Cost__Azure__RateCard__ModelRates__([A-Za-z0-9._-]{1,256})__(input|cachedInput|output)$/;
+const identifierPattern = /^[A-Za-z0-9._:-]{1,256}$/;
 
 /** Require the declared fields and allow only model-binding keys validated separately. */
 function exactFields(value, fields, location, allowAdditionalField = () => false) {
@@ -77,12 +84,57 @@ function validateModelBindings(configuration) {
     throw new Error('Events configuration requires a valid model-bindings revision.');
   for (const [reference, binding] of bindings) {
     if (!Object.hasOwn(binding, 'ModelId') || !Object.hasOwn(binding, 'SourceMode') ||
-        !/^[A-Za-z0-9._:-]{1,256}$/.test(reference) ||
+        !identifierPattern.test(reference) ||
         typeof binding.ModelId !== 'string' ||
-        !/^[A-Za-z0-9._:-]{1,256}$/.test(binding.ModelId) ||
-        !['HostedCopilot', 'Byok'].includes(binding.SourceMode))
+        !identifierPattern.test(binding.ModelId) ||
+        !['HostedCopilot', 'Byok'].includes(binding.SourceMode) ||
+        !validBindingOptions(binding))
       throw new Error(`Events configuration: model binding '${reference}' is incomplete or invalid.`);
   }
+}
+
+/** Keep BYOK provider fields identical in shape to the AgentHost model map; the services validate the rest. */
+function validBindingOptions(binding) {
+  const provider = ['Provider__Type', 'Provider__BaseUrl', 'Provider__WireApi']
+    .filter(field => Object.hasOwn(binding, field));
+  const efforts = Object.keys(binding).filter(field => field.startsWith('SupportedReasoningEfforts__'))
+    .map(field => Number(field.slice('SupportedReasoningEfforts__'.length))).sort((a, b) => a - b);
+  if (binding.SourceMode === 'HostedCopilot')
+    return provider.length === 0 && !Object.hasOwn(binding, 'Provider__AzureApiVersion');
+  let url;
+  try { url = new URL(binding.Provider__BaseUrl); } catch { return false; }
+  return provider.length === 3 &&
+    ['openai', 'azure', 'anthropic'].includes(binding.Provider__Type) &&
+    ['responses', 'completions'].includes(binding.Provider__WireApi) &&
+    url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash &&
+    (!Object.hasOwn(binding, 'Provider__AzureApiVersion') ||
+      binding.Provider__Type === 'azure' && /^[A-Za-z0-9.-]{1,64}$/.test(binding.Provider__AzureApiVersion)) &&
+    (!Object.hasOwn(binding, 'Enabled') || ['true', 'false'].includes(binding.Enabled)) &&
+    (!Object.hasOwn(binding, 'PromptCapacityTokens') || /^[1-9][0-9]{0,8}$/.test(binding.PromptCapacityTokens)) &&
+    efforts.every((index, position) => index === position) &&
+    efforts.every(index => ['low', 'medium', 'high', 'xhigh']
+      .includes(binding[`SupportedReasoningEfforts__${index}`]));
+}
+
+/** Check the optional Azure BYOK rate card shape; the service validates rates at startup. */
+function validateAzureCost(configuration) {
+  const keys = Object.keys(configuration).filter(key => key.startsWith(azureCostPrefix));
+  if (keys.length === 0) return;
+  for (const field of azureCostFields) {
+    const value = configuration[`${azureCostPrefix}${field}`];
+    if (typeof value !== 'string' || !value.trim() || /[\u0000-\u001f\u007f]/.test(value))
+      throw new Error(`Azure Cost requires '${azureCostPrefix}${field}'.`);
+  }
+  const rates = keys.filter(key => azureModelRatePattern.test(key));
+  if (configuration[`${azureCostPrefix}OptionsSchemaVersion`] !== '1' ||
+      configuration[`${azureCostPrefix}PricingModel`] !== 'StandardTokens' ||
+      configuration[`${azureCostPrefix}RateCard__MeterSource`] !== 'byok.tokens' ||
+      configuration[`${azureCostPrefix}RateCard__Unit`] !== 'USD' ||
+      configuration[`${azureCostPrefix}RateCard__NanoUnitsPerUnit`] !== '1000000' ||
+      !configuration[`${azureCostPrefix}RateCard__Id`].startsWith('azure-retail-prices.standard.') ||
+      rates.length === 0 ||
+      rates.some(key => !/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(configuration[key]) || Number(configuration[key]) <= 0))
+    throw new Error('Azure Cost requires schema 1, StandardTokens, byok.tokens, USD per 1M tokens, and positive model rates.');
 }
 
 /** Require syntactically valid rate-card JSON; the service validates its full schema at startup. */
@@ -131,7 +183,9 @@ export function renderEventsProfile(input) {
 
   const data = input.configuration;
   exactFields(data, requiredConfiguration, 'Events configuration',
-    key => modelBindingFieldPattern.test(key) || key === rateCardKey);
+    key => modelBindingFieldPattern.test(key) || key === rateCardKey ||
+      azureModelRatePattern.test(key) ||
+      azureCostFields.some(field => key === `${azureCostPrefix}${field}`));
   const resolvedData = Object.hasOwn(data, rateCardKey)
     ? data : { ...data, [rateCardKey]: defaultRateCardJson };
   for (const key of requiredConfiguration) {
@@ -141,6 +195,7 @@ export function renderEventsProfile(input) {
   }
   validateModelBindings(resolvedData);
   validateRateCardJson(resolvedData[rateCardKey]);
+  validateAzureCost(resolvedData);
   for (const [key, value] of Object.entries(fixedConfiguration)) {
     if (resolvedData[key] !== value) throw new Error(`Events configuration: '${key}' differs from the admitted Events runtime mapping.`);
   }

@@ -42,6 +42,8 @@ behavior; they do not confirm availability in a particular environment.
 
 - [Configure Knowledge memory](./configure-knowledge.md): configure the
   native PostgreSQL Memory provider.
+- [Configure an Azure OpenAI BYOK model](./configure-byok-azure-openai.md):
+  let a project use your own Azure OpenAI deployment with a USD run limit.
 - [Use the Gateway](./gateway.md): read the authorization boundary and call a
   supported API route.
 - [Deploy Agentweaver to Azure](./deploy-to-azure.md): deploy to an approved

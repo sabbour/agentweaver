@@ -29,7 +29,8 @@ internal sealed record NativeUsageCostPreflightResult(
 internal sealed class NativeUsageReceiptConsumer(
     NpgsqlDataSource dataSource, PostgresSessionsProviderOptions options, PostgresUsageLedger ledger,
     CopilotCostProvider? provider = null, ICostProviderBinder? bindings = null,
-    AzureCostProvider? azureProvider = null, AzureCostProviderBinder? azureBindings = null)
+    AzureCostProvider? azureProvider = null, AzureCostProviderBinder? azureBindings = null,
+    Agentweaver.AgentRuntime.RuntimeModelBindingsResolver? models = null)
 {
     private const string InboxConsumer = "events.native-sdk-usage.v1";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -176,16 +177,17 @@ internal sealed class NativeUsageReceiptConsumer(
         // Usage without a dispatch message ID is recorded as Unpriced; it is never rejected or dropped.
         // Only dispatch-correlated usage that passes RequireTrustedAzureByok can be priced.
         var trustedAzureByok = false;
-        if (RuntimeUsageSourceReceiptContract.ClaimsAzureByok(receipt))
+        var azureOpenAIEndpoint = IsAzureOpenAIV1Endpoint(receipt);
+        if (RuntimeUsageSourceReceiptContract.ClaimsAzureByok(receipt, azureOpenAIEndpoint))
         {
             // Step 1: every Azure claim must have matching provider, deployment, and configuration
             // facts. A failed check throws, so a false Azure claim never reaches the ledger.
-            RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance(receipt);
+            RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance(receipt, azureOpenAIEndpoint);
             // Step 2: pricing also needs the dispatch ID, so the charge can be traced to one dispatch.
             // Usage without it is still recorded, but it stays unpriced.
             if (receipt.Usage.A2AMessageId is { } dispatchId && dispatchId != Guid.Empty)
             {
-                RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(receipt);
+                RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(receipt, azureOpenAIEndpoint);
                 trustedAzureByok = true;
             }
         }
@@ -409,6 +411,24 @@ internal sealed class NativeUsageReceiptConsumer(
     }
 
     /// <summary>Checks the full scope and immutable accounting fields for one reconciliation receipt.</summary>
+    private bool IsAzureOpenAIV1Endpoint(RuntimeUsageSourceReceipt receipt)
+    {
+        // An openai pin is treated as Azure only when this service's own bindings resolve the exact
+        // pin to an Azure OpenAI v1 endpoint. Other openai receipts keep their normal unpriced path.
+        if (models is null ||
+            receipt?.Registration?.Binding?.ModelBindingPin is not { ProviderType: "openai", SourceMode: ModelSourceMode.Byok } pin)
+            return false;
+        try
+        {
+            return models.Resolve(pin.ModelSelectionReference, ModelSourceMode.Byok, pin).Provider
+                is { IsAzureOpenAIV1Endpoint: true };
+        }
+        catch (RuntimeAuthorizationException)
+        {
+            return false;
+        }
+    }
+
     private static bool MatchesReceipt(
         Guid sourceReceiptId,
         Guid eventId,

@@ -327,9 +327,7 @@ public static class NativeUsageEndpoints
         services.AddSingleton(new Agentweaver.AgentRuntime.RuntimeModelBindingsResolver(
             configuration[Agentweaver.AgentRuntime.RuntimeModelBindingsResolver.RevisionConfigurationKey]
                 ?? throw new InvalidOperationException("AgentHost:ModelBindingsRevision is required."),
-            configuration.GetSection(Agentweaver.AgentRuntime.RuntimeModelBindingsResolver.ConfigurationSection)
-                .Get<Dictionary<string, Agentweaver.AgentRuntime.RuntimeModelBinding>>()
-                ?? throw new InvalidOperationException("The shared AgentHost:ModelBindings configuration is required.")));
+            Agentweaver.AgentRuntime.RuntimeModelBindingsResolver.ReadBindings(configuration)));
         services.AddSingleton<PostgresUsageLedger>(services => new(
             services.GetRequiredService<Npgsql.NpgsqlDataSource>(),
             services.GetRequiredService<PostgresSessionsProviderOptions>().Schema));

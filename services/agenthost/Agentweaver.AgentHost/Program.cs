@@ -60,9 +60,7 @@ var audience = Required(section["Authentication:Audience"], "AgentHost:Authentic
 var models = new RuntimeModelBindingsResolver(
     Required(builder.Configuration[RuntimeModelBindingsResolver.RevisionConfigurationKey],
         RuntimeModelBindingsResolver.RevisionConfigurationKey),
-    builder.Configuration.GetSection(RuntimeModelBindingsResolver.ConfigurationSection)
-        .Get<Dictionary<string, RuntimeModelBinding>>()
-        ?? throw new InvalidOperationException("Explicit server-owned AgentHost model bindings are required."));
+    RuntimeModelBindingsResolver.ReadBindings(builder.Configuration));
 var baseDirectory = Required(section["PrivateStateDirectory"], "AgentHost:PrivateStateDirectory");
 var workingDirectory = Required(section["WorkingDirectory"], "AgentHost:WorkingDirectory");
 if (!Path.IsPathFullyQualified(baseDirectory) || !Path.IsPathFullyQualified(workingDirectory) ||

@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
+using Microsoft.Extensions.Configuration;
 
 namespace Agentweaver.AgentRuntime;
 
@@ -66,6 +67,26 @@ public sealed class RuntimeModelBindingsResolver
             _ => new { Models = models, PromptCapacities = capacities, SupportedReasoningEfforts = reasoningEfforts }
         };
         ConfigurationHash = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(configuration));
+    }
+
+    /// <summary>Reads the model binding map, including supported reasoning efforts, from host configuration.</summary>
+    /// <exception cref="InvalidOperationException">The model binding map is missing.</exception>
+    public static Dictionary<string, RuntimeModelBinding> ReadBindings(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        var section = configuration.GetSection(ConfigurationSection);
+        var bindings = section.Get<Dictionary<string, RuntimeModelBinding>>()
+            ?? throw new InvalidOperationException("The AgentHost:ModelBindings configuration is required.");
+        // The configuration binder does not populate ImmutableArray properties.
+        foreach (var reference in bindings.Keys.ToArray())
+        {
+            var efforts = section.GetSection(reference).GetSection("SupportedReasoningEfforts").GetChildren()
+                .OrderBy(child => int.TryParse(child.Key, out var index) ? index : int.MaxValue)
+                .Select(child => child.Value ?? string.Empty).ToImmutableArray();
+            if (!efforts.IsEmpty)
+                bindings[reference] = bindings[reference] with { SupportedReasoningEfforts = efforts };
+        }
+        return bindings;
     }
 
     /// <summary>Revision supplied by the host for this model binding snapshot.</summary>
