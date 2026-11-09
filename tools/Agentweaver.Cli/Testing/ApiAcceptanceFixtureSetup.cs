@@ -104,9 +104,8 @@ internal static class ApiAcceptanceFixtureSetup
                         ApiAcceptanceSupport.GetString(p1Setup, "ownerAssignmentId") ||
                     GetLong(owner, "revision") != GetLong(p1Setup, "ownerAssignmentRevision"))
                     throw new InvalidOperationException("The P1 setup Owner readback does not match its receipt.");
-                orchestrator = FindAssignment(assignments,
-                    ApiAcceptanceSupport.GetString(p1Setup, "assignmentId")!);
-                RequireAssignment(orchestrator, projectId, environment, "orchestrator", "active",
+                orchestrator = RequireListedAssignment(assignments, projectId, environment,
+                    ApiAcceptanceSupport.GetString(p1Setup, "assignmentId")!,
                     GetLong(p1Setup, "assignmentRevision")!.Value);
             }
             else
@@ -204,6 +203,7 @@ internal static class ApiAcceptanceFixtureSetup
                 };
                 if (nativeP1)
                     createRunBody["p1SetupInvocationId"] = p1SetupInvocationId;
+                state.RunSetupAttempted = true;
                 JsonObject createdRun = await MutatingSetupStepAsync(state, "create-interactive-run", selectionApi,
                     "createProjectRun",
                     new GatewayInvocation(
@@ -263,6 +263,7 @@ internal static class ApiAcceptanceFixtureSetup
                     ["expectedPlatformRuntimeRevision"] = expectedPlatformRevision,
                     ["context"] = selectionContext.DeepClone(),
                 };
+                state.RunSetupAttempted = true;
                 JsonObject acceptedSelection = await MutatingSetupStepAsync(state, "accept-run-selection", selectionApi,
                     "acceptRunSelection",
                     new GatewayInvocation(
@@ -520,7 +521,7 @@ internal static class ApiAcceptanceFixtureSetup
         JsonObject setup = state.Setup;
         string projectId = ApiAcceptanceSupport.GetString(setup, "projectId")!;
         string projectName = ApiAcceptanceSupport.GetString(setup, "projectName") ?? state.ProjectName;
-        if (state.VerifyCleanupReadback)
+        if (state.VerifyCleanupReadback && state.RunSetupAttempted)
         {
             if (!state.SelectionKnown || state.RunId is null || state.RootSessionId is null)
             {
@@ -1538,6 +1539,29 @@ internal static class ApiAcceptanceFixtureSetup
             throw new InvalidOperationException("Projects Config did not return the exact creator Owner assignment receipt.");
         }
         return owners[0];
+    }
+
+    private static JsonObject RequireListedAssignment(
+        JsonObject assignments,
+        string projectId,
+        JsonObject environment,
+        string assignmentId,
+        long revision)
+    {
+        JsonObject[] matches = (assignments["assignments"] as JsonArray ?? [])
+            .OfType<JsonObject>()
+            .Where(item => ApiAcceptanceSupport.GetString(item, "assignmentId") == assignmentId)
+            .ToArray();
+        if (ApiAcceptanceSupport.GetString(assignments, "projectId") != projectId
+            || matches.Length != 1
+            || ApiAcceptanceSupport.GetString(matches[0], "principalId") != ApiAcceptanceSupport.GetString(environment, "actorId")
+            || ApiAcceptanceSupport.GetString(matches[0], "role") != "orchestrator"
+            || GetLong(matches[0], "revision") != revision
+            || ApiAcceptanceSupport.GetString(matches[0], "createdBy") != ApiAcceptanceSupport.GetString(environment, "actorId"))
+        {
+            throw new InvalidOperationException("Projects Config did not return the exact active Orchestrator assignment list row.");
+        }
+        return matches[0];
     }
 
     private static void RequireRevokedAssignment(JsonObject value, string projectId, string assignmentId, string actorId, string role, long expectedRevision)

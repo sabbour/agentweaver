@@ -195,6 +195,7 @@ public sealed class ApiAcceptanceFullFlowTests
             Journey = ApiAcceptanceSupport.FullFlowJourney,
             SetupAttempted = true,
             SetupComplete = true,
+            RunSetupAttempted = true,
             VerifyCleanupReadback = true,
             SelectionKnown = true,
             RunId = runId,

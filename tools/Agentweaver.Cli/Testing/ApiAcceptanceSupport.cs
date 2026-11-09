@@ -29,6 +29,7 @@ internal sealed class AcceptanceFixtureState(string invocationId)
     public bool SetupAttempted { get; set; }
     public bool SetupIndeterminate { get; set; }
     public bool SetupComplete { get; set; }
+    public bool RunSetupAttempted { get; set; }
     public bool CleanupAttempted { get; set; }
     public bool VerifyCleanupReadback { get; set; }
     public bool SelectionKnown { get; set; }
