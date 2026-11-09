@@ -227,6 +227,24 @@ are redacted. Opaque responses report the output path and byte count. Raw
 response headers are not surfaced (`headers` is empty). Exit codes are `0`
 for 2xx, `1` for other statuses or failures, and `130` for cancellation.
 
+## Configure a BYOK model binding
+
+`models byok` adds an Azure OpenAI BYOK model binding to the checked-in
+runtime maps. It does not need a target or a sign-in.
+
+```text
+agentweaver models byok prices --region <azure-region> --search <meter-text>
+agentweaver models byok plan --input <byok.json> --source <deploy/k8s> --output <new-plan-file>
+agentweaver models byok apply --plan <plan-file>
+```
+
+`prices` lists Azure Retail Prices meters in USD per million tokens. `plan`
+reads the input file and the runtime maps, and writes a new plan file. `apply`
+writes the planned maps only when every file still has its planned digest. The
+input contains a Key Vault secret name and version, never an API key. For the
+full procedure, see
+[Configure an Azure OpenAI BYOK model](./configure-byok-azure-openai.md).
+
 ## Run API acceptance
 
 The acceptance project launches the exact apphost for `--version`,

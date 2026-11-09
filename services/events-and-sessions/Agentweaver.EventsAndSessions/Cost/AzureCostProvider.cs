@@ -105,7 +105,7 @@ public sealed class AzureCostProvider : ICostProvider
             _rateCard);
     }
 
-    /// <summary>Prices supported uncached token usage; unsupported or incomplete measurements remain unpriced.</summary>
+    /// <summary>Prices input, cached-input, and output token usage; unsupported or incomplete measurements remain unpriced.</summary>
     public CostPrice Price(UsageMeasurement usage, UsageModelBinding model, CostBinding binding)
     {
         ArgumentNullException.ThrowIfNull(usage);
@@ -129,7 +129,7 @@ public sealed class AzureCostProvider : ICostProvider
             return Unpriced("token-measurements-missing");
         if (usage.CachedTokens is null || usage.CacheWriteTokens is null)
             return Unpriced("token-cache-measurements-missing");
-        if (usage.CachedTokens != 0 || usage.CacheWriteTokens != 0)
+        if (usage.CacheWriteTokens != 0)
             return Unpriced("token-cache-pricing-unavailable");
         if (usage.ReasoningTokens is not null && usage.ReasoningTokens > usage.OutputTokens)
             return Unpriced("token-measurement-inconsistent");
@@ -138,11 +138,18 @@ public sealed class AzureCostProvider : ICostProvider
             !_rateCard.ModelMultipliers.TryGetValue(
                 AzureCostProviderOptions.OutputRateKey(model.ModelId), out var outputRate))
             return Unpriced("model-rate-unavailable");
+        var cachedRate = 0m;
+        if (usage.CachedTokens != 0 && !_rateCard.ModelMultipliers.TryGetValue(
+                AzureCostProviderOptions.CachedInputRateKey(model.ModelId), out cachedRate))
+            return Unpriced("token-cache-pricing-unavailable");
 
+        // Cached tokens are added to input tokens, as the Copilot adapter does. If the runtime also
+        // counts them in InputTokens, the result is a safe upper bound.
         decimal amount;
         checked
         {
             amount = ((decimal)usage.InputTokens.Value * inputRate +
+                (decimal)usage.CachedTokens.Value * cachedRate +
                 (decimal)usage.OutputTokens.Value * outputRate) / _rateCard.NanoUnitsPerUnit;
         }
 

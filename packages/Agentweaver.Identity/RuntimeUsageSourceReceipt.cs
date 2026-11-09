@@ -742,7 +742,13 @@ public static class RuntimeUsageSourceReceiptContract
     }
 
     /// <summary>Reports whether a receipt claims Azure BYOK provenance without validating the claim.</summary>
-    public static bool ClaimsAzureByok(RuntimeUsageSourceReceipt receipt) =>
+    /// <param name="receipt">The receipt to inspect.</param>
+    /// <param name="azureOpenAIEndpoint">
+    /// True only when the caller proved, from its own model bindings, that the accepted <c>openai</c>
+    /// pin resolves to an Azure OpenAI v1 endpoint. Such a receipt is then checked as Azure BYOK.
+    /// </param>
+    public static bool ClaimsAzureByok(RuntimeUsageSourceReceipt receipt, bool azureOpenAIEndpoint = false) =>
+        azureOpenAIEndpoint ||
         // A receipt claims Azure BYOK when either side says so: the SDK source that the runtime
         // reported, or the model binding pin that the owner registered. Checking both sides means a
         // receipt can't avoid the provenance check by setting Azure on only one of them.
@@ -759,11 +765,12 @@ public static class RuntimeUsageSourceReceiptContract
     /// </remarks>
     /// <returns>The provenance facts that Azure pricing and budget exposure use.</returns>
     /// <exception cref="RuntimeAuthorizationException">Thrown with <c>runtime_byok_azure_provenance_invalid</c> when any fact does not match.</exception>
-    public static TrustedAzureByokUsage RequireTrustedAzureByok(RuntimeUsageSourceReceipt receipt)
+    public static TrustedAzureByokUsage RequireTrustedAzureByok(
+        RuntimeUsageSourceReceipt receipt, bool azureOpenAIEndpoint = false)
     {
         // First prove the source facts: provider, deployment, configuration, and meter.
         // This also recomputes and checks the receipt payload hash.
-        var (pin, provider) = RequireAzureByokSource(receipt);
+        var (pin, provider) = RequireAzureByokSource(receipt, azureOpenAIEndpoint);
 
         // Pricing and budget exposure are charged to one dispatch. Usage without a dispatch message ID,
         // or with the empty GUID, can't be attributed to a dispatch, so it isn't trusted for pricing.
@@ -785,11 +792,12 @@ public static class RuntimeUsageSourceReceiptContract
     /// that isn't correlated to one dispatch passes this check. Events records that usage as Unpriced.
     /// </remarks>
     /// <exception cref="RuntimeAuthorizationException">Thrown with <c>runtime_byok_azure_provenance_invalid</c> when any fact does not match.</exception>
-    public static void RequireAzureByokProvenance(RuntimeUsageSourceReceipt receipt) =>
-        RequireAzureByokSource(receipt);
+    public static void RequireAzureByokProvenance(
+        RuntimeUsageSourceReceipt receipt, bool azureOpenAIEndpoint = false) =>
+        RequireAzureByokSource(receipt, azureOpenAIEndpoint);
 
     private static (RuntimeModelBindingPin Pin, SdkByokProviderFacts Provider) RequireAzureByokSource(
-        RuntimeUsageSourceReceipt receipt)
+        RuntimeUsageSourceReceipt receipt, bool azureOpenAIEndpoint)
     {
         // Validate checks the receipt version and usage binding, then recomputes the canonical payload
         // hash. A changed registration or usage field no longer matches the hash and fails here, before
@@ -802,13 +810,16 @@ public static class RuntimeUsageSourceReceiptContract
 
         // The owner registered this runtime for BYOK with an Azure pin. The pin is the trusted record
         // of the model and configuration that the owner accepted.
+        // An Azure OpenAI v1 endpoint uses the openai provider type; only the caller can prove the endpoint.
         if (binding.ModelSourceMode != ModelSourceMode.Byok ||
-            binding.ModelBindingPin is not { ProviderType: "azure", SourceMode: ModelSourceMode.Byok } pin)
+            binding.ModelBindingPin is not { SourceMode: ModelSourceMode.Byok } pin ||
+            pin.ProviderType is not "azure" && !(azureOpenAIEndpoint && pin.ProviderType == "openai"))
             throw new RuntimeAuthorizationException("runtime_byok_azure_provenance_invalid");
 
-        // The runtime's SDK source reports Azure BYOK too. A source that reports hosted Copilot or
-        // another BYOK provider doesn't match the pin.
-        if (usage.SdkSource is not { SourceMode: "byok", ByokProvider: { Type: "azure" } provider } source)
+        // The runtime's SDK source reports the same BYOK provider type. A source that reports hosted
+        // Copilot or another BYOK provider doesn't match the pin.
+        if (usage.SdkSource is not { SourceMode: "byok", ByokProvider: { } provider } source ||
+            provider.Type != pin.ProviderType)
             throw new RuntimeAuthorizationException("runtime_byok_azure_provenance_invalid");
 
         // BYOK usage is metered in raw tokens on both the source and the usage binding. A hosted

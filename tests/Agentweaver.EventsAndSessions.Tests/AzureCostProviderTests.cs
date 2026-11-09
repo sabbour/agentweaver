@@ -186,6 +186,35 @@ public sealed class AzureCostProviderTests
     }
 
     [Fact]
+    public void ReadsConfigMapSafeModelRatesFromEnvironmentStyleKeys()
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["Cost__ResourceId"] = "azure-openai-deployment-1",
+            ["Cost__ResourceGeneration"] = "3",
+            ["Cost__OptionsRevision"] = "azure-cost-options-v1",
+            ["Cost__OptionsSchemaVersion"] = "1",
+            ["Cost__PricingModel"] = "StandardTokens",
+            ["Cost__RateCard__Id"] = "azure-retail-prices.standard.swedencentral",
+            ["Cost__RateCard__Version"] = "2026-11-09",
+            ["Cost__RateCard__MeterSource"] = AzureCostProvider.MeterSource,
+            ["Cost__RateCard__Unit"] = "USD",
+            ["Cost__RateCard__NanoUnitsPerUnit"] = "1000000",
+            ["Cost__RateCard__ModelRates__gpt-5.4__input"] = "2.5",
+            ["Cost__RateCard__ModelRates__gpt-5.4__cachedInput"] = "0.25",
+            ["Cost__RateCard__ModelRates__gpt-5.4__output"] = "15"
+        };
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(values.ToDictionary(pair => pair.Key.Replace("__", ":"), pair => pair.Value))
+            .Build();
+
+        var options = AzureCostProviderOptions.FromConfiguration(configuration.GetSection("Cost"))!;
+
+        Assert.Equal(0.25m, options.RateCard.ModelMultipliers["gpt-5.4|cachedInput"]);
+        Assert.Equal(15m, options.RateCard.ModelMultipliers["gpt-5.4|output"]);
+    }
+
+    [Fact]
     public void AzureBinderUsesTheExistingMeterResolverAndRejectsChangedRateCardPins()
     {
         var provider = new AzureCostProvider(Options());
@@ -246,6 +275,34 @@ public sealed class AzureCostProviderTests
             Measurement(inputTokens: long.MaxValue, outputTokens: 0),
             Model(),
             binding));
+    }
+
+    [Fact]
+    public void PricesCachedInputOnlyWithAnExplicitCachedInputRate()
+    {
+        var options = Options();
+        options = options with
+        {
+            RateCard = options.RateCard with
+            {
+                ModelMultipliers = options.RateCard.ModelMultipliers.Add("gpt-4.1|cachedInput", 0.25m)
+            }
+        };
+        var provider = new AzureCostProvider(options);
+        var binding = Create().Binding with { RateCard = provider.Options.RateCard };
+
+        var price = provider.Price(Measurement(1_000_000, 1_000_000, cachedTokens: 2_000_000), Model(), binding);
+
+        Assert.Equal(1.25m + 0.50m + 5.75m, price.Amount);
+        AssertUnpriced(provider.Price(Measurement(cacheWriteTokens: 1), Model(), binding),
+            "token-cache-pricing-unavailable");
+        Assert.Throws<ArgumentException>(() => new AzureCostProvider(options with
+        {
+            RateCard = options.RateCard with
+            {
+                ModelMultipliers = options.RateCard.ModelMultipliers.Add("gpt-4.1|longContext", 5m)
+            }
+        }));
     }
 
     private static void AssertUnpriced(CostPrice price, string reason)

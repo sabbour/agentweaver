@@ -1509,6 +1509,35 @@ public sealed class RuntimeUsageSourceReceiptTests
         }
     }
 
+    [Fact]
+    public void AzureOpenAIV1EndpointProofLetsAnOpenAIPinUseAzureProvenance()
+    {
+        var openAi = AzureByokReceipt("openai");
+        Assert.True(RuntimeUsageSourceReceiptContract.ClaimsAzureByok(openAi, azureOpenAIEndpoint: true));
+        var trusted = RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(openAi, azureOpenAIEndpoint: true);
+        Assert.Equal(openAi.Usage.ModelBinding.ModelId, trusted.DeploymentId);
+
+        // The proof doesn't relax the other rules: the SDK source type must still match the pin.
+        var source = openAi.Usage.SdkSource!;
+        var mismatched = Reseal(openAi with
+        {
+            Usage = openAi.Usage with { SdkSource = source with { ByokProvider = source.ByokProvider! with { Type = "azure" } } }
+        });
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(mismatched, azureOpenAIEndpoint: true));
+    }
+
+    [Theory]
+    [InlineData("https://example-resource.openai.azure.com/openai/v1", true)]
+    [InlineData("https://example-resource.openai.azure.com/openai/v1/", true)]
+    [InlineData("https://example-resource.services.ai.azure.com/openai/v1", true)]
+    [InlineData("https://example-resource.openai.azure.com/", false)]
+    [InlineData("https://openai.azure.com.example.net/openai/v1", false)]
+    [InlineData("https://api.openai.com/v1", false)]
+    public void AzureOpenAIV1EndpointRequiresAnAzureHostAndTheV1Path(string baseUrl, bool expected) =>
+        Assert.Equal(expected, new Agentweaver.AgentRuntime.RuntimeByokProvider(
+            "openai", new Uri(baseUrl), "responses", null).IsAzureOpenAIV1Endpoint);
+
     private static string LegacyHash(RuntimeRegistration registration, UsageSubmission usage)
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)

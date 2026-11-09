@@ -15,6 +15,17 @@ public sealed record RuntimeByokProvider(
     /// <summary>Additional provider headers copied into the SDK configuration.</summary>
     public ImmutableDictionary<string, string> Headers { get; init; } =
         ImmutableDictionary<string, string>.Empty;
+
+    /// <summary>
+    /// True for an <c>openai</c> provider that uses the Azure OpenAI v1 API path on an Azure-owned host.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsAzureOpenAIV1Endpoint =>
+        Type == "openai" && BaseUrl is { IsAbsoluteUri: true, Scheme: "https" } &&
+        (BaseUrl.Host.EndsWith(".openai.azure.com", StringComparison.OrdinalIgnoreCase) ||
+         BaseUrl.Host.EndsWith(".cognitiveservices.azure.com", StringComparison.OrdinalIgnoreCase) ||
+         BaseUrl.Host.EndsWith(".services.ai.azure.com", StringComparison.OrdinalIgnoreCase)) &&
+        BaseUrl.AbsolutePath.TrimEnd('/').Equals("/openai/v1", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>

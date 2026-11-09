@@ -52,6 +52,9 @@ public static class CliApplication
                 return await RunAuthAsync(args[1..], runtime ?? new CliRuntimeOptions(), output, ct).ConfigureAwait(false);
             if (args[0] == "test")
                 return await RunTestAsync(args[1..], runtime ?? new CliRuntimeOptions(), output, ct).ConfigureAwait(false);
+            if (args[0] == "models")
+                return await ByokModelCommands.RunAsync(
+                    args[1..], runtime ?? new CliRuntimeOptions(), output, ct).ConfigureAwait(false);
             throw new CliUsageException($"Unknown command: {args[0]}");
         }
         catch (OperationCanceledException)
@@ -519,6 +522,9 @@ public static class CliApplication
           agentweaver test --input <manifest> --output <evidence.jsonl>
               [--native-probe-envelope <file>] [--dispatch-recovery-envelope <file>]
               [--dry-run] [--interactive]
+          agentweaver models byok prices --region <azure-region> --search <meter-text>
+          agentweaver models byok plan --input <byok.json> --source <deploy/k8s> --output <new-plan.json>
+          agentweaver models byok apply --plan <plan.json>
         """;
 }
 

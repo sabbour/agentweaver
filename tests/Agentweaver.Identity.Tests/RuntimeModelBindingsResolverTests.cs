@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.AgentRuntime;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace Agentweaver.Identity.Tests;
@@ -36,6 +37,28 @@ public sealed class RuntimeModelBindingsResolverTests
             {
                 ["accepted-reference"] = model with { PromptCapacityTokens = 0 }
             }));
+    }
+
+    [Fact]
+    public void ReadBindingsKeepsConfiguredReasoningEffortsThatTheBinderDrops()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["AgentHost:ModelBindings:byok:ModelId"] = "byok-model",
+                ["AgentHost:ModelBindings:byok:SourceMode"] = "Byok",
+                ["AgentHost:ModelBindings:byok:Provider:Type"] = "openai",
+                ["AgentHost:ModelBindings:byok:Provider:BaseUrl"] = "https://byok.test/v1",
+                ["AgentHost:ModelBindings:byok:SupportedReasoningEfforts:0"] = "low",
+                ["AgentHost:ModelBindings:byok:SupportedReasoningEfforts:1"] = "high",
+                ["AgentHost:ModelBindings:hosted:ModelId"] = "hosted-model",
+                ["AgentHost:ModelBindings:hosted:SourceMode"] = "HostedCopilot",
+            }).Build();
+
+        var bindings = RuntimeModelBindingsResolver.ReadBindings(configuration);
+
+        Assert.Equal(["low", "high"], bindings["byok"].SupportedReasoningEfforts.ToArray());
+        Assert.True(bindings["hosted"].SupportedReasoningEfforts.IsEmpty);
     }
 
     [Fact]

@@ -30,6 +30,8 @@ public sealed record AzureCostProviderOptions(
     public const int CurrentOptionsSchemaVersion = 1;
     public const decimal TokensPerRateUnit = 1_000_000m;
     public const string RateCardSource = "azure-retail-prices";
+    /// <summary>Configuration section below RateCard that holds rates as ModelRates:&lt;model&gt;:&lt;category&gt;.</summary>
+    public const string ModelRatesSection = "ModelRates";
 
     /// <summary>Reads and validates an optional explicit rate card from configuration.</summary>
     /// <returns>Null when the section is absent; invalid or incomplete configuration throws.</returns>
@@ -42,6 +44,15 @@ public sealed record AzureCostProviderOptions(
         var card = section.GetRequiredSection(nameof(RateCard));
         var modelRates = card.GetSection(nameof(CostRateCard.ModelMultipliers))
             .Get<Dictionary<string, decimal>>() ?? [];
+        // Kubernetes ConfigMap keys can't contain '|', so deployments use ModelRates:<model>:<category>.
+        foreach (var model in card.GetSection(ModelRatesSection).GetChildren())
+        {
+            foreach (var rate in model.GetChildren())
+            {
+                if (!modelRates.TryAdd($"{model.Key}|{rate.Key}", rate.Get<decimal>()))
+                    throw new ArgumentException("Azure Cost model rates are ambiguous.");
+            }
+        }
         var pricingModel = section[nameof(PricingModel)] switch
         {
             nameof(AzureCostPricingModel.StandardTokens) => AzureCostPricingModel.StandardTokens,
@@ -67,7 +78,8 @@ public sealed record AzureCostProviderOptions(
 
     /// <summary>
     /// Requires a positive resource generation and supported options schema. Token pricing needs
-    /// positive input and output rates for every model, denominated per million tokens; provisioned
+    /// positive input and output rates for every model, denominated per million tokens. A model can also
+    /// have a positive cached-input rate; provisioned
     /// throughput must not contain token multipliers.
     /// </summary>
     public void Validate()
@@ -115,7 +127,7 @@ public sealed record AzureCostProviderOptions(
         }
 
         if (modelCategories.Count == 0 || modelCategories.Values.Any(categories =>
-                !categories.SetEquals(["input", "output"])))
+                !categories.Contains("input") || !categories.Contains("output")))
             throw new ArgumentException("Each Azure model requires explicit input and output rates.");
     }
 
@@ -141,6 +153,10 @@ public sealed record AzureCostProviderOptions(
     internal static string InputRateKey(string modelId) => $"{modelId}|input";
     /// <summary>Builds the canonical output-token rate key for a concrete model identifier.</summary>
     internal static string OutputRateKey(string modelId) => $"{modelId}|output";
+    /// <summary>Builds the optional cached-input-token rate key for a concrete model identifier.</summary>
+    internal static string CachedInputRateKey(string modelId) => $"{modelId}|{CachedInputCategory}";
+
+    private const string CachedInputCategory = "cachedInput";
 
     private static string PricingModelId(AzureCostPricingModel pricingModel) =>
         pricingModel switch
@@ -161,7 +177,8 @@ public sealed record AzureCostProviderOptions(
             return false;
         modelId = key[..separator];
         category = key[(separator + 1)..];
-        return IsToken(modelId, 256) && category is "input" or "output";
+        return IsToken(modelId, 256) &&
+            category is "input" or "output" or CachedInputCategory;
     }
 
     private static bool IsCurrency(string? value) =>

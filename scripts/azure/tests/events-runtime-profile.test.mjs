@@ -149,3 +149,49 @@ test('managed issuer, exact private owner services and Blob container inputs are
     assert.throws(() => renderEventsProfile(input), /one explicit container/);
   }
 });
+
+test('BYOK provider fields and the Azure rate card match the AgentHost model map shape', () => {
+  const byok = {
+    'AgentHost__ModelBindings__azure-gpt__ModelId': 'gpt-5.4',
+    'AgentHost__ModelBindings__azure-gpt__SourceMode': 'Byok',
+    'AgentHost__ModelBindings__azure-gpt__Provider__Type': 'openai',
+    'AgentHost__ModelBindings__azure-gpt__Provider__BaseUrl': 'https://example-resource.openai.azure.com/openai/v1',
+    'AgentHost__ModelBindings__azure-gpt__Provider__WireApi': 'completions',
+    'AgentHost__ModelBindings__azure-gpt__SupportedReasoningEfforts__0': 'low',
+    'AgentHost__ModelBindings__azure-gpt__SupportedReasoningEfforts__1': 'high',
+    EventsAndSessions__Cost__Azure__ResourceId: 'azure-openai:example-resource',
+    EventsAndSessions__Cost__Azure__ResourceGeneration: '1',
+    EventsAndSessions__Cost__Azure__OptionsRevision: 'byok-1',
+    EventsAndSessions__Cost__Azure__OptionsSchemaVersion: '1',
+    EventsAndSessions__Cost__Azure__PricingModel: 'StandardTokens',
+    EventsAndSessions__Cost__Azure__RateCard__Id: 'azure-retail-prices.standard.swedencentral',
+    EventsAndSessions__Cost__Azure__RateCard__Version: '2026-11-09',
+    EventsAndSessions__Cost__Azure__RateCard__MeterSource: 'byok.tokens',
+    EventsAndSessions__Cost__Azure__RateCard__Unit: 'USD',
+    EventsAndSessions__Cost__Azure__RateCard__NanoUnitsPerUnit: '1000000',
+    'EventsAndSessions__Cost__Azure__RateCard__ModelRates__gpt-5.4__input': '2.5',
+    'EventsAndSessions__Cost__Azure__RateCard__ModelRates__gpt-5.4__cachedInput': '0.25',
+    'EventsAndSessions__Cost__Azure__RateCard__ModelRates__gpt-5.4__output': '15',
+  };
+  const input = fixture();
+  Object.assign(input.configuration, byok);
+  assert.equal(renderEventsProfile(input).data['AgentHost__ModelBindings__azure-gpt__Provider__WireApi'], 'completions');
+
+  for (const [key, value] of [
+    ['AgentHost__ModelBindings__azure-gpt__Provider__WireApi', undefined],
+    ['AgentHost__ModelBindings__azure-gpt__Provider__BaseUrl', 'https://key@example.test/openai/v1'],
+    ['AgentHost__ModelBindings__azure-gpt__Provider__AzureApiVersion', '2025-04-01-preview'],
+    ['AgentHost__ModelBindings__azure-gpt__Provider__Headers__api-key', 'secret'],
+    ['AgentHost__ModelBindings__azure-gpt__SupportedReasoningEfforts__1', 'minimal'],
+    ['AgentHost__ModelBindings__reasoning__Provider__Type', 'openai'],
+    ['EventsAndSessions__Cost__Azure__RateCard__Unit', 'EUR'],
+    ['EventsAndSessions__Cost__Azure__RateCard__ModelRates__gpt-5.4__output', '0'],
+    ['EventsAndSessions__Cost__Azure__PricingModel', undefined],
+  ]) {
+    const invalid = fixture();
+    Object.assign(invalid.configuration, byok);
+    if (value === undefined) delete invalid.configuration[key];
+    else invalid.configuration[key] = value;
+    assert.throws(() => renderEventsProfile(invalid), Error, key);
+  }
+});

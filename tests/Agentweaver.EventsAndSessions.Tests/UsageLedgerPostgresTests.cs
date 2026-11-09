@@ -670,6 +670,31 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task OpenAIPinIsPricedAsAzureOnlyWhenTheEventsBindingIsAnAzureOpenAIV1Endpoint()
+    {
+        static Agentweaver.AgentRuntime.RuntimeModelBindingsResolver Models(string baseUrl) =>
+            new("byok-bindings-v2", new Dictionary<string, Agentweaver.AgentRuntime.RuntimeModelBinding>
+            {
+                ["native-model-selection"] = new("gpt-6.1-sol", ModelSourceMode.Byok,
+                    new("openai", new Uri(baseUrl), "completions"))
+            });
+        var azureModels = Models("https://example-resource.openai.azure.com/openai/v1");
+        var (consumer, _, _) = AzureConsumer(1.25m, 5.75m, azureModels);
+        var pin = azureModels.Pin("native-model-selection", ModelSourceMode.Byok);
+        var priced = await consumer.AppendAsync(
+            AzureByokReceipt("openai", pin: pin), _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Estimate, priced.Accounting.Disposition);
+
+        // The same pin shape for a non-Azure endpoint stays unpriced and doesn't fail admission.
+        var otherModels = Models("https://api.openai.example/v1");
+        var (other, _, _) = AzureConsumer(1.25m, 5.75m, otherModels);
+        var unpriced = await other.AppendAsync(AzureByokReceipt("openai",
+            pin: otherModels.Pin("native-model-selection", ModelSourceMode.Byok)), _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Unpriced, unpriced.Accounting.Disposition);
+        Assert.Equal("byok-provider-unpriced", unpriced.Accounting.UnpricedReason);
+    }
+
+    [Fact]
     public async Task UncorrelatedAzureByokUsageIsAdmittedButNeverPricedFromAnAzureRateCard()
     {
         var (consumer, _, _) = AzureConsumer(1.25m, 5.75m);
@@ -1933,7 +1958,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     // The rates are part of the card version, so different rates make a different card.
     // The returned binding is the rate card pinned for run-1.
     private (NativeUsageReceiptConsumer Consumer, AzureCostProvider Provider, CostBinding Binding) AzureConsumer(
-        decimal inputRate, decimal outputRate)
+        decimal inputRate, decimal outputRate, Agentweaver.AgentRuntime.RuntimeModelBindingsResolver? models = null)
     {
         var options = new AzureCostProviderOptions(
             "azure-openai-deployment-1", 1, "azure-cost-options-v1",
@@ -1955,7 +1980,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         Assert.True(pinned.IsSuccess, pinned.Error?.Message);
         var consumer = new NativeUsageReceiptConsumer(_fixture.DataSource,
             new PostgresSessionsProviderOptions("native-postgres", "test", 1, _schema, "native-options", 1),
-            _ledger, azureProvider: azure, azureBindings: binder);
+            _ledger, azureProvider: azure, azureBindings: binder, models: models);
         return (consumer, azure, pinned.Value!);
     }
 
@@ -1963,7 +1988,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     // Each call uses a new SDK event and, unless withoutA2AMessageId is set, a new dispatch ID.
     // providerType picks the BYOK provider recorded on the model binding.
     private static RuntimeUsageSourceReceipt AzureByokReceipt(
-        string providerType = "azure", bool withoutA2AMessageId = false)
+        string providerType = "azure", bool withoutA2AMessageId = false, RuntimeModelBindingPin? pin = null)
     {
         var hosted = NativeReceipt();
         var registration = hosted.Registration with
@@ -1971,7 +1996,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
             Binding = hosted.Registration.Binding with
             {
                 ModelSourceMode = ModelSourceMode.Byok,
-                ModelBindingPin = new(1, hosted.Usage.SdkSource!.ModelSelectionReference,
+                ModelBindingPin = pin ?? new(1, hosted.Usage.SdkSource!.ModelSelectionReference,
                     hosted.Usage.SdkSource.ModelId, ModelSourceMode.Byok, "byok-bindings-v1", new string('a', 64))
                 {
                     ProviderType = providerType
@@ -1981,7 +2006,8 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var source = hosted.Usage.SdkSource! with
         {
             SourceMode = "byok", MeterSource = SdkMeterSources.ByokTokens, ModelMultiplier = null,
-            ByokProvider = new(providerType, hosted.Usage.SdkSource.ModelId, new string('a', 64)),
+            ByokProvider = new(providerType, hosted.Usage.SdkSource.ModelId,
+                registration.Binding.ModelBindingPin!.ConfigurationHash),
             ModelBindingPin = registration.Binding.ModelBindingPin,
             ResolvedModelBindingPin = registration.Binding.ModelBindingPin
         };

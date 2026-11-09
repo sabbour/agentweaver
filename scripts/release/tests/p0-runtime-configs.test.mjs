@@ -695,6 +695,12 @@ test('Events and Projects render identical model-binding references and revision
     const prefix = `AgentHost__ModelBindings__${reference}__`;
     eventsConfiguration[`${prefix}ModelId`] = binding.ModelId;
     eventsConfiguration[`${prefix}SourceMode`] = binding.SourceMode;
+    // Events loads the same resolver as AgentHost, so a BYOK binding carries its provider fields.
+    if (binding.SourceMode === 'Byok') {
+      eventsConfiguration[`${prefix}Provider__Type`] = 'openai';
+      eventsConfiguration[`${prefix}Provider__BaseUrl`] = 'https://example-resource.openai.azure.com/openai/v1';
+      eventsConfiguration[`${prefix}Provider__WireApi`] = 'responses';
+    }
     projectsConfiguration[`${prefix}SourceMode`] = binding.SourceMode;
     projectsConfiguration[`${prefix}Enabled`] = binding.Enabled;
     binding.efforts.forEach((effort, index) => {
