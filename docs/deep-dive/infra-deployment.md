@@ -183,8 +183,10 @@ shared Deployment.
 
 AgentHost Sandbox pods can reach only the internal owners, the Identity Broker,
 and DNS. The deploy helper adds the HTTPS host of each BYOK model binding in the
-rendered AgentHost runtime map to the `agenthost-model-egress` policy. See
-[Configure an Azure OpenAI BYOK model](../guide/configure-byok-azure-openai.md).
+rendered AgentHost runtime map to the `agenthost-model-egress` policy. If the map
+has a GitHub Copilot (`HostedCopilot`) binding, the helper also adds the exact
+GitHub Copilot hosts. See
+[Configure an Azure OpenAI BYOK model](../guide/configure-byok-azure-openai.md#deploy-the-change).
 
 That source inventory includes the retained MCP compatibility workload and
 ingress. It does not make MCP a supported product or acceptance surface.

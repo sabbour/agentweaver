@@ -34,6 +34,13 @@ const brokerRuntimeConfigName = 'identity-broker-runtime-config-v3';
 const readYaml = relativePath => parse(readFileSync(path.join(root, relativePath), 'utf8'));
 const agentHostRuntimeConfig = readYaml('deploy/k8s/profiles/agenthost/runtime-config.example.yaml');
 const agentHostModelEgress = readYaml('deploy/k8s/base/agenthost-model-egress.yaml');
+const copilotModelHosts = [
+  'api.business.githubcopilot.com',
+  'api.enterprise.githubcopilot.com',
+  'api.github.com',
+  'api.githubcopilot.com',
+  'api.individual.githubcopilot.com',
+];
 const environmentRuntimeConfig = JSON.parse(readFileSync(
   path.join(root, 'deploy', 'k8s', 'runtime-configs', 'environment-runtime-config.json'), 'utf8',
 ));
@@ -921,7 +928,7 @@ test('deploy adds environment model bindings from a file to all runtime maps and
     assert.match(item('Deployment', 'events-and-sessions').spec.template.metadata.annotations[
       'agentweaver.io/runtime-config-sha256'], /^[a-f0-9]{64}$/);
     assert.deepEqual(item('CiliumNetworkPolicy', 'agenthost-model-egress').spec.egress[1].toFQDNs,
-      [{ matchName: 'demo.openai.azure.com' }]);
+      [...copilotModelHosts, 'demo.openai.azure.com'].sort().map(matchName => ({ matchName })));
     const projects = calls.filter(call => call.command === 'kubectl' && call.args[0] === 'create')
       .map(call => parse(call.options.input))
       .find(resource => resource.metadata?.name === 'projects-config-runtime-config');
@@ -931,18 +938,34 @@ test('deploy adds environment model bindings from a file to all runtime maps and
     rmSync(directory, { recursive: true, force: true });
   }
 });
-test('deploy allows AgentHost model egress to exactly the rendered BYOK hosts on TCP 443', () => {
+test('deploy allows AgentHost model egress to exactly the rendered HostedCopilot and BYOK hosts on TCP 443', () => {
   const render = bindings => [
     { kind: 'ConfigMap', metadata: { name: 'agenthost-runtime-v1' },
       data: { 'appsettings.json': JSON.stringify({ AgentHost: { ModelBindings: bindings } }) } },
     structuredClone(agentHostModelEgress),
   ];
   const byok = baseUrl => ({ SourceMode: 'Byok', Provider: { BaseUrl: baseUrl } });
-  const hosted = { SourceMode: 'HostedCopilot', Provider: { BaseUrl: 'https://api.githubcopilot.com' } };
+  const hosted = { ModelId: 'gpt-6.1-sol', SourceMode: 'HostedCopilot' };
+  const stamped = hostNames => {
+    const names = hostNames.map(matchName => ({ matchName }));
+    return [
+      { ...agentHostModelEgress.spec.egress[0],
+        toPorts: [{ ...agentHostModelEgress.spec.egress[0].toPorts[0], rules: { dns: names } }] },
+      { toFQDNs: names, toPorts: [{ ports: [{ port: '443', protocol: 'TCP' }] }] },
+    ];
+  };
 
-  const none = render({ hosted });
+  const none = render({});
   assert.deepEqual(stampAgentHostModelEgress(none), []);
   assert.deepEqual(none[1].spec, agentHostModelEgress.spec);
+
+  const copilot = render({ hosted, other: { ...hosted, ModelId: 'gpt-6-luna' } });
+  assert.deepEqual(stampAgentHostModelEgress(copilot), copilotModelHosts);
+  assert.deepEqual(copilot[1].spec.egress, stamped(copilotModelHosts));
+
+  const byokOnly = render({ a: byok('https://demo.openai.azure.com/openai/v1') });
+  assert.deepEqual(stampAgentHostModelEgress(byokOnly), ['demo.openai.azure.com']);
+  assert.deepEqual(byokOnly[1].spec.egress, stamped(['demo.openai.azure.com']));
 
   const resources = render({
     hosted,
@@ -950,14 +973,9 @@ test('deploy allows AgentHost model egress to exactly the rendered BYOK hosts on
     b: byok('https://demo.openai.azure.com:443/openai/v1/'),
     c: byok('https://other.cognitiveservices.azure.com'),
   });
-  const names = [{ matchName: 'demo.openai.azure.com' }, { matchName: 'other.cognitiveservices.azure.com' }];
-  assert.deepEqual(stampAgentHostModelEgress(resources),
-    ['demo.openai.azure.com', 'other.cognitiveservices.azure.com']);
-  assert.deepEqual(resources[1].spec.egress, [
-    { ...agentHostModelEgress.spec.egress[0],
-      toPorts: [{ ...agentHostModelEgress.spec.egress[0].toPorts[0], rules: { dns: names } }] },
-    { toFQDNs: names, toPorts: [{ ports: [{ port: '443', protocol: 'TCP' }] }] },
-  ]);
+  const merged = [...copilotModelHosts, 'demo.openai.azure.com', 'other.cognitiveservices.azure.com'].sort();
+  assert.deepEqual(stampAgentHostModelEgress(resources), merged);
+  assert.deepEqual(resources[1].spec.egress, stamped(merged));
 
   for (const baseUrl of [
     'http://demo.openai.azure.com/openai/v1',
@@ -1357,7 +1375,9 @@ test('active installer stamps the selected AgentHost platform digest and measure
         tuple.CompressedPullBytes);
       assert.notEqual(tuple.CompressedPullBytes, 322214685);
       assert.deepEqual(applied.items.find(resource => resource.kind === 'CiliumNetworkPolicy' &&
-        resource.metadata.name === 'agenthost-model-egress')?.spec, agentHostModelEgress.spec);
+        resource.metadata.name === 'agenthost-model-egress')?.spec.egress[1],
+      { toFQDNs: copilotModelHosts.map(matchName => ({ matchName })),
+        toPorts: [{ ports: [{ port: '443', protocol: 'TCP' }] }] });
       facts.push({ digest: tuple.Digest, bytes: tuple.CompressedPullBytes });
     }
     assert.notEqual(facts[0].digest, facts[1].digest);
