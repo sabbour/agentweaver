@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, delimiter, join } from 'node:path';
-import { gitShowMatches, redact, run, runAz, runGit, sourceBytesMatch } from '../lib/exec.mjs';
+import {
+  gitShowMatches, redact, run, runAz, runAzAcrLoginToken, runGit, sourceBytesMatch,
+} from '../lib/exec.mjs';
 
 const isWindows = process.platform === 'win32';
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -199,6 +201,19 @@ test('runAz resolves and runs the real az CLI (including Windows .cmd shim)', { 
   const result = runAz(['version'], { check: false });
   assert.equal(result.status, 0);
   assert.match(result.stdout, /azure-cli/);
+});
+
+test('ACR login token stays in memory and command diagnostics redact secret output', { skip: !isWindows }, () => {
+  const env = {
+    ...process.env,
+    PATH: `${FIXTURES_DIR}${delimiter}${process.env.PATH ?? ''}`,
+  };
+  assert.equal(runAzAcrLoginToken('agentweaverasabbour', { env }), 'synthetic-acr-token');
+  assert.throws(() => runAzAcrLoginToken('not-valid!', { env }), /ACR registry name/);
+  assert.throws(() => runAzAcrLoginToken('agentweaverasabbour', {
+    env: { ...env, ACR_TOKEN_FIXTURE_FAIL: '1' },
+  }), error => error.message.includes('[redacted]') &&
+    !error.message.includes('synthetic-acr-secret'));
 });
 
 // Literal-argv-preservation round trip through the Windows cmd.exe shim

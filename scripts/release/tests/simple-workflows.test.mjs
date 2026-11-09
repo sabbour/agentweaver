@@ -1195,6 +1195,16 @@ test('image manifest arguments select exactly one input and require execution', 
     { imageManifest: 'images.json' });
   assert.deepEqual(parseDeployKustomizeArgs(['--image-tag', selectedTag, '--execute']),
     { imageTag: selectedTag });
+  assert.deepEqual(parseDeployKustomizeArgs([
+    '--image-manifest', 'images.json', '--registry', 'agentweaverasabbour.azurecr.io', '--execute',
+  ]), { imageManifest: 'images.json', registry: 'agentweaverasabbour.azurecr.io' });
+  assert.throws(() => parseDeployKustomizeArgs([
+    '--image-tag', selectedTag, '--registry', 'invalid', '--execute',
+  ]), /registry must be/);
+  assert.throws(() => parseDeployKustomizeArgs([
+    '--image-tag', selectedTag, '--registry', 'ghcr.io/sabbour', '--registry',
+    'agentweaverasabbour.azurecr.io', '--execute',
+  ]), /requires a registry/);
   assert.throws(() => parseDeployKustomizeArgs([
     '--image-manifest', 'images.json', '--image-tag', selectedTag, '--execute',
   ]), /exactly one/);
@@ -1280,6 +1290,38 @@ test('partial deployment preserves unselected live images and skips unrelated mi
       Platform: 'linux/amd64',
       CompressedPullBytes: 987654321,
     });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('ACR partial deployment keeps omitted live images in their existing registries', async () => {
+  const directory = scratch();
+  const manifestPath = path.join(directory, 'images.json');
+  const calls = [];
+  writeFileSync(manifestPath, JSON.stringify({ images: { 'agentweaver-web': selectedTag } }));
+  try {
+    await deployKustomize({ imageManifest: manifestPath, registry: 'agentweaverasabbour.azurecr.io' }, {
+      root: directory, exec: fakeExec(calls), log() {},
+    });
+
+    const pins = calls.find(call => call.command === 'kubectl' && call.args[0] === 'kustomize')
+      .renderedImages;
+    const selected = pins.find(image => image.name === `${REGISTRY}/agentweaver-web`);
+    assert.equal(selected.newName, 'agentweaverasabbour.azurecr.io/agentweaver-web');
+    for (const repository of imageRepositories.filter(repository => repository !== 'agentweaver-web')) {
+      const image = pins.find(pin => pin.name === `${REGISTRY}/${repository}`);
+      assert.equal(image.newName, `${REGISTRY}/${repository}`, `${repository} keeps its live registry`);
+    }
+
+    const applied = parse(calls.find(call => call.command === 'kubectl' && call.args[0] === 'apply').options.input);
+    const environment = applied.items.find(resource =>
+      resource.kind === 'Deployment' && resource.metadata.name === 'environment');
+    const environmentContainer = environment.spec.template.spec.containers
+      .find(container => container.name === 'environment');
+    const settings = Object.fromEntries(environmentContainer.env.map(({ name, value }) => [name, value]));
+    assert.equal(settings.Environment__Sandbox__AgentSandbox__ContainerImage,
+      `${REGISTRY}/agentweaver-agenthost@${existingAgentHostRegistry.childDigest}`);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

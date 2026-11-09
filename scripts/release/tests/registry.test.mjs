@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 import {
   measureAgentHostRegistryImage,
+  parseRegistryTarget,
   readServiceImageRevision,
   verifyRegistryImage,
   verifyServiceRegistryImage,
@@ -11,13 +12,16 @@ import {
 const sourceSha = 'a'.repeat(40);
 const sourceTree = 'b'.repeat(40);
 const version = '1.0.0';
-const topReference = 'ghcr.io/sabbour/agentweaver-events-and-sessions@';
 
 function digest(bytes) {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 }
 
-function serviceFixture({ duplicateAmd64 = false, mutateConfig = () => {}, tamper, missingToken = false } = {}) {
+function serviceFixture({
+  duplicateAmd64 = false, mutateConfig = () => {}, tamper, missingToken = false,
+  registry = 'ghcr.io/sabbour', repository = 'agentweaver-events-and-sessions',
+} = {}) {
+  const topReference = `${registry}/${repository}@`;
   const config = {
     os: 'linux',
     architecture: 'amd64',
@@ -71,11 +75,15 @@ function serviceFixture({ duplicateAmd64 = false, mutateConfig = () => {}, tampe
     text: async () => bytes.toString('utf8'),
     arrayBuffer: async () => bytes,
   });
+
   const fetchImpl = async (url, options = {}) => {
     const value = String(url);
     calls.push([value, options]);
     if (value.startsWith('https://ghcr.io/token?')) {
       return { ok: true, status: 200, json: async () => missingToken ? {} : ({ token: 'registry-pull-token' }) };
+    }
+    if (value.endsWith('/oauth2/token')) {
+      return { ok: true, status: 200, json: async () => ({ access_token: 'registry-pull-token' }) };
     }
     if (value.endsWith(`/manifests/${topDigest}`)) {
       return response(tamper === 'top' ? Buffer.from('{"tampered":true}') : topBytes, topDigest);
@@ -127,6 +135,54 @@ test('service registry verification checks raw index, unique amd64 child, and so
   }, { configDigest: fixture.configDigest, sourceSha, sourceTree, version });
 });
 
+test('ACR verification exchanges a login token and uses it only for pull requests', async () => {
+  const registry = 'agentweaverasabbour.azurecr.io';
+  const fixture = serviceFixture({ registry });
+  let loginCalls = 0;
+  const options = { getAcrLoginToken: name => {
+    loginCalls += 1;
+    assert.equal(name, 'agentweaverasabbour');
+    return 'memory-only-refresh-token';
+  } };
+  const result = await verifyServiceRegistryImage(
+    `${fixture.topReference}${fixture.topDigest}`, fixture.fetchImpl, undefined, options);
+
+  assert.equal(parseRegistryTarget(registry).kind, 'acr');
+  assert.equal(result.image, `${registry}/agentweaver-events-and-sessions@${fixture.childDigest}`);
+  assert.equal(result.sourceSha, sourceSha);
+  assert.equal(loginCalls, 1);
+  assert.equal(fixture.calls[0][0], `https://${registry}/oauth2/token`);
+  assert.equal(fixture.calls[0][1].body.get('refresh_token'), 'memory-only-refresh-token');
+  assert.ok(fixture.calls.slice(1).every(([, request]) =>
+    request.headers.authorization === 'Bearer registry-pull-token'));
+});
+
+test('ACR AgentHost measurement reads its OCI descriptors and returns the compressed pull size', async () => {
+  const registry = 'agentweaverasabbour.azurecr.io';
+  const fixture = serviceFixture({ registry, repository: 'agentweaver-agenthost' });
+  const result = await measureAgentHostRegistryImage(
+    `${fixture.topReference}${fixture.topDigest}`, fixture.fetchImpl, undefined, {
+      getAcrLoginToken: () => 'memory-only-refresh-token',
+    });
+
+  assert.equal(result.image, `${registry}/agentweaver-agenthost@${fixture.childDigest}`);
+  assert.equal(result.digest, fixture.childDigest);
+  assert.equal(result.compressedPullBytes,
+    fixture.childBytes.length + fixture.configBytes.length + fixture.layerSize);
+});
+
+test('ACR verification rejects an empty token-exchange response', async () => {
+  const registry = 'agentweaverasabbour.azurecr.io';
+  const fixture = serviceFixture({ registry });
+  const fetchImpl = async (url, options) => String(url).endsWith('/oauth2/token')
+    ? { ok: true, status: 200, json: async () => null }
+    : fixture.fetchImpl(url, options);
+  await assert.rejects(verifyServiceRegistryImage(
+    `${fixture.topReference}${fixture.topDigest}`, fetchImpl, undefined, {
+      getAcrLoginToken: () => 'memory-only-refresh-token',
+    }), /ACR returned no pull token/);
+});
+
 test('migration revision lookup needs no source-tree or version publication claims', async () => {
   const fixture = serviceFixture({
     mutateConfig(config) {
@@ -174,7 +230,8 @@ test('service registry verification rejects non-matching raw registry bytes', as
 
 test('service registry verification reports authorization and token failures', async () => {
   const unauthorized = async () => ({ ok: false, status: 401 });
-  await assert.rejects(verifyServiceRegistryImage(`${topReference}${`sha256:${'c'.repeat(64)}`}`, unauthorized),
+  await assert.rejects(verifyServiceRegistryImage(
+    `ghcr.io/sabbour/agentweaver-events-and-sessions@${`sha256:${'c'.repeat(64)}`}`, unauthorized),
     /https:\/\/ghcr.io\/token.*after 1 attempt.*HTTP 401/);
 
   const missingToken = serviceFixture({ missingToken: true });

@@ -194,6 +194,11 @@ builds its frontend and host, and the other seven images use .NET container
 publishing. Each image is pushed directly to GHCR with a `sha-<commit>` tag.
 The workflow summary lists each registry digest and the AgentHost compressed
 pull size.
+For an ACR candidate, `npm run azure:build-acr-candidate` uses those Docker
+and .NET build paths from a detached exact-source worktree. It pushes the same
+ten `linux/amd64` images to ACR and verifies the source commit, Git tree,
+component version, digest, and AgentHost compressed pull size. This local
+command does not replace the automatic GHCR workflow.
 
 The package workflow runs separately when `releases/foundation.json` changes.
 It packs versioned contracts and libraries and pushes NuGet packages to GitHub
@@ -207,7 +212,11 @@ The workload command runs locally from an approved operator machine with an
 interactive Azure CLI identity and the intended Kubernetes context. It selects
 image repositories using the operator-supplied JSON manifest documented in
 the [Kustomize guide](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md#select-images-with-a-manifest);
-omitted repositories retain their live image references. The legacy
+GHCR is the default registry. `--registry` selects another supported registry
+for images in the manifest; omitted repositories retain their live image
+references and registries. ACR OCI reads exchange an Azure CLI login token for
+a pull-scoped token in memory. The helper does not print or store that token.
+The legacy
 `--image-tag` form updates all ten images. Use the
 [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md)
 for the approved operator procedure; this view explains its boundaries rather

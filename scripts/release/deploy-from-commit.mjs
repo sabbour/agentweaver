@@ -4,25 +4,45 @@ import { existsSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { IMAGE_REPOSITORIES } from './image-repositories.mjs';
-import { verifyServiceRegistryImage } from './registry.mjs';
+import { DEFAULT_REGISTRY, parseRegistryTarget, verifyServiceRegistryImage } from './registry.mjs';
 import { run } from '../azure/lib/exec.mjs';
 
-const REGISTRY = 'ghcr.io/sabbour';
 const SHA = /^[a-f0-9]{40}$/;
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
 
 export const DEPLOY_FROM_COMMIT_USAGE =
-  'Usage: npm run azure:deploy-from-commit -- <full-lowercase-40-character-commit-sha> --execute';
+  'Usage: npm run azure:deploy-from-commit -- <full-lowercase-40-character-commit-sha> ' +
+  '[--registry <registry>] --execute';
 
 function fail(message) {
   throw new Error(`Commit deployment: ${message}`);
 }
 
 export function parseDeployFromCommitArgs(argv) {
-  if (argv.length !== 2 || !SHA.test(argv[0] ?? '') || argv[1] !== '--execute') {
+  if (!SHA.test(argv[0] ?? '')) {
     fail(DEPLOY_FROM_COMMIT_USAGE);
   }
-  return { sourceSha: argv[0] };
+  let registry = DEFAULT_REGISTRY;
+  let hasRegistry = false;
+  let execute = false;
+  for (let index = 1; index < argv.length; index += 1) {
+    if (argv[index] === '--execute') {
+      if (execute) fail(DEPLOY_FROM_COMMIT_USAGE);
+      execute = true;
+    } else if (argv[index] === '--registry') {
+      if (hasRegistry || argv[index + 1] === undefined ||
+          argv[index + 1].startsWith('--')) fail(DEPLOY_FROM_COMMIT_USAGE);
+      hasRegistry = true;
+      registry = argv[++index];
+      try {
+        parseRegistryTarget(registry);
+      } catch {
+        fail('registry must be ghcr.io/sabbour or an Azure Container Registry login server.');
+      }
+    } else fail(DEPLOY_FROM_COMMIT_USAGE);
+  }
+  if (!execute) fail(DEPLOY_FROM_COMMIT_USAGE);
+  return { sourceSha: argv[0], ...(registry === DEFAULT_REGISTRY ? {} : { registry }) };
 }
 
 function command(exec, name, args, cwd, action) {
@@ -33,8 +53,13 @@ function command(exec, name, args, cwd, action) {
   return result;
 }
 
-export async function deployFromCommit({ sourceSha }, overrides = {}) {
+export async function deployFromCommit({ sourceSha, registry = DEFAULT_REGISTRY }, overrides = {}) {
   if (!SHA.test(sourceSha ?? '')) fail('source SHA must be a lowercase full 40-character commit SHA.');
+  try {
+    parseRegistryTarget(registry);
+  } catch {
+    fail('registry must be ghcr.io/sabbour or an Azure Container Registry login server.');
+  }
 
   const root = path.resolve(overrides.root ?? process.cwd());
   const exec = overrides.exec ?? run;
@@ -74,7 +99,7 @@ export async function deployFromCommit({ sourceSha }, overrides = {}) {
 
     const images = {};
     for (const repository of IMAGE_REPOSITORIES) {
-      const tag = `${REGISTRY}/${repository}:sha-${sourceSha}`;
+      const tag = `${registry}/${repository}:sha-${sourceSha}`;
       const inspected = command(exec, 'docker', [
         'buildx', 'imagetools', 'inspect', tag, '--format', '{{.Manifest.Digest}}',
       ], worktreePath, `Could not resolve ${tag}`);
@@ -82,7 +107,7 @@ export async function deployFromCommit({ sourceSha }, overrides = {}) {
       if (!DIGEST.test(digest)) fail(`Registry returned an invalid digest for ${tag}.`);
 
       const verified = await verifyImage(
-        `${REGISTRY}/${repository}@${digest}`, fetchImpl);
+        `${registry}/${repository}@${digest}`, fetchImpl, undefined, overrides.registryOptions);
       if (verified.sourceSha !== sourceSha || verified.sourceTree !== sourceTree) {
         fail(`Image ${repository} does not match source ${sourceSha} and tree ${sourceTree}.`);
       }
@@ -91,11 +116,15 @@ export async function deployFromCommit({ sourceSha }, overrides = {}) {
 
     const imageManifest = path.join(worktreePath, `.deploy-from-commit-${randomUUID()}.json`);
     writeFileSync(imageManifest, JSON.stringify({ images }, null, 2), { flag: 'wx' });
-    const deployKustomize = overrides.deployKustomize ?? (await import(pathToFileURL(
+    const deployModule = overrides.deployModule ?? (overrides.deployKustomize ? undefined : await import(pathToFileURL(
       path.join(worktreePath, 'scripts', 'release', 'deploy-kustomize.mjs'),
-    ).href)).deployKustomize;
+    ).href));
+    if (registry !== DEFAULT_REGISTRY && deployModule?.DEPLOY_KUSTOMIZE_REGISTRY_OPTION !== true) {
+      fail(`source ${sourceSha} predates registry-aware Kustomize deployment; select a newer source commit.`);
+    }
+    const deployKustomize = overrides.deployKustomize ?? deployModule.deployKustomize;
     result = await deployKustomize(
-      { imageManifest }, { root: worktreePath });
+      { imageManifest, registry }, { root: worktreePath, registryOptions: overrides.registryOptions });
   } catch (error) {
     failure = error;
   }

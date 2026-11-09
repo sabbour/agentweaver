@@ -338,7 +338,11 @@ separate.
    policy, so routing acceptance needs a separately approved Gateway namespace
    using the `baseline` policy. Do not change the product namespace policy to
    work around this limitation.
-6. Confirm the selected image tag was pushed by the v1 image workflow.
+6. Confirm each selected image is available in the chosen registry. The v1
+   image workflow pushes to GHCR. For an ACR candidate, use the local build
+   command in the [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#container-images).
+   Add `--registry <acr-login-server>` to the deployment command when you use
+   ACR.
 
 Do not copy acceptance-only OAuth client IDs or loopback redirect URIs into a
 production registration. Keep passwords, OAuth secrets, PFX passwords, tokens,
