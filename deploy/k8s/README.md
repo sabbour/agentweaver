@@ -31,11 +31,15 @@ prerequisites:
    catalog. Follow the runtime configuration reference; do not put credentials
    or private keys in ConfigMaps.
 3. Create the operator-owned Secrets and backend CA ConfigMap referenced by
-   the workloads. When using AgentHost, provide `agenthost-tls` as a
-   `kubernetes.io/tls` Secret for the configured HTTPS endpoint. The installer
-   checks only the Secret's name and type; verify its certificate and key
-   through the approved operator process. Complete the managed certificate
-   procedure so AKS creates `identity-broker-tls`.
+   the workloads. Provide `identity-broker-internal-tls` as a
+   `kubernetes.io/tls` Secret. Its certificate must match
+   `identity-broker.agentweaver.svc.cluster.local` and chain to
+   `service-backend-ca`. Keep it separate from `identity-broker-tls`, which
+   AKS creates for the public Gateway from a managed
+   `DefaultDomainCertificate`. When using AgentHost, provide `agenthost-tls` as
+   a `kubernetes.io/tls` Secret for the configured HTTPS endpoint. The
+   installer checks only the Secret's name and type; verify its certificate
+   and key through the approved operator process.
 4. Confirm the database and Entra workload identities are ready. The deploy
    command runs the selected service migrations before it applies workloads.
 5. Run the infrastructure deployment so that the cluster has the `kata` node

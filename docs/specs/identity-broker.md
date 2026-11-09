@@ -269,8 +269,11 @@ Replacing the sole certificate immediately invalidates previous encrypted tokens
 
 The Kubernetes base references the required
 `identity-broker-runtime-config-v3`
-ConfigMap, `identity-broker-signing` and `identity-broker-tls` Secrets, and the
-durable `identity-broker-key-ring` PVC. It also references
+ConfigMap, `identity-broker-signing`, `identity-broker-internal-tls`, and
+`identity-broker-tls` Secrets, and the durable `identity-broker-key-ring` PVC.
+The internal TLS Secret serves the Broker's in-cluster Service name and chains
+to `service-backend-ca`; the public TLS Secret serves Gateway traffic. The base
+also references
 `identity-broker-client-secrets` when a confidential upstream or OAuth client
 is configured. It does not create any of these objects. The runtime ConfigMap
 contains non-secret settings and must register the exact issuer, upstream OIDC

@@ -54,6 +54,12 @@ hostname checks, the configured peer leaf pin, server-authentication purpose,
 the client certificate, and online revocation checks. Public issuer discovery
 and external OAuth providers continue to use normal system trust.
 
+For the Broker's internal Service, Kestrel selects the certificate from
+`identity-broker-internal-tls` for the exact SNI name
+`identity-broker.agentweaver.svc.cluster.local`. That certificate must chain to
+`service-backend-ca`. The public `identity-broker-tls` certificate remains the
+`*` fallback, including for clients that do not send SNI.
+
 ## 6. Runtime view
 
 ### Understand token authority

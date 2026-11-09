@@ -74,6 +74,9 @@ spec:
             - name: tls-certificate
               mountPath: /var/run/identity-broker-tls
               readOnly: true
+            - name: internal-tls-certificate
+              mountPath: /var/run/identity-broker-internal-tls
+              readOnly: true
             - name: hosted-catalog-tls
               mountPath: /var/run/identity-broker-agenthost-tls
               readOnly: true
@@ -120,6 +123,16 @@ spec:
         - name: tls-certificate
           secret:
             secretName: identity-broker-tls
+            optional: false
+            defaultMode: 0440
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+        - name: internal-tls-certificate
+          secret:
+            secretName: identity-broker-internal-tls
             optional: false
             defaultMode: 0440
             items:

@@ -79,6 +79,12 @@ hostname checks, the configured peer leaf pin, server-authentication purpose,
 the client certificate, and online revocation checks. Public issuer discovery
 and external HTTPS providers continue to use normal system trust.
 
+For the Broker's internal Service, Kestrel selects the certificate from
+`identity-broker-internal-tls` for the exact SNI name
+`identity-broker.agentweaver.svc.cluster.local`. That certificate must chain to
+`service-backend-ca`. The public `identity-broker-tls` certificate remains the
+`*` fallback, including for clients that do not send SNI.
+
 Projects & Config accepts hosted catalog publication only when the request
 carries both the caller's bearer and AgentHost's client certificate. Its
 optional `ProjectsConfig:HostedModelCatalogPublication:AgentHostCertificateSha256`
