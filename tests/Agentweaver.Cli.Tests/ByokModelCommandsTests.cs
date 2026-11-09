@@ -94,6 +94,45 @@ public sealed class ByokModelCommandsTests : IDisposable
         Assert.Contains("changed after the plan was made", stale.Error, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task PlanWritesAModelBindingsFileForDeploymentWithoutChangingTheSource()
+    {
+        var agentHostPath = Path.Combine(_directory, "k8s", ByokModelCommands.AgentHostFile);
+        var productText = File.ReadAllText(agentHostPath);
+        var inputPath = Path.Combine(_directory, "byok.json");
+        File.WriteAllText(inputPath, Input("openai", V1Endpoint, "responses", null).ToJsonString());
+        string[] plan = ["models", "byok", "plan", "--input", inputPath, "--source", Path.Combine(_directory, "k8s"),
+            "--output", PlanPath, "--overlay-output", OverlayPath];
+
+        var (code, _, error) = await RunAsync(plan);
+        Assert.True(code == 0, error);
+        Assert.Equal(productText, File.ReadAllText(agentHostPath));
+        var overlay = JsonNode.Parse(File.ReadAllText(OverlayPath))!.AsObject();
+        var product = JsonNode.Parse(string.Join('\n', productText.Split('\n')
+            .SkipWhile(line => !line.StartsWith("  appsettings.json", StringComparison.Ordinal)).Skip(1)
+            .Select(line => line.TrimEnd('\r')).Select(line => line.Length >= 4 ? line[4..] : line)))!["AgentHost"]!;
+        Assert.Equal("agentweaver.model-bindings-overlay", overlay["kind"]!.GetValue<string>());
+        Assert.Equal(product["ModelBindingsRevision"]!.GetValue<string>(), overlay["baseRevision"]!.GetValue<string>());
+        Assert.True(JsonNode.DeepEquals(product["ModelBindings"], overlay["baseModelBindings"]));
+        Assert.Equal("byok-r1", overlay["revision"]!.GetValue<string>());
+        Assert.Equal(["azure-gpt"], overlay["modelBindings"]!.AsObject().Select(item => item.Key));
+        Assert.Equal("Byok", overlay["modelBindings"]!["azure-gpt"]!["SourceMode"]!.GetValue<string>());
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse("""{"gpt-5.4":{"input":"2.5","cachedInput":"0.25","output":"15"}}"""),
+            overlay["modelRates"]));
+        Assert.DoesNotContain("fedcba9876543210fedcba9876543210", overlay.ToJsonString(), StringComparison.Ordinal);
+
+        Assert.Equal(0, (await RunAsync(["models", "byok", "apply", "--plan", PlanPath])).Code);
+        File.Delete(PlanPath);
+        File.Delete(OverlayPath);
+        var next = Input("openai", V1Endpoint, "responses", null);
+        next["revision"] = "byok-r2";
+        File.WriteAllText(inputPath, next.ToJsonString());
+        var rejected = await RunAsync(plan);
+        Assert.Equal(1, rejected.Code);
+        Assert.Contains("already has a BYOK binding", rejected.Error, StringComparison.Ordinal);
+        Assert.False(File.Exists(OverlayPath));
+    }
+
     [Theory]
     [InlineData("apiKey", "\"secret-value\"", "unsupported field 'apiKey'")]
     [InlineData("wireApi", null, "'wireApi' is required")]
@@ -169,6 +208,8 @@ public sealed class ByokModelCommandsTests : IDisposable
     }
 
     private string PlanPath => Path.Combine(_directory, "plan.json");
+
+    private string OverlayPath => Path.Combine(_directory, "model-bindings.json");
 
     private async Task<(int Code, string Output, string Error)> RunPlanAsync(JsonObject input, HttpClient? client = null)
     {

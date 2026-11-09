@@ -1,14 +1,19 @@
 # Configure an Azure OpenAI BYOK model
 
 Use this procedure to let a project run on your own Azure OpenAI deployment
-(bring your own key, BYOK). The `agentweaver models byok` commands change the
-checked-in runtime maps for AgentHost, Events & Sessions, and Projects &
-Config in one step. They also make the project settings that select the model
-and set a USD spend limit for each run.
+(bring your own key, BYOK). The `agentweaver models byok plan` command writes a
+model bindings file for your environment. The deploy helper adds the binding
+from this file to the runtime maps for AgentHost, Events & Sessions, and
+Projects & Config. The command also makes the project settings that select the
+model and set a USD spend limit for each run.
 
-This procedure is for a platform operator who can change the deployment
-source and deploy it. The commands do not change a cluster, Key Vault, or
-Azure resource. They never read or write an API key.
+Keep the model bindings file outside the repository. The deployment source
+then keeps only the product model bindings, and you can deploy any later
+source commit with the same file.
+
+This procedure is for a platform operator who deploys Agentweaver. The
+commands do not change a cluster, Key Vault, or Azure resource. They never
+read or write an API key.
 
 ## Before you begin
 
@@ -105,7 +110,7 @@ Create `byok.json` outside the repository. It contains no secrets.
 
 | Field | Value |
 | --- | --- |
-| `reference` | The model reference that projects select. If the reference exists, it must already be a BYOK binding. |
+| `reference` | The model reference that projects select. It must not be a product model reference. |
 | `deployment` | The Azure OpenAI deployment name. Agentweaver sends it as the model ID. |
 | `providerType`, `endpoint`, `azureApiVersion` | See [Select the endpoint form](#select-the-endpoint-form). |
 | `wireApi` | Required: `responses` or `completions`. |
@@ -140,68 +145,82 @@ a hard budget then stops new turns in the run.
 The command rejects unknown fields. Do not add an API key or any other secret
 to the file.
 
-## Make and apply the plan
+## Make the plan
 
-1. Make a plan:
+1. Make a plan and a model bindings file. Use the deployment source of the
+   commit that you deploy:
 
    ```powershell
-   agentweaver models byok plan --input byok.json --source deploy\k8s --output byok-plan.json
+   agentweaver models byok plan --input byok.json --source deploy\k8s --output byok-plan.json --overlay-output <path-outside-repository>\model-bindings.json
    ```
 
    The command reads the three runtime maps below `deploy\k8s` and prints a
-   summary. It writes the full plan to a new file. If you use Retail meters,
-   it reads each price from the Azure Retail Prices API. It requires exactly
-   one USD consumption price for each meter.
+   summary. It writes the full plan and the model bindings file to new files.
+   It does not change the deployment source. If you use Retail meters, it
+   reads each price from the Azure Retail Prices API. It requires exactly one
+   USD consumption price for each meter.
 
 2. Review the summary and the plan file. The plan contains:
    - The new binding and revision.
    - The rate card ID, version, and prices.
-   - The changed files, with a SHA-256 digest of each file before and after
-     the change.
    - `projectConfiguration`: the model selection, the model binding pin, and
      the spend budget for the project.
 
-3. Apply the plan:
+3. Review the model bindings file. It contains:
+   - `baseRevision` and `baseModelBindings`: the product model bindings that
+     the file adds to.
+   - `revision`: the new model-binding revision.
+   - `modelBindings`: the BYOK binding.
+   - `rateCard` and `modelRates`: the rate card ID, version, and USD prices
+     for one million tokens.
 
-   ```powershell
-   agentweaver models byok apply --plan byok-plan.json
-   ```
+   The file contains no API key and no Key Vault reference. Keep it with your
+   environment settings, outside the repository.
 
-   The command checks every digest before it writes. If a file changed after
-   you made the plan, the command stops and writes nothing. Make a new plan.
+The deploy helper adds these items to the rendered runtime maps:
 
-The command changes these files:
-
-| File | Change |
+| Runtime map | Change |
 | --- | --- |
-| `deploy\k8s\profiles\agenthost\runtime-config.example.yaml` | Adds the binding and the new revision to the AgentHost map. |
-| `deploy\k8s\runtime-configs\events-and-sessions-runtime-config.json` | Copies the binding, and sets the Azure rate card and the `byok.tokens` USD meter. |
-| `deploy\k8s\runtime-configs\projects-config-runtime-config.json` | Copies the source mode, enabled state, and efforts, so that projects can select the model. |
+| `ConfigMap/agenthost-runtime-v1` | Adds the binding and the new revision. |
+| `ConfigMap/events-and-sessions-runtime-config` | Copies the binding, and sets the Azure rate card and the `byok.tokens` USD meter. |
+| `ConfigMap/projects-config-runtime-config` | Copies the source mode, enabled state, and efforts, so that projects can select the model. |
 
 AgentHost and Events & Sessions must load the same binding map. The plan
 checks that both maps give the same configuration hash as the pin.
 
+Do not use `agentweaver models byok apply` for an environment binding. It
+writes the binding into the deployment source, and the deploy helper then
+stops for deployment source that does not have the binding.
+
 ## Deploy the change
 
-1. Commit the changed files through your normal review process.
-2. Deploy them. See [Deploy Agentweaver to Azure](./deploy-to-azure.md). For
-   example:
+1. Deploy with the model bindings file. See
+   [Deploy Agentweaver to Azure](./deploy-to-azure.md). For example:
 
    ```powershell
-   npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --execute
+   npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --model-bindings <path-outside-repository>\model-bindings.json --execute
    ```
 
-3. Restart Events & Sessions, so that it reads the new binding map and rate
-   card, and wait for the rollout to finish:
+   To deploy an exact source commit, give the same option to
+   `npm run azure:deploy-from-commit`.
 
-   ```powershell
-   kubectl rollout restart deployment/events-and-sessions -n agentweaver
-   kubectl rollout status deployment/events-and-sessions -n agentweaver
-   ```
+2. Use the same file for each later deploy to this cluster. If you do not,
+   the deploy stops before it changes the cluster.
 
-The deploy helper stops if the rendered AgentHost map would remove a live
-BYOK binding, or change it without a new model-binding revision. Add or change
-the binding in the source with this procedure before you deploy.
+The deploy helper checks the file before it changes the cluster:
+
+- The product revision and product bindings must be equal to
+  `baseRevision` and `baseModelBindings`. If the product bindings change in
+  a later commit, make a new file and a new revision from that commit.
+- A reference in the file must not exist in the product bindings.
+- The deploy stops if the rendered AgentHost map would remove a live BYOK
+  binding, or change it without a new model-binding revision.
+- The deploy stops if it would change the live Azure rate card without a new
+  revision.
+
+The deploy helper restarts Events & Sessions when its runtime map changes, so
+that it reads the new binding map and rate card. You do not have to restart
+it.
 
 The deploy helper also lets AgentHost reach the BYOK endpoints. It reads the
 host of each BYOK binding in the rendered AgentHost map, and adds the host to
@@ -209,6 +228,9 @@ the `agenthost-model-egress` Cilium network policy as an exact DNS name on TCP
 port 443. It adds no other host. If you remove all BYOK bindings, the policy
 allows only DNS. The deploy stops if a BYOK `BaseUrl` is not an HTTPS Azure
 OpenAI endpoint on port 443. Do not edit the policy by hand.
+
+Source commits before this change cannot use `--model-bindings`.
+`npm run azure:deploy-from-commit` stops when the commit does not support it.
 
 After you select the model for a project, run one turn in the project. Make
 sure that the turn gets a model response. A connection error or a time-out can
@@ -244,6 +266,53 @@ exact Key Vault secret version for each run. Events & Sessions prices the
 `byok.tokens` usage in USD, and Orchestrator stops a new model turn when the
 run would go over the hard limit.
 
+## Move an existing binding to a model bindings file
+
+If you added a binding to the deployment source with `apply`, move it to a
+model bindings file. Keep the same revision, so that the project pins stay
+valid:
+
+1. Make the file from the product source, as in [Make the plan](#make-the-plan).
+   Use the same `reference` and `revision` that you applied.
+2. Compare the file with the live maps. Read the binding from
+   `ConfigMap/agenthost-runtime-v1`. Read the rate card ID, version, and
+   model rates from the `EventsAndSessions__Cost__Azure__` keys in
+   `ConfigMap/events-and-sessions-runtime-config`.
+3. If the rate card version or a rate is different, set the live value in
+   `rateCard` and `modelRates`. Retail prices and the rate card version can
+   change after you apply the plan.
+4. Deploy source without the applied binding, and give the file with
+   `--model-bindings`. The deploy stops if the binding or the rate card is
+   different from the live value at the same revision.
+
+A model bindings file can contain more than one binding. `plan` writes one
+binding. To add another binding, put it and its model rates into the same
+file by hand, and set a new `revision`.
+
+## Change or remove the binding
+
+Each change to the model bindings uses a new revision. A new revision makes
+the model binding pin of every project not valid. After the deploy, select the
+model again for each project that uses a model binding. Use the
+`projectConfiguration` from the new plan.
+
+To change the binding, for example its prices, make a new plan and a new model
+bindings file with a new `revision`. Then deploy with the new file.
+
+To remove the binding:
+
+1. Change each project that selects the BYOK model to another model.
+2. Deploy without `--model-bindings`. Name the binding to remove:
+
+   ```powershell
+   npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --remove-model-binding <reference> --execute
+   ```
+
+   The deploy stops if the reference is not a live BYOK binding, if the
+   rendered map still has it, or if the revision does not change. Deploy
+   source with its product revision, or use a model bindings file with a new
+   revision.
+
 ## Limits
 
 - The rate card uses standard token prices. It does not use long-context
@@ -252,6 +321,8 @@ run would go over the hard limit.
 - To change prices, run the procedure again with a new `revision`. Runs that
   started with the earlier rate card keep it, and their new usage is not
   priced.
+- A model bindings file adds bindings to the product bindings. It cannot
+  change or remove a product binding.
 
 ## Related information
 

@@ -229,18 +229,22 @@ for 2xx, `1` for other statuses or failures, and `130` for cancellation.
 
 ## Configure a BYOK model binding
 
-`models byok` adds an Azure OpenAI BYOK model binding to the checked-in
-runtime maps. It does not need a target or a sign-in.
+`models byok` plans an Azure OpenAI BYOK model binding. It does not need a
+target or a sign-in.
 
 ```text
 agentweaver models byok prices --region <azure-region> --search <meter-text>
-agentweaver models byok plan --input <byok.json> --source <deploy/k8s> --output <new-plan-file>
+agentweaver models byok plan --input <byok.json> --source <deploy/k8s> --output <new-plan-file> [--overlay-output <new-model-bindings-file>]
 agentweaver models byok apply --plan <plan-file>
 ```
 
 `prices` lists Azure Retail Prices meters in USD per million tokens. `plan`
-reads the input file and the runtime maps, and writes a new plan file. `apply`
-writes the planned maps only when every file still has its planned digest. The
+reads the input file and the runtime maps, and writes a new plan file. With
+`--overlay-output`, `plan` also writes a model bindings file. Give this file
+to `npm run deploy:kustomize -- --model-bindings <file>`. Keep it outside the
+repository. `apply` writes the planned maps to the deployment source only
+when every file still has its planned digest. Do not use `apply` for an
+environment binding. The
 input contains a Key Vault secret name and version, never an API key. For the
 full procedure, see
 [Configure an Azure OpenAI BYOK model](./configure-byok-azure-openai.md).

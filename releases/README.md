@@ -118,6 +118,13 @@ It passes those immutable digests and the registry to the existing Kustomize
 deployment helper. ACR deployment stops if the selected source commit does not
 include registry-aware Kustomize support.
 
+If the cluster has an environment BYOK model binding, add
+`--model-bindings <model-bindings.json>` with the operator-owned model bindings
+file. To remove a live BYOK binding, add `--remove-model-binding <reference>`.
+The helper passes these options to the Kustomize deployment helper. It stops
+if the selected source commit does not support them. See
+[Configure an Azure OpenAI BYOK model](../docs/guide/configure-byok-azure-openai.md).
+
 The command does not switch branches or change tracked files in your current
 worktree. It runs the existing migration-first deployment, permission checks,
 selected-context apply, and nine Deployment rollouts. This command can change

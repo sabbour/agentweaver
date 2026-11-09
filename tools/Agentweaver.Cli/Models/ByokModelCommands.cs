@@ -19,6 +19,7 @@ internal static class ByokModelCommands
     internal const string ProjectsFile = "runtime-configs/projects-config-runtime-config.json";
     internal const string RetailPricesUrl = "https://prices.azure.com/api/retail/prices";
     private const string PlanKind = "agentweaver.byok-model-plan";
+    private const string OverlayKind = "agentweaver.model-bindings-overlay";
     private const string BindingPrefix = "AgentHost__ModelBindings__";
     private const string RevisionKey = "AgentHost__ModelBindingsRevision";
     private const string AzureCostPrefix = "EventsAndSessions__Cost__Azure__";
@@ -70,17 +71,23 @@ internal static class ByokModelCommands
             }
             case "plan":
             {
-                parsed.RequireOnly("input", "source", "output");
+                parsed.RequireOnly("input", "source", "output", "overlay-output");
                 var input = parsed.Single("input") ?? throw new CliUsageException("Use --input <byok.json>.");
                 var source = parsed.Single("source") ?? throw new CliUsageException("Use --source <deploy/k8s>.");
                 var planPath = parsed.Single("output") ?? throw new CliUsageException("Use --output <new-plan.json>.");
                 if (File.Exists(planPath))
                     throw new CliUsageException("The plan output file already exists. Choose a new file.");
+                var overlayPath = parsed.Single("overlay-output");
+                if (overlayPath is not null && File.Exists(overlayPath))
+                    throw new CliUsageException("The model bindings output file already exists. Choose a new file.");
                 var request = ByokRequest.Read(JsonNode.Parse(await File.ReadAllTextAsync(input, ct)
                     .ConfigureAwait(false)) as JsonObject);
                 var pricing = await ResolvePricingAsync(request.Pricing, runtime, ct).ConfigureAwait(false);
-                var plan = CreatePlan(request, pricing, Path.GetFullPath(source));
+                var plan = CreatePlan(request, pricing, Path.GetFullPath(source), overlayPath is not null);
                 await File.WriteAllTextAsync(planPath, plan.ToJsonString(FileJson), ct).ConfigureAwait(false);
+                if (overlayPath is not null)
+                    await File.WriteAllTextAsync(overlayPath, plan["modelBindingsOverlay"]!.ToJsonString(FileJson), ct)
+                        .ConfigureAwait(false);
                 var summary = plan.DeepClone().AsObject();
                 foreach (var file in summary["files"]!.AsArray())
                     file!.AsObject().Remove("content");
@@ -103,8 +110,12 @@ internal static class ByokModelCommands
         }
     }
 
-    /// <summary>Builds the reviewed file changes, model pin, and project configuration fragment.</summary>
-    internal static JsonObject CreatePlan(ByokRequest request, ResolvedPricing pricing, string sourceRoot)
+    /// <summary>
+    /// Builds the reviewed file changes, model pin, and project configuration fragment. With
+    /// <paramref name="overlay"/>, also builds the model bindings file that the Kustomize deployment merges.
+    /// </summary>
+    internal static JsonObject CreatePlan(
+        ByokRequest request, ResolvedPricing pricing, string sourceRoot, bool overlay = false)
     {
         var agentHostText = File.ReadAllText(Path.Combine(sourceRoot, AgentHostFile));
         var eventsText = File.ReadAllText(Path.Combine(sourceRoot, EventsFile));
@@ -120,6 +131,12 @@ internal static class ByokModelCommands
         if (bindings[request.Reference] is JsonObject existing &&
             existing["SourceMode"]?.GetValue<string>() != "Byok")
             throw new CliUsageException($"Model reference '{request.Reference}' is not a BYOK binding. Choose another reference.");
+        var baseRevision = agentHost["ModelBindingsRevision"]?.GetValue<string>();
+        var baseBindings = bindings.DeepClone();
+        if (overlay && (bindings.Any(item => item.Value?["SourceMode"]?.GetValue<string>() == "Byok") ||
+                eventsText.Contains($"\"{AzureCostPrefix}", StringComparison.Ordinal)))
+            throw new CliUsageException(
+                "The source already has a BYOK binding or an Azure rate card. Use product deployment source for --overlay-output.");
         bindings[request.Reference] = request.AgentHostBinding();
         agentHost["ModelBindingsRevision"] = request.Revision;
 
@@ -158,7 +175,7 @@ internal static class ByokModelCommands
             ["reasoningEffort"] = request.DefaultReasoningEffort,
             ["providerType"] = request.ProviderType,
         };
-        return new JsonObject
+        var plan = new JsonObject
         {
             ["kind"] = PlanKind,
             ["schemaVersion"] = 1,
@@ -194,6 +211,25 @@ internal static class ByokModelCommands
                 },
             },
         };
+        if (overlay)
+        {
+            var rates = new JsonObject { ["input"] = FormatDecimal(pricing.Input) };
+            if (pricing.CachedInput is { } cachedInput)
+                rates["cachedInput"] = FormatDecimal(cachedInput);
+            rates["output"] = FormatDecimal(pricing.Output);
+            plan["modelBindingsOverlay"] = new JsonObject
+            {
+                ["kind"] = OverlayKind,
+                ["schemaVersion"] = 1,
+                ["baseRevision"] = baseRevision,
+                ["baseModelBindings"] = baseBindings,
+                ["revision"] = request.Revision,
+                ["modelBindings"] = new JsonObject { [request.Reference] = request.AgentHostBinding() },
+                ["rateCard"] = new JsonObject { ["id"] = pricing.RateCardId, ["version"] = pricing.Version },
+                ["modelRates"] = new JsonObject { [request.Deployment] = rates },
+            };
+        }
+        return plan;
     }
 
     /// <summary>Writes planned files only when every file still has its planned starting digest.</summary>

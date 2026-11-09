@@ -155,6 +155,26 @@ run-binding audience, certificate/key paths, and leaf pin together: the root
 bundle may replace its immutable ConfigMap during a selective image deployment,
 even when the Projects image is omitted.
 
+### Environment BYOK model bindings
+
+Do not add an environment BYOK model binding to this source. Keep the binding
+in a model bindings file outside the repository, and give the file to each
+deploy:
+
+```powershell
+npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --model-bindings <model-bindings.json> --execute
+npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --remove-model-binding <reference> --execute
+```
+
+`agentweaver models byok plan --overlay-output` writes the file. The helper
+adds its bindings and Azure rate card to the AgentHost, Events & Sessions, and
+Projects & Config runtime maps. It stops if the file does not match the
+product model bindings, if the deploy would remove or change a live BYOK
+binding without `--remove-model-binding` and a new revision, or if the deploy
+would change the live Azure rate card without a new revision. It restarts
+Events & Sessions when its runtime map changes. See
+[Configure an Azure OpenAI BYOK model](../../docs/guide/configure-byok-azure-openai.md).
+
 ## Select images with a manifest
 
 The local deploy command accepts an operator-supplied JSON file mapping image

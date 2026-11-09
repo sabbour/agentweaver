@@ -12,7 +12,7 @@ const DIGEST = /^sha256:[a-f0-9]{64}$/;
 
 export const DEPLOY_FROM_COMMIT_USAGE =
   'Usage: npm run azure:deploy-from-commit -- <full-lowercase-40-character-commit-sha> ' +
-  '[--registry <registry>] --execute';
+  '[--registry <registry>] [--model-bindings <file.json>] [--remove-model-binding <reference>]... --execute';
 
 function fail(message) {
   throw new Error(`Commit deployment: ${message}`);
@@ -25,6 +25,8 @@ export function parseDeployFromCommitArgs(argv) {
   let registry = DEFAULT_REGISTRY;
   let hasRegistry = false;
   let execute = false;
+  let modelBindings;
+  const removeModelBindings = [];
   for (let index = 1; index < argv.length; index += 1) {
     if (argv[index] === '--execute') {
       if (execute) fail(DEPLOY_FROM_COMMIT_USAGE);
@@ -39,10 +41,25 @@ export function parseDeployFromCommitArgs(argv) {
       } catch {
         fail('registry must be ghcr.io/sabbour or an Azure Container Registry login server.');
       }
+    } else if (argv[index] === '--model-bindings') {
+      if (modelBindings !== undefined || argv[index + 1] === undefined ||
+          argv[index + 1].startsWith('--')) fail(DEPLOY_FROM_COMMIT_USAGE);
+      modelBindings = path.resolve(argv[++index]);
+    } else if (argv[index] === '--remove-model-binding') {
+      const reference = argv[index + 1];
+      if (reference === undefined || reference.startsWith('--') ||
+          removeModelBindings.includes(reference)) fail(DEPLOY_FROM_COMMIT_USAGE);
+      removeModelBindings.push(reference);
+      index += 1;
     } else fail(DEPLOY_FROM_COMMIT_USAGE);
   }
   if (!execute) fail(DEPLOY_FROM_COMMIT_USAGE);
-  return { sourceSha: argv[0], ...(registry === DEFAULT_REGISTRY ? {} : { registry }) };
+  return {
+    sourceSha: argv[0],
+    ...(registry === DEFAULT_REGISTRY ? {} : { registry }),
+    ...(modelBindings === undefined ? {} : { modelBindings }),
+    ...(removeModelBindings.length ? { removeModelBindings } : {}),
+  };
 }
 
 function command(exec, name, args, cwd, action) {
@@ -53,7 +70,9 @@ function command(exec, name, args, cwd, action) {
   return result;
 }
 
-export async function deployFromCommit({ sourceSha, registry = DEFAULT_REGISTRY }, overrides = {}) {
+export async function deployFromCommit({
+  sourceSha, registry = DEFAULT_REGISTRY, modelBindings, removeModelBindings,
+}, overrides = {}) {
   if (!SHA.test(sourceSha ?? '')) fail('source SHA must be a lowercase full 40-character commit SHA.');
   try {
     parseRegistryTarget(registry);
@@ -62,6 +81,13 @@ export async function deployFromCommit({ sourceSha, registry = DEFAULT_REGISTRY 
   }
 
   const root = path.resolve(overrides.root ?? process.cwd());
+  const modelOptions = {
+    ...(modelBindings === undefined ? {} : { modelBindings: path.resolve(modelBindings) }),
+    ...(removeModelBindings?.length ? { removeModelBindings } : {}),
+  };
+  if (modelOptions.modelBindings !== undefined && !existsSync(modelOptions.modelBindings)) {
+    fail(`model bindings file does not exist: ${modelOptions.modelBindings}`);
+  }
   const exec = overrides.exec ?? run;
   const verifyImage = overrides.verifyImage ?? verifyServiceRegistryImage;
   const fetchImpl = overrides.fetchImpl ?? globalThis.fetch;
@@ -122,9 +148,13 @@ export async function deployFromCommit({ sourceSha, registry = DEFAULT_REGISTRY 
     if (registry !== DEFAULT_REGISTRY && deployModule?.DEPLOY_KUSTOMIZE_REGISTRY_OPTION !== true) {
       fail(`source ${sourceSha} predates registry-aware Kustomize deployment; select a newer source commit.`);
     }
+    if (Object.keys(modelOptions).length && deployModule?.DEPLOY_KUSTOMIZE_MODEL_BINDINGS_OPTION !== true) {
+      fail(`source ${sourceSha} predates the Kustomize model binding options; select a newer source commit.`);
+    }
     const deployKustomize = overrides.deployKustomize ?? deployModule.deployKustomize;
     result = await deployKustomize(
-      { imageManifest, registry }, { root: worktreePath, registryOptions: overrides.registryOptions });
+      { imageManifest, registry, ...modelOptions },
+      { root: worktreePath, registryOptions: overrides.registryOptions });
   } catch (error) {
     failure = error;
   }
