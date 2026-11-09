@@ -3,7 +3,9 @@ using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc;
+using OpenIddict.Abstractions;
 
 namespace Agentweaver.Orchestrator;
 
@@ -172,10 +174,24 @@ internal sealed class RuntimeActionOwner(
         CancellationToken cancellationToken,
         bool reserveToolInvocation = false)
     {
+        // Spend evidence is read only when a coordinator root model turn has budgets. The caller's bearer is
+        // forwarded to Events, so it is wrapped on first use and invalidated after the grant call.
+        SecretCredential? bearer = null;
+        var broker = request.ActionId == "model.turn" ? services.GetService<RuntimeUsageBrokerClient>() : null;
+        Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>>? readSpendEvidence =
+            broker is null ? null : async (spendRequest, token) =>
+            {
+                bearer ??= await ReadBearerAsync(context).ConfigureAwait(false);
+                return await broker.ReadSpendEvidenceAsync(
+                    new RuntimeActorAuthorization(bearer, CoordinationIdentity.ReadTenantSelector(context)),
+                    options.EventsOwnerBaseAddress, registration.Binding.ProjectId, registration.Binding.RunId,
+                    spendRequest, token).ConfigureAwait(false);
+            };
         try
         {
             return await grants.IssueRuntimeActionGrantAsync(
-                context, registration, request, cancellationToken, reserveToolInvocation).ConfigureAwait(false);
+                context, registration, request, cancellationToken, reserveToolInvocation, readSpendEvidence)
+                .ConfigureAwait(false);
         }
         catch (RuntimeNumericLimitDeniedException denial)
         {
@@ -184,6 +200,20 @@ internal sealed class RuntimeActionOwner(
                     context, registration, request, denial, cancellationToken).ConfigureAwait(false);
             throw new RuntimeAuthorizationException(denial.Code);
         }
+        finally
+        {
+            bearer?.Invalidate();
+        }
+    }
+
+    private async Task<SecretCredential> ReadBearerAsync(HttpContext context)
+    {
+        var time = services.GetRequiredService<TimeProvider>();
+        var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
+        var expiry = context.User.GetExpirationDate() ?? authentication.Properties?.ExpiresUtc;
+        if (!authentication.Succeeded || expiry is null || expiry <= time.GetUtcNow())
+            throw new RuntimeAuthorizationException("runtime_actor_expired");
+        return new SecretCredential(CoordinationIdentity.RequireBearer(context).Parameter!, expiry.Value, time);
     }
 
     /// <summary>

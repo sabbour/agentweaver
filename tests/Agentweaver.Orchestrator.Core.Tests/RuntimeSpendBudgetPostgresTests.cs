@@ -399,6 +399,117 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
         Assert.Equal(1, await CountAsync("maf_execution_dispatches"));
     }
 
+    [Fact]
+    public async Task CoordinatorRootTurnIsAdmittedAndReservedOnceUnderAHardBudget()
+    {
+        // A current project budget with hard limit 10 and reserve 4 applies to the root turn.
+        var request = await ArrangeAdmittedRootTurnAsync(hard: 10m, reserve: 4m);
+        var requests = new List<UsageSpendEvidenceRequest>();
+        var evidence = Evidence(priced: 0m, cursor: 1, requests: requests);
+
+        // 0 committed + 0 outstanding + 4 reserve = 4 <= 10, so the grant is issued and the turn holds a
+        // reservation under its event ID.
+        var grant = await IssueAsync(0, request, evidence);
+        Assert.Equal(ExecutableActionGrantLookupStatus.Current, (await GrantStore().GetCurrentAsync(grant)).Status);
+        Assert.Single(requests);
+        Assert.Equal("outstanding", await ReadReservationStateAsync(request.EventId));
+
+        // A retry of the same request returns the same grant and does not reserve again.
+        Assert.Equal(grant, await IssueAsync(0, request, evidence));
+        Assert.Equal(1, await CountReservationsAsync("outstanding"));
+        Assert.Equal(0, await CountOutboxAsync(DeniedEvent));
+
+        // The outstanding root reservation counts as exposure for the next admission:
+        // 0 committed + 4 outstanding + 4 reserve = 8 <= 10, but a third reserve would not fit.
+        var budgets = CurrentProjectBudgets();
+        Assert.Null(await AdmitDirectAsync(budgets, Evidence(0m, cursor: 2)));
+        Assert.Equal(SpendBudgetAdmissionMath.Exhausted, await AdmitDirectAsync(budgets, Evidence(0m, cursor: 3)));
+    }
+
+    [Fact]
+    public async Task CoordinatorRootTurnIsDeniedWhenTheHardBudgetIsExhausted()
+    {
+        var request = await ArrangeAdmittedRootTurnAsync(hard: 5m, reserve: 4m);
+
+        // 2 committed + 0 outstanding + 4 reserve = 6 > 5, so the turn gets no grant and no reservation.
+        var denial = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            IssueAsync(0, request, Evidence(priced: 2m, cursor: 1)));
+        Assert.Equal(SpendBudgetAdmissionMath.Exhausted, denial.Code);
+        Assert.Equal(0, await CountRuntimeGrantsAsync());
+        Assert.Equal(0, await CountAllReservationsAsync());
+        // The denial notification is committed even though the grant is not.
+        Assert.Equal(1, await CountOutboxAsync(DeniedEvent));
+    }
+
+    [Fact]
+    public async Task CoordinatorRootReservationStaysOutstandingUntilItsCompletionIsRecorded()
+    {
+        var request = await ArrangeAdmittedRootTurnAsync(hard: 100m, reserve: 4m);
+        await IssueAsync(0, request, Evidence(priced: 0m, cursor: 1));
+
+        // Events witnesses usage for the root turn, but the turn has no recorded completion yet. The usage can
+        // still be incomplete, so the reservation must not retire.
+        var receipts = new Dictionary<Guid, Guid[]> { [request.EventId] = [Guid.NewGuid()] };
+        Assert.Null(await AdmitDirectAsync(CurrentProjectBudgets(),
+            Evidence(1m, cursor: 2, receipts: receipts)));
+        Assert.Equal("outstanding", await ReadReservationStateAsync(request.EventId));
+    }
+
+    [Fact]
+    public void CoordinatorRootRequirementMatchesUsageEventIdsNotSourceReceiptIds()
+    {
+        var usageEventId = Guid.NewGuid();
+        var otherEventId = Guid.NewGuid();
+        var requirement = new SpendBudgetAccountingRequirement([], [usageEventId]);
+
+        // Root turns acknowledge no source receipts, so a witness that only repeats the usage event ID as a
+        // source receipt ID does not prove accounting.
+        Assert.False(requirement.IsAccounted(Witness((usageEventId, otherEventId))));
+        Assert.False(requirement.IsAccounted(Witness()));
+        Assert.True(requirement.IsAccounted(Witness((Guid.NewGuid(), usageEventId), (Guid.NewGuid(), otherEventId))));
+        // Every usage event must be witnessed.
+        Assert.False(new SpendBudgetAccountingRequirement([], [usageEventId, Guid.NewGuid()])
+            .IsAccounted(Witness((Guid.NewGuid(), usageEventId))));
+    }
+
+    // Registers runtime 0 as the coordinator root under one current project hard budget and admits one root
+    // model turn. Returns the matching model.turn request.
+    private async Task<RuntimeActionRequest> ArrangeAdmittedRootTurnAsync(decimal hard, decimal reserve)
+    {
+        var (rootRequestContext, rootContext) = await ArrangeCoordinatorRootAsync();
+        _projectsHandler.ProjectSpendBudgets = new(
+            _root.ProjectId, 1, 1, [ProjectBudget(1, hard, reserve, CurrentPeriod())]);
+        var eventId = Guid.NewGuid();
+        var promptHash = RuntimeContractValidation.Hash("root turn under a spend budget"u8);
+        await GrantStore().AdmitCoordinatorRootModelTurnAsync(
+            rootRequestContext, _registrations[0], eventId, promptHash, rootContext.DecisionStateVersion, default);
+        return new RuntimeActionRequest(
+            1, _registrations[0].RuntimeInstanceId, _registrations[0].Revision,
+            rootContext.ExecutionFence, eventId, "model.turn", promptHash)
+        {
+            DispatchId = eventId
+        };
+    }
+
+    // The budgets that the test Projects handler currently returns, as an admission context.
+    private SpendBudgetAdmissionContext CurrentProjectBudgets() => new([], _projectsHandler.ProjectSpendBudgets);
+
+    // An Events witness for one dispatch with the given (source receipt ID, usage event ID) pairs.
+    private UsageDispatchAccountingWitness Witness(params (Guid SourceReceiptId, Guid EventId)[] receipts)
+    {
+        var binding = _registrations[0].Binding;
+        var dispatchId = Guid.NewGuid().ToString("D");
+        var scope = new UsageDispatchAccountingScope(binding.TenantId, binding.ProjectId, binding.RunId,
+            SdkMeterSources.CopilotNanoAiu, "AIC", null);
+        var items = receipts
+            .Select(receipt => new UsageDispatchSourceReceiptIdentity(
+                receipt.SourceReceiptId, receipt.EventId, new string('f', 64)))
+            .ToImmutableArray();
+        return new(dispatchId, scope, 1, items,
+            UsageDispatchAccountingWitnessContract.ComputeReceiptDigest(dispatchId, scope, items),
+            0m, items.Length, 0, UsageDispatchAccountingStatus.Partial, null, null, null);
+    }
+
     private async Task ArrangeBudgetedPairAsync()
     {
         // Allow two model turns so the run can send two dispatches.
