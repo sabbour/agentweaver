@@ -100,6 +100,7 @@ public sealed class ByokModelCommandsTests : IDisposable
     [InlineData("reasoningEfforts", "[\"none\",\"low\"]", "'reasoningEfforts' must list")]
     [InlineData("endpoint", "\"https://example-resource.openai.azure.com/openai/v1?api-key=x\"", "'endpoint' must be")]
     [InlineData("endpoint", "\"https://example.com/openai/v1\"", "'endpoint' must be")]
+    [InlineData("endpoint", "\"https://example-resource.openai.azure.com:8443/openai/v1\"", "'endpoint' must be")]
     [InlineData("azureApiVersion", "\"2025-04-01-preview\"", "Use providerType openai")]
     [InlineData("credentialReference", "{\"id\":\"byok-key\",\"version\":\"latest\"}", "exact 32-character version")]
     [InlineData("deployment", "\"gpt:5.4\"", "'deployment' may contain only")]

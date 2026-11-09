@@ -912,6 +912,63 @@ function stampAgentHostRuntime(resources, tuple) {
   ];
 }
 
+const AGENTHOST_MODEL_EGRESS_POLICY = 'agenthost-model-egress';
+const BYOK_HOST_SUFFIXES = ['.openai.azure.com', '.cognitiveservices.azure.com', '.services.ai.azure.com'];
+const DNS_NAME = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+/**
+ * Allow AgentHost to reach exactly the HTTPS hosts of the BYOK model bindings in the rendered
+ * AgentHost runtime map. The checked-in policy allows only DNS, so this derives the hosts from
+ * the same map that AgentHost reads and removes hosts when bindings are removed.
+ */
+export function stampAgentHostModelEgress(resources) {
+  const runtimeConfig = resources.find(resource =>
+    resource.kind === 'ConfigMap' && resource.metadata?.name === AGENTHOST_RUNTIME_CONFIG);
+  let bindings;
+  try {
+    bindings = JSON.parse(runtimeConfig?.data?.['appsettings.json'])?.AgentHost?.ModelBindings ?? {};
+  } catch {
+    fail(`ConfigMap/${AGENTHOST_RUNTIME_CONFIG} must contain valid appsettings.json.`);
+  }
+  const hosts = new Set();
+  for (const [reference, binding] of Object.entries(bindings)) {
+    if (binding?.SourceMode !== 'Byok') continue;
+    let endpoint;
+    try {
+      endpoint = new URL(binding.Provider?.BaseUrl);
+    } catch {
+      endpoint = undefined;
+    }
+    const host = endpoint?.hostname;
+    if (!endpoint || endpoint.protocol !== 'https:' || endpoint.port !== '' ||
+        endpoint.username || endpoint.password || !DNS_NAME.test(host) ||
+        !BYOK_HOST_SUFFIXES.some(suffix => host.endsWith(suffix))) {
+      fail(`BYOK model binding ${reference} must use an HTTPS Azure OpenAI BaseUrl on port 443. ` +
+        'Fix it with `agentweaver models byok plan` and `agentweaver models byok apply`.');
+    }
+    hosts.add(host);
+  }
+  const policies = resources.filter(resource =>
+    resource.kind === 'CiliumNetworkPolicy' && resource.metadata?.name === AGENTHOST_MODEL_EGRESS_POLICY);
+  const policy = policies[0];
+  const dnsRule = policy?.spec?.egress?.[0];
+  if (policies.length !== 1 || policy.metadata?.namespace !== NAMESPACE ||
+      policy.spec?.endpointSelector?.matchLabels?.['agentweaver.io/workload'] !== 'agenthost' ||
+      policy.spec.egress?.length !== 1 || !dnsRule?.toEndpoints || dnsRule.toPorts?.length !== 1 ||
+      dnsRule.toPorts[0].rules) {
+    fail(`Kustomize must render the DNS-only CiliumNetworkPolicy/${AGENTHOST_MODEL_EGRESS_POLICY} ` +
+      `for AgentHost in namespace ${NAMESPACE}.`);
+  }
+  if (!hosts.size) return [];
+  const names = [...hosts].sort().map(matchName => ({ matchName }));
+  dnsRule.toPorts[0].rules = { dns: names };
+  policy.spec.egress.push({
+    toFQDNs: names.map(name => ({ ...name })),
+    toPorts: [{ ports: [{ port: '443', protocol: 'TCP' }] }],
+  });
+  return names.map(name => name.matchName);
+}
+
 function findJob(resources, name) {
   const matches = resources.filter(resource =>
     resource.kind === 'Job' && resource.metadata?.name === name);
@@ -1104,6 +1161,10 @@ export async function deployKustomize(options, overrides = {}) {
       preserveLiveAgentHostSettings(resources, liveAgentHostSettings, agentHostTuple);
     }
     stampAgentHostRuntime(resources, agentHostTuple);
+    const modelHosts = stampAgentHostModelEgress(resources);
+    log(modelHosts.length
+      ? `Allowed AgentHost BYOK model egress to ${modelHosts.join(', ')} on TCP 443.`
+      : 'No BYOK model bindings; AgentHost model egress allows DNS only.');
     const brokerRuntimeConfig = findBrokerRuntimeConfig(resources);
     const providerSetup = preflightBrokerRuntimeConfig(exec, context, root, brokerRuntimeConfig, resources);
     if (providerSetup?.configMap) {

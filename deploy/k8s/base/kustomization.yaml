@@ -7,6 +7,7 @@ resources:
   - limitrange.yaml
   - networkpolicy-default-deny.yaml
   - environment-agenthost-network.yaml
+  - agenthost-model-egress.yaml
   - service-owner-network.yaml
   - events-and-sessions-network.yaml
   - projects-config-network.yaml

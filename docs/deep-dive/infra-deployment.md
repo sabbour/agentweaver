@@ -181,6 +181,11 @@ The shared runtime `List` contains nine service Deployment/Service pairs.
 AgentHost is the tenth product image, but it runs per Sandbox instead of as a
 shared Deployment.
 
+AgentHost Sandbox pods can reach only the internal owners, the Identity Broker,
+and DNS. The deploy helper adds the HTTPS host of each BYOK model binding in the
+rendered AgentHost runtime map to the `agenthost-model-egress` policy. See
+[Configure an Azure OpenAI BYOK model](../guide/configure-byok-azure-openai.md).
+
 That source inventory includes the retained MCP compatibility workload and
 ingress. It does not make MCP a supported product or acceptance surface.
 Gateway/API, browser and native .NET CLI remain the supported client paths.
