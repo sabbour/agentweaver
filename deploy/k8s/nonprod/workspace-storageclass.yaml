@@ -1,0 +1,19 @@
+# Nonprod only. Workaround for #2619. Applied out of band with kubectl; not part of the kustomization.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: agentweaver-workspace-azurefile
+provisioner: file.csi.azure.com
+parameters:
+  skuName: Standard_LRS
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+mountOptions:
+  - dir_mode=0755
+  - file_mode=0644
+  - uid=1000
+  - gid=1000
+  - mfsymlinks
+  - cache=strict
+  - actimeo=30
