@@ -44,11 +44,11 @@ beforeEach(() => {
   mocks.getAuthorizationContext.mockReset().mockResolvedValue(authorization(['readProjects', 'writeProjects']));
 });
 
-function authorization(permissions: string[]) {
+function authorization(permissions: string[], projectId = 'p1') {
   return {
     contractVersion: 1, issuer: 'https://broker.test', actorId: 'user-1', tenantId: 'tenant-1', membershipRevision: 1,
     boundProjectId: null, boundRunId: null,
-    effectiveAuthority: [{ resourceType: 'project', resourceId: 'p1', permissions: permissions.map((permission) => ({ permission, roleRevision: 1 })) }],
+    effectiveAuthority: [{ resourceType: 'project', resourceId: projectId, permissions: permissions.map((permission) => ({ permission, roleRevision: 1 })) }],
   };
 }
 
@@ -168,7 +168,22 @@ describe('RetainedShell', () => {
     expect(screen.queryByRole('button', { name: 'Start task' })).toBeNull();
   });
 
-  it('hides Start task outside a project', async () => {
+  it('offers Start task on Overview for the most recently updated active project', async () => {
+    mocks.listProjects.mockResolvedValue([
+      { projectId: 'p1', name: 'Alpha', state: 'active', revision: 1, configurationRevision: 1, createdAt: '', updatedAt: '2026-01-01T00:00:00Z' },
+      { projectId: 'p2', name: 'Beta', state: 'active', revision: 1, configurationRevision: 1, createdAt: '', updatedAt: '2026-02-01T00:00:00Z' },
+      { projectId: 'p3', name: 'Archived', state: 'archived', revision: 1, configurationRevision: 1, createdAt: '', updatedAt: '2026-03-01T00:00:00Z' },
+    ]);
+    mocks.getAuthorizationContext.mockResolvedValue(authorization(['readProjects', 'writeProjects'], 'p2'));
+    renderShell('/overview');
+    fireEvent.click(await screen.findByRole('button', { name: 'Start task' }));
+    expect(await screen.findByText('The task is added to the Backlog of Beta. The Board opens when it is saved.')).toBeTruthy();
+  });
+
+  it('hides Start task on Overview when there is no active project', async () => {
+    mocks.listProjects.mockResolvedValue([
+      { projectId: 'p1', name: 'Archived', state: 'archived', revision: 1, configurationRevision: 1, createdAt: '', updatedAt: '2026-03-01T00:00:00Z' },
+    ]);
     renderShell('/overview');
     await waitFor(() => expect(mocks.listProjects).toHaveBeenCalled());
     expect(screen.queryByRole('button', { name: 'Start task' })).toBeNull();

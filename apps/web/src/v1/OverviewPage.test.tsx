@@ -184,15 +184,14 @@ describe('OverviewPage metrics', () => {
     expect(screen.getByText('Queued')).toBeTruthy();
   });
 
-  it('restores the 0.x Overview section order and reports missing aggregate routes', async () => {
+  it('keeps project execution ahead of Chief of Staff and uses plain copy', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByLabelText('Project metric summary')).toBeTruthy());
-    const sections = ['Chief of Staff', 'Operations', 'Recent projects', 'AI usage & performance', 'Activity feed', 'Needs attention'];
+    const sections = ['Operations', 'Recent projects', 'AI usage & performance', 'Activity feed', 'Needs attention', 'Chief of Staff'];
     const positions = sections.map((section) => document.body.textContent!.indexOf(section));
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
-    expect(screen.getAllByText(/GET \/api\/v1\/overview/).length).toBeGreaterThanOrEqual(3);
-    expect(screen.getByText(/recentActivity/)).toBeTruthy();
+    expect(screen.queryByText(/GET \/api\/v1\/overview|Gateway|recentActivity/)).toBeNull();
   });
 
   it('marks health unavailable and counts only active projects in Operations', async () => {
@@ -202,7 +201,7 @@ describe('OverviewPage metrics', () => {
 
     expect(within(operations).getByText('Health unavailable')).toBeTruthy();
     expect(within(operations).queryByText(/Healthy|Needs review/)).toBeNull();
-    expect(within(operations).getByText(/GET \/api\/v1\/overview, which is not published/)).toBeTruthy();
+    expect(within(operations).getByText('Some work totals and service health are not available yet.')).toBeTruthy();
     for (const label of ['In flight', 'Queued work', 'Done today']) {
       expect(within(operations).getByText(label).nextElementSibling?.textContent).toBe('—');
     }
@@ -213,7 +212,7 @@ describe('OverviewPage metrics', () => {
     renderPage();
     await waitFor(() => expect(screen.getByLabelText('Project metric summary')).toBeTruthy());
     expect(mocks.useProjectMetrics).toHaveBeenLastCalledWith('p2', '30d');
-    expect(screen.getByText(/GET \/api\/v1\/overview route for aggregate metrics or usage/)).toBeTruthy();
+    expect(screen.getByText('Aggregate metrics and usage are not available yet. Select an active project to view its metrics.')).toBeTruthy();
     const summary = screen.getByLabelText('Project metric summary');
     expect(summary.textContent).toContain('Active runs4');
     expect(summary.textContent).toContain('Needs input2');

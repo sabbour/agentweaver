@@ -1,10 +1,8 @@
 /**
- * Cross-project Overview in the 0.x layout: Operations card, Recent projects,
- * project metrics and usage, Recent runs, and Needs attention. Counts come from
- * the project list, project metrics, the newest runs, and your notifications. The
- * service reports metrics and usage per project only, so the metrics section
- * shows one chosen project and says so. Chief of Staff groups personal Priorities,
- * new chat, and private conversations without controlling project-owned views.
+ * Cross-project Overview with operations, project status, metrics, and activity
+ * first. Counts come from published project reads; missing aggregate and health
+ * data stay explicit. Chief of Staff remains available after the execution
+ * summary and does not control project-owned views.
  */
 import { Badge, Button, Select, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowSyncRegular, ClockRegular, FolderRegular, Pulse24Regular } from '@fluentui/react-icons';
@@ -317,20 +315,13 @@ export function OverviewPage() {
       {loading && !projects && <Loading label="Loading overview" />}
       {projects && (
         <>
-          {/* Personal planning stays separate from execution and project metrics. */}
-          <section className={styles.chiefOfStaff} aria-labelledby="chief-of-staff">
-            <Text as="h2" id="chief-of-staff" className={styles.sectionTitle}>Chief of Staff</Text>
-            <PrioritiesPanel priorities={priorities} projects={projects} conversations={conversations} />
-            <NewChatPanel projects={projects} onChanged={conversations.reload} />
-            <ConversationList conversations={conversations} projectNames={projectNames} />
-          </section>
           <section className={styles.card} aria-labelledby="overview-operations">
             <div className={styles.cardHead}>
               <span className={styles.cardHeadIcon}><Pulse24Regular /></span>
               <Text as="h2" id="overview-operations" className={styles.cardHeadTitle}>Operations</Text>
               <Badge appearance="tint" color="subtle">Health unavailable</Badge>
             </div>
-            <Text className={styles.muted}>In-flight, queued-work, and done-today totals and service health need GET /api/v1/overview, which is not published.</Text>
+            <Text className={styles.muted}>Some work totals and service health are not available yet.</Text>
             <div className={styles.glanceGrid}>
               <div className={styles.glance}>
                 <Text className={styles.glanceLabel}>In flight</Text>
@@ -408,7 +399,7 @@ export function OverviewPage() {
               <Text as="h2" id="overview-metrics" className={styles.sectionTitle}>AI usage &amp; performance</Text>
               {shownProjectId && <Link className={styles.link} to={`/projects/${encodeURIComponent(shownProjectId)}`}>Open project dashboard</Link>}
             </div>
-            <Text className={styles.muted}>The Gateway has no GET /api/v1/overview route for aggregate metrics or usage, so this section shows one project at a time.</Text>
+            <Text className={styles.muted}>Aggregate metrics and usage are not available yet. Select an active project to view its metrics.</Text>
             {!shownProjectId ? <Text className={styles.muted}>Metrics appear when you have an active project.</Text> : (
               <>
                 <div className={styles.glanceGrid} aria-label="Project metric summary">
@@ -446,7 +437,7 @@ export function OverviewPage() {
               {runs.error != null && <ErrorNotice code={errorCode(runs.error)}>{runListErrorMessage(runs.error)}</ErrorNotice>}
               <RunList
                 title="Activity feed"
-                description="Recent run summaries across your projects. The Gateway has no GET /api/v1/overview route with a recentActivity feed."
+                description="Recent runs across your projects."
                 data={runs}
                 emptyText={runs.loading ? 'Loading runs…' : 'No runs yet.'}
                 projectNames={runs.projectNames}
@@ -459,6 +450,12 @@ export function OverviewPage() {
               <AttentionList attention={attention} projectNames={projectNames} />
             </section>
           </div>
+          <section className={styles.chiefOfStaff} aria-labelledby="chief-of-staff">
+            <Text as="h2" id="chief-of-staff" className={styles.sectionTitle}>Chief of Staff</Text>
+            <PrioritiesPanel priorities={priorities} projects={projects} conversations={conversations} />
+            <NewChatPanel projects={projects} onChanged={conversations.reload} />
+            <ConversationList conversations={conversations} projectNames={projectNames} />
+          </section>
         </>
       )}
     </div>

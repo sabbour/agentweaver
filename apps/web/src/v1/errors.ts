@@ -2,12 +2,21 @@
 import { GatewayError } from './api';
 import { RepoAppBrokerError } from './repoApp';
 
-/** Formats Gateway and unexpected failures for display in page-level notices. */
+/** Formats errors for display in page-level notices without exposing internal codes. */
 export function errorMessage(error: unknown): string {
   if (error instanceof GatewayError) {
-    // Show the status and code too; they help when reporting a problem.
-    const code = error.code ? ` (${error.code})` : '';
-    return `HTTP ${error.status}${code}: ${error.message}`;
+    if (error.status === 401) return 'Sign in to continue.';
+    if (error.status === 403) return 'You do not have permission to complete this request.';
+    if (error.status === 404) return 'The requested item could not be found.';
+    const detail = error.message.trim();
+    if (detail && detail !== error.code && !/^The request failed with HTTP \d+\.$/.test(detail))
+      return `HTTP ${error.status}: ${detail}`;
+    return 'The request could not be completed. Try again.';
+  }
+  if (error instanceof RepoAppBrokerError) {
+    if (error.code === 'github_repo_app_not_configured')
+      return 'GitHub access is not set up. Ask your administrator to configure it.';
+    return 'The GitHub connection could not be checked. Try again.';
   }
   return error instanceof Error ? error.message : 'The request failed unexpectedly.';
 }

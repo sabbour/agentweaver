@@ -200,11 +200,11 @@ function errorCode(value: unknown): string | undefined {
 function errorMessage(value: unknown, status: number): string {
   const code = errorCode(value);
   if (code === 'github_repo_app_not_configured') {
-    return 'GitHub Repo App is not configured. Ask an operator to configure the Identity Broker provider.';
+    return 'GitHub access is not set up. Ask your administrator to configure it.';
   }
-  return code
-    ? `The GitHub app request failed with HTTP ${status} (${code}).`
-    : `The GitHub app request failed with HTTP ${status}.`;
+  if (status === 403) return 'You do not have permission to use this GitHub connection.';
+  if (status === 404) return 'The GitHub connection could not be found.';
+  return 'The GitHub connection could not be checked. Try again.';
 }
 
 /** Narrows a message to the exact Repo App callback notification shape. */
@@ -258,7 +258,7 @@ export class IdentityBrokerRepoAppClient {
       throw new RepoAppBrokerError(
         0,
         'configuration_missing',
-        'Configure the Identity Broker URL before using GitHub Repo App.',
+        'GitHub access is not configured. Contact your administrator.',
       );
     }
     return `${this.baseUrl}${REPO_APP_ROUTE}${path}`;

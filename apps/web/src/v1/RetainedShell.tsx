@@ -145,6 +145,13 @@ export function RetainedShell({ children }: { children: ReactNode }) {
     () => new Map((current?.projects ?? []).map((project) => [project.projectId, project.name])),
     [current],
   );
+  const overviewStartProject = useMemo(() => {
+    if (location.pathname !== '/overview') return undefined;
+    return [...(current?.projects ?? [])]
+      .filter((project) => project.state === 'active')
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  }, [current, location.pathname]);
+  const startTaskProjectId = projectId ?? overviewStartProject?.projectId;
   // Read the running build's version once for both the rail and the account menu.
   const appVersion = useWebAppVersion();
   return (
@@ -180,9 +187,10 @@ export function RetainedShell({ children }: { children: ReactNode }) {
         />
         <div className="aw-shell-canvas">
           <main className="aw-shell-content" aria-label="Main content">
-            {/* 0.x placed Start task above the page. Inside a project it adds a task
-                to that project's backlog; outside a project there is no target, so it is hidden. */}
-            {projectId && <StartTaskAction projectId={projectId} projectName={projectNames.get(projectId)} />}
+            {/* Overview uses the same most-recent active project as its Current focus card. */}
+            {startTaskProjectId && (
+              <StartTaskAction projectId={startTaskProjectId} projectName={projectNames.get(startTaskProjectId)} />
+            )}
             <div className="aw-shell-scroll">
               <PageContainer>
                 {current?.error && <MessageBar intent="error"><MessageBarBody>{current.error}</MessageBarBody></MessageBar>}

@@ -593,8 +593,8 @@ function statusCopy(
         badge: 'success',
         title: 'Runs are active in this project.',
         body: hasQualityEvidence
-          ? `${plural(summary.active_runs, 'run')} are active. Active agent count is unavailable.`
-          : `${plural(summary.active_runs, 'run')} are active. Agent counts and model data are unavailable.`,
+          ? `${plural(summary.active_runs, 'run')} ${summary.active_runs === 1 ? 'is' : 'are'} active. Active agent count is unavailable.`
+          : `${plural(summary.active_runs, 'run')} ${summary.active_runs === 1 ? 'is' : 'are'} active. Agent counts and model data are unavailable.`,
       };
     case 'steady':
       return {
@@ -648,7 +648,7 @@ function primaryActionFor(
       if (hasSummaryActivity(summary)) return { label: 'Open Board', path: 'board' };
       return { label: 'Open Flow', path: 'flow' };
     case 'quiet':
-      return { label: 'Open Board', path: 'board' };
+      return { label: 'Start task', path: 'orchestrations' };
   }
 }
 
@@ -1203,7 +1203,7 @@ export function DashboardPage() {
                 subtitle="Review reported model usage and project run outcomes."
               />
             </div>
-            <Text className={styles.healthCopy}>Agent leaderboard and latency percentiles are unavailable. The Gateway does not report them yet.</Text>
+            <Text className={styles.healthCopy}>Agent scores and response times are not available yet.</Text>
             {!dashboardModel.modelTelemetry && !dashboardModel.hasAgentUsage && dashboardModel.leaderboard.length === 0 ? (
               <div className={styles.diagnosticsEmpty}>
                 <div>
@@ -1222,7 +1222,7 @@ export function DashboardPage() {
                   <Text as="h3" className={styles.columnTitle}>Agent usage</Text>
                   <MetricEmptyState>{currentUsageError ? 'Agent usage could not load.' : 'No agent usage has been recorded for this range.'}</MetricEmptyState>
                   <Text as="h3" className={styles.columnTitle}>Agent leaderboard</Text>
-                  <MetricEmptyState>Agent scores are unavailable from the Gateway. Open Flow to review agent runs.</MetricEmptyState>
+                  <MetricEmptyState>Agent scores are not available yet. Open Flow to review agent runs.</MetricEmptyState>
                   <div className={styles.evidenceRail} aria-label="Available dashboard evidence">
                     <span className={styles.evidencePill}>
                       {currentData.summary.runs_this_week == null

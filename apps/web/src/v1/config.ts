@@ -124,7 +124,7 @@ export const oauthScopes = (runtimeSetting('OAUTH_SCOPES') ?? environment.VITE_O
 /** Lists required Broker and OAuth settings that are absent from this browser configuration. */
 export function missingAuthConfiguration(): string[] {
   return [
-    ['Identity Broker URL', brokerBaseUrl],
+    ['sign-in service URL', brokerBaseUrl],
     ['registered OAuth client ID', oauthClientId],
     ['registered OAuth redirect URI', oauthRedirectUri],
     ['registered OAuth scopes', oauthScopes.length > 0 ? 'configured' : ''],

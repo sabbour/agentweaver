@@ -203,6 +203,6 @@ describe('ProjectMembersPanel', () => {
   it('shows other load failures as an error', async () => {
     mocks.listProjectRoleAssignments.mockRejectedValue(new GatewayError(500, { code: 'internal' }, 'Server error'));
     await renderPanel(false);
-    expect(await screen.findByText(/HTTP 500 \(internal\): Server error/)).toBeTruthy();
+    expect(await screen.findByText('HTTP 500: Server error')).toBeTruthy();
   });
 });

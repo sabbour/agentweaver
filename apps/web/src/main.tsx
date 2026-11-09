@@ -41,7 +41,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   }
 }
 
-// Load the app after creating the root so a missing deployed Gateway setting can
+// Load the app after creating the root so a missing service setting can
 // render a readable startup error instead of leaving the user with a blank page.
 const root = createRoot(document.getElementById('root')!);
 void import('./App.tsx').then(({ default: App }) => {
@@ -49,12 +49,12 @@ void import('./App.tsx').then(({ default: App }) => {
   root.render(<StrictMode><ErrorBoundary><App /></ErrorBoundary></StrictMode>);
 }).catch((reason: unknown) => {
   // Show only the known configuration message; other import failures need a generic reload prompt.
-  const missingGateway = reason instanceof Error && reason.message.startsWith('Gateway URL');
+  const missingService = reason instanceof Error && reason.message.startsWith('Gateway URL');
   root.render(
     <main role="alert" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>
       <section style={{ maxWidth: 520 }}>
-        <h1>{missingGateway ? 'Gateway configuration is unavailable' : 'Something went wrong'}</h1>
-        <p>{missingGateway ? reason.message : 'The app could not start. Reload the page to try again.'}</p>
+        <h1>{missingService ? 'Service setup is unavailable' : 'Something went wrong'}</h1>
+        <p>{missingService ? 'This app could not connect to its service. Contact your administrator.' : 'The app could not start. Reload the page to try again.'}</p>
       </section>
     </main>,
   );

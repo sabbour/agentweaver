@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   getAuthorizationContext: vi.fn(),
   getProject: vi.fn(),
   apiCall: vi.fn(),
+  useProjectMetrics: vi.fn(),
+  useProjectRunList: vi.fn(),
   session: { accessToken: 'token', binding: null },
   authorizationContext: { tenantId: 'tenant-1', membershipRevision: 1 },
   authorizationData: null as unknown,
@@ -36,6 +38,16 @@ vi.mock('./AuthContext', () => ({
 vi.mock('./projectData', async (importOriginal) => ({
   ...await importOriginal<typeof import('./projectData')>(),
   useAuthorizationContext: () => ({ data: mocks.authorizationData, error: null, loading: false }),
+}));
+
+vi.mock('./projectMetrics', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./projectMetrics')>(),
+  useProjectMetrics: mocks.useProjectMetrics,
+}));
+
+vi.mock('./runListData', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./runListData')>(),
+  useProjectRunList: mocks.useProjectRunList,
 }));
 
 vi.mock('./api', async (importOriginal) => ({
@@ -80,6 +92,16 @@ function graph(
   projectId = 'p1',
 ): BacklogGraph {
   return { projectId, revision, tasks, dependencies };
+}
+
+function runList(items: Array<{
+  projectId: string;
+  runId: string;
+  label: string;
+  executionState: string | null;
+  time: { label: string; value: string };
+}> = [], hasMore = false) {
+  return { items, loading: false, error: null, hasMore, loadingMore: false, loadMore: vi.fn(), reload: vi.fn() };
 }
 
 function context(
@@ -164,9 +186,126 @@ beforeEach(() => {
   mocks.removeProjectBacklogDependency.mockReset();
   mocks.getAuthorizationContext.mockReset().mockResolvedValue(context(['readProjects', 'writeProjects']));
   mocks.getProject.mockReset().mockResolvedValue({ projectId: 'p1', name: 'Alpha', effectiveRoles: [] });
+  mocks.useProjectMetrics.mockReset().mockReturnValue({
+    metrics: {
+      projectId: 'p1', from: 'a', to: 'b', activeRuns: 0, blockedRuns: 0, runsInRange: 0, runsTotal: 0,
+      completedRuns: 0, succeededRuns: 0, series: [],
+    },
+    usage: null,
+    metricsError: null,
+    usageError: null,
+    loading: false,
+    loadedAt: null,
+    reload: vi.fn(),
+  });
+  mocks.useProjectRunList.mockReset().mockImplementation(() => runList());
 });
 
 describe('BoardPage', () => {
+  it('uses the Dashboard run metrics and shows review, problem, and history lanes', async () => {
+    mocks.useProjectMetrics.mockReturnValue({
+      metrics: {
+        projectId: 'p1', from: 'a', to: 'b', activeRuns: 1, blockedRuns: 1, runsInRange: 3, runsTotal: 8,
+        completedRuns: 2, succeededRuns: 1, series: [],
+      },
+      usage: null,
+      metricsError: null,
+      usageError: null,
+      loading: false,
+      loadedAt: null,
+      reload: vi.fn(),
+    });
+    mocks.useProjectRunList.mockImplementation((_projectId: string, options?: { states?: string[] }) => {
+      const state = options?.states?.[0];
+      if (state === 'blocked') return runList([{
+        projectId: 'p1', runId: 'review-1', label: 'Review the release', executionState: 'blocked',
+        time: { label: 'Started', value: '2026-01-03T00:00:00Z' },
+      }]);
+      if (state === 'failed') return runList([{
+        projectId: 'p1', runId: 'failed-1', label: 'Build the package', executionState: 'failed',
+        time: { label: 'Started', value: '2026-01-02T00:00:00Z' },
+      }]);
+      if (state === 'terminal') return runList([{
+        projectId: 'p1', runId: 'done-1', label: 'Ship the patch', executionState: 'completed',
+        time: { label: 'Started', value: '2026-01-01T00:00:00Z' },
+      }], true);
+      return runList();
+    });
+    renderBoard();
+
+    expect((await screen.findByTestId('board-active-run-count')).textContent).toContain('Active runs1');
+    expect(screen.getByRole('heading', { name: 'Human review' })).toBeTruthy();
+    expect(screen.getByText('Review the release')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Problems' })).toBeTruthy();
+    expect(screen.getByText('Build the package')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Run history' })).toBeTruthy();
+    expect(screen.getByText('Ship the patch')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Load more' })).toBeTruthy();
+    expect(mocks.useProjectMetrics).toHaveBeenCalledWith('p1', '30d');
+    expect(mocks.useProjectRunList).toHaveBeenCalledWith('p1', { states: ['blocked'] });
+    expect(mocks.useProjectRunList).toHaveBeenCalledWith('p1', { states: ['failed', 'indeterminate'] });
+    expect(mocks.useProjectRunList).toHaveBeenCalledWith('p1', { states: ['terminal'] });
+  });
+
+  it('shows unavailable run metrics instead of zero after a read failure', async () => {
+    mocks.useProjectMetrics.mockReturnValue({
+      metrics: null,
+      usage: null,
+      metricsError: new Error('Metrics are unavailable.'),
+      usageError: null,
+      loading: false,
+      loadedAt: null,
+      reload: vi.fn(),
+    });
+    renderBoard();
+
+    const activeCount = await screen.findByTestId('board-active-run-count');
+    expect(activeCount.textContent).toContain('—');
+    expect(activeCount.textContent).not.toContain('0');
+    expect(screen.getByText('Metrics are unavailable.')).toBeTruthy();
+  });
+
+  it('refreshes run metrics and every run lane with the Board', async () => {
+    const reloadMetrics = vi.fn().mockResolvedValue(undefined);
+    const reloads = {
+      open: vi.fn(),
+      review: vi.fn(),
+      problem: vi.fn(),
+      history: vi.fn(),
+    };
+    mocks.useProjectMetrics.mockReturnValue({
+      metrics: null,
+      usage: null,
+      metricsError: null,
+      usageError: null,
+      loading: false,
+      loadedAt: null,
+      reload: reloadMetrics,
+    });
+    mocks.useProjectRunList.mockImplementation((_projectId: string, options?: { states?: string[] }) => {
+      const state = options?.states?.[0];
+      const reload = state === 'active' ? reloads.open
+        : state === 'blocked' ? reloads.review
+          : state === 'failed' ? reloads.problem
+            : reloads.history;
+      return { ...runList(), reload };
+    });
+    renderBoard();
+
+    await waitFor(() => {
+      expect((screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled).toBe(false);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() => {
+      expect(reloadMetrics).toHaveBeenCalledOnce();
+      expect(reloads.open).toHaveBeenCalledOnce();
+      expect(reloads.review).toHaveBeenCalledOnce();
+      expect(reloads.problem).toHaveBeenCalledOnce();
+      expect(reloads.history).toHaveBeenCalledOnce();
+    });
+  });
+
   it('groups tasks into the 0.x columns and adds synced issue details', async () => {
     mocks.readProjectBacklog.mockResolvedValue(graph([
       task('t1', 'Draft spec', { repositoryIssue: issueLink }),

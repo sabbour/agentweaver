@@ -166,7 +166,7 @@ describe('IdentityBrokerRepoAppClient', () => {
       name: 'RepoAppBrokerError',
       status: 409,
       code: 'not_connected',
-      message: 'The GitHub app request failed with HTTP 409 (not_connected).',
+      message: 'The GitHub connection could not be checked. Try again.',
     } satisfies Partial<RepoAppBrokerError>);
 
     const notConfigured = new IdentityBrokerRepoAppClient(
@@ -180,7 +180,7 @@ describe('IdentityBrokerRepoAppClient', () => {
       name: 'RepoAppBrokerError',
       status: 503,
       code: 'github_repo_app_not_configured',
-      message: 'GitHub Repo App is not configured. Ask an operator to configure the Identity Broker provider.',
+      message: 'GitHub access is not set up. Ask your administrator to configure it.',
     } satisfies Partial<RepoAppBrokerError>);
   });
 

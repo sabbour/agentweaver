@@ -28,7 +28,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { ArrowSyncRegular, CheckmarkRegular, DeleteRegular, DismissRegular, EditRegular } from '@fluentui/react-icons';
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
 import { useLocation, useParams } from 'react-router-dom';
 import { CaptureTaskForm } from '../components/board/CaptureTaskForm';
@@ -60,8 +60,11 @@ import {
 import type { BoardRequestScope } from './boardData';
 import type { BoardColumn } from './boardData';
 import type { BacklogGraph, BacklogTaskSnapshot, ProjectIssueSummary } from './contracts';
-import { Loading, PageHeading } from './pageParts';
+import { ErrorNotice, Loading, PageHeading, Panel } from './pageParts';
 import { permissionsForProject, useAuthorizationContext } from './projectData';
+import { metricTiles, metricsErrorMessage, useProjectMetrics } from './projectMetrics';
+import { RunList } from './RunList';
+import { runListErrorMessage, useProjectRunList } from './runListData';
 
 /** Route state set by Start task after it adds a task, so the Board can confirm it. */
 export interface BoardLocationState {
@@ -125,6 +128,29 @@ const useStyles = makeStyles({
   intakeCopy: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, paddingTop: tokens.spacingVerticalXS },
   capture: { minWidth: '280px' },
   workflowSection: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  runMetricGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+    gap: tokens.spacingHorizontalS,
+  },
+  runMetric: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    borderRadius: tokens.borderRadiusMedium,
+    ...border(tokens.colorNeutralStroke2),
+  },
+  runMetricLabel: { color: tokens.colorNeutralForeground2 },
+  runMetricValue: { fontSize: tokens.fontSizeBase600, lineHeight: tokens.lineHeightBase600, fontVariantNumeric: 'tabular-nums' },
+  runMetricCaption: { color: tokens.colorNeutralForeground3 },
+  runLists: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+    gap: tokens.spacingHorizontalL,
+    '@media (max-width: 700px)': { gridTemplateColumns: '1fr' },
+  },
   sectionHeader: {
     display: 'flex',
     flexDirection: 'row',
@@ -795,6 +821,73 @@ function jumpToColumn(id: string) {
   target.focus({ preventScroll: true });
 }
 
+function RunListGroup({
+  title,
+  description,
+  data,
+  emptyText,
+}: {
+  title: string;
+  description: string;
+  data: ReturnType<typeof useProjectRunList>;
+  emptyText: string;
+}) {
+  return (
+    <div>
+      {data.error != null && <ErrorNotice>{runListErrorMessage(data.error)}</ErrorNotice>}
+      <RunList title={title} description={description} data={data} emptyText={data.loading ? 'Loading runs…' : emptyText} />
+    </div>
+  );
+}
+
+function RunOverviewSection({ projectId, refreshKey }: { projectId: string; refreshKey: number }) {
+  const styles = useStyles();
+  const metrics = useProjectMetrics(projectId || null, '30d');
+  const openRuns = useProjectRunList(projectId, { states: ['active', 'idle'] });
+  const reviewRuns = useProjectRunList(projectId, { states: ['blocked'] });
+  const problemRuns = useProjectRunList(projectId, { states: ['failed', 'indeterminate'] });
+  const historyRuns = useProjectRunList(projectId, { states: ['terminal'] });
+  const tiles = metricTiles(metrics.metrics, '30d', metrics.loading);
+  const previousRefreshKey = useRef(refreshKey);
+
+  useEffect(() => {
+    if (refreshKey === previousRefreshKey.current) return;
+    previousRefreshKey.current = refreshKey;
+    void metrics.reload();
+    openRuns.reload();
+    reviewRuns.reload();
+    problemRuns.reload();
+    historyRuns.reload();
+  }, [historyRuns.reload, metrics.reload, openRuns.reload, problemRuns.reload, refreshKey, reviewRuns.reload]);
+
+  return (
+    <Panel title="Run overview" description="Run counts and recent run history for this project.">
+      {metrics.metricsError != null && (
+        <ErrorNotice>{metricsErrorMessage(metrics.metricsError, 'run metrics')}</ErrorNotice>
+      )}
+      <div className={styles.runMetricGrid} aria-label="Run metrics">
+        {tiles.map((tile) => (
+          <div
+            key={tile.key}
+            className={styles.runMetric}
+            data-testid={tile.key === 'active' ? 'board-active-run-count' : undefined}
+          >
+            <Text className={styles.runMetricLabel}>{tile.label}</Text>
+            <Text className={styles.runMetricValue}>{tile.value}</Text>
+            <Text className={styles.runMetricCaption}>{tile.meta}</Text>
+          </div>
+        ))}
+      </div>
+      <div className={styles.runLists}>
+        <RunListGroup title="Open runs" description="Runs that are working or open." data={openRuns} emptyText="No open runs." />
+        <RunListGroup title="Human review" description="Runs waiting for your decision or input." data={reviewRuns} emptyText="No runs need input." />
+        <RunListGroup title="Problems" description="Runs that failed or have an unknown outcome." data={problemRuns} emptyText="No problem runs." />
+        <RunListGroup title="Run history" description="Finished runs, newest first." data={historyRuns} emptyText="No finished runs." />
+      </div>
+    </Panel>
+  );
+}
+
 /** Renders one project's Board. */
 export function BoardPage() {
   const styles = useStyles();
@@ -841,6 +934,7 @@ export function BoardPage() {
   // Each navigation to the Board, including the one after Start task adds a
   // task, has a new location key. Passing it reloads the board on arrival.
   const board = useProjectBoard(projectId, location.key, scope, isScopeCurrent);
+  const [runOverviewRefreshKey, setRunOverviewRefreshKey] = useState(0);
   const { zoom, zoomIn, zoomOut, viewportRef } = useCtrlScrollZoom();
   const [feedback, setFeedback] = useState<BoardFeedback | null>(null);
   const activeFeedback = feedback?.scope === scope ? feedback : null;
@@ -912,6 +1006,10 @@ export function BoardPage() {
   const visibleCount = columns.reduce((sum, column) => sum + column.tasks.length, 0);
   const countOf = (id: string) => columns.find((column) => column.id === id)?.tasks.length ?? 0;
   const { reload, replaceGraph } = board;
+  const refreshBoard = useCallback(() => {
+    reload();
+    setRunOverviewRefreshKey((key) => key + 1);
+  }, [reload]);
   const graphRevision = board.graph?.revision;
 
   // Called by the capture form. Errors are rethrown as plain messages because the form shows `error.message`.
@@ -1184,8 +1282,9 @@ export function BoardPage() {
         title="Board"
         description="Queue work and record prerequisites; a run checks live eligibility when it claims a task."
         page="Board"
-        actions={<Button appearance="secondary" icon={<ArrowSyncRegular />} disabled={board.loading || pendingForScope || pendingMoveForScope} onClick={reload}>Refresh</Button>}
+        actions={<Button appearance="secondary" icon={<ArrowSyncRegular />} disabled={board.loading || pendingForScope || pendingMoveForScope} onClick={refreshBoard}>Refresh</Button>}
       />
+      <RunOverviewSection projectId={projectId} refreshKey={runOverviewRefreshKey} />
 
       {/* The capture form is shown only to users who can write, and only once the board has loaded. */}
       {board.graph && canWrite && (
