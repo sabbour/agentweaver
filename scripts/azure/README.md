@@ -584,6 +584,16 @@ Azure Linux, `workloadRuntime: KataVmIsolation`, `Standard_D4s_v5`, autoscale
 this pool. For the cost and recovery from a conflicting pool, see
 [Kata node pool](../../infra/bicep/README.md#kata-node-pool).
 
+## Azure Monitor add-on
+
+Every `deploy.mjs --execute` run enables the AKS Azure Monitor add-on with the
+`<prefix>-law` workspace, or adopts it when it is already enabled. There is no
+opt-out. The receipt contains `azureMonitorAddon` with `action` set to
+`enabled` or `adopted`. `npm run deploy:kustomize` stops before any write when
+DaemonSet `ama-logs` in `kube-system` is not ready. For the steps, failures,
+permissions, and cost, see
+[Azure Monitor add-on](../../infra/bicep/README.md#azure-monitor-add-on).
+
 ## ACNS security source setting
 
 AKS opts into Advanced Container Networking Services (ACNS) with security

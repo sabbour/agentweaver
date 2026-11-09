@@ -100,6 +100,59 @@ kubectl get nodes --selector kubernetes.azure.com/kata-vm-isolation=true
 `npm run deploy:kustomize` checks for this node before it writes to the
 cluster.
 
+## Azure Monitor add-on
+
+Every installation enables the AKS Azure Monitor add-on (Container Insights).
+You cannot turn it off. The per-run egress audit needs the add-on to forward
+ACNS container network logs to the `ContainerNetworkLogs` table.
+
+The templates do not declare the add-on. After each successful
+`scripts/azure/deploy.mjs --execute` run, for both `main.bicep` and
+`aks-redeploy.bicep`, the installer does these steps:
+
+1. It reads `addonProfiles.omsagent` from `<prefix>-aks`.
+2. If the add-on is enabled with the `<prefix>-law` workspace and managed
+   identity authentication (`useAADAuth`), the installer adopts it. It makes
+   no change.
+3. If the add-on is not enabled, the installer runs
+   `az aks enable-addons --addons monitoring` with `<prefix>-law`, managed
+   identity authentication, and the `<prefix>-ampls` private link scope. Azure
+   CLI creates the data collection rule, the data collection endpoint, and the
+   association.
+4. It reads the profile again and requires the add-on with `<prefix>-law`.
+
+The installer stops if the add-on sends to another workspace or uses
+shared-key authentication. It does not disable monitoring. Disable the add-on,
+then run the deployment again. If the enable step fails, the error starts with
+`Infrastructure deployment succeeded, but Azure Monitor add-on setup failed`.
+You can run the deployment again.
+
+The `aks-redeploy.bicep` what-if still has no managed-cluster change. The
+add-on step is a separate Azure CLI call. Use `main.bicep` only for an initial
+deployment. If you run it on an existing cluster, the AKS PUT can remove the
+add-on; the same run then enables it again.
+
+The identity that runs the installer needs these permissions in the resource
+group: `Microsoft.ContainerService/managedClusters/read` and `write`,
+`Microsoft.Insights/dataCollectionRules/*`,
+`Microsoft.Insights/dataCollectionEndpoints/*`,
+`Microsoft.Insights/dataCollectionRuleAssociations/*`,
+`Microsoft.Insights/privateLinkScopes/scopedResources/*`, and
+`Microsoft.OperationalInsights/workspaces/read` and `sharedKeys/action`. The installer
+grants no roles.
+
+`npm run deploy:kustomize` checks that DaemonSet `ama-logs` in `kube-system`
+is ready on every scheduled node before it writes to the cluster. The
+deployment identity needs `get` on `daemonsets.apps/ama-logs` in
+`kube-system`.
+
+Cost: Log Analytics charges for the ingested Container Insights data in
+`<prefix>-law` (`PerGB2018`, 30-day retention). The add-on also runs one
+`ama-logs` pod on each node and one `ama-logs-rs` pod. Cost depends on the log
+volume. Check the
+[Azure Monitor pricing](https://azure.microsoft.com/pricing/details/monitor/)
+for your region and agreement.
+
 ## Local compilation
 
 Run the local compiler:
