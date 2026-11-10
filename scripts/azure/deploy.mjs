@@ -60,6 +60,36 @@ export function buildDeployArgs({
   return args;
 }
 
+const RUNTIME_IDENTITY_SERVICES = ['projects-config', 'environment', 'knowledge', 'events-and-sessions', 'orchestrator'];
+
+/**
+ * Deploys infra/bicep/p1-runtime-identities.bicep for the selected target and checks the returned identities.
+ * execAz must be the target-bound runner, which adds the subscription.
+ */
+export function deployRuntimeIdentities({ resourceGroup, sourceSha, tags, groupLocation, oidcIssuerUrl }, execAz) {
+  const cluster = execAz(['aks', 'show', '--resource-group', resourceGroup, '--name', `${resourceGroup}-aks`,
+    '--query', 'location', '-o', 'tsv'], { check: false });
+  const clusterLocation = cluster.status === 0 ? cluster.stdout.trim().toLowerCase() : '';
+  if (!clusterLocation || clusterLocation !== String(groupLocation).toLowerCase()) {
+    throw new Error(`The cluster location (${clusterLocation || 'unknown'}) differs from the resource group location (${groupLocation}).`);
+  }
+  const result = execAz(['deployment', 'group', 'create', '--resource-group', resourceGroup,
+    '--name', `${resourceGroup}-p1-runtime-identities`, '--template-file', 'infra/bicep/p1-runtime-identities.bicep',
+    '--parameters', `namePrefix=${resourceGroup}`, `tags=${JSON.stringify(tags)}`, `sourceSha=${sourceSha}`,
+    '--mode', 'Incremental', '-o', 'json'], { check: false });
+  if (result.status !== 0) throw new Error(`az deployment group create failed: ${result.stderr}`);
+  const properties = JSON.parse(result.stdout).properties;
+  const identities = properties?.outputs?.runtimeIdentities?.value;
+  if (properties?.provisioningState !== 'Succeeded' || properties.outputs.oidcIssuerUrl?.value !== oidcIssuerUrl ||
+      !Array.isArray(identities) || identities.length !== RUNTIME_IDENTITY_SERVICES.length ||
+      identities.some((identity, i) => identity.name !== RUNTIME_IDENTITY_SERVICES[i] ||
+        identity.namespace !== 'agentweaver' || identity.serviceAccount !== identity.name ||
+        !GUID_PATTERN.test(identity.clientId ?? '') || !GUID_PATTERN.test(identity.principalObjectId ?? ''))) {
+    throw new Error('The deployment did not return the five service identities for this cluster.');
+  }
+  return identities.map(({ name, clientId, principalObjectId }) => ({ name, clientId, principalObjectId }));
+}
+
 /** Canary (EUAP) regions; their clusters can only associate data collection rules in a canary region. */
 const isCanaryRegion = location => /euap$/i.test(location);
 
@@ -138,7 +168,8 @@ export async function deploy(config, {
     config.registerBrokerCallback || config.confirmBrokerCallback ||
     config.bootstrapIdentityPostgres || config.bootstrapIdentityBrokerState ||
     config.alignExistingIdentityBrokerHostname || config.bootstrapIdentityBrokerRuntime ||
-    config.bootstrapFoundationProbeInputs || config.bootstrapFoundationProbePostgres
+    config.bootstrapFoundationProbeInputs || config.bootstrapFoundationProbePostgres ||
+    config.bootstrapRuntimeIdentities
   )) {
     throw new Error('Identity-routing-only cannot be combined with callback registration or unrelated bootstrap options.');
   }
@@ -178,6 +209,9 @@ export async function deploy(config, {
   if (config.identityRoutingOnly && source.scope !== 'aks-only') {
     throw new Error('Identity-routing-only requires the reviewed AKS-only template and parameters.');
   }
+  if (config.bootstrapRuntimeIdentities && source.scope !== 'aks-only') {
+    throw new Error('Runtime identity setup requires the reviewed AKS-only template and parameters.');
+  }
   const deploymentName = `${config.resourceGroup}-${source.scope === 'aks-only' ? 'aks-' : ''}${source.sha.slice(0, 12)}`;
   const clusterId = `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${config.resourceGroup}-aks`;
   let args = config.identityRoutingOnly ? undefined : buildDeployArgs({ resourceGroup: config.resourceGroup, ...source,
@@ -186,6 +220,7 @@ export async function deploy(config, {
   const summary = { ...source, resourceGroup: config.resourceGroup,
     ...(config.identityRoutingOnly ? { identityRoutingOnly: true } : { deploymentName, args }), executed: false,
     bootstrapIdentityPostgres: Boolean(config.bootstrapIdentityPostgres),
+    bootstrapRuntimeIdentities: Boolean(config.bootstrapRuntimeIdentities),
     bootstrapIdentityRouting: routingRequested,
     bootstrapIdentityBrokerState: Boolean(config.bootstrapIdentityBrokerState),
     alignExistingIdentityBrokerHostname: Boolean(config.alignExistingIdentityBrokerHostname),
@@ -343,6 +378,16 @@ export async function deploy(config, {
   } catch (error) {
     throw new Error(`Infrastructure deployment succeeded, but Azure Monitor add-on setup failed: ${redact(error.message)}`);
   }
+  let runtimeIdentities;
+  if (config.bootstrapRuntimeIdentities) {
+    try {
+      assertSourceUnchanged();
+      runtimeIdentities = deployRuntimeIdentities({ resourceGroup: config.resourceGroup, sourceSha: source.sha,
+        tags: group.tags, groupLocation: group.location, oidcIssuerUrl: deploymentReceipt.oidcIssuerUrl }, boundAz);
+    } catch (error) {
+      throw new Error(`Infrastructure deployment succeeded, but runtime identity setup failed: ${redact(error.message)}`);
+    }
+  }
   let identityPostgresBootstrap;
   if (config.bootstrapIdentityPostgres) {
     try {
@@ -480,6 +525,7 @@ export async function deploy(config, {
   return { ...summary, executed: true, receipt: { scope: source.scope, sourceSha: source.sha,
     sourceTree: source.sourceTree, sourceHash: source.sourceHash, subscriptionId: config.subscriptionId, tenantId: config.tenantId,
     resourceGroup: config.resourceGroup, deploymentName, deploymentId: deployment.id, azureMonitorAddon,
+    ...(runtimeIdentities ? { runtimeIdentities } : {}),
     ...(identityPostgresBootstrap ? { identityPostgresBootstrap } : {}),
     ...(identityRouting ? { identityRouting } : {}),
     ...(identityBrokerState ? { identityBrokerState } : {}),
@@ -498,6 +544,7 @@ export function cliConfig(values) {
     repoRoot: process.cwd(), execute: values.execute, subscriptionId: values.subscription,
     allowedSubscriptionId: values['allowed-subscription'], tenantId: values.tenant, allowedTenantId: values['allowed-tenant'],
     bootstrapIdentityPostgres: values['bootstrap-identity-postgres'] ?? false,
+    bootstrapRuntimeIdentities: values['bootstrap-runtime-identities'] ?? false,
     bootstrapIdentityRouting: Boolean(values['bootstrap-identity-routing'] || values['identity-routing-only']),
     identityRoutingOnly: values['identity-routing-only'] ?? false,
     identityRoutingCertificatesOnly: values['identity-routing-certificates-only'] ?? false,
@@ -532,7 +579,8 @@ export async function setupIdentityBrokerProviders(config, dependencies = {}) {
   }
   if (!config.identityBrokerProviderConfig) invalid('--identity-broker-provider-config');
   if (config.execute) invalid('--execute');
-  if (config.bootstrapIdentityPostgres || config.bootstrapIdentityRouting || config.identityRoutingOnly ||
+  if (config.bootstrapIdentityPostgres || config.bootstrapRuntimeIdentities ||
+      config.bootstrapIdentityRouting || config.identityRoutingOnly ||
       config.identityRoutingCertificatesOnly || config.bootstrapIdentityBrokerState ||
       config.alignExistingIdentityBrokerHostname || config.bootstrapIdentityBrokerRuntime ||
       config.bootstrapFoundationProbeInputs || config.bootstrapFoundationProbePostgres ||
@@ -573,6 +621,7 @@ export const cliOptions = {
   parameters: { type: 'string' }, subscription: { type: 'string' }, 'allowed-subscription': { type: 'string' },
   tenant: { type: 'string' }, 'allowed-tenant': { type: 'string' },
   'bootstrap-identity-postgres': { type: 'boolean', default: false },
+  'bootstrap-runtime-identities': { type: 'boolean', default: false },
   'bootstrap-identity-routing': { type: 'boolean', default: false },
   'identity-routing-only': { type: 'boolean', default: false },
   // This stage creates managed TLS certificates only; route writes remain service-guarded.

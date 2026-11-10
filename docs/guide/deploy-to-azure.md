@@ -323,13 +323,12 @@ The guarded PostgreSQL bootstrap in step 4 creates only the Identity Broker
 runtime and migration roles. It does not create the Projects & Config,
 Environment, Knowledge, Events & Sessions, or Orchestrator runtime identities
 and their ServiceAccount federations. Those five identities use the separate
-service runtime-identity template. The current guarded installer does not deploy
-that template, and the repository does not provide a guarded command for it.
-Do not apply it with a direct `az deployment` command. Before you install the
-product bundle, require a separately approved process to provision these
-identities and federations. If that process is not available, stop here. See
-[Limited service runtime identities](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#limited-p1-runtime-identities).
-Do not apply that template with an unguarded command.
+service runtime-identity template. Apply it with the guarded installer option
+`--bootstrap-runtime-identities` and the AKS-only template and parameters for
+your target. Do not apply the template with a direct `az deployment` command.
+See
+[Limited service runtime identities](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#limited-p1-runtime-identities)
+for the command and its checks.
 
 Before you install the product bundle, confirm that the five identities are
 provisioned and federated to the exact `agentweaver` namespace and service
