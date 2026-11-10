@@ -1020,10 +1020,10 @@ node scripts\azure\deploy.mjs --resource-group agentweaver --template infra\bice
 
 Without `--execute`, this command produces an offline infrastructure summary.
 It makes no Azure call.
-The target preflight does not inspect resource inventory or guarantee that a
+The existing P0 target preflight does not inspect resource inventory or guarantee that a
 full-foundation deployment preserves existing resources. Select the template
 that matches the intended change and review its what-if output.
-For either template, `plan.mjs` accepts the same selection and target
+For either P0 template, `plan.mjs` accepts the same selection and target
 arguments for a guarded live read-only what-if. `deploy.mjs --execute` performs
 the guarded what-if before Incremental create. The source guard requires a
 clean HEAD equal to the fetched admitted `origin/v1` tip; deployment does not
@@ -1035,6 +1035,11 @@ pool that the nested deployments will create or update. It does not query
 existing credentials or node pools to distinguish creates from updates.
 Bicep source parameters and outputs bind the receipt to exact reviewed inputs.
 No unsupported deployment tags occur.
+
+For a new separate nonproduction group, use `deploy.mjs --new-foundation`.
+The required empty-group checks, managed-group name, and recovery limits are
+described in [Deploy Agentweaver to Azure](../../docs/guide/deploy-to-azure.md#use-a-new-separate-nonproduction-group).
+`plan.mjs` and the bootstrap and acceptance paths remain restricted to P0.
 
 The guarded infrastructure deployment does not create Kubernetes namespaces or
 grant human AKS permissions. Namespace preparation is a separate, explicitly

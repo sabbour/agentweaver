@@ -7,6 +7,7 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { redact, runAz } from './lib/exec.mjs';
 import { resolveSource } from './lib/git.mjs';
+import { assertNewFoundation, checkNewFoundation, checkNewFoundationPlan } from './lib/new-foundation.mjs';
 import { bootstrapIdentityPostgres } from './lib/identity-postgres-bootstrap.mjs';
 import {
   alignExistingP0BrokerHostname, assertIdentityRoutingPlacement, bootstrapIdentityRouting,
@@ -37,9 +38,13 @@ const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 /** Builds source-bound CLI args; only full-foundation creation submits a node-pool count. */
 export function buildDeployArgs({
   resourceGroup, template, parametersFile, deploymentName, subscription, sourceSha, sourceTree, sourceHash,
-  scope = 'infrastructure-only', nodePoolCount,
+  scope = 'infrastructure-only', nodePoolCount, newFoundation = false, nodeResourceGroup,
 }) {
-  assertDedicatedTarget(resourceGroup);
+  if (!newFoundation) assertDedicatedTarget(resourceGroup);
+  else if (!/^[a-z][a-z0-9]{5,11}$/.test(resourceGroup ?? '') || resourceGroup === 'agentweaver' ||
+      scope !== 'infrastructure-only' || nodeResourceGroup !== `${resourceGroup}-aks-nodes`) {
+    throw new Error('Invalid new foundation target or managed resource group.');
+  }
   if (!subscription || !/^[0-9a-f]{40}$/.test(sourceSha ?? '') || !/^[0-9a-f]{40}$/.test(sourceTree ?? '') ||
       !/^[0-9a-f]{64}$/.test(sourceHash ?? '') ||
       !['infrastructure-only', 'aks-only'].includes(scope) ||
@@ -50,6 +55,7 @@ export function buildDeployArgs({
   const args = ['deployment', 'group', 'create', '--resource-group', resourceGroup, '--template-file', template,
     '--parameters', `@${parametersFile}`, `sourceSha=${sourceSha}`, `sourceTree=${sourceTree}`, `sourceHash=${sourceHash}`];
   if (scope === 'infrastructure-only') args.push(`nodePoolCount=${nodePoolCount ?? 2}`);
+  if (newFoundation) args.push(`nodeResourceGroup=${nodeResourceGroup}`);
   args.push('--mode', 'Incremental', '--name', deploymentName, '--subscription', subscription, '-o', 'json');
   return args;
 }
@@ -121,7 +127,7 @@ export async function deploy(config, {
   preflightIdentityBrokerRegistration = preflightPublicBrokerRegistration,
   initializeFoundationProbeInputs = bootstrapFoundationProbeInputs,
 } = {}) {
-  assertDedicatedTarget(config.resourceGroup);
+  if (!config.newFoundation) assertDedicatedTarget(config.resourceGroup);
   assertSubscription(config.subscriptionId, config.allowedSubscriptionId);
   assertTenant(config.tenantId, config.allowedTenantId);
   const routingRequested = Boolean(config.bootstrapIdentityRouting || config.identityRoutingOnly);
@@ -158,6 +164,7 @@ export async function deploy(config, {
     throw new Error('Identity routing inputs require the separate --bootstrap-identity-routing option.');
   }
   const source = sourceResolver(config);
+  if (config.newFoundation) assertNewFoundation(config, source);
   if (source.nodePoolMinCount !== 2 || source.nodePoolMaxCount !== 3) {
     throw new Error('Reviewed deployment source must bind the approved system autoscaler bounds 2-3.');
   }
@@ -167,7 +174,8 @@ export async function deploy(config, {
   const deploymentName = `${config.resourceGroup}-${source.scope === 'aks-only' ? 'aks-' : ''}${source.sha.slice(0, 12)}`;
   const clusterId = `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${config.resourceGroup}-aks`;
   let args = config.identityRoutingOnly ? undefined : buildDeployArgs({ resourceGroup: config.resourceGroup, ...source,
-    subscription: config.subscriptionId, sourceSha: source.sha, deploymentName });
+    subscription: config.subscriptionId, sourceSha: source.sha, deploymentName,
+    newFoundation: config.newFoundation, nodeResourceGroup: `${config.resourceGroup}-aks-nodes` });
   const summary = { ...source, resourceGroup: config.resourceGroup,
     ...(config.identityRoutingOnly ? { identityRoutingOnly: true } : { deploymentName, args }), executed: false,
     bootstrapIdentityPostgres: Boolean(config.bootstrapIdentityPostgres),
@@ -186,7 +194,10 @@ export async function deploy(config, {
       appRegistrationMutation: false,
     } } : {}) };
   if (!config.execute) return summary;
-  const { execAz: boundAz, group } = guardAzureTarget({ ...config, ...source }, execAz);
+  const preflight = config.newFoundation
+    ? checkNewFoundation(config, source, execAz)
+    : guardAzureTarget({ ...config, ...source }, execAz);
+  const { execAz: boundAz, group } = preflight;
   if (group.tags['agentweaver:owner'] !== source.owner || group.tags['agentweaver:cost-center'] !== source.costCenter) {
     throw new Error('Source parameter ownership differs from the actual target.');
   }
@@ -242,20 +253,29 @@ export async function deploy(config, {
   // Only full-foundation creation owns the pool count; AKS-only reads the cluster without updating it.
   const nodePoolCount = source.scope === 'infrastructure-only' ? source.nodePoolMinCount : undefined;
   args = buildDeployArgs({ resourceGroup: config.resourceGroup, ...source,
-    subscription: config.subscriptionId, sourceSha: source.sha, deploymentName, nodePoolCount });
+    subscription: config.subscriptionId, sourceSha: source.sha, deploymentName, nodePoolCount,
+    newFoundation: config.newFoundation, nodeResourceGroup: `${config.resourceGroup}-aks-nodes` });
   summary.args = args;
   // A guarded what-if precedes create. Failure never admits a mutation.
   const whatIfArgs = ['deployment', 'group', 'what-if', '--resource-group', config.resourceGroup,
     '--template-file', source.template, '--parameters', `@${source.parametersFile}`, `sourceSha=${source.sha}`,
     `sourceTree=${source.sourceTree}`, `sourceHash=${source.sourceHash}`];
   if (nodePoolCount !== undefined) whatIfArgs.push(`nodePoolCount=${nodePoolCount}`);
+  if (config.newFoundation) whatIfArgs.push(`nodeResourceGroup=${preflight.nodeResourceGroup}`);
   whatIfArgs.push('--no-pretty-print');
+  if (config.newFoundation) whatIfArgs.push('--name', deploymentName, '--mode', 'Incremental', '-o', 'json');
   function runWhatIf() {
     const result = boundAz(whatIfArgs, { check: false });
     if (result.status !== 0) throw new Error(`What-if failed: ${result.stderr}`);
+    return config.newFoundation ? checkNewFoundationPlan(result, config) : undefined;
   }
-  runWhatIf();
+  const firstPlan = runWhatIf();
   assertSourceUnchanged();
+  if (config.newFoundation) {
+    checkNewFoundation(config, source, execAz, preflight.identity);
+    if (runWhatIf() !== firstPlan) throw new Error('What-if changed after preflight; refusing deployment.');
+    assertSourceUnchanged();
+  }
   const result = execAz(args, { check: false });
   if (result.status !== 0) throw new Error(`Infrastructure deployment failed: ${result.stderr}`);
   const deployment = JSON.parse(result.stdout);
@@ -295,6 +315,20 @@ export async function deploy(config, {
     deploymentReceipt = {
       ...readFoundationOutputs(outputs, { ...config, ...source }),
     };
+  }
+  if (config.newFoundation) {
+    const observed = boundAz(['aks', 'show', '--resource-group', config.resourceGroup, '--name',
+      `${config.resourceGroup}-aks`, '--query', 'nodeResourceGroup', '-o', 'json'], { check: false });
+    if (observed.status !== 0) throw new Error(`Infrastructure deployment succeeded, but AKS managed group lookup failed: ${observed.stderr}`);
+    let nodeGroup;
+    try { nodeGroup = JSON.parse(observed.stdout); } catch { throw new Error('Infrastructure deployment succeeded, but AKS managed group lookup returned malformed JSON.'); }
+    if (nodeGroup !== preflight.nodeResourceGroup) {
+      throw new Error('Infrastructure deployment succeeded, but AKS managed group does not match the selected target.');
+    }
+    const identityPrefix = `/subscriptions/${config.subscriptionId}/resourceGroups/${nodeGroup}/`.toLowerCase();
+    if (!deploymentReceipt.appRoutingIdentity.resourceId.toLowerCase().startsWith(identityPrefix)) {
+      throw new Error('Infrastructure deployment succeeded, but the routing identity is outside the AKS managed group.');
+    }
   }
   let azureMonitorAddon;
   try {
@@ -453,6 +487,7 @@ export async function deploy(config, {
 /** Converts parsed command-line values into the deployment configuration consumed by deploy(). */
 export function cliConfig(values) {
   return { resourceGroup: values['resource-group'], template: values.template, parametersFile: values.parameters,
+    newFoundation: values['new-foundation'] ?? false,
     repoRoot: process.cwd(), execute: values.execute, subscriptionId: values.subscription,
     allowedSubscriptionId: values['allowed-subscription'], tenantId: values.tenant, allowedTenantId: values['allowed-tenant'],
     bootstrapIdentityPostgres: values['bootstrap-identity-postgres'] ?? false,
@@ -527,6 +562,7 @@ export async function setupIdentityBrokerProviders(config, dependencies = {}) {
 /** CLI option definitions shared by the deployment and planning entry points. */
 export const cliOptions = {
   'resource-group': { type: 'string' }, template: { type: 'string', default: 'infra/bicep/main.bicep' },
+  'new-foundation': { type: 'boolean', default: false },
   parameters: { type: 'string' }, subscription: { type: 'string' }, 'allowed-subscription': { type: 'string' },
   tenant: { type: 'string' }, 'allowed-tenant': { type: 'string' },
   'bootstrap-identity-postgres': { type: 'boolean', default: false },

@@ -147,8 +147,14 @@ source SHA. It compares committed infrastructure inputs and computes the
 source tree and input hash. `plan.mjs` checks the target and ownership before
 building an Azure what-if request. `deploy.mjs` defaults to a nonexecuting summary. Its write path requires
 `--execute`, checks the selected account and dedicated target, runs what-if,
-and rechecks source inputs before mutation. The target preflight does not
+and rechecks source inputs before mutation. The existing P0 target preflight does not
 enumerate resources or verify their resulting properties.
+
+The `--new-foundation` path instead requires an empty, already tagged group
+with no deployment history. It verifies a separate AKS managed group and
+compares two create-only what-if results. It retains the Monitor add-on step.
+The [deployment guide](../guide/deploy-to-azure#use-a-new-separate-nonproduction-group)
+states the single-operator and recovery limits.
 
 The full-foundation path applies the full template. The AKS-only path reads the
 existing cluster and refreshes its three workload-identity federation records
