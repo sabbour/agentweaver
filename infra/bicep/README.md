@@ -134,10 +134,12 @@ The templates do not declare the add-on. After each successful
    the `<prefix>-law` region. If the cluster is in a canary region and the
    workspace is not, it skips the add-on (see
    [Canary-region clusters](#canary-region-clusters)). Otherwise it runs
-   `az aks enable-addons --addons monitoring` with `<prefix>-law`, managed
-   identity authentication, and the `<prefix>-ampls` private link scope. Azure
-   CLI creates the data collection rule, the data collection endpoint, and the
-   association.
+   `az aks enable-addons --addons monitoring` with `<prefix>-law` and managed
+   identity authentication. Azure CLI creates the data collection rule and the
+   association. The installer does not send `--ampls-resource-id`: Azure CLI
+   accepts it only for a private cluster, and the AKS cluster is public. The
+   workspace accepts ingestion from public networks (`ingestionAccessMode:
+   Open`), and queries stay private.
 4. It reads the profile again and requires the add-on with `<prefix>-law`.
 
 The installer stops if the add-on sends to another workspace or uses
@@ -154,9 +156,7 @@ add-on; the same run then enables it again.
 The identity that runs the installer needs these permissions in the resource
 group: `Microsoft.ContainerService/managedClusters/read` and `write`,
 `Microsoft.Insights/dataCollectionRules/*`,
-`Microsoft.Insights/dataCollectionEndpoints/*`,
-`Microsoft.Insights/dataCollectionRuleAssociations/*`,
-`Microsoft.Insights/privateLinkScopes/scopedResources/*`, and
+`Microsoft.Insights/dataCollectionRuleAssociations/*`, and
 `Microsoft.OperationalInsights/workspaces/read` and `sharedKeys/action`. The installer
 grants no roles.
 

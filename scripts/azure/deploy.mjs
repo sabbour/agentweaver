@@ -106,7 +106,6 @@ export function ensureAzureMonitorAddon({ resourceGroup, subscriptionId }, execA
   }
   const enable = execAz(['aks', 'enable-addons', ...cluster, '--addons', 'monitoring',
     '--workspace-resource-id', workspaceResourceId, '--enable-msi-auth-for-monitoring',
-    '--ampls-resource-id', `${groupId}/providers/Microsoft.Insights/privateLinkScopes/${resourceGroup}-ampls`,
     '-o', 'none'], { check: false });
   if (enable.status !== 0) throw new Error(`az aks enable-addons failed: ${enable.stderr}`);
   if (state(read()) !== 'enabled') throw new Error('The AKS add-on profile does not show the add-on as enabled.');

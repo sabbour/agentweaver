@@ -712,7 +712,7 @@ test('deployment receipt rejects substituted resources, identity, workspace and 
   }
 });
 
-test('AKS-only deployment enables the missing Azure Monitor add-on with the install workspace and AMPLS', async () => {
+test('AKS-only deployment enables the missing Azure Monitor add-on with the install workspace and no AMPLS argument', async () => {
   const workspace = deploymentOutputs.foundationResources.value.monitorWorkspaceResourceId;
   const calls = [];
   let enabled = false;
@@ -728,7 +728,6 @@ test('AKS-only deployment enables the missing Azure Monitor add-on with the inst
   const enable = calls.find(args => args[1] === 'enable-addons');
   assert.deepEqual(enable, ['aks', 'enable-addons', '--resource-group', 'agentweaver', '--name', 'agentweaver-aks',
     '--addons', 'monitoring', '--workspace-resource-id', workspace, '--enable-msi-auth-for-monitoring',
-    '--ampls-resource-id', `${fixture.groupId}/providers/Microsoft.Insights/privateLinkScopes/agentweaver-ampls`,
     '-o', 'none', '--subscription', ids.subscriptionId]);
   assert.ok(calls.indexOf(enable) > calls.findIndex(args => args[2] === 'create'));
   assert.deepEqual(result.receipt.azureMonitorAddon, { workspaceResourceId: workspace, action: 'enabled' });
