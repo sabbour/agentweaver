@@ -63,6 +63,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
 }
 
 output vnetId string = vnet.id
-output aksSubnetId string = vnet.properties.subnets[0].id
+// Deterministic ID so what-if can resolve the AKS subnet role assignment name and scope.
+output aksSubnetId string = resourceId('Microsoft.Network/virtualNetworks/subnets', vnet.name, 'aks')
 output postgresSubnetId string = vnet.properties.subnets[1].id
 output privateEndpointsSubnetId string = vnet.properties.subnets[2].id
