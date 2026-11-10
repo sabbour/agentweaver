@@ -77,18 +77,18 @@ test('AKS-only what-if lists the nested federated credential create-or-update op
 });
 
 test('AKS-only what-if names the federated identities and kata size of the selected target', () => {
-  const result = plan({ ...fixture, resourceGroup: 'aweast2np01' }, {
+  const result = plan({ ...fixture, resourceGroup: 'awwus2np01' }, {
     sourceResolver: () => ({ ...source, scope: 'aks-only', template: 'infra/bicep/aks-redeploy.bicep',
-      parametersFile: 'infra/bicep/parameters/aweast2np01-aks-redeploy.approved.json', kataVmSize: 'Standard_D4ds_v5' }),
+      parametersFile: 'infra/bicep/parameters/awwus2np01-aks-redeploy.approved.json', kataVmSize: 'Standard_D4ds_v5' }),
     execAz: fakeAzure({ whatIf: { status: 0, stdout: '{"changes":[]}', stderr: '' },
-      group: { id: `/subscriptions/${ids.subscriptionId}/resourceGroups/aweast2np01`, name: 'aweast2np01' } }, []),
+      group: { id: `/subscriptions/${ids.subscriptionId}/resourceGroups/awwus2np01`, name: 'awwus2np01' } }, []),
   });
   const nested = JSON.parse(result.stdout).nestedDeploymentChanges;
   assert.deepEqual(nested.agentPools.map(pool => pool.vmSize), ['Standard_D4ds_v5']);
   assert.deepEqual(
     nested.federatedIdentityCredentials.map(fic => fic.managedIdentityName),
-    ['aweast2np01-id-foundation-probe', 'aweast2np01-id-identity-broker',
-      'aweast2np01-id-identity-broker-migration']);
+    ['awwus2np01-id-foundation-probe', 'awwus2np01-id-identity-broker',
+      'awwus2np01-id-identity-broker-migration']);
 });
 
 test('plan fails closed for unauthorized, missing or untagged target', () => {

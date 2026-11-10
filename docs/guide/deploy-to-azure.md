@@ -152,7 +152,7 @@ that target:
 | Target | Foundation parameters | AKS-only parameters |
 |---|---|---|
 | `agentweaver` | `p0-integration.approved.json` | `p0-aks-redeploy.approved.json` |
-| `aweast2np01` | `aweast2np01.approved.json` | `aweast2np01-aks-redeploy.approved.json` |
+| `awwus2np01` | `awwus2np01.approved.json` | `awwus2np01-aks-redeploy.approved.json` |
 
 All files are in `infra/bicep/parameters/`. To add a target, add its entry and
 both parameter files in one reviewed change. In the same change, add the name

@@ -34,7 +34,7 @@ test('P0-only options reject a registered separate target before any Azure call'
   for (const option of ['bootstrapFoundationProbeInputs', 'bootstrapFoundationProbePostgres',
     'alignExistingIdentityBrokerHostname']) {
     await assert.rejects(
-      deploy({ ...fixture, resourceGroup: 'aweast2np01', execute: true, [option]: true }, {
+      deploy({ ...fixture, resourceGroup: 'awwus2np01', execute: true, [option]: true }, {
         sourceResolver: () => { throw new Error('source read'); },
         execAz: () => { throw new Error('cloud call'); },
       }),

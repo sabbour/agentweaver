@@ -69,8 +69,7 @@ same value in the AKS-only parameter file of that target; the installer stops
 when the two values differ. The `kata` size must be a Generation 2 size that
 supports nested virtualization; see
 [Pod sandboxing with AKS](https://learn.microsoft.com/azure/aks/use-pod-sandboxing).
-The `aweast2np01` target uses `Standard_D2ds_v5` and `Standard_D4ds_v5`,
-because its subscription cannot use the default sizes in `eastus2`.
+The `awwus2np01` target uses `Standard_D2ds_v5` and `Standard_D4ds_v5`.
 
 The `kata` pool uses Azure Linux with `workloadRuntime: KataVmIsolation`
 (AKS Pod Sandboxing). SSH access to its nodes is disabled. The pool has no
@@ -91,7 +90,7 @@ Quota: with the default sizes, the `system` pool can use up to 6 vCPUs and the
 `kata` pool up to 8 vCPUs, both in the DSv5 family. Make sure that the regional
 DSv5 vCPU quota of the subscription is at least 14. Otherwise the autoscaler
 cannot add nodes. Other sizes use the quota family and price of those sizes.
-For example, `aweast2np01` needs at least 14 vCPUs of DDSv5 quota.
+For example, `awwus2np01` needs at least 14 vCPUs of DDSv5 quota.
 
 Both `main.bicep` and `aks-redeploy.bicep` create or update the pool with
 `modules/aks-kata-pool.bicep`. The module is a nested deployment, so the
