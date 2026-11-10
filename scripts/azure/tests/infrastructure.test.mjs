@@ -4,25 +4,12 @@ import { readFileSync } from 'node:fs';
 import { parse } from 'yaml';
 import { runAz, run } from '../lib/exec.mjs';
 
-test('Broker uses its internal certificate for service SNI and keeps the public wildcard fallback', () => {
-  const config = JSON.parse(readFileSync(
-    'services/identity/Agentweaver.Identity.Broker/appsettings.Production.json',
-    'utf8',
-  ));
-  const sni = config.Kestrel.Endpoints.Https.Sni;
-  assert.deepEqual(Object.keys(sni).sort(), ['*', 'identity-broker.agentweaver.svc.cluster.local']);
-  assert.deepEqual(sni['identity-broker.agentweaver.svc.cluster.local'].Certificate, {
-    Path: '/var/run/identity-broker-internal-tls/tls.crt',
-    KeyPath: '/var/run/identity-broker-internal-tls/tls.key',
-  });
-  assert.deepEqual(sni['*'].Certificate, {
-    Path: '/var/run/identity-broker-tls/tls.crt',
-    KeyPath: '/var/run/identity-broker-tls/tls.key',
-  });
-
+test('Broker deploys its internal TLS secret to the production HTTPS listener', () => {
   const deployment = parse(readFileSync('deploy/k8s/base/identity-broker/deployment.yaml', 'utf8'));
   const pod = deployment.spec.template.spec;
   const container = pod.containers.find(item => item.name === 'identity-broker');
+  assert.ok(container.env.some(item =>
+    item.name === 'ASPNETCORE_ENVIRONMENT' && item.value === 'Production'));
   assert.ok(container.volumeMounts.some(mount =>
     mount.name === 'internal-tls-certificate' &&
     mount.mountPath === '/var/run/identity-broker-internal-tls' &&

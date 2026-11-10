@@ -87,9 +87,11 @@ if (verifyPostgresBootstrap)
     return;
 }
 
+IdentityBrokerInternalTlsConfiguration.Configure(builder);
+
 // Explicit, fail-closed configuration: every broker setting (issuer, signing material,
-// external provider, client list) must be supplied by the host. There is no environment
-// branching and no development fallback anywhere in this composition.
+// external provider, client list) must be supplied by the host. Production TLS has no
+// development certificate fallback.
 var identityOptions = builder.Configuration
     .GetSection(IdentityBrokerOptions.SectionName)
     .Get<IdentityBrokerOptions>()
