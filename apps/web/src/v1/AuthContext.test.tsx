@@ -180,6 +180,8 @@ function Harness() {
       <output>{auth.restoringSession ? 'restoring' : 'not-restoring'}</output>
       <output>{auth.error ?? 'no-auth-error'}</output>
       <output>context:{auth.authorizationContext?.tenantId ?? 'none'}</output>
+      <output>actor:{auth.authorizationContext?.actorId ?? 'none'}</output>
+      <output>issuer:{auth.authorizationContext?.issuer ?? 'none'}</output>
       <output>context-fields:{Object.keys(auth.authorizationContext ?? {}).sort().join(',')}</output>
       <output>api-tenant:{observedTenant ?? 'none'}</output>
     </div>
@@ -422,7 +424,9 @@ describe('Broker refresh coordination', () => {
     await completePopupSignIn();
 
     await screen.findByText('context:tenant-1');
-    await screen.findByText('context-fields:membershipRevision,tenantId');
+    await screen.findByText('actor:actor-1');
+    await screen.findByText('issuer:projects-config');
+    await screen.findByText('context-fields:actorId,issuer,membershipRevision,tenantId');
     expect(gatewayClient.getAuthorizationContext).toHaveBeenCalledWith('access-1', undefined);
     expect(ownerFetcher).toHaveBeenCalledOnce();
     expect(String(ownerFetcher.mock.calls[0][0])).toBe('/api/v1/authorization/context');
@@ -450,7 +454,7 @@ describe('Broker refresh coordination', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await completePopupSignIn();
     await screen.findByText('context:tenant-1');
-    await screen.findByText('context-fields:membershipRevision,tenantId');
+    await screen.findByText('context-fields:actorId,issuer,membershipRevision,tenantId');
 
     fireEvent.click(screen.getByRole('button', { name: 'Resolve tenant two' }));
     await screen.findByText('context:tenant-2');
