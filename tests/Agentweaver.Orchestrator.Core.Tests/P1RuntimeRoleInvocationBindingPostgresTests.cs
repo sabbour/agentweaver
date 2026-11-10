@@ -158,6 +158,23 @@ public sealed class P1RuntimeRoleInvocationBindingPostgresTests(CoordinationPost
     private static async Task AssertRestrictedP1GrantsAsync(NpgsqlDataSource dataSource)
     {
         await using var connection = await dataSource.OpenConnectionAsync();
+        await using (var jobs = new NpgsqlCommand("""
+            SELECT has_table_privilege(current_user, 'orchestrator.workflow_generation_jobs', 'SELECT'),
+                   has_table_privilege(current_user, 'orchestrator.workflow_generation_jobs', 'INSERT'),
+                   has_table_privilege(current_user, 'orchestrator.workflow_generation_jobs', 'UPDATE'),
+                   has_table_privilege(current_user, 'orchestrator.workflow_generation_jobs', 'DELETE'),
+                   has_table_privilege(current_user, 'orchestrator.workflow_generation_jobs', 'TRUNCATE')
+            """, connection))
+        await using (var reader = await jobs.ExecuteReaderAsync())
+        {
+            Assert.True(await reader.ReadAsync());
+            Assert.True(reader.GetBoolean(0));
+            Assert.True(reader.GetBoolean(1));
+            Assert.True(reader.GetBoolean(2));
+            Assert.False(reader.GetBoolean(3));
+            Assert.False(reader.GetBoolean(4));
+        }
+
         foreach (var (table, column) in new[]
         {
             ("p1_run_request_provenance", "provenance_id"),

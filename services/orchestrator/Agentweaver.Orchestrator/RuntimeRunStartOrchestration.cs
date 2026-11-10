@@ -1300,6 +1300,7 @@ internal sealed class RuntimeRunStartCleanupContinuation(
     CoordinationRuntimeRunStartStore store,
     ProjectsRunSelectionClient projects,
     RuntimeRegistrationOwner registrations,
+    WorkflowGenerationJobStore workflowGenerationJobs,
     RuntimeRunStartOptions options,
     IHttpClientFactory clients)
 {
@@ -1309,6 +1310,9 @@ internal sealed class RuntimeRunStartCleanupContinuation(
     {
         if (!work.Actor.Bearer.IsUsable())
             return;
+        while (await workflowGenerationJobs.HasUnresolvedNativeWorkAsync(
+                   work.ProjectId, work.RunId, cancellationToken).ConfigureAwait(false))
+            await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
         var intent = await store.FindCleanupIntentAsync(
             work.TenantId, work.ProjectId, work.RunId, cancellationToken).ConfigureAwait(false);
         if (intent is null || intent.State == "cleanup_complete")

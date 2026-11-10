@@ -23,8 +23,8 @@ public static class CoordinationOwnerMigrator
         // Version 040 adds immutable P1 run-request provenance and accepted invocation bindings.
         // Version 041 extends the immutable runtime-evidence kind allowlist; 042 adds run-start intents.
         // Version 043 adds immutable native root-turn completion evidence; 044 adds replacement operations.
-        // Version 045 adds immutable native root-turn replay evidence.
-        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45])];
+        // Version 045 adds immutable native root-turn replay evidence; 046 adds durable workflow-generation jobs.
+        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46])];
 
     /// <summary>
     /// Applies the supported embedded migrations in order under a schema-scoped PostgreSQL lock.
@@ -72,7 +72,7 @@ public static class CoordinationOwnerMigrator
         // Fail on any version this build doesn't know, or on a version whose prerequisite is missing.
         // Optional owner features remain compatible with their complete pre-migration shapes
         // until the reviewed maintenance plan applies them.
-        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33 or 35 or 36 or 37 or 38 or 39 or 40 or 41 or 42 or 43 or 44 or 45)) ||
+        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33 or 35 or 36 or 37 or 38 or 39 or 40 or 41 or 42 or 43 or 44 or 45 or 46)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -123,7 +123,8 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(42) && !applied.Contains(41)) ||
             (applied.Contains(43) && !applied.Contains(41)) ||
             (applied.Contains(44) && !applied.Contains(42)) ||
-            (applied.Contains(45) && !applied.Contains(43)))
+            (applied.Contains(45) && !applied.Contains(43)) ||
+            (applied.Contains(46) && !applied.Contains(45)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
         // Apply every catalog version that is not yet recorded, in catalog order. Operator tooling relies on
         // this: it can only cap what runs by checking that the catalog itself ends at the approved version.
@@ -177,6 +178,7 @@ public static class CoordinationOwnerMigrator
                 43 => "runtime_root_turn_completion",
                 44 => "runtime_replacement_operations",
                 45 => "runtime_root_turn_replay",
+                46 => "workflow_generation_jobs",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
             var filename = version == 10 ? $"{migrationName}.sql" : $"{version:000}_{migrationName}.sql";
@@ -215,7 +217,7 @@ public static class CoordinationOwnerMigrator
         // record, the spend_budget_reservations table, and the spend_budget_accounting_cursors table.
         // Six columns cover version 030: its migration record, its two tables, and its three unique indexes.
         // Two columns cover version 031: its migration record and the promotion dismissal table.
-        // Additive migrations 032, 033, and 035-045 remain optional to readiness.
+        // Additive migrations 032, 033, and 035-046 remain optional to readiness.
         // so the owner can start before maintenance applies the reviewed plan; accept only complete shapes.
         await using var command = new NpgsqlCommand($"""
             SELECT
@@ -235,7 +237,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -701,6 +703,39 @@ public static class CoordinationOwnerMigrator
                                AND indexdef LIKE 'CREATE UNIQUE INDEX uq_runtime_replacement_one_active ON %'
                                AND regexp_replace(indexdef, '::text|[()[:space:]]', '', 'g')
                                    LIKE '%WHEREstate=''pending'''))
+                ),
+                (
+                        ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 46) = 0
+                            AND to_regclass(@workflowGenerationJobs) IS NULL
+                            AND to_regprocedure(@workflowGenerationInsertGuard) IS NULL
+                            AND to_regprocedure(@workflowGenerationCancelFunction) IS NULL)
+                        OR
+                        ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 46) = 1
+                            AND to_regclass(@workflowGenerationJobs) IS NOT NULL
+                            AND (SELECT count(*) FROM pg_catalog.pg_attribute
+                                 WHERE attrelid = to_regclass(@workflowGenerationJobs)
+                                   AND attnum > 0 AND NOT attisdropped) = 26
+                            AND (SELECT count(*) FROM pg_constraint
+                                 WHERE conrelid = to_regclass(@workflowGenerationJobs) AND contype = 'p') = 1
+                            AND (SELECT count(*) FROM pg_constraint
+                                 WHERE conrelid = to_regclass(@workflowGenerationJobs) AND contype = 'u') = 2
+                            AND (SELECT count(*) FROM pg_constraint
+                                 WHERE conrelid = to_regclass(@workflowGenerationJobs) AND contype = 'f'
+                                   AND confrelid = to_regclass(@runs) AND convalidated) = 1
+                            AND (SELECT count(*) FROM pg_constraint
+                                 WHERE conrelid = to_regclass(@workflowGenerationJobs) AND contype = 'c'
+                                   AND convalidated) = 9
+                            AND to_regclass(@workflowGenerationIndex) IS NOT NULL
+                            AND EXISTS (SELECT 1 FROM pg_trigger
+                                 WHERE tgrelid = to_regclass(@workflowGenerationJobs)
+                                   AND tgname = 'workflow_generation_job_active_run'
+                                   AND tgfoid = to_regprocedure(@workflowGenerationInsertGuard)
+                                   AND tgtype = 7 AND tgenabled = 'O' AND NOT tgisinternal)
+                            AND EXISTS (SELECT 1 FROM pg_trigger
+                                 WHERE tgrelid = to_regclass(@projectRunCancellations)
+                                   AND tgname = 'project_run_cancellation_closes_workflow_generation_jobs'
+                                   AND tgfoid = to_regprocedure(@workflowGenerationCancelFunction)
+                                   AND tgtype = 5 AND tgenabled = 'O' AND NOT tgisinternal))
                 )
             """, connection);
         command.Parameters.AddWithValue(
@@ -720,6 +755,16 @@ public static class CoordinationOwnerMigrator
         command.Parameters.AddWithValue("projectRunRequests", NpgsqlDbType.Text, $"{schema}.project_run_requests");
         command.Parameters.AddWithValue(
             "projectRunCancellations", NpgsqlDbType.Text, $"{schema}.project_run_cancellations");
+        command.Parameters.AddWithValue(
+            "workflowGenerationJobs", NpgsqlDbType.Text, $"{schema}.workflow_generation_jobs");
+        command.Parameters.AddWithValue(
+            "workflowGenerationIndex", NpgsqlDbType.Text, $"{schema}.ix_workflow_generation_jobs_unresolved");
+        command.Parameters.AddWithValue(
+            "workflowGenerationInsertGuard", NpgsqlDbType.Text,
+            $"{schema}.guard_workflow_generation_job_insert()");
+        command.Parameters.AddWithValue(
+            "workflowGenerationCancelFunction", NpgsqlDbType.Text,
+            $"{schema}.close_workflow_generation_jobs_on_cancel()");
         command.Parameters.AddWithValue("runs", NpgsqlDbType.Text, $"{schema}.accepted_runs");
         command.Parameters.AddWithValue("userDismissals", NpgsqlDbType.Text, $"{schema}.user_notification_dismissals");
         // Bind the relation name as data; schema validation alone does not prove the table exists.
@@ -863,7 +908,7 @@ public static class CoordinationOwnerMigrator
             !reader.GetBoolean(53) || !reader.GetBoolean(54) ||
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
             // Columns 57 onward are boolean checks for complete migration shapes. A partial apply never counts as ready.
-                Enumerable.Range(57, 54).Any(column => !reader.GetBoolean(column)))
+                Enumerable.Range(57, 55).Any(column => !reader.GetBoolean(column)))
                     throw new InvalidOperationException(
                         "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }

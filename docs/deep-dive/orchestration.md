@@ -95,6 +95,7 @@ has run in a deployment.
 | Source | Responsibility |
 | --- | --- |
 | `CoordinationEndpoints.cs` and `CoordinationOwnerStore.cs` | Session, decision, gate, message, turn, roots, fences, and outbox |
+| `WorkflowGenerationEndpoints.cs` and `WorkflowGenerationJobStore.cs` | Durable workflow-generation jobs and typed draft results |
 | `CoordinatorDecisionOwnerStore.cs` | Atomic decision, gate, grant, and outbox writes |
 | `MafExecutionPlanner.cs` | Deterministic associations and ready-frontier calculation |
 | `MafExecutionDispatchEndpoints.cs` | Explicit dispatch, durable intents, host sends, and result joining |
@@ -235,6 +236,77 @@ sequenceDiagram
     Core->>Core: Validate completion and replacement lineage
     Core-->>Gateway: Return original completion and no-call replay evidence
     Gateway-->>CLI: Return nativeReplay without a new native send
+```
+
+### Generate a workflow draft
+
+The Orchestrator owner provides these routes:
+
+- `POST /api/projects/{projectId}/workflows/generate`
+- `GET /api/projects/{projectId}/workflows/generation-jobs/{jobId}`
+- `GET /api/projects/{projectId}/workflows/generation-jobs/{jobId}/result`
+
+The owner requires an `Idempotency-Key`, the `projects.orchestrator` scope, current
+project write and Orchestrator authority, and the exact accepted coordinator
+root. It checks the current run selection, model registration, execution fence,
+and decision state before it sends work. The request names only the run,
+session, expected decision version, and prompt. The owner derives the tenant,
+actor, selection, model, fence, and native request ID.
+
+The owner saves the job and native request ID before it sends a model turn.
+An identical authenticated POST returns the same job. A changed request with
+the same key returns `409 idempotency_key_conflict`. The owner sends the saved
+prompt to the accepted root Host in read-only mode. It validates the native
+completion and the acknowledged user, assistant, and cache material before it
+stores a typed `WorkflowDefinition`. A completed job without a valid stored
+definition and persisted native completion evidence is an error.
+
+Acceptance returns `202` with separate status and result URLs. The status route
+returns a job envelope. The result route returns `409
+workflow_generation_not_complete` until the job completes. Both read routes
+recheck the owning actor, project, and current accepted selection. They do not
+start model work. Invalid definitions and roles outside the accepted team fail
+with typed errors. A generated definition remains a draft; it does not select
+or confirm a workflow or plan.
+
+Migration 046 adds the job table and closes queued work when a run is cancelled.
+It preserves an admitted native turn as unresolved until the worker confirms
+that it stopped. Cleanup waits for that work. An identical POST can reconcile
+the same native request after a lost reply. The owner does not create a second
+turn or make an automatic paid retry when the outcome is uncertain. The runtime
+database role needs `SELECT`, `INSERT`, and `UPDATE` on the job table. It has no
+`DELETE` grant. The migration is optional during rollout; readiness rejects an
+applied but incomplete schema.
+
+These are Orchestrator owner routes. Gateway admission and the CLI acceptance
+journey remain pending PR 4. The diagram shows the owner source flow, not a
+deployed or live-model test.
+
+```mermaid
+sequenceDiagram
+    actor Caller
+    participant Core as Orchestrator
+    participant Projects
+    participant DB as Orchestrator PostgreSQL
+    participant Host as Accepted root AgentHost
+    participant Events
+    Note over Caller,Events: Gateway admission remains pending PR 4.
+    Caller->>Core: POST workflow request with Idempotency-Key
+    Core->>Projects: Check current authority and accepted selection
+    Core->>DB: Save job and stable native request ID
+    Core->>Core: Queue the saved job on a bounded worker
+    Core-->>Caller: 202 with status and result URLs
+    Core->>Projects: Recheck authority, root, selection, fence and decision
+    Core->>DB: Persist send-admitted phase
+    Core->>Host: Send the same read-only native request
+    Host->>Events: Append user, assistant and cache material
+    Events-->>Host: Return material acknowledgments
+    Host-->>Core: Return native completion evidence
+    Core->>Events: Read and verify acknowledged material
+    Core->>DB: Store validated typed draft and completion evidence
+    Caller->>Core: GET status or result
+    Core->>Projects: Recheck actor and project authority
+    Core-->>Caller: Return job status or completed result
 ```
 
 ### Understand workflows, plans, and gates
