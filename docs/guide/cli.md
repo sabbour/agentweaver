@@ -472,8 +472,10 @@ deployment guide. The registry comes from `deploymentEvidence.registry`, not
 from this image manifest. Each value is either a source-commit tag or an
 immutable digest. Selected tags are resolved to digests, and every selected
 reference must match the live workload. Omitted entries are read from
-Kubernetes and must already be immutable references for the exact pinned
-source. All observed images are verified against their registry manifest,
+Kubernetes and keep their current registry. That registry must be
+`ghcr.io/sabbour` or an approved ACR login server. Omitted references must
+remain immutable and match the exact pinned source. All observed images are
+verified against their registry manifest,
 platform, config digest, and exact source revision; a present source-tree
 label must match the pinned Git tree. ACR also requires the pinned component
 version label. For AgentHost, the CLI checks the `linux/amd64` platform

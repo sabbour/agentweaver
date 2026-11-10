@@ -934,7 +934,9 @@ controlled responses. They cover the GHCR default, approved ACR references,
 ACR pull-token exchange, redirects that do not forward bearer tokens,
 rejection of unapproved registries, exact source labels, immutable image
 digests, and AgentHost platform and compressed-byte checks. These tests do
-not contact ACR or prove a live rollout.
+not contact ACR or prove a live rollout. They also verify that an omitted
+image keeps its current approved registry when selected images use another
+registry.
 
 Board deployment-provider tests separately verify the mixed source receipts:
 Gateway, Orchestrator, and authority owners keep their own source identity,
