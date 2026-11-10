@@ -98,7 +98,8 @@ acceptance. The Probe image and infrastructure deployment have separate source
 receipts.
 
 The full-foundation template configures the system node pool to scale
-automatically between two and three `Standard_D2s_v5` nodes, starting with two.
+automatically between two and three nodes of `nodePoolVmSize` (default
+`Standard_D2s_v5`), starting with two.
 The AKS-only installer validates these bounds against the approved foundation
 parameters but does not read or configure the pool. Its receipt has no submitted
 node count and does not prove that the pool scaled. Available vCPU quota also

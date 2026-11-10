@@ -129,6 +129,12 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
       /unassigned|CHANGEME|00000000-0000/i.test(JSON.stringify(document))) {
     throw new Error('Parameters must bind the dedicated target, tenant, region, owner and cost center without placeholders.');
   }
+  for (const key of ['nodePoolVmSize', 'kataVmSize']) {
+    if (values[key] !== undefined && !/^Standard_[A-Za-z0-9_]+$/.test(values[key]?.value ?? '')) {
+      throw new Error(`Parameter ${key} must be an Azure VM size such as Standard_D4ds_v5.`);
+    }
+  }
+  const kataVmSize = values.kataVmSize?.value;
   let nodePoolBounds;
   let monitorLocation;
   let postgresEntraAdminObjectId;
@@ -157,6 +163,9 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
     }
     const approvedFoundation = trackedPath(target.foundationParameters);
     const foundationValues = JSON.parse(readFile(approvedFoundation.absolute, 'utf8')).parameters;
+    if (foundationValues?.kataVmSize?.value !== kataVmSize) {
+      throw new Error('AKS-only kataVmSize must match the full-foundation parameters of the selected target.');
+    }
     // The existing-cluster template does not own node-pool settings; retain the full-foundation policy check.
     nodePoolBounds = assertAutoscalerBounds(foundationValues);
     keyVaultName = assertApprovedKeyVaultName(resourceGroup, foundationValues?.keyVaultName?.value);
@@ -180,7 +189,7 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   validateRelease(resolve(root, 'releases/foundation.json'), { root });
   return { sha, verifierSha: headSha, branch, sourceTree, sourceHash: hash.digest('hex'), template: inputTemplate.absolute,
     parametersFile: parameters.absolute, owner, costCenter,
-    location, monitorLocation, keyVaultName, postgresEntraAdminObjectId, postgresEntraAdminPrincipalName,
+    location, monitorLocation, keyVaultName, kataVmSize, postgresEntraAdminObjectId, postgresEntraAdminPrincipalName,
     nodePoolMinCount: nodePoolBounds.minCount, nodePoolMaxCount: nodePoolBounds.maxCount,
     postgresEntraAdminPrincipalType,
     appRoutingDnsZoneResourceIds,

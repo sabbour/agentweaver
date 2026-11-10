@@ -10,6 +10,9 @@ param clusterName string
 @description('Subnet resource ID of the existing aks subnet.')
 param nodeSubnetId string
 
+@description('VM size of the kata pool: a Generation 2 size with nested virtualization.')
+param vmSize string
+
 resource aks 'Microsoft.ContainerService/managedClusters@2026-07-02-preview' existing = {
   name: clusterName
 }
@@ -24,7 +27,7 @@ resource kataPool 'Microsoft.ContainerService/managedClusters/agentPools@2026-07
     enableAutoScaling: true
     minCount: 1
     maxCount: 2
-    vmSize: 'Standard_D4s_v5'
+    vmSize: vmSize
     vnetSubnetID: nodeSubnetId
     osType: 'Linux'
     osSKU: 'AzureLinux'

@@ -182,7 +182,8 @@ another target before any Azure call. A later change adds target selection to
 these steps.
 
 Both templates create or update the `kata` node pool for sandbox pods (AKS Pod
-Sandboxing, Azure Linux, SSH disabled, 1-2 `Standard_D4s_v5` nodes). You do not
+Sandboxing, Azure Linux, SSH disabled, 1-2 nodes of `kataVmSize`, default
+`Standard_D4s_v5`). You do not
 add the pool manually. If a pool named `kata` already exists with another OS
 SKU, workload runtime, VM size, or subnet, the deployment fails; delete that
 pool and run the deployment again. For the cost, see

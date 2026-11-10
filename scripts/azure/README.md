@@ -572,7 +572,8 @@ dotnet test tests\Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~
 
 The full-foundation template enables autoscaling on the `system` pool with
 explicit `nodePoolMinCount=2` and `nodePoolMaxCount=3` parameters. The VM size
-remains `Standard_D2s_v5`; the initial foundation starts with two nodes.
+is `nodePoolVmSize` (default `Standard_D2s_v5`); the initial foundation starts
+with two nodes.
 
 The AKS-only path validates the same bounds against the approved full-foundation
 parameters, but it does not read, configure, or change the pool. It does not
@@ -584,8 +585,10 @@ cost by 50%, plus per-node service charges. Quota headroom does not prove region
 ## Kata node pool
 
 Both templates create or update a `kata` user node pool for sandbox pods:
-Azure Linux, `workloadRuntime: KataVmIsolation`, `Standard_D4s_v5`, autoscale
-1-2 nodes, and SSH disabled. The deployment does not submit a node count for
+Azure Linux, `workloadRuntime: KataVmIsolation`, `kataVmSize` (default
+`Standard_D4s_v5`), autoscale 1-2 nodes, and SSH disabled. The AKS-only
+parameter file must repeat the `kataVmSize` of the full-foundation file of the
+same target, or both must omit it. The deployment does not submit a node count for
 this pool. For the cost and recovery from a conflicting pool, see
 [Kata node pool](../../infra/bicep/README.md#kata-node-pool).
 

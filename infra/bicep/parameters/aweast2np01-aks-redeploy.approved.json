@@ -6,6 +6,7 @@
     "namePrefix": { "value": "aweast2np01" },
     "tenantId": { "value": "72f988bf-86f1-41af-91ab-2d7cd011db47" },
     "owner": { "value": "sabbour" },
-    "costCenter": { "value": "agentweaver" }
+    "costCenter": { "value": "agentweaver" },
+    "kataVmSize": { "value": "Standard_D4ds_v5" }
   }
 }

@@ -11,7 +11,9 @@ test('every registered target binds its own foundation and AKS-only parameter fi
     const aksOnly = values(target.aksParameters);
     assert.equal(foundation.namePrefix.value, name);
     // git.mjs requires the AKS-only file to repeat these foundation values and nothing else.
-    assert.deepEqual(Object.keys(aksOnly).sort(), ['costCenter', 'location', 'namePrefix', 'owner', 'tenantId']);
+    const repeated = ['costCenter', 'location', 'namePrefix', 'owner', 'tenantId'];
+    if (foundation.kataVmSize) repeated.push('kataVmSize');
+    assert.deepEqual(Object.keys(aksOnly).sort(), repeated.sort());
     for (const key of Object.keys(aksOnly)) assert.equal(aksOnly[key].value, foundation[key].value, `${name} ${key}`);
     if (name !== 'agentweaver') {
       // A separate group is created by the new-foundation path, which requires these values.

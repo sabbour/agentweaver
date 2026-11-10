@@ -14,6 +14,8 @@
     "postgresEntraAdminPrincipalType": { "value": "User" },
     "appRoutingDnsZoneResourceIds": { "value": [] },
     "owner": { "value": "sabbour" },
-    "costCenter": { "value": "agentweaver" }
+    "costCenter": { "value": "agentweaver" },
+    "nodePoolVmSize": { "value": "Standard_D2ds_v5" },
+    "kataVmSize": { "value": "Standard_D4ds_v5" }
   }
 }
