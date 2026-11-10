@@ -141,6 +141,11 @@ Key Vault is the Identity Broker's secrets backend; its name and
 The deployment uses that configured name and returns the vault URI for runtime
 configuration.
 
+Set `monitorLocation` to a region that supports Log Analytics and Application
+Insights. It can match `location` when the foundation resources are also
+available there. The full-foundation template creates its own workspace; it
+does not reuse an existing workspace.
+
 ## 4. Connect to AKS and prepare the namespace
 
 The full-foundation template enables Kubernetes RBAC and Microsoft Entra

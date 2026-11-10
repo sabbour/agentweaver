@@ -15,7 +15,7 @@ targetScope = 'resourceGroup'
 @description('Primary region for the VNet and core resources. Monitor service resources use monitorLocation.')
 param location string = resourceGroup().location
 
-@description('Separate Azure region for the Log Analytics workspace and Application Insights. The Monitor private endpoint stays with the VNet.')
+@description('Azure region for the Log Analytics workspace and Application Insights. The Monitor private endpoint stays with the VNet.')
 param monitorLocation string
 
 @minLength(6)

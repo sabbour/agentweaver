@@ -138,11 +138,10 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
     postgresEntraAdminPrincipalName = values?.postgresEntraAdminPrincipalName?.value;
     postgresEntraAdminPrincipalType = values?.postgresEntraAdminPrincipalType?.value;
     if (typeof monitorLocation !== 'string' || !monitorLocation.trim() ||
-        location.toLowerCase() === monitorLocation.toLowerCase() ||
         !GUID_PATTERN.test(postgresEntraAdminObjectId ?? '') ||
         typeof postgresEntraAdminPrincipalName !== 'string' || !postgresEntraAdminPrincipalName.trim() ||
         !POSTGRES_ADMIN_TYPES.has(postgresEntraAdminPrincipalType)) {
-      throw new Error('Foundation parameters must specify a separate Monitor region and supported PostgreSQL Entra administrator.');
+      throw new Error('Foundation parameters must specify a Monitor region and supported PostgreSQL Entra administrator.');
     }
   } else {
     if (parameters.local !== 'infra/bicep/parameters/p0-aks-redeploy.approved.json') {

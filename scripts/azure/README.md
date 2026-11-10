@@ -966,6 +966,8 @@ object ID, name, and supported type (`User`, `Group`, or `ServicePrincipal`);
 they do not require a new group. The example keeps `location` for VNet/AKS/
 PostgreSQL and subnet-bound resources separate from required
 `monitorLocation` for Log Analytics and Application Insights.
+The reviewed locations may also match when the required resources are
+available in that region.
 The selected deployment's source SHA, Git tree, and infrastructure hash are
 checked against its exact successful receipt. Older deployment-history entries
 do not have to be repacked or contain retrofitted outputs.

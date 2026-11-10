@@ -220,7 +220,20 @@ test('acceptance pins an ancestor deployment source separately from the reviewed
   }
 });
 
-test('source parameters require a supported Entra administrator and separate Monitor region', () => {
+test('source parameters accept the same or separate Monitor region', () => {
+  for (const monitorLocation of ['eastus2', 'EASTUS2']) {
+    const { config, deps } = sourceFixture({
+      parameterValues: { location: { value: 'eastus2' }, monitorLocation: { value: monitorLocation } },
+    });
+    const receipt = resolveSource(config, deps);
+    assert.equal(receipt.location, 'eastus2');
+    assert.equal(receipt.monitorLocation, monitorLocation);
+  }
+  const { config, deps } = sourceFixture();
+  assert.notEqual(resolveSource(config, deps).location, resolveSource(config, deps).monitorLocation);
+});
+
+test('source parameters require a supported Entra administrator and Monitor region', () => {
   for (const principalType of ['User', 'Group', 'ServicePrincipal']) {
     const { config, deps } = sourceFixture({
       parameterValues: { postgresEntraAdminPrincipalType: { value: principalType } },
@@ -231,8 +244,10 @@ test('source parameters require a supported Entra administrator and separate Mon
     { postgresEntraAdminPrincipalType: { value: 'Unknown' } },
     { postgresEntraAdminObjectId: { value: 'not-a-guid' } },
     { postgresEntraAdminPrincipalName: { value: '' } },
-    { location: { value: 'eastus2' }, monitorLocation: { value: 'EASTUS2' } },
     { monitorLocation: undefined },
+    { monitorLocation: { value: '' } },
+    { monitorLocation: { value: '  ' } },
+    { monitorLocation: { value: 123 } },
   ]) {
     const { config, deps } = sourceFixture({ parameterValues });
     assert.throws(() => resolveSource(config, deps));
