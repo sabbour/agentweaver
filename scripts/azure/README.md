@@ -346,6 +346,13 @@ The plan contains five principal object IDs from the approved target snapshot.
 The initializer does not query Azure to refresh those IDs. Review the plan and
 its hash against the approved deployment before initialization; unresolved
 markers are rejected before credential requests.
+For a separate registered target, add `--resource-group <target>`. The plan
+then uses the PostgreSQL server, cluster, and five principal object IDs of that
+target, so its hash is different. The PostgreSQL role names stay
+`agentweaver-id-<service>`. Run `npm run db:maintenance:setup -- --resource-group <target> --execute`
+first: the initializer creates the PostgreSQL role for the
+`<target>-id-projects-config-migration` identity. A separate target supports
+only `--initialize`.
 The Environment runtime bootstrap profile replacement store receives exactly
 `SELECT, INSERT` on `environment.runtime_bootstrap_profile_replacements`. It
 receives no `UPDATE`, `DELETE`, or default privileges. The source catalog lists

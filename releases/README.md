@@ -118,6 +118,13 @@ It passes those immutable digests and the registry to the existing Kustomize
 deployment helper. ACR deployment stops if the selected source commit does not
 include registry-aware Kustomize support.
 
+To deploy a registered separate install target, add
+`--resource-group <target>`. The command stops if the selected source commit
+does not support target selection. The deployment applies
+`deploy/k8s/targets/<target>.json` and checks that the selected Kubernetes
+context is the AKS API server of that target. See
+[Use a registered separate target](../docs/guide/deploy-to-azure.md#use-a-registered-separate-target).
+
 If the cluster has an environment BYOK model binding, add
 `--model-bindings <model-bindings.json>` with the operator-owned model bindings
 file. To remove a live BYOK binding, add `--remove-model-binding <reference>`.

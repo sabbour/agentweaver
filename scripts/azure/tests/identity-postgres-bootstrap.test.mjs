@@ -8,7 +8,7 @@ import {
   bootstrapIdentityPostgres,
   startIdentityPostgresPortForward,
 } from '../lib/identity-postgres-bootstrap.mjs';
-import { p1PostgresPlanHash } from '../lib/p1-postgres-plan.mjs';
+import { buildP1PostgresPlan, p1PostgresPlanHash } from '../lib/p1-postgres-plan.mjs';
 
 const options = {
   repoRoot: resolve('agentweaver-test-root'),
@@ -291,6 +291,37 @@ test('combined Identity and P1 PostgreSQL bootstrap keeps the tunnel through P1 
   assert.equal(receipt.p1Initializer.planSha256, p1PostgresPlanHash());
   assert.equal(receipt.cleanup.portForwardStopped, true);
   assert.deepEqual(fakes.resources, new Map());
+});
+
+/** A separate target passes its plan and Projects migration principal to the initializer through the environment. */
+test('separate-target P1 initialization passes the target and Projects migration principal', async () => {
+  const principal = 'e'.repeat(8) + '-eeee-4eee-8eee-' + 'e'.repeat(12);
+  const p1Initializer = {
+    sourceSha: 'a'.repeat(40),
+    coreMergeSha: 'b'.repeat(40),
+    planSha256: p1PostgresPlanHash(buildP1PostgresPlan('awwus2np01')),
+    receiptPath: join(options.repoRoot, 'Temp', 'p1-postgres-target.jsonl'),
+    installTarget: 'awwus2np01',
+    projectsConfigMigrationPrincipalObjectId: principal,
+  };
+  const target = { ...options, resourceGroup: 'awwus2np01', clusterName: 'awwus2np01-aks',
+    postgresHost: 'awwus2np01-pg.postgres.database.azure.com' };
+  const fakes = dependencies();
+  await bootstrapIdentityPostgres({ ...target, p1Initializer }, fakes.deps);
+  const env = fakes.dotnetInvocations[1].settings.env;
+  assert.equal(env.AGENTWEAVER_INSTALL_TARGET, 'awwus2np01');
+  assert.equal(env.P1Initializer__ProjectsConfigMigrationPrincipalObjectId, principal);
+
+  for (const [input, value] of [
+    [options, p1Initializer],
+    [target, { ...p1Initializer, projectsConfigMigrationPrincipalObjectId: undefined }],
+    [target, { ...p1Initializer, planSha256: p1PostgresPlanHash() }],
+  ]) {
+    const rejected = dependencies();
+    await assert.rejects(bootstrapIdentityPostgres({ ...input, p1Initializer: value }, rejected.deps),
+      /separate-target P1 initializer|Combined PostgreSQL initialization requires/);
+    assert.equal(rejected.calls.length, 0);
+  }
 });
 
 /** Initialized-database modes verify Identity read-only, then run the bounded P1 mode on the same tunnel. */

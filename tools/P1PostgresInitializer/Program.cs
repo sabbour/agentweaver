@@ -256,6 +256,12 @@ try
         fresh.Parameters.AddWithValue("schemas", plan.Services.Select(item => item.Schema).ToArray());
         if (await fresh.ExecuteScalarAsync(cancellationToken) is not true)
             throw new InvalidOperationException("The target contains existing, partial, or unapproved state. Refusing to adopt, reset, or retry it.");
+        // A separate install target has no Projects migration role yet; the installer passes its object ID.
+        var projectsMigrationObjectId = Environment.GetEnvironmentVariable(
+            "P1Initializer__ProjectsConfigMigrationPrincipalObjectId");
+        if (!string.IsNullOrEmpty(projectsMigrationObjectId))
+            await EnsureProjectsMigrationPrincipalAsync(
+                principalConnection, projectsMigrationObjectId, plan.Target.TenantId, cancellationToken);
         await P1PostgresContinuation.AssertProjectsMigrationOwnerReadyAsync(
             connection, plan.Target.OperatorName, cancellationToken);
     }
@@ -827,6 +833,44 @@ static async Task<JsonNode?> ReadNodeAsync(NpgsqlConnection connection, string s
 
 // Converts a value for the inspection report, keeping null as JSON null.
 static JsonNode? ToNode<T>(T? value) where T : class => value is null ? null : JsonSerializer.SerializeToNode(value);
+
+// Creates the Projects migration Entra role on a fresh separate target when it is missing. Created or not,
+// the role must map to exactly the expected service principal, so a stale mapping is never adopted.
+static async Task EnsureProjectsMigrationPrincipalAsync(NpgsqlConnection connection, string objectId,
+    string tenantId, CancellationToken cancellationToken)
+{
+    if (!Guid.TryParseExact(objectId, "D", out _))
+        throw new InvalidOperationException("The Projects migration principal object ID must be a GUID.");
+    const string owner = P1PostgresContinuation.ProjectsConfigMigrationOwner;
+    await using (var exists = new NpgsqlCommand(
+        "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = @owner)", connection))
+    {
+        exists.Parameters.AddWithValue("owner", owner);
+        if (await exists.ExecuteScalarAsync(cancellationToken) is not true)
+        {
+            await using var create = new NpgsqlCommand(
+                "SELECT pg_catalog.pgaadauth_create_principal_with_oid(@role, @object, 'service', false, false)",
+                connection);
+            create.Parameters.AddWithValue("role", owner);
+            create.Parameters.AddWithValue("object", objectId);
+            await create.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+    await using var mapping = new NpgsqlCommand("""
+        SELECT count(*) = 1
+           AND bool_and(lower(p.object_id::text) = lower(@object) AND p.principal_type = 'service'
+                        AND p.tenant_id::text = @tenant)
+        FROM pg_catalog.pgaadauth_list_principals(false)
+          AS p(role_name, principal_type, object_id, tenant_id, is_mfa, is_admin)
+        WHERE p.role_name::text = @owner
+        """, connection);
+    mapping.Parameters.AddWithValue("owner", owner);
+    mapping.Parameters.AddWithValue("object", objectId);
+    mapping.Parameters.AddWithValue("tenant", tenantId);
+    if (await mapping.ExecuteScalarAsync(cancellationToken) is not true)
+        throw new InvalidOperationException(
+            "The Projects migration role does not map to exactly the expected service principal. Reconcile it manually.");
+}
 
 // Executes one command in the transaction selected by the caller.
 static async Task ExecuteAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction, string sql, CancellationToken cancellationToken)

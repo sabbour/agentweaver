@@ -21,14 +21,44 @@ export const P1_POSTGRES_TARGET = Object.freeze({
   sslMode: 'VerifyFull',
 });
 
-// Revalidate these target-specific IDs against the current deployment outputs before initialization.
 const SERVICES = [
-  ['projects-config', 'projects_config', 'df4f3934-9585-47c7-b923-d9abca981dfe'],
-  ['environment', 'environment', '3f94ddf2-a376-4d8e-8e8f-ad24e96f7417'],
-  ['knowledge', 'knowledge', '9bc761f0-f192-41c6-a2d7-bbee1b83a1f2'],
-  ['events-and-sessions', 'events_sessions', '7045d349-8e2d-40d1-a492-039540465780'],
-  ['orchestrator', 'orchestrator', 'bb6f5b78-1f0e-4e56-a93c-31d96d9e1aa7'],
+  ['projects-config', 'projects_config'],
+  ['environment', 'environment'],
+  ['knowledge', 'knowledge'],
+  ['events-and-sessions', 'events_sessions'],
+  ['orchestrator', 'orchestrator'],
 ];
+
+// Revalidate these target-specific IDs against the current deployment outputs before initialization.
+// The P1 role names are fixed product names on every target; only the Entra object IDs differ.
+const PRINCIPALS = Object.freeze({
+  agentweaver: [
+    'df4f3934-9585-47c7-b923-d9abca981dfe',
+    '3f94ddf2-a376-4d8e-8e8f-ad24e96f7417',
+    '9bc761f0-f192-41c6-a2d7-bbee1b83a1f2',
+    '7045d349-8e2d-40d1-a492-039540465780',
+    'bb6f5b78-1f0e-4e56-a93c-31d96d9e1aa7',
+  ],
+  awwus2np01: [
+    '2bd657f7-a859-4bf1-815c-09f4e0d32db9',
+    '78856a22-8d8a-4cca-bcd3-ef2031fb4a48',
+    'b8a20ba6-e488-4640-b9a1-3d5d4d9c6678',
+    '7004c77e-5fa0-454c-a217-9d6f0fde2ce3',
+    '98a5cdfb-0b79-4fb3-b21c-4df561d43282',
+  ],
+});
+
+/** Returns the P1 PostgreSQL target for a registered install target name. */
+export function p1PostgresTarget(name = 'agentweaver') {
+  if (!Object.hasOwn(PRINCIPALS, name)) throw new Error(`No P1 PostgreSQL plan is registered for target '${name}'.`);
+  if (name === 'agentweaver') return P1_POSTGRES_TARGET;
+  return Object.freeze({
+    ...P1_POSTGRES_TARGET,
+    resourceGroup: name,
+    clusterName: `${name}-aks`,
+    postgresHost: `${name}-pg.postgres.database.azure.com`,
+  });
+}
 
 const GROUPS = {
   projects_config: {
@@ -256,12 +286,13 @@ const OWNER_ONLY_OBJECTS = {
 };
 
 /** Builds the complete ordered role, schema, table, and sequence grant description. */
-export function buildP1PostgresPlan() {
-  const services = SERVICES.map(([service, schema, principalObjectId]) => ({
+export function buildP1PostgresPlan(targetName = 'agentweaver') {
+  const target = p1PostgresTarget(targetName);
+  const services = SERVICES.map(([service, schema], index) => ({
     service,
     schema,
     role: `agentweaver-id-${service}`,
-    principalObjectId,
+    principalObjectId: PRINCIPALS[targetName][index],
     ownerOnlyTables: OWNER_ONLY_OBJECTS[schema]?.tables ?? [],
     ownerOnlySequences: OWNER_ONLY_OBJECTS[schema]?.sequences ?? [],
     tables: Object.entries(GROUPS[schema]).flatMap(([privileges, names]) =>
@@ -299,7 +330,7 @@ export function buildP1PostgresPlan() {
   }));
   return {
     formatVersion: 1,
-    target: { ...P1_POSTGRES_TARGET },
+    target: { ...target },
     services,
     // 022 adds completed_at; 023 adds interactive requests and cancellation with the exact grants above.
     // 024 adds private Chief of Staff conversations and Priorities; 025 adds caller dismissal receipts;
@@ -336,5 +367,6 @@ export function p1PostgresPlanHash(plan = buildP1PostgresPlan()) {
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   if (process.argv.length !== 3 || process.argv[2] !== '--json')
     throw new Error('The P1 PostgreSQL plan requires --json and never connects to a database.');
-  process.stdout.write(JSON.stringify(buildP1PostgresPlan()));
+  // The P1 initializer runs this CLI; the installer selects a registered target through this variable.
+  process.stdout.write(JSON.stringify(buildP1PostgresPlan(process.env.AGENTWEAVER_INSTALL_TARGET || 'agentweaver')));
 }

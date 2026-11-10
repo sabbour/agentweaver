@@ -14,6 +14,8 @@ import { bootstrapIdentityPostgres } from './identity-postgres-bootstrap.mjs';
 import { parseKustomizeResources } from '../../release/kustomize-runtime.mjs';
 import { componentImageRepository } from '../../release/image-names.mjs';
 import { readServiceImageRevision } from '../../release/registry.mjs';
+import { applyTargetValues, targetValuePairs } from '../../release/target-values.mjs';
+import { installTarget } from './targets.mjs';
 
 /** The only environment this runner can touch. Every value is checked against the live account. */
 export const DB_MAINTENANCE_TARGET = Object.freeze({
@@ -25,6 +27,17 @@ export const DB_MAINTENANCE_TARGET = Object.freeze({
   postgresHost: 'agentweaver-pg.postgres.database.azure.com',
   registry: 'ghcr.io/sabbour',
 });
+
+/**
+ * Returns the maintenance target for a registered install target. A separate target uses its own
+ * cluster and PostgreSQL server; the subscription, tenant, namespace, and registry stay the same.
+ */
+export function dbMaintenanceTarget(name = 'agentweaver') {
+  if (!installTarget(name)) throw new Error(`'${name}' is not a registered install target.`);
+  if (name === 'agentweaver') return DB_MAINTENANCE_TARGET;
+  return Object.freeze({ ...DB_MAINTENANCE_TARGET, resourceGroup: name, clusterName: `${name}-aks`,
+    postgresHost: `${name}-pg.postgres.database.azure.com` });
+}
 /** The reviewed plan binds Environment, Events, Core, and Projects & Config runtime grants. */
 export const REVIEWED_PLAN_SHA256 = '78598665bcf0d8b06f51482483d9803d9ef9a85b6a04efbbf791495e943ca282';
 export const LOCK_NAME = 'p1-db-maintenance-lock';
@@ -124,6 +137,8 @@ Without --execute the runner only checks preconditions and prints what it would 
   --prepare-only                Stop after the identity, ServiceAccount, egress, and handover. No
                                 digests, probes, or migration Jobs. The setup command uses it.
   --release-lock <runId>        Remove a lock left by a crashed run with that exact run ID, then exit.
+  --resource-group <name>       Registered install target. Default agentweaver. Another target
+                                supports only --prepare-only and --release-lock.
   --receipt-dir <path>          Receipt directory. Default ~/.agentweaver/db-maintenance (outside the checkout).
   --job-timeout-seconds <n>     Per-Job wait. Default 900.
 `;
@@ -132,13 +147,14 @@ Without --execute the runner only checks preconditions and prints what it would 
 export function parseDbMaintenanceArgs(argv) {
   const options = { execute: false, handover: 'auto', reconcileBrokerEgress: false, deployApps: false,
     migrationsOnly: false, appsOnly: false, prepareOnly: false,
-    receiptDir: join(homedir(), '.agentweaver', 'db-maintenance'), jobTimeoutSeconds: 900, readinessTimeoutSeconds: 600, help: false };
+    receiptDir: join(homedir(), '.agentweaver', 'db-maintenance'), jobTimeoutSeconds: 900, readinessTimeoutSeconds: 600,
+    resourceGroup: 'agentweaver', help: false };
   const valued = new Map([
     ['--environment-digest', 'environmentDigest'], ['--orchestrator-digest', 'orchestratorDigest'],
     ['--events-digest', 'eventsDigest'],
     ['--broker-digest', 'brokerDigest'], ['--handover', 'handover'], ['--postgres-admin', 'postgresAdmin'],
     ['--release-lock', 'releaseLock'], ['--receipt-dir', 'receiptDir'], ['--job-timeout-seconds', 'jobTimeoutSeconds'],
-    ['--readiness-timeout-seconds', 'readinessTimeoutSeconds'],
+    ['--readiness-timeout-seconds', 'readinessTimeoutSeconds'], ['--resource-group', 'resourceGroup'],
   ]);
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -167,6 +183,10 @@ export function parseDbMaintenanceArgs(argv) {
     throw new Error('--readiness-timeout-seconds must be an integer from 60 to 3600.');
   if (!['auto', 'always', 'skip'].includes(options.handover))
     throw new Error('--handover must be auto, always, or skip.');
+  if (!installTarget(options.resourceGroup)) throw new Error(`--resource-group '${options.resourceGroup}' is not a registered install target.`);
+  // A separate target gets its migrations from the release deploy path, so it only prepares.
+  if (options.resourceGroup !== 'agentweaver' && !options.prepareOnly && options.releaseLock === undefined)
+    throw new Error('--resource-group other than agentweaver supports only --prepare-only and --release-lock.');
   if (options.releaseLock !== undefined) {
     // Lock release is its own mode so it can never be mixed with a write run.
     if (!/^[0-9a-f]{12}$/.test(options.releaseLock)) throw new Error('--release-lock needs the 12-character run ID from the lock.');
@@ -441,21 +461,22 @@ export function connectivityProbeJob({ name, workload, runId, host, namespace })
  * stops the run, because guessing would let a CI run try a deployment it has no rights for.
  */
 export function readMigrationIdentity(exec, target) {
+  const identityName = migrationIdentityName(target);
   const shown = exec('az', ['identity', 'show', '--resource-group', target.resourceGroup,
-    '--name', MIGRATION_IDENTITY, '-o', 'json']);
+    '--name', identityName, '-o', 'json']);
   if (shown.status !== 0) {
     if (/not ?found|could not be found/i.test(shown.stderr ?? '')) return { exists: false, ready: false };
-    throw new Error(`Could not read ${MIGRATION_IDENTITY}: ${redact((shown.stderr ?? '').trim())}`);
+    throw new Error(`Could not read ${identityName}: ${redact((shown.stderr ?? '').trim())}`);
   }
   const identity = JSON.parse(shown.stdout);
   if (!GUID.test(identity.clientId ?? '') || !GUID.test(identity.principalId ?? ''))
-    throw new Error(`${MIGRATION_IDENTITY} has no client or principal ID.`);
+    throw new Error(`${identityName} has no client or principal ID.`);
   const issuer = exec('az', ['aks', 'show', '--resource-group', target.resourceGroup, '--name', target.clusterName,
     '--query', 'oidcIssuerProfile.issuerUrl', '-o', 'tsv']);
   if (issuer.status !== 0 || !issuer.stdout.trim()) throw new Error('Could not read the AKS OIDC issuer.');
   const credentials = exec('az', ['identity', 'federated-credential', 'list', '--resource-group', target.resourceGroup,
-    '--identity-name', MIGRATION_IDENTITY, '-o', 'json']);
-  if (credentials.status !== 0) throw new Error(`Could not read the federated credentials of ${MIGRATION_IDENTITY}.`);
+    '--identity-name', identityName, '-o', 'json']);
+  if (credentials.status !== 0) throw new Error(`Could not read the federated credentials of ${identityName}.`);
   // The issuer is compared without a trailing slash, since Azure may store it either way.
   const trim = value => (value ?? '').replace(/\/+$/, '');
   const subject = `system:serviceaccount:${target.namespace}:p1-postgres-migration`;
@@ -465,10 +486,15 @@ export function readMigrationIdentity(exec, target) {
   return { exists: true, ready: federated, clientId: identity.clientId, principalObjectId: identity.principalId };
 }
 
-function render(exec, repoRoot, directory) {
+/** The Azure identity name of the P1 migration identity. Its PostgreSQL role name stays fixed. */
+function migrationIdentityName(target) {
+  return `${target.resourceGroup}-id-p1-postgres-migration`;
+}
+
+function render(exec, repoRoot, directory, pairs = []) {
   const result = exec('kubectl', ['kustomize', directory], { cwd: repoRoot });
   if (result.status !== 0) throw new Error(`Could not render ${directory}: ${result.stderr || result.stdout}`);
-  return parseKustomizeResources(result.stdout).items;
+  return parseKustomizeResources(applyTargetValues(result.stdout, pairs)).items;
 }
 
 /**
@@ -517,7 +543,8 @@ export async function runDbMaintenance(options, overrides = {}) {
   // Tests replace it, or only the registry read, to stay offline.
   deps.imageSchemaRange ??= (image, component) => readImageSchemaRange({ image, component,
     readImage: deps.readImage ?? (reference => readServiceImageRevision(reference)), exec, repoRoot });
-  const target = DB_MAINTENANCE_TARGET;
+  const target = dbMaintenanceTarget(options.resourceGroup);
+  const targetPairs = targetValuePairs(repoRoot, target.resourceGroup);
   const runId = deps.newRunId();
   const receipt = {
     runId, mode: options.releaseLock ? 'release-lock' : options.execute ? 'execute' : 'dry-run',
@@ -591,8 +618,8 @@ export async function runDbMaintenance(options, overrides = {}) {
     step('cluster-access-verified');
 
     // 5. Templates render and match the reviewed shape.
-    const p1Resources = render(exec, repoRoot, P1_DIRECTORY);
-    const brokerResources = render(exec, repoRoot, BROKER_DIRECTORY);
+    const p1Resources = render(exec, repoRoot, P1_DIRECTORY, targetPairs);
+    const brokerResources = render(exec, repoRoot, BROKER_DIRECTORY, targetPairs);
     const pick = (resources, kind, name) => {
       const found = resources.find(item => item.kind === kind && item.metadata?.name === name);
       if (!found) throw new Error(`Rendered manifests are missing ${kind} ${name}.`);
@@ -861,7 +888,7 @@ export async function runDbMaintenance(options, overrides = {}) {
     // federated credential needs time before AKS tokens are accepted.
     let deployment;
     if (identityState.ready) {
-      deployment = { name: MIGRATION_IDENTITY, clientId: identityState.clientId,
+      deployment = { name: migrationIdentityName(target), clientId: identityState.clientId,
         principalObjectId: identityState.principalObjectId, serviceAccount: 'p1-postgres-migration' };
     } else {
       const tags = JSON.parse(must(exec('az', ['group', 'show', '--name', target.resourceGroup,
@@ -869,10 +896,11 @@ export async function runDbMaintenance(options, overrides = {}) {
       deployment = JSON.parse(must(exec('az', ['deployment', 'group', 'create',
         '--resource-group', target.resourceGroup, '--name', 'p1-postgres-migration-identity',
         '--template-file', IDENTITY_TEMPLATE, '--parameters', `tags=${JSON.stringify(tags)}`, `sourceSha=${head}`,
+        ...(target.resourceGroup === 'agentweaver' ? [] : [`namePrefix=${target.resourceGroup}`]),
         '--query', 'properties.outputs.migrationIdentity.value', '-o', 'json'], { cwd: repoRoot, timeout: 600_000 }),
       'Migration identity deployment failed').stdout);
     }
-    if (deployment.name !== MIGRATION_IDENTITY || !GUID.test(deployment.clientId ?? '') ||
+    if (deployment.name !== migrationIdentityName(target) || !GUID.test(deployment.clientId ?? '') ||
         !GUID.test(deployment.principalObjectId ?? '') || deployment.serviceAccount !== 'p1-postgres-migration')
       throw new Error('The migration identity deployment returned an unexpected identity.');
     receipt.migrationIdentity = { clientId: deployment.clientId, principalObjectId: deployment.principalObjectId };
@@ -909,8 +937,8 @@ export async function runDbMaintenance(options, overrides = {}) {
         repoRoot, resourceGroup: target.resourceGroup, subscriptionId: target.subscriptionId,
         tenantId: target.tenantId, clusterName: target.clusterName, postgresHost: target.postgresHost,
         adminUsername: options.postgresAdmin ?? account.user?.name,
-        runtimePrincipalObjectId: principal('agentweaver-id-identity-broker'),
-        migrationPrincipalObjectId: principal('agentweaver-id-identity-broker-migration'),
+        runtimePrincipalObjectId: principal(`${target.resourceGroup}-id-identity-broker`),
+        migrationPrincipalObjectId: principal(`${target.resourceGroup}-id-identity-broker-migration`),
         verifyOnly: true,
         p1OwnershipHandover: { migrationPrincipalObjectId: deployment.principalObjectId },
       });

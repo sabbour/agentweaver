@@ -174,12 +174,39 @@ the parameter file of another target.
 In the manual `az aks` commands in step 4, replace `agentweaver` with the
 target name and `agentweaver-aks` with `<target>-aks`.
 
+These later steps also accept `--resource-group <target>`:
+
+- `npm run db:maintenance:setup -- --resource-group <target> --execute`
+  creates the Projects Config migration identity and its Kubernetes service
+  account. For a separate target, it does not create the GitHub workflow
+  identity, credentials, or role assignments.
+- `node scripts\azure\bootstrap-p1-postgres.mjs --resource-group <target>`
+  initializes the P1 PostgreSQL databases. For a separate target, only the
+  first initialization is supported.
+- `npm run db:maintenance -- --resource-group <target> --prepare-only` and
+  `--release-lock`. A separate target runs its migrations through service
+  deployment.
+- `npm run db:maintenance:projects-config -- --resource-group <target>`.
+- `npm run azure:deploy-from-commit -- <sha> --resource-group <target>`.
+
+Service deployment uses `deploy/k8s/targets/<target>.json`. This file lists
+the exact text replacements (host names, client IDs, and the first
+PlatformAdmin subject) that the deployment applies to the rendered
+`agentweaver` manifests. Do not edit the `agentweaver` runtime configuration
+files for another target. The deployment also reads the API server of the
+selected Kubernetes context. It stops if the server is not the `aksApiServer`
+of the target in the registry. For the `agentweaver` target, it stops if the
+server belongs to another registered target.
+
+The P1 PostgreSQL role names are the same on every target, for example
+`agentweaver-id-projects-config`. The Azure managed identity names start with
+the target name, for example `<target>-id-projects-config`.
+
 These steps still accept only `agentweaver`: the Foundation Probe options,
 `--align-existing-identity-broker-hostname`, Identity Broker provider setup,
-P1 PostgreSQL initialization, database maintenance, and service deployment.
+P1 PostgreSQL continuation or repair, and database maintenance migrations.
 `deploy.mjs` rejects the Foundation Probe and hostname alignment options for
-another target before any Azure call. A later change adds target selection to
-these steps.
+another target before any Azure call.
 
 Both templates create or update the `kata` node pool for sandbox pods (AKS Pod
 Sandboxing, Azure Linux, SSH disabled, 1-2 nodes of `kataVmSize`, default

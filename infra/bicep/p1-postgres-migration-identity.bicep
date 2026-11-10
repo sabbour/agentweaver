@@ -7,6 +7,7 @@ targetScope = 'resourceGroup'
 @description('The existing approved 1.x resource group naming prefix.')
 @allowed([
   'agentweaver'
+  'awwus2np01'
 ])
 param namePrefix string = 'agentweaver'
 

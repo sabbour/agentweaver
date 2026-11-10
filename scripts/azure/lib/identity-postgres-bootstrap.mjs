@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { run, runAz, redact } from './exec.mjs';
 import { assertP0KubernetesPermissions } from './namespace-bootstrap.mjs';
-import { p1PostgresPlanHash } from './p1-postgres-plan.mjs';
+import { buildP1PostgresPlan, p1PostgresPlanHash } from './p1-postgres-plan.mjs';
 
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const NAMESPACE = 'agentweaver';
@@ -309,7 +309,7 @@ export async function bootstrapIdentityPostgres({
         (needsCoreMerge ? !/^[0-9a-f]{40}$/.test(p1Initializer.coreMergeSha ?? '')
           : p1Initializer.coreMergeSha !== undefined) ||
         !/^[0-9a-f]{64}$/.test(p1Initializer.planSha256 ?? '') ||
-        p1Initializer.planSha256 !== p1PostgresPlanHash() ||
+        p1Initializer.planSha256 !== p1PostgresPlanHash(buildP1PostgresPlan(p1Initializer.installTarget ?? 'agentweaver')) ||
         (pendingMode
           ? !isApprovedMaximum(p1Initializer.maxCoreVersion) || !isApprovedMaximum(p1Initializer.maxEventsVersion)
           : p1Initializer.maxCoreVersion !== undefined || p1Initializer.maxEventsVersion !== undefined) ||
@@ -318,6 +318,12 @@ export async function bootstrapIdentityPostgres({
             receiptRelativePath.startsWith(`..${sep}`) || isAbsolute(receiptRelativePath) || existsSync(receiptPath)
           : p1Initializer.receiptPath !== undefined)) {
       throw new Error('Combined PostgreSQL initialization requires exact lowercase source hashes, explicit maximum versions for continuation, and a new receipt under the source Temp directory only for writing modes.');
+    }
+    // A separate target names itself and the projects-config migration principal; it supports only fresh initialization.
+    if (p1Initializer.installTarget !== undefined &&
+        (p1Initializer.installTarget !== resourceGroup || resourceGroup === 'agentweaver' || p1Mode !== 'initialize' ||
+         !GUID_PATTERN.test(p1Initializer.projectsConfigMigrationPrincipalObjectId ?? ''))) {
+      throw new Error('A separate-target P1 initializer requires its own resource group, fresh initialization, and the projects-config migration principal.');
     }
   }
 
@@ -511,7 +517,8 @@ export async function bootstrapIdentityPostgres({
           ...process.env,
           P1Handover__PostgresHost: postgresHost,
           P1Handover__AdminUsername: adminUsername,
-          P1Handover__MigrationRole: `${resourceGroup}-id-p1-postgres-migration`,
+          // The P1 migration role is a fixed product role name on every target.
+          P1Handover__MigrationRole: 'agentweaver-id-p1-postgres-migration',
           P1Handover__MigrationPrincipalObjectId: p1OwnershipHandover.migrationPrincipalObjectId,
           P1Handover__LocalPort: String(LOCAL_PORT),
         },
@@ -529,7 +536,18 @@ export async function bootstrapIdentityPostgres({
       const p1Result = execDotnet([
         'run', '--project', join(repoRoot, 'tools', 'P1PostgresInitializer', 'P1PostgresInitializer.csproj'),
         '--no-launch-profile', '--', ...p1InitializerArguments(p1Mode, p1Initializer),
-      ], { check: false, cwd: repoRoot, timeout: 600_000 });
+      ], {
+        check: false,
+        cwd: repoRoot,
+        timeout: 600_000,
+        ...(p1Initializer.installTarget === undefined ? {} : {
+          env: {
+            ...process.env,
+            AGENTWEAVER_INSTALL_TARGET: p1Initializer.installTarget,
+            P1Initializer__ProjectsConfigMigrationPrincipalObjectId: p1Initializer.projectsConfigMigrationPrincipalObjectId,
+          },
+        }),
+      });
       const p1Output = [p1Result.stderr, p1Result.stdout].filter(Boolean).join('\n').trim();
       const p1Marker = P1_MARKERS[p1Mode];
       // Success needs both a zero exit code and this mode's marker. Error output is redacted before it is shown.

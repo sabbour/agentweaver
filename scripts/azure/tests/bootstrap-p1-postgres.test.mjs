@@ -194,3 +194,44 @@ test('P1 PostgreSQL modes reject missing maxima, stray maxima, and inspection me
   assert.throws(() => p1PostgresMode({ inspect: true, 'apply-pending-migrations': true }), /only one of/);
   assert.throws(() => p1PostgresMode({ inspect: true, 'dry-run': true }), /does not apply to --inspect/);
 });
+/** A separate target initializes only, with its own plan and its Projects migration principal. */
+test('P1 PostgreSQL for a separate target passes its plan and Projects migration principal', async () => {
+  const fail = { sourceResolver() { assert.fail('Invalid input must fail first.'); } };
+  await assert.rejects(bootstrapP1Postgres({ repoRoot, resourceGroup: 'unknown', coreMergeSha }, fail),
+    /not a registered install target/);
+  await assert.rejects(bootstrapP1Postgres({ repoRoot, resourceGroup: 'awwus2np01', execute: true, mode: 'inspect' }, fail),
+    /only fresh initialization/);
+
+  const principal = 'e'.repeat(8) + '-eeee-4eee-8eee-' + 'e'.repeat(12);
+  const run = async identityOutput => {
+    let input;
+    const result = await bootstrapP1Postgres({ repoRoot, resourceGroup: 'awwus2np01', coreMergeSha, execute: true }, {
+      sourceResolver(config) {
+        assert.equal(config.resourceGroup, 'awwus2np01');
+        assert.match(config.parametersFile, /awwus2np01-aks-redeploy\.approved\.json$/);
+        return source;
+      },
+      targetGuard() {
+        return {
+          group: { tags: { 'agentweaver:owner': source.owner, 'agentweaver:cost-center': source.costCenter } },
+          execAz(args) {
+            assert.deepEqual(args.slice(0, 6), ['identity', 'show', '--resource-group', 'awwus2np01',
+              '--name', 'awwus2np01-id-projects-config-migration']);
+            return { status: identityOutput ? 0 : 3, stdout: identityOutput, stderr: '' };
+          },
+        };
+      },
+      readPostgresValues: () => metadata(),
+      async initializePostgres(value) { input = value; return { database: 'agentweaver' }; },
+    });
+    return { result, input };
+  };
+  const { result, input } = await run(`${principal}\n`);
+  assert.equal(result.postgresHost, 'awwus2np01-pg.postgres.database.azure.com');
+  assert.equal(result.planSha256, p1PostgresPlanHash(buildP1PostgresPlan('awwus2np01')));
+  assert.equal(input.clusterName, 'awwus2np01-aks');
+  assert.equal(input.verifyOnly, false);
+  assert.equal(input.p1Initializer.installTarget, 'awwus2np01');
+  assert.equal(input.p1Initializer.projectsConfigMigrationPrincipalObjectId, principal);
+  await assert.rejects(run(''), /db:maintenance:setup first/);
+});

@@ -14,7 +14,8 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { run, redact } from './exec.mjs';
-import { DB_MAINTENANCE_TARGET, runDbMaintenance } from './db-maintenance.mjs';
+import { DB_MAINTENANCE_TARGET, dbMaintenanceTarget, runDbMaintenance } from './db-maintenance.mjs';
+import { installTarget } from './targets.mjs';
 
 /** Names that the workflow, the Bicep template, and this setup must agree on. */
 export const SETUP_TARGET = Object.freeze({
@@ -38,17 +39,20 @@ const ROLES = [
 ];
 const GUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
-export const SETUP_USAGE = `Usage: npm run db:maintenance:setup -- [--execute] [--v1-deploy-only] [--receipt-dir <path>]
+export const SETUP_USAGE = `Usage: npm run db:maintenance:setup -- [--execute] [--v1-deploy-only] [--resource-group <name>] [--receipt-dir <path>]
 
 Without --execute the command only checks the setup and lists what is missing; it exits 1 if
 anything is missing. With --execute it creates only the missing parts and checks them again.
 Run it signed in to Azure as the PostgreSQL Entra administrator and to GitHub as a repository admin.
 Use --v1-deploy-only to configure the shared v1 database-maintenance workflow identity and namespace permissions without running P1 maintenance setup.
+Use --resource-group <name> for a registered separate target. It creates only the Projects & Config migration
+identity and its ServiceAccount. It does not create the GitHub workflow identity or run P1 maintenance setup.
 `;
 
 /** Parses flags. Unknown flags stop the command before anything runs. */
 export function parseSetupArgs(argv) {
-  const options = { execute: false, v1DeployOnly: false, help: false, receiptDir: join(homedir(), '.agentweaver', 'db-maintenance') };
+  const options = { execute: false, v1DeployOnly: false, help: false, resourceGroup: 'agentweaver',
+    receiptDir: join(homedir(), '.agentweaver', 'db-maintenance') };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === '--execute') options.execute = true;
@@ -58,8 +62,15 @@ export function parseSetupArgs(argv) {
       const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : argv[++index];
       if (!value || value.startsWith('--')) throw new Error('--receipt-dir requires a value.');
       options.receiptDir = value;
+    } else if (arg === '--resource-group' || arg.startsWith('--resource-group=')) {
+      const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : argv[++index];
+      if (!value || value.startsWith('--')) throw new Error('--resource-group requires a value.');
+      options.resourceGroup = value;
     } else throw new Error(`Unknown argument "${arg}".`);
   }
+  if (!installTarget(options.resourceGroup)) throw new Error(`--resource-group '${options.resourceGroup}' is not a registered install target.`);
+  if (options.resourceGroup !== 'agentweaver' && options.v1DeployOnly)
+    throw new Error('--v1-deploy-only applies only to the agentweaver target.');
   return options;
 }
 
@@ -313,6 +324,72 @@ export function readSetupState(exec) {
   return { ...state, gaps, azureGaps, kubernetesGaps, githubGaps };
 }
 
+/**
+ * A separate target has no GitHub maintenance workflow. Its migrations run from the release deploy
+ * path, so setup creates only the Projects & Config migration identity and its ServiceAccount.
+ */
+async function setupSeparateTarget(options, deps, repoRoot, receipt, step, must) {
+  const { exec } = deps;
+  const target = dbMaintenanceTarget(options.resourceGroup);
+  const identityName = `${target.resourceGroup}-id-projects-config-migration`;
+  const account = JSON.parse(must(exec('az', ['account', 'show', '-o', 'json']), 'Azure account lookup').stdout);
+  if (account.id !== target.subscriptionId || account.tenantId !== target.tenantId)
+    throw new Error('The signed-in Azure account is not on the approved subscription and tenant.');
+  if (account.user?.type !== 'user') throw new Error('Run the setup with the Azure CLI signed in as a user, not a service principal.');
+  receipt.operator = account.user.name;
+  receipt.target = target.resourceGroup;
+  step('account-verified');
+  const readState = () => {
+    const shown = exec('az', ['identity', 'show', '--resource-group', target.resourceGroup, '--name', identityName, '-o', 'json']);
+    const identity = shown.status === 0 ? JSON.parse(shown.stdout) : undefined;
+    if (!identity && !/not ?found|could not be found/i.test(`${shown.stderr}${shown.stdout}`))
+      throw new Error(`Could not read ${identityName}: ${redact((shown.stderr || '').trim())}`);
+    const annotation = identity && withSetupKubectl(exec, target, kubectl => {
+      const result = kubectl(['get', 'serviceaccount', SETUP_TARGET.projectsConfigMigrationServiceAccount,
+        '--namespace', target.namespace, '-o', 'json']);
+      return result.status === 0 ? JSON.parse(result.stdout).metadata?.annotations?.['azure.workload.identity/client-id'] : undefined;
+    });
+    const gaps = [
+      ...(identity ? [] : [`Azure identity ${identityName} does not exist.`]),
+      ...(identity && annotation !== identity.clientId
+        ? [`ServiceAccount "${SETUP_TARGET.projectsConfigMigrationServiceAccount}" does not name ${identityName}.`] : []),
+    ];
+    return { identity, gaps };
+  };
+  let state = readState();
+  if (!options.execute) {
+    receipt.gaps = state.gaps;
+    for (const gap of state.gaps) deps.log(`missing: ${gap}`);
+    receipt.result = state.gaps.length ? 'setup-needed' : 'verified';
+    if (state.gaps.length) throw new Error(`Setup is incomplete (${state.gaps.length} gaps). Run with --execute.`);
+    return;
+  }
+  const head = must(exec('git', ['rev-parse', 'HEAD'], { cwd: repoRoot }), 'Could not read HEAD').stdout.trim();
+  const tags = JSON.parse(must(exec('az', ['group', 'show', '--name', target.resourceGroup, '--query', 'tags', '-o', 'json']),
+    'Could not read resource group tags').stdout || '{}') ?? {};
+  const outputs = JSON.parse(must(exec('az', ['deployment', 'group', 'create', '--resource-group', target.resourceGroup,
+    '--name', SETUP_TARGET.deploymentName, '--template-file', SETUP_TARGET.template,
+    '--parameters', `tags=${JSON.stringify(tags)}`, `sourceSha=${head}`, `namePrefix=${target.resourceGroup}`,
+    'githubWorkflow=false', '--query', 'properties.outputs', '-o', 'json'], { cwd: repoRoot, timeout: 600_000 }),
+  'Projects & Config migration identity deployment failed').stdout);
+  const deployed = outputs.projectsConfigMigrationIdentity?.value;
+  if (deployed?.name !== identityName || !GUID.test(deployed?.clientId ?? '') || !GUID.test(deployed?.principalObjectId ?? ''))
+    throw new Error('The Projects & Config migration identity deployment returned an unexpected identity.');
+  step('projects-config-migration-identity-deployed', { clientId: deployed.clientId });
+  const serviceAccount = workflowAuthorizationResources(deployed.principalObjectId, deployed.clientId)
+    .find(resource => resource.kind === 'ServiceAccount');
+  withSetupKubectl(exec, target, kubectl => must(kubectl(['apply', '--server-side', '--field-manager',
+    'agentweaver-db-maintenance-setup', '-f', '-'], { input: JSON.stringify(serviceAccount) }),
+  'Could not apply the Projects & Config migration ServiceAccount'));
+  step('projects-config-migration-serviceaccount-applied');
+  state = readState();
+  receipt.gaps = state.gaps;
+  if (state.gaps.length) throw new Error(`Setup did not converge: ${state.gaps.join(' ')}`);
+  receipt.projectsConfigMigrationIdentity = { clientId: state.identity.clientId, principalObjectId: state.identity.principalId };
+  step('setup-verified');
+  receipt.result = 'succeeded';
+}
+
 function defaultDependencies() {
   return {
     exec: (command, args, options = {}) => run(command, args, { check: false, timeout: 120_000, ...options }),
@@ -344,6 +421,10 @@ export async function runDbMaintenanceSetup(options, overrides = {}) {
   };
   let primaryError;
   try {
+    if (options.resourceGroup && options.resourceGroup !== 'agentweaver') {
+      await setupSeparateTarget(options, deps, repoRoot, receipt, step, must);
+      return receipt;
+    }
     // 1. Accounts. Setup runs under the PostgreSQL Entra administrator's Azure CLI sign-in,
     // which is a user account. The workflow identity is not that administrator and holds no
     // role-assignment rights, so a service principal sign-in fails here before any change.

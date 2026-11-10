@@ -84,6 +84,7 @@ function setup({
       registry: options.registry,
       modelBindings: options.modelBindings,
       removeModelBindings: options.removeModelBindings,
+      resourceGroup: options.resourceGroup,
       images: JSON.parse(readFileSync(options.imageManifest, 'utf8')).images,
     };
   };
@@ -94,7 +95,7 @@ function setup({
 }
 
 function runDeploy(fixture, registry = 'ghcr.io/sabbour', registryAwareHelper = true,
-  modelOptions = {}, modelAwareHelper = true) {
+  modelOptions = {}, modelAwareHelper = true, targetAwareHelper = true) {
   return deployFromCommit({ sourceSha, registry, ...modelOptions }, {
     root,
     worktreePath: fixture.worktreePath,
@@ -104,6 +105,7 @@ function runDeploy(fixture, registry = 'ghcr.io/sabbour', registryAwareHelper = 
     deployModule: {
       DEPLOY_KUSTOMIZE_REGISTRY_OPTION: registryAwareHelper,
       DEPLOY_KUSTOMIZE_MODEL_BINDINGS_OPTION: modelAwareHelper,
+      DEPLOY_KUSTOMIZE_TARGET_OPTION: targetAwareHelper,
     },
   });
 }
@@ -150,6 +152,35 @@ test('passes an absolute model bindings file and named removals to the exact-sou
     await runDeploy(fixture, undefined, true, { modelBindings: bindings, removeModelBindings: ['old'] });
     assert.equal(fixture.deployment.modelBindings, bindings);
     assert.deepEqual(fixture.deployment.removeModelBindings, ['old']);
+  } finally {
+    rmSync(fixture.testRoot, { recursive: true, force: true });
+  }
+});
+
+test('passes a registered separate target and rejects it for an older Kustomize helper', async () => {
+  assert.deepEqual(parseDeployFromCommitArgs([sourceSha, '--resource-group', 'awwus2np01', '--execute']),
+    { sourceSha, resourceGroup: 'awwus2np01' });
+  assert.deepEqual(parseDeployFromCommitArgs([sourceSha, '--resource-group', 'agentweaver', '--execute']),
+    { sourceSha });
+  for (const args of [
+    [sourceSha, '--resource-group', 'unknown', '--execute'],
+    [sourceSha, '--resource-group', '--execute'],
+    [sourceSha, '--resource-group', 'awwus2np01', '--resource-group', 'awwus2np01', '--execute'],
+  ]) {
+    assert.throws(() => parseDeployFromCommitArgs(args), /Usage:/);
+  }
+  const fixture = setup();
+  try {
+    await runDeploy(fixture, undefined, true, { resourceGroup: 'awwus2np01' });
+    assert.equal(fixture.deployment.resourceGroup, 'awwus2np01');
+    const older = setup();
+    try {
+      await assert.rejects(runDeploy(older, undefined, true, { resourceGroup: 'awwus2np01' }, true, false),
+        /predates install target selection/);
+      assert.equal(older.deployment, undefined);
+    } finally {
+      rmSync(older.testRoot, { recursive: true, force: true });
+    }
   } finally {
     rmSync(fixture.testRoot, { recursive: true, force: true });
   }

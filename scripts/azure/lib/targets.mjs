@@ -10,6 +10,8 @@ export const INSTALL_TARGETS = Object.freeze({
   awwus2np01: Object.freeze({
     foundationParameters: 'infra/bicep/parameters/awwus2np01.approved.json',
     aksParameters: 'infra/bicep/parameters/awwus2np01-aks-redeploy.approved.json',
+    aksApiServer: 'https://awwus2np01-aks-88n4s6n7.hcp.westus2.azmk8s.io:443',
+    k8sValues: 'deploy/k8s/targets/awwus2np01.json',
   }),
 });
 

@@ -8,6 +8,7 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { runAz } from './lib/exec.mjs';
+import { installTarget } from './lib/targets.mjs';
 import { resolveSource } from './lib/git.mjs';
 import {
   guardAzureTarget,
@@ -15,8 +16,8 @@ import {
 } from './lib/guardrails.mjs';
 import {
   buildP1PostgresPlan,
-  P1_POSTGRES_TARGET,
   p1PostgresPlanHash,
+  p1PostgresTarget,
 } from './lib/p1-postgres-plan.mjs';
 import { bootstrapIdentityPostgres } from './lib/identity-postgres-bootstrap.mjs';
 
@@ -60,6 +61,7 @@ function parseVersion(value) {
  */
 export async function bootstrapP1Postgres({
   repoRoot = process.cwd(),
+  resourceGroup = 'agentweaver',
   coreMergeSha,
   execute = false,
   mode = 'initialize',
@@ -90,16 +92,22 @@ export async function bootstrapP1Postgres({
     throw new Error('Only pending-migration continuation takes, and requires, explicit maximum Core and Events versions.');
   }
 
-  const target = P1_POSTGRES_TARGET;
+  const registered = installTarget(resourceGroup);
+  if (!registered) throw new Error(`Resource group '${resourceGroup}' is not a registered install target.`);
+  // Continuation reads the plan of an earlier source, which knows only the default target.
+  if (resourceGroup !== 'agentweaver' && mode !== 'initialize') {
+    throw new Error('For a separate target, P1 PostgreSQL supports only fresh initialization.');
+  }
+  const target = p1PostgresTarget(resourceGroup);
   const source = sourceResolver({
     repoRoot,
     resourceGroup: target.resourceGroup,
     subscriptionId: target.subscriptionId,
     tenantId: target.tenantId,
     template: join(repoRoot, 'infra', 'bicep', 'aks-redeploy.bicep'),
-    parametersFile: join(repoRoot, 'infra', 'bicep', 'parameters', 'p0-aks-redeploy.approved.json'),
+    parametersFile: join(repoRoot, ...registered.aksParameters.split('/')),
   });
-  const plan = buildP1PostgresPlan();
+  const plan = buildP1PostgresPlan(resourceGroup);
   const planSha256 = p1PostgresPlanHash(plan);
   const summary = {
     resourceGroup: target.resourceGroup,
@@ -134,6 +142,16 @@ export async function bootstrapP1Postgres({
   }
 
   const postgresValues = readPostgresValues(config, boundAz);
+  // The default target already has this PostgreSQL role. A fresh separate target gets it from the initializer.
+  let projectsConfigMigrationPrincipalObjectId;
+  if (resourceGroup !== 'agentweaver') {
+    projectsConfigMigrationPrincipalObjectId = boundAz(['identity', 'show', '--resource-group', resourceGroup,
+      '--name', `${resourceGroup}-id-projects-config-migration`, '--query', 'principalId', '-o', 'tsv'], { check: false })
+      .stdout?.trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectsConfigMigrationPrincipalObjectId ?? '')) {
+      throw new Error(`Create ${resourceGroup}-id-projects-config-migration with db:maintenance:setup first.`);
+    }
+  }
 
   // Only modes that write to the database get a receipt file. Read-only modes leave nothing behind.
   const writesReceipt = ['initialize', 'apply-pending'].includes(mode);
@@ -155,6 +173,7 @@ export async function bootstrapP1Postgres({
       // Omit the mode for initialize so the lower layer sees the same settings it always did.
       ...(mode === 'initialize' ? {} : { mode }),
       sourceSha: source.sha,
+      ...(resourceGroup === 'agentweaver' ? {} : { installTarget: resourceGroup, projectsConfigMigrationPrincipalObjectId }),
       ...(coreMergeSha === undefined ? {} : { coreMergeSha }),
       planSha256,
       ...(receiptPath ? { receiptPath } : {}),
@@ -165,6 +184,7 @@ export async function bootstrapP1Postgres({
 }
 
 const cliOptions = {
+  'resource-group': { type: 'string', default: 'agentweaver' },
   'core-merge-sha': { type: 'string' },
   execute: { type: 'boolean', default: false },
   inspect: { type: 'boolean', default: false },
@@ -180,6 +200,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const mode = p1PostgresMode(values);
     const repoRoot = process.cwd();
     const result = await bootstrapP1Postgres({
+      resourceGroup: values['resource-group'],
       coreMergeSha: values['core-merge-sha'],
       execute: values.execute,
       mode,

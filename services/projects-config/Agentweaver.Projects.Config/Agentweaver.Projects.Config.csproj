@@ -12,7 +12,7 @@
     <InternalsVisibleTo Include="Agentweaver.Projects.Config.Tests" />
     <InternalsVisibleTo Include="Agentweaver.FoundationProbe.Tests" />
     <InternalsVisibleTo Include="Agentweaver.Identity.Broker.Tests" />
-    <InternalsVisibleTo Include="Agentweaver.P1PostgresInitializer" />
+    <InternalsVisibleTo Include="P1PostgresInitializer" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Resources\Blueprints\*.json" LogicalName="Agentweaver.Projects.Config.Resources.Blueprints.%(Filename)%(Extension)" />

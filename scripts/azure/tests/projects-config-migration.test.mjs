@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import {
@@ -662,6 +662,28 @@ test('the receipt directory must be outside the source checkout', async () => {
     await assert.rejects(runProjectsConfigMigration(options, world.overrides), /--receipt-dir must be outside/);
     assert.equal(world.calls.length, 0);
     assert.equal(world.receipts.length, 0);
+  } finally {
+    world.dispose();
+  }
+});
+
+test('a separate target uses its own cluster and rejects an unregistered target', async () => {
+  assert.throws(() => parseProjectsConfigMigrationArgs(['--image', image, '--resource-group', 'other']),
+    /registered install target/);
+  const world = createWorld();
+  try {
+    const targetsFile = path.join(world.overrides.root, 'deploy', 'k8s', 'targets', 'awwus2np01.json');
+    mkdirSync(path.dirname(targetsFile), { recursive: true });
+    writeFileSync(targetsFile, readFileSync(path.join(process.cwd(), 'deploy', 'k8s', 'targets', 'awwus2np01.json')));
+    const targets = [];
+    const receipt = await runProjectsConfigMigration({ ...world.options, resourceGroup: 'awwus2np01' }, {
+      ...world.overrides,
+      withKubeconfig: (target, action, settings) => { targets.push(target); return world.overrides.withKubeconfig(target, action, settings); },
+    });
+    assert.equal(receipt.result, 'dry-run-passed');
+    assert.deepEqual(receipt.target, { subscriptionId: DB_MAINTENANCE_TARGET.subscriptionId, resourceGroup: 'awwus2np01',
+      clusterName: 'awwus2np01-aks', namespace: DB_MAINTENANCE_TARGET.namespace });
+    assert.deepEqual(targets.map(target => [target.resourceGroup, target.clusterName]), [['awwus2np01', 'awwus2np01-aks']]);
   } finally {
     world.dispose();
   }

@@ -232,6 +232,30 @@ test('Core plan includes migration 045 and exact owner grants', () => {
   assert.ok(plan.executionRequirements.some(item => item.includes('restricted-role PostgreSQL tests prove')));
 });
 
+test('A separate target changes only its server, cluster, and principal IDs', () => {
+  const base = buildP1PostgresPlan();
+  const plan = buildP1PostgresPlan('awwus2np01');
+  assert.deepEqual(plan.services.map(item => item.role), base.services.map(item => item.role));
+  assert.deepEqual(plan.services.map(item => item.principalObjectId), [
+    '2bd657f7-a859-4bf1-815c-09f4e0d32db9',
+    '78856a22-8d8a-4cca-bcd3-ef2031fb4a48',
+    'b8a20ba6-e488-4640-b9a1-3d5d4d9c6678',
+    '7004c77e-5fa0-454c-a217-9d6f0fde2ce3',
+    '98a5cdfb-0b79-4fb3-b21c-4df561d43282',
+  ]);
+  assert.deepEqual(plan.target, {
+    ...base.target,
+    resourceGroup: 'awwus2np01',
+    clusterName: 'awwus2np01-aks',
+    postgresHost: 'awwus2np01-pg.postgres.database.azure.com',
+  });
+  const strip = value => ({ ...value, target: undefined,
+    services: value.services.map(item => ({ ...item, principalObjectId: undefined })) });
+  assert.deepEqual(strip(plan), strip(base));
+  assert.notEqual(p1PostgresPlanHash(plan), p1PostgresPlanHash(base));
+  assert.throws(() => buildP1PostgresPlan('unknown'), /No P1 PostgreSQL plan/);
+});
+
 test('Plans and hashes are deterministic and independent copies', () => {
   const original = buildP1PostgresPlan();
   const hash = p1PostgresPlanHash(original);

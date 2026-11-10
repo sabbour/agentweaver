@@ -9,6 +9,7 @@ targetScope = 'resourceGroup'
 @description('The existing approved 1.x resource group naming prefix.')
 @allowed([
   'agentweaver'
+  'awwus2np01'
 ])
 param namePrefix string = 'agentweaver'
 
@@ -26,6 +27,9 @@ param githubRepository string = 'sabbour/agentweaver'
 @description('GitHub environment that the database maintenance workflow uses.')
 param githubEnvironment string = 'v1-db-maintenance'
 
+@description('Create the GitHub workflow identity and its roles. A separate target sets false and gets only the Projects & Config migration identity.')
+param githubWorkflow bool = true
+
 resource aks 'Microsoft.ContainerService/managedClusters@2026-07-02-preview' existing = {
   name: '${namePrefix}-aks'
 }
@@ -35,7 +39,7 @@ resource aks 'Microsoft.ContainerService/managedClusters@2026-07-02-preview' exi
 var readerRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
 var clusterUserRoleId = '4abbcc35-e782-43d8-92c5-2d3f1bd2253f'
 
-resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (githubWorkflow) {
   name: '${namePrefix}-id-db-maintenance'
   location: resourceGroup().location
   tags: union(tags, {
@@ -46,7 +50,7 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' 
 
 // Only a job that names the environment gets a token. Branch rules on the environment then limit
 // it to v1, so a pull request or another branch cannot use this identity.
-resource githubCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+resource githubCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = if (githubWorkflow) {
   parent: identity
   name: 'github-${githubEnvironment}'
   properties: {
@@ -79,31 +83,31 @@ resource projectsConfigMigrationCredential 'Microsoft.ManagedIdentity/userAssign
   }
 }
 
-resource readerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource readerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (githubWorkflow) {
   name: guid(resourceGroup().id, identity.id, readerRoleId)
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', readerRoleId)
-    principalId: identity.properties.principalId
+    principalId: identity!.properties.principalId
     principalType: 'ServicePrincipal'
   }
 }
 
-resource clusterUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource clusterUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (githubWorkflow) {
   name: guid(aks.id, identity.id, clusterUserRoleId)
   scope: aks
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', clusterUserRoleId)
-    principalId: identity.properties.principalId
+    principalId: identity!.properties.principalId
     principalType: 'ServicePrincipal'
   }
 }
 
-output maintenanceIdentity object = {
+output maintenanceIdentity object = githubWorkflow ? {
   name: identity.name
-  clientId: identity.properties.clientId
-  principalObjectId: identity.properties.principalId
-  githubSubject: githubCredential.properties.subject
-}
+  clientId: identity!.properties.clientId
+  principalObjectId: identity!.properties.principalId
+  githubSubject: githubCredential!.properties.subject
+} : {}
 
 output projectsConfigMigrationIdentity object = {
   name: projectsConfigMigrationIdentity.name
