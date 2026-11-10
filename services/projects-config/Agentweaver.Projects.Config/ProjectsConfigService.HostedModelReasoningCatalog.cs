@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 using Microsoft.EntityFrameworkCore;
 
@@ -8,9 +7,6 @@ public sealed partial class ProjectsConfigService
 {
     private static readonly TimeSpan HostedReasoningCatalogMaxAge = TimeSpan.FromHours(24);
     private static readonly TimeSpan HostedReasoningCatalogMaxClockSkew = TimeSpan.FromMinutes(5);
-    private static readonly ImmutableHashSet<string> HostedReasoningEffortNames =
-        ImmutableHashSet.Create(StringComparer.Ordinal, "low", "medium", "high", "xhigh");
-
     /// <summary>Stores AgentHost-verified reasoning levels for the caller's current hosted connection.</summary>
     public async Task PublishHostedModelReasoningCatalogAsync(
         ProjectAuthorizationContext caller,
@@ -86,7 +82,7 @@ public sealed partial class ProjectsConfigService
         // Keep the stored vocabulary closed and unique so readers can trust it without reinterpreting SDK values.
         return !string.IsNullOrWhiteSpace(publication.Reference) &&
             !publication.SupportedReasoningEfforts.IsDefault &&
-            publication.SupportedReasoningEfforts.All(HostedReasoningEffortNames.Contains) &&
+            publication.SupportedReasoningEfforts.All(ModelReasoningEfforts.IsSupported) &&
             publication.SupportedReasoningEfforts.Distinct(StringComparer.Ordinal).Count() ==
                 publication.SupportedReasoningEfforts.Length;
     }

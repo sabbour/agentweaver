@@ -298,7 +298,9 @@ revision, and only while it is less than 24 hours old. A delayed older
 publication cannot replace a newer value. Settings reads current hosted
 levels from AgentHost's separate live catalog route; this stored publication
 remains a non-authoritative hint. AgentHost checks every requested effort
-against the live SDK catalog when a run starts.
+against the live SDK catalog when a run starts. The shared v1 vocabulary is
+`none`, `minimal`, `low`, `medium`, `high`, and `xhigh`; the database rejects
+values outside this set.
 
 Marketplace source CRUD, source revisioning, and commit-pinned browse are
 documented in the [skill marketplace source contract](./skill-marketplace.md).

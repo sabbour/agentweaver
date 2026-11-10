@@ -349,6 +349,18 @@ public sealed class GatewayBacklogOpenApiTests
         Assert.Equal(new string?[] { "modelBinding", "hostedModelCatalog", "verifiedAtRunStart" },
             modelChoice.GetProperty("reasoningEffortSource").GetProperty("enum").EnumerateArray()
                 .Select(item => item.GetString()).ToArray());
+        var supportedReasoningEfforts = new string?[] { "none", "minimal", "low", "medium", "high", "xhigh" };
+        Assert.Equal(supportedReasoningEfforts,
+            modelChoice.GetProperty("reasoningEfforts").GetProperty("items").GetProperty("enum")
+                .EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.Equal(supportedReasoningEfforts,
+            schemas.GetProperty("RuntimeModelBindingPin").GetProperty("properties")
+                .GetProperty("reasoningEffort").GetProperty("enum").EnumerateArray()
+                .Select(item => item.GetString()).ToArray());
+        Assert.Equal(supportedReasoningEfforts,
+            schemas.GetProperty("ModelTaskSelectionReference").GetProperty("properties")
+                .GetProperty("reasoningEffort").GetProperty("enum").EnumerateArray()
+                .Select(item => item.GetString()).ToArray());
         Assert.Contains("run-start verification",
             modelChoice.GetProperty("reasoningEfforts").GetProperty("description").GetString());
         // The choice item carries eligibility fields only; provider and credential data stay with AgentHost.

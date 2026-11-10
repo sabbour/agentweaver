@@ -221,7 +221,7 @@ export interface ModelSelectionSettings {
 }
 
 /** Reasoning levels accepted by the Projects configuration validator. */
-export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 /** Live reasoning levels returned by AgentHost for one project and binding revision. */
 export interface HostedModelReasoningCatalogV1 {

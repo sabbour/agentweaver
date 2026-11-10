@@ -118,9 +118,9 @@ public sealed class ProjectConfigurationValidatorTests
             AgentCharters = [new ProjectAgentCharter("agent-1", "Engineer", "engineer", "Build software.")],
             Casting = [new ProjectAgentCast("agent-1", "engineer", 0)],
             ModelTaskOverrides =
-                [new ModelTaskSelectionOverride(ModelTaskKind.CodeWriting, new("project-code", "medium"))],
+                [new ModelTaskSelectionOverride(ModelTaskKind.CodeWriting, new("project-code", "none"))],
             ModelRoleOverrides =
-                [new ModelRoleSelectionOverride("engineer", new("role-model", "low"))],
+                [new ModelRoleSelectionOverride("engineer", new("role-model", "minimal"))],
             ModelAgentOverrides =
                 [new ModelAgentSelectionOverride("agent-1", new("agent-model", "xhigh"))],
         });
@@ -141,11 +141,11 @@ public sealed class ProjectConfigurationValidatorTests
         var taskRoute = Assert.Single(resolved.TaskSelections.Where(item =>
             item.TaskKind == ModelTaskKind.CodeWriting && item.RoleId is null && item.AgentId is null));
         Assert.Equal("project-code", taskRoute.ModelSelectionReference);
-        Assert.Equal("medium", taskRoute.ReasoningEffort);
+        Assert.Equal("none", taskRoute.ReasoningEffort);
         var roleRoute = Assert.Single(resolved.TaskSelections.Where(item =>
             item.TaskKind == ModelTaskKind.CodeWriting && item.RoleId == "engineer" && item.AgentId is null));
         Assert.Equal("role-model", roleRoute.ModelSelectionReference);
-        Assert.Equal("low", roleRoute.ReasoningEffort);
+        Assert.Equal("minimal", roleRoute.ReasoningEffort);
         var agentRoute = Assert.Single(resolved.TaskSelections.Where(item =>
             item.TaskKind == ModelTaskKind.CodeWriting && item.RoleId == "engineer" && item.AgentId == "agent-1"));
         Assert.Equal("agent-model", agentRoute.ModelSelectionReference);

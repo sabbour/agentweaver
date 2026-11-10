@@ -39,7 +39,7 @@ public sealed class RuntimeHostedModelReasoningCatalogHttpClientTests
 
         var status = await publisher.PublishAsync(
             projectId,
-            new("bindings-r4", "hosted-reasoning", connectionId, ["low", "high"], verifiedAt),
+            new("bindings-r4", "hosted-reasoning", connectionId, ["none", "minimal", "low", "high"], verifiedAt),
             CancellationToken.None);
 
         Assert.Equal(HttpStatusCode.NoContent, status);
@@ -49,7 +49,7 @@ public sealed class RuntimeHostedModelReasoningCatalogHttpClientTests
         Assert.Equal(connectionId, payload.RootElement.GetProperty("connectionId").GetGuid());
         Assert.Equal(verifiedAt, payload.RootElement.GetProperty("verifiedAt").GetDateTimeOffset());
         Assert.Equal(
-            ["low", "high"],
+            ["none", "minimal", "low", "high"],
             payload.RootElement.GetProperty("supportedReasoningEfforts").EnumerateArray()
                 .Select(item => item.GetString()!).ToArray());
         Assert.Equal(

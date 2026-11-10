@@ -8,6 +8,7 @@ namespace Agentweaver.Gateway;
 internal static partial class GatewayOpenApi
 {
     internal static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly string[] ReasoningEffortValues = ModelReasoningEfforts.SupportedValues.ToArray();
 
     private sealed record OperationContract(
         string? RequestSchema,
@@ -1264,7 +1265,7 @@ else if (route.OperationId is
         ["HostedModelReasoningModelV1"] = Obj(
             ["state", "unavailableReason", "reasoningEfforts"],
             ("state", Enum("available", "unavailable")), ("unavailableReason", NullableStr()),
-            ("reasoningEfforts", Arr(Enum("low", "medium", "high", "xhigh")))),
+            ("reasoningEfforts", Arr(Enum(ReasoningEffortValues)))),
         ["ProjectModelChoices"] = Obj(
             ["state", "unavailableReason", "runtimeEligibility", "bindingsRevision", "defaultReasoningEffort", "choices", "savedReferences"],
             ("state", Enum("available", "unavailable")),
@@ -1275,7 +1276,7 @@ else if (route.OperationId is
                 type = new[] { "string", "null" },
                 description = "Revision of the runtime model-binding copy the choices came from. Null while state is unavailable.",
             }),
-            ("defaultReasoningEffort", Enum("low", "medium", "high", "xhigh")),
+            ("defaultReasoningEffort", Enum(ReasoningEffortValues)),
             ("choices", new
             {
                 type = "array",
@@ -1295,7 +1296,7 @@ else if (route.OperationId is
             ("reasoningEfforts", new
             {
                 type = "array",
-                items = Enum("low", "medium", "high", "xhigh"),
+                items = Enum(ReasoningEffortValues),
                 description = "Reasoning efforts configured for BYOK or verified from AgentHost's live hosted catalog. Hosted references without a matching publication use run-start verification and list no cached levels.",
             })),
         ["ProjectModelReferenceChoice"] = Obj(["reference", "sources"],
@@ -1592,14 +1593,14 @@ else if (route.OperationId is
             ("reference", Str()), ("credentialReference", NullableRef("SecretRef")),
             ("sourceMode", new { type = new[] { "string", "null" }, @enum = new object?[] { "hostedCopilot", "byok", null } }),
             ("connectionId", new { type = new[] { "string", "null" }, format = "uuid" }),
-            ("reasoningEffort", Nullable(Enum("low", "medium", "high", "xhigh"))),
+            ("reasoningEffort", Nullable(Enum(ReasoningEffortValues))),
             ("modelBindingPin", NullableRef("RuntimeModelBindingPin"))),
         ["RuntimeModelBindingPin"] = Obj(
             ["contractVersion", "modelSelectionReference", "modelId", "sourceMode",
                "configurationRevision", "configurationHash", "reasoningEffort"],
             ("contractVersion", Int()), ("modelSelectionReference", Str()), ("modelId", Str()),
             ("sourceMode", Enum("hostedCopilot", "byok")), ("configurationRevision", Str()),
-            ("configurationHash", Str()), ("reasoningEffort", Enum("low", "medium", "high", "xhigh")),
+            ("configurationHash", Str()), ("reasoningEffort", Enum(ReasoningEffortValues)),
             ("providerType", Nullable(Enum("azure", "openai", "anthropic")))),
         ["SecretRef"] = Obj(["id", "version"], ("id", Str()), ("version", Str())),
         ["SourceControlRepositoryPinRequest"] = Obj(["selectionCode"], ("selectionCode", Str())),
@@ -1697,7 +1698,7 @@ else if (route.OperationId is
         ["ProjectAgentCast"] = Obj(["agentId", "role", "order"],
             ("agentId", Str()), ("role", Str()), ("order", Int())),
         ["ModelSelectionOverride"] = Obj([],
-            ("reference", NullableStr()), ("reasoningEffort", Nullable(Enum("low", "medium", "high", "xhigh"))),
+            ("reference", NullableStr()), ("reasoningEffort", Nullable(Enum(ReasoningEffortValues))),
             ("modelBindingPin", NullableRef("RuntimeModelBindingPin"))),
         ["ModelTaskSelectionOverride"] = Obj(["taskKind", "selection"],
             ("taskKind", Enum("planning", "review", "design", "security", "creativeWriting", "complex",
@@ -1792,7 +1793,7 @@ else if (route.OperationId is
                 "codeWriting", "straightforward")),
             ("roleId", NullableStr()), ("agentId", NullableStr()),
             ("modelSelectionReference", Str()),
-            ("reasoningEffort", Enum("low", "medium", "high", "xhigh"))),
+            ("reasoningEffort", Enum(ReasoningEffortValues))),
         ["EffectiveProviderSelection"] = Obj(["cardinality", "seam", "candidates"],
             ("cardinality", Enum("exclusive", "orderedComposite", "platformSingleton", "layered", "keyedByMeterSource", "perApplication")),
             ("seam", ProviderSeamSchema()), ("candidates", Arr(Ref("EffectiveProviderCandidate"))), ("meterSource", NullableStr())),

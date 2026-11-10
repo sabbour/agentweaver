@@ -32,15 +32,17 @@ public sealed class RuntimeRunAdmissionContractTests
             $$"""{"ContractVersion":1,"AcceptedSelectionHash":"{{request.AcceptedSelectionHash}}","ModelId":"free-model"}"""));
     }
 
-    [Fact]
-    public void AdmissionPreservesTheAcceptedReasoningEffortInTheModelPin()
+    [Theory]
+    [InlineData("none")]
+    [InlineData("minimal")]
+    public void AdmissionPreservesTheAcceptedReasoningEffortInTheModelPin(string reasoningEffort)
     {
-        var selection = Selection(reasoningEffort: "low");
+        var selection = Selection(reasoningEffort: reasoningEffort);
         var request = new RuntimeRunAdmissionRequest(1, RuntimeRunAdmissionContract.SelectionHash(selection));
         var receipt = Receipt(selection);
 
-        Assert.Equal("low", receipt.ModelSelection.ReasoningEffort);
-        Assert.Equal("low", receipt.ModelBindingPin.ReasoningEffort);
+        Assert.Equal(reasoningEffort, receipt.ModelSelection.ReasoningEffort);
+        Assert.Equal(reasoningEffort, receipt.ModelBindingPin.ReasoningEffort);
         Assert.Equal(0, RuntimeRunAdmissionContract.ValidateReceipt(
             receipt, request, "tenant", "project", "run", selection));
 

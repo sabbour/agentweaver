@@ -208,7 +208,7 @@ public sealed class WorkPlanValidatorTests
             WorkflowTestData.SelectionContext(
                 modelTaskSelections:
                 [
-                    new(ModelTaskKind.Straightforward, null, null, "model:provider/alpha", "none")
+                    new(ModelTaskKind.Straightforward, null, null, "model:provider/alpha", "unknown")
                 ]));
 
         Assert.Null(result.Value);

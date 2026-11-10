@@ -52,7 +52,7 @@ public static class ModelTaskSelectionResolver
 
     /// <summary>Checks the supported runtime reasoning-effort values accepted by task routes.</summary>
     public static bool IsValidReasoningEffort(string? reasoningEffort) =>
-        reasoningEffort is "low" or "medium" or "high" or "xhigh";
+        ModelReasoningEfforts.IsSupported(reasoningEffort);
 
     private static bool IsValid(ModelTaskSelectionReference selection) =>
         Enum.IsDefined(selection.TaskKind) &&

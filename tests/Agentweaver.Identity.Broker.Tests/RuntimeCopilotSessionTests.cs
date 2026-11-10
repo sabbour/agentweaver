@@ -13,7 +13,7 @@ public sealed class RuntimeCopilotSessionTests
     {
         await using var external = new ControlledCopilotRuntime
         {
-            SupportedReasoningEfforts = ["xhigh", "low", "medium"]
+            SupportedReasoningEfforts = ["xhigh", "low", "minimal", "none", "medium"]
         };
         var factory = Factory(external);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -24,7 +24,7 @@ public sealed class RuntimeCopilotSessionTests
 
         var model = Assert.IsType<HostedModelReasoningModelV1>(catalog["accepted-model-reference"]);
         Assert.Equal("available", model.State);
-        Assert.Equal(["low", "medium", "xhigh"], model.ReasoningEfforts.ToArray());
+        Assert.Equal(["none", "minimal", "low", "medium", "xhigh"], model.ReasoningEfforts.ToArray());
         Assert.Single(external.Requests, request => request.Method == "models.list");
         Assert.DoesNotContain(external.Requests, request => request.Method.StartsWith("session.", StringComparison.Ordinal));
     }
@@ -104,14 +104,16 @@ public sealed class RuntimeCopilotSessionTests
             .GetProperty("limits").GetProperty("max_prompt_tokens").GetInt32());
     }
 
-    [Fact]
-    public async Task ConfiguredReasoningEffortIsPassedToNativeCreateAndVerified()
+    [Theory]
+    [InlineData("none")]
+    [InlineData("minimal")]
+    public async Task ConfiguredReasoningEffortIsPassedToNativeCreateAndVerified(string reasoningEffort)
     {
         await using var external = new ControlledCopilotRuntime
         {
-            ExpectedReasoningEffort = "low",
-            EffectiveReasoningEffort = "low",
-            SupportedReasoningEfforts = ["high", "low"]
+            ExpectedReasoningEffort = reasoningEffort,
+            EffectiveReasoningEffort = reasoningEffort,
+            SupportedReasoningEfforts = [reasoningEffort]
         };
         var models = new RuntimeModelBindingsResolver("model-bindings-v1",
             new Dictionary<string, RuntimeModelBinding>
@@ -122,9 +124,9 @@ public sealed class RuntimeCopilotSessionTests
         {
             Binding = Registration().Binding with
             {
-                ReasoningEffort = "low",
+                ReasoningEffort = reasoningEffort,
                 ModelBindingPin = models.Pin(
-                    "accepted-model-reference", ModelSourceMode.HostedCopilot, "low")
+                    "accepted-model-reference", ModelSourceMode.HostedCopilot, reasoningEffort)
             }
         };
         var factory = new RuntimeCopilotSessionFactory(external.Connection,
@@ -135,13 +137,13 @@ public sealed class RuntimeCopilotSessionTests
             registration, registration.Binding.ModelSelectionReference!, SdkCredential(),
             _ => Task.CompletedTask, timeout.Token);
 
-        Assert.Equal("low", session.Facts.ReasoningEffort);
+        Assert.Equal(reasoningEffort, session.Facts.ReasoningEffort);
         Assert.True(session.VerifiedHostedReasoningEfforts.HasValue);
-        Assert.Equal(["low", "high"], session.VerifiedHostedReasoningEfforts.Value.ToArray());
+        Assert.Equal([reasoningEffort], session.VerifiedHostedReasoningEfforts.Value.ToArray());
         Assert.Equal(registration.Binding.ModelBindingPin, session.Facts.ModelBindingPin);
         Assert.Equal(registration.Binding.ModelBindingPin, session.Facts.ResolvedModelBindingPin);
         var create = Assert.Single(external.Requests, request => request.Method == "session.create");
-        Assert.Equal("low", create.Parameters.GetProperty("reasoningEffort").GetString());
+        Assert.Equal(reasoningEffort, create.Parameters.GetProperty("reasoningEffort").GetString());
     }
 
     [Fact]
@@ -244,6 +246,50 @@ public sealed class RuntimeCopilotSessionTests
 
         Assert.Equal("runtime_reasoning_effort_unsupported", failure.Code);
         Assert.DoesNotContain(external.Requests, request => request.Method is "session.create" or "session.resume");
+        Assert.DoesNotContain(external.Requests, request => request.Method == "models.list");
+    }
+
+    [Theory]
+    [InlineData("none")]
+    [InlineData("minimal")]
+    public async Task ConfiguredByokReasoningEffortIsPassedToNativeCreate(string reasoningEffort)
+    {
+        await using var external = new ControlledCopilotRuntime
+        {
+            Byok = true,
+            ExpectedReasoningEffort = reasoningEffort
+        };
+        var models = new RuntimeModelBindingsResolver("byok-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.Byok,
+                    new RuntimeByokProvider("openai", new Uri("https://byok.test/v1")))
+                {
+                    SupportedReasoningEfforts = [reasoningEffort]
+                }
+            });
+        var registration = Registration();
+        registration = registration with
+        {
+            Binding = registration.Binding with
+            {
+                ModelSourceMode = ModelSourceMode.Byok,
+                ReasoningEffort = reasoningEffort,
+                ModelBindingPin = models.Pin(
+                    "accepted-model-reference", ModelSourceMode.Byok, reasoningEffort)
+            }
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        await using var session = await new RuntimeCopilotSessionFactory(external.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), models).CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!,
+            new SecretCredential(external.SdkCredential, DateTimeOffset.UtcNow.AddMinutes(2)),
+            _ => Task.CompletedTask, timeout.Token);
+
+        Assert.Equal(reasoningEffort, session.Facts.ReasoningEffort);
+        var create = Assert.Single(external.Requests, request => request.Method == "session.create");
+        Assert.Equal(reasoningEffort, create.Parameters.GetProperty("reasoningEffort").GetString());
         Assert.DoesNotContain(external.Requests, request => request.Method == "models.list");
     }
 

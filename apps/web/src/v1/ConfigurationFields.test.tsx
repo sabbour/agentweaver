@@ -31,7 +31,7 @@ function ownerChoices(): ProjectConfigurationChoices {
       bindingsRevision: 'models-r7',
       defaultReasoningEffort: 'xhigh',
       choices: [
-        { reference: 'platform-model', sourceMode: 'byok', reasoningEffortSource: 'modelBinding', reasoningEfforts: ['low', 'xhigh'] },
+        { reference: 'platform-model', sourceMode: 'byok', reasoningEffortSource: 'modelBinding', reasoningEfforts: ['none', 'minimal', 'low', 'xhigh'] },
         { reference: 'planner', sourceMode: 'hostedCopilot', reasoningEffortSource: 'verifiedAtRunStart', reasoningEfforts: [] },
       ],
       savedReferences: [],
@@ -76,6 +76,21 @@ describe('readable project configuration', () => {
     fireEvent.change(screen.getByLabelText('Default reasoning effort'), { target: { value: 'xhigh' } });
     expect(onChange).toHaveBeenCalledWith({
       ...configuration, modelSelection: { ...configuration.modelSelection, reasoningEffort: 'xhigh' },
+    });
+  });
+
+  it.each(['none', 'minimal'] as const)('accepts %s in model choices and saves it', (effort) => {
+    const configuration = fixture();
+    configuration.modelSelection = { ...configuration.modelSelection!, reference: 'platform-model' };
+    const onChange = vi.fn();
+    render(<ConfigurationFields configuration={configuration} onChange={onChange}
+      choices={ownerChoices()} part="models" />);
+    const select = screen.getByLabelText('Default reasoning effort') as HTMLSelectElement;
+    expect(Array.from(select.options).map((option) => option.textContent)).toContain(
+      effort === 'none' ? 'None' : 'Minimal');
+    fireEvent.change(select, { target: { value: effort } });
+    expect(onChange).toHaveBeenCalledWith({
+      ...configuration, modelSelection: { ...configuration.modelSelection, reasoningEffort: effort },
     });
   });
 
@@ -128,7 +143,8 @@ describe('readable project configuration', () => {
     render(<ConfigurationFields configuration={configuration} onChange={vi.fn()} choices={ownerChoices()} part="models" />);
     const defaultEffort = screen.getByLabelText('Default reasoning effort') as HTMLSelectElement;
     expect(Array.from(defaultEffort.options).map((option) => option.textContent)).toEqual([
-      'Use platform default (Extra high)', 'High (saved; not listed for this model)', 'Low', 'Extra high',
+      'Use platform default (Extra high)', 'High (saved; not listed for this model)',
+      'None', 'Minimal', 'Low', 'Extra high',
     ]);
     expect(screen.queryByText(/checked when a run starts/)).toBeNull();
   });

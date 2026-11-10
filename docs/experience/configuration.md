@@ -60,7 +60,9 @@ Settings reads these levels with the existing project choices; it does not
 make a live model or provider call. If no recent publication exists, the
 selector does not invent levels. A saved level remains visible as
 **(saved; not listed for this model)**, and AgentHost checks the selected level
-against the live model catalog when a run starts.
+against the live model catalog when a run starts. The v1 vocabulary includes
+`none`, `minimal`, `low`, `medium`, `high`, and `xhigh`; each model offers only
+the levels in its support list.
 
 When the project service has no model list, **Models** says so explicitly,
 lists the saved model references as **not verified as eligible**, and keeps

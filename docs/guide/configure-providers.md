@@ -191,10 +191,10 @@ The source supports these model source modes:
 BYOK requires an owner-authorized credential binding; do not put provider
 secrets in the model-binding ConfigMap or headers. An optional
 `PromptCapacityTokens` value must be positive. Optional
-`SupportedReasoningEfforts` entries must be unique values from `low`,
-`medium`, `high`, or `xhigh`. These contracts describe source support; the
-checked-in deployment profile does not select BYOK. To add an Azure OpenAI
-BYOK binding, see
+`SupportedReasoningEfforts` entries must be unique values from `none`,
+`minimal`, `low`, `medium`, `high`, or `xhigh`. List only efforts the model
+supports. These contracts describe source support; the checked-in deployment
+profile does not select BYOK. To add an Azure OpenAI BYOK binding, see
 [Configure an Azure OpenAI BYOK model](./configure-byok-azure-openai.md).
 
 Projects & Config receives a read-only copy of each binding's source mode,

@@ -11,6 +11,7 @@ using Agentweaver.Providers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
 using Testcontainers.PostgreSql;
@@ -216,7 +217,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         Assert.Null(bound.Models.UnavailableReason);
         Assert.Equal("models-r7", bound.Models.BindingsRevision);
         Assert.Equal(["byok-coder", "hosted-reasoning"], bound.Models.Choices.Select(item => item.Reference).ToArray());
-        Assert.Equal(["low", "xhigh"], bound.Models.Choices[0].ReasoningEfforts.ToArray());
+        Assert.Equal(["none", "minimal", "low", "xhigh"], bound.Models.Choices[0].ReasoningEfforts.ToArray());
         Assert.Equal("verifiedAtRunStart", bound.Models.Choices[1].ReasoningEffortSource);
         Assert.DoesNotContain(bound.Models.Choices, item => item.Reference == "retired");
         Assert.Contains(bound.Models.SavedReferences, item => item.Reference == "saved-default");
@@ -318,14 +319,14 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         await service.PublishHostedModelReasoningCatalogAsync(
             owner,
             project.ProjectId,
-            new("models-r7", "hosted-reasoning", connectionId, ["low", "high"], verifiedAt),
+            new("models-r7", "hosted-reasoning", connectionId, ["none", "minimal", "low", "high"], verifiedAt),
             CancellationToken.None);
 
         var choices = await service.GetProjectConfigurationChoicesAsync(
             owner, project.ProjectId, CancellationToken.None);
         var published = Assert.Single(choices.Models.Choices, item => item.Reference == "hosted-reasoning");
         Assert.Equal("hostedModelCatalog", published.ReasoningEffortSource);
-        Assert.Equal(["low", "high"], published.ReasoningEfforts.ToArray());
+        Assert.Equal(["none", "minimal", "low", "high"], published.ReasoningEfforts.ToArray());
 
         var stalePublication = await Assert.ThrowsAsync<ProjectConfigException>(() =>
             service.PublishHostedModelReasoningCatalogAsync(
@@ -337,7 +338,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var unchanged = await service.GetProjectConfigurationChoicesAsync(
             owner, project.ProjectId, CancellationToken.None);
         Assert.Equal(
-            ["low", "high"],
+            ["none", "minimal", "low", "high"],
             Assert.Single(unchanged.Models.Choices, item => item.Reference == "hosted-reasoning")
                 .ReasoningEfforts.ToArray());
 
@@ -375,6 +376,60 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var expired = Assert.Single(expiredChoices.Models.Choices, item => item.Reference == "hosted-reasoning");
         Assert.Equal("verifiedAtRunStart", expired.ReasoningEffortSource);
         Assert.Empty(expired.ReasoningEfforts);
+    }
+
+    [Fact]
+    public async Task DowngradeRemovesUnsupportedHostedReasoningEffortsBeforeRestoringConstraint()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "hosted-reasoning-downgrade-tenant-" + suffix;
+        var actorId = "hosted-reasoning-downgrade-owner-" + suffix;
+        var owner = await SeedCallerAsync(
+            db, authorityStore, actorId, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+            tenantId, ProjectAuthorityRole.TenantAdmin);
+        var connectionId = Guid.NewGuid();
+        var service = new ProjectsConfigService(
+            db, CreateProviderCatalog(), TimeProvider.System,
+            modelBindings: ProjectModelChoicesTests.SampleBindings());
+        var project = await service.CreateProjectAsync(owner, "Hosted model downgrade", CancellationToken.None);
+        await service.UpdateProjectConfigurationAsync(
+            owner,
+            project.ProjectId,
+            project.ConfigurationRevision,
+            new ProjectConfiguration
+            {
+                ModelSelection = new ModelSelectionSettings(
+                    "hosted-reasoning", SourceMode: ModelSourceMode.HostedCopilot, ConnectionId: connectionId),
+            },
+            CancellationToken.None);
+        await service.PublishHostedModelReasoningCatalogAsync(
+            owner,
+            project.ProjectId,
+            new("models-r7", "hosted-reasoning", connectionId, ["none", "minimal", "low", "high"],
+                DateTimeOffset.UtcNow),
+            CancellationToken.None);
+
+        await using var migrationDb = CreateMigrationDbContext();
+        var migrator = migrationDb.GetService<IMigrator>();
+        var migrations = db.Database.GetMigrations().ToArray();
+        var latestMigration = migrations[^1];
+        await migrator.MigrateAsync(migrations[^2]);
+        try
+        {
+            await using var verificationDb = CreateDbContext();
+            var supportedEfforts = await verificationDb.HostedModelReasoningCatalog
+                .Where(item => item.TenantId == tenantId && item.ProjectId == project.ProjectId)
+                .Select(item => item.SupportedReasoningEfforts)
+                .SingleAsync();
+            Assert.Equal(["low", "high"], supportedEfforts);
+        }
+        finally
+        {
+            await migrator.MigrateAsync(latestMigration);
+        }
     }
 
     [Fact]

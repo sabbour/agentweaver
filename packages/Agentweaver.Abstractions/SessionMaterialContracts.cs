@@ -236,7 +236,7 @@ public static class SessionMaterialValidation
             material.RuntimeInstanceId == Guid.Empty || material.RegistrationRevision <= 0 ||
             material.ExecutionFence <= 0 || reference.ByteLength is not (> 0 and <= MaximumBytes) ||
             reference.Purpose != Purpose(material.Kind) || material.MaxPromptTokens is < 1 or > 200000 ||
-            material.ReasoningEffort is not ("low" or "medium" or "high" or "xhigh") ||
+            !ModelReasoningEfforts.IsSupported(material.ReasoningEffort) ||
             material.ModelBindingPin is { } modelPin && !MatchesModelBindingPin(modelPin, material) ||
             material.ResolvedModelBindingPin is { } resolvedPin &&
                 !MatchesModelBindingPin(resolvedPin, material) ||

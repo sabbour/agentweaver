@@ -136,7 +136,9 @@ expired publication falls back to `reasoningEffortSource: "verifiedAtRunStart"`
 with no levels. Hosted publications are limited to the current actor, project,
 connection, and model-binding revision, expire after 24 hours, and cannot
 replace a newer verification with a delayed older one. The runtime still
-checks the selected level against its live SDK catalog when a run starts.
+checks the selected level against its live SDK catalog when a run starts. The
+v1 vocabulary is `none`, `minimal`, `low`, `medium`, `high`, and `xhigh`;
+each model entry lists only its configured or verified levels.
 Without the copy, `models` is `unavailable` with reason
 `model_capability_catalog_unavailable` and empty `choices`. In both states,
 `savedReferences` is not an eligibility claim. Model

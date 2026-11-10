@@ -84,6 +84,8 @@ public sealed class ProjectModelChoicesTests
         ("AgentHost:ModelBindings:byok-coder:Enabled", "true"),
         ("AgentHost:ModelBindings:byok-coder:SupportedReasoningEfforts:0", "xhigh"),
         ("AgentHost:ModelBindings:byok-coder:SupportedReasoningEfforts:1", "low"),
+        ("AgentHost:ModelBindings:byok-coder:SupportedReasoningEfforts:2", "none"),
+        ("AgentHost:ModelBindings:byok-coder:SupportedReasoningEfforts:3", "minimal"),
         ("AgentHost:ModelBindings:retired:SourceMode", "Byok"),
         ("AgentHost:ModelBindings:retired:Enabled", "false"),
         ("AgentHost:ModelBindings:retired:SupportedReasoningEfforts:0", "high"));
@@ -112,7 +114,7 @@ public sealed class ProjectModelChoicesTests
                 Assert.Equal("byok-coder", item.Reference);
                 Assert.Equal("byok", item.SourceMode);
                 Assert.Equal("modelBinding", item.ReasoningEffortSource);
-                Assert.Equal(["low", "xhigh"], item.ReasoningEfforts.ToArray());
+                Assert.Equal(["none", "minimal", "low", "xhigh"], item.ReasoningEfforts.ToArray());
             },
             item =>
             {
