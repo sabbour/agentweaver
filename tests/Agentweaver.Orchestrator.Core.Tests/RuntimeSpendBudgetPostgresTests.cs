@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Security.Cryptography;
+using System.Text;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
@@ -456,6 +458,60 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
     }
 
     [Fact]
+    public async Task ProjectRootReservationRetiresOnlyAfterCompletionAndEveryUsageEventIsWitnessed()
+    {
+        var request = await ArrangeAdmittedRootTurnAsync(hard: 100m, reserve: 4m);
+        await IssueAsync(0, request, Evidence(priced: 0m, cursor: 1));
+        var usageEventIds = new[] { Guid.NewGuid(), Guid.NewGuid() };
+        var completion = CreateRootCompletion(_registrations[0], request, usageEventIds);
+        var binding = _registrations[0].Binding;
+        var intent = new MafExecutionRubberduckIntent(
+            request.EventId,
+            _root,
+            "rubberduck-checkpoint",
+            1,
+            "rubberduck-plan",
+            "rubberduck-workflow",
+            "revision-1",
+            "rubberduck",
+            1,
+            binding.ActorId,
+            binding.ExecutionFence,
+            binding.AcceptedSelectionHash,
+            _registrations[0].RuntimeInstanceId,
+            _registrations[0].Revision,
+            new string('c', 64),
+            "recorded evidence");
+        _ = MafRubberduckReviewContract.ValidateRootCompletion(
+            completion, intent, _registrations[0], "root turn under a spend budget", "PASS",
+            completion.ObserveGrant);
+        Assert.Equal("maf_execution_rubberduck_completion_invalid",
+            Assert.Throws<CoordinationException>(() =>
+                MafRubberduckReviewContract.ValidateRootCompletion(
+                    completion, intent, _registrations[0],
+                    "root turn under a spend budget", "Different output", completion.ObserveGrant)).Code);
+        _ = await GrantStore().RecordRootTurnCompletionAsync(
+            _context, _registrations[0], completion, default);
+        var accountedEventIds = completion.NativeTurn.UsageEventIds.Select(usageEventId =>
+            SdkUsageIdentity.Create(
+                completion.Source.RuntimeInstanceId,
+                completion.Source.SdkSessionId,
+                usageEventId.ToString("D"))).ToArray();
+
+        // A project bucket cannot retire the shared root reservation while Events is missing one usage event.
+        Assert.Null(await AdmitDirectAsync(
+            CurrentProjectBudgets(),
+            EvidenceWithRootUsage(request.EventId, [accountedEventIds[0]], cursor: 2)));
+        Assert.Equal("outstanding", await ReadReservationStateAsync(request.EventId));
+
+        // The same shared bucket retires it after Events witnesses both usage events from the completion.
+        Assert.Null(await AdmitDirectAsync(
+            CurrentProjectBudgets(),
+            EvidenceWithRootUsage(request.EventId, accountedEventIds, cursor: 3)));
+        Assert.Equal("retired", await ReadReservationStateAsync(request.EventId));
+    }
+
+    [Fact]
     public void CoordinatorRootRequirementMatchesUsageEventIdsNotSourceReceiptIds()
     {
         var usageEventId = Guid.NewGuid();
@@ -470,13 +526,20 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
         // Every usage event must be witnessed.
         Assert.False(new SpendBudgetAccountingRequirement([], [usageEventId, Guid.NewGuid()])
             .IsAccounted(Witness((Guid.NewGuid(), usageEventId))));
+        // An empty completion accounts only when Events also has no usage receipts for the dispatch.
+        Assert.False(new SpendBudgetAccountingRequirement([], [])
+            .IsAccounted(Witness((Guid.NewGuid(), otherEventId))));
+        Assert.True(new SpendBudgetAccountingRequirement([], []).IsAccounted(Witness()));
+        // Child dispatches still use their source receipts, even when the witness has other usage receipts.
+        Assert.True(new SpendBudgetAccountingRequirement([otherEventId], [])
+            .IsAccounted(Witness((otherEventId, usageEventId))));
     }
 
     // Registers runtime 0 as the coordinator root under one current project hard budget and admits one root
     // model turn. Returns the matching model.turn request.
     private async Task<RuntimeActionRequest> ArrangeAdmittedRootTurnAsync(decimal hard, decimal reserve)
     {
-        var (rootRequestContext, rootContext) = await ArrangeCoordinatorRootAsync();
+        var (rootRequestContext, rootContext) = await ArrangeCoordinatorRootAsync(includeImage: true);
         _projectsHandler.ProjectSpendBudgets = new(
             _root.ProjectId, 1, 1, [ProjectBudget(1, hard, reserve, CurrentPeriod())]);
         var eventId = Guid.NewGuid();
@@ -508,6 +571,121 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
         return new(dispatchId, scope, 1, items,
             UsageDispatchAccountingWitnessContract.ComputeReceiptDigest(dispatchId, scope, items),
             0m, items.Length, 0, UsageDispatchAccountingStatus.Partial, null, null, null);
+    }
+
+    private Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>> EvidenceWithRootUsage(
+        Guid rootTurnId, Guid[] usageEventIds, long cursor) => (request, _) =>
+    {
+        var binding = _registrations[0].Binding;
+        var total = new UsageSpendTotal(0m, 0, 0);
+        var scope = new UsageDispatchAccountingScope(
+            binding.TenantId, binding.ProjectId, binding.RunId,
+            request.MeterSource, request.Unit, request.ProjectPeriod?.PeriodId);
+        var witnesses = request.DispatchIds.Select(dispatchId =>
+        {
+            var eventIds = Guid.Parse(dispatchId) == rootTurnId ? usageEventIds : [];
+            var receipts = eventIds.Select(eventId => new UsageDispatchSourceReceiptIdentity(
+                Guid.NewGuid(), eventId, new string('f', 64))).ToImmutableArray();
+            return new UsageDispatchAccountingWitness(
+                dispatchId, scope, cursor, receipts,
+                UsageDispatchAccountingWitnessContract.ComputeReceiptDigest(dispatchId, scope, receipts),
+                0m, receipts.Length, 0,
+                receipts.IsEmpty ? UsageDispatchAccountingStatus.Unknown : UsageDispatchAccountingStatus.Partial,
+                null, null, null);
+        }).ToImmutableArray();
+        return Task.FromResult(new UsageSpendEvidence(
+            UsageSpendEvidenceContract.CurrentVersion,
+            binding.TenantId, binding.ProjectId, binding.RunId, request.MeterSource, request.Unit,
+            cursor, total, request.ProjectPeriod is null ? null : total,
+            request.ProjectPeriod?.PeriodId, witnesses)
+        {
+            Agent = request.AgentId is null ? null : total
+        });
+    };
+
+    private static RuntimeRootTurnCompletionReceipt CreateRootCompletion(
+        RuntimeRegistration registration, RuntimeActionRequest request, Guid[] usageEventIds)
+    {
+        var binding = registration.Binding;
+        var prompt = "root turn under a spend budget";
+        var output = "PASS";
+        var cacheBytes = "cache";
+        var promptHash = RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(prompt));
+        var outputHash = RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(output));
+        var cacheHash = RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(cacheBytes));
+        var modelSelectionReference = binding.ModelSelectionReference
+            ?? throw new InvalidOperationException("The root model selection is required.");
+        var source = new SdkSessionFacts(
+            registration.RuntimeInstanceId,
+            RuntimeContractValidation.NativeSessionId(binding),
+            "sdk-v1",
+            "runtime-v1",
+            modelSelectionReference,
+            "model-id",
+            new string('a', 64),
+            1m,
+            "hosted-copilot",
+            SdkMeterSources.CopilotNanoAiu,
+            binding.AcceptedSelectionHash,
+            registration.Revision)
+        {
+            MaxPromptTokens = binding.MaxPromptTokens,
+            ReasoningEffort = binding.ReasoningEffort,
+            ModelBindingPin = binding.ModelBindingPin,
+            ResolvedModelBindingPin = binding.ModelBindingPin
+        };
+        var now = DateTimeOffset.UtcNow;
+        var observeGrant = new RuntimeGrantReceipt(
+            Guid.NewGuid(), registration.RuntimeInstanceId, registration.Revision, 1,
+            binding.ActorIssuer, RuntimeCredentialPurpose.Observe,
+            binding.ConfigureEndpoint, RuntimeCredentialState.Active,
+            new string('b', 64), now.AddMinutes(5), now);
+        var nativeTurn = new RuntimeNativeTurnObservation(
+            source, request.EventId.ToString("D"), "native-turn",
+            Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), now,
+            "native-cursor", outputHash, null)
+        {
+            UsageEventIds = [.. usageEventIds]
+        };
+        var user = Material(request.EventId, SessionMaterialKind.TurnContent, 1, promptHash);
+        var assistantEventId = new Guid(SHA256.HashData(
+            Encoding.UTF8.GetBytes($"agentweaver:a2a:assistant:{request.EventId:N}")).AsSpan(0, 16));
+        var assistant = Material(
+            assistantEventId,
+            SessionMaterialKind.TurnContent, 2, outputHash);
+        var cache = Material(Guid.NewGuid(), SessionMaterialKind.SdkCache, 3, cacheHash);
+        var cacheCursor = "cache-baseline";
+        var cacheCursorHash = RuntimeContractValidation.Hash(
+            System.Text.Encoding.UTF8.GetBytes(cacheCursor));
+        return new RuntimeRootTurnCompletionReceipt(
+            1, request.EventId, promptHash, registration, source, observeGrant, nativeTurn,
+            RuntimeContractValidation.Hash("before"u8),
+            RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(nativeTurn.DurableCursor)),
+            RuntimeContractValidation.Hash("native-events"u8),
+            1, user, assistant, cache, 0, 0,
+            cacheCursor, cacheCursorHash, cacheCursorHash, 0, true).Validate();
+
+        SessionMaterialAcknowledgment Material(
+            Guid eventId, SessionMaterialKind kind, long position, string hash)
+        {
+            var material = new SessionMaterialBinding(
+                1, kind, binding.TenantId, hash, registration.RuntimeInstanceId, registration.Revision,
+                binding.ExecutionFence, binding.AcceptedSelectionHash, source.SdkVersion, source.RuntimeVersion,
+                source.ModelSelectionReference, source.ModelId)
+            {
+                MaxPromptTokens = source.MaxPromptTokens,
+                ReasoningEffort = source.ReasoningEffort,
+                ModelBindingPin = source.ModelBindingPin,
+                ResolvedModelBindingPin = source.ResolvedModelBindingPin
+            };
+            var reference = new SessionObjectReference(
+                new ObjectKey($"fixture/{kind}/{eventId:N}"), SessionMaterialValidation.Purpose(kind), 1)
+            {
+                Material = material
+            };
+            return new SessionMaterialAcknowledgment(
+                1, new(binding.ProjectId, binding.RunId, binding.SessionId), eventId, position, reference);
+        }
     }
 
     private async Task ArrangeBudgetedPairAsync()

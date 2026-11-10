@@ -139,6 +139,38 @@ internal static class MafRubberduckReviewContract
         return output;
     }
 
+    internal static RuntimeRootTurnCompletionReceipt ValidateRootCompletion(
+        RuntimeRootTurnCompletionReceipt completion,
+        MafExecutionRubberduckIntent intent,
+        RuntimeRegistration registration,
+        string prompt,
+        string? output,
+        RuntimeGrantReceipt? expectedObserveGrant = null)
+    {
+        try
+        {
+            completion.Validate();
+        }
+        catch (Exception failure) when (
+            failure is RuntimeAuthorizationException or ArgumentException)
+        {
+            throw new CoordinationException(
+                "maf_execution_rubberduck_completion_invalid",
+                StatusCodes.Status503ServiceUnavailable);
+        }
+
+        if (completion.RequestId != intent.OperationId ||
+            completion.Registration != registration ||
+            expectedObserveGrant is not null && completion.ObserveGrant != expectedObserveGrant ||
+            completion.PromptHash != RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt)) ||
+            output is not null &&
+                completion.NativeTurn.OutputHash != RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(output)))
+            throw new CoordinationException(
+                "maf_execution_rubberduck_completion_invalid",
+                StatusCodes.Status503ServiceUnavailable);
+        return completion;
+    }
+
     internal static bool IsValidIntent(MafExecutionRubberduckIntent? intent) =>
         intent is not null &&
         intent.OperationId != Guid.Empty &&

@@ -130,6 +130,52 @@ public sealed partial class MafCheckpointStorePostgresTests
             latest.State.Progress.NonModelSteps[intent.StepId]);
     }
 
+    [Fact]
+    public async Task PostgresRubberduckChecksRootCompletionBeforeReturningTerminalReceipt()
+    {
+        var (plan, intent, _) = await PrepareRubberduckOwnerAsync();
+        var initial = CreateRubberduckExecutor(
+            plan, (_, _, _) => Task.FromResult("PASS"));
+        Assert.Equal(MafExecutionTaskStatus.Succeeded,
+            await initial.ExecuteAsync(intent, CancellationToken.None));
+
+        var ownerCalls = 0;
+        var completionChecks = 0;
+        var recovery = CreateRubberduckExecutor(
+            plan,
+            (_, _, _) =>
+            {
+                ownerCalls++;
+                return Task.FromResult("PASS");
+            },
+            ensureRootCompletion: (_, receipt, _) =>
+            {
+                completionChecks++;
+                Assert.Equal(RuntimeContractValidation.Hash("PASS"u8), receipt.OutputSha256);
+                return Task.CompletedTask;
+            });
+
+        Assert.Equal(MafExecutionTaskStatus.Succeeded,
+            await recovery.ExecuteAsync(intent, CancellationToken.None));
+        Assert.Equal(0, ownerCalls);
+        Assert.Equal(1, completionChecks);
+        var latest = await _executionStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(latest);
+        Assert.Equal("passed", latest.State.RubberduckReceipts[intent.StepId].Outcome);
+        Assert.Empty(latest.State.RubberduckFailureCodes);
+
+        var unavailable = CreateRubberduckExecutor(
+            plan,
+            (_, _, _) => throw new InvalidOperationException("The terminal receipt must not rerun."),
+            ensureRootCompletion: (_, _, _) => Task.FromException(
+                new CoordinationException("maf_execution_host_unavailable", 503)));
+        Assert.Equal(MafExecutionTaskStatus.Succeeded,
+            await unavailable.ExecuteAsync(intent, CancellationToken.None));
+        latest = await _executionStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(latest);
+        Assert.Equal("passed", latest.State.RubberduckReceipts[intent.StepId].Outcome);
+    }
+
     private async Task<(WorkPlanSnapshot Plan, MafExecutionRubberduckIntent Intent,
         MafExecutionCheckpointSnapshot Initial)> PrepareRubberduckOwnerAsync()
     {
@@ -234,7 +280,9 @@ public sealed partial class MafCheckpointStorePostgresTests
         WorkPlanSnapshot plan,
         Func<MafExecutionRubberduckIntent, string, CancellationToken, Task<string>> runOwner,
         MafExecutionCheckpointStore? execution = null,
-        bool evidenceChanged = false)
+        bool evidenceChanged = false,
+        Func<MafExecutionRubberduckIntent, MafRubberduckTerminalReceipt,
+            CancellationToken, Task>? ensureRootCompletion = null)
     {
         execution ??= _executionStore;
         var ownerRegistration = _rubberduckTestOwner;
@@ -288,6 +336,7 @@ public sealed partial class MafCheckpointStorePostgresTests
             RequireCurrent,
             RequireDecision,
             RequireEvidence,
-            _ => { });
+            _ => { },
+            ensureRootCompletion);
     }
 }

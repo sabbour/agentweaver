@@ -1601,7 +1601,8 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
     }
 
     // Registers runtime 0 as the coordinator root of the run and returns its owner request and context.
-    private async Task<(DefaultHttpContext Request, RuntimeOwnerContext Context)> ArrangeCoordinatorRootAsync()
+    private async Task<(DefaultHttpContext Request, RuntimeOwnerContext Context)> ArrangeCoordinatorRootAsync(
+        bool includeImage = false)
     {
         var rootRequestContext = new DefaultHttpContext
         {
@@ -1641,7 +1642,10 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             ModelConnectionId = rootContext.ModelConnectionId,
             ModelConnectionScope = rootContext.ModelConnectionScope,
             MaxModelTurns = rootContext.MaxModelTurns,
-            MaxToolCalls = rootContext.MaxToolCalls
+            MaxToolCalls = rootContext.MaxToolCalls,
+            Image = includeImage
+                ? new SandboxImageIdentity("sha256:" + new string('a', 64), "linux/amd64", 1024)
+                : null
         };
         await RegisterSourceAsync(0, rootBinding, bindDispatchIntent: false);
         return (rootRequestContext, rootContext);

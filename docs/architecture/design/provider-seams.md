@@ -988,12 +988,16 @@ the hard limit together. A retry of the same dispatch reserves once.
 A coordinator root model turn has no dispatch row. The RuntimeAction owner admits it with the same steps
 in the transaction that issues its `model.turn` grant, and the turn ID is the reservation ID. A denied root
 turn gets no grant. Its reservation retires only after the root-turn completion is recorded and Events
-witnesses every usage event in that completion. A RubberDuck root turn doesn't record its completion yet, so
-its reservation stays outstanding and keeps its reserve counted
-([#2613](https://github.com/sabbour/agentweaver/issues/2613)). A root turn that fails before its completion is
-recorded has the same result. In a run bucket, this lowers the capacity that remains for the run. A project
-bucket is shared by all runs of the project, so these reservations add up until the period ends. When more
-than 64 reservations are outstanding in a hard project bucket, every dispatch in that bucket is denied with
+witnesses every usage event in that completion. RubberDuck records this completion after a successful owner
+turn. A root turn that fails before the completion is recorded keeps its reservation outstanding. A retry of
+an older RubberDuck receipt can replay the same operation. The replay must match the saved output before the
+Orchestrator records new completion evidence. The reservation retires only if the replay returns verifiable
+completion evidence or the owner ledger already has matching evidence. If neither source can prove completion,
+the reservation stays outstanding; the system does not reduce or delete it.
+
+In a run bucket, an outstanding reservation lowers the capacity that remains for the run. A project bucket
+is shared by all runs of the project, so these reservations add up until the period ends. When more than 64
+reservations are outstanding in a hard project bucket, every dispatch in that bucket is denied with
 `runtime_spend_budget_exposure_unbounded`. Spend can't exceed the limit in either case.
 
 The design makes these choices:

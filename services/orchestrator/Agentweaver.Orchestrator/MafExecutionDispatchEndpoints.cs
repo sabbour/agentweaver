@@ -1860,7 +1860,10 @@ public static partial class CoordinationEndpoints
             }
 
             async Task<string> RunRubberduckOwnerAsync(
-                MafExecutionRubberduckIntent intent, string prompt, CancellationToken token)
+                MafExecutionRubberduckIntent intent,
+                string prompt,
+                CancellationToken token,
+                string? expectedOutputSha256 = null)
             {
                 if (actionGrants is null)
                     throw new CoordinationException(
@@ -1925,8 +1928,92 @@ public static partial class CoordinationEndpoints
                     sendActor.Bearer.Invalidate();
                 }
                 await RequireCurrentRubberduckAsync(intent, token).ConfigureAwait(false);
-                return MafRubberduckReviewContract.ReadOwnerResponse(
+                var output = MafRubberduckReviewContract.ReadOwnerResponse(
                     response, RuntimeContractValidation.NativeSessionId(registration.Binding));
+                if (expectedOutputSha256 is not null &&
+                    RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(output)) != expectedOutputSha256)
+                    throw new CoordinationException(
+                        "maf_execution_rubberduck_replay_invalid",
+                        StatusCodes.Status503ServiceUnavailable);
+                if (response.RootCompletion is not null && response.RootReplay is not null)
+                    throw new CoordinationException(
+                        "maf_execution_rubberduck_completion_invalid",
+                        StatusCodes.Status503ServiceUnavailable);
+                if (response.RootCompletion is { } completion)
+                {
+                    MafRubberduckReviewContract.ValidateRootCompletion(
+                        completion, intent, registration, prompt, output, readiness.SourceGrant);
+                    var materialActor = await CreateRuntimeActorAsync(token).ConfigureAwait(false);
+                    try
+                    {
+                        var user = await events.ReadSessionMaterialAsync(
+                            context, identity, completion.UserMaterial.EventId, SessionMaterialKind.TurnContent,
+                            materialActor, token).ConfigureAwait(false);
+                        var assistant = await events.ReadSessionMaterialAsync(
+                            context, identity, completion.AssistantMaterial.EventId, SessionMaterialKind.TurnContent,
+                            materialActor, token).ConfigureAwait(false);
+                        var cache = await events.ReadSessionMaterialAsync(
+                            context, identity, completion.CacheMaterial.EventId, SessionMaterialKind.SdkCache,
+                            materialActor, token).ConfigureAwait(false);
+                        if (user.Material != completion.UserMaterial ||
+                            assistant.Material != completion.AssistantMaterial ||
+                            cache.Material != completion.CacheMaterial ||
+                            RuntimeContractValidation.Hash(user.Bytes) != completion.PromptHash ||
+                            RuntimeContractValidation.Hash(assistant.Bytes) != completion.NativeTurn.OutputHash ||
+                            !user.Bytes.AsSpan().SequenceEqual(Encoding.UTF8.GetBytes(prompt)) ||
+                            !assistant.Bytes.AsSpan().SequenceEqual(Encoding.UTF8.GetBytes(output)))
+                            throw new CoordinationException(
+                                "maf_execution_rubberduck_material_invalid",
+                                StatusCodes.Status503ServiceUnavailable);
+                    }
+                    finally
+                    {
+                        materialActor.Bearer.Invalidate();
+                    }
+                    await RequireCurrentRubberduckAsync(intent, token).ConfigureAwait(false);
+                    _ = await actionGrants.RecordRootTurnCompletionAsync(
+                        context, registration, completion, token).ConfigureAwait(false);
+                }
+                else
+                {
+                    var recorded = await actionGrants.ReadRootTurnCompletionAsync(
+                        context, registration, intent.OperationId, promptHash, token).ConfigureAwait(false);
+                    if (response.RootReplay is not null || recorded is null)
+                        throw new CoordinationException(
+                            "maf_execution_rubberduck_completion_unavailable",
+                            StatusCodes.Status503ServiceUnavailable);
+                    MafRubberduckReviewContract.ValidateRootCompletion(
+                        recorded.Completion, intent, registration, prompt, output);
+                }
+                return output;
+            }
+
+            async Task EnsureRubberduckRootCompletionAsync(
+                MafExecutionRubberduckIntent intent,
+                MafRubberduckTerminalReceipt terminalReceipt,
+                CancellationToken token)
+            {
+                if (actionGrants is null)
+                    throw new CoordinationException(
+                        "maf_execution_rubberduck_owner_unavailable", StatusCodes.Status503ServiceUnavailable);
+                await RequireCurrentRubberduckAsync(intent, token).ConfigureAwait(false);
+                var registration = await ReadCurrentRubberduckOwnerAsync(intent, token).ConfigureAwait(false);
+                var prompt = MafRubberduckReviewContract.CreatePrompt(intent);
+                var promptHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt));
+                var recorded = await actionGrants.ReadRootTurnCompletionAsync(
+                    context, registration, intent.OperationId, promptHash, token).ConfigureAwait(false);
+                if (recorded is not null)
+                {
+                    var completion = MafRubberduckReviewContract.ValidateRootCompletion(
+                        recorded.Completion, intent, registration, prompt, null);
+                    if (completion.NativeTurn.OutputHash != terminalReceipt.OutputSha256)
+                        throw new CoordinationException(
+                            "maf_execution_rubberduck_completion_invalid",
+                            StatusCodes.Status503ServiceUnavailable);
+                    return;
+                }
+                _ = await RunRubberduckOwnerAsync(
+                    intent, prompt, token, terminalReceipt.OutputSha256).ConfigureAwait(false);
             }
 
             async Task OpenReviewApprovalAsync(MafExecutionReviewIntent intent, CancellationToken token)
@@ -1993,11 +2080,12 @@ public static partial class CoordinationEndpoints
             var rubberduckExecutor = new MafRubberduckReviewExecutor(
                 execution,
                 dataSource,
-                RunRubberduckOwnerAsync,
+                (intent, prompt, token) => RunRubberduckOwnerAsync(intent, prompt, token),
                 RequireCurrentRubberduckAsync,
                 RequireRubberduckDecisionInTransactionAsync,
                 RequireRubberduckEvidenceAsync,
-                snapshot => checkpoint = snapshot);
+                snapshot => checkpoint = snapshot,
+                EnsureRubberduckRootCompletionAsync);
 
             foreach (var intent in checkpoint.State.RubberduckIntents.Values
                          .Where(intent => checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) is
