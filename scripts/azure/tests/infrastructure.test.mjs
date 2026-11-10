@@ -168,6 +168,9 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   const networkDeployment = template.resources.find(resource =>
     resource.name === "[format('{0}-network', parameters('namePrefix'))]");
   assert.equal(networkDeployment.properties.parameters.location.value, "[parameters('location')]");
+  // A runtime reference here makes the subnet role assignment Unsupported in new-foundation what-if.
+  assert.equal(networkDeployment.properties.template.outputs.aksSubnetId.value,
+    "[resourceId('Microsoft.Network/virtualNetworks/subnets', format('{0}-vnet', parameters('namePrefix')), 'aks')]");
   const postgresDeployment = template.resources.find(resource =>
     resource.name === "[format('{0}-postgres', parameters('namePrefix'))]");
   assert.equal(postgresDeployment.properties.parameters.location.value, "[parameters('location')]");
