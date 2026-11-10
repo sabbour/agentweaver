@@ -31,8 +31,14 @@
         const states = parameters.getAll('state');
         const codes = parameters.getAll('code');
         const errors = parameters.getAll('error');
+        const descriptions = parameters.getAll('error_description');
+        const errorUris = parameters.getAll('error_uri');
         const hasOnlyAllowedParameters = [...parameters.keys()].every(
-          (key) => key === 'state' || key === 'code' || key === 'error',
+          (key) => key === 'state' ||
+            key === 'code' ||
+            key === 'error' ||
+            key === 'error_description' ||
+            key === 'error_uri',
         );
         const hasControlCharacters = (value) => {
           for (let index = 0; index < value.length; index += 1) {
@@ -47,14 +53,27 @@
           value.length <= limit &&
           !hasControlCharacters(value);
 
-        if (hasOnlyAllowedParameters && states.length === 1 && isBounded(states[0], 512)) {
-          if (codes.length === 1 && errors.length === 0 && isBounded(codes[0], 4096)) {
+        const hasBoundedDenialDiagnostics =
+          descriptions.length <= 1 &&
+          errorUris.length <= 1 &&
+          [...descriptions, ...errorUris].every(
+            (value) => value.length <= 2048 && !hasControlCharacters(value),
+          );
+        if (hasOnlyAllowedParameters && states.length === 1 && isBounded(states[0], 2048)) {
+          if (codes.length === 1 &&
+              errors.length === 0 &&
+              descriptions.length === 0 &&
+              errorUris.length === 0 &&
+              isBounded(codes[0], 4096)) {
             window.__AGENTWEAVER_COPILOT_CALLBACK__ = {
               type: 'agentweaver.copilot-user.callback',
               state: states[0],
               code: codes[0],
             };
-          } else if (codes.length === 0 && errors.length === 1 && errors[0] === 'access_denied') {
+          } else if (codes.length === 0 &&
+              errors.length === 1 &&
+              errors[0] === 'access_denied' &&
+              hasBoundedDenialDiagnostics) {
             window.__AGENTWEAVER_COPILOT_CALLBACK__ = {
               type: 'agentweaver.copilot-user.callback',
               state: states[0],

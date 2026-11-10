@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   beginCopilotConnection: vi.fn(),
   completeCopilotConnection: vi.fn(),
   getCopilotConnection: vi.fn(),
+  relayCopilotCallback: vi.fn(),
 }));
 
 vi.mock('./AuthContext', () => ({
@@ -27,6 +28,7 @@ vi.mock('./api', () => ({
     beginCopilotConnection: mocks.beginCopilotConnection,
     completeCopilotConnection: mocks.completeCopilotConnection,
     getCopilotConnection: mocks.getCopilotConnection,
+    relayCopilotCallback: mocks.relayCopilotCallback,
   },
   get copilotGatewayBaseUrl() {
     return mocks.copilotGatewayBaseUrl;
@@ -95,6 +97,9 @@ describe('Copilot user connection panel', () => {
       state: 'connected',
       revision: 2,
     });
+    mocks.relayCopilotCallback.mockReset().mockResolvedValue(
+      'http://127.0.0.1:49173/oauth/callback',
+    );
   });
 
   it('calls the begin method when the authorization context includes cancelRun', async () => {
@@ -492,6 +497,35 @@ describe('Copilot user connection panel', () => {
         Object.defineProperty(window, 'opener', previousOpener);
       else
         Reflect.deleteProperty(window, 'opener');
+    }
+  });
+
+  it('returns a no-opener callback to the CLI loopback listener', async () => {
+    const happyDOM = Reflect.get(window, 'happyDOM') as {
+      setURL(url: string): void | Promise<void>;
+    };
+    const previousOpener = Object.getOwnPropertyDescriptor(window, 'opener');
+    const previousCallback = window.__AGENTWEAVER_COPILOT_CALLBACK__;
+    Reflect.deleteProperty(window, 'opener');
+    window.__AGENTWEAVER_COPILOT_CALLBACK__ = {
+      type: 'agentweaver.copilot-user.callback',
+      state: 'request-1',
+      code: 'one-time-code',
+    };
+    try {
+      render(<CopilotPopupCallbackPage />);
+      await waitFor(() => expect(mocks.relayCopilotCallback).toHaveBeenCalledWith('request-1'));
+      await waitFor(() => expect(window.location.pathname).toBe('/oauth/callback'));
+      expect(window.location.protocol).toBe('http:');
+      expect(window.location.hostname).toBe('127.0.0.1');
+      expect(window.location.port).toBe('49173');
+      expect(window.location.search).toContain('state=request-1');
+      expect(window.location.search).toContain('code=one-time-code');
+    } finally {
+      window.__AGENTWEAVER_COPILOT_CALLBACK__ = previousCallback;
+      if (previousOpener)
+        Object.defineProperty(window, 'opener', previousOpener);
+      await happyDOM.setURL(`${portalOrigin}/auth/github/copilot-app/callback`);
     }
   });
 });

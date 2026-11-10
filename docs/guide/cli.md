@@ -125,6 +125,54 @@ already held by another running process. If a refresh outcome is uncertain,
 the CLI requires sign-in again rather than retrying a possibly consumed refresh
 token.
 
+## Manage a Copilot connection
+
+The Copilot commands use an unbound `projects.admin` identity. The Broker checks
+current `WriteProjects` authority for a project connection or
+`WritePlatformRuntimeDefaults` authority for a platform connection. These
+permissions also require `api.read`. Sign in with `projects.admin` before you
+use the commands:
+
+```powershell
+agentweaver auth login --scope projects.admin
+agentweaver copilot status --scope project --scope-id PROJECT_ID
+agentweaver copilot connect --scope project --scope-id PROJECT_ID
+agentweaver copilot refresh --connection-id CONNECTION_ID
+agentweaver copilot disconnect --connection-id CONNECTION_ID
+```
+
+Use `--scope platform` for a platform connection. Its scope ID is `default`,
+so you do not need `--scope-id`. For a project connection, pass the exact
+project ID with `--scope-id`.
+
+The `status` command returns at most 50 connections for the selected scope.
+If the response has a `nextAfterConnectionId` value, pass it with
+`--after-connection-id` to read the next page:
+
+```powershell
+agentweaver copilot status --scope project --scope-id PROJECT_ID --after-connection-id CONNECTION_ID
+```
+
+The CLI checks the current authorization context before it sends a Copilot
+request. It ignores `AGENTWEAVER_PROJECT_ID` and `AGENTWEAVER_RUN_ID` because
+Copilot commands require an unbound identity. Do not pass `--project-id` or
+`--run-id`. The `--scope` and `--scope-id` values select the Copilot connection;
+they do not bind the bearer.
+
+`connect` opens GitHub in your browser and waits for the callback on
+`http://127.0.0.1:49173/oauth/callback`. The browser returns through the
+callback page on the Broker's configured portal origin. This origin can differ
+from the Gateway URL. That page sends the protected state to the Gateway and
+redirects only the authorization code or denial result to the loopback
+listener. The CLI keeps the callback state, code, and Broker cookie in memory.
+It sends the cookie only with the completion request. GitHub access and refresh
+tokens stay in the Broker's secret store and are not returned to the CLI.
+
+`refresh` and `disconnect` first read the current connection revision. The
+Broker rejects the change if another request changes that revision first.
+`disconnect` revokes the connection. `status` and these changes return safe
+connection details; they do not return GitHub credentials.
+
 ## Discover and invoke API operations
 
 The CLI reads the currently served Gateway `GET /openapi/v1.json` document for

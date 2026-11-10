@@ -14,7 +14,8 @@ internal static class CliConfiguration
     public static CliIdentity ReadIdentity(
         IReadOnlyList<string>? requestedScopes = null,
         bool discoveryOnly = false,
-        CliOptions? options = null)
+        CliOptions? options = null,
+        bool unbound = false)
     {
         var gatewayOverride = options?.Single("gateway-url");
         var issuerOverride = options?.Single("broker-issuer");
@@ -35,9 +36,9 @@ internal static class CliConfiguration
         if (string.IsNullOrWhiteSpace(clientId))
             clientId = "agentweaver-cli";
 
-        var project = discoveryOnly ? null : Optional("AGENTWEAVER_PROJECT_ID", projectOverride);
-        var run = discoveryOnly ? null : Optional("AGENTWEAVER_RUN_ID", runOverride);
-        if ((project is null) != (run is null))
+        var project = discoveryOnly || unbound ? null : Optional("AGENTWEAVER_PROJECT_ID", projectOverride);
+        var run = discoveryOnly || unbound ? null : Optional("AGENTWEAVER_RUN_ID", runOverride);
+        if (!unbound && (project is null) != (run is null))
             throw new InvalidOperationException("AGENTWEAVER_PROJECT_ID and AGENTWEAVER_RUN_ID must be supplied together.");
 
         var scopes = BaseScopes.Concat(discoveryOnly ? [] : requestedScopes ?? [])

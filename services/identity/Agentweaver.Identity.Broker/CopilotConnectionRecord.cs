@@ -63,6 +63,10 @@ internal static class CopilotConnectionModel
             entity.Property(row => row.SecretVersion).HasMaxLength(256);
             entity.Property(row => row.StateHash).HasMaxLength(64);
             entity.Property(row => row.Revision).IsConcurrencyToken();
+            entity.HasIndex(row => new
+            {
+                row.OwnerIssuer, row.OwnerActorId, row.TenantId, row.Scope, row.ScopeId, row.ConnectionId
+            });
         });
         model.Entity<CopilotConnectionRevision>(entity =>
         {

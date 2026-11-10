@@ -1174,6 +1174,120 @@ public sealed partial class GatewayOwnerClient(
             cookieErrorCode: "copilot_connection_cookie_invalid",
             cancellationToken);
 
+    /// <summary>Forwards the bounded, allowlisted Copilot connection list query.</summary>
+    public Task ProxyCopilotConnectionListAsync(HttpContext context, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var query = BuildCopilotConnectionListQuery(context.Request.Query);
+            return ProxyIdentityBrokerApiAsync(
+                context,
+                "GET",
+                "/internal/connections/copilot-user/list",
+                hasJsonBody: false,
+                forwardTenantSelector: true,
+                forwardCookieName: null,
+                cookieErrorCode: "copilot_connection_cookie_invalid",
+                cancellationToken: cancellationToken,
+                ownerQueryString: query);
+        }
+        catch (GatewayOwnerFailureException exception)
+        {
+            return WriteOwnerFailureAsync(context, exception);
+        }
+    }
+
+    /// <summary>Relays only an anonymous CLI state to the Broker's fixed loopback lookup.</summary>
+    public async Task ProxyCopilotCallbackRelayAsync(HttpContext context, CancellationToken cancellationToken)
+    {
+        try
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (context.Request.Query.Count != 0 ||
+                context.Request.ContentLength is > 16 * 1024 ||
+                context.Request.ContentType is not { } contentType ||
+                !MediaTypeHeaderValue.TryParse(contentType, out var parsed) ||
+                !string.Equals(parsed.MediaType, "application/json", StringComparison.OrdinalIgnoreCase))
+                throw new GatewayOwnerFailureException(
+                    StatusCodes.Status400BadRequest,
+                    "application/problem+json",
+                    ProblemBody("copilot_callback_relay_request_invalid", StatusCodes.Status400BadRequest));
+
+            using var requestBody = new StreamContent(context.Request.Body);
+            var body = await ReadBoundedAsync(requestBody, 16 * 1024, cancellationToken).ConfigureAwait(false);
+            using var timeout = CreateOwnerTimeout(cancellationToken);
+            try
+            {
+                using var request = new HttpRequestMessage(
+                    HttpMethod.Post,
+                    BuildOwnerUri(GatewayOwner.IdentityBroker, "/internal/connections/copilot-user/callback-relay"))
+                {
+                    Content = new ByteArrayContent(body),
+                };
+                request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                using var response = await SendAsync(GatewayOwner.IdentityBroker, request, timeout.Token)
+                    .ConfigureAwait(false);
+                if (IsRedirect(response.StatusCode))
+                {
+                    await WriteProblemAsync(context, "owner_redirect_rejected", StatusCodes.Status502BadGateway)
+                        .ConfigureAwait(false);
+                    return;
+                }
+                if (response.Content.Headers.ContentLength is > 16 * 1024)
+                {
+                    await WriteProblemAsync(context, "owner_response_too_large", StatusCodes.Status502BadGateway)
+                        .ConfigureAwait(false);
+                    return;
+                }
+                context.Response.StatusCode = (int)response.StatusCode;
+                context.Response.Headers.XContentTypeOptions = "nosniff";
+                if (response.Content.Headers.ContentType is { } responseType)
+                    context.Response.ContentType = responseType.ToString();
+                if (response.Content.Headers.ContentLength is { } length)
+                    context.Response.ContentLength = length;
+                await CopyBoundedAsync(
+                    await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false),
+                    context.Response.Body, 16 * 1024, timeout.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(body);
+            }
+        }
+        catch (GatewayOwnerFailureException exception)
+        {
+            await WriteOwnerFailureAsync(context, exception).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            await WriteProblemAsync(context, "owner_timeout", StatusCodes.Status504GatewayTimeout)
+                .ConfigureAwait(false);
+        }
+        catch (HttpRequestException)
+        {
+            await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+                .ConfigureAwait(false);
+        }
+        catch (InvalidDataException)
+        {
+            if (context.Response.HasStarted)
+                context.Abort();
+            else
+                await WriteProblemAsync(context, "owner_response_too_large", StatusCodes.Status502BadGateway)
+                    .ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+                .ConfigureAwait(false);
+        }
+    }
+
     /// <summary>Forwards JSON identity APIs with validated bearer, optional tenant scope, and selected cookie.</summary>
     public async Task ProxyIdentityBrokerApiAsync(
         HttpContext context,
@@ -1183,11 +1297,13 @@ public sealed partial class GatewayOwnerClient(
         bool forwardTenantSelector,
         string? forwardCookieName,
         string cookieErrorCode,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? ownerQueryString = null)
     {
         try
         {
-            if (context.Request.Query.Count > 0)
+            if (context.Request.Query.Count > 0 && ownerQueryString is null ||
+                context.Request.Query.Count == 0 && ownerQueryString is not null)
                 throw new GatewayOwnerFailureException(
                     StatusCodes.Status400BadRequest,
                     "application/problem+json",
@@ -1197,7 +1313,7 @@ public sealed partial class GatewayOwnerClient(
             using var timeout = CreateOwnerTimeout(cancellationToken);
             using var request = new HttpRequestMessage(
                 new HttpMethod(method),
-                BuildOwnerUri(GatewayOwner.IdentityBroker, ownerPath));
+                BuildOwnerUri(GatewayOwner.IdentityBroker, ownerPath + ownerQueryString));
             request.Headers.Authorization = bearer;
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             if (forwardTenantSelector)
@@ -1216,6 +1332,7 @@ public sealed partial class GatewayOwnerClient(
                         "application/problem+json",
                         ProblemBody("request_content_type_invalid", StatusCodes.Status415UnsupportedMediaType));
                 }
+
                 request.Content = new StreamContent(context.Request.Body);
                 if (context.Request.ContentLength is { } requestContentLength)
                     request.Content.Headers.ContentLength = requestContentLength;
@@ -1291,6 +1408,58 @@ public sealed partial class GatewayOwnerClient(
                 .ConfigureAwait(false);
         }
     }
+
+    private static string BuildCopilotConnectionListQuery(IQueryCollection query)
+    {
+        var allowed = new HashSet<string>(
+            ["scope", "scopeId", "pageSize", "afterConnectionId"], StringComparer.Ordinal);
+        if (query.Keys.Any(key => !allowed.Contains(key)))
+            throw CopilotListRequestFailure();
+
+        string Required(string name, int maximumLength)
+        {
+            var values = query[name];
+            if (values.Count != 1 || string.IsNullOrWhiteSpace(values[0]) ||
+                values[0]!.Length > maximumLength || values[0]!.Any(char.IsControl))
+                throw CopilotListRequestFailure();
+            return values[0]!;
+        }
+
+        var scope = Required("scope", 16);
+        var scopeId = Required("scopeId", 256);
+        if (scope is not ("project" or "platform") ||
+            scope == "platform" && scopeId != "default")
+            throw CopilotListRequestFailure();
+
+        var pageSize = 50;
+        if (query.TryGetValue("pageSize", out var pageValues))
+        {
+            if (pageValues.Count != 1 ||
+                !int.TryParse(pageValues[0], NumberStyles.None, CultureInfo.InvariantCulture, out pageSize) ||
+                pageSize is < 1 or > 50)
+                throw CopilotListRequestFailure();
+        }
+
+        string? afterConnectionId = null;
+        if (query.TryGetValue("afterConnectionId", out var cursorValues))
+        {
+            if (cursorValues.Count != 1 ||
+                !Guid.TryParseExact(cursorValues[0], "D", out var cursor) ||
+                cursor == Guid.Empty)
+                throw CopilotListRequestFailure();
+            afterConnectionId = cursor.ToString("D", CultureInfo.InvariantCulture);
+        }
+
+        return $"?scope={Uri.EscapeDataString(scope)}&scopeId={Uri.EscapeDataString(scopeId)}" +
+            $"&pageSize={pageSize.ToString(CultureInfo.InvariantCulture)}" +
+            (afterConnectionId is null ? string.Empty : $"&afterConnectionId={afterConnectionId}");
+    }
+
+    private static GatewayOwnerFailureException CopilotListRequestFailure() =>
+        new(
+            StatusCodes.Status400BadRequest,
+            "application/problem+json",
+            ProblemBody("copilot_connection_list_request_invalid", StatusCodes.Status400BadRequest));
 
     /// <summary>Forwards allowlisted GitHub callback query parameters and exactly one transaction cookie.</summary>
     public async Task ProxyGitHubRepoAppCallbackAsync(

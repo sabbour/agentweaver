@@ -3,10 +3,17 @@ export const COPILOT_CALLBACK_PATH = '/auth/github/copilot-app/callback';
 /** Same-origin popup message discriminator for the Copilot authorization result. */
 export const COPILOT_CALLBACK_MESSAGE_TYPE = 'agentweaver.copilot-user.callback';
 /** Maximum accepted OAuth state length. */
-export const COPILOT_CALLBACK_STATE_LIMIT = 512;
+export const COPILOT_CALLBACK_STATE_LIMIT = 2048;
 /** Maximum accepted authorization-code length. */
 export const COPILOT_CALLBACK_CODE_LIMIT = 4096;
-const COPILOT_CALLBACK_PARAMETER_NAMES = new Set(['state', 'code', 'error']);
+const COPILOT_CALLBACK_DIAGNOSTIC_LIMIT = 2048;
+const COPILOT_CALLBACK_PARAMETER_NAMES = new Set([
+  'state',
+  'code',
+  'error',
+  'error_description',
+  'error_uri',
+]);
 
 /** Exact success or user-denial payload relayed from the GitHub Copilot callback window. */
 export type CopilotCallbackMessage =
@@ -77,8 +84,22 @@ export function parseCopilotCallbackParameters(search: string): CopilotCallbackM
 
   const codes = parameters.getAll('code');
   const errors = parameters.getAll('error');
+  const descriptions = parameters.getAll('error_description');
+  const errorUris = parameters.getAll('error_uri');
+  const hasValidDenialDiagnostics =
+    descriptions.length <= 1 &&
+    errorUris.length <= 1 &&
+    [descriptions[0], errorUris[0]].every((value) =>
+      value === undefined ||
+      value.length <= COPILOT_CALLBACK_DIAGNOSTIC_LIMIT &&
+      !value.split('').some((character) => {
+        const code = character.charCodeAt(0);
+        return code <= 0x1f || code === 0x7f;
+      }));
   if (codes.length === 1 &&
       errors.length === 0 &&
+      descriptions.length === 0 &&
+      errorUris.length === 0 &&
       isBoundedParameter(codes[0], COPILOT_CALLBACK_CODE_LIMIT)) {
     return {
       type: COPILOT_CALLBACK_MESSAGE_TYPE,
@@ -86,7 +107,10 @@ export function parseCopilotCallbackParameters(search: string): CopilotCallbackM
       code: codes[0],
     };
   }
-  if (codes.length === 0 && errors.length === 1 && errors[0] === 'access_denied') {
+  if (codes.length === 0 &&
+      errors.length === 1 &&
+      errors[0] === 'access_denied' &&
+      hasValidDenialDiagnostics) {
     return {
       type: COPILOT_CALLBACK_MESSAGE_TYPE,
       state: states[0],

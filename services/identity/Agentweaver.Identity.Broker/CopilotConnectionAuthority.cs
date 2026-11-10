@@ -35,7 +35,12 @@ public sealed record CopilotConnectionStart(CopilotConnectionReceipt Connection,
 /// callback to one connection, actor, PKCE verifier and browser cookie.
 /// </summary>
 internal sealed record CopilotLinkState(
-    Guid ConnectionId, string ActorId, string Verifier, string CallbackCookieHash, DateTimeOffset ExpiresAt);
+    Guid ConnectionId, string ActorId, string Verifier, string CallbackCookieHash, DateTimeOffset ExpiresAt,
+    Uri? CliCallbackUri = null);
+
+/// <summary>One bounded page of safe Copilot connection receipts.</summary>
+public sealed record CopilotConnectionPage(
+    IReadOnlyList<CopilotConnectionReceipt> Items, Guid? NextAfterConnectionId);
 
 /// <summary>Serialized GitHub user access and refresh tokens stored only in the secret backend.</summary>
 internal sealed record CopilotUserCredential(
@@ -66,11 +71,14 @@ public sealed class CopilotConnectionAuthority(
     /// </summary>
     public async Task<CopilotConnectionStart> BeginAsync(
         RuntimeActorAuthorization actor, string issuer, string actorId,
-        ProjectAuthorityResourceType scope, string scopeId, CancellationToken cancellationToken)
+        ProjectAuthorityResourceType scope, string scopeId, Uri? cliCallbackUri,
+        CancellationToken cancellationToken)
     {
         if (scope is not (ProjectAuthorityResourceType.Project or ProjectAuthorityResourceType.Platform) ||
             scope == ProjectAuthorityResourceType.Platform && scopeId != "default")
             throw Denied("copilot_connection_scope_invalid");
+        if (cliCallbackUri is not null)
+            ValidateCliCallbackUri(cliCallbackUri);
         RuntimeContractValidation.ValidateIdentifier(scopeId);
         var authority = await RequireWriteAuthorityAsync(
             actor, issuer, actorId, scope, scopeId, cancellationToken);
@@ -80,7 +88,7 @@ public sealed class CopilotConnectionAuthority(
             .TrimEnd('=').Replace('+', '-').Replace('/', '_');
         var callbackCookie = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
         var state = _stateProtector.Protect(JsonSerializer.Serialize(
-            new CopilotLinkState(id, actorId, verifier, Hash(callbackCookie), expiry), Json));
+            new CopilotLinkState(id, actorId, verifier, Hash(callbackCookie), expiry, cliCallbackUri), Json));
         var row = new CopilotConnectionRecord
         {
             ConnectionId = id, OwnerIssuer = issuer, OwnerActorId = actorId,
@@ -101,6 +109,58 @@ public sealed class CopilotConnectionAuthority(
             $"&redirect_uri={Uri.EscapeDataString(options.CallbackUri.AbsoluteUri)}" +
             $"&state={Uri.EscapeDataString(state)}&code_challenge={challenge}&code_challenge_method=S256");
         return new(Receipt(row), url) { CallbackCookie = callbackCookie };
+    }
+
+    /// <summary>Returns the fixed loopback target for a valid pending CLI state.</summary>
+    public async Task<Uri> ResolveCliCallbackUriAsync(string state, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(state) || state.Length > 8192)
+            throw Denied("copilot_connection_callback_invalid");
+        CopilotLinkState link;
+        try
+        {
+            link = JsonSerializer.Deserialize<CopilotLinkState>(_stateProtector.Unprotect(state), Json)
+                ?? throw Denied("copilot_connection_callback_invalid");
+        }
+        catch (Exception failure) when (failure is CryptographicException or JsonException)
+        {
+            throw Denied("copilot_connection_callback_invalid");
+        }
+        if (link.CliCallbackUri is null || link.ExpiresAt <= time.GetUtcNow())
+            throw Denied("copilot_connection_callback_expired");
+        ValidateCliCallbackUri(link.CliCallbackUri);
+        var row = await ReadAsync(link.ConnectionId, cancellationToken);
+        if (row.State != CopilotConnectionState.Pending ||
+            row.StateHash != Hash(state) ||
+            row.FreshUntil <= time.GetUtcNow())
+            throw Denied("copilot_connection_callback_replayed");
+        return link.CliCallbackUri;
+    }
+
+    /// <summary>Lists safe connection receipts for the current unbound owner and selected scope.</summary>
+    public async Task<CopilotConnectionPage> ListAsync(
+        RuntimeActorAuthorization actor, string issuer, string actorId,
+        ProjectAuthorityResourceType scope, string scopeId, int pageSize, Guid? afterConnectionId,
+        CancellationToken cancellationToken)
+    {
+        if (scope is not (ProjectAuthorityResourceType.Project or ProjectAuthorityResourceType.Platform) ||
+            scope == ProjectAuthorityResourceType.Platform && scopeId != "default" ||
+            pageSize is < 1 or > 50 || afterConnectionId == Guid.Empty)
+            throw Denied("copilot_connection_request_invalid");
+        RuntimeContractValidation.ValidateIdentifier(scopeId);
+        var authority = await RequireWriteAuthorityAsync(actor, issuer, actorId, scope, scopeId, cancellationToken);
+        var query = db.CopilotConnections.AsNoTracking().Where(row =>
+            row.OwnerIssuer == issuer && row.OwnerActorId == actorId &&
+            row.TenantId == authority.TenantId && row.Scope == scope && row.ScopeId == scopeId);
+        if (afterConnectionId is { } cursor)
+            query = query.Where(row => row.ConnectionId.CompareTo(cursor) > 0);
+        var rows = await query.OrderBy(row => row.ConnectionId).Take(pageSize + 1)
+            .ToListAsync(cancellationToken);
+        await RequireWriteAuthorityAsync(actor, issuer, actorId, scope, scopeId, cancellationToken);
+        var hasMore = rows.Count > pageSize;
+        if (hasMore)
+            rows.RemoveAt(rows.Count - 1);
+        return new(rows.Select(Receipt).ToArray(), hasMore ? rows[^1].ConnectionId : null);
     }
 
     /// <summary>
@@ -600,6 +660,19 @@ public sealed class CopilotConnectionAuthority(
         return new(now.UtcTicks - now.UtcTicks % 10, TimeSpan.Zero);
     }
     private static string Hash(string value) => RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(value));
+
+    private static void ValidateCliCallbackUri(Uri value)
+    {
+        if (!value.IsAbsoluteUri ||
+            value.Scheme != Uri.UriSchemeHttp ||
+            value.Host != "127.0.0.1" ||
+            value.Port != 49173 ||
+            value.AbsolutePath != "/oauth/callback" ||
+            value.Query.Length != 0 ||
+            value.Fragment.Length != 0 ||
+            value.UserInfo.Length != 0)
+            throw Denied("copilot_connection_cli_callback_invalid");
+    }
     private static RuntimeAuthorizationException Denied(string code) => new(code);
     private static string ReadString(JsonElement root, string name)
     {

@@ -158,6 +158,17 @@ public static class GatewayEndpoints
                     $"/internal/connections/copilot-user/{connectionId:D}",
                     forwardLinkCookie: false,
                     cancellationToken: cancellationToken));
+        copilotConnections.MapGet(
+            "/list",
+            (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                owner.ProxyCopilotConnectionListAsync(context, cancellationToken));
+
+        endpoints.MapPost(
+                "/api/connections/copilot-user/v1/callback-relay",
+                (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                    owner.ProxyCopilotCallbackRelayAsync(context, cancellationToken))
+            .AllowAnonymous()
+            .RequireCors(GatewayWebCors.CopilotConnectionsPolicyName);
 
         var remoteMcpConnections = endpoints.MapGroup("/api/connections/remote-mcp/v1")
             .RequireAuthorization()

@@ -498,13 +498,13 @@ function callbackPageMessage(): string {
     return 'The GitHub response was invalid. Close this window and start again.';
   const opener = window.opener;
   if (!opener || opener === window)
-    return 'This response has no matching project settings window. Close this window and start again.';
+    return 'Returning the sign-in result to the CLI…';
   return 'Returning to the project settings window…';
 }
 
-/** Relays the sanitized callback to its same-origin opener and closes the popup. */
+/** Relays the sanitized callback to its opener or the CLI loopback listener. */
 export function CopilotPopupCallbackPage() {
-  const [message] = useState(callbackPageMessage);
+  const [message, setMessage] = useState(callbackPageMessage);
   const attempted = useRef(false);
 
   useEffect(() => {
@@ -514,9 +514,23 @@ export function CopilotPopupCallbackPage() {
     window.__AGENTWEAVER_COPILOT_CALLBACK__ = undefined;
     if (!isCopilotCallbackMessage(callback)) return;
     const opener = window.opener;
-    if (!opener || opener === window) return;
-    opener.postMessage(callback, window.location.origin);
-    window.close();
+    if (opener && opener !== window) {
+      opener.postMessage(callback, window.location.origin);
+      window.close();
+      return;
+    }
+
+    void copilotGatewayClient.relayCopilotCallback(callback.state)
+      .then((callbackUri) => {
+        const target = new URL(callbackUri);
+        target.searchParams.set('state', callback.state);
+        if ('code' in callback)
+          target.searchParams.set('code', callback.code);
+        else
+          target.searchParams.set('error', callback.error);
+        window.location.replace(target.toString());
+      })
+      .catch(() => setMessage('The CLI callback failed. Return to the CLI and start again.'));
   }, []);
 
   return (
