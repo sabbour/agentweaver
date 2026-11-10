@@ -191,8 +191,8 @@ public sealed record CiliumFqdnSelector(string? MatchName = null, string? MatchP
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
 }
 
-/// <summary>JSON representation of a Cilium CIDR destination selector.</summary>
-public sealed record CiliumCidrSelector(string Cidr)
+/// <summary>JSON representation of a Cilium CIDR destination selector with optional excluded ranges.</summary>
+public sealed record CiliumCidrSelector(string Cidr, ImmutableArray<string>? Except = null)
 {
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
@@ -205,8 +205,8 @@ public sealed record CiliumPort(string Port, string Protocol)
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
 }
 
-/// <summary>JSON representation of an allowed DNS query pattern.</summary>
-public sealed record CiliumDnsRule(string MatchPattern)
+/// <summary>JSON representation of an allowed DNS query pattern or exact name.</summary>
+public sealed record CiliumDnsRule(string? MatchPattern = null, string? MatchName = null)
 {
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
@@ -752,7 +752,7 @@ public sealed class CiliumEgressPolicyAdapter(
     }
 
     /// <summary>Compares canonical policy specs so JSON property ordering does not affect idempotency checks.</summary>
-    private static bool SameSpec(CiliumPolicySpec left, CiliumPolicySpec right) =>
+    internal static bool SameSpec(CiliumPolicySpec left, CiliumPolicySpec right) =>
         string.Equals(CanonicalJson(left), CanonicalJson(right), StringComparison.Ordinal);
 
     private static bool HasOnlyExpectedRootFields(CiliumNetworkPolicyDocument policy) =>

@@ -285,6 +285,88 @@ negotiation, absent-policy revocation fences, and the explicit L7 limitation. Th
 [testing guide](../guide/testing.md) lists the command and what the tests cannot
 prove.
 
+## Platform egress provider and reconciler
+
+Issue #2634 adds the provider side of the shared AgentHost egress baseline. It
+does not add a way to edit the policy. The canonical policy source and its
+management routes are planned in #2655 and #2659.
+
+The parts are:
+
+- `IPlatformEgressPolicySource` returns the admitted snapshot: the source ID,
+  the source revision, the source hash, the compiler version, the checkpoint,
+  the mode (`PublicHttps` or `Allowlist`), and the exact hosts. If no admitted
+  snapshot exists, it returns `null`.
+- `PlatformEgressReconciler` reads the snapshot and applies it to the
+  selected `IPlatformEgressProvider`. It fails closed. If the source is
+  absent, cannot be read, or is invalid, or if the provider cannot apply the
+  mode, the reconciler does not apply or remove provider rules. It returns
+  `Failed` with `policy_source_unavailable`, `policy_source_invalid`, or
+  `capability_unavailable`. It never uses a table, the configuration, or a
+  default mode in place of the source.
+- The reconciler reads the source again immediately before an apply. If the
+  snapshot changed, it uses the new snapshot. A change to the source hash
+  alone creates a new generation, even when the mode and the hosts are the
+  same.
+- The provider object stores the generation, the intent hash, and the source
+  hash. The reconciler therefore keeps no local state. Two replicas are
+  fenced by the Kubernetes `resourceVersion` check.
+- `CiliumPlatformEgressProvider` owns one object:
+  `CiliumNetworkPolicy/agenthost-platform-egress` in the AgentHost namespace,
+  with the selector `agentweaver.io/workload: agenthost`. The deploy creates
+  the object with a DNS-only spec. The provider only reads and replaces it.
+  If the object is missing, the apply fails with `policy_object_missing`.
+- `PublicHttps` renders one `toCIDRSet` rule for `0.0.0.0/0` and `::/0` on
+  TCP 443, with the excluded ranges in `except`. `Allowlist` renders DNS
+  `matchName` rules and `toFQDNs` `matchName` rules for each exact host on
+  TCP 443. Both modes add an `egressDeny` rule for the excluded ranges. An
+  empty `Allowlist` renders no allow rule.
+- Cilium allow rules from different policies add together. Deny rules take
+  precedence over allow rules in every policy. The deploy-managed AgentHost
+  egress policies stay in place, so `Allowlist` does not narrow egress until
+  the deploy removes those policies (#2640). The `egressDeny` rule for the
+  excluded ranges applies to the selected AgentHost pods even when another
+  policy allows those ranges.
+- `GetStatusAsync` reads the object back, renders it again, and compares the
+  spec and the hashes. A match gives `Accepted`. `Accepted` proves only the
+  Kubernetes object. It does not prove enforcement in the datapath.
+- The provider advertises `egress.exact-host` only when
+  `ExactHostVerifiedForKata` is true. That value stays false until the Kata
+  spike (#2633) and the install probe prove exact-host rules. While it is
+  false, the reconciler refuses an `Allowlist` snapshot.
+
+```mermaid
+sequenceDiagram
+    participant R as Reconciler
+    participant S as Policy source
+    participant C as Cilium provider
+    participant K as Kubernetes API
+    R->>S: Read admitted snapshot
+    alt No snapshot, read error, or invalid snapshot
+        R-->>R: Failed, no provider change
+    else Snapshot is valid
+        R->>C: Read status
+        C->>K: Read agenthost-platform-egress
+        alt Status matches intent hash and source hash
+            R-->>R: Converged
+        else Different or not applied
+            R->>S: Read snapshot again
+            R->>C: Apply generation + 1
+            C->>K: Replace with resourceVersion check
+            K-->>C: Stored object
+            C-->>R: Accepted or Failed
+        end
+    end
+```
+
+Environment does not run the reconciler yet. #2659 connects it to the
+canonical policy source. Until then, no platform egress policy is applied and
+the deploy-managed AgentHost egress policies stay in effect.
+
+The focused tests use a fake policy source and a fake Kubernetes store. They
+include a conformance kit that every `IPlatformEgressProvider` must pass. They
+do not prove datapath enforcement.
+
 ## Trade-offs and limits
 
 Intersecting intent prevents project settings from widening platform egress,
