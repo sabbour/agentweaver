@@ -26,7 +26,8 @@ Blob, and their private endpoints in `eastus2euap`. Its required
 Log Analytics and Application Insights in `eastus2`; the AMPLS remains global,
 and the Monitor Private Endpoint stays in the VNet's `location`. PostgreSQL
 continues to use the delegated subnet in the primary `location`; no cross-region
-database subnet is introduced.
+database subnet is introduced. In this layout, the AKS Azure Monitor add-on is
+not available; see [Canary-region clusters](#canary-region-clusters).
 
 AKS is not a private cluster: `apiServerAccessProfile.enablePrivateCluster` is
 fixed to `false`. Managed Entra authentication and Azure RBAC are enabled and
@@ -104,7 +105,9 @@ cluster.
 
 Every installation enables the AKS Azure Monitor add-on (Container Insights).
 You cannot turn it off. The per-run egress audit needs the add-on to forward
-ACNS container network logs to the `ContainerNetworkLogs` table.
+ACNS container network logs to the `ContainerNetworkLogs` table. The only
+exception is a cluster in a canary region; see
+[Canary-region clusters](#canary-region-clusters).
 
 The templates do not declare the add-on. After each successful
 `scripts/azure/deploy.mjs --execute` run, for both `main.bicep` and
@@ -114,7 +117,10 @@ The templates do not declare the add-on. After each successful
 2. If the add-on is enabled with the `<prefix>-law` workspace and managed
    identity authentication (`useAADAuth`), the installer adopts it. It makes
    no change.
-3. If the add-on is not enabled, the installer runs
+3. If the add-on is not enabled, the installer reads the cluster region and
+   the `<prefix>-law` region. If the cluster is in a canary region and the
+   workspace is not, it skips the add-on (see
+   [Canary-region clusters](#canary-region-clusters)). Otherwise it runs
    `az aks enable-addons --addons monitoring` with `<prefix>-law`, managed
    identity authentication, and the `<prefix>-ampls` private link scope. Azure
    CLI creates the data collection rule, the data collection endpoint, and the
@@ -145,6 +151,39 @@ grants no roles.
 is ready on every scheduled node before it writes to the cluster. The
 deployment identity needs `get` on `daemonsets.apps/ama-logs` in
 `kube-system`.
+
+### Canary-region clusters
+
+A cluster in a canary region (a region name that ends in `euap`, for example
+`eastus2euap`) cannot use the add-on when the workspace is in a production
+region. The example parameters use this layout: AKS in `eastus2euap` and
+`<prefix>-law` in `eastus2`. Azure Monitor has these limits:
+
+- The Container Insights data collection rule must be in the workspace region.
+  Azure rejects a rule in another region with `InvalidWorkspace`.
+- A canary-region cluster can only use a data collection rule in
+  `eastus2euap`. A rule in a production region fails with
+  `InvalidAssociation` ("Rule Id ... does not exist").
+- Log Analytics workspaces may not be available in canary regions for your
+  subscription.
+- Shared-key authentication for Container Insights was retired on
+  2026-09-30.
+
+For this layout, the installer does not run `az aks enable-addons`. It prints
+a warning, and the receipt contains `azureMonitorAddon` with `action` set to
+`unsupported-region`, `clusterLocation`, and `workspaceLocation`. If the
+add-on is already enabled, the installer adopts or stops as usual.
+
+`npm run deploy:kustomize` then accepts a missing `ama-logs` DaemonSet only
+when it can list the nodes, the list is not empty, and every node has a
+`topology.kubernetes.io/region` label that ends in `euap`. It prints a
+warning and continues. It needs `list nodes` at cluster scope for this check.
+If `ama-logs` exists, it must be ready.
+
+In this layout, Container Insights data, `ContainerNetworkLogs`, and the
+egress audit data that depends on them are not collected. To collect them,
+put the cluster in a production region, or use a workspace in `eastus2euap`
+if Log Analytics is available there for your subscription.
 
 Cost: Log Analytics charges for the ingested Container Insights data in
 `<prefix>-law` (`PerGB2018`, 30-day retention). The add-on also runs one

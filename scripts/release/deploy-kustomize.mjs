@@ -308,7 +308,7 @@ function readClusterResourceAsEnvironment(exec, context, root, kind, name) {
  * the workspace StorageClass, a Ready node for the sandbox RuntimeClass, and the smoke check permissions.
  * Returns the product StorageClass to create when it is missing.
  */
-function verifyClusterPrerequisites(exec, context, root, resources) {
+function verifyClusterPrerequisites(exec, context, root, resources, log) {
   const data = resources.find(resource => resource.kind === 'ConfigMap' &&
     resource.metadata?.name === ENVIRONMENT_RUNTIME_CONFIG)?.data ?? {};
   const storageClassName = data.Environment__Storage__AzureFiles__StorageClassName;
@@ -370,15 +370,19 @@ function verifyClusterPrerequisites(exec, context, root, resources) {
         `${nodes.length} matching node(s) found. ${KATA_POOL_REMEDY}`);
     }
   }
-  verifyAzureMonitorAgent(exec, context, root);
+  verifyAzureMonitorAgent(exec, context, root, log);
   return { storageClassName, runtimeClassName, createStorageClass };
 }
 
 const AZURE_MONITOR_REMEDY = 'Run the infrastructure deployment (node scripts/azure/deploy.mjs --execute) to enable ' +
   'the AKS Azure Monitor add-on, wait until DaemonSet/ama-logs is ready, then run this deployment again.';
+const REGION_LABEL = 'topology.kubernetes.io/region';
 
-/** Requires the Azure Monitor add-on agent, which forwards container and network logs, to be ready on every node. */
-function verifyAzureMonitorAgent(exec, context, root) {
+/**
+ * Requires the Azure Monitor add-on agent, which forwards container and network logs, to be ready on every node.
+ * A missing agent is accepted only when every node is in a canary (EUAP) region, where the installer skips the add-on.
+ */
+function verifyAzureMonitorAgent(exec, context, root, log) {
   const permission = exec('kubectl', ['auth', 'can-i', 'get', 'daemonsets.apps/ama-logs',
     '--namespace', 'kube-system', '--context', context], { check: false, cwd: root });
   if (permission.status !== 0 || permission.stdout.trim().toLowerCase() !== 'yes') {
@@ -388,7 +392,15 @@ function verifyAzureMonitorAgent(exec, context, root) {
   const output = must(exec, 'kubectl', ['get', 'daemonset', 'ama-logs', '--namespace', 'kube-system',
     '--ignore-not-found=true', '--output=json', '--context', context], { cwd: root },
   'Could not read DaemonSet/ama-logs').stdout;
-  if (!output.trim()) fail(`DaemonSet/ama-logs is missing in namespace kube-system. ${AZURE_MONITOR_REMEDY}`);
+  if (!output.trim()) {
+    if (canaryRegionCluster(exec, context, root)) {
+      log('Warning: DaemonSet/ama-logs is missing and every node is in a canary (EUAP) region. The AKS Azure Monitor ' +
+        'add-on is not available in this layout; Container Insights, ContainerNetworkLogs, and egress audit data ' +
+        'are not collected.');
+      return;
+    }
+    fail(`DaemonSet/ama-logs is missing in namespace kube-system. ${AZURE_MONITOR_REMEDY}`);
+  }
   let daemonSet;
   try {
     daemonSet = JSON.parse(output);
@@ -402,6 +414,21 @@ function verifyAzureMonitorAgent(exec, context, root) {
       (status.observedGeneration ?? 0) < (daemonSet.metadata?.generation ?? 1)) {
     fail(`DaemonSet/ama-logs is not ready (${status.numberReady ?? 0}/${desired} ready). ${AZURE_MONITOR_REMEDY}`);
   }
+}
+
+/** True only when the unfiltered node list is not empty and every node has a canary-region label. */
+function canaryRegionCluster(exec, context, root) {
+  requireClusterPermission(exec, context, root, 'list', 'nodes', 'check the cluster region');
+  const output = must(exec, 'kubectl', ['get', 'nodes', '--output=json', '--context', context], { cwd: root },
+    'Could not list nodes').stdout;
+  let nodes;
+  try {
+    nodes = JSON.parse(output).items;
+  } catch {
+    fail('Kubernetes returned invalid JSON for the node list.');
+  }
+  return Array.isArray(nodes) && nodes.length > 0 &&
+    nodes.every(node => /^[a-z0-9]+euap$/i.test(node.metadata?.labels?.[REGION_LABEL] ?? ''));
 }
 
 function requireClusterPermission(exec, context, root, verb, resource, purpose) {
@@ -1583,7 +1610,7 @@ export async function deployKustomize(options, overrides = {}) {
         desiredRuntimeMaps.some(resource => resource.metadata?.namespace !== NAMESPACE || resource.immutable !== true)) {
       fail('Kustomize must render both immutable AgentHost runtime ConfigMaps in namespace agentweaver.');
     }
-    const prerequisites = verifyClusterPrerequisites(exec, context, root, resources);
+    const prerequisites = verifyClusterPrerequisites(exec, context, root, resources, log);
     const existingRuntimeMaps = new Map([...RUNTIME_CONFIG_MAPS].map(name => [
       name, readExistingNamedRuntimeConfigMap(exec, context, root, name),
     ]));
