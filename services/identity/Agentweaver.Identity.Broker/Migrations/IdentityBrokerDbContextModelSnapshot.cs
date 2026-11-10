@@ -122,6 +122,8 @@ namespace Agentweaver.Identity.Broker.Migrations
 
                     b.HasKey("ConnectionId");
 
+                    b.HasIndex("OwnerIssuer", "OwnerActorId", "TenantId", "Scope", "ScopeId", "ConnectionId");
+
                     b.ToTable("copilot_connections", "identity_broker");
                 });
 

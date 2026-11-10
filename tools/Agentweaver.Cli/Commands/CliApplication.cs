@@ -55,6 +55,14 @@ public static class CliApplication
             if (args[0] == "models")
                 return await ByokModelCommands.RunAsync(
                     args[1..], runtime ?? new CliRuntimeOptions(), output, ct).ConfigureAwait(false);
+            if (args[0] == "copilot")
+            {
+                var actualRuntime = runtime ?? new CliRuntimeOptions();
+                using var ownedClient = actualRuntime.HttpClient is null ? CreateSafeHttpClient() : null;
+                var httpClient = actualRuntime.HttpClient ?? ownedClient!;
+                return await CopilotConnectionCommands.RunAsync(
+                    args[1..], actualRuntime, httpClient, output, ct).ConfigureAwait(false);
+            }
             throw new CliUsageException($"Unknown command: {args[0]}");
         }
         catch (OperationCanceledException)
@@ -511,6 +519,8 @@ public static class CliApplication
         Usage:
           agentweaver [--help] [--version]
           agentweaver auth login|status|logout [target options] [--scope <scope>]
+          agentweaver copilot status|connect --scope project|platform [--scope-id <id>] [target options]
+          agentweaver copilot refresh|disconnect --connection-id <guid> [target options]
           agentweaver api operations [target options]
           agentweaver api describe <operationId> [target options]
           agentweaver api invoke <operationId> [target options] [--path name=value] [--query name=value]

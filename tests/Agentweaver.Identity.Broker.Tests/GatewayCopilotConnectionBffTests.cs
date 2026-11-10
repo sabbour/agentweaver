@@ -16,6 +16,60 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed class GatewayCopilotConnectionBffTests
 {
     [Fact]
+    public async Task AnonymousCopilotCallbackRelayForwardsOnlyTheStateBody()
+    {
+        using var rsa = RSA.Create(2048);
+        var requests = new ConcurrentQueue<OwnerRequest>();
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa),
+            () => new HttpClientHandler(),
+            async (owner, request, cancellationToken) =>
+            {
+                var body = request.Content is null
+                    ? null
+                    : await request.Content.ReadAsStringAsync(cancellationToken);
+                requests.Enqueue(new OwnerRequest(
+                    request.Method,
+                    request.RequestUri!,
+                    request.Headers.Authorization?.ToString(),
+                    request.Headers.TryGetValues("X-Agentweaver-Tenant", out var tenant)
+                        ? tenant.Single()
+                        : null,
+                    request.Headers.TryGetValues("Cookie", out var cookie)
+                        ? cookie.Single()
+                        : null,
+                    body));
+                Assert.Equal(GatewayHost::Agentweaver.Gateway.GatewayOwner.IdentityBroker, owner);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        callbackUri = "http://127.0.0.1:49173/oauth/callback",
+                    }),
+                };
+            });
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "/api/connections/copilot-user/v1/callback-relay")
+        {
+            Content = JsonContent.Create(new { state = "protected-state" }),
+        };
+        using var response = await gateway.Client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("127.0.0.1:49173/oauth/callback",
+            await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+
+        var forwarded = Assert.Single(requests);
+        Assert.Equal(HttpMethod.Post, forwarded.Method);
+        Assert.Equal("/internal/connections/copilot-user/callback-relay", forwarded.Uri.AbsolutePath);
+        Assert.Null(forwarded.Authorization);
+        Assert.Null(forwarded.Tenant);
+        Assert.Null(forwarded.Cookie);
+        Assert.Equal("{\"state\":\"protected-state\"}", forwarded.Body);
+    }
+
+    [Fact]
     public async Task CopilotConnectionBffForwardsOptionalTenantSelectorAndOnlyLinkCookie()
     {
         using var rsa = RSA.Create(2048);

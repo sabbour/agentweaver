@@ -336,6 +336,43 @@ export class AgentweaverGatewayClient {
     init: RequestInit = {},
     tenantSelector?: string | null,
   ): Promise<T> {
+    this.copilotRequestUrl(path);
+    return this.request(token, path, init, this.gatewayRootUrl, tenantSelector);
+  }
+
+  /** Relays a validated CLI callback state without sending a bearer token or browser cookie. */
+  async relayCopilotCallback(state: string): Promise<string> {
+    const requestUrl = this.copilotRequestUrl('/api/connections/copilot-user/v1/callback-relay');
+    const response = await this.fetcher.call(globalThis, requestUrl, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state }),
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'error',
+    });
+    if (!response.ok) {
+      let problem: Record<string, unknown> = {};
+      try {
+        const body: unknown = await response.json();
+        if (body && typeof body === 'object' && !Array.isArray(body))
+          problem = body as Record<string, unknown>;
+      } catch {
+        // The relay error body is optional; the status is enough to report failure.
+      }
+      throw new GatewayError(response.status, problem, problemMessage(problem, response.status));
+    }
+
+    const body: unknown = await response.json();
+    if (!body || typeof body !== 'object' || Array.isArray(body) ||
+        (body as Record<string, unknown>).callbackUri !== 'http://127.0.0.1:49173/oauth/callback') {
+      throw new GatewayError(502, { code: 'invalid_callback_relay_response' },
+        'The server returned an invalid CLI callback address.');
+    }
+    return (body as { callbackUri: string }).callbackUri;
+  }
+
+  private copilotRequestUrl(path: string): string {
     const requestUrl = `${this.gatewayRootUrl}${path}`;
     if (typeof window === 'undefined' ||
         window.location.protocol !== 'https:' ||
@@ -354,7 +391,7 @@ export class AgentweaverGatewayClient {
     if (target.origin !== window.location.origin) {
       throw new Error('The GitHub Copilot connection must use the same site as this app over HTTPS.');
     }
-    return this.request(token, path, init, this.gatewayRootUrl, tenantSelector);
+    return requestUrl;
   }
 
   /** Reads and validates the Projects owner's authorization context for this session. */

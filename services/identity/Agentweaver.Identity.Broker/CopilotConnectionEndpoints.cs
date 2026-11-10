@@ -11,7 +11,18 @@ namespace Agentweaver.Identity.Broker;
 
 /// <summary>Request to start a Copilot connection for one project or platform scope.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record BeginCopilotConnectionRequest(ProjectAuthorityResourceType Scope, string ScopeId);
+public sealed record BeginCopilotConnectionRequest(
+    ProjectAuthorityResourceType Scope, string ScopeId, Uri? CliCallbackUri = null);
+
+/// <summary>Anonymous lookup for the loopback target in a protected, pending CLI flow.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record CopilotCallbackRelayRequest(string State)
+{
+    public override string ToString() => nameof(CopilotCallbackRelayRequest) + " [REDACTED]";
+}
+
+/// <summary>Loopback target returned for a valid CLI callback state.</summary>
+public sealed record CopilotCallbackRelayResponse(Uri CallbackUri);
 
 /// <summary>OAuth callback data. Its string representation deliberately omits state and code.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -53,7 +64,8 @@ public static class CopilotConnectionEndpoints
             });
         routes.MapPost("/begin", (HttpContext context, BeginCopilotConnectionRequest input) =>
             ExecuteAsync(context, (authority, actor, issuer, actorId) =>
-                authority.BeginAsync(actor, issuer, actorId, input.Scope, input.ScopeId, context.RequestAborted)));
+                authority.BeginAsync(actor, issuer, actorId, input.Scope, input.ScopeId,
+                    input.CliCallbackUri, context.RequestAborted)));
         routes.MapPost("/complete", (HttpContext context, CompleteCopilotConnectionRequest input) =>
             ExecuteAsync(context, (authority, actor, issuer, actorId) =>
                 authority.CompleteAsync(actor, issuer, actorId, input.State, input.Code,
@@ -80,6 +92,52 @@ public static class CopilotConnectionEndpoints
         routes.MapGet("/{connectionId:guid}", (HttpContext context, Guid connectionId) =>
             ExecuteAsync(context, (authority, actor, issuer, actorId) =>
                 authority.ReadStatusAsync(actor, issuer, actorId, connectionId, context.RequestAborted)));
+        routes.MapGet("/list", (HttpContext context, string scope, string scopeId,
+            int? pageSize, Guid? afterConnectionId) =>
+            ExecuteAsync(context, (authority, actor, issuer, actorId) =>
+            {
+                var resourceType = scope.ToLowerInvariant() switch
+                {
+                    "project" => ProjectAuthorityResourceType.Project,
+                    "platform" => ProjectAuthorityResourceType.Platform,
+                    _ => throw new ArgumentException("The Copilot connection scope is invalid.")
+                };
+                return authority.ListAsync(actor, issuer, actorId, resourceType, scopeId,
+                    pageSize ?? 50, afterConnectionId, context.RequestAborted);
+            }));
+        routes.MapPost("/callback-relay", (HttpContext context, CopilotCallbackRelayRequest input) =>
+            ExecuteCallbackRelayAsync(context, input))
+            .AllowAnonymous()
+            .WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(16 * 1024));
+    }
+
+    private static async Task ExecuteCallbackRelayAsync(
+        HttpContext context,
+        CopilotCallbackRelayRequest input)
+    {
+        context.Response.Headers.CacheControl = "no-store";
+        try
+        {
+            if (context.Request.Query.Count != 0)
+                throw new RuntimeAuthorizationException("copilot_connection_callback_invalid");
+            var authority = context.RequestServices.GetService<CopilotConnectionAuthority>();
+            if (authority is null)
+            {
+                await ErrorAsync(context, "copilot_connection_writer_unavailable",
+                    StatusCodes.Status503ServiceUnavailable);
+                return;
+            }
+            var callbackUri = await authority.ResolveCliCallbackUriAsync(input.State, context.RequestAborted);
+            await Results.Json(new CopilotCallbackRelayResponse(callbackUri)).ExecuteAsync(context);
+        }
+        catch (RuntimeAuthorizationException error)
+        {
+            await ErrorAsync(context, error.Code, StatusCodes.Status403Forbidden);
+        }
+        catch (ArgumentException)
+        {
+            await ErrorAsync(context, "copilot_connection_request_invalid", StatusCodes.Status400BadRequest);
+        }
     }
 
     private static async Task ExecuteAsync<T>(

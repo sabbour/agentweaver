@@ -284,6 +284,63 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             $"/internal/connections/copilot-user/{linked.ConnectionId:D}", ownerToken, [TenantId]);
         await AssertStatusAsync(status, HttpStatusCode.OK);
         Assert.Equal(rotated, await status.Content.ReadFromJsonAsync<CopilotConnectionReceipt>(CoordinationJsonOptions));
+        var secondOwnedConnectionId = Guid.NewGuid();
+        var ownerIssuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri;
+        using (var seedScope = factory.Services.CreateScope())
+        {
+            var seedDb = seedScope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
+            CopilotConnectionRecord Connection(
+                Guid connectionId, string issuer, string actorId, string tenantId,
+                ProjectAuthorityResourceType connectionScope, string connectionScopeId) => new()
+            {
+                ConnectionId = connectionId,
+                OwnerIssuer = issuer,
+                OwnerActorId = actorId,
+                TenantId = tenantId,
+                Scope = connectionScope,
+                ScopeId = connectionScopeId,
+                Revision = 1,
+                State = CopilotConnectionState.Revoked,
+                FreshUntil = DateTimeOffset.UtcNow,
+                StateHash = new string('a', 64),
+            };
+            seedDb.CopilotConnections.AddRange(
+                Connection(secondOwnedConnectionId, ownerIssuer, ownerId, TenantId,
+                    ProjectAuthorityResourceType.Project, project.ProjectId),
+                Connection(Guid.NewGuid(), ownerIssuer, "another-owner", TenantId,
+                    ProjectAuthorityResourceType.Project, project.ProjectId),
+                Connection(Guid.NewGuid(), ownerIssuer, ownerId, "another-tenant",
+                    ProjectAuthorityResourceType.Project, project.ProjectId),
+                Connection(Guid.NewGuid(), ownerIssuer, ownerId, TenantId,
+                    ProjectAuthorityResourceType.Platform, "default"),
+                Connection(Guid.NewGuid(), "https://another-broker.test/", ownerId, TenantId,
+                    ProjectAuthorityResourceType.Project, project.ProjectId),
+                Connection(Guid.NewGuid(), ownerIssuer, ownerId, TenantId,
+                    ProjectAuthorityResourceType.Project, "another-project"));
+            await seedDb.SaveChangesAsync();
+        }
+        using var listed = await SendAsync(broker, HttpMethod.Get,
+            $"/internal/connections/copilot-user/list?scope=project&scopeId={Uri.EscapeDataString(project.ProjectId)}&pageSize=1",
+            ownerToken, [TenantId]);
+        await AssertStatusAsync(listed, HttpStatusCode.OK);
+        var firstPage = await listed.Content.ReadFromJsonAsync<CopilotConnectionPage>(CoordinationJsonOptions);
+        Assert.NotNull(firstPage);
+        var firstItem = Assert.Single(firstPage.Items);
+        Assert.NotNull(firstPage.NextAfterConnectionId);
+        Assert.Equal(firstItem.ConnectionId, firstPage.NextAfterConnectionId);
+        using var afterListed = await SendAsync(broker, HttpMethod.Get,
+            $"/internal/connections/copilot-user/list?scope=project&scopeId={Uri.EscapeDataString(project.ProjectId)}&pageSize=1&afterConnectionId={firstPage.NextAfterConnectionId:D}",
+            ownerToken, [TenantId]);
+        await AssertStatusAsync(afterListed, HttpStatusCode.OK);
+        var secondPage = await afterListed.Content.ReadFromJsonAsync<CopilotConnectionPage>(CoordinationJsonOptions);
+        Assert.NotNull(secondPage);
+        var secondItem = Assert.Single(secondPage.Items);
+        Assert.NotEqual(firstItem.ConnectionId, secondItem.ConnectionId);
+        Assert.Null(secondPage.NextAfterConnectionId);
+        var expectedConnectionIds = new HashSet<Guid> { linked.ConnectionId, secondOwnedConnectionId };
+        var listedConnectionIds = new HashSet<Guid> { firstItem.ConnectionId, secondItem.ConnectionId };
+        Assert.Equal(expectedConnectionIds.Count, listedConnectionIds.Count);
+        Assert.All(expectedConnectionIds, connectionId => Assert.Contains(connectionId, listedConnectionIds));
         using var disconnected = await SendJsonAsync(broker, HttpMethod.Post,
             "/internal/connections/copilot-user/revoke", ownerToken,
             new ChangeCopilotConnectionRequest(linked.ConnectionId, rotated.Revision));
@@ -298,7 +355,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await AssertStatusAsync(refreshDenied, HttpStatusCode.Forbidden);
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
-        var current = await db.CopilotConnections.AsNoTracking().SingleAsync();
+        var current = await db.CopilotConnections.AsNoTracking()
+            .SingleAsync(row => row.ConnectionId == linked.ConnectionId);
         Assert.Equal(CopilotConnectionState.Revoked, current.State);
         Assert.Equal("version-2", current.SecretVersion);
         Assert.Equal(6, await db.CopilotConnectionRevisions.CountAsync());
@@ -341,7 +399,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         });
         using var begin = await SendJsonAsync(
             broker, HttpMethod.Post, "/internal/connections/copilot-user/begin",
-            ownerToken, new BeginCopilotConnectionRequest(ProjectAuthorityResourceType.Platform, "default"));
+            ownerToken, new BeginCopilotConnectionRequest(
+                ProjectAuthorityResourceType.Platform, "default",
+                new Uri("http://127.0.0.1:49173/oauth/callback")));
         await AssertStatusAsync(begin, HttpStatusCode.OK);
         var setCookie = Assert.Single(begin.Headers.GetValues("Set-Cookie"));
         Assert.Contains("secure", setCookie, StringComparison.OrdinalIgnoreCase);
@@ -358,6 +418,21 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             started.AuthorizationUri.Query)["state"].ToString();
         Assert.DoesNotContain(ownerToken, state);
         Assert.DoesNotContain(cookie.Split('=')[1], state);
+        using (var relay = await broker.PostAsJsonAsync(
+                   "/internal/connections/copilot-user/callback-relay",
+                   new CopilotCallbackRelayRequest(state)))
+        {
+            await AssertStatusAsync(relay, HttpStatusCode.OK);
+            Assert.True(relay.Headers.CacheControl?.NoStore);
+            var callback = await relay.Content.ReadFromJsonAsync<CopilotCallbackRelayResponse>(
+                CoordinationJsonOptions);
+            Assert.NotNull(callback);
+            Assert.Equal(new Uri("http://127.0.0.1:49173/oauth/callback"), callback.CallbackUri);
+        }
+        using (var invalidRelay = await broker.PostAsJsonAsync(
+                   "/internal/connections/copilot-user/callback-relay",
+                   new CopilotCallbackRelayRequest(state + "tampered")))
+            await AssertStatusAsync(invalidRelay, HttpStatusCode.Forbidden);
         foreach (var (token, callbackState, callbackCookie) in new[]
         {
             (ownerToken, state, (string?)null),

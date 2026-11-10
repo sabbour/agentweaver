@@ -316,16 +316,25 @@ Prefix: `/api/connections/copilot-user/v1`. Native Identity prefix:
 
 | Method | Suffix | Auth | Purpose |
 | --- | --- | --- | --- |
-| POST | `/begin` | Bearer; current connection-scope authority | Start Copilot connection. |
+| POST | `/begin` | Bearer; current connection-scope authority | Start Copilot connection. Optional `cliCallbackUri` is limited to the fixed IPv4 loopback callback. |
 | POST | `/complete` | Bearer and exact link cookie | Complete state-matched authorization. |
 | POST | `/refresh` | Bearer; expected revision | Refresh the connection. |
 | POST | `/revoke` | Bearer; expected revision | Revoke the connection. |
 | GET | `/{connectionId:guid}` | Bearer; current connection authority | Read status. |
+| GET | `/list?scope={project\|platform}&scopeId={id}&pageSize={1-50}&afterConnectionId={guid}` | Bearer; current connection-scope authority | Read a stable page of safe connection receipts for the current issuer, actor, tenant, and scope. |
+| POST | `/callback-relay` | Public; valid pending CLI state | Return only the protected CLI loopback callback address. It does not return a bearer or GitHub credential. |
 
-Every Copilot operation requires an unbound bearer and current
+All authenticated Copilot operations require an unbound bearer and current
 `WriteProjects` for project scope, or `WritePlatformRuntimeDefaults` for platform
 scope. These permissions require `api.read` and `projects.admin`. Existing
 connections also require the original owner issuer and actor.
+
+The Gateway callback relay accepts only a bounded JSON body with `state`. It
+forwards that state to the Broker without a bearer and returns the fixed
+`http://127.0.0.1:49173/oauth/callback` address only when the protected state
+is valid and pending. The state expires after five minutes. The completion
+operation consumes it once and still requires the callback cookie and the
+original signed-in owner. Web popup callbacks keep their existing opener flow.
 
 Prefix: `/api/connections/remote-mcp/v1`. Native Identity prefix:
 `/internal/connections/remote-mcp`.

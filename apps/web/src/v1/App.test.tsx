@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   ensureSession: vi.fn(),
   tenantSelector: 'tenant-1',
   completeRemoteMcpOAuthCallback: vi.fn(),
+  relayCopilotCallback: vi.fn(),
   listProjects: vi.fn(),
   listProjectRuns: vi.fn(),
   getProjectMetrics: vi.fn(),
@@ -85,6 +86,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('./api', () => ({
+  copilotGatewayClient: {
+    relayCopilotCallback: mocks.relayCopilotCallback,
+  },
+  copilotGatewayBaseUrl: '/api/v1',
   gatewayClient: {
     completeRemoteMcpOAuthCallback: mocks.completeRemoteMcpOAuthCallback,
     listProjects: mocks.listProjects,
