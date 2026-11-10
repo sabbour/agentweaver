@@ -49,15 +49,17 @@ public sealed class RuntimeModelBindingsResolverTests
                 ["AgentHost:ModelBindings:byok:SourceMode"] = "Byok",
                 ["AgentHost:ModelBindings:byok:Provider:Type"] = "openai",
                 ["AgentHost:ModelBindings:byok:Provider:BaseUrl"] = "https://byok.test/v1",
-                ["AgentHost:ModelBindings:byok:SupportedReasoningEfforts:0"] = "low",
-                ["AgentHost:ModelBindings:byok:SupportedReasoningEfforts:1"] = "high",
+                ["AgentHost:ModelBindings:byok:SupportedReasoningEfforts:0"] = "none",
+                ["AgentHost:ModelBindings:byok:SupportedReasoningEfforts:1"] = "minimal",
+                ["AgentHost:ModelBindings:byok:SupportedReasoningEfforts:2"] = "low",
+                ["AgentHost:ModelBindings:byok:SupportedReasoningEfforts:3"] = "high",
                 ["AgentHost:ModelBindings:hosted:ModelId"] = "hosted-model",
                 ["AgentHost:ModelBindings:hosted:SourceMode"] = "HostedCopilot",
             }).Build();
 
         var bindings = RuntimeModelBindingsResolver.ReadBindings(configuration);
 
-        Assert.Equal(["low", "high"], bindings["byok"].SupportedReasoningEfforts.ToArray());
+        Assert.Equal(["none", "minimal", "low", "high"], bindings["byok"].SupportedReasoningEfforts.ToArray());
         Assert.True(bindings["hosted"].SupportedReasoningEfforts.IsEmpty);
     }
 
@@ -67,14 +69,14 @@ public sealed class RuntimeModelBindingsResolverTests
         var binding = new RuntimeModelBinding("byok-model", ModelSourceMode.Byok,
             new RuntimeByokProvider("openai", new Uri("https://byok.test/v1")))
         {
-            SupportedReasoningEfforts = ["low", "high"]
+            SupportedReasoningEfforts = ["none", "minimal", "low", "high"]
         };
         var first = new RuntimeModelBindingsResolver("model-bindings-v1",
             new Dictionary<string, RuntimeModelBinding> { ["accepted-reference"] = binding });
         var reordered = new RuntimeModelBindingsResolver("model-bindings-v1",
             new Dictionary<string, RuntimeModelBinding>
             {
-                ["accepted-reference"] = binding with { SupportedReasoningEfforts = ["high", "low"] }
+                ["accepted-reference"] = binding with { SupportedReasoningEfforts = ["high", "low", "minimal", "none"] }
             });
         var changed = new RuntimeModelBindingsResolver("model-bindings-v1",
             new Dictionary<string, RuntimeModelBinding>
@@ -86,14 +88,19 @@ public sealed class RuntimeModelBindingsResolverTests
         Assert.NotEqual(first.ConfigurationHash, changed.ConfigurationHash);
         var high = first.Pin("accepted-reference", ModelSourceMode.Byok, "high");
         var low = first.Pin("accepted-reference", ModelSourceMode.Byok, "low");
+        var none = first.Pin("accepted-reference", ModelSourceMode.Byok, "none");
+        var minimal = first.Pin("accepted-reference", ModelSourceMode.Byok, "minimal");
         Assert.NotEqual(high, low);
+        Assert.NotEqual(none, minimal);
         Assert.Equal("high", high.ReasoningEffort);
+        Assert.Equal("none", none.ReasoningEffort);
+        Assert.Equal("minimal", minimal.ReasoningEffort);
         Assert.Equal("runtime_model_binding_pin_mismatch",
             Assert.Throws<RuntimeAuthorizationException>(() =>
                 changed.Resolve("accepted-reference", ModelSourceMode.Byok, high)).Code);
         Assert.Equal("runtime_model_binding_pin_invalid",
             Assert.Throws<RuntimeAuthorizationException>(() =>
-                RuntimeModelBindingsResolver.ValidatePin(high with { ReasoningEffort = "none" })).Code);
+                RuntimeModelBindingsResolver.ValidatePin(high with { ReasoningEffort = "unsupported" })).Code);
     }
 
     [Fact]

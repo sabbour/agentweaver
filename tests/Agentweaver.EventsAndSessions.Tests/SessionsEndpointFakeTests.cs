@@ -93,6 +93,25 @@ public sealed class SessionsEndpointFakeTests
     }
 
     [Theory]
+    [InlineData("none")]
+    [InlineData("minimal")]
+    public void SessionMaterialAcceptsNoneAndMinimalReasoningEfforts(string reasoningEffort)
+    {
+        var reference = new SessionObjectReference(
+            new ObjectKey("private/configuration/opaque-key"),
+            SessionMaterialValidation.Purpose(SessionMaterialKind.RuntimeConfiguration), 2)
+        {
+            Material = new(1, SessionMaterialKind.RuntimeConfiguration, "tenant-1", new string('a', 64),
+                Guid.NewGuid(), 1, 1, new string('b', 64), "sdk-v1", "runtime-v1", "model:selected", "model")
+            {
+                ReasoningEffort = reasoningEffort
+            }
+        };
+
+        SessionMaterialValidation.Validate(reference);
+    }
+
+    [Theory]
     [InlineData("/internal/sessions/session-1/remote-tool-results")]
     [InlineData("/internal/sessions/session-1/remote-tool-results/read")]
     public async Task ReviewedRemoteToolResultRoutesRejectHttpBeforeReadingBody(string path)

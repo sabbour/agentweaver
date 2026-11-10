@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.RegularExpressions;
+using Agentweaver.Abstractions;
 using Microsoft.Extensions.Configuration;
 
 namespace Agentweaver.Projects.Config;
@@ -27,8 +28,6 @@ public sealed partial class ModelBindingCapabilities
 
     /// <summary>Configuration path of the binding revision shared with AgentHost.</summary>
     public const string RevisionConfigurationKey = "AgentHost:ModelBindingsRevision";
-
-    private static readonly string[] ReasoningEffortOrder = ["low", "medium", "high", "xhigh"];
 
     private ModelBindingCapabilities(string? revision, ImmutableArray<ModelBindingCapability> bindings)
     {
@@ -109,15 +108,19 @@ public sealed partial class ModelBindingCapabilities
         // These rules match AgentHost's RuntimeModelBinding validation, so any binding AgentHost accepts can be
         // copied here. AgentHost ignores binding efforts for hosted models and verifies them against the SDK model
         // list at run start; BuildModelChoices therefore never reports them.
-        if (efforts.Any(effort => effort is null || !ReasoningEffortOrder.Contains(effort)) ||
+        if (efforts.Any(effort => !ModelReasoningEfforts.IsSupported(effort)) ||
             efforts.Distinct(StringComparer.Ordinal).Count() != efforts.Length)
-            throw Invalid($"Model binding '{reference}' reasoning efforts must be distinct values from low, medium, high, xhigh.");
+            throw Invalid(
+                $"Model binding '{reference}' reasoning efforts must be distinct values from " +
+                $"{string.Join(", ", ModelReasoningEfforts.SupportedValues)}.");
 
         return new ModelBindingCapability(
             reference,
             enabled,
             sourceMode,
-            ReasoningEffortOrder.Where(efforts.Contains).ToImmutableArray());
+            ModelReasoningEfforts.SupportedValues
+                .Where(effort => efforts.Contains(effort, StringComparer.Ordinal))
+                .ToImmutableArray());
     }
 
     private static InvalidOperationException Invalid(string message) =>

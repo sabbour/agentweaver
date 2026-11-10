@@ -488,7 +488,7 @@ public sealed class RuntimeCopilotSessionFactory : IRuntimeHostedModelReasoningC
 
         // Keep the published vocabulary aligned with the values accepted by project configuration.
         var supported = supportedEfforts.ToHashSet(StringComparer.Ordinal);
-        return new[] { "low", "medium", "high", "xhigh" }
+        return ModelReasoningEfforts.SupportedValues
             .Where(supported.Contains)
             .ToImmutableArray();
     }

@@ -49,7 +49,7 @@ public sealed record RuntimeModelBinding(
         RuntimeContractValidation.ValidateIdentifier(ModelId);
         if (!Enum.IsDefined(SourceMode) || PromptCapacityTokens is < 1 ||
             SupportedReasoningEfforts.IsDefault ||
-            SupportedReasoningEfforts.Any(effort => effort is not ("low" or "medium" or "high" or "xhigh")) ||
+            SupportedReasoningEfforts.Any(effort => !ModelReasoningEfforts.IsSupported(effort)) ||
             SupportedReasoningEfforts.Distinct(StringComparer.Ordinal).Count() != SupportedReasoningEfforts.Length ||
             SourceMode == ModelSourceMode.HostedCopilot && Provider is not null ||
             SourceMode == ModelSourceMode.Byok && Provider is null)

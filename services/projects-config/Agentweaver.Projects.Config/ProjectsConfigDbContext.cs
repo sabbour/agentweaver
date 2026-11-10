@@ -573,7 +573,7 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.ToTable("hosted_model_reasoning_catalog", table =>
                 table.HasCheckConstraint(
                     "ck_hosted_model_reasoning_supported_efforts",
-                    "supported_reasoning_efforts <@ ARRAY['low', 'medium', 'high', 'xhigh']::text[]"));
+                    "supported_reasoning_efforts <@ ARRAY['none', 'minimal', 'low', 'medium', 'high', 'xhigh']::text[]"));
             entity.HasKey(catalog => new
             {
                 catalog.TenantId,

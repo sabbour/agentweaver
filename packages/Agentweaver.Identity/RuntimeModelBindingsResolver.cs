@@ -145,7 +145,7 @@ public sealed class RuntimeModelBindingsResolver
         if (pin.ContractVersion != 1 || !Enum.IsDefined(pin.SourceMode) ||
             pin.SourceMode == ModelSourceMode.HostedCopilot && pin.ProviderType is not null ||
             pin.SourceMode == ModelSourceMode.Byok && pin.ProviderType is not ("azure" or "openai" or "anthropic") ||
-            pin.ReasoningEffort is not ("low" or "medium" or "high" or "xhigh"))
+            !ModelReasoningEfforts.IsSupported(pin.ReasoningEffort))
             throw new RuntimeAuthorizationException("runtime_model_binding_pin_invalid");
         RuntimeContractValidation.ValidateIdentifier(pin.ModelSelectionReference);
         RuntimeContractValidation.ValidateIdentifier(pin.ModelId);
@@ -155,7 +155,7 @@ public sealed class RuntimeModelBindingsResolver
 
     private static void ValidateReasoningEffort(string reasoningEffort)
     {
-        if (reasoningEffort is not ("low" or "medium" or "high" or "xhigh"))
+        if (!ModelReasoningEfforts.IsSupported(reasoningEffort))
             throw new RuntimeAuthorizationException("runtime_model_reasoning_effort_invalid");
     }
 }

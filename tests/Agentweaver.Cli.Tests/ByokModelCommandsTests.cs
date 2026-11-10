@@ -60,6 +60,7 @@ public sealed class ByokModelCommandsTests : IDisposable
             {
                 Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
             })!;
+        Assert.Equal("none", pin.ReasoningEffort);
         foreach (var configuration in new IConfiguration[] { agentHost, events })
         {
             var resolver = new RuntimeModelBindingsResolver(
@@ -68,7 +69,7 @@ public sealed class ByokModelCommandsTests : IDisposable
             Assert.Equal(pin.ConfigurationHash, resolver.ConfigurationHash);
             var binding = resolver.Resolve("azure-gpt", ModelSourceMode.Byok, pin);
             Assert.Equal(new RuntimeByokProvider(providerType, new Uri(endpoint), wireApi, apiVersion), binding.Provider);
-            Assert.Equal(["low", "medium", "high"], binding.SupportedReasoningEfforts.ToArray());
+            Assert.Equal(["none", "minimal", "low", "medium", "high"], binding.SupportedReasoningEfforts.ToArray());
             Assert.Equal(providerType == "openai", binding.Provider!.IsAzureOpenAIV1Endpoint);
         }
 
@@ -136,7 +137,7 @@ public sealed class ByokModelCommandsTests : IDisposable
     [Theory]
     [InlineData("apiKey", "\"secret-value\"", "unsupported field 'apiKey'")]
     [InlineData("wireApi", null, "'wireApi' is required")]
-    [InlineData("reasoningEfforts", "[\"none\",\"low\"]", "'reasoningEfforts' must list")]
+    [InlineData("reasoningEfforts", "[\"unsupported\",\"low\"]", "'reasoningEfforts' must list")]
     [InlineData("endpoint", "\"https://example-resource.openai.azure.com/openai/v1?api-key=x\"", "'endpoint' must be")]
     [InlineData("endpoint", "\"https://example.com/openai/v1\"", "'endpoint' must be")]
     [InlineData("endpoint", "\"https://example-resource.openai.azure.com:8443/openai/v1\"", "'endpoint' must be")]
@@ -236,8 +237,8 @@ public sealed class ByokModelCommandsTests : IDisposable
             ["providerType"] = providerType,
             ["endpoint"] = endpoint,
             ["wireApi"] = wireApi,
-            ["reasoningEfforts"] = new JsonArray("high", "low", "medium"),
-            ["defaultReasoningEffort"] = "high",
+            ["reasoningEfforts"] = new JsonArray("high", "low", "minimal", "none", "medium"),
+            ["defaultReasoningEffort"] = "none",
             ["revision"] = "byok-r1",
             ["credentialReference"] = new JsonObject
             {

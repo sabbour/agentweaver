@@ -24,7 +24,6 @@ internal static class ByokModelCommands
     private const string RevisionKey = "AgentHost__ModelBindingsRevision";
     private const string AzureCostPrefix = "EventsAndSessions__Cost__Azure__";
     private const string ModelRatesPrefix = AzureCostPrefix + "RateCard__ModelRates__";
-    private static readonly string[] Efforts = ["low", "medium", "high", "xhigh"];
     private static readonly string[] AzureHostSuffixes =
         [".openai.azure.com", ".cognitiveservices.azure.com", ".services.ai.azure.com"];
 
@@ -521,10 +520,11 @@ internal static class ByokModelCommands
                 ? effortArray.Select(item => item is JsonValue value && value.TryGetValue<string>(out var text)
                     ? text : throw new CliUsageException("'reasoningEfforts' must contain strings.")).ToArray()
                 : throw new CliUsageException("'reasoningEfforts' must be a JSON array.");
-            if (efforts.Length == 0 || efforts.Any(effort => !Efforts.Contains(effort)) ||
+            if (efforts.Length == 0 || efforts.Any(effort => !ModelReasoningEfforts.IsSupported(effort)) ||
                 efforts.Distinct(StringComparer.Ordinal).Count() != efforts.Length)
                 throw new CliUsageException(
-                    "'reasoningEfforts' must list unique values from low, medium, high, and xhigh.");
+                    "'reasoningEfforts' must list unique values from " +
+                    $"{string.Join(", ", ModelReasoningEfforts.SupportedValues)}.");
             var defaultEffort = String(input, "defaultReasoningEffort");
             if (!efforts.Contains(defaultEffort))
                 throw new CliUsageException("'defaultReasoningEffort' must be one of 'reasoningEfforts'.");
@@ -545,7 +545,8 @@ internal static class ByokModelCommands
                     "'credentialReference' must name a Key Vault secret and its exact 32-character version.");
 
             return new ByokRequest(reference, deployment, providerType, endpoint, wireApi, apiVersion,
-                Efforts.Where(efforts.Contains).ToArray(), defaultEffort, capacity, revision,
+                ModelReasoningEfforts.SupportedValues.Where(efforts.Contains).ToArray(),
+                defaultEffort, capacity, revision,
                 new SecretRef(secretId, secretVersion), ReadPricing(input["pricing"] as JsonObject),
                 ReadBudget(input["spendBudget"] as JsonObject));
         }

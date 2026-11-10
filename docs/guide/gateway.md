@@ -140,8 +140,10 @@ cannot replace a newer verification with a delayed older one. AgentHost reads
 the live SDK catalog with the hosted credential and sends only the verified
 levels and binding metadata to Projects & Config; the hosted credential and
 model ID are not included. The runtime checks the requested level against the
-live catalog whenever a run starts. Disabled bindings are not listed. Choices never contain
-model IDs, provider settings, or credential references, and the owner does not
+live catalog whenever a run starts. The v1 vocabulary is `none`, `minimal`,
+`low`, `medium`, `high`, and `xhigh`; each model lists only its configured or
+verified levels. Disabled bindings are not listed. Choices never contain model
+IDs, provider settings, or credential references, and the owner does not
 add choices from saved values or a fixed list.
 
 When the copy is absent, `models` reports `state: "unavailable"` with

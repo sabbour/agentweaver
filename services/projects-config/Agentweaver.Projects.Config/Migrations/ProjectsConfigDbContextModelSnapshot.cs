@@ -69,7 +69,7 @@ namespace Agentweaver.Projects.Config.Migrations
 
                     b.ToTable("hosted_model_reasoning_catalog", "projects_config", t =>
                         {
-                            t.HasCheckConstraint("ck_hosted_model_reasoning_supported_efforts", "supported_reasoning_efforts <@ ARRAY['low', 'medium', 'high', 'xhigh']::text[]");
+                            t.HasCheckConstraint("ck_hosted_model_reasoning_supported_efforts", "supported_reasoning_efforts <@ ARRAY['none', 'minimal', 'low', 'medium', 'high', 'xhigh']::text[]");
                         });
                 });
 

@@ -557,8 +557,8 @@ public static class ProjectConfigurationValidator
 
     private static void ValidateReasoningEffort(string? effort, string path)
     {
-        if (effort is not null && effort is not ("low" or "medium" or "high" or "xhigh"))
-            throw Invalid($"'{path}' must be low, medium, high, or xhigh.");
+        if (effort is not null && !ModelReasoningEfforts.IsSupported(effort))
+            throw Invalid($"'{path}' is not a supported reasoning effort.");
     }
 
     private static void ValidateModelSourceMode(ModelSelectionSettings model)

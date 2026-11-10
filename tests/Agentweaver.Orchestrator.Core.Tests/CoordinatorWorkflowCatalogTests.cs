@@ -169,11 +169,12 @@ public sealed class CoordinatorWorkflowCatalogTests
               "modelSelection": { "reference": "model:provider/alpha", "reasoningEffort": "high" },
               "modelSelections": [
                 { "selection": { "reference": "model:provider/alpha", "reasoningEffort": "high" }, "connectionScope": "project" },
-                { "selection": { "reference": "model:provider/alpha", "reasoningEffort": "low" }, "connectionScope": "project" }
+                { "selection": { "reference": "model:provider/alpha", "reasoningEffort": "none" }, "connectionScope": "project" },
+                { "selection": { "reference": "model:provider/alpha", "reasoningEffort": "minimal" }, "connectionScope": "project" }
               ],
               "modelTaskSelections": [
-                { "taskKind": "planning", "modelSelectionReference": "model:provider/alpha", "reasoningEffort": "low" },
-                { "taskKind": "codeWriting", "modelSelectionReference": "model:provider/alpha", "reasoningEffort": "high" }
+                { "taskKind": "planning", "modelSelectionReference": "model:provider/alpha", "reasoningEffort": "minimal" },
+                { "taskKind": "codeWriting", "modelSelectionReference": "model:provider/alpha", "reasoningEffort": "none" }
               ]
             }
             """);
@@ -186,11 +187,11 @@ public sealed class CoordinatorWorkflowCatalogTests
 
         Assert.Equal(
             new ModelTaskSelectionReference(
-                ModelTaskKind.Planning, null, null, "model:provider/alpha", "low"),
+                ModelTaskKind.Planning, null, null, "model:provider/alpha", "minimal"),
             planning);
         Assert.Equal(
             new ModelTaskSelectionReference(
-                ModelTaskKind.CodeWriting, null, null, "model:provider/alpha", "high"),
+                ModelTaskKind.CodeWriting, null, null, "model:provider/alpha", "none"),
             coding);
         Assert.Equal(["model:provider/alpha"], context.Roles.Single().ModelSelectionReferences.ToArray());
     }
@@ -304,7 +305,7 @@ public sealed class CoordinatorWorkflowCatalogTests
               },
               "modelSelection": { "reference": "model:provider/alpha", "reasoningEffort": "high" },
               "modelTaskSelections": [
-                { "taskKind": "codeWriting", "modelSelectionReference": "model:provider/alpha", "reasoningEffort": "none" }
+                { "taskKind": "codeWriting", "modelSelectionReference": "model:provider/alpha", "reasoningEffort": "unknown" }
               ]
             }
             """);

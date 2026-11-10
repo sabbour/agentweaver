@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
@@ -45,7 +46,7 @@ public static class RuntimeContractValidation
         if (binding.ModelSourceMode is { } modelSourceMode &&
             (!Enum.IsDefined(modelSourceMode) || binding.ModelSelectionReference is null))
             throw new RuntimeAuthorizationException("runtime_binding_invalid");
-        if (binding.ReasoningEffort is not ("low" or "medium" or "high" or "xhigh"))
+        if (!ModelReasoningEfforts.IsSupported(binding.ReasoningEffort))
             throw new RuntimeAuthorizationException("runtime_binding_invalid");
         if (binding.ModelBindingPin is { } modelBindingPin)
         {

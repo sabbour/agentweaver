@@ -22,8 +22,9 @@ Get these items first:
 - An Azure OpenAI deployment. Record its name, region, and endpoint.
 - The wire API that the deployment and Agentweaver both support:
   `responses` or `completions`. Test it with a small request before you start.
-- The reasoning efforts that the deployment accepts. Agentweaver runs only
-  `low`, `medium`, `high`, and `xhigh`. Do not list other values.
+- The reasoning efforts that the deployment accepts. Agentweaver accepts
+  `none`, `minimal`, `low`, `medium`, `high`, and `xhigh`. List only efforts
+  that the deployment supports.
 - The API key, stored as a Key Vault secret in the vault that the Identity
   Broker reads (`IdentityBroker:SecretRedemption:VaultUri`). Record the secret
   name and its exact 32-character version. The secret value is the raw key.
@@ -114,7 +115,7 @@ Create `byok.json` outside the repository. It contains no secrets.
 | `deployment` | The Azure OpenAI deployment name. Agentweaver sends it as the model ID. |
 | `providerType`, `endpoint`, `azureApiVersion` | See [Select the endpoint form](#select-the-endpoint-form). |
 | `wireApi` | Required: `responses` or `completions`. |
-| `reasoningEfforts` | The verified efforts, from `low`, `medium`, `high`, and `xhigh`. |
+| `reasoningEfforts` | The verified efforts, from `none`, `minimal`, `low`, `medium`, `high`, and `xhigh`. |
 | `defaultReasoningEffort` | The effort for the project. It must be in `reasoningEfforts`. |
 | `promptCapacityTokens` | Optional. The positive prompt token limit of the deployment. |
 | `revision` | A new model-binding revision. It must differ from the current revision. |
@@ -335,7 +336,8 @@ To remove the binding:
 
 - The rate card uses standard token prices. It does not use long-context
   prices, provisioned throughput, or batch prices.
-- Agentweaver does not support the `none` or `minimal` reasoning efforts.
+- Agentweaver accepts `none` and `minimal` when they are listed for the selected
+  model. Add them only when the deployment supports them.
 - To change prices, run the procedure again with a new `revision`. Runs that
   started with the earlier rate card keep it, and their new usage is not
   priced.

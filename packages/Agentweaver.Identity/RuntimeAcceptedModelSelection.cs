@@ -48,7 +48,7 @@ public sealed record RuntimeAcceptedModelSelection(
         JsonElement snapshot, string expectedReference, string expectedReasoningEffort)
     {
         RuntimeContractValidation.ValidateIdentifier(expectedReference);
-        if (expectedReasoningEffort is not ("low" or "medium" or "high" or "xhigh") ||
+        if (!ModelReasoningEfforts.IsSupported(expectedReasoningEffort) ||
             snapshot.ValueKind != JsonValueKind.Object)
             throw Invalid();
 
@@ -263,7 +263,7 @@ public sealed record RuntimeAcceptedModelSelection(
                 return "high";
         }
         if (value.ValueKind != JsonValueKind.String ||
-            value.GetString() is not ("low" or "medium" or "high" or "xhigh"))
+            !ModelReasoningEfforts.IsSupported(value.GetString()))
             throw Invalid();
         return value.GetString()!;
     }

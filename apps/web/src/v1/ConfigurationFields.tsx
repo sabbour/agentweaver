@@ -18,6 +18,8 @@ const TASKS: ReadonlyArray<{ value: ModelTaskKind; label: string }> = [
 ];
 
 const REASONING_LABELS: Record<ReasoningEffort, string> = {
+  none: 'None',
+  minimal: 'Minimal',
   low: 'Low',
   medium: 'Medium',
   high: 'High',
@@ -27,7 +29,8 @@ const REASONING_LABELS: Record<ReasoningEffort, string> = {
 /** Narrows a select value to the reasoning levels accepted by the owner. */
 function reasoning(value: string): ReasoningEffort | null {
   // Any other value, including the empty "use default" option, means no override.
-  return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' ? value : null;
+  return value === 'none' || value === 'minimal' || value === 'low' || value === 'medium' ||
+    value === 'high' || value === 'xhigh' ? value : null;
 }
 
 /**
