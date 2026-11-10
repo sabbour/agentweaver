@@ -98,16 +98,41 @@ export function parsePlatformRuntimeDefaultsArgs(argv = []) {
   return options;
 }
 
-function canonicalJson(value) {
-  if (Array.isArray(value)) return value.map(canonicalJson);
+const optionalNullPaths = new Set([
+  'modelSelection',
+  ...['credentialReference', 'sourceMode', 'connectionId', 'reasoningEffort', 'modelBindingPin']
+    .map(field => `modelSelection.${field}`),
+  'modelSelection.modelBindingPin.providerType',
+  ...['modelTaskDefaults', 'modelRoleDefaults', 'modelAgentDefaults'].flatMap(group =>
+    ['reference', 'reasoningEffort', 'modelBindingPin', 'modelBindingPin.providerType']
+      .map(field => `${group}.*.selection.${field}`)),
+  ...['maxPromptTokens', 'maxRevisionAttempts', 'copilotSoftCreditLimit', 'copilotHardCreditLimit', 'spendBudgets']
+    .map(field => `runLimits.${field}`),
+  ...['softLimit', 'hardLimit', 'agentId', 'period']
+    .map(field => `runLimits.spendBudgets.*.${field}`),
+].map(path => JSON.stringify(path.split('.').map(part => part === '*' ? null : part))));
+
+function canonicalJson(value, location = []) {
+  if (Array.isArray(value)) return value.map(item => canonicalJson(item, [...location, null]));
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalJson(value[key])]));
+    return Object.fromEntries(Object.keys(value).sort().flatMap(key => {
+      const child = [...location, key];
+      return value[key] === null && optionalNullPaths.has(JSON.stringify(child))
+        ? []
+        : [[key, canonicalJson(value[key], child)]];
+    }));
   }
   return value;
 }
 
+function containsRedaction(value) {
+  if (typeof value === 'string') return /\[REDACTED(?:_[A-Z0-9_]+)?\]|\*{3}REDACTED\*{3}/.test(value);
+  return value !== null && typeof value === 'object' && Object.values(value).some(containsRedaction);
+}
+
 function sameJson(left, right) {
-  return JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right));
+  return !containsRedaction(left) && !containsRedaction(right) &&
+    JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right));
 }
 
 function parseDefaultsJson(text) {
@@ -119,6 +144,9 @@ function parseDefaultsJson(text) {
   }
   if (!defaults || typeof defaults !== 'object' || Array.isArray(defaults)) {
     fail('the reviewed input file must contain a platform defaults object.');
+  }
+  if (containsRedaction(defaults)) {
+    fail('the reviewed input file contains a redaction marker.');
   }
   return defaults;
 }
@@ -197,6 +225,9 @@ export async function runPlatformRuntimeDefaults(options, overrides = {}) {
     await readJsonResponse(
       deps.fetch, endpoint, token, options.tenantId, 'Platform runtime defaults GET'),
     'Platform runtime defaults GET');
+  if (containsRedaction(current.defaults)) {
+    fail('the platform defaults GET contains a redaction marker and cannot be verified.');
+  }
   const currentMatches = current.defaults !== null && sameJson(current.defaults, expected);
   if (!options.execute) {
     if (currentMatches) {

@@ -735,7 +735,9 @@ Exit code `2` means the current defaults differ from the reviewed file. To
 write them, add `--execute`. If the defaults already match, `--execute` is a
 no-op and reports the current revision. Otherwise, the script uses the current
 platform revision as `expectedRevision`, then reads the configuration again
-and requires an exact readback before reporting the new revision:
+and checks it before reporting the new revision. For optional fields, the
+comparison treats an omitted value as null. It compares all other values,
+including any credential reference, and rejects redaction markers:
 
 ```powershell
 npm run platform:runtime-defaults -- `
@@ -746,8 +748,13 @@ npm run platform:runtime-defaults -- `
   --execute
 ```
 
+If the write or readback fails, the write may already have created a revision.
+Check the current revision and configuration before you retry. Stop if the
+readback is unavailable or ambiguous. CLI display redaction does not verify a
+credential reference.
+
 Run selection is ready only after the script confirms a configured platform
-revision and exact defaults readback. Before rerunning the acceptance harness, set
+revision and matching defaults readback. Before rerunning the acceptance harness, set
 `fixturePlan.expectedPlatformRuntimeRevision` in its manifest to the verified
 revision reported by the script. A stale expected revision still causes run
 selection to return `409`.

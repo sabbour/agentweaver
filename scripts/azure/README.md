@@ -472,9 +472,13 @@ Pass the selected `environment.tenantId` from the acceptance harness manifest wi
 The default invocation is read-only. Add `--execute` to write differing
 reviewed defaults with the current expected revision. If the current defaults
 already match, execute mode is a no-op and reports the current revision.
-After a write, the script reads the values back and requires an exact
-normalized configuration and revision before it succeeds. It never writes or
-prints the access token.
+For optional fields, comparison treats an omitted value as null. All other
+values, including credential references, must match. A redaction marker is not
+a verified value. After a write, the script reads the configuration and revision
+again before it succeeds. A failed write or readback may still have created a
+revision. Check the current revision and configuration before retrying; stop if
+the readback is unavailable or ambiguous. The script never writes or prints the
+access token.
 
 ```powershell
 npm run platform:runtime-defaults -- --base-url https://<gateway-host> --issuer https://<identity-broker-host>/ --audience https://<api-audience>/ --tenant <tenant-id>
