@@ -319,11 +319,13 @@ export async function bootstrapIdentityPostgres({
           : p1Initializer.receiptPath !== undefined)) {
       throw new Error('Combined PostgreSQL initialization requires exact lowercase source hashes, explicit maximum versions for continuation, and a new receipt under the source Temp directory only for writing modes.');
     }
-    // A separate target names itself and the projects-config migration principal; it supports only fresh initialization.
+    // A separate target names itself. Only fresh initialization creates the projects-config migration principal.
     if (p1Initializer.installTarget !== undefined &&
-        (p1Initializer.installTarget !== resourceGroup || resourceGroup === 'agentweaver' || p1Mode !== 'initialize' ||
-         !GUID_PATTERN.test(p1Initializer.projectsConfigMigrationPrincipalObjectId ?? ''))) {
-      throw new Error('A separate-target P1 initializer requires its own resource group, fresh initialization, and the projects-config migration principal.');
+        (p1Initializer.installTarget !== resourceGroup || resourceGroup === 'agentweaver' ||
+         (p1Mode === 'initialize'
+           ? !GUID_PATTERN.test(p1Initializer.projectsConfigMigrationPrincipalObjectId ?? '')
+           : p1Initializer.projectsConfigMigrationPrincipalObjectId !== undefined))) {
+      throw new Error('A separate-target P1 initializer requires its own resource group, and the projects-config migration principal only for fresh initialization.');
     }
   }
 
@@ -544,7 +546,9 @@ export async function bootstrapIdentityPostgres({
           env: {
             ...process.env,
             AGENTWEAVER_INSTALL_TARGET: p1Initializer.installTarget,
-            P1Initializer__ProjectsConfigMigrationPrincipalObjectId: p1Initializer.projectsConfigMigrationPrincipalObjectId,
+            ...(p1Initializer.projectsConfigMigrationPrincipalObjectId === undefined ? {} : {
+              P1Initializer__ProjectsConfigMigrationPrincipalObjectId: p1Initializer.projectsConfigMigrationPrincipalObjectId,
+            }),
           },
         }),
       });

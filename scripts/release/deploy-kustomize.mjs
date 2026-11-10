@@ -858,7 +858,7 @@ function brokerRuntimeConfigDifferences(live, candidate) {
   return [...differences].sort();
 }
 
-function preflightBrokerRuntimeConfig(exec, context, root, candidate, resources) {
+function preflightBrokerRuntimeConfig(exec, context, root, candidate, resources, resourceGroup) {
   let result;
   try {
     result = exec('kubectl', [
@@ -893,7 +893,7 @@ function preflightBrokerRuntimeConfig(exec, context, root, candidate, resources)
   return preserveIdentityBrokerProviderSetup(resources, liveDeployment, name =>
     name === BROKER_RUNTIME_CONFIG
       ? live
-      : readExistingNamedRuntimeConfigMap(exec, context, root, name), root);
+      : readExistingNamedRuntimeConfigMap(exec, context, root, name), root, resourceGroup);
 }
 
 function deploymentReplicas(deployment, name = 'projects-config') {
@@ -1660,7 +1660,7 @@ export async function deployKustomize(options, overrides = {}) {
       : 'No HostedCopilot or BYOK model bindings; AgentHost model egress allows DNS only.');
     const probeUrls = byokEndpointProbeUrls(resources);
     const brokerRuntimeConfig = findBrokerRuntimeConfig(resources);
-    const providerSetup = preflightBrokerRuntimeConfig(exec, context, root, brokerRuntimeConfig, resources);
+    const providerSetup = preflightBrokerRuntimeConfig(exec, context, root, brokerRuntimeConfig, resources, resourceGroup);
     if (providerSetup?.configMap) {
       log(`Preserved Identity Broker provider setup from ConfigMap/${providerSetup.configMap}.`);
     }

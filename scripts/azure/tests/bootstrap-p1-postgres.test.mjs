@@ -199,8 +199,6 @@ test('P1 PostgreSQL for a separate target passes its plan and Projects migration
   const fail = { sourceResolver() { assert.fail('Invalid input must fail first.'); } };
   await assert.rejects(bootstrapP1Postgres({ repoRoot, resourceGroup: 'unknown', coreMergeSha }, fail),
     /not a registered install target/);
-  await assert.rejects(bootstrapP1Postgres({ repoRoot, resourceGroup: 'awwus2np01', execute: true, mode: 'inspect' }, fail),
-    /only fresh initialization/);
 
   const principal = 'e'.repeat(8) + '-eeee-4eee-8eee-' + 'e'.repeat(12);
   const run = async identityOutput => {
@@ -234,4 +232,18 @@ test('P1 PostgreSQL for a separate target passes its plan and Projects migration
   assert.equal(input.p1Initializer.installTarget, 'awwus2np01');
   assert.equal(input.p1Initializer.projectsConfigMigrationPrincipalObjectId, principal);
   await assert.rejects(run(''), /db:maintenance:setup first/);
+
+  let inspection;
+  await bootstrapP1Postgres({ repoRoot, resourceGroup: 'awwus2np01', execute: true, mode: 'inspect' }, {
+    sourceResolver: () => source,
+    targetGuard: () => ({
+      group: { tags: { 'agentweaver:owner': source.owner, 'agentweaver:cost-center': source.costCenter } },
+      execAz() { assert.fail('Only initialization reads the Projects migration principal.'); },
+    }),
+    readPostgresValues: () => metadata(),
+    async initializePostgres(value) { inspection = value; return { database: 'agentweaver' }; },
+  });
+  assert.equal(inspection.verifyOnly, true);
+  assert.equal(inspection.p1Initializer.installTarget, 'awwus2np01');
+  assert.equal(Object.hasOwn(inspection.p1Initializer, 'projectsConfigMigrationPrincipalObjectId'), false);
 });

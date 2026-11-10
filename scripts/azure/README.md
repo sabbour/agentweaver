@@ -351,8 +351,10 @@ then uses the PostgreSQL server, cluster, and five principal object IDs of that
 target, so its hash is different. The PostgreSQL role names stay
 `agentweaver-id-<service>`. Run `npm run db:maintenance:setup -- --resource-group <target> --execute`
 first: the initializer creates the PostgreSQL role for the
-`<target>-id-projects-config-migration` identity. A separate target supports
-only `--initialize`.
+`<target>-id-projects-config-migration` identity. Only `--initialize` needs
+that identity. `--inspect` and `--apply-pending-migrations` also accept a
+separate target. The reviewed `--continue-after-projects-config` mode reads the
+plan of an earlier source and supports only `agentweaver`.
 The Environment runtime bootstrap profile replacement store receives exactly
 `SELECT, INSERT` on `environment.runtime_bootstrap_profile_replacements`. It
 receives no `UPDATE`, `DELETE`, or default privileges. The source catalog lists

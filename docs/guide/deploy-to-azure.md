@@ -181,11 +181,13 @@ These later steps also accept `--resource-group <target>`:
   account. For a separate target, it does not create the GitHub workflow
   identity, credentials, or role assignments.
 - `node scripts\azure\bootstrap-p1-postgres.mjs --resource-group <target>`
-  initializes the P1 PostgreSQL databases. For a separate target, only the
-  first initialization is supported.
-- `npm run db:maintenance -- --resource-group <target> --prepare-only` and
-  `--release-lock`. A separate target runs its migrations through service
-  deployment.
+  initializes the P1 PostgreSQL databases. With `--inspect` or
+  `--apply-pending-migrations`, it inspects or continues them.
+- `npm run db:maintenance -- --resource-group <target>` in every mode,
+  including the full migration run.
+- Identity Broker provider setup (`deploy.mjs --identity-broker-provider-mode`
+  `render` or `activate`). See
+  [Configure the optional GitHub providers](#configure-the-optional-github-providers).
 - `npm run db:maintenance:projects-config -- --resource-group <target>`.
 - `npm run azure:deploy-from-commit -- <sha> --resource-group <target>`.
 
@@ -202,10 +204,8 @@ The P1 PostgreSQL role names are the same on every target, for example
 `agentweaver-id-projects-config`. The Azure managed identity names start with
 the target name, for example `<target>-id-projects-config`.
 
-These steps still accept only `agentweaver`: the Foundation Probe options,
-`--align-existing-identity-broker-hostname`, Identity Broker provider setup,
-P1 PostgreSQL continuation or repair, and database maintenance migrations.
-`deploy.mjs` rejects the Foundation Probe and hostname alignment options for
+These steps still accept only `agentweaver`: the Foundation Probe options and
+`--align-existing-identity-broker-hostname`. `deploy.mjs` rejects them for
 another target before any Azure call.
 
 Both templates create or update the `kata` node pool for sandbox pods (AKS Pod
@@ -997,6 +997,10 @@ node scripts\azure\deploy.mjs `
   --identity-broker-provider-output .\provider-setup-plan.json
 ```
 
+For a registered separate target, add `--resource-group <target>`. The plan
+then starts from the target values in `deploy/k8s/targets/<target>.json`.
+Render takes no other Azure option.
+
 Render reads the local v1 source and the non-secret JSON file. It makes no
 network or Azure call, does not authenticate, does not open a browser, does not
 read Secret data, and does not change cluster resources. Review the rendered
@@ -1007,9 +1011,10 @@ plan is wrong.
 ### Activate the reviewed plan
 
 After you finish provider registration and review the plan, read the current
-resource versions from the approved `agentweaver-aks` cluster. Confirm that
-your current `kubectl` context targets that cluster before you use these
-values. These commands do not read Secret data:
+resource versions from the approved `<target>-aks` cluster (`agentweaver-aks`
+for the default target). Confirm that your current `kubectl` context targets
+that cluster before you use these values. These commands do not read Secret
+data:
 
 ```powershell
 kubectl config current-context
@@ -1029,7 +1034,7 @@ resource-version values are non-empty before you activate.
 node scripts\azure\deploy.mjs `
   --identity-broker-provider-config .\provider-setup.json `
   --identity-broker-provider-mode activate `
-  --resource-group agentweaver `
+  --resource-group <target> `
   --subscription $SubscriptionId `
   --allowed-subscription $SubscriptionId `
   --tenant $TenantId `
