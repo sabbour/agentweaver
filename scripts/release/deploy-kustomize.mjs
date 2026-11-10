@@ -15,6 +15,8 @@ import { IMAGE_REPOSITORIES } from './image-repositories.mjs';
 import { DEFAULT_REGISTRY, measureAgentHostRegistryImage, parseRegistryTarget } from './registry.mjs';
 import { run, redact } from '../azure/lib/exec.mjs';
 import { preserveIdentityBrokerProviderSetup } from '../azure/lib/identity-broker-provider-setup.mjs';
+import { INSTALL_TARGETS, installTarget } from '../azure/lib/targets.mjs';
+import { applyTargetValues, targetValuePairs } from './target-values.mjs';
 import {
   applyModelBindingsOverlay,
   parseModelBindingsOverlay,
@@ -119,6 +121,10 @@ Model options:
   --model-bindings <file.json>         Add the environment BYOK model bindings in this file.
   --remove-model-binding <reference>   Remove this live BYOK model binding. You can repeat it.
 
+Target option:
+  --resource-group <name>              Registered install target. Default agentweaver. The selected
+                                       kubectl context must point at the API server of that target.
+
 The manifest selects published images to update; omitted images keep their
 currently deployed references. The command checks the cluster prerequisites
 and required Secrets,
@@ -128,6 +134,7 @@ Deployment rollout, and then runs a sandbox smoke check.
 `;
 export const DEPLOY_KUSTOMIZE_REGISTRY_OPTION = true;
 export const DEPLOY_KUSTOMIZE_MODEL_BINDINGS_OPTION = true;
+export const DEPLOY_KUSTOMIZE_TARGET_OPTION = true;
 
 function fail(message) {
   throw new Error(`Kustomize deployment: ${message}`);
@@ -140,10 +147,16 @@ export function parseDeployKustomizeArgs(argv) {
   let hasRegistry = false;
   let execute = false;
   let modelBindings;
+  let resourceGroup;
   const removeModelBindings = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--execute') execute = true;
+    else if (arg === '--resource-group') {
+      if (resourceGroup !== undefined) fail('--resource-group may be specified only once.');
+      resourceGroup = argv[++index];
+      if (!installTarget(resourceGroup)) fail('--resource-group must name a registered install target.');
+    }
     else if (arg === '--model-bindings') {
       if (modelBindings !== undefined) fail('--model-bindings may be specified only once.');
       modelBindings = argv[++index];
@@ -184,6 +197,7 @@ export function parseDeployKustomizeArgs(argv) {
     ...(registry === DEFAULT_REGISTRY ? {} : { registry }),
     ...(modelBindings === undefined ? {} : { modelBindings }),
     ...(removeModelBindings.length ? { removeModelBindings } : {}),
+    ...(resourceGroup === undefined || resourceGroup === 'agentweaver' ? {} : { resourceGroup }),
   };
   return imageManifest === undefined
     ? { imageTag, ...options }
@@ -1430,14 +1444,29 @@ function findJob(resources, name) {
   return matches[0];
 }
 
-function migrationJobs(root, exec, context, digests, registries, selectedRepositories) {
+/**
+ * Fails unless the kubectl context points at the selected target's API server. The default target
+ * only has to avoid every other registered target, so its existing contexts keep working.
+ */
+export function assertTargetContext(exec, context, root, resourceGroup = 'agentweaver') {
+  const server = must(exec, 'kubectl', ['config', 'view', '--minify', '--context', context,
+    '--output', 'jsonpath={.clusters[0].cluster.server}'], { cwd: root },
+  'Could not read the API server of the selected kubectl context').stdout.trim();
+  const expected = installTarget(resourceGroup)?.aksApiServer;
+  if (resourceGroup !== 'agentweaver' ? server !== expected
+    : Object.values(INSTALL_TARGETS).some(target => target.aksApiServer && target.aksApiServer === server)) {
+    fail(`kubectl context ${context} does not point at the ${resourceGroup} cluster.`);
+  }
+}
+
+function migrationJobs(root, exec, context, digests, registries, selectedRepositories, resourceGroup, pairs) {
   const selected = new Set(selectedRepositories);
   const jobs = [];
   if (selected.has('agentweaver.identity.broker')) {
     const rendered = must(exec, 'kubectl', [
       'kustomize', path.join(root, 'deploy', 'k8s', 'migrations', 'identity-broker'),
     ], { cwd: root }, 'Broker migration Job rendering failed').stdout;
-    const resources = parseKustomizeResources(rendered).items;
+    const resources = parseKustomizeResources(applyTargetValues(rendered, pairs)).items;
     readResource(exec, context, 'serviceaccount', 'identity-broker-migration', root);
     readResource(exec, context, 'configmap', 'identity-broker-migration-config', root);
     jobs.push(prepareJob(findJob(resources, 'identity-broker-migration'), {
@@ -1451,7 +1480,7 @@ function migrationJobs(root, exec, context, digests, registries, selectedReposit
     const rendered = must(exec, 'kubectl', [
       'kustomize', path.join(root, 'deploy', 'k8s', 'migrations', 'p1-postgres'),
     ], { cwd: root }, 'P1 migration Job rendering failed').stdout;
-    const resources = parseKustomizeResources(rendered).items;
+    const resources = parseKustomizeResources(applyTargetValues(rendered, pairs)).items;
     const identity = readResource(exec, context, 'serviceaccount', 'p1-postgres-migration', root);
     const clientId = identity.metadata?.annotations?.['azure.workload.identity/client-id'];
     if (!CLIENT_ID.test(clientId ?? '')) {
@@ -1470,12 +1499,12 @@ function migrationJobs(root, exec, context, digests, registries, selectedReposit
   }
 
   if (selected.has('agentweaver.projects.config')) {
-    const projectsConfig = parse(readFileSync(path.join(root, 'deploy', 'k8s', 'migrations',
-      'projects-config', 'job.yaml'), 'utf8'));
+    const projectsConfig = parse(applyTargetValues(readFileSync(path.join(root, 'deploy', 'k8s', 'migrations',
+      'projects-config', 'job.yaml'), 'utf8'), pairs));
     const identity = readResource(exec, context, 'serviceaccount', 'projects-config-migration', root);
     const clientId = identity.metadata?.annotations?.['azure.workload.identity/client-id'];
     const expectedClientId = must(exec, 'az', [
-      'identity', 'show', '--resource-group', 'agentweaver', '--name', 'agentweaver-id-projects-config-migration',
+      'identity', 'show', '--resource-group', resourceGroup, '--name', `${resourceGroup}-id-projects-config-migration`,
       '--query', 'clientId', '-o', 'tsv',
     ], { cwd: root }, 'Could not read the Projects & Config migration identity').stdout.trim();
     if (!CLIENT_ID.test(expectedClientId) || clientId !== expectedClientId) {
@@ -1563,6 +1592,9 @@ export async function deployKustomize(options, overrides = {}) {
   const context = must(exec, 'kubectl', ['config', 'current-context'], { cwd: root },
     'Could not read the selected kubectl context').stdout.trim();
   if (!context) fail('No kubectl context is selected.');
+  const resourceGroup = options.resourceGroup ?? 'agentweaver';
+  const pairs = targetValuePairs(root, resourceGroup);
+  assertTargetContext(exec, context, root, resourceGroup);
   verifyAuthorization(exec, context, root,
     [...requestedImages.keys()].some(repository => MIGRATION_IMAGES.has(repository)));
   verifyEnvironmentRuntimeAuthorization(exec, context, root);
@@ -1602,8 +1634,8 @@ export async function deployKustomize(options, overrides = {}) {
     applyImageDigests(kustomization, digests, registries);
     writeFileSync(kustomizationPath, stringify(kustomization));
 
-    const rendered = must(exec, 'kubectl', ['kustomize', path.join(root, 'deploy', 'k8s')], { cwd: root },
-      'Kustomize rendering failed').stdout;
+    const rendered = applyTargetValues(must(exec, 'kubectl', ['kustomize', path.join(root, 'deploy', 'k8s')],
+      { cwd: root }, 'Kustomize rendering failed').stdout, pairs);
     const resources = parseKustomizeResources(rendered).items;
     const deployments = resources.filter(resource => resource.kind === 'Deployment')
       .map(resource => resource.metadata?.name);
@@ -1722,7 +1754,7 @@ export async function deployKustomize(options, overrides = {}) {
       items: resources.filter(resource => resource.kind !== 'Namespace' &&
         resource !== brokerRuntimeConfig && resource !== brokerDeployment),
     };
-    const jobs = migrationJobs(root, exec, context, digests, registries, requestedImages.keys());
+    const jobs = migrationJobs(root, exec, context, digests, registries, requestedImages.keys(), resourceGroup, pairs);
 
     if (prerequisites.createStorageClass) {
       must(exec, 'kubectl', ['create', '--filename', '-', '--context', context], {

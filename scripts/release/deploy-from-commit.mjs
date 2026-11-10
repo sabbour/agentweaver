@@ -6,13 +6,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { IMAGE_REPOSITORIES } from './image-repositories.mjs';
 import { DEFAULT_REGISTRY, parseRegistryTarget, verifyServiceRegistryImage } from './registry.mjs';
 import { run } from '../azure/lib/exec.mjs';
+import { installTarget } from '../azure/lib/targets.mjs';
 
 const SHA = /^[a-f0-9]{40}$/;
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
 
 export const DEPLOY_FROM_COMMIT_USAGE =
   'Usage: npm run azure:deploy-from-commit -- <full-lowercase-40-character-commit-sha> ' +
-  '[--registry <registry>] [--model-bindings <file.json>] [--remove-model-binding <reference>]... --execute';
+  '[--registry <registry>] [--resource-group <name>] [--model-bindings <file.json>] ' +
+  '[--remove-model-binding <reference>]... --execute';
 
 function fail(message) {
   throw new Error(`Commit deployment: ${message}`);
@@ -26,6 +28,7 @@ export function parseDeployFromCommitArgs(argv) {
   let hasRegistry = false;
   let execute = false;
   let modelBindings;
+  let resourceGroup;
   const removeModelBindings = [];
   for (let index = 1; index < argv.length; index += 1) {
     if (argv[index] === '--execute') {
@@ -41,6 +44,9 @@ export function parseDeployFromCommitArgs(argv) {
       } catch {
         fail('registry must be ghcr.io/sabbour or an Azure Container Registry login server.');
       }
+    } else if (argv[index] === '--resource-group') {
+      if (resourceGroup !== undefined || !installTarget(argv[index + 1])) fail(DEPLOY_FROM_COMMIT_USAGE);
+      resourceGroup = argv[++index];
     } else if (argv[index] === '--model-bindings') {
       if (modelBindings !== undefined || argv[index + 1] === undefined ||
           argv[index + 1].startsWith('--')) fail(DEPLOY_FROM_COMMIT_USAGE);
@@ -59,6 +65,7 @@ export function parseDeployFromCommitArgs(argv) {
     ...(registry === DEFAULT_REGISTRY ? {} : { registry }),
     ...(modelBindings === undefined ? {} : { modelBindings }),
     ...(removeModelBindings.length ? { removeModelBindings } : {}),
+    ...(resourceGroup === undefined || resourceGroup === 'agentweaver' ? {} : { resourceGroup }),
   };
 }
 
@@ -71,7 +78,7 @@ function command(exec, name, args, cwd, action) {
 }
 
 export async function deployFromCommit({
-  sourceSha, registry = DEFAULT_REGISTRY, modelBindings, removeModelBindings,
+  sourceSha, registry = DEFAULT_REGISTRY, modelBindings, removeModelBindings, resourceGroup,
 }, overrides = {}) {
   if (!SHA.test(sourceSha ?? '')) fail('source SHA must be a lowercase full 40-character commit SHA.');
   try {
@@ -151,9 +158,12 @@ export async function deployFromCommit({
     if (Object.keys(modelOptions).length && deployModule?.DEPLOY_KUSTOMIZE_MODEL_BINDINGS_OPTION !== true) {
       fail(`source ${sourceSha} predates the Kustomize model binding options; select a newer source commit.`);
     }
+    if (resourceGroup !== undefined && deployModule?.DEPLOY_KUSTOMIZE_TARGET_OPTION !== true) {
+      fail(`source ${sourceSha} predates install target selection; select a newer source commit.`);
+    }
     const deployKustomize = overrides.deployKustomize ?? deployModule.deployKustomize;
     result = await deployKustomize(
-      { imageManifest, registry, ...modelOptions },
+      { imageManifest, registry, ...modelOptions, ...(resourceGroup === undefined ? {} : { resourceGroup }) },
       { root: worktreePath, registryOptions: overrides.registryOptions });
   } catch (error) {
     failure = error;

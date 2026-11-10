@@ -290,3 +290,63 @@ test('the workflow uses the variable and environment that setup creates', () => 
   assert.match(workflow, new RegExp(`environment: ${SETUP_TARGET.environment}`));
   assert.match(workflow, new RegExp(`vars\\.${SETUP_TARGET.variable}`));
 });
+
+test('a separate target creates only its Projects & Config migration identity and ServiceAccount', async () => {
+  assert.equal(parseSetupArgs(['--resource-group', 'awwus2np01']).resourceGroup, 'awwus2np01');
+  assert.throws(() => parseSetupArgs(['--resource-group', 'other']), /not a registered install target/);
+  assert.throws(() => parseSetupArgs(['--resource-group', 'awwus2np01', '--v1-deploy-only']), /only to the agentweaver target/);
+
+  const name = 'awwus2np01-id-projects-config-migration';
+  let deployed = false;
+  const serviceAccounts = new Map();
+  const calls = [];
+  const receipts = [];
+  const exec = (command, args, settings = {}) => {
+    calls.push({ command, args, settings });
+    if (command === 'git') return ok('b'.repeat(40));
+    if (command === 'kubelogin') return ok();
+    if (command === 'az' && args[0] === 'account') return ok(JSON.stringify({ id: DB_MAINTENANCE_TARGET.subscriptionId,
+      tenantId: DB_MAINTENANCE_TARGET.tenantId, user: { name: 'admin@example.test', type: 'user' } }));
+    if (command === 'az' && args[0] === 'aks') return ok();
+    if (command === 'az' && args[0] === 'group') return ok('{}');
+    if (command === 'az' && args[0] === 'identity' && args[1] === 'show') {
+      assert.equal(args[args.indexOf('--name') + 1], name);
+      return deployed ? ok(JSON.stringify({ name, clientId: MIGRATION_CLIENT_ID, principalId: MIGRATION_PRINCIPAL_ID }))
+        : fail(`ERROR: The Resource '${name}' was not found.`, 3);
+    }
+    if (command === 'az' && args[0] === 'deployment') {
+      deployed = true;
+      return ok(JSON.stringify({ maintenanceIdentity: { value: {} }, projectsConfigMigrationIdentity: {
+        value: { name, clientId: MIGRATION_CLIENT_ID, principalObjectId: MIGRATION_PRINCIPAL_ID } } }));
+    }
+    if (command === 'kubectl' && args.includes('apply')) {
+      const resource = JSON.parse(settings.input);
+      serviceAccounts.set(resource.metadata.name, resource);
+      return ok();
+    }
+    if (command === 'kubectl' && args.includes('get')) {
+      const resource = serviceAccounts.get(args[args.indexOf('get') + 2]);
+      return resource ? ok(JSON.stringify(resource)) : fail('NotFound');
+    }
+    throw new Error(`Unexpected ${command} ${args.join(' ')}`);
+  };
+  const deps = { exec, repoRoot: process.cwd(), newRunId: () => 'setup0000002', now: () => new Date('2026-10-22T10:00:00Z'),
+    log: () => {}, writeReceipt: (path, receipt) => receipts.push(structuredClone(receipt)),
+    runner: async () => assert.fail('A separate target does not run P1 maintenance setup.') };
+
+  await assert.rejects(runDbMaintenanceSetup(parseSetupArgs(['--resource-group', 'awwus2np01']), deps),
+    /Setup is incomplete \(1 gaps\)/);
+  assert.ok(!calls.some(call => call.args[0] === 'deployment' || call.args.includes('apply')));
+
+  const receipt = await runDbMaintenanceSetup(parseSetupArgs(['--resource-group', 'awwus2np01', '--execute']), deps);
+  assert.equal(receipt.result, 'succeeded');
+  const deploy = calls.find(call => call.args[0] === 'deployment').args;
+  assert.equal(deploy[deploy.indexOf('--resource-group') + 1], 'awwus2np01');
+  assert.ok(deploy.includes('namePrefix=awwus2np01') && deploy.includes('githubWorkflow=false'));
+  const credentials = calls.find(call => call.args[0] === 'aks').args;
+  assert.equal(credentials[credentials.indexOf('--name') + 1], 'awwus2np01-aks');
+  assert.deepEqual([...serviceAccounts.values()].map(item => [item.kind, item.metadata.name,
+    item.metadata.annotations['azure.workload.identity/client-id']]),
+  [['ServiceAccount', SETUP_TARGET.projectsConfigMigrationServiceAccount, MIGRATION_CLIENT_ID]]);
+  assert.ok(!calls.some(call => call.command === 'gh' || call.args[0] === 'role'));
+});

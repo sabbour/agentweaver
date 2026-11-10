@@ -1,0 +1,20 @@
+{
+  "replace": [
+    ["6ad4aaa13923a30001c83518.eastus2euap.aksapp.io", "6af2d5d83827af00019b70e2.westus2.aksapp.io"],
+    ["agentweaver-pg.postgres.database.azure.com", "awwus2np01-pg.postgres.database.azure.com"],
+    ["agentweaver-pg.privatelink.postgres.database.azure.com", "awwus2np01-pg.privatelink.postgres.database.azure.com"],
+    ["agentweaver-kv-v1.vault.azure.net", "awwus2np01-kv1.vault.azure.net"],
+    ["agentweaverblob.blob.core.windows.net", "awwus2np01blob.blob.core.windows.net"],
+    ["agentweaverblob.privatelink.blob.core.windows.net", "awwus2np01blob.privatelink.blob.core.windows.net"],
+    ["agentweaver-id-identity-broker", "awwus2np01-id-identity-broker"],
+    ["4ee7e4e8-f5c8-445a-9fa4-5cf13afdb067", "4cb6b3eb-db18-44e9-a624-0dc969d0417b"],
+    ["0cf2e9cd-6b0a-45cd-bbaf-fc674a194781", "b49e4ce9-3de2-42b8-bb61-29956f2343d7"],
+    ["b65f060f-364b-45ea-adf4-f704c176f33e", "26e53ac3-c76d-47c1-a90a-1cb0e4d398da"],
+    ["47e81803-63aa-4311-8990-98beef468a5c", "7bb2e71a-7f96-472b-96be-b581a6dcc419"],
+    ["faadfa78-1bfc-4a85-a0e5-d9a913630a0f", "fd1c6132-36e9-44da-9320-ae42005be014"],
+    ["23083988-bf80-45c7-84cf-891eb5ed4736", "e9876321-8974-45bc-b77b-a2132d498441"],
+    ["039d7849-9fa0-4488-83ed-c52ec55007ea", "fb48f6c8-82a7-41cd-8574-d2d5a9c1c77d"],
+    ["5860d27c-cc2d-4097-8f0a-680316cc5b46", "66812430-d72c-47a0-b537-afcdb2de9ca2"],
+    ["518f1ce8-8eb0-4f5f-a719-f742b8ed9ed0", "awwus2np01-pending-first-sign-in"]
+  ]
+}

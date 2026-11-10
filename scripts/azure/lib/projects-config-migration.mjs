@@ -6,7 +6,9 @@ import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { verifyServiceRegistryImage } from '../../release/registry.mjs';
-import { DB_MAINTENANCE_TARGET, LOCK_NAME } from './db-maintenance.mjs';
+import { DB_MAINTENANCE_TARGET, LOCK_NAME, dbMaintenanceTarget } from './db-maintenance.mjs';
+import { installTarget } from './targets.mjs';
+import { applyTargetValues, targetValuePairs } from '../../release/target-values.mjs';
 import { isOutsideCheckout } from './checkout-paths.mjs';
 import { run, redact } from './exec.mjs';
 import { withP0UserKubeconfig } from './namespace-bootstrap.mjs';
@@ -38,6 +40,7 @@ Run it from a clean checkout of the fetched origin/v1 tip.
   --execute                  Create a short-lived credential Secret and one Job. Migration mode applies
                              the planned runtime grants; bootstrap mode creates the first PlatformAdmin.
   --receipt-dir <directory>  Receipt directory outside the checkout. Default: ~/.agentweaver/db-maintenance.
+  --resource-group <name>    Registered install target. Default: agentweaver.
   --help                     Show this help.
 
 Execution and inspection read these process environment variables and never print their values:
@@ -76,9 +79,9 @@ export function parseProjectsConfigMigrationArgs(argv = []) {
   const options = {
     image: undefined, execute: false, bootstrapFirstPlatformAdmin: false,
     inspectFirstPlatformAdmin: false,
-    receiptDir: RECEIPT_DIRECTORY, help: false,
+    receiptDir: RECEIPT_DIRECTORY, resourceGroup: 'agentweaver', help: false,
   };
-  const valued = new Map([['--image', 'image'], ['--receipt-dir', 'receiptDir']]);
+  const valued = new Map([['--image', 'image'], ['--receipt-dir', 'receiptDir'], ['--resource-group', 'resourceGroup']]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') options.help = true;
@@ -95,6 +98,7 @@ export function parseProjectsConfigMigrationArgs(argv = []) {
     }
   }
   if (options.help) return options;
+  if (!installTarget(options.resourceGroup)) fail('--resource-group must name a registered install target.');
   if (typeof options.image !== 'string' || !options.image.trim() || options.image.trim() !== options.image) {
     fail('--image is required and must not contain surrounding whitespace.');
   }
@@ -120,7 +124,7 @@ export async function resolveProjectsConfigImage(image, {
   return { image, digest: match[1] };
 }
 
-function readCredentials({ inspectFirstPlatformAdmin = false } = {}) {
+function readCredentials({ inspectFirstPlatformAdmin = false, postgresHost = DB_MAINTENANCE_TARGET.postgresHost } = {}) {
   const connection = process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION?.trim();
   const accessToken = process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN?.trim();
   if (!connection || !accessToken) {
@@ -139,7 +143,7 @@ function readCredentials({ inspectFirstPlatformAdmin = false } = {}) {
     }
     fields.set(key, value);
   }
-  if (fields.get('host') !== DB_MAINTENANCE_TARGET.postgresHost ||
+  if (fields.get('host') !== postgresHost ||
       fields.get('database') !== DATABASE_NAME ||
       !fields.get('username') ||
       (fields.has('port') && fields.get('port') !== '5432') ||
@@ -432,6 +436,7 @@ function defaultDependencies() {
 export async function runProjectsConfigMigration(options, overrides = {}) {
   const deps = { ...defaultDependencies(), ...overrides };
   const root = path.resolve(deps.root ?? process.cwd());
+  const target = dbMaintenanceTarget(options.resourceGroup ?? 'agentweaver');
   const runId = deps.newRunId();
   const receiptDirectory = path.resolve(root, options.receiptDir ?? RECEIPT_DIRECTORY);
   // Receipts inside the checkout would make it dirty, and the next maintenance or rollout step
@@ -466,9 +471,9 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
     sourceSha: null,
     image: null,
     target: {
-      subscriptionId: DB_MAINTENANCE_TARGET.subscriptionId,
-      resourceGroup: DB_MAINTENANCE_TARGET.resourceGroup,
-      clusterName: DB_MAINTENANCE_TARGET.clusterName,
+      subscriptionId: target.subscriptionId,
+      resourceGroup: target.resourceGroup,
+      clusterName: target.clusterName,
       namespace: NAMESPACE,
     },
     steps: [],
@@ -517,13 +522,14 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
     receipt.image = image.image;
     record('image-verified', { image: image.image, digest: image.digest });
 
-    const jobText = deps.readFile(path.resolve(root, JOB_TEMPLATE), 'utf8');
+    const jobText = applyTargetValues(deps.readFile(path.resolve(root, JOB_TEMPLATE), 'utf8'),
+      targetValuePairs(root, target.resourceGroup));
     const jobTemplate = parseYaml(jobText);
     if (jobTemplate.kind !== 'Job' || jobTemplate.metadata?.name !== 'projects-config-migration') {
       fail('Projects & Config migration Job template has an unexpected identity.');
     }
     if (executeJob) {
-      const credentials = readCredentials({ inspectFirstPlatformAdmin });
+      const credentials = readCredentials({ inspectFirstPlatformAdmin, postgresHost: target.postgresHost });
       secrets.push(credentials.connection, credentials.accessToken);
       receipt.plannedSteps = inspectFirstPlatformAdmin
         ? ['lock', 'verify-approved-identity-config', 'create-credential-secret',
@@ -545,9 +551,9 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
     }
 
     await deps.withKubeconfig({
-      resourceGroup: DB_MAINTENANCE_TARGET.resourceGroup,
-      subscriptionId: DB_MAINTENANCE_TARGET.subscriptionId,
-      clusterName: DB_MAINTENANCE_TARGET.clusterName,
+      resourceGroup: target.resourceGroup,
+      subscriptionId: target.subscriptionId,
+      clusterName: target.clusterName,
     }, async baseArgs => {
       const kubectl = (args, settings = {}) => {
         const result = deps.exec('kubectl', [

@@ -207,6 +207,12 @@ run-binding audience, certificate/key paths, and leaf pin together: the root
 bundle may replace its immutable ConfigMap during a selective image deployment,
 even when the Projects image is omitted.
 
+The tracked values are for the `agentweaver` target. For another registered
+install target, `deploy/k8s/targets/<target>.json` lists exact text
+replacements that the deployment helper applies to the rendered manifests.
+When you change a replaced `agentweaver` value, update that file in the same
+change. A test fails if a replacement no longer matches.
+
 ### Environment BYOK model bindings
 
 Do not add an environment BYOK model binding to this source. Keep the binding

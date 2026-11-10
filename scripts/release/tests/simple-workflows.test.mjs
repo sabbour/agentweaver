@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { parse, stringify } from 'yaml';
 import {
+  assertTargetContext,
   deployKustomize,
   ENVIRONMENT_RBAC_REQUIREMENTS,
   parseDeployKustomizeArgs,
@@ -1576,6 +1577,26 @@ test('image manifest arguments select exactly one input and require execution', 
   assert.throws(() => parseDeployKustomizeArgs([
     '--image-tag', selectedTag, '--remove-model-binding', 'a', '--remove-model-binding', 'a', '--execute',
   ]), /names a more than once/);
+});
+
+test('a separate target needs its own API server; the default target must avoid it', () => {
+  assert.deepEqual(parseDeployKustomizeArgs(['--image-tag', selectedTag, '--resource-group', 'awwus2np01', '--execute']),
+    { imageTag: selectedTag, resourceGroup: 'awwus2np01' });
+  assert.deepEqual(parseDeployKustomizeArgs(['--image-tag', selectedTag, '--resource-group', 'agentweaver', '--execute']),
+    { imageTag: selectedTag });
+  assert.throws(() => parseDeployKustomizeArgs(['--image-tag', selectedTag, '--resource-group', 'other', '--execute']),
+    /registered install target/);
+  const separate = 'https://awwus2np01-aks-88n4s6n7.hcp.westus2.azmk8s.io:443';
+  const exec = server => (name, args) => {
+    assert.deepEqual([name, ...args], ['kubectl', 'config', 'view', '--minify', '--context', 'ctx',
+      '--output', 'jsonpath={.clusters[0].cluster.server}']);
+    return { status: 0, stdout: `${server}\n`, stderr: '' };
+  };
+  assertTargetContext(exec(separate), 'ctx', root, 'awwus2np01');
+  assertTargetContext(exec('https://agentweaver.example:443'), 'ctx', root);
+  assert.throws(() => assertTargetContext(exec('https://agentweaver.example:443'), 'ctx', root, 'awwus2np01'),
+    /does not point at the awwus2np01 cluster/);
+  assert.throws(() => assertTargetContext(exec(separate), 'ctx', root), /does not point at the agentweaver cluster/);
 });
 
 test('image manifest accepts published tags or digests and rejects invalid or duplicate entries', () => {

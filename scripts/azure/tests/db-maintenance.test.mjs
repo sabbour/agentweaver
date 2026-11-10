@@ -84,7 +84,8 @@ function world({ lease, drift = false, state, jobOutcome = () => 'Complete', log
         return identityExists ? ok(JSON.stringify({ clientId: CLIENT_ID, principalId: PRINCIPAL_ID }))
           : fail(`ERROR: The Resource '${MIGRATION_IDENTITY}' was not found.`, 3);
       }
-      if (args[0] === 'deployment') return ok(JSON.stringify({ name: MIGRATION_IDENTITY, clientId: CLIENT_ID,
+      if (args[0] === 'deployment') return ok(JSON.stringify({
+        name: `${args[args.indexOf('--resource-group') + 1]}-id-p1-postgres-migration`, clientId: CLIENT_ID,
         principalObjectId: PRINCIPAL_ID, namespace: 'agentweaver', serviceAccount: 'p1-postgres-migration' }));
       throw new Error(`Unexpected az ${args.join(' ')}`);
     }
@@ -1104,4 +1105,33 @@ test('--prepare-only sets up identity, egress, and handover, then stops before a
   } finally { fake.done(); }
   assert.throws(() => parseDbMaintenanceArgs(['--prepare-only', ...baseArgs]), /--prepare-only cannot be combined with --environment-digest/);
   assert.throws(() => parseDbMaintenanceArgs(['--prepare-only', '--deploy-apps']), /--deploy-apps/);
+});
+
+test('a separate target only prepares, with its own identity names and rendered values', async () => {
+  assert.equal(parseDbMaintenanceArgs(['--prepare-only', '--resource-group', 'awwus2np01']).resourceGroup, 'awwus2np01');
+  assert.equal(parseDbMaintenanceArgs(['--release-lock', 'abcdef123456', '--resource-group', 'awwus2np01']).releaseLock,
+    'abcdef123456');
+  assert.throws(() => parseDbMaintenanceArgs([...baseArgs, '--resource-group', 'awwus2np01']),
+    /supports only --prepare-only and --release-lock/);
+  assert.throws(() => parseDbMaintenanceArgs(['--prepare-only', '--resource-group', 'other']), /not a registered install target/);
+
+  const fake = world({ identityExists: false });
+  try {
+    const receipt = await runDbMaintenance({
+      ...parseDbMaintenanceArgs(['--prepare-only', '--resource-group', 'awwus2np01', '--execute']),
+      receiptDir: fake.receiptDir }, fake.deps);
+    assert.equal(receipt.result, 'succeeded');
+    assert.equal(receipt.target.postgresHost, 'awwus2np01-pg.postgres.database.azure.com');
+    const deploy = fake.calls.find(call => call.command === 'az' && call.args[0] === 'deployment').args;
+    assert.ok(deploy.includes('namePrefix=awwus2np01'));
+    assert.equal(deploy[deploy.indexOf('--resource-group') + 1], 'awwus2np01');
+    assert.ok(fake.calls.some(call => call.command === 'az' && call.args[0] === 'identity' &&
+      call.args.includes('awwus2np01-id-identity-broker-migration')));
+    assert.equal(fake.relayCalls[0].clusterName, 'awwus2np01-aks');
+    assert.equal(fake.relayCalls[0].postgresHost, 'awwus2np01-pg.postgres.database.azure.com');
+    const applied = fake.calls.filter(call => call.command === 'kubectl' && call.settings.input)
+      .map(call => call.settings.input).join('\n');
+    assert.ok(!applied.includes('agentweaver-pg.'), 'rendered manifests keep the default PostgreSQL host');
+    assert.ok(applied.includes('awwus2np01-pg.'));
+  } finally { fake.done(); }
 });

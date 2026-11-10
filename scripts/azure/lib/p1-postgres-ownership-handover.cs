@@ -16,9 +16,11 @@ using Npgsql;
 if (args.Length != 1 || args[0] != "--execute")
     throw new ArgumentException("The P1 ownership handover requires the explicit --execute argument.");
 
-// All inputs are checked before any connection. The host and role are fixed values, so a
-// wrong environment can only stop the run, never point it at another server or role.
-const string ExpectedHost = "agentweaver-pg.postgres.database.azure.com";
+// All inputs are checked before any connection. The role is a fixed value and the host must be an
+// install target's Azure PostgreSQL server, so a wrong environment cannot point it at another role.
+// The relay supplies the host of the target whose cluster it tunnels through.
+var expectedHost = new System.Text.RegularExpressions.Regex(
+    "^[a-z][a-z0-9]{2,23}-pg\\.postgres\\.database\\.azure\\.com$");
 const string ExpectedRole = "agentweaver-id-p1-postgres-migration";
 string[] schemas = ["environment", "orchestrator", "events_sessions"];
 var host = Environment.GetEnvironmentVariable("P1Handover__PostgresHost");
@@ -26,7 +28,7 @@ var admin = Environment.GetEnvironmentVariable("P1Handover__AdminUsername");
 var role = Environment.GetEnvironmentVariable("P1Handover__MigrationRole");
 var principal = Environment.GetEnvironmentVariable("P1Handover__MigrationPrincipalObjectId");
 var localPort = int.TryParse(Environment.GetEnvironmentVariable("P1Handover__LocalPort"), out var port) ? port : 15432;
-if (host != ExpectedHost || string.IsNullOrWhiteSpace(admin) || role != ExpectedRole ||
+if (host is null || !expectedHost.IsMatch(host) || string.IsNullOrWhiteSpace(admin) || role != ExpectedRole ||
     !Guid.TryParse(principal, out var principalId))
     throw new ArgumentException("The P1 ownership handover requires the exact host, administrator, migration role, and principal.");
 
