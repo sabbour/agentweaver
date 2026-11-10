@@ -120,7 +120,8 @@ Model options:
   --remove-model-binding <reference>   Remove this live BYOK model binding. You can repeat it.
 
 The manifest selects published images to update; omitted images keep their
-currently deployed references. The command checks the cluster prerequisites,
+currently deployed references. The command checks the cluster prerequisites
+and required Secrets,
 creates the workspace StorageClass when it is missing, runs migrations for
 selected services, applies namespaced Kustomize resources, waits for every
 Deployment rollout, and then runs a sandbox smoke check.
@@ -632,16 +633,49 @@ async function runInstallSmokeCheck(exec, context, root, prerequisites, image, p
   }
 }
 
-function verifyAgentHostTlsSecret(exec, context, root) {
+function requiredSecrets(resources) {
+  const required = new Map([['agenthost-tls', 'kubernetes.io/tls']]);
+  const add = (name, tls = false) => {
+    if (tls) required.set(name, 'kubernetes.io/tls');
+    else if (!required.has(name)) required.set(name, undefined);
+  };
+  for (const resource of resources) {
+    if (resource.kind !== 'Deployment') continue;
+    const spec = resource.spec?.template?.spec ?? {};
+    for (const volume of spec.volumes ?? []) {
+      const secret = volume.secret;
+      if (!secret?.secretName || secret.optional === true) continue;
+      const keys = new Set((secret.items ?? []).map(item => item.key));
+      add(secret.secretName, keys.has('tls.crt') && keys.has('tls.key'));
+    }
+    for (const container of [...(spec.initContainers ?? []), ...(spec.containers ?? [])]) {
+      for (const setting of container.env ?? []) {
+        const reference = setting.valueFrom?.secretKeyRef;
+        if (reference?.name && reference.optional !== true) add(reference.name);
+      }
+      for (const source of container.envFrom ?? []) {
+        if (source.secretRef?.name && source.secretRef.optional !== true) add(source.secretRef.name);
+      }
+    }
+  }
+  return required;
+}
+
+function verifyRequiredSecrets(exec, context, root, resources) {
+  const required = requiredSecrets(resources);
   const result = kubectl(exec, context, [
-    'get', 'secret', 'agenthost-tls', '--ignore-not-found=true', '--output=wide',
-  ], root, 'Could not check Secret/agenthost-tls metadata');
-  const rows = result.stdout.trim().split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const row = rows.find(line => line.split(/\s+/)[0] === 'agenthost-tls');
-  if (!row) fail('Secret/agenthost-tls is missing; the operator must provide the TLS Secret.');
-  const [name, type] = row.split(/\s+/);
-  if (name !== 'agenthost-tls' || type !== 'kubernetes.io/tls') {
-    fail('Secret/agenthost-tls must exist in namespace agentweaver with type kubernetes.io/tls.');
+    'get', 'secret', ...required.keys(), '--ignore-not-found=true', '--output=wide',
+  ], root, 'Could not check required Secret metadata');
+  const live = new Map(result.stdout.trim().split(/\r?\n/).map(line => line.trim().split(/\s+/))
+    .filter(([name]) => name && name !== 'NAME').map(([name, type]) => [name, type]));
+  const problems = [];
+  for (const [name, type] of required) {
+    if (!live.has(name)) problems.push(`Secret/${name} is missing`);
+    else if (type && live.get(name) !== type) problems.push(`Secret/${name} must have type ${type}`);
+  }
+  if (problems.length) {
+    fail(`Required Secrets are not ready in namespace ${NAMESPACE}: ${problems.join('; ')}. ` +
+      'The operator must provide them before deployment; see deploy/k8s/README.md.');
   }
 }
 
@@ -1531,7 +1565,6 @@ export async function deployKustomize(options, overrides = {}) {
   if (!context) fail('No kubectl context is selected.');
   verifyAuthorization(exec, context, root,
     [...requestedImages.keys()].some(repository => MIGRATION_IMAGES.has(repository)));
-  verifyAgentHostTlsSecret(exec, context, root);
   verifyEnvironmentRuntimeAuthorization(exec, context, root);
   const missingRepositories = IMAGE_REPOSITORIES.filter(repository => !digests.has(repository));
   let liveAgentHostSettings;
@@ -1599,6 +1632,7 @@ export async function deployKustomize(options, overrides = {}) {
     if (providerSetup?.configMap) {
       log(`Preserved Identity Broker provider setup from ConfigMap/${providerSetup.configMap}.`);
     }
+    verifyRequiredSecrets(exec, context, root, resources);
     const brokerDeployment = resources.find(resource =>
       resource.kind === 'Deployment' && resource.metadata?.name === 'identity-broker');
     const runtimeConfig = resources.find(resource => resource.kind === 'ConfigMap' &&

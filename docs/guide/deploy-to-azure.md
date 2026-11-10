@@ -350,15 +350,17 @@ separate.
    `identity-broker-internal-tls` in namespace `agentweaver` as a
    `kubernetes.io/tls` Secret. Its certificate must match
    `identity-broker.agentweaver.svc.cluster.local` and chain to
-   `service-backend-ca`. AKS creates the separate public
+   `service-backend-ca`. To issue these certificates, follow
+   [Issue an internal service certificate](#issue-an-internal-service-certificate).
+   AKS creates the separate public
    `identity-broker-tls` Secret from a managed `DefaultDomainCertificate`; do
    not create that Secret manually.
 3. When using the AgentHost profile, provide `agenthost-tls` in namespace
    `agentweaver` as a `kubernetes.io/tls` Secret for the configured HTTPS
-   endpoint. The deployment helper checks only its name and type through
-   server-side metadata. It does not create the Secret or inspect its
-   certificate and key. Verify those values through the approved operator
-   process.
+   endpoint. The deployment helper checks this Secret and every other required
+   Secret before it changes the cluster. It reads only the Secret names and
+   types. It does not create the Secrets or inspect their certificates and
+   keys. Verify those values through the approved operator process.
 4. Resolve all required runtime ConfigMap values before applying the product
    bundle. For an existing installation, use the
    [immutable ConfigMap update procedure](#replace-an-immutable-runtime-configmap).
@@ -383,6 +385,68 @@ production registration. Keep passwords, OAuth secrets, PFX passwords, tokens,
 and private keys out of ConfigMaps and command-line arguments. For a fresh
 install, complete the certificate-only routing stage below so AKS creates the
 managed `identity-broker-tls` Secret before deploying the workloads.
+
+### Issue an internal service certificate
+
+Agentweaver does not issue or rotate internal service certificates. Use this
+procedure for `identity-broker-internal-tls` and for each internal
+`<service>-tls` Secret. The example uses the Identity Broker name
+`identity-broker.agentweaver.svc.cluster.local`.
+
+> [!IMPORTANT]
+> An upgrade to a release that contains the Identity Broker internal TLS
+> change needs `identity-broker-internal-tls`. Create it before you deploy.
+> If the selected source commit also contains the required Secret check, the
+> deployment helper stops before it changes the cluster when the Secret is
+> missing. Older commits do not have this check.
+
+You need the private key of the CA whose certificate is in ConfigMap
+`service-backend-ca`. Keep this key in the approved operator store. Do not put
+it in the cluster, in a ConfigMap, or in a log. If you cannot get this key,
+stop. Do not make a second CA for one Secret, because the services trust only
+the CA in `service-backend-ca`. To replace the CA, plan an outage, issue new
+certificates for every internal Secret, replace the Secrets and the
+ConfigMap, and restart the workloads.
+
+1. Get the public CA certificate:
+
+   ```bash
+   kubectl get configmap service-backend-ca --namespace agentweaver \
+     --output=jsonpath='{.data.ca\.crt}' > ca.crt
+   ```
+
+2. Make a P-256 key, and sign a server certificate for the service DNS name.
+   Replace `ca.key` with the path to the CA key from the approved store:
+
+   ```bash
+   NAME=identity-broker.agentweaver.svc.cluster.local
+   openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+     -keyout tls.key -out tls.csr -subj "/CN=$NAME"
+   printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:%s\n' \
+     "$NAME" > tls.ext
+   openssl x509 -req -in tls.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+     -days 90 -sha256 -extfile tls.ext -out tls.crt
+   ```
+
+3. Verify the chain and the name:
+
+   ```bash
+   openssl verify -CAfile ca.crt tls.crt
+   openssl x509 -in tls.crt -noout -checkhost "$NAME" -enddate
+   ```
+
+4. Create or update the Secret:
+
+   ```bash
+   kubectl create secret tls identity-broker-internal-tls \
+     --cert=tls.crt --key=tls.key --namespace agentweaver \
+     --dry-run=client --output=yaml | kubectl apply --filename=-
+   ```
+
+5. Delete `tls.key`, `tls.csr`, and `tls.ext` from the local disk.
+
+To make sure that a service uses a replaced certificate, restart the
+Deployment that mounts the Secret.
 
 ## 7. Run the deployment
 

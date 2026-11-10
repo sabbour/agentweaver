@@ -180,11 +180,15 @@ Kubernetes write.
 The live Environment image must already use the digest in that tuple. If it
 uses a tag or a different digest, select AgentHost explicitly to update it.
 
-Before writes, the command checks that `agenthost-tls` exists as a
-`kubernetes.io/tls` Secret and checks the effective Agent Sandbox permissions
-of the Environment ServiceAccount. The Secret check reads server-side table
+Before writes, the command checks the effective Agent Sandbox permissions of
+the Environment ServiceAccount. After rendering, and still before writes, it
+checks that `agenthost-tls` and every Secret that a rendered Deployment
+requires exist with the expected type. The Secret check reads server-side table
 metadata only; it does not validate certificate contents. The checks do not
-create the Secret or grant access. The proposed RBAC manifest in
+create Secrets or grant access. This check applies only when the selected
+source commit contains it, because `azure:deploy-from-commit` runs the
+deployment helper from that commit. For an older commit, check the required
+Secrets manually. The proposed RBAC manifest in
 `deploy/k8s/proposed/` is separate from the active Kustomize set and is not
 applied.
 
