@@ -40,7 +40,7 @@ and each owned write effect.
 
 ### Dedicated target
 
-The `agentweaver` naming convention is necessary, but does not prove isolation.
+The existing P0 path requires the `agentweaver` naming convention, which does not prove isolation.
 Every live tooling route queries the selected account with `--subscription`.
 The actual enabled account and tenant must match the selected target.
 Every subsequent Azure command also includes the explicit subscription.
@@ -49,10 +49,18 @@ The resource group must already exist after separately approved bootstrap.
 Its full resource ID and ownership tags must match the target.
 The target preflight checks the selected enabled account, tenant, dedicated
 resource-group ID and name, ownership tags, and configured Key Vault name. It
-does not enumerate existing resources or compare their post-deployment
+on the existing P0 path does not enumerate existing resources or compare their post-deployment
 properties. Every Azure command explicitly binds the selected subscription.
 Access denied, malformed JSON, unapproved null tags, and missing groups block execution.
 No failed lookup permits creation or fallback to the default subscription.
+
+The separate first-foundation path requires `--new-foundation` and an empty,
+already tagged resource group with no deployment history. It rejects existing
+custom DNS zones and unrelated bootstrap options. It checks that the derived
+AKS managed group is absent and verifies the name after deployment. It checks
+two matching what-if results, but these do not prove all provider effects.
+The path retains the existing Monitor add-on step. The inventory checks do not
+lock the target; concurrent writers can race with deployment.
 
 Custom DNS resource IDs are validated as deployment inputs. The selected
 deployment is still checked against its exact source SHA/tree/input-hash

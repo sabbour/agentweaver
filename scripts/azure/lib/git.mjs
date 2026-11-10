@@ -112,6 +112,9 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   }
   const document = JSON.parse(readFile(parameters.absolute, 'utf8'));
   const values = document.parameters;
+  if (values?.nodeResourceGroup !== undefined) {
+    throw new Error('AKS managed resource group is set only by the new-foundation installer.');
+  }
   const location = values?.location?.value;
   const namePrefix = values?.namePrefix?.value;
   let keyVaultName;

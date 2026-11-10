@@ -34,6 +34,9 @@ param nodePoolMinCount int = 2
 @allowed([3])
 param nodePoolMaxCount int = 3
 
+@description('Optional new AKS managed resource group name.')
+param nodeResourceGroup string = ''
+
 @description('Optional existing application DNS zone resource IDs for custom routing domains.')
 param appRoutingDnsZoneResourceIds array = []
 
@@ -59,6 +62,7 @@ resource aks 'Microsoft.ContainerService/managedClusters@2026-07-02-preview' = {
   }
   properties: {
     kubernetesVersion: empty(kubernetesVersion) ? null : kubernetesVersion
+    nodeResourceGroup: empty(nodeResourceGroup) ? null : nodeResourceGroup
     dnsPrefix: clusterName
     disableLocalAccounts: true
     // Kubernetes RBAC is separate from Azure RBAC in aadProfile.

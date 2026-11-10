@@ -143,6 +143,14 @@ test('source rejects autoscaler bounds outside approval and tracked current-coun
     config: { template: 'infra/bicep/aks-redeploy.bicep' },
     foundationValues: { nodePoolMaxCount: { value: 5 } },
   });
+
+  test('tracked parameters cannot select an AKS managed group on either source path', () => {
+    for (const template of ['infra/bicep/main.bicep', 'infra/bicep/aks-redeploy.bicep']) {
+      const { config, deps } = sourceFixture({ config: { template },
+        parameterValues: { nodeResourceGroup: { value: 'another-group' } } });
+      assert.throws(() => resolveSource(config, deps), /set only by the new-foundation installer/);
+    }
+  });
   assert.throws(() => resolveSource(config, deps), /autoscaling parameters/);
 });
 

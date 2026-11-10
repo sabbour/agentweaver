@@ -180,7 +180,7 @@ The verifier compares the Probe image with its exact build source. It also
 compares each native deployment receipt with its source, input hash, resource
 IDs, and deployment scope. An AKS-only receipt cannot stand in for the
 full-foundation receipt, and neither image evidence nor infrastructure
-evidence replaces the other. The deployment preflight does not enumerate Azure resources or verify their
+evidence replaces the other. The existing P0 deployment preflight does not enumerate Azure resources or verify their
 post-deployment properties.
 
 See [Test Agentweaver](./testing) for the limits of source and integration

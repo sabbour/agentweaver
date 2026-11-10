@@ -77,6 +77,9 @@ param nodePoolMinCount int
 @allowed([3])
 param nodePoolMaxCount int
 
+@description('Optional new AKS managed resource group name.')
+param nodeResourceGroup string = ''
+
 var tags = {
   'agentweaver:environment': 'v1-p0'
   'agentweaver:managed-by': 'bicep'
@@ -106,6 +109,7 @@ module aks 'modules/aks.bicep' = {
     nodePoolCount: nodePoolCount
     nodePoolMinCount: nodePoolMinCount
     nodePoolMaxCount: nodePoolMaxCount
+    nodeResourceGroup: nodeResourceGroup
   }
 }
 

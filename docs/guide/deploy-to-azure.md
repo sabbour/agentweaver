@@ -96,8 +96,8 @@ Without `--execute`, `deploy.mjs` prints an offline summary and makes no Azure
 call. After the target and effects are approved, add `--execute` to the same
 command. It provisions the Azure foundation. The preflight checks the allowed
 subscription and tenant, enabled account, dedicated resource group, configured
-Key Vault name, exact source, and Bicep inputs. It does not enumerate existing
-resources or compare their properties after deployment. Use the full-foundation
+Key Vault name, exact source, and Bicep inputs. The existing P0 path does not
+enumerate existing resources or compare their properties after deployment. Use the full-foundation
 template only for an approved initial deployment into an empty managed-resource
 target. For an existing foundation cluster, the AKS-only template refreshes the three
 workload-identity federated credentials and creates or updates the `kata` node
@@ -108,6 +108,38 @@ federation and Kata node pool deployments. The preflight lists the three
 federated identity credentials and the `kata` node pool that the nested
 deployments will create or update. It does not query existing credentials or
 node pools to distinguish creates from updates.
+
+### Use a new separate nonproduction group
+
+For a first foundation in a separate group, add `--new-foundation` and set
+`--resource-group` to the exact new prefix. Use 6–12 lowercase letters and
+digits, starting with a letter. The reviewed parameters must use the same
+prefix, a Key Vault name starting with `<prefix>-`, and the same region for
+the cluster and Monitor workspace. They must not select
+existing custom DNS zones. The resource group must already exist, contain no
+resources or deployment history, and have the required Agentweaver ownership
+tags: `agentweaver:environment=v1-p0`, `agentweaver:managed-by=bicep`,
+`agentweaver:owner`, and `agentweaver:cost-center`. The owner and cost-center
+tags must match the parameters. Create and tag
+the group only with separate approval. The installer does not create it.
+
+The new path requires Azure CLI 2.75.0 or later and permission to list deleted
+Log Analytics workspaces. The installer checks the empty group, deployment
+history, and deleted workspace inventory twice. It requires
+the derived AKS managed group `<prefix>-aks-nodes` to be absent, supplies that
+name to AKS, and verifies the returned name. It rejects what-if results with
+unresolved diagnostics, potential changes, non-create, or out-of-group changes. It compares two what-if
+results before submission. These checks do not prove all provider effects:
+the existing Monitor add-on step still runs after the deployment. The new path
+does not enable bootstrap or acceptance operations for the new target.
+
+Use one operator and stop competing automation for this target. The checks
+are not atomic: another writer can change the target after a check. If a
+submission times out or its outcome is uncertain, stop and reconcile the
+resource group, deployment history, and AKS managed group manually. Do not
+start another installation until reconciliation is complete. Azure CLI may
+retry the same deployment request, but the installer does not rerun deployment
+after an uncertain result.
 
 Both templates create or update the `kata` node pool for sandbox pods (AKS Pod
 Sandboxing, Azure Linux, SSH disabled, 1-2 `Standard_D4s_v5` nodes). You do not
