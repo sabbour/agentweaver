@@ -28,6 +28,8 @@ and the Monitor Private Endpoint stays in the VNet's `location`. PostgreSQL
 continues to use the delegated subnet in the primary `location`; no cross-region
 database subnet is introduced. In this layout, the AKS Azure Monitor add-on is
 not available; see [Canary-region clusters](#canary-region-clusters).
+The reviewed `monitorLocation` can also match `location` when the required
+Azure resources are available in that region.
 
 AKS is not a private cluster: `apiServerAccessProfile.enablePrivateCluster` is
 fixed to `false`. Managed Entra authentication and Azure RBAC are enabled and
