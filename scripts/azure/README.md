@@ -207,6 +207,33 @@ The target preflight does not enumerate existing resources or compare
 federated-credential bindings after deployment.
 Supply the existing resource group tags and the exact reviewed source SHA.
 
+Use the guarded installer option to apply it. It accepts only the AKS-only
+template and parameters for a registered target:
+
+```powershell
+node scripts\azure\deploy.mjs `
+  --resource-group <target> `
+  --template infra\bicep\aks-redeploy.bicep `
+  --parameters infra\bicep\parameters\<target-aks-parameters>.approved.json `
+  --subscription <subscription-id> --allowed-subscription <subscription-id> `
+  --tenant <tenant-id> --allowed-tenant <tenant-id> `
+  --bootstrap-runtime-identities
+```
+
+Without `--execute`, the command prints the plan and changes nothing. With
+`--execute`, it runs the AKS-only deployment and the Azure Monitor step. Then it
+checks that the cluster and resource group locations are the same, and deploys
+this template with `namePrefix=<target>`, the resource group tags, and the
+source SHA. It accepts the result only when the deployment succeeds and returns
+the five identities in order with valid client and principal IDs and the
+cluster OIDC issuer. It does not read back the federated credentials. The
+receipt field `runtimeIdentities` lists each name, client ID, and principal ID.
+The template is declarative. A second run keeps the same identities, client
+IDs, and principal IDs. It resets the identity tags to the resource group tags
+plus `service` and the source SHA, and points the federations at the current
+cluster issuer. If the step fails, the error starts with
+`Infrastructure deployment succeeded, but runtime identity setup failed`.
+
 This template defines no database grant, migration, certificate, server,
 storage account, cluster, or node pool change. It does not alter Broker, Probe,
 or migration identities.

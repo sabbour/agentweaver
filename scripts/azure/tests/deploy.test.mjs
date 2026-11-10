@@ -791,3 +791,50 @@ test('Azure Monitor add-on step stops on another workspace, shared-key auth, or 
     execAz: fakeAzure({ monitoringAddon: disabled, enableAddons: { status: 1, stdout: '', stderr: `denied ${token}` } }) }),
   error => /succeeded, but Azure Monitor add-on setup failed: .*\[redacted\]/.test(error.message) && !error.message.includes(token));
 });
+
+test('runtime identity setup deploys the template for the selected target and records the five identities', async () => {
+  const issuer = deploymentOutputs.oidcIssuerUrl.value;
+  const services = ['projects-config', 'environment', 'knowledge', 'events-and-sessions', 'orchestrator'];
+  const identities = services.map((name, i) => ({ name, namespace: 'agentweaver', serviceAccount: name,
+    clientId: `${i}0000000-0000-4000-8000-000000000000`, principalObjectId: `${i}1111111-1111-4111-8111-111111111111`,
+    resourceId: `${fixture.groupId}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/agentweaver-id-${name}` }));
+  const run = async ({ outputs = { runtimeIdentities: { value: identities }, oidcIssuerUrl: { value: issuer } },
+    groupLocation = 'eastus2' } = {}) => {
+    const calls = [];
+    const az = fakeAzure({ group: { location: groupLocation } }, calls);
+    const promise = deploy({ ...fixture, execute: true, bootstrapRuntimeIdentities: true }, {
+      sourceResolver: () => ({ ...source, scope: 'aks-only' }),
+      execAz(args, options) {
+        if (args.includes('infra/bicep/p1-runtime-identities.bicep')) {
+          calls.push(args);
+          return { status: 0, stdout: JSON.stringify({ properties: { provisioningState: 'Succeeded', outputs } }), stderr: '' };
+        }
+        return az(args, options);
+      },
+    });
+    return { promise, calls };
+  };
+
+  const { promise, calls } = await run();
+  const result = await promise;
+  const create = calls.find(args => args.includes('infra/bicep/p1-runtime-identities.bicep'));
+  assert.deepEqual(create, ['deployment', 'group', 'create', '--resource-group', 'agentweaver',
+    '--name', 'agentweaver-p1-runtime-identities', '--template-file', 'infra/bicep/p1-runtime-identities.bicep',
+    '--parameters', 'namePrefix=agentweaver', `tags=${JSON.stringify(tags)}`, `sourceSha=${source.sha}`,
+    '--mode', 'Incremental', '-o', 'json', '--subscription', ids.subscriptionId]);
+  assert.deepEqual(result.receipt.runtimeIdentities.map(identity => identity.name), services);
+  assert.equal(result.receipt.runtimeIdentities[0].clientId, identities[0].clientId);
+
+  const swapped = [identities[1], identities[0], ...identities.slice(2)];
+  for (const outputs of [
+    { runtimeIdentities: { value: swapped }, oidcIssuerUrl: { value: issuer } },
+    { runtimeIdentities: { value: identities }, oidcIssuerUrl: { value: `${issuer}other/` } },
+  ]) {
+    await assert.rejects((await run({ outputs })).promise, /runtime identity setup failed: .*five service identities/);
+  }
+  const moved = await run({ groupLocation: 'westus2' });
+  await assert.rejects(moved.promise, /runtime identity setup failed: .*differs from the resource group location/);
+  assert.ok(!moved.calls.some(args => args.includes('infra/bicep/p1-runtime-identities.bicep')));
+  await assert.rejects(deploy({ ...fixture, bootstrapRuntimeIdentities: true }, { sourceResolver: () => source }),
+    /requires the reviewed AKS-only template/);
+});
