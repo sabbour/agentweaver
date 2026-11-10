@@ -16,9 +16,9 @@ public sealed partial class AgentSandboxProvider
     /// <param name="namespace">Kubernetes namespace containing the resources.</param>
     /// <param name="options">The pinned provider options and AgentHost profile.</param>
     /// <param name="cancellationToken">Cancels Kubernetes reads.</param>
-    /// <returns>A validated endpoint bound to the exact Pod and owned service.</returns>
+    /// <returns>A validated endpoint and whether the exact Pod has no IP yet.</returns>
     /// <exception cref="SandboxProviderException">The profile, service, selector, or endpoint configuration is unavailable or invalid.</exception>
-    private async Task<SandboxRuntimeHttpsEndpoint> ReadRuntimeEndpointAsync(
+    private async Task<(SandboxRuntimeHttpsEndpoint Endpoint, bool AddressPending)> ReadRuntimeEndpointAsync(
         JsonElement sandbox,
         JsonElement pod,
         string @namespace,
@@ -29,9 +29,8 @@ public sealed partial class AgentSandboxProvider
             throw RuntimeEndpointUnavailable();
         var serviceName = ReadOptionalString(sandbox, "status", "service");
         var fqdn = ReadOptionalString(sandbox, "status", "serviceFQDN");
-        var podAddress = ReadOptionalString(pod, "status", "podIP");
+        var podAddress = ReadPodAddress(pod);
         if (string.IsNullOrWhiteSpace(serviceName) || string.IsNullOrWhiteSpace(fqdn) ||
-            string.IsNullOrWhiteSpace(podAddress) ||
             serviceName.Length > 63 ||
             serviceName.Split('.').Any(label => !IsRuntimeDnsLabel(label)) ||
             fqdn.Length > 253 ||
@@ -65,26 +64,45 @@ public sealed partial class AgentSandboxProvider
         var selectedPods = await _client.ListAsync(
             string.Empty, "pods", @namespace, selector, cancellationToken).ConfigureAwait(false);
         if (selectedPods.Count != 1 ||
-            RequiredString(RequiredObject(selectedPods[0], "metadata"), "uid") != podUid ||
-            ReadOptionalString(selectedPods[0], "status", "podIP") != podAddress)
+            RequiredString(RequiredObject(selectedPods[0], "metadata"), "uid") != podUid)
+            throw RuntimeEndpointUnavailable();
+        var selectedAddress = ReadPodAddress(selectedPods[0]);
+        if (!string.IsNullOrEmpty(podAddress) && selectedAddress != podAddress)
             throw RuntimeEndpointUnavailable();
         try
         {
             var address = new Uri($"https://{fqdn}:8443/");
             var configureEndpoint = await ReadReceiverConfigureEndpointAsync(
                 @namespace, options.AgentHost, cancellationToken).ConfigureAwait(false);
+            var serviceUid = RequiredString(metadata, "uid");
+            var addressPending = string.IsNullOrEmpty(podAddress);
+            // Validate receiver configuration without exposing the placeholder as a placement endpoint.
             var endpoint = new SandboxRuntimeHttpsEndpoint(
-                address, podAddress, podUid, RequiredString(metadata, "uid"))
+                address, addressPending ? (string.IsNullOrEmpty(selectedAddress) ? "192.0.2.1" : selectedAddress) : podAddress!,
+                podUid, serviceUid)
             {
                 ReceiverConfigureEndpoint = configureEndpoint
             };
-            return endpoint.ValidateForConfigureEndpoint(configureEndpoint);
+            return (endpoint.ValidateForConfigureEndpoint(configureEndpoint), addressPending);
         }
         catch (ArgumentException exception)
         {
             throw new SandboxProviderException(
                 "sandbox_runtime_endpoint_invalid", exception.Message, effectMayHaveApplied: false, exception);
         }
+    }
+
+    private static string? ReadPodAddress(JsonElement pod)
+    {
+        if (!pod.TryGetProperty("status", out var status) || status.ValueKind == JsonValueKind.Null)
+            return null;
+        if (status.ValueKind != JsonValueKind.Object)
+            throw RuntimeEndpointUnavailable();
+        if (!status.TryGetProperty("podIP", out var address) || address.ValueKind == JsonValueKind.Null)
+            return null;
+        if (address.ValueKind != JsonValueKind.String)
+            throw RuntimeEndpointUnavailable();
+        return address.GetString();
     }
 
     /// <summary>Checks the single supported named HTTPS service port and its container target.</summary>
