@@ -33,7 +33,8 @@ GHCR; an omitted image keeps the validated live tuple. A missing or conflicting
 live tuple fails before Kubernetes writes.
 
 The operator supplies the `agenthost-tls` Secret. Before writes, the installer
-checks its Kubernetes TLS Secret type and checks the effective Environment
+checks its Kubernetes TLS Secret type, the other required Secrets, and the
+effective Environment
 ServiceAccount permissions needed by the Sandbox provider. It does not inspect
 certificate or key data, create the Secret, or apply RBAC. The proposed
 Agent Sandbox permissions are kept outside the active Kustomize bundle. The

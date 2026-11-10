@@ -9,9 +9,9 @@ managed Gateway, listener, certificate, and public DNS.
 The root pins ten product images, including the optional AgentHost runtime
 profile. The profile includes its configure endpoint and keeps the existing
 pending-turn limit of four. Environment supplies the matching AgentHost image
-tuple and bootstrap settings. The operator must provide `agenthost-tls`; the
-deployment helper checks its Kubernetes TLS Secret type but does not create or
-inspect certificate data. AgentHost runs only in selected Sandboxes, not as a
+tuple and bootstrap settings. The operator must provide `agenthost-tls` and the
+other required Secrets. The deployment helper checks their names and types but
+does not create them or inspect certificate data. AgentHost runs only in selected Sandboxes, not as a
 shared Deployment. The Broker migration Job and acceptance Foundation Probe
 are separate overlays.
 
@@ -37,9 +37,12 @@ prerequisites:
    `service-backend-ca`. Keep it separate from `identity-broker-tls`, which
    AKS creates for the public Gateway from a managed
    `DefaultDomainCertificate`. When using AgentHost, provide `agenthost-tls` as
-   a `kubernetes.io/tls` Secret for the configured HTTPS endpoint. The
-   installer checks only the Secret's name and type; verify its certificate
-   and key through the approved operator process.
+   a `kubernetes.io/tls` Secret for the configured HTTPS endpoint. To issue an
+   internal certificate, follow
+   [Issue an internal service certificate](../../docs/guide/deploy-to-azure.md#issue-an-internal-service-certificate).
+   The deployment helper checks every required Secret before it changes the
+   cluster. It reads only the Secret names and types. Verify certificates and
+   keys through the approved operator process.
 4. Confirm the database and Entra workload identities are ready. The deploy
    command runs the selected service migrations before it applies workloads.
 5. Run the infrastructure deployment so that the cluster has the `kata` node
@@ -308,7 +311,11 @@ absent, the helper keeps the Deployment stopped until the retry recreates it.
 Do not clear the annotation manually.
 
 Before any writes, the helper checks the effective Agent Sandbox permissions
-of the Environment ServiceAccount and the metadata-only type of
-`agenthost-tls`. These checks do not grant permissions or create Secrets. The
+of the Environment ServiceAccount. After it renders the bundle, and before any
+writes, it checks the metadata of every required Secret. Required Secrets are
+`agenthost-tls` and each Secret that a rendered Deployment references without
+`optional: true`. A Secret volume that projects `tls.crt` and `tls.key` must
+have type `kubernetes.io/tls`. The helper reports every missing Secret or wrong
+type in one error. These checks do not grant permissions or create Secrets. The
 proposed rules in `proposed/environment-agent-sandbox-rbac.yaml` are not part
 of the active Kustomize bundle and are never applied by this command.

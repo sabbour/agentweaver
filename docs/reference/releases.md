@@ -71,8 +71,10 @@ npm run deploy:kustomize -- --image-manifest <path-to-image-manifest.json> --exe
 
 The command resolves selected references in the chosen registry to digests, runs the selected
 services' migration Jobs, applies the namespaced Kustomize overlay, and checks
-the nine Deployment rollouts. It does not provision Azure resources, grant
-access, read Secrets, or manage Namespaces. A migration failure stops before
+the nine Deployment rollouts. Before any cluster write, it checks that every
+required Secret exists with the expected type; it reads only Secret names and
+types. It does not provision Azure resources, grant
+access, read Secret data, or manage Namespaces. A migration failure stops before
 the root workload apply. Earlier migrations or workload updates may have
 completed if a later step fails; inspect state before retrying.
 

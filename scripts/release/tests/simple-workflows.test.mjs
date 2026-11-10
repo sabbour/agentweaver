@@ -348,8 +348,7 @@ function fakeExec(calls, {
   brokerConfigMapReadFailure = false, brokerConfigMapReadOutput,
   brokerConfigMapCount = 1, brokerConfigMapReference = brokerRuntimeConfigName,
   liveAgentHostSettings = {}, failApplyCount = 0, remainingPodPolls = 0, podList, state,
-  denyEnvironmentPermission, denyRuntimePermission, missingAgentHostTls = false,
-  wrongAgentHostTlsType = false,
+  denyEnvironmentPermission, denyRuntimePermission, missingSecrets = [], secretTypes = {},
   liveStorageClass, kataNodes, clusterNodes,
   amaLogs = { metadata: { generation: 2 }, status: { observedGeneration: 2, desiredNumberScheduled: 3,
     numberReady: 3, numberAvailable: 3, updatedNumberScheduled: 3 } },
@@ -505,11 +504,14 @@ function fakeExec(calls, {
       return { status: 0, stdout: JSON.stringify(liveDeployment(args[2])), stderr: '' };
     }
     if (args[0] === 'get' && args[1] === 'secret') {
+      const names = args.slice(2, args.findIndex(arg => arg.startsWith('--')))
+        .filter(name => !missingSecrets.includes(name));
       return {
         status: 0,
-        stdout: missingAgentHostTls
-          ? 'No resources found in agentweaver namespace.\n'
-          : `NAME           TYPE\nagenthost-tls   ${wrongAgentHostTlsType ? 'Opaque' : 'kubernetes.io/tls'}\n`,
+        stdout: names.length
+          ? ['NAME TYPE DATA AGE', ...names.map(name => `${name} ${secretTypes[name] ??
+            (name.endsWith('-tls') ? 'kubernetes.io/tls' : 'Opaque')} 2 1d`)].join('\n') + '\n'
+          : 'No resources found in agentweaver namespace.\n',
         stderr: '',
       };
     }
@@ -2377,11 +2379,65 @@ test('runtime ConfigMap and Environment activation permission failures stop befo
   }
 });
 
-test('TLS metadata and effective Environment RBAC failures stop before workload effects', async () => {
+test('required Secret metadata failures stop before workload effects', async () => {
   const directory = scratch();
   const failures = [
-    [{ missingAgentHostTls: true }, /Secret\/agenthost-tls is missing/],
-    [{ wrongAgentHostTlsType: true }, /must exist in namespace agentweaver with type kubernetes.io\/tls/],
+    [{ missingSecrets: ['agenthost-tls'] }, /Secret\/agenthost-tls is missing/],
+    [{ secretTypes: { 'agenthost-tls': 'Opaque' } }, /Secret\/agenthost-tls must have type kubernetes\.io\/tls/],
+    [{ missingSecrets: ['identity-broker-internal-tls'] }, /Secret\/identity-broker-internal-tls is missing/],
+    [{ secretTypes: { 'identity-broker-internal-tls': 'Opaque' } },
+      /Secret\/identity-broker-internal-tls must have type kubernetes\.io\/tls/],
+    [{ missingSecrets: ['identity-broker-signing'], secretTypes: { 'gateway-tls': 'Opaque' } },
+      /Secret\/identity-broker-signing is missing; Secret\/gateway-tls must have type kubernetes\.io\/tls/],
+  ];
+  try {
+    for (const [settings, expected] of failures) {
+      const calls = [];
+      await assert.rejects(deployKustomize({ imageTag: selectedTag }, {
+        root: directory, exec: fakeExec(calls, settings), log() {},
+      }), expected);
+      assert.equal(calls.some(call => call.command === 'kubectl' &&
+        ['annotate', 'create', 'delete', 'apply', 'scale', 'patch'].includes(call.args[0])), false);
+      const secretReads = calls.filter(call => call.command === 'kubectl' &&
+        call.args[0] === 'get' && call.args[1] === 'secret');
+      assert.equal(secretReads.length, 1);
+      assert.deepEqual(secretReads[0].args.slice(2, secretReads[0].args.indexOf('--ignore-not-found=true')).sort(), [
+        'agenthost-tls', 'environment-tls', 'events-and-sessions-tls', 'gateway-tls', 'identity-broker-internal-tls',
+        'identity-broker-signing', 'identity-broker-tls', 'knowledge-tls', 'mcp-tls', 'orchestrator-tls',
+        'projects-config-tls',
+      ]);
+      assert.equal(secretReads[0].args.some(arg => arg === '--output=json'), false);
+      assert.equal(secretReads[0].args.includes('--output=wide'), true);
+      assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
+        call.args.includes('secrets')), false);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('a preserved provider Secret reference is checked before workload effects', async () => {
+  const directory = scratch();
+  const calls = [];
+  try {
+    await assert.rejects(deployKustomize({ imageTag: selectedTag }, {
+      root: directory,
+      exec: fakeExec(calls, {
+        liveProviderSetup: buildIdentityBrokerProviderPlan(providerSetupInput, root),
+        missingSecrets: ['github-repo-app-oauth'],
+      }),
+      log() {},
+    }), /Secret\/github-repo-app-oauth is missing/);
+    assert.equal(calls.some(call => call.command === 'kubectl' &&
+      ['annotate', 'create', 'delete', 'apply', 'scale', 'patch'].includes(call.args[0])), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('effective Environment RBAC failures stop before workload effects', async () => {
+  const directory = scratch();
+  const failures = [
     [{ denyEnvironmentPermission: 'get sandboxclaims.extensions.agents.x-k8s.io' },
       /lacks effective permission get sandboxclaims.extensions.agents.x-k8s.io/],
     [{ denyEnvironmentPermission: 'get configmaps/agenthost-runtime-v1' },
@@ -2403,13 +2459,6 @@ test('TLS metadata and effective Environment RBAC failures stop before workload 
       }), expected);
       assert.equal(calls.some(call => call.command === 'kubectl' &&
         ['annotate', 'create', 'delete', 'apply', 'scale', 'patch'].includes(call.args[0])), false);
-      const secretReads = calls.filter(call => call.command === 'kubectl' &&
-        call.args[0] === 'get' && call.args[1] === 'secret');
-      assert.equal(secretReads.length, 1);
-      assert.equal(secretReads[0].args.some(arg => arg === '--output=json'), false);
-      assert.equal(secretReads[0].args.includes('--output=wide'), true);
-      assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'auth' &&
-        call.args.includes('secrets')), false);
     }
   } finally {
     rmSync(directory, { recursive: true, force: true });
