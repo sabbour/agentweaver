@@ -49,8 +49,8 @@ const STEPS: TourStep[] = [
     id: 'projects',
     title: 'Create a project',
     body: [
-      'Create a local project or connect a GitHub repository.',
-      'Describe the work so Agentweaver can propose its team, skills, and workflow.',
+      'Create or open a project.',
+      'Add a GitHub repository during setup or later in Project settings.',
     ],
   },
   {
@@ -65,8 +65,8 @@ const STEPS: TourStep[] = [
     id: 'startTask',
     title: 'Start a task',
     body: [
-      'Select a project first.',
-      'Then describe the outcome and review the gates before the team begins.',
+      'Select a project first. Start task adds an item to its Backlog.',
+      'Open the Board to review the item. Start task does not start a run.',
     ],
   },
 ];

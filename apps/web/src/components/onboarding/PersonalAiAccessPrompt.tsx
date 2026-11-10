@@ -1,7 +1,6 @@
 import { Button } from '@fluentui/react-components';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { apiClient } from '../../api/apiClient';
 import { SetupReadiness } from '../SetupReadiness';
 import {
   hasDismissedPersonalAiAccessPrompt,
@@ -9,61 +8,66 @@ import {
   personalAiAccessPromptStorageKey,
 } from './personalAiAccessPromptStorage';
 
-/**
- * Loads the user's AI-access readiness and renders the onboarding prompt when needed.
- * The API client supplies access status; local state/effects track loading, dismissal, and
- * refresh, while navigation opens the settings flow.
- */
-export function PersonalAiAccessPrompt({ userKey }: { userKey: string }) {
+/** Shows AI access guidance without claiming to know the user's provider status. */
+export function PersonalAiAccessPrompt({
+  userKey,
+  projectId,
+  onDismiss,
+}: {
+  userKey: string;
+  projectId?: string;
+  onDismiss?: () => void;
+}) {
   const navigate = useNavigate();
   const storageKey = useMemo(() => personalAiAccessPromptStorageKey(userKey), [userKey]);
-  const [visible, setVisible] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (hasDismissedPersonalAiAccessPrompt(storageKey)) return undefined;
-
-    void apiClient.getUserAiAccess()
-      .then((status) => {
-        if (!cancelled) setVisible(status.effective_source === 'none');
-      })
-      .catch(() => {
-        // A failed readiness check must not claim that the user has no provider access.
-      });
-
-    return () => { cancelled = true; };
-  }, [storageKey]);
+  const [visible, setVisible] = useState(
+    () => Boolean(userKey.trim()) && !hasDismissedPersonalAiAccessPrompt(storageKey),
+  );
 
   const dismiss = useCallback(() => {
     markPersonalAiAccessPromptDismissed(storageKey);
     setVisible(false);
-  }, [storageKey]);
+    onDismiss?.();
+  }, [onDismiss, storageKey]);
 
-  const openSettings = useCallback(() => {
+  const openConnections = useCallback(() => {
     dismiss();
-    navigate('/settings');
-  }, [dismiss, navigate]);
+    navigate(projectId
+      ? `/projects/${encodeURIComponent(projectId)}/settings?section=connections`
+      : '/projects');
+  }, [dismiss, navigate, projectId]);
 
-  if (!visible) return null;
+  if (!visible || !userKey.trim()) return null;
 
   return (
     <SetupReadiness
       compact
       onDismiss={dismiss}
       model={{
-        title: 'Set up personal AI access',
-        description: 'Session chat needs either your own model provider or an authorized GitHub Copilot account.',
-        items: [{
-          id: 'personal-ai-access',
-          title: 'Personal AI access',
-          description: 'Open Account settings to add a provider or connect GitHub Copilot.',
-          requirement: 'required',
-          status: 'action-required',
-        }],
+        title: 'AI access',
+        description: 'This guide does not check your current AI access.',
+        items: [
+          {
+            id: 'github-copilot',
+            title: 'GitHub Copilot',
+            description: projectId
+              ? 'Copilot connects to this project. Open Project settings > Connections to connect or check the connection.'
+              : 'Copilot connects to a project. Choose a project, then open Project settings > Connections to connect or check the connection.',
+            requirement: 'optional',
+            status: 'optional',
+          },
+          {
+            id: 'byok',
+            title: 'Bring your own key (BYOK)',
+            description: 'The v1 web app does not provide BYOK setup yet.',
+            requirement: 'optional',
+            status: 'unavailable',
+          },
+        ],
       }}
       primaryAction={(
-        <Button appearance="primary" onClick={openSettings}>
-          Open AI Access settings
+        <Button appearance="primary" onClick={openConnections}>
+          {projectId ? 'Open project connections' : 'Choose a project'}
         </Button>
       )}
     />

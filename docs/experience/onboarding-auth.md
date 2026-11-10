@@ -34,6 +34,23 @@ has a ten-minute client deadline.
 Broker requests consent, the app continues only after you make an explicit
 choice.
 
+## Choose AI access
+
+After sign-in, the app shows a first-run tour and an AI-access guide. The guide
+does not check your current provider status.
+
+GitHub Copilot connects to a project. Open a project, then open **Settings** >
+**Connections** to connect Copilot or check its status. The app uses the
+project connection panel to confirm the result. See
+[Account connections](./connections.md) for the full steps.
+
+The v1 web app does not provide BYOK setup yet. The guide does not claim that a
+BYOK connection exists.
+
+The app keeps dismissal state in this browser for the signed-in identity. If
+the guide does not open, select **Projects** and follow the project settings
+steps above.
+
 ## Open an existing run
 
 You don't type a run ID. Open a run from a link or a notification, or select

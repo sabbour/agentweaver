@@ -18,6 +18,7 @@ import {
 } from '@fluentui/react-components';
 import { DismissRegular, FlowRegular } from '@fluentui/react-icons';
 import { useCallback, useMemo, useRef, useState } from 'react';
+import type { RefObject } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CaptureTaskForm } from '../components/board/CaptureTaskForm';
 import { useAuth } from './AuthContext';
@@ -30,7 +31,15 @@ import { permissionsForProject, useAuthorizationContext } from './projectData';
  * access check shows that the user can change the project, so a user who
  * can't add tasks never sees a button that would fail.
  */
-export function StartTaskAction({ projectId, projectName }: { projectId: string; projectName?: string }) {
+export function StartTaskAction({
+  projectId,
+  projectName,
+  buttonRef,
+}: {
+  projectId: string;
+  projectName?: string;
+  buttonRef?: RefObject<HTMLButtonElement | null>;
+}) {
   const { apiCall } = useAuth();
   const navigate = useNavigate();
   const authorization = useAuthorizationContext();
@@ -68,6 +77,7 @@ export function StartTaskAction({ projectId, projectName }: { projectId: string;
       <Dialog open={open} onOpenChange={(_, data) => setOpen(data.open)}>
         <Tooltip content="Start task" relationship="label" positioning="before">
           <Button
+            ref={buttonRef}
             icon={<FlowRegular />}
             aria-label="Start task"
             data-testid="start-task-topbar-action"

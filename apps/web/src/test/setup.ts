@@ -1,6 +1,25 @@
 import { cleanup } from '@testing-library/react';
 import { afterEach } from 'vitest';
 
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() { return values.size; },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => values.delete(key),
+    setItem: (key, value) => values.set(key, String(value)),
+  };
+}
+
+// Node requires a file flag for global storage, so tests use in-memory storage.
+for (const name of ['localStorage', 'sessionStorage'] as const) {
+  const storage = createMemoryStorage();
+  Object.defineProperty(window, name, { configurable: true, value: storage });
+  Object.defineProperty(globalThis, name, { configurable: true, value: storage });
+}
+
 // happy-dom has no layout engine, so `<body>` reports a 0x0 rectangle. Tabster
 // (used by Fluent UI dialogs) reads that as "the page is hidden" and treats
 // every control as invisible. A Fluent Dialog then finds nothing to focus and

@@ -5,6 +5,7 @@ import {
   hasCompletedFirstRunTour,
   markFirstRunTourComplete,
 } from '../components/onboarding/firstRunTourStorage';
+import { personalAiAccessPromptStorageKey } from '../components/onboarding/personalAiAccessPromptStorage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useRef } from 'react';
@@ -97,13 +98,19 @@ describe('FirstRunTour', () => {
     expect(dialog.style.right).toBe('16px');
   });
 
-  it('stores completion by normalized user and tour version', () => {
+  it('stores completion by user identity and tour version', () => {
     const storageKey = firstRunTourStorageKey(' Admin@Example.COM ');
     expect(hasCompletedFirstRunTour(storageKey)).toBe(false);
 
     markFirstRunTourComplete(storageKey);
 
-    expect(storageKey).toContain('admin%40example.com');
+    expect(storageKey).toContain('Admin%40Example.COM');
     expect(hasCompletedFirstRunTour(storageKey)).toBe(true);
+  });
+
+  it('keeps identity keys that differ by case separate', () => {
+    expect(firstRunTourStorageKey('Actor-1')).not.toBe(firstRunTourStorageKey('actor-1'));
+    expect(personalAiAccessPromptStorageKey('Actor-1'))
+      .not.toBe(personalAiAccessPromptStorageKey('actor-1'));
   });
 });

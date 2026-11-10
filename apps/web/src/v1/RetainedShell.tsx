@@ -1,7 +1,7 @@
 import { Badge, Button, Divider, MessageBar, MessageBarBody, Popover, PopoverSurface, PopoverTrigger, Text, mergeClasses } from '@fluentui/react-components';
 import { ChevronDownRegular, PersonRegular, SignOutRegular } from '@fluentui/react-icons';
 import { useIdentityMenuStyles } from '../components/identityMenuStyles';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useMatch } from 'react-router-dom';
 import { LeftNavView } from '../components/shell/LeftNav';
 import { ProjectSwitcherView } from '../components/shell/ProjectSwitcher';
@@ -14,6 +14,13 @@ import { StartTaskAction } from './StartTaskAction';
 import { gatewayClient } from './api';
 import type { ProjectSummary } from './contracts';
 import { useWebAppVersion, type WebAppVersion } from './appVersion';
+import { FirstRunTour } from '../components/onboarding/FirstRunTour';
+import { PersonalAiAccessPrompt } from '../components/onboarding/PersonalAiAccessPrompt';
+import {
+  firstRunTourStorageKey,
+  hasCompletedFirstRunTour,
+  markFirstRunTourComplete,
+} from '../components/onboarding/firstRunTourStorage';
 
 /**
  * Keeps the 0.x persona trigger and menu layout without requesting legacy identity APIs.
@@ -100,9 +107,38 @@ function shellActiveKey(pathname: string, projectId: string | undefined, hash: s
 /** Adapts Gateway data to the existing rail; no monolith API consumers are mounted. */
 export function RetainedShell({ children }: { children: ReactNode }) {
   const location = useLocation();
-  const { session, apiCall } = useAuth();
+  const { session, apiCall, authorizationContext } = useAuth();
   const match = useMatch('/projects/:projectId/*');
   const projectId = match?.params.projectId;
+  const actorIdentityKey = authorizationContext?.issuer?.trim() && authorizationContext.actorId?.trim()
+    ? JSON.stringify([authorizationContext.issuer, authorizationContext.actorId])
+    : null;
+  const tourStorageKey = useMemo(() => firstRunTourStorageKey(actorIdentityKey), [actorIdentityKey]);
+  const [dismissedTourIdentity, setDismissedTourIdentity] = useState<string | null>(null);
+  const [dismissedAiAccessIdentities, setDismissedAiAccessIdentities] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const tourOpen = Boolean(actorIdentityKey &&
+    dismissedTourIdentity !== actorIdentityKey &&
+    !hasCompletedFirstRunTour(tourStorageKey));
+  const dismissFirstRunTour = useCallback(() => {
+    if (!actorIdentityKey) return;
+    markFirstRunTourComplete(tourStorageKey);
+    setDismissedTourIdentity(actorIdentityKey);
+  }, [actorIdentityKey, tourStorageKey]);
+  const dismissAiAccessPrompt = useCallback((identityKey: string) => {
+    setDismissedAiAccessIdentities((current) => new Set(current).add(identityKey));
+  }, []);
+  const projectsTourTarget = useRef<HTMLAnchorElement | null>(null);
+  const sessionsTourTarget = useRef<HTMLAnchorElement | null>(null);
+  const settingsTourTarget = useRef<HTMLButtonElement | null>(null);
+  const startTaskTourTarget = useRef<HTMLButtonElement | null>(null);
+  const tourTargets = useMemo(() => ({
+    projects: projectsTourTarget,
+    sessions: sessionsTourTarget,
+    settings: settingsTourTarget,
+    startTask: startTaskTourTarget,
+  }), []);
   // The new session page carries its project in `?project=`. The switcher
   // shows that project, so it matches the project the page starts in.
   const switcherProjectId = projectId
@@ -169,6 +205,7 @@ export function RetainedShell({ children }: { children: ReactNode }) {
           pathname={location.pathname}
           activeKey={shellActiveKey(location.pathname, projectId, location.hash)}
           version={appVersion.display}
+          tourTargets={tourTargets}
           projectSwitcher={(
             <ProjectSwitcherView
               projectId={switcherProjectId}
@@ -189,16 +226,37 @@ export function RetainedShell({ children }: { children: ReactNode }) {
           <main className="aw-shell-content" aria-label="Main content">
             {/* Overview uses the same most-recent active project as its Current focus card. */}
             {startTaskProjectId && (
-              <StartTaskAction projectId={startTaskProjectId} projectName={projectNames.get(startTaskProjectId)} />
+              <StartTaskAction
+                projectId={startTaskProjectId}
+                projectName={projectNames.get(startTaskProjectId)}
+                buttonRef={startTaskTourTarget}
+              />
             )}
             <div className="aw-shell-scroll">
               <PageContainer>
                 {current?.error && <MessageBar intent="error"><MessageBarBody>{current.error}</MessageBarBody></MessageBar>}
+                {actorIdentityKey && !dismissedAiAccessIdentities.has(actorIdentityKey) && (
+                  <PersonalAiAccessPrompt
+                    key={actorIdentityKey}
+                    userKey={actorIdentityKey}
+                    projectId={projectId ?? switcherProjectId}
+                    onDismiss={() => dismissAiAccessPrompt(actorIdentityKey)}
+                  />
+                )}
                 {children}
               </PageContainer>
             </div>
           </main>
         </div>
+        {actorIdentityKey && (
+          <FirstRunTour
+            key={actorIdentityKey}
+            open={tourOpen}
+            targets={tourTargets}
+            returnFocusTarget={settingsTourTarget}
+            onDismiss={dismissFirstRunTour}
+          />
+        )}
       </div>
     </RunAttentionProvider>
   );

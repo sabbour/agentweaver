@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useEffect } from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import packageInfo from '../../package.json';
 import { BrokerIdentity, RetainedShell } from './RetainedShell';
@@ -12,9 +12,17 @@ const packageVersion = { display: packageInfo.version, gitSha: null };
 const mocks = vi.hoisted(() => ({
   apiCall: vi.fn(), useRunAttention: vi.fn(), instances: 0, listProjects: vi.fn(), getAuthorizationContext: vi.fn(),
   session: { accessToken: 'token', displayName: null as string | null },
+  authorizationContext: null as { issuer: string; actorId: string } | null,
 }));
 const signOut = vi.fn();
-vi.mock('./AuthContext', () => ({ useAuth: () => ({ signOut, session: mocks.session, apiCall: mocks.apiCall }) }));
+vi.mock('./AuthContext', () => ({
+  useAuth: () => ({
+    signOut,
+    session: mocks.session,
+    apiCall: mocks.apiCall,
+    authorizationContext: mocks.authorizationContext,
+  }),
+}));
 vi.mock('./api', async (importOriginal) => ({
   ...await importOriginal<typeof import('./api')>(),
   gatewayClient: { listProjects: mocks.listProjects, getAuthorizationContext: mocks.getAuthorizationContext },
@@ -33,8 +41,10 @@ const attention: RunAttention = {
 };
 
 beforeEach(() => {
+  localStorage.clear();
   mocks.instances = 0;
   mocks.session.displayName = null;
+  mocks.authorizationContext = null;
   mocks.useRunAttention.mockReset().mockReturnValue(attention);
   // The shell loads the project list for the switcher, and Start task reads the caller's access.
   mocks.apiCall.mockReset().mockImplementation((operation: (token: string, tenant: string) => Promise<unknown>) => operation('token', 'tenant-1'));
@@ -60,6 +70,11 @@ function AttentionReader({ onRead }: { onRead: (value: RunAttention) => void }) 
 
 function renderShell(path: string, children = <p>Page</p>) {
   return render(<MemoryRouter initialEntries={[path]}><RetainedShell>{children}</RetainedShell></MemoryRouter>);
+}
+
+function LocationReader() {
+  const location = useLocation();
+  return <output data-testid="current-location">{location.pathname}{location.search}</output>;
 }
 
 describe('BrokerIdentity', () => {
@@ -187,5 +202,73 @@ describe('RetainedShell', () => {
     renderShell('/overview');
     await waitFor(() => expect(mocks.listProjects).toHaveBeenCalled());
     expect(screen.queryByRole('button', { name: 'Start task' })).toBeNull();
+  });
+
+  it('guides a signed-in user to project Copilot settings and reports BYOK as unavailable', async () => {
+    mocks.authorizationContext = { issuer: 'https://broker.test', actorId: 'actor-1' };
+    renderShell('/projects/p1', <LocationReader />);
+
+    expect(await screen.findByRole('heading', { name: 'Create a project' })).toBeDefined();
+    expect(await screen.findByRole('heading', { name: 'AI access' })).toBeDefined();
+    expect(screen.getByText('This guide does not check your current AI access.')).toBeDefined();
+    expect(screen.getByText('The v1 web app does not provide BYOK setup yet.')).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open project connections' }));
+
+    expect(screen.getByTestId('current-location').textContent)
+      .toBe('/projects/p1/settings?section=connections');
+  });
+
+  it('opens Projects when the user has not selected a project', async () => {
+    mocks.authorizationContext = { issuer: 'https://broker.test', actorId: 'actor-1' };
+    renderShell('/overview', <LocationReader />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose a project' }));
+
+    expect(screen.getByTestId('current-location').textContent).toBe('/projects');
+  });
+
+  it('hides onboarding when the authorization context has no actor identity', async () => {
+    mocks.authorizationContext = { issuer: '', actorId: '' };
+    renderShell('/overview');
+
+    await screen.findByText('Page');
+
+    expect(screen.queryByRole('heading', { name: 'Create a project' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'AI access' })).toBeNull();
+  });
+
+  it('keeps the AI guide dismissed through an identity refresh when storage is unavailable', async () => {
+    mocks.authorizationContext = { issuer: 'https://broker.test', actorId: 'actor-1' };
+    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
+      throw new Error('Storage is unavailable');
+    });
+
+    try {
+      const view = renderShell('/overview');
+      fireEvent.click(await screen.findByRole('button', { name: 'Dismiss AI access' }));
+      expect(screen.queryByRole('heading', { name: 'AI access' })).toBeNull();
+
+      mocks.authorizationContext = null;
+      view.rerender(<MemoryRouter initialEntries={['/overview']}><RetainedShell><p>Page</p></RetainedShell></MemoryRouter>);
+      mocks.authorizationContext = { issuer: 'https://broker.test', actorId: 'actor-1' };
+      view.rerender(<MemoryRouter initialEntries={['/overview']}><RetainedShell><p>Page</p></RetainedShell></MemoryRouter>);
+
+      expect(screen.queryByRole('heading', { name: 'AI access' })).toBeNull();
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
+  it('keeps tour completion separate for actor IDs that differ by case', async () => {
+    mocks.authorizationContext = { issuer: 'https://broker.test', actorId: 'Actor-1' };
+    const first = renderShell('/overview');
+    fireEvent.click(await screen.findByRole('button', { name: 'Skip tour' }));
+    first.unmount();
+
+    mocks.authorizationContext = { issuer: 'https://broker.test', actorId: 'actor-1' };
+    renderShell('/overview');
+
+    expect(await screen.findByRole('heading', { name: 'Create a project' })).toBeDefined();
   });
 });

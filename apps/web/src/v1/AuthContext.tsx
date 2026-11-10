@@ -49,7 +49,7 @@ interface AuthSession {
 /** Tenant authorization values confirmed by the Projects owner. */
 type ConfirmedAuthorizationContext = Pick<
   ProjectAuthorizationContextResponse,
-  'tenantId' | 'membershipRevision'
+  'issuer' | 'actorId' | 'tenantId' | 'membershipRevision'
 >;
 
 /** Authentication state and operations shared with v1 pages and Gateway callers. */
@@ -787,6 +787,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         );
 
       const confirmedContext: ConfirmedAuthorizationContext = {
+        issuer: result.issuer,
+        actorId: result.actorId,
         tenantId: result.tenantId,
         membershipRevision: result.membershipRevision,
       };

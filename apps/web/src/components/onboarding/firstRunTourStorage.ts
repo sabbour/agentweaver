@@ -4,7 +4,7 @@ const REQUIRED_SETUP_RETURN_TO_KEY = 'agentweaver.requiredSetup.returnTo';
 
 /** Builds the versioned browser-storage key for a user-specific first-run tour. */
 export function firstRunTourStorageKey(userKey: string | null | undefined): string {
-  const normalized = userKey?.trim().toLowerCase() || 'anonymous';
+  const normalized = userKey?.trim() || 'anonymous';
   return `agentweaver.firstRunTour.${TOUR_VERSION}.${encodeURIComponent(normalized)}`;
 }
 

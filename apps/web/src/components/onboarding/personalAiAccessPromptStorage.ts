@@ -2,7 +2,7 @@ const PROMPT_VERSION = 'v1';
 
 /** Builds the per-user local-storage key for the personal AI-access prompt. */
 export function personalAiAccessPromptStorageKey(userKey: string): string {
-  const normalized = userKey.trim().toLowerCase();
+  const normalized = userKey.trim();
   return `agentweaver.personalAiAccessPrompt.${PROMPT_VERSION}.${encodeURIComponent(normalized)}`;
 }
 
