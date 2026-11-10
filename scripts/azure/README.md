@@ -590,8 +590,12 @@ Every `deploy.mjs --execute` run enables the AKS Azure Monitor add-on with the
 `<prefix>-law` workspace, or adopts it when it is already enabled. There is no
 opt-out. The receipt contains `azureMonitorAddon` with `action` set to
 `enabled` or `adopted`. `npm run deploy:kustomize` stops before any write when
-DaemonSet `ama-logs` in `kube-system` is not ready. For the steps, failures,
-permissions, and cost, see
+DaemonSet `ama-logs` in `kube-system` is not ready. A cluster in a canary
+region with a workspace in a production region cannot use the add-on: the
+installer skips it with a warning and `action` set to `unsupported-region`,
+and `deploy:kustomize` accepts the missing agent only when every node is in a
+canary region. For the steps, failures, permissions, cost, and the canary
+limit, see
 [Azure Monitor add-on](../../infra/bicep/README.md#azure-monitor-add-on).
 
 ## ACNS security source setting

@@ -142,6 +142,12 @@ export function fakeAzure(overrides = {}, calls = []) {
       } });
     }
     if (args[0] === 'aks' && args[1] === 'enable-addons') return overrides.enableAddons ?? ok({});
+    if (args[0] === 'aks' && args[1] === 'show' && args.at(args.indexOf('--query') + 1) === 'location') {
+      return overrides.clusterLocation ?? { status: 0, stdout: 'eastus2\n', stderr: '' };
+    }
+    if (args[0] === 'resource' && args[1] === 'show' && args.includes('location')) {
+      return overrides.workspaceLocation ?? { status: 0, stdout: 'eastus2\n', stderr: '' };
+    }
     if (args[0] === 'aks' && args[1] === 'show' && args.includes('--query')) return overrides.issuerResult ?? {
       status: 0,
       stdout: 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/cluster-id/',

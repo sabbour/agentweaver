@@ -119,8 +119,12 @@ pool and run the deployment again. For the cost, see
 Both templates also end with the AKS Azure Monitor add-on enabled. The
 installer enables the add-on with the `<prefix>-law` workspace, or adopts it
 when it is already enabled. You cannot turn it off. The installer stops if the
-add-on sends to another workspace or uses shared-key authentication. For the
-required permissions and the cost, see
+add-on sends to another workspace or uses shared-key authentication. The only
+exception is a cluster in a canary region (such as `eastus2euap`) with the
+workspace in a production region. Azure Monitor does not support that layout,
+so the installer skips the add-on with a warning, and container logs are not
+collected. For the required permissions, the cost, and the canary-region
+limit, see
 [Azure Monitor add-on](https://github.com/sabbour/agentweaver/blob/v1/infra/bicep/README.md#azure-monitor-add-on).
 
 The infrastructure installer does not create Kubernetes namespaces or grant
@@ -951,7 +955,9 @@ the workspace StorageClass and the sandbox RuntimeClass named in
 - the RuntimeClass is missing; or
 - no Ready, schedulable node matches the RuntimeClass node selector; or
 - DaemonSet `ama-logs` in `kube-system` (the AKS Azure Monitor add-on agent)
-  is missing or not ready on every scheduled node.
+  is missing or not ready on every scheduled node. A missing `ama-logs` is
+  accepted, with a warning, only when the node list is not empty and every
+  node has a `topology.kubernetes.io/region` label that ends in `euap`.
 
 The message for a missing RuntimeClass or node tells you to run the
 infrastructure deployment, which creates the `kata` node pool. The message for

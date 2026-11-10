@@ -339,6 +339,8 @@ function renderedRoot(kustomizationPath, {
   ].join('---\n');
 }
 
+const canaryNode = region => ({ metadata: { labels: { 'topology.kubernetes.io/region': region } } });
+
 function fakeExec(calls, {
   failedJob, failedRollout, missingProjectsConfigClientId, liveImageRefs, distinctDigests = false,
   liveRuntimeConfig = runtimeConfig, denyRuntimeConfigDelete = false,
@@ -348,7 +350,7 @@ function fakeExec(calls, {
   liveAgentHostSettings = {}, failApplyCount = 0, remainingPodPolls = 0, podList, state,
   denyEnvironmentPermission, denyRuntimePermission, missingAgentHostTls = false,
   wrongAgentHostTlsType = false,
-  liveStorageClass, kataNodes,
+  liveStorageClass, kataNodes, clusterNodes,
   amaLogs = { metadata: { generation: 2 }, status: { observedGeneration: 2, desiredNumberScheduled: 3,
     numberReady: 3, numberAvailable: 3, updatedNumberScheduled: 3 } },
   smokePod = { status: { phase: 'Succeeded' } }, smokeLogs = 'SMOKE_OK\n', smokeCreateError,
@@ -543,6 +545,10 @@ function fakeExec(calls, {
         scheduling: { nodeSelector: { 'kubernetes.azure.com/kata-vm-isolation': 'true' } } }), stderr: '' };
     }
     if (args[0] === 'get' && args[1] === 'nodes') {
+      if (!args.includes('--selector') && clusterNodes !== undefined) {
+        return { status: 0, stdout: typeof clusterNodes === 'string' ? clusterNodes :
+          JSON.stringify({ items: clusterNodes }), stderr: '' };
+      }
       const items = kataNodes ?? [{ spec: {}, status: { conditions: [{ type: 'Ready', status: 'True' }] } }];
       return { status: 0, stdout: JSON.stringify({ items }), stderr: '' };
     }
@@ -2428,6 +2434,12 @@ test('cluster prerequisite failures stop before workload effects', async () => {
       /cannot delete persistentvolumeclaims .*install smoke check/],
     [{ denyRuntimePermission: 'get pods/log' }, /cannot get pods\/log/],
     [{ amaLogs: null }, /DaemonSet\/ama-logs is missing in namespace kube-system.*deploy\.mjs --execute/],
+    [{ amaLogs: null, clusterNodes: [] }, /DaemonSet\/ama-logs is missing/],
+    [{ amaLogs: null, clusterNodes: [canaryNode('eastus2euap'), canaryNode('eastus2')] }, /DaemonSet\/ama-logs is missing/],
+    [{ amaLogs: null, clusterNodes: [canaryNode('eastus2euap'), { metadata: {} }] }, /DaemonSet\/ama-logs is missing/],
+    [{ amaLogs: null, clusterNodes: 'not json' }, /invalid JSON for the node list/],
+    [{ amaLogs: { metadata: { generation: 1 }, status: {} }, clusterNodes: [canaryNode('eastus2euap')] },
+      /ama-logs is not ready \(0\/0 ready\)/],
     [{ amaLogs: { metadata: { generation: 1 }, status: { observedGeneration: 1, desiredNumberScheduled: 3,
       numberReady: 2, numberAvailable: 2, updatedNumberScheduled: 3 } } }, /ama-logs is not ready \(2\/3 ready\)/],
     [{ amaLogs: { metadata: { generation: 1 }, status: {} } }, /ama-logs is not ready \(0\/0 ready\)/],
@@ -2449,6 +2461,24 @@ test('cluster prerequisite failures stop before workload effects', async () => {
     const storageClassRead = calls.find(call => call.args[0] === 'get' && call.args[1] === 'storageclass');
     assert.equal(storageClassRead.args[storageClassRead.args.indexOf('--as') + 1],
       'system:serviceaccount:agentweaver:environment');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('deploy continues without ama-logs only when every node is in a canary region', async () => {
+  const directory = scratch();
+  try {
+    for (const region of ['eastus2euap', 'centraluseuap']) {
+      const calls = [];
+      const lines = [];
+      await deployKustomize({ imageTag: selectedTag }, {
+        root: directory, exec: fakeExec(calls, { amaLogs: null, clusterNodes: [canaryNode(region), canaryNode(region)] }),
+        log: line => lines.push(line),
+      });
+      assert.match(lines.join('\n'), /ama-logs is missing and every node is in a canary \(EUAP\) region.*not collected/);
+      assert.ok(calls.some(call => call.args[0] === 'auth' && call.args[2] === 'list' && call.args[3] === 'nodes'));
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

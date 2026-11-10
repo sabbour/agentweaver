@@ -54,12 +54,16 @@ export function buildDeployArgs({
   return args;
 }
 
+/** Canary (EUAP) regions; their clusters can only associate data collection rules in a canary region. */
+const isCanaryRegion = location => /euap$/i.test(location);
+
 /**
  * Enables the AKS Azure Monitor add-on with the install workspace, or adopts it when it is already enabled.
- * The add-on is always required; a different workspace or shared-key auth stops the install.
+ * A different workspace or shared-key auth stops the install. A canary-region cluster with a workspace
+ * outside a canary region cannot use Container Insights, so the step is skipped with a warning.
  * execAz must be the target-bound runner, which adds the subscription.
  */
-export function ensureAzureMonitorAddon({ resourceGroup, subscriptionId }, execAz) {
+export function ensureAzureMonitorAddon({ resourceGroup, subscriptionId }, execAz, warn = console.warn) {
   const groupId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}`;
   const workspaceResourceId = `${groupId}/providers/Microsoft.OperationalInsights/workspaces/${resourceGroup}-law`;
   const cluster = ['--resource-group', resourceGroup, '--name', `${resourceGroup}-aks`];
@@ -80,6 +84,20 @@ export function ensureAzureMonitorAddon({ resourceGroup, subscriptionId }, execA
     return 'enabled';
   };
   if (state(read()) === 'enabled') return { workspaceResourceId, action: 'adopted' };
+  const location = (args, name) => {
+    const result = execAz(args, { check: false });
+    const value = result.status === 0 ? result.stdout.trim() : '';
+    if (!/^[a-z0-9]+$/i.test(value)) throw new Error(`Could not read the ${name} location: ${result.stderr}`);
+    return value.toLowerCase();
+  };
+  const clusterLocation = location(['aks', 'show', ...cluster, '--query', 'location', '-o', 'tsv'], 'AKS cluster');
+  const workspaceLocation = location(['resource', 'show', '--ids', workspaceResourceId, '--query', 'location',
+    '-o', 'tsv'], 'Log Analytics workspace');
+  if (isCanaryRegion(clusterLocation) && !isCanaryRegion(workspaceLocation)) {
+    warn(`Azure Monitor add-on skipped: cluster region ${clusterLocation} is a canary region and workspace region ` +
+      `${workspaceLocation} is not. Container Insights, ContainerNetworkLogs, and egress audit data are not collected.`);
+    return { workspaceResourceId, action: 'unsupported-region', clusterLocation, workspaceLocation };
+  }
   const enable = execAz(['aks', 'enable-addons', ...cluster, '--addons', 'monitoring',
     '--workspace-resource-id', workspaceResourceId, '--enable-msi-auth-for-monitoring',
     '--ampls-resource-id', `${groupId}/providers/Microsoft.Insights/privateLinkScopes/${resourceGroup}-ampls`,

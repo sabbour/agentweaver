@@ -720,6 +720,41 @@ test('AKS-only deployment enables the missing Azure Monitor add-on with the inst
   assert.deepEqual(result.receipt.azureMonitorAddon, { workspaceResourceId: workspace, action: 'enabled' });
 });
 
+test('Azure Monitor add-on step skips a canary-region cluster whose workspace is outside a canary region', () => {
+  const workspace = deploymentOutputs.foundationResources.value.monitorWorkspaceResourceId;
+  const target = { resourceGroup: 'agentweaver', subscriptionId: ids.subscriptionId };
+  const disabled = { status: 0, stdout: '', stderr: '' };
+  const at = location => ({ status: 0, stdout: `${location}\n`, stderr: '' });
+  for (const cluster of ['eastus2euap', 'centraluseuap']) {
+    const calls = [];
+    const warnings = [];
+    const result = ensureAzureMonitorAddon(target, fakeAzure({ monitoringAddon: disabled,
+      clusterLocation: at(cluster), workspaceLocation: at('eastus2') }, calls), line => warnings.push(line));
+    assert.deepEqual(result, { workspaceResourceId: workspace, action: 'unsupported-region',
+      clusterLocation: cluster, workspaceLocation: 'eastus2' });
+    assert.ok(!calls.some(args => args[1] === 'enable-addons'));
+    assert.match(warnings.join('\n'), /skipped: .*canary region.*not collected/);
+  }
+  for (const [cluster, workspaceRegion] of [['eastus2euap', 'eastus2euap'], ['eastus2', 'eastus2']]) {
+    const calls = [];
+    let enabled = false;
+    const az = fakeAzure({ clusterLocation: at(cluster), workspaceLocation: at(workspaceRegion) }, calls);
+    const result = ensureAzureMonitorAddon(target, (args, options) => {
+      if (args[1] === 'enable-addons') enabled = true;
+      if (args.includes('addonProfiles.omsagent') && !enabled) return disabled;
+      return az(args, options);
+    }, () => assert.fail('unexpected warning'));
+    assert.equal(result.action, 'enabled');
+    assert.ok(calls.some(args => args[1] === 'enable-addons'));
+  }
+  for (const overrides of [{ clusterLocation: at('') }, { workspaceLocation: { status: 1, stdout: '', stderr: 'denied' } }]) {
+    const calls = [];
+    assert.throws(() => ensureAzureMonitorAddon(target, fakeAzure({ monitoringAddon: disabled, ...overrides }, calls)),
+      /Could not read the (AKS cluster|Log Analytics workspace) location/);
+    assert.ok(!calls.some(args => args[1] === 'enable-addons'));
+  }
+});
+
 test('Azure Monitor add-on step stops on another workspace, shared-key auth, or a failed enable', () => {
   const workspace = deploymentOutputs.foundationResources.value.monitorWorkspaceResourceId;
   const target = { resourceGroup: 'agentweaver', subscriptionId: ids.subscriptionId };
