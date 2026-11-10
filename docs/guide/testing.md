@@ -696,6 +696,10 @@ allows browser authorization; use a fresh evidence path for each run. A live
 run creates and cleans up API fixtures, so use only an explicitly approved
 non-production target.
 
+Evidence reports `cleanup.state: "cleaned"` and omits the provisional failure
+reason only after every cleanup receipt and readback passes. An indeterminate
+result keeps its reason; reconcile that invocation before you retry.
+
 For input-only validation, add `--dry-run`. A successful dry run performs no
 network request, authentication, or browser launch and writes no evidence,
 even when `--interactive` is also present; validation failure may persist a
