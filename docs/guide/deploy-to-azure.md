@@ -130,8 +130,9 @@ the derived AKS managed group `<prefix>-aks-nodes` to be absent, supplies that
 name to AKS, and verifies the returned name. It rejects what-if results with
 unresolved diagnostics, potential changes, non-create, or out-of-group changes. It compares two what-if
 results before submission. These checks do not prove all provider effects:
-the existing Monitor add-on step still runs after the deployment. The new path
-does not enable bootstrap or acceptance operations for the new target.
+the existing Monitor add-on step still runs after the deployment. Later
+install steps accept the new group only when it is a registered target. See
+[Use a registered separate target](#use-a-registered-separate-target).
 
 Use one operator and stop competing automation for this target. The checks
 are not atomic: another writer can change the target after a check. If a
@@ -140,6 +141,45 @@ resource group, deployment history, and AKS managed group manually. Do not
 start another installation until reconciliation is complete. Azure CLI may
 retry the same deployment request, but the installer does not rerun deployment
 after an uncertain result.
+
+### Use a registered separate target
+
+The tracked registry `scripts/azure/lib/targets.mjs` lists each install
+target. The target name is the resource group name and the `namePrefix`. Each
+entry names the foundation parameter file and the AKS-only parameter file of
+that target:
+
+| Target | Foundation parameters | AKS-only parameters |
+|---|---|---|
+| `agentweaver` | `p0-integration.approved.json` | `p0-aks-redeploy.approved.json` |
+| `aweast2np01` | `aweast2np01.approved.json` | `aweast2np01-aks-redeploy.approved.json` |
+
+All files are in `infra/bicep/parameters/`. To add a target, add its entry and
+both parameter files in one reviewed change. In the same change, add the name
+to the `namePrefix` allowed values in `infra/bicep/p1-runtime-identities.bicep`
+and `infra/bicep/p1-session-material-access.bicep`.
+
+Set `--resource-group` to the target name. After the foundation exists, these
+steps accept a registered target:
+
+- the `plan.mjs` what-if;
+- the `deploy.mjs` AKS-only redeployment, with `--parameters` set to the
+  AKS-only file of the same target; and
+- the `deploy.mjs` options for Identity PostgreSQL, identity routing, Broker
+  state, and Broker runtime bootstrap.
+
+An unregistered name fails before any Azure call. The AKS-only path rejects
+the parameter file of another target.
+
+In the manual `az aks` commands in step 4, replace `agentweaver` with the
+target name and `agentweaver-aks` with `<target>-aks`.
+
+These steps still accept only `agentweaver`: the Foundation Probe options,
+`--align-existing-identity-broker-hostname`, Identity Broker provider setup,
+P1 PostgreSQL initialization, database maintenance, and service deployment.
+`deploy.mjs` rejects the Foundation Probe and hostname alignment options for
+another target before any Azure call. A later change adds target selection to
+these steps.
 
 Both templates create or update the `kata` node pool for sandbox pods (AKS Pod
 Sandboxing, Azure Linux, SSH disabled, 1-2 `Standard_D4s_v5` nodes). You do not

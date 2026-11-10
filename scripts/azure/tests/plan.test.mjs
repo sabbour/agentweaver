@@ -76,6 +76,19 @@ test('AKS-only what-if lists the nested federated credential create-or-update op
   assert.ok(!calls.some(args => args.includes('create')));
 });
 
+test('AKS-only what-if names the federated identities from the selected resource group', () => {
+  const result = plan({ ...fixture, resourceGroup: 'aweast2np01' }, {
+    sourceResolver: () => ({ ...source, scope: 'aks-only', template: 'infra/bicep/aks-redeploy.bicep',
+      parametersFile: 'infra/bicep/parameters/aweast2np01-aks-redeploy.approved.json' }),
+    execAz: fakeAzure({ whatIf: { status: 0, stdout: '{"changes":[]}', stderr: '' },
+      group: { id: `/subscriptions/${ids.subscriptionId}/resourceGroups/aweast2np01`, name: 'aweast2np01' } }, []),
+  });
+  assert.deepEqual(
+    JSON.parse(result.stdout).nestedDeploymentChanges.federatedIdentityCredentials.map(fic => fic.managedIdentityName),
+    ['aweast2np01-id-foundation-probe', 'aweast2np01-id-identity-broker',
+      'aweast2np01-id-identity-broker-migration']);
+});
+
 test('plan fails closed for unauthorized, missing or untagged target', () => {
   for (const overrides of [
     { groupResult: { status: 1, stderr: '(AuthorizationFailed)', stdout: '' } },

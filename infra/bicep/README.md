@@ -209,7 +209,8 @@ This command requires no Azure login.
 The parameter examples contain placeholders and are not deploy-ready.
 The deployment tooling accepts tracked reviewed JSON parameters, not arbitrary
 files or caller-supplied source templates. The dedicated AKS update uses
-`aks-redeploy.bicep` with `parameters/p0-aks-redeploy.approved.json`; use the
+`aks-redeploy.bicep` with the AKS-only parameter file of the selected target
+(`parameters/p0-aks-redeploy.approved.json` for `agentweaver`); use the
 full `main.bicep` composition only for an approved initial deployment into an
 empty managed-resource target.
 It injects exact `sourceSha` and `sourceHash` parameters and reads matching outputs.

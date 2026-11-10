@@ -112,8 +112,8 @@ test('new foundation rejects invalid targets, DNS and bootstrap before Azure rea
     }));
   }
   assert.equal(cliConfig({ 'new-foundation': true }).newFoundation, true);
-  assert.throws(() => plan({ ...config }, { sourceResolver: () => selectedSource, execAz: azure() }),
-    /dedicated v1 P0 naming convention/);
+  assert.throws(() => plan({ ...config, resourceGroup: 'awunlisted01' }, { sourceResolver: () => selectedSource, execAz: azure() }),
+    /registered dedicated v1 target/);
 });
 
 test('new foundation compares plan changes, not request metadata or result ordering', async () => {

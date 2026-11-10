@@ -13,6 +13,7 @@ import { validateFile } from '../../release/validate.mjs';
 import { validateAppRoutingDnsZoneResourceIds } from './app-routing-dns.mjs';
 import { assertAutoscalerBounds } from './aks-autoscaling.mjs';
 import { assertApprovedKeyVaultName } from './guardrails.mjs';
+import { installTarget } from './targets.mjs';
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -147,13 +148,14 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
       throw new Error('Foundation parameters must specify a Monitor region and supported PostgreSQL Entra administrator.');
     }
   } else {
-    if (parameters.local !== 'infra/bicep/parameters/p0-aks-redeploy.approved.json') {
-      throw new Error('AKS-only redeployment requires its exact reviewed P0 parameter file.');
+    const target = installTarget(resourceGroup);
+    if (!target || parameters.local !== target.aksParameters) {
+      throw new Error('AKS-only redeployment requires the exact reviewed parameter file of the selected target.');
     }
     if (values.appRoutingDnsZoneResourceIds !== undefined) {
       throw new Error('AKS-only redeployment does not change Application Routing DNS configuration.');
     }
-    const approvedFoundation = trackedPath('infra/bicep/parameters/p0-integration.approved.json');
+    const approvedFoundation = trackedPath(target.foundationParameters);
     const foundationValues = JSON.parse(readFile(approvedFoundation.absolute, 'utf8')).parameters;
     // The existing-cluster template does not own node-pool settings; retain the full-foundation policy check.
     nodePoolBounds = assertAutoscalerBounds(foundationValues);

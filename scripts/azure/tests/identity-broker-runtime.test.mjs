@@ -397,6 +397,11 @@ test('runtime configuration retains the run-owned acceptance client and seeds th
     'http://127.0.0.1:123/callback?secret=value']) {
     assert.throws(() => assertBrokerRuntimeInputs({ ...config, acceptanceRedirectUri: redirect }), /loopback callback/);
   }
+  assertBrokerRuntimeInputs({ ...config, resourceGroup: 'aweast2np01', clusterName: 'aweast2np01-aks' });
+  assert.throws(() => assertBrokerRuntimeInputs({ ...config, resourceGroup: 'aweast2np01' }),
+    /exact registered target cluster/);
+  assert.throws(() => assertBrokerRuntimeInputs({ ...config, resourceGroup: 'awunlisted01',
+    clusterName: 'awunlisted01-aks' }), /registered dedicated v1 target/);
   const projected = projectBrokerRuntimeResource({ kind: 'ConfigMap', metadata: {}, data: {
     IdentityBroker__ExternalProvider__ClientSecret: 'PRIVATE',
     ConnectionStrings__IdentityBroker: 'Host=server;Password=PRIVATE',
@@ -411,6 +416,8 @@ test('runtime setup creates absent native objects once and never overwrites conf
   const calls = [];
   const manifests = [];
   let denyDeploymentCreate = true;
+  // The issuer must belong to the region that Azure reports for the cluster.
+  let aksLocation = 'eastus2';
   const rendered = [
     { apiVersion: 'v1', kind: 'ServiceAccount', metadata: { name: 'identity-broker', namespace },
       automountServiceAccountToken: true },
@@ -427,7 +434,7 @@ test('runtime setup creates absent native objects once and never overwrites conf
     execAz(args, options) {
       let value;
       if (args[0] === 'account') value = { id: clientId, tenantId: clientId, state: 'Enabled' };
-      if (args[0] === 'aks') value = { oidcIssuerProfile: { issuerUrl: issuer } };
+      if (args[0] === 'aks') value = { oidcIssuerProfile: { issuerUrl: issuer }, location: aksLocation };
       if (args[0] === 'identity' && args[1] === 'show') value = { id:
         `/subscriptions/${clientId}/resourceGroups/agentweaver/providers/Microsoft.ManagedIdentity/userAssignedIdentities/agentweaver-id-identity-broker`,
       clientId, principalId };
@@ -470,6 +477,9 @@ test('runtime setup creates absent native objects once and never overwrites conf
       return ok();
     },
   };
+  assert.throws(() => bootstrapIdentityBrokerRuntime(runtimeConfig, deps),
+    /federation does not match the actual cluster issuer/);
+  aksLocation = 'eastus2euap';
   assert.throws(() => bootstrapIdentityBrokerRuntime(runtimeConfig, deps),
     /Kubernetes API access is unavailable or insufficient for Identity Broker runtime bootstrap: required permission "create deployments" in namespace agentweaver/);
   assert.equal(created.size, 0);

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { run, runAz, redact } from './exec.mjs';
-import { assertApprovedKeyVaultName } from './guardrails.mjs';
+import { assertApprovedKeyVaultName, assertDedicatedTarget } from './guardrails.mjs';
 import { assertP0KubernetesPermissions, withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 import {
   assertPublicBrokerRegistration, observeExistingP0BrokerRouting, planPublicBrokerCallback,
@@ -22,11 +22,12 @@ const CLI_SCOPES = ['openid', 'api.read', 'offline_access'];
 /** Checks the required broker runtime source and target inputs before resource generation. */
 export function assertBrokerRuntimeInputs(config) {
   assertApprovedKeyVaultName(config.resourceGroup, config.keyVaultName);
-  if (config.resourceGroup !== 'agentweaver' || config.clusterName !== 'agentweaver-aks' ||
+  assertDedicatedTarget(config.resourceGroup);
+  if (config.clusterName !== `${config.resourceGroup}-aks` ||
       !GUID.test(config.subscriptionId ?? '') || !GUID.test(config.tenantId ?? '') ||
       !GUID.test(config.upstreamClientId ?? '') || !GUID.test(config.acceptanceRunId ?? '') ||
       !/^ghcr\.io\/sabbour\/agentweaver\.identity\.broker@sha256:[0-9a-f]{64}$/.test(config.brokerImage ?? '')) {
-    throw new Error('Broker runtime setup requires the exact P0 target, upstream public client, acceptance run UUID, and immutable Broker image.');
+    throw new Error('Broker runtime setup requires the exact registered target cluster, upstream public client, acceptance run UUID, and immutable Broker image.');
   }
   let redirect;
   try { redirect = new URL(config.acceptanceRedirectUri); } catch {
@@ -187,12 +188,14 @@ export function bootstrapIdentityBrokerRuntime(config, {
     throw new Error('Broker runtime identity does not match the approved native target.');
   }
   const issuer = azureJson(['aks', 'show', '--resource-group', config.resourceGroup, '--name', config.clusterName,
-    '--subscription', config.subscriptionId, '-o', 'json'], value => ({ issuer: value.oidcIssuerProfile?.issuerUrl }));
+    '--subscription', config.subscriptionId, '-o', 'json'],
+  value => ({ issuer: value.oidcIssuerProfile?.issuerUrl, location: value.location }));
   const fic = azureJson(['identity', 'federated-credential', 'show', '--resource-group', config.resourceGroup,
     '--identity-name', identityName, '--name', 'identity-broker-workload-identity',
     '--subscription', config.subscriptionId, '-o', 'json'],
   value => ({ issuer: value.issuer, subject: value.subject, audiences: value.audiences }));
-  if (!issuer.issuer?.startsWith(`https://eastus2euap.oic.prod-aks.azure.com/${config.tenantId}/`) ||
+  if (!/^[a-z0-9]+$/.test(issuer.location ?? '') ||
+      !issuer.issuer?.startsWith(`https://${issuer.location}.oic.prod-aks.azure.com/${config.tenantId}/`) ||
       fic.issuer !== issuer.issuer || fic.subject !== `system:serviceaccount:${NAMESPACE}:identity-broker` ||
       fic.audiences?.length !== 1 || fic.audiences[0] !== 'api://AzureADTokenExchange') {
     throw new Error('Broker runtime federation does not match the actual cluster issuer and exact ServiceAccount.');

@@ -194,7 +194,8 @@ authorized by a successful source test or by merging a pull request.
 ## Limited service runtime identities
 
 `infra/bicep/p1-runtime-identities.bicep` is separate from the full foundation deployment.
-It uses the existing resource group location and the `agentweaver-aks` OIDC issuer.
+It uses the existing resource group location and the `<namePrefix>-aks` OIDC issuer.
+The `namePrefix` allowed values are the registered install targets.
 Before applying it, verify that the resource group and cluster locations match.
 It creates only the Projects & Config, Environment, Knowledge, Events & Sessions,
 and Orchestrator runtime identities and their exact ServiceAccount federations.
@@ -1043,7 +1044,11 @@ No unsupported deployment tags occur.
 For a new separate nonproduction group, use `deploy.mjs --new-foundation`.
 The required empty-group checks, managed-group name, and recovery limits are
 described in [Deploy Agentweaver to Azure](../../docs/guide/deploy-to-azure.md#use-a-new-separate-nonproduction-group).
-`plan.mjs` and the bootstrap and acceptance paths remain restricted to P0.
+`plan.mjs`, the AKS-only redeployment, and the Identity PostgreSQL, identity
+routing, Broker state, and Broker runtime bootstrap options accept a
+registered target from `lib/targets.mjs`. The other bootstrap and acceptance
+paths remain restricted to P0. See
+[Use a registered separate target](../../docs/guide/deploy-to-azure.md#use-a-registered-separate-target).
 
 The guarded infrastructure deployment does not create Kubernetes namespaces or
 grant human AKS permissions. Namespace preparation is a separate, explicitly
