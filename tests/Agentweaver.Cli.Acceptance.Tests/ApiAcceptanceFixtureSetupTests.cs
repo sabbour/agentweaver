@@ -61,7 +61,41 @@ public sealed class ApiAcceptanceFixtureSetupTests
         Assert.Equal("cleaned", ApiAcceptanceSupport.GetString(cleanup, "state"));
         Assert.Equal("archived", ApiAcceptanceSupport.GetString(cleanup, "projectReadback"));
         Assert.Equal("empty", ApiAcceptanceSupport.GetString(cleanup, "assignmentsReadback"));
+        Assert.False(cleanup.ContainsKey("reason"));
         Assert.Contains("revokeProjectRoleAssignment", setupApi.Operations);
+    }
+
+    [Fact]
+    public async Task CleanupRetainsProvisionalReasonWhenAssignmentsReadbackIsIncomplete()
+    {
+        AcceptanceFixtureState state = new("44444444-4444-4444-8444-444444444444")
+        {
+            SetupAttempted = true,
+            SetupComplete = true,
+            VerifyCleanupReadback = true,
+            Setup = new JsonObject
+            {
+                ["tenantId"] = TenantId,
+                ["projectId"] = ProjectId,
+                ["projectName"] = "p1-44444444-4444-4444-8444-444444444444",
+                ["projectRevision"] = 1L,
+                ["projectConfigurationRevision"] = 1L,
+                ["assignmentId"] = OrchestratorAssignmentId,
+                ["assignmentRevision"] = 1L,
+                ["ownerAssignmentId"] = OwnerAssignmentId,
+                ["ownerAssignmentRevision"] = 1L,
+            },
+        };
+        ScriptedClient setupApi = new(new JsonObject()) { ReturnStaleAssignmentReadback = true };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ApiAcceptanceFixtureSetup.CleanupAsync(
+                setupApi, null, null, state, ActorId, CancellationToken.None));
+
+        Assert.Equal(
+            "Cleanup was attempted, but not every cleanup receipt was verified.",
+            ApiAcceptanceSupport.GetString(state.Cleanup!, "reason"));
+        Assert.Equal("indeterminate", ApiAcceptanceSupport.GetString(state.Cleanup!, "state"));
     }
 
     [Fact]
@@ -90,6 +124,8 @@ public sealed class ApiAcceptanceFixtureSetupTests
         private readonly JsonObject _openApi = (JsonObject)openApi.DeepClone();
         private bool _archived;
         private bool _assignmentsRevoked;
+
+        public bool ReturnStaleAssignmentReadback { get; init; }
 
         public CliIdentity Identity { get; } = new(
             new CliTarget(new Uri("https://gateway.example/"), new Uri(Issuer), "test", "agentweaver", TenantId),
@@ -170,7 +206,7 @@ public sealed class ApiAcceptanceFixtureSetupTests
 
         private JsonObject Assignments()
         {
-            if (_assignmentsRevoked)
+            if (_assignmentsRevoked && !ReturnStaleAssignmentReadback)
                 return new JsonObject { ["projectId"] = ProjectId, ["assignments"] = new JsonArray() };
 
             return new JsonObject

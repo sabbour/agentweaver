@@ -621,6 +621,9 @@ internal static class ApiAcceptanceFixtureSetup
             cleanup["state"] = state.SetupIndeterminate ? "indeterminate" : "cleaned";
         }
 
+        if (ApiAcceptanceSupport.GetString(cleanup, "state") == "cleaned")
+            cleanup.Remove("reason");
+
         return state.Cleanup = cleanup;
     }
 

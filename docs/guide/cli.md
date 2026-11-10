@@ -567,8 +567,10 @@ cleanup. It then waits up to two minutes for the root session status to report
 `runtimeStartup.state: "cleanup_complete"`. The CLI waits before it revokes
 project roles or archives the fixture project. If cleanup does not complete,
 or the CLI cannot read its status, the evidence records the failure and the
-CLI stops before it removes access or archives the project. Reconcile that
-invocation before you retry.
+CLI stops before it removes access or archives the project. After all cleanup
+receipts and readbacks pass, the cleanup state is `cleaned` and the result does
+not include the provisional failure reason. Reconcile an incomplete or
+indeterminate cleanup before you retry.
 
 `--dry-run` validates the manifest without network calls, authentication,
 browser launch, or evidence creation, even when `--interactive` is present.
