@@ -1310,9 +1310,12 @@ internal sealed class RuntimeRunStartCleanupContinuation(
     {
         if (!work.Actor.Bearer.IsUsable())
             return;
-        while (await workflowGenerationJobs.HasUnresolvedNativeWorkAsync(
-                   work.ProjectId, work.RunId, cancellationToken).ConfigureAwait(false))
-            await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
+        if (await workflowGenerationJobs.HasUnresolvedNativeWorkAsync(
+                work.ProjectId, work.RunId, cancellationToken).ConfigureAwait(false))
+        {
+            // shortcut: lost responses or verifier exits block cleanup; add authorized receipt recovery after cancellation.
+            return;
+        }
         var intent = await store.FindCleanupIntentAsync(
             work.TenantId, work.ProjectId, work.RunId, cancellationToken).ConfigureAwait(false);
         if (intent is null || intent.State == "cleanup_complete")

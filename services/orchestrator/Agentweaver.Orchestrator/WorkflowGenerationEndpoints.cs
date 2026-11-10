@@ -177,7 +177,11 @@ public static partial class CoordinationEndpoints
         var work = new WorkflowGenerationWork(
             job.ProjectId, job.RunId, job.SessionId, actor, context.User, runtimeActor, job.JobId);
         if (!queue.TryEnqueue(work))
+        {
             runtimeActor.Bearer.Invalidate();
+            throw new CoordinationException(
+                "workflow_generation_queue_full", StatusCodes.Status503ServiceUnavailable);
+        }
     }
 
     private static Task<IResult> ReadWorkflowGenerationJobAsync(
@@ -432,7 +436,7 @@ internal sealed class WorkflowGenerationExecutor(
         if (job is null)
             return;
 
-        var nativeTurnObserved = false;
+        var completionVerified = false;
         var sendAdmitted = job.ExecutionPhase == "send-admitted";
         try
         {
@@ -458,9 +462,9 @@ internal sealed class WorkflowGenerationExecutor(
                     throw new CoordinationException(
                         "workflow_generation_completion_receipt_invalid",
                         StatusCodes.Status503ServiceUnavailable);
-                nativeTurnObserved = true;
                 (evidence, output) = await ReadCompletionMaterialsAsync(
                     context, work, job, current.Registration, stored, cancellationToken).ConfigureAwait(false);
+                completionVerified = true;
             }
             else
             {
@@ -527,12 +531,11 @@ internal sealed class WorkflowGenerationExecutor(
                     throw new CoordinationException(
                         "workflow_generation_completion_receipt_invalid",
                         StatusCodes.Status503ServiceUnavailable);
-                nativeTurnObserved = true;
-
                 var recorded = await RecordCompletionAsync(
                     context, work, job, current.Registration, readiness, completion, output, cancellationToken)
                     .ConfigureAwait(false);
                 evidence = recorded.Evidence;
+                completionVerified = true;
             }
 
             var definition = ParseAndValidateDefinition(output, current.Selection.Selection);
@@ -550,15 +553,12 @@ internal sealed class WorkflowGenerationExecutor(
             if (!await jobs.CompleteAsync(
                     job.ProjectId, job.JobId, result, cancellationToken).ConfigureAwait(false))
             {
-                await jobs.MarkQuiescedAsync(job.ProjectId, job.JobId, cancellationToken).ConfigureAwait(false);
                 var latest = await jobs.ReadAsync(job.ProjectId, job.JobId, cancellationToken).ConfigureAwait(false);
-                if (latest?.Status is not "cancelled")
-                    await jobs.FailAsync(
-                        job.ProjectId, job.JobId,
-                        "workflow_generation_result_unavailable",
-                        "The generated workflow result could not be stored.",
-                        quiesced: true,
-                        cancellationToken).ConfigureAwait(false);
+                if (latest?.Status is "cancelled")
+                    await jobs.MarkQuiescedAsync(job.ProjectId, job.JobId, cancellationToken).ConfigureAwait(false);
+                else
+                    throw new CoordinationException(
+                        "workflow_generation_outcome_indeterminate", StatusCodes.Status503ServiceUnavailable);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -568,12 +568,13 @@ internal sealed class WorkflowGenerationExecutor(
         catch (Exception exception)
         {
             var failureCode = MapFailure(exception, sendAdmitted);
-            var quiesced = !sendAdmitted || nativeTurnObserved;
-            if (quiesced)
-                await jobs.MarkQuiescedAsync(job.ProjectId, job.JobId, cancellationToken).ConfigureAwait(false);
+            var quiesced = !sendAdmitted || completionVerified &&
+                failureCode is ("workflow_generation_artifact_invalid" or "workflow_generation_role_unresolved");
             await jobs.FailAsync(
                 job.ProjectId, job.JobId, failureCode, FailureMessage(failureCode),
                 quiesced, cancellationToken).ConfigureAwait(false);
+            if (quiesced)
+                await jobs.MarkQuiescedAsync(job.ProjectId, job.JobId, cancellationToken).ConfigureAwait(false);
             logger.LogWarning("Workflow generation job {JobId} failed with {FailureCode}.",
                 job.JobId, failureCode);
         }
