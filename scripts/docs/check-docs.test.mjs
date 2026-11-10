@@ -91,3 +91,29 @@ test('maps Orchestrator Core changes to its architecture and test documentation'
     [],
   );
 });
+
+test('excludes Orchestrator image build files from runtime-owner documentation mapping', () => {
+  const sourceMap = JSON.parse(
+    readFileSync(new URL('../../docs/docs-source-map.json', import.meta.url), 'utf8'),
+  );
+  const rule = sourceMap.rules.find(({ name }) => name === 'Orchestrator coordination owner');
+  assert.ok(rule);
+  assert.deepEqual(
+    findMissingDocumentation(
+      ['services/orchestrator/Agentweaver.Orchestrator/Dockerfile'],
+      [rule],
+    ),
+    [],
+  );
+  assert.deepEqual(
+    findMissingDocumentation(
+      ['services/orchestrator/Agentweaver.Orchestrator/CoordinatorDecisionOwnerStore.cs'],
+      [rule],
+    ),
+    [{
+      rule: rule.name,
+      affected: ['services/orchestrator/Agentweaver.Orchestrator/CoordinatorDecisionOwnerStore.cs'],
+      missing: rule.required,
+    }],
+  );
+});

@@ -22,8 +22,8 @@ const COMPONENTS = [
     project: path.join('services', 'mcp', 'Agentweaver.Mcp', 'Agentweaver.Mcp.csproj') },
   { id: 'Agentweaver.Web', repository: 'agentweaver-web', mode: 'web',
     project: path.join('apps', 'web', 'host', 'Agentweaver.Web.Host.csproj') },
-  { id: 'Agentweaver.Orchestrator', repository: 'agentweaver.orchestrator', mode: 'dotnet',
-    project: path.join('services', 'orchestrator', 'Agentweaver.Orchestrator', 'Agentweaver.Orchestrator.csproj') },
+  { id: 'Agentweaver.Orchestrator', repository: 'agentweaver.orchestrator', mode: 'docker',
+    dockerfile: path.join('services', 'orchestrator', 'Agentweaver.Orchestrator', 'Dockerfile') },
   { id: 'Agentweaver.Environment', repository: 'agentweaver.environment', mode: 'dotnet',
     project: path.join('services', 'environment', 'Agentweaver.Environment', 'Agentweaver.Environment.csproj') },
   { id: 'Agentweaver.Knowledge', repository: 'agentweaver.knowledge', mode: 'dotnet',
@@ -31,6 +31,7 @@ const COMPONENTS = [
   { id: 'Agentweaver.Projects.Config', repository: 'agentweaver.projects.config', mode: 'dotnet',
     project: path.join('services', 'projects-config', 'Agentweaver.Projects.Config', 'Agentweaver.Projects.Config.csproj') },
 ];
+const OPA_URL = 'https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static';
 
 export const BUILD_ACR_CANDIDATE_USAGE =
   'Usage: npm run azure:build-acr-candidate -- <full-lowercase-40-character-commit-sha> <name>.azurecr.io';
@@ -158,6 +159,11 @@ export async function buildAcrCandidate(
     runAzure(['acr', 'login', '--name', target.name], { cwd: worktreePath });
     command(exec, 'docker', ['buildx', 'inspect', '--bootstrap'], worktreePath,
       'Could not initialize Docker Buildx');
+    command(exec, 'curl', [
+      '--fail', '--location', '--proto', '=https', '--tlsv1.2', '--retry', '5',
+      '--retry-all-errors', '--retry-delay', '5', '--connect-timeout', '20',
+      OPA_URL, '--output', path.join(worktreePath, 'eng', 'acs', 'opa_linux_amd64_static'),
+    ], worktreePath, 'Could not download pinned OPA');
 
     const web = COMPONENTS.find(component => component.mode === 'web');
     let webVersion;
