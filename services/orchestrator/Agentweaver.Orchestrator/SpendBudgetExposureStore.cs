@@ -40,7 +40,9 @@ internal sealed record SpendBudgetAccountingRequirement(
     /// <summary>Whether the Events witness shows every required receipt and usage event.</summary>
     public bool IsAccounted(UsageDispatchAccountingWitness witness) =>
         SpendBudgetAdmissionMath.IsAccounted(SourceReceiptIds, witness) &&
-        UsageEventIds.All(required => witness.Receipts.Any(receipt => receipt.EventId == required));
+        (UsageEventIds.IsEmpty
+            ? !SourceReceiptIds.IsEmpty || witness.Receipts.IsEmpty
+            : UsageEventIds.All(required => witness.Receipts.Any(receipt => receipt.EventId == required)));
 }
 
 /// <summary>One budget that applies to a dispatch, with its run-qualified bucket key.</summary>

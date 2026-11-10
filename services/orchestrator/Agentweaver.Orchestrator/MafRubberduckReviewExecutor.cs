@@ -11,7 +11,9 @@ internal sealed class MafRubberduckReviewExecutor(
     Func<MafExecutionRubberduckIntent, CancellationToken, Task> requireCurrentAsync,
     Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task> requireDecisionAsync,
     Func<MafExecutionRubberduckIntent, MafExecutionCheckpoint, CancellationToken, Task> requireEvidenceAsync,
-    Action<MafExecutionCheckpointSnapshot> updateCheckpoint)
+    Action<MafExecutionCheckpointSnapshot> updateCheckpoint,
+    Func<MafExecutionRubberduckIntent, MafRubberduckTerminalReceipt, CancellationToken, Task>?
+        ensureRootCompletionAsync = null)
 {
     internal async Task<MafExecutionTaskStatus?> ExecuteAsync(
         MafExecutionRubberduckIntent intent,
@@ -28,6 +30,24 @@ internal sealed class MafRubberduckReviewExecutor(
         {
             await requireEvidenceAsync(intent, latest.State, cancellationToken).ConfigureAwait(false);
             await requireCurrentAsync(intent, cancellationToken).ConfigureAwait(false);
+            if (ensureRootCompletionAsync is not null)
+            {
+                try
+                {
+                    await ensureRootCompletionAsync(intent, completed, cancellationToken).ConfigureAwait(false);
+                }
+                catch (CoordinationException failure) when (
+                    failure.StatusCode >= StatusCodes.Status500InternalServerError)
+                {
+                    updateCheckpoint(latest);
+                    return MafRubberduckReviewContract.ValidateReceipt(intent, completed);
+                }
+                catch (HttpRequestException)
+                {
+                    updateCheckpoint(latest);
+                    return MafRubberduckReviewContract.ValidateReceipt(intent, completed);
+                }
+            }
             updateCheckpoint(latest);
             return MafRubberduckReviewContract.ValidateReceipt(intent, completed);
         }
