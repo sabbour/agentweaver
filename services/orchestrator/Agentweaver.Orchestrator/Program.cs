@@ -110,6 +110,8 @@ builder.Services.AddSingleton(options);
 builder.Services.AddSingleton(providerCatalog);
 builder.Services.AddSingleton<ProviderResolver>();
 builder.Services.AddSingleton<AgtPolicyProvider>();
+builder.Services.AddSingleton(services => new WorkflowGenerationJobStore(
+    services.GetRequiredService<NpgsqlDataSource>(), options.Schema));
 if (agentGovernancePolicyOptions is not null)
     builder.Services.AddSingleton(agentGovernancePolicyOptions);
 builder.Services.AddHttpContextAccessor();
@@ -259,6 +261,12 @@ builder.Services.AddScoped(services => new ExecutableActionGuard(
 builder.Services.AddGuardrails(builder.Configuration, options.Schema);
 var runtimeRegistrationEnabled = builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options);
 _ = builder.Services.AddRuntimeRunStart(builder.Configuration, options, runtimeRegistrationEnabled);
+if (runtimeRegistrationEnabled)
+{
+    builder.Services.AddSingleton<WorkflowGenerationWorkQueue>();
+    builder.Services.AddScoped<WorkflowGenerationExecutor>();
+    builder.Services.AddHostedService<WorkflowGenerationBackgroundService>();
+}
 var remoteToolTlsSection = builder.Configuration.GetSection("Orchestrator:RemoteToolResults:Tls");
 if (remoteToolTlsSection.Exists())
 {
@@ -365,6 +373,7 @@ if (runtimeRegistrationEnabled)
     app.MapReviewedRemoteToolResultEndpoints();
     app.MapRuntimeSuspendResumeEndpoints();
     app.MapCastingGenerationExecutionEndpoints();
+    app.MapWorkflowGenerationEndpoints();
 }
 if (runtimeUsageEnabled)
 {

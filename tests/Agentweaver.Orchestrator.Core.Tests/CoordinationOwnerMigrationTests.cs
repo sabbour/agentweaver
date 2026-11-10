@@ -64,6 +64,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(43)]
     [InlineData(44)]
     [InlineData(45)]
+    [InlineData(46)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         // A partial history must fail verification until every registered resource is installed.
@@ -114,6 +115,29 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.True(await reader.ReadAsync());
         Assert.Equal(0L, reader.GetInt64(0));
         Assert.False(reader.GetBoolean(1));
+    }
+
+    [Fact]
+    public async Task WorkflowGenerationMigrationIsOptionalButAnAppliedPartialSchemaFailsReadiness()
+    {
+        await ApplyMigrationsThroughAsync(45);
+        var jobs = new WorkflowGenerationJobStore(fixture.DataSource, _schema);
+
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        Assert.False(await jobs.IsAvailableAsync(CancellationToken.None));
+
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        Assert.True(await jobs.IsAvailableAsync(CancellationToken.None));
+
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand(
+            $"DROP TABLE \"{_schema}\".workflow_generation_jobs CASCADE", connection))
+            await command.ExecuteNonQueryAsync();
+
+        Assert.False(await jobs.IsAvailableAsync(CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
     }
 
     [Fact]
@@ -521,7 +545,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                       AND created_at = '2026-10-20T00:00:00Z'),
                 -- A pre-033 owner rejects repository identity and later Core migrations.
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations
-                    WHERE version NOT IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,43,44,45)),
+                    WHERE version NOT IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,43,44,45,46)),
                 to_regclass(@obsolete) IS NULL
             """, connection);
         check.Parameters.AddWithValue("obsolete", $"{_schema}.uq_chief_of_staff_priority_links_target");
@@ -902,7 +926,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (42, "042_runtime_run_start.sql"),
             (43, "043_runtime_root_turn_completion.sql"),
             (44, "044_runtime_replacement_operations.sql"),
-            (45, "045_runtime_root_turn_replay.sql")
+            (45, "045_runtime_root_turn_replay.sql"),
+            (46, "046_workflow_generation_jobs.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""
@@ -1096,7 +1121,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
         // The default history skips reserved versions 017 and 034.
         Assert.Equal(
-            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45]),
+            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46]),
             reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
