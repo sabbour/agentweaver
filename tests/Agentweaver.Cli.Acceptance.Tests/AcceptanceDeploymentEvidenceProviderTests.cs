@@ -202,11 +202,19 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
     }
 
     [Fact]
-    public async Task KubernetesReadbackRejectsAnOmittedImageFromAnotherRegistry()
+    public async Task KubernetesReadbackKeepsOmittedImageOnItsCurrentApprovedRegistry()
     {
         RegistryFixtureSet fixtures = CreateAcrRegistryFixtureSet();
+        RegistryFixtureSet ghcrFixtures = CreateRegistryFixtureSet();
         JsonObject cluster = CreateCluster(fixtures);
-        using var http = new HttpClient(new RegistryHandler(fixtures));
+        string ghcrImage = ghcrFixtures.ByName["identity-broker"].Image;
+        JsonObject deployment = FindResource(cluster, "Deployment", "identity-broker");
+        deployment["spec"]!["template"]!["spec"]!["containers"]![0]!["image"] = ghcrImage;
+        JsonObject pod = FindResource(cluster, "Pod", "identity-broker-pod");
+        pod["spec"]!["containers"]![0]!["image"] = ghcrImage;
+        pod["status"]!["containerStatuses"]![0]!["imageID"] = ghcrImage;
+
+        using var http = new HttpClient(new RegistryHandler(fixtures, additionalFixtures: ghcrFixtures));
         var provider = new AcceptanceDeploymentEvidenceProvider(
             http,
             (_, _, _) => Task.FromResult((JsonObject)cluster.DeepClone()),
@@ -214,12 +222,40 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
             (_, _) => Task.FromResult(ControlledAcrRefreshToken));
         Dictionary<string, string> selectedImages = new(fixtures.SelectedImages);
         selectedImages.Remove("agentweaver.identity.broker");
+        AcceptanceManifest manifest = CreateManifest() with
+        {
+            Root = new JsonObject
+            {
+                ["deploymentEvidence"] = new JsonObject { ["registry"] = AcrRegistry },
+            },
+        };
+        Dictionary<string, string> versions = Services.Append(("Agentweaver.AgentHost", "agenthost"))
+            .ToDictionary(item => item.Item1, _ => "1.0.0", StringComparer.Ordinal);
 
+        JsonObject evidence = await provider.ObserveServicesEquivalentAsync(
+            manifest, SourceSha, SourceTree, selectedImages, default, versions);
+
+        Assert.Equal("passed", evidence["status"]?.GetValue<string>());
+        JsonObject omittedService = evidence["services"]!.AsArray().OfType<JsonObject>()
+            .Single(item => item["componentId"]?.GetValue<string>() == "Agentweaver.Identity.Broker");
+        Assert.Equal(ghcrImage, omittedService["pods"]![0]!["image"]?.GetValue<string>());
+
+        JsonObject unapprovedCluster = (JsonObject)cluster.DeepClone();
+        string unapprovedImage = $"registry.example.com/agentweaver.identity.broker@sha256:{new string('f', 64)}";
+        FindResource(unapprovedCluster, "Deployment", "identity-broker")
+            ["spec"]!["template"]!["spec"]!["containers"]![0]!["image"] = unapprovedImage;
+        JsonObject unapprovedPod = FindResource(unapprovedCluster, "Pod", "identity-broker-pod");
+        unapprovedPod["spec"]!["containers"]![0]!["image"] = unapprovedImage;
+        unapprovedPod["status"]!["containerStatuses"]![0]!["imageID"] = unapprovedImage;
+        var unapprovedProvider = new AcceptanceDeploymentEvidenceProvider(
+            http,
+            (_, _, _) => Task.FromResult((JsonObject)unapprovedCluster.DeepClone()),
+            (_, _) => Task.CompletedTask,
+            (_, _) => Task.FromResult(ControlledAcrRefreshToken));
         InvalidDataException failure = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            provider.ObserveServicesEquivalentAsync(
-                CreateManifest(), SourceSha, SourceTree, selectedImages, default));
-
-        Assert.Contains("selected approved registry", failure.Message, StringComparison.Ordinal);
+            unapprovedProvider.ObserveServicesEquivalentAsync(
+                manifest, SourceSha, SourceTree, selectedImages, default, versions));
+        Assert.Contains("GHCR or an approved ACR", failure.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1038,7 +1074,8 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
         bool redirectToUntrustedHost = false,
         bool redirectAcrConfig = false,
         bool redirectAcrToUntrustedHost = false,
-        string acrRedirectHost = "acrstore.blob.core.windows.net") : HttpMessageHandler
+        string acrRedirectHost = "acrstore.blob.core.windows.net",
+        RegistryFixtureSet? additionalFixtures = null) : HttpMessageHandler
     {
         private int tokenAttempts;
         public List<RecordedRequest> Requests { get; } = [];
@@ -1087,7 +1124,9 @@ public sealed class AcceptanceDeploymentEvidenceProviderTests
                     Headers = { Location = new Uri($"https://{acrRedirectHost}/{uri.AbsolutePath[(uri.AbsolutePath.LastIndexOf('/') + 1)..]}") },
                 };
             }
-            if (fixtures.Bodies.TryGetValue(uri.AbsolutePath, out byte[]? responseBody))
+            if (fixtures.Bodies.TryGetValue(uri.AbsolutePath, out byte[]? responseBody)
+                || additionalFixtures is not null
+                    && additionalFixtures.Bodies.TryGetValue(uri.AbsolutePath, out responseBody))
                 return JsonResponse(responseBody);
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         }

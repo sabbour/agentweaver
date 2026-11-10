@@ -108,10 +108,14 @@ internal sealed partial class AcceptanceDeploymentEvidenceProvider
                 throw new InvalidDataException($"The live Kubernetes image for {repository} does not match the selected immutable {RegistryDescription(selectedRegistry)} reference.");
         }
 
-        if (!TryImageReference(reference, out string actualRegistry, out string actualRepository, out _)
-            || actualRepository != repository
-            || actualRegistry != selectedRegistry)
-            throw new InvalidDataException($"The live Kubernetes image for {repository} is not an exact immutable image from the selected approved registry.");
+        bool validReference = TryImageReference(reference, out string actualRegistry, out string actualRepository, out _);
+        bool validRegistry = selectedReference is null
+            ? actualRegistry == DefaultRegistry || AcrLoginServer.IsMatch(actualRegistry)
+            : actualRegistry == selectedRegistry;
+        if (!validReference || actualRepository != repository || !validRegistry)
+            throw new InvalidDataException(selectedReference is null
+                ? $"The live Kubernetes image for {repository} is not an exact immutable image from GHCR or an approved ACR."
+                : $"The live Kubernetes image for {repository} is not an exact immutable image from the selected approved registry.");
         return reference;
     }
 
