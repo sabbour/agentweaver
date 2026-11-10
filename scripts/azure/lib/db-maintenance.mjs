@@ -137,8 +137,7 @@ Without --execute the runner only checks preconditions and prints what it would 
   --prepare-only                Stop after the identity, ServiceAccount, egress, and handover. No
                                 digests, probes, or migration Jobs. The setup command uses it.
   --release-lock <runId>        Remove a lock left by a crashed run with that exact run ID, then exit.
-  --resource-group <name>       Registered install target. Default agentweaver. Another target
-                                supports only --prepare-only and --release-lock.
+  --resource-group <name>       Registered install target. Default agentweaver.
   --receipt-dir <path>          Receipt directory. Default ~/.agentweaver/db-maintenance (outside the checkout).
   --job-timeout-seconds <n>     Per-Job wait. Default 900.
 `;
@@ -184,9 +183,6 @@ export function parseDbMaintenanceArgs(argv) {
   if (!['auto', 'always', 'skip'].includes(options.handover))
     throw new Error('--handover must be auto, always, or skip.');
   if (!installTarget(options.resourceGroup)) throw new Error(`--resource-group '${options.resourceGroup}' is not a registered install target.`);
-  // A separate target gets its migrations from the release deploy path, so it only prepares.
-  if (options.resourceGroup !== 'agentweaver' && !options.prepareOnly && options.releaseLock === undefined)
-    throw new Error('--resource-group other than agentweaver supports only --prepare-only and --release-lock.');
   if (options.releaseLock !== undefined) {
     // Lock release is its own mode so it can never be mixed with a write run.
     if (!/^[0-9a-f]{12}$/.test(options.releaseLock)) throw new Error('--release-lock needs the 12-character run ID from the lock.');

@@ -7,6 +7,8 @@ import { run, runAz } from './exec.mjs';
 import { assertP0KubernetesPermissions, withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 import { brokerObjectHash } from './identity-broker-runtime.mjs';
 import { parseKustomizeResources } from '../../release/kustomize-runtime.mjs';
+import { applyTargetValues, targetValuePairs } from '../../release/target-values.mjs';
+import { installTarget } from './targets.mjs';
 
 const NAMESPACE = 'agentweaver';
 const BASE_CONFIG_MAP = 'identity-broker-runtime-config-v3';
@@ -120,14 +122,19 @@ function exactOrigin(value) {
   return url.origin;
 }
 
-function sourceFiles(repoRoot) {
+function targetPairs(repoRoot, resourceGroup) {
+  if (!installTarget(resourceGroup)) invalid('--resource-group');
+  try { return targetValuePairs(repoRoot, resourceGroup); } catch { conflict('deploy/k8s/targets'); }
+}
+
+function sourceFiles(repoRoot, pairs = []) {
   let configMap;
   let deployment;
   try {
-    configMap = JSON.parse(readFileSync(join(repoRoot, 'deploy', 'k8s', 'runtime-configs',
-      'identity-broker-runtime-config.json'), 'utf8'));
-    deployment = parseYaml(readFileSync(join(repoRoot, 'deploy', 'k8s', 'base',
-      'identity-broker', 'deployment.yaml'), 'utf8'));
+    configMap = JSON.parse(applyTargetValues(readFileSync(join(repoRoot, 'deploy', 'k8s', 'runtime-configs',
+      'identity-broker-runtime-config.json'), 'utf8'), pairs));
+    deployment = parseYaml(applyTargetValues(readFileSync(join(repoRoot, 'deploy', 'k8s', 'base',
+      'identity-broker', 'deployment.yaml'), 'utf8'), pairs));
   } catch {
     conflict('deploy/k8s');
   }
@@ -354,16 +361,18 @@ export function readIdentityBrokerProviderInput(inputPath) {
   }
 }
 
-export function buildIdentityBrokerProviderPlan(input, repoRoot = process.cwd()) {
-  return renderPlan(input, repoRoot);
+export function buildIdentityBrokerProviderPlan(input, repoRoot = process.cwd(), resourceGroup = 'agentweaver') {
+  return renderPlan(input, repoRoot, sourceFiles(repoRoot, targetPairs(repoRoot, resourceGroup)));
 }
 
 /** Carries the validated provider successor and release write fence through Kustomize deployment. */
-export function preserveIdentityBrokerProviderSetup(resources, liveDeployment, readConfigMap, repoRoot = process.cwd()) {
+export function preserveIdentityBrokerProviderSetup(
+  resources, liveDeployment, readConfigMap, repoRoot = process.cwd(), resourceGroup = 'agentweaver',
+) {
   const matches = resources.filter(value => value?.kind === 'Deployment' &&
     value.metadata?.namespace === NAMESPACE && value.metadata?.name === 'identity-broker');
   if (matches.length !== 1) conflict('deploy/k8s/deployment/identity-broker');
-  const source = sourceFiles(repoRoot);
+  const source = sourceFiles(repoRoot, targetPairs(repoRoot, resourceGroup));
   const candidate = matches[0];
   const current = deploymentParts(liveDeployment);
   const activeName = current.configRefs[0].configMapRef.name;
@@ -397,7 +406,6 @@ export function preserveIdentityBrokerProviderSetup(resources, liveDeployment, r
 }
 
 function assertTarget(config, source) {
-  if (config.resourceGroup !== 'agentweaver') invalid('--resource-group');
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(config.subscriptionId ?? '')) {
     invalid('--subscription');
   }
@@ -645,13 +653,17 @@ function readProviderSetupState(deployment, activeMap, source, baseData) {
   return { activeName, entries, secretKeyRef, managed: true };
 }
 
-function sourceDataAndDeployment(repoRoot, execKubectl, source) {
+function sourceDataAndDeployment(repoRoot, execKubectl, source, pairs) {
   const rendered = execKubectl(['kustomize', join(repoRoot, 'deploy', 'k8s')], {
     ...RESOURCE_OPTIONS,
   });
   if (rendered.status !== 0) conflict('deploy/k8s');
   let resources;
-  try { resources = parseKustomizeResources(rendered.stdout).items; } catch { conflict('deploy/k8s'); }
+  try {
+    resources = parseKustomizeResources(applyTargetValues(rendered.stdout, pairs)).items;
+  } catch {
+    conflict('deploy/k8s');
+  }
   const baseMap = resources.find(item => item?.kind === 'ConfigMap' &&
     item.metadata?.name === BASE_CONFIG_MAP && item.metadata?.namespace === NAMESPACE);
   const deployment = sourceDeployment(resources);
@@ -738,10 +750,11 @@ function addOrReplace(operations, path, value, exists) {
 
 function activationPlan(input, config, dependencies) {
   const repoRoot = config.repoRoot ?? process.cwd();
-  const source = sourceFiles(repoRoot);
+  const pairs = targetPairs(repoRoot, config.resourceGroup);
+  const source = sourceFiles(repoRoot, pairs);
   const rendered = renderPlan(input, repoRoot, source);
   const target = assertTarget(config, source);
-  const sourceObjects = sourceDataAndDeployment(repoRoot, dependencies.execKubectl, source);
+  const sourceObjects = sourceDataAndDeployment(repoRoot, dependencies.execKubectl, source, pairs);
   if (config.expectedConfigResourceVersion === undefined ||
       config.expectedDeploymentResourceVersion === undefined) invalid(REVISION_FLAG_FIELDS.config);
   return { repoRoot, source, rendered, target, sourceObjects };

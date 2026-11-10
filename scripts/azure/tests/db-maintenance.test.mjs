@@ -1107,12 +1107,11 @@ test('--prepare-only sets up identity, egress, and handover, then stops before a
   assert.throws(() => parseDbMaintenanceArgs(['--prepare-only', '--deploy-apps']), /--deploy-apps/);
 });
 
-test('a separate target only prepares, with its own identity names and rendered values', async () => {
+test('a separate target parses every mode and prepares with its own identity names and rendered values', async () => {
   assert.equal(parseDbMaintenanceArgs(['--prepare-only', '--resource-group', 'awwus2np01']).resourceGroup, 'awwus2np01');
   assert.equal(parseDbMaintenanceArgs(['--release-lock', 'abcdef123456', '--resource-group', 'awwus2np01']).releaseLock,
     'abcdef123456');
-  assert.throws(() => parseDbMaintenanceArgs([...baseArgs, '--resource-group', 'awwus2np01']),
-    /supports only --prepare-only and --release-lock/);
+  assert.equal(parseDbMaintenanceArgs([...baseArgs, '--resource-group', 'awwus2np01']).resourceGroup, 'awwus2np01');
   assert.throws(() => parseDbMaintenanceArgs(['--prepare-only', '--resource-group', 'other']), /not a registered install target/);
 
   const fake = world({ identityExists: false });
@@ -1133,5 +1132,24 @@ test('a separate target only prepares, with its own identity names and rendered 
       .map(call => call.settings.input).join('\n');
     assert.ok(!applied.includes('agentweaver-pg.'), 'rendered manifests keep the default PostgreSQL host');
     assert.ok(applied.includes('awwus2np01-pg.'));
+  } finally { fake.done(); }
+});
+
+test('a separate target runs the full migration on its own cluster with its own values', async () => {
+  const fake = world({ state: { kind: 'ConfigMap', metadata: { name: STATE_NAME },
+    data: { handoverPrincipalObjectId: PRINCIPAL_ID } },
+  probeLog: `${CONNECTIVITY_MARKER} host=awwus2np01-pg.postgres.database.azure.com port=5432\n` });
+  try {
+    const receipt = await runDbMaintenance({
+      ...parseDbMaintenanceArgs([...baseArgs, '--resource-group', 'awwus2np01', '--execute']),
+      receiptDir: fake.receiptDir }, fake.deps);
+    assert.equal(receipt.result, 'succeeded');
+    assert.ok(receipt.steps.some(step => step.name === 'events-and-sessions-migrated'));
+    const credentials = fake.calls.find(call => call.command === 'az' && call.args.includes('get-credentials')).args;
+    assert.equal(credentials[credentials.indexOf('--name') + 1], 'awwus2np01-aks');
+    const applied = fake.calls.filter(call => call.command === 'kubectl' && call.settings.input)
+      .map(call => call.settings.input).join('\n');
+    assert.ok(applied.includes('"kind":"Job"'));
+    assert.ok(!applied.includes('agentweaver-pg.'), 'rendered Jobs keep the default PostgreSQL host');
   } finally { fake.done(); }
 });

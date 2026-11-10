@@ -312,9 +312,18 @@ test('separate-target P1 initialization passes the target and Projects migration
   assert.equal(env.AGENTWEAVER_INSTALL_TARGET, 'awwus2np01');
   assert.equal(env.P1Initializer__ProjectsConfigMigrationPrincipalObjectId, principal);
 
+  const inspection = { mode: 'inspect', sourceSha: p1Initializer.sourceSha, planSha256: p1Initializer.planSha256,
+    installTarget: 'awwus2np01' };
+  const inspected = dependencies();
+  await bootstrapIdentityPostgres({ ...target, verifyOnly: true, p1Initializer: inspection }, inspected.deps);
+  const inspectEnv = inspected.dotnetInvocations.at(-1).settings.env;
+  assert.equal(inspectEnv.AGENTWEAVER_INSTALL_TARGET, 'awwus2np01');
+  assert.equal(Object.hasOwn(inspectEnv, 'P1Initializer__ProjectsConfigMigrationPrincipalObjectId'), false);
+
   for (const [input, value] of [
     [options, p1Initializer],
     [target, { ...p1Initializer, projectsConfigMigrationPrincipalObjectId: undefined }],
+    [{ ...target, verifyOnly: true }, { ...inspection, projectsConfigMigrationPrincipalObjectId: principal }],
     [target, { ...p1Initializer, planSha256: p1PostgresPlanHash() }],
   ]) {
     const rejected = dependencies();

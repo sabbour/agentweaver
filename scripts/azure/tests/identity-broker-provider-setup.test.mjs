@@ -9,7 +9,9 @@ import {
   buildIdentityBrokerProviderPlan,
   IdentityBrokerProviderSetupError,
   parseIdentityBrokerProviderInput,
+  preserveIdentityBrokerProviderSetup,
 } from '../lib/identity-broker-provider-setup.mjs';
+import { applyTargetValues, targetValuePairs } from '../../release/target-values.mjs';
 import { setupIdentityBrokerProviders } from '../deploy.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -57,9 +59,9 @@ const sourceMapPath = join(repoRoot, 'deploy', 'k8s', 'runtime-configs',
 const sourceDeploymentPath = join(repoRoot, 'deploy', 'k8s', 'base',
   'identity-broker', 'deployment.yaml');
 
-function sourceObjects() {
-  const configMap = JSON.parse(readFileSync(sourceMapPath, 'utf8'));
-  const deployment = parseYaml(readFileSync(sourceDeploymentPath, 'utf8'));
+function sourceObjects(pairs = []) {
+  const configMap = JSON.parse(applyTargetValues(readFileSync(sourceMapPath, 'utf8'), pairs));
+  const deployment = parseYaml(applyTargetValues(readFileSync(sourceDeploymentPath, 'utf8'), pairs));
   deployment.spec.template.spec.containers
     .find(container => container.name === 'identity-broker').image =
       `ghcr.io/sabbour/agentweaver.identity.broker@sha256:${'a'.repeat(64)}`;
@@ -67,8 +69,8 @@ function sourceObjects() {
   return { configMap, deployment, rendered };
 }
 
-function liveResources({ activeMap, activeName, providers = false, drift = false } = {}) {
-  const source = sourceObjects();
+function liveResources({ activeMap, activeName, providers = false, drift = false, pairs } = {}) {
+  const source = sourceObjects(pairs);
   const configMap = structuredClone(source.configMap);
   configMap.metadata.uid = 'base-map-uid';
   configMap.metadata.resourceVersion = target.expectedConfigResourceVersion;
@@ -173,14 +175,16 @@ function createKubectlFixture(options = {}) {
     }
     throw new Error(`Unexpected kubectl command: ${args.slice(command).join(' ')}`);
   };
+  const guarded = [];
+  const kubeconfigs = [];
   const dependencies = {
     execKubectl,
     execAz: () => { throw new Error('Azure must not be used by the test.'); },
-    guardTarget: () => {},
-    withKubeconfig: (_target, runAction) => runAction(['--kubeconfig', 'fixture']),
+    guardTarget: value => { guarded.push(value); },
+    withKubeconfig: (value, runAction) => { kubeconfigs.push(value); return runAction(['--kubeconfig', 'fixture']); },
   };
   return {
-    state, maps, events, apiCalls, dependencies,
+    state, maps, events, apiCalls, dependencies, guarded, kubeconfigs,
     get createdMap() { return createdMap; },
     get patched() { return patched; },
     get patchedBody() { return patchedBody; },
@@ -335,6 +339,37 @@ test('activation creates the immutable map before a revision-fenced rollout and 
   assert.equal(fixture.apiCalls.every(call =>
     call.args.includes('--namespace') && call.args[call.args.indexOf('--namespace') + 1] === 'agentweaver'), true);
   assert.equal(fixture.rolloutOptions.timeout, 190_000);
+});
+
+test('a separate target renders, activates, and preserves provider setup from its own values', async () => {
+  const pairs = targetValuePairs(repoRoot, 'awwus2np01');
+  const separate = { ...target, resourceGroup: 'awwus2np01' };
+  const vaultHost = 'IdentityBroker__SecretRedemption__VaultHost';
+  assert.equal(buildIdentityBrokerProviderPlan(input, repoRoot, 'awwus2np01').configMap.data[vaultHost],
+    'awwus2np01-kv1.vault.azure.net');
+  expectProviderError(() => buildIdentityBrokerProviderPlan(input, repoRoot, 'other'),
+    'identity_broker_provider_input_invalid', '--resource-group');
+
+  const fixture = createKubectlFixture({ pairs });
+  const result = await activateIdentityBrokerProviderSetup(input, separate, fixture.dependencies);
+  assert.equal(result.changed, true);
+  assert.equal(fixture.createdMap.data[vaultHost], 'awwus2np01-kv1.vault.azure.net');
+  assert.equal(fixture.guarded[0].keyVaultName, 'awwus2np01-kv1');
+  assert.equal(fixture.kubeconfigs[0].clusterName, 'awwus2np01-aks');
+
+  const candidate = structuredClone(sourceObjects(pairs).deployment);
+  const readConfigMap = name => fixture.maps.get(name);
+  assert.equal(preserveIdentityBrokerProviderSetup([candidate], fixture.state.deployment, readConfigMap,
+    repoRoot, 'awwus2np01').configMap, result.configMap);
+  assert.throws(() => preserveIdentityBrokerProviderSetup([structuredClone(sourceObjects(pairs).deployment)],
+    fixture.state.deployment, readConfigMap, repoRoot), IdentityBrokerProviderSetupError);
+
+  const defaultSource = createKubectlFixture();
+  await assert.rejects(activateIdentityBrokerProviderSetup(input, separate, defaultSource.dependencies),
+    error => error.error === 'identity_broker_provider_source_conflict');
+  assert.deepEqual(defaultSource.events, []);
+  await assert.rejects(activateIdentityBrokerProviderSetup(input, { ...target, resourceGroup: 'other' },
+    createKubectlFixture().dependencies), error => error.details.field === '--resource-group');
 });
 
 test('activation is a no-op for the exact current successor and rejects stale revisions or drift', async () => {

@@ -94,10 +94,6 @@ export async function bootstrapP1Postgres({
 
   const registered = installTarget(resourceGroup);
   if (!registered) throw new Error(`Resource group '${resourceGroup}' is not a registered install target.`);
-  // Continuation reads the plan of an earlier source, which knows only the default target.
-  if (resourceGroup !== 'agentweaver' && mode !== 'initialize') {
-    throw new Error('For a separate target, P1 PostgreSQL supports only fresh initialization.');
-  }
   const target = p1PostgresTarget(resourceGroup);
   const source = sourceResolver({
     repoRoot,
@@ -144,7 +140,7 @@ export async function bootstrapP1Postgres({
   const postgresValues = readPostgresValues(config, boundAz);
   // The default target already has this PostgreSQL role. A fresh separate target gets it from the initializer.
   let projectsConfigMigrationPrincipalObjectId;
-  if (resourceGroup !== 'agentweaver') {
+  if (resourceGroup !== 'agentweaver' && mode === 'initialize') {
     projectsConfigMigrationPrincipalObjectId = boundAz(['identity', 'show', '--resource-group', resourceGroup,
       '--name', `${resourceGroup}-id-projects-config-migration`, '--query', 'principalId', '-o', 'tsv'], { check: false })
       .stdout?.trim();
@@ -173,7 +169,8 @@ export async function bootstrapP1Postgres({
       // Omit the mode for initialize so the lower layer sees the same settings it always did.
       ...(mode === 'initialize' ? {} : { mode }),
       sourceSha: source.sha,
-      ...(resourceGroup === 'agentweaver' ? {} : { installTarget: resourceGroup, projectsConfigMigrationPrincipalObjectId }),
+      ...(resourceGroup === 'agentweaver' ? {} : { installTarget: resourceGroup }),
+      ...(projectsConfigMigrationPrincipalObjectId === undefined ? {} : { projectsConfigMigrationPrincipalObjectId }),
       ...(coreMergeSha === undefined ? {} : { coreMergeSha }),
       planSha256,
       ...(receiptPath ? { receiptPath } : {}),

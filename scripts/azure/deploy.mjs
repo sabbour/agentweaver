@@ -591,7 +591,7 @@ export async function setupIdentityBrokerProviders(config, dependencies = {}) {
   const input = readIdentityBrokerProviderInput(config.identityBrokerProviderConfig);
   if (config.identityBrokerProviderMode === 'render') {
     if (!config.identityBrokerProviderOutput) invalid('--identity-broker-provider-output');
-    if (config.resourceGroup || config.subscriptionId || config.allowedSubscriptionId ||
+    if (config.subscriptionId || config.allowedSubscriptionId ||
         config.tenantId || config.allowedTenantId) invalid('--identity-broker-provider-mode');
     if (config.expectedConfigResourceVersion !== undefined) {
       invalid('--expected-identity-broker-config-resource-version');
@@ -599,7 +599,7 @@ export async function setupIdentityBrokerProviders(config, dependencies = {}) {
     if (config.expectedDeploymentResourceVersion !== undefined) {
       invalid('--expected-identity-broker-deployment-resource-version');
     }
-    const plan = buildIdentityBrokerProviderPlan(input, config.repoRoot);
+    const plan = buildIdentityBrokerProviderPlan(input, config.repoRoot, config.resourceGroup ?? 'agentweaver');
     writeIdentityBrokerProviderPlan(plan, config.identityBrokerProviderOutput);
     return {
       mode: 'render',
