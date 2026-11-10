@@ -397,8 +397,8 @@ test('runtime configuration retains the run-owned acceptance client and seeds th
     'http://127.0.0.1:123/callback?secret=value']) {
     assert.throws(() => assertBrokerRuntimeInputs({ ...config, acceptanceRedirectUri: redirect }), /loopback callback/);
   }
-  assertBrokerRuntimeInputs({ ...config, resourceGroup: 'aweast2np01', clusterName: 'aweast2np01-aks' });
-  assert.throws(() => assertBrokerRuntimeInputs({ ...config, resourceGroup: 'aweast2np01' }),
+  assertBrokerRuntimeInputs({ ...config, resourceGroup: 'awwus2np01', clusterName: 'awwus2np01-aks' });
+  assert.throws(() => assertBrokerRuntimeInputs({ ...config, resourceGroup: 'awwus2np01' }),
     /exact registered target cluster/);
   assert.throws(() => assertBrokerRuntimeInputs({ ...config, resourceGroup: 'awunlisted01',
     clusterName: 'awunlisted01-aks' }), /registered dedicated v1 target/);

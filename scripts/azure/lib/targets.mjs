@@ -7,9 +7,9 @@ export const INSTALL_TARGETS = Object.freeze({
     foundationParameters: 'infra/bicep/parameters/p0-integration.approved.json',
     aksParameters: 'infra/bicep/parameters/p0-aks-redeploy.approved.json',
   }),
-  aweast2np01: Object.freeze({
-    foundationParameters: 'infra/bicep/parameters/aweast2np01.approved.json',
-    aksParameters: 'infra/bicep/parameters/aweast2np01-aks-redeploy.approved.json',
+  awwus2np01: Object.freeze({
+    foundationParameters: 'infra/bicep/parameters/awwus2np01.approved.json',
+    aksParameters: 'infra/bicep/parameters/awwus2np01-aks-redeploy.approved.json',
   }),
 });
 

@@ -5,9 +5,9 @@ import { plan } from '../plan.mjs';
 import { runAz } from '../lib/exec.mjs';
 import { fixture, source, fakeAzure, ids, tags } from './fixtures/target.mjs';
 
-const group = 'aweast2np01';
+const group = 'awwus2np01';
 const config = { ...fixture, resourceGroup: group, newFoundation: true, execute: true };
-const selectedSource = { ...source, keyVaultName: `${group}-kv`, location: 'eastus2', monitorLocation: 'eastus2' };
+const selectedSource = { ...source, keyVaultName: `${group}-kv`, location: 'westus2', monitorLocation: 'westus2' };
 const groupId = `/subscriptions/${ids.subscriptionId}/resourceGroups/${group}`;
 const planResult = { status: 'Succeeded', error: null, potentialChanges: null, diagnostics: null,
   changes: [{ resourceId: `${groupId}/providers/Microsoft.Network/virtualNetworks/${group}-vnet`,
@@ -100,7 +100,7 @@ test('new foundation deploy binds the target, repeated plan, managed group and e
 test('new foundation rejects invalid targets, DNS and bootstrap before Azure reads', async () => {
   for (const [changes, sourceChanges] of [
     [{ resourceGroup: 'agentweaver' }, {}],
-    [{ resourceGroup: 'aweast2np01 ' }, {}],
+    [{ resourceGroup: 'awwus2np01 ' }, {}],
     [{ bootstrapIdentityPostgres: true }, {}],
     [{}, { scope: 'aks-only' }],
     [{}, { appRoutingDnsZoneResourceIds: ['/subscriptions/existing'] }],

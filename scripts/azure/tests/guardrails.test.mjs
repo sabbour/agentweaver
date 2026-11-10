@@ -21,7 +21,7 @@ function targetGuard(overrides = {}, config = {}, calls = []) {
 
 test('dedicated resource-group target accepts only registered v1 targets', () => {
   assert.equal(assertDedicatedTarget('agentweaver'), 'agentweaver');
-  assert.equal(assertDedicatedTarget('aweast2np01'), 'aweast2np01');
+  assert.equal(assertDedicatedTarget('awwus2np01'), 'awwus2np01');
   for (const name of ['agentweaver-prod', 'agentweaver-integration', 'agentweaver_bad',
     'agentweaver-legacy', 'aweast2np02', 'toString', '', undefined, 'shared-rg']) {
     assert.throws(() => assertDedicatedTarget(name), /registered dedicated v1 target/);
