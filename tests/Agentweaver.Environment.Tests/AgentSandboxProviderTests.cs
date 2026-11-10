@@ -560,6 +560,95 @@ public sealed partial class AgentSandboxProviderTests
             {
                 RequireRuntimeEndpoint = true
             };
+            foreach (var transition in new[] { "selected", "readback", "next-observation" })
+            {
+                handler.SetPodAddress(null);
+                var claimReads = 0;
+                handler.OnPodRead = read =>
+                {
+                    if (read == "claim") claimReads++;
+                    if (transition == "selected" && read == "selected" ||
+                        transition == "readback" && read == "readback" ||
+                        transition == "next-observation" && read == "claim" && claimReads == 2)
+                    {
+                        handler.SetPodAddress(JsonValue.Create("10.2.3.4"));
+                        handler.OnPodRead = null;
+                    }
+                };
+                var recovered = await provider.DescribeAsync(endpointRequest);
+                Assert.Equal(SandboxObservedState.Pending, recovered.State);
+                Assert.Equal("10.2.3.4", recovered.RuntimeEndpoint!.PodAddress);
+                Assert.True(claimReads >= 1);
+            }
+            foreach (var fault in new[] { "foreign-service-owner", "foreign-pod-selector", "external-service",
+                         "foreign-service-port", "ambiguous-pod-selector", "foreign-dns" })
+            {
+                handler.SetPodAddress(null);
+                handler.SetRuntimeEndpointFault(fault);
+                var unavailable = await Assert.ThrowsAsync<SandboxProviderException>(
+                    () => provider.DescribeAsync(endpointRequest));
+                Assert.Equal("sandbox_runtime_endpoint_unavailable", unavailable.Code);
+                handler.SetRuntimeEndpointFault(null);
+            }
+            foreach (var invalid in new JsonNode?[] { JsonValue.Create(42), JsonValue.Create(" "), JsonValue.Create("127.0.0.1") })
+            {
+                handler.SetPodAddress(invalid);
+                await Assert.ThrowsAsync<SandboxProviderException>(() => provider.DescribeAsync(endpointRequest));
+            }
+            handler.SetPodAddress(null);
+            handler.OnPodRead = read =>
+            {
+                if (read != "selected") return;
+                handler.SetPodAddress(JsonValue.Create(42));
+                handler.OnPodRead = null;
+            };
+            await Assert.ThrowsAsync<SandboxProviderException>(() => provider.DescribeAsync(endpointRequest));
+
+            handler.SetPodAddress(null);
+            handler.OnPodRead = read =>
+            {
+                if (read != "readback") return;
+                handler.SetPodAddress(JsonValue.Create("127.0.0.1"));
+                handler.OnPodRead = null;
+            };
+            var invalidReadback = await Assert.ThrowsAsync<SandboxProviderException>(
+                () => provider.DescribeAsync(endpointRequest));
+            Assert.Equal("sandbox_runtime_endpoint_invalid", invalidReadback.Code);
+
+            handler.SetPodAddress(null);
+            handler.SetReceiverEndpoint("https://runtime-receiver.agentweaver.svc.cluster.local:443/runtime/v1/configure");
+            var invalidReceiver = await Assert.ThrowsAsync<SandboxProviderException>(
+                () => provider.DescribeAsync(endpointRequest));
+            Assert.Equal("sandbox_runtime_endpoint_invalid", invalidReceiver.Code);
+            handler.SetReceiverEndpoint(
+                "https://runtime-receiver.agentweaver.svc.cluster.local:8443/runtime/v1/configure");
+
+            foreach (var change in new[] { "pod", "service" })
+            {
+                handler.SetPodAddress(null);
+                var claimReads = 0;
+                handler.OnPodRead = read =>
+                {
+                    if (read != "claim" || ++claimReads != 2) return;
+                    if (change == "pod") handler.SetPodUid("replacement-pod");
+                    else handler.SetRuntimeEndpointFault("foreign-service-owner");
+                    handler.OnPodRead = null;
+                };
+                await Assert.ThrowsAsync<SandboxProviderException>(() => provider.DescribeAsync(endpointRequest));
+                handler.SetPodUid("pod-uid");
+                handler.SetRuntimeEndpointFault(null);
+            }
+            handler.SetPodAddress(null);
+            using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50)))
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => provider.DescribeAsync(endpointRequest, cancellation.Token));
+            if (!cachedImage)
+            {
+                var timeout = await Assert.ThrowsAsync<SandboxProviderException>(
+                    () => provider.DescribeAsync(endpointRequest));
+                Assert.Equal("sandbox_runtime_endpoint_unavailable", timeout.Code);
+            }
+            handler.SetPodAddress(JsonValue.Create("10.2.3.4"));
             var endpointObservation = await provider.DescribeAsync(endpointRequest);
             Assert.Equal(new SandboxRuntimeHttpsEndpoint(
                 new("https://sandbox-a.agentweaver.svc.cluster.local:8443/"),
@@ -836,6 +925,27 @@ public sealed partial class AgentSandboxProviderTests
         public string ImageEventPodUid { get; set; } = "pod-uid";
         public string? PodReadbackFault { get; set; }
         public string? PodObservationFault { get; set; }
+        public Action<string>? OnPodRead { get; set; }
+
+        public void SetPodAddress(JsonNode? address)
+        {
+            var pod = _podList!["items"]![0]!;
+            pod["status"]!["podIP"] = address?.DeepClone();
+            pod["metadata"]!["resourceVersion"] = Guid.NewGuid().ToString("N");
+        }
+
+        public void SetPodUid(string uid) => _podList!["items"]![0]!["metadata"]!["uid"] = uid;
+
+        public void SetReceiverEndpoint(string endpoint) =>
+            _resources["api/v1/namespaces/agentweaver/configmaps/agenthost-runtime-v1"]["data"]!["appsettings.json"] =
+                JsonSerializer.Serialize(new
+                {
+                    AgentHost = new
+                    {
+                        ConfigureEndpoint = endpoint,
+                        Authentication = new { Audience = endpoint }
+                    }
+                });
 
         public void AddReadySandbox(string claimUid, DateTimeOffset leaseCreatedAt)
         {
@@ -1073,6 +1183,8 @@ public sealed partial class AgentSandboxProviderTests
                         .Where(parts => parts.Length == 2 && parts[0] == "labelSelector")
                         .Select(parts => Uri.UnescapeDataString(parts[1]))
                         .SingleOrDefault();
+                    OnPodRead?.Invoke(labelSelector?.Contains("agents.x-k8s.io/claim-uid", StringComparison.Ordinal) == true
+                        ? "claim" : "selected");
                     if (labelSelector is null)
                         return JsonResponse(HttpStatusCode.OK, podList);
 
@@ -1119,6 +1231,7 @@ public sealed partial class AgentSandboxProviderTests
                 }
                 if (path == "api/v1/namespaces/agentweaver/pods/sandbox-pod")
                 {
+                    OnPodRead?.Invoke("readback");
                     if (_podList is null || PodReadbackFault == "missing")
                         return new HttpResponseMessage(HttpStatusCode.NotFound);
                     var pod = _podList["items"]![0]!.DeepClone();

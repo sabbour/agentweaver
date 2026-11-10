@@ -667,6 +667,10 @@ Before spawning or delivering child work, Orchestrator verifies placement egress
 from Host execution readiness. The AgentSandbox placement can still be `Pending`, but must
 carry all three placement phases, the exact pinned image digest and compressed size, verified
 isolation and workspace attachment, a verified network generation, and no startup failure.
+When the exact owned Pod has no IP, an endpoint-required observation retries the complete
+observation for up to five seconds. Each retry checks the Sandbox, Pod, and Service again.
+If the IP remains unavailable, endpoint resolution fails. Invalid or replaced resources
+still fail validation; an assigned IP must pass the normal endpoint checks.
 Environment then rereads the exact lifecycle fence, accepted selection, and Cilium generation.
 Only AgentHost supplies `configured` and `ready`; child execution still requires its genuine
 readiness receipt. A confirmed dispatchable plan keeps the existing root registration current,

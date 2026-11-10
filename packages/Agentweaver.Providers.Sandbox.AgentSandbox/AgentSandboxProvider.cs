@@ -286,6 +286,54 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         CancellationToken cancellationToken = default)
     {
         request = (request ?? throw new ArgumentNullException(nameof(request))).Validate();
+        string? sandboxUid = null;
+        string? podUid = null;
+        CancellationTokenSource? deadline = null;
+        try
+        {
+            while (true)
+            {
+                try
+                {
+                    return await DescribeOnceAsync(request, sandboxUid, podUid, deadline?.Token ?? cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (RuntimePodAddressPending pending)
+                {
+                    sandboxUid ??= pending.SandboxUid;
+                    podUid ??= pending.PodUid;
+                    if (deadline is null)
+                    {
+                        deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                        deadline.CancelAfter(TimeSpan.FromSeconds(5));
+                    }
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), deadline.Token).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested &&
+                                                  deadline?.IsCancellationRequested == true)
+        {
+            throw RuntimeEndpointUnavailable();
+        }
+        finally
+        {
+            deadline?.Dispose();
+        }
+    }
+
+    private sealed class RuntimePodAddressPending(string sandboxUid, string podUid) : Exception
+    {
+        public string SandboxUid { get; } = sandboxUid;
+        public string PodUid { get; } = podUid;
+    }
+
+    private async Task<SandboxObservation> DescribeOnceAsync(
+        SandboxDescribeRequest request,
+        string? expectedSandboxUid,
+        string? expectedPodUid,
+        CancellationToken cancellationToken)
+    {
         var clusterIdentity = await _client.GetClusterIdentityAsync(cancellationToken).ConfigureAwait(false);
         var (options, descriptor) = ReadBinding(
             request.Fence,
@@ -342,6 +390,9 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             return PendingObservation(
                 request, descriptor, [], workspaceVerified: false, isolationVerified: false);
         ValidateSandboxOwner(sandbox.Value, claimUid);
+        var sandboxUid = RequiredString(RequiredObject(sandbox.Value, "metadata"), "uid");
+        if (expectedSandboxUid is not null && sandboxUid != expectedSandboxUid)
+            throw ProviderResourceMismatch("The backing Sandbox changed while its address was pending.");
         if (TryReadTerminalEvidence(
                 sandbox.Value,
                 claimUid,
@@ -373,9 +424,17 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         var pod = pods[0];
         ValidatePodOwner(
             pod,
-            RequiredString(RequiredObject(sandbox.Value, "metadata"), "uid"),
+            sandboxUid,
             claimUid,
             descriptor);
+        var metadata = RequiredObject(pod, "metadata");
+        var podUid = RequiredString(metadata, "uid");
+        if (expectedPodUid is not null && podUid != expectedPodUid)
+            throw ProviderResourceMismatch("The backing Pod changed while its address was pending.");
+        if (ReadOptionalString(metadata, "namespace") != descriptor.Namespace ||
+            metadata.TryGetProperty("deletionTimestamp", out var deletion) &&
+                deletion.ValueKind != JsonValueKind.Null)
+            throw ProviderResourceMismatch("The backing Pod has a different namespace or is deleting.");
         var workspaceVerified = await VerifyAttachedPodAsync(
             pod,
             request.Fence,
@@ -397,16 +456,12 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         var state = failed
             ? SandboxObservedState.Failed
             : SandboxObservedState.Pending;
-        var runtimeEndpoint = request.RequireRuntimeEndpoint && !failed &&
-            workspaceVerified && isolationVerified
+        var requiresEndpoint = request.RequireRuntimeEndpoint && !failed &&
+            workspaceVerified && isolationVerified;
+        var (checkedEndpoint, addressPending) = requiresEndpoint
             ? await ReadRuntimeEndpointAsync(
                 sandbox.Value, pod, descriptor.Namespace, options, cancellationToken).ConfigureAwait(false)
-            : null;
-        var metadata = RequiredObject(pod, "metadata");
-        if (ReadOptionalString(metadata, "namespace") != descriptor.Namespace ||
-            metadata.TryGetProperty("deletionTimestamp", out var deletion) &&
-                deletion.ValueKind != JsonValueKind.Null)
-            throw ProviderResourceMismatch("The backing Pod has a different namespace or is deleting.");
+            : ((SandboxRuntimeHttpsEndpoint?)null, false);
         SandboxPodObservation? podObservation = null;
         // Older Kubernetes versions may omit Pod generation. Never invent it or break legacy startup reads.
         if (TryGetInt64(metadata, "generation", out var podGeneration) && podGeneration > 0 &&
@@ -429,11 +484,33 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                 string.Empty, "pods", descriptor.Namespace, podObservation.PodName, cancellationToken)
                 .ConfigureAwait(false);
             if (currentPod is null ||
-                RequiredString(RequiredObject(currentPod.Value, "metadata"), "uid") != podObservation.PodUid ||
-                RequiredString(RequiredObject(currentPod.Value, "metadata"), "resourceVersion") !=
-                    podObservation.PodResourceVersion)
+                RequiredString(RequiredObject(currentPod.Value, "metadata"), "uid") != podObservation.PodUid)
+                throw ProviderResourceMismatch("The backing Pod changed while its configuration was observed.");
+            var currentVersion = RequiredString(RequiredObject(currentPod.Value, "metadata"), "resourceVersion");
+            if (addressPending)
+            {
+                var currentAddress = ReadPodAddress(currentPod.Value);
+                if (!string.IsNullOrEmpty(currentAddress))
+                {
+                    try
+                    {
+                        _ = (checkedEndpoint! with { PodAddress = currentAddress }).Validate();
+                    }
+                    catch (ArgumentException exception)
+                    {
+                        throw new SandboxProviderException(
+                            "sandbox_runtime_endpoint_invalid", exception.Message, effectMayHaveApplied: false, exception);
+                    }
+                }
+                if (currentVersion == podObservation.PodResourceVersion &&
+                    !string.IsNullOrEmpty(currentAddress))
+                    throw ProviderResourceMismatch("The backing Pod changed while its configuration was observed.");
+            }
+            else if (currentVersion != podObservation.PodResourceVersion)
                 throw ProviderResourceMismatch("The backing Pod changed while its configuration was observed.");
         }
+        if (addressPending)
+            throw new RuntimePodAddressPending(sandboxUid, podUid);
         return new SandboxObservation(
             request.Resource,
             state,
@@ -446,7 +523,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             ProvisionedResource: BuildProvisionedResource(request, descriptor, phases),
             StartupFailure: startupFailure)
         {
-            RuntimeEndpoint = runtimeEndpoint,
+            RuntimeEndpoint = checkedEndpoint,
             PodObservation = podObservation
         }.ValidateFor(request);
     }
