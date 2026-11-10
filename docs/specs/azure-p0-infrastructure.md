@@ -162,7 +162,8 @@ Digest format checks alone cannot prove a running pod.
 ## Network definitions
 
 The full-foundation AKS module enables system-pool autoscaling between two and
-three `Standard_D2s_v5` nodes. Its initial count is two. The AKS-only parameter
+three nodes of `nodePoolVmSize` (default `Standard_D2s_v5`). Its initial count
+is two. The AKS-only parameter
 file does not configure a node pool; its source validation checks the bounds
 against the approved full-foundation parameters. The AKS-only receipt reports
 no submitted count and does not prove scale-up or regional capacity.

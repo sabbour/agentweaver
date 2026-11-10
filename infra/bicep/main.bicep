@@ -77,6 +77,12 @@ param nodePoolMinCount int
 @allowed([3])
 param nodePoolMaxCount int
 
+@description('VM size of the system node pool.')
+param nodePoolVmSize string = 'Standard_D2s_v5'
+
+@description('VM size of the kata node pool: a Generation 2 size with nested virtualization.')
+param kataVmSize string = 'Standard_D4s_v5'
+
 @description('Optional new AKS managed resource group name.')
 param nodeResourceGroup string = ''
 
@@ -109,6 +115,7 @@ module aks 'modules/aks.bicep' = {
     nodePoolCount: nodePoolCount
     nodePoolMinCount: nodePoolMinCount
     nodePoolMaxCount: nodePoolMaxCount
+    nodePoolVmSize: nodePoolVmSize
     nodeResourceGroup: nodeResourceGroup
   }
 }
@@ -118,6 +125,7 @@ module kataPool 'modules/aks-kata-pool.bicep' = {
   params: {
     clusterName: aks.outputs.clusterName
     nodeSubnetId: network.outputs.aksSubnetId
+    vmSize: kataVmSize
   }
 }
 

@@ -18,6 +18,9 @@ param owner string
 @description('Cost center tag from the dedicated resource group.')
 param costCenter string
 
+@description('VM size of the kata node pool. It must match the full-foundation parameters.')
+param kataVmSize string = 'Standard_D4s_v5'
+
 @minLength(40)
 @maxLength(40)
 @description('Exact reviewed source commit supplied by deployment tooling.')
@@ -52,6 +55,7 @@ module kataPool 'modules/aks-kata-pool.bicep' = {
   params: {
     clusterName: aks.name
     nodeSubnetId: resourceId('Microsoft.Network/virtualNetworks/subnets', '${namePrefix}-vnet', 'aks')
+    vmSize: kataVmSize
   }
 }
 

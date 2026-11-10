@@ -231,11 +231,20 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
     const { name, properties } = pools[0];
     assert.match(name, /'kata'\)\]$/);
     assert.deepEqual(properties, {
-      mode: 'User', enableAutoScaling: true, minCount: 1, maxCount: 2, vmSize: 'Standard_D4s_v5',
+      mode: 'User', enableAutoScaling: true, minCount: 1, maxCount: 2, vmSize: "[parameters('vmSize')]",
       vnetSubnetID: "[parameters('nodeSubnetId')]", osType: 'Linux', osSKU: 'AzureLinux',
       workloadRuntime: 'KataVmIsolation', type: 'VirtualMachineScaleSets', securityProfile: { sshAccess: 'Disabled' },
     });
-  }  assert.deepEqual(template.parameters.nodePoolMinCount.allowedValues, [2]);
+    assert.equal(deployment.properties.parameters.vmSize.value, "[parameters('kataVmSize')]");
+  }
+  for (const root of [template, redeploy]) {
+    assert.equal(root.parameters.kataVmSize.defaultValue, 'Standard_D4s_v5');
+  }
+  assert.equal(template.parameters.nodePoolVmSize.defaultValue, 'Standard_D2s_v5');
+  assert.equal(template.resources.find(resource =>
+    resource.name === "[format('{0}-aks', parameters('namePrefix'))]").properties.parameters.nodePoolVmSize.value,
+  "[parameters('nodePoolVmSize')]");
+  assert.deepEqual(template.parameters.nodePoolMinCount.allowedValues, [2]);
   assert.deepEqual(template.parameters.nodePoolMaxCount.allowedValues, [3]);
   assert.deepEqual(template.parameters.nodePoolCount.allowedValues, [2, 3]);
   assert.equal(cluster.apiVersion, '2026-07-02-preview');

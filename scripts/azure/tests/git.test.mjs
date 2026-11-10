@@ -193,6 +193,24 @@ test('AKS-only source selects the parameter files of the registered target', () 
     parameterValues: { namePrefix: { value: 'awunlisted01' } } });
   assert.throws(() => resolveSource(unlisted.config, unlisted.deps), /parameter file of the selected target/);
 });
+
+test('pool VM sizes must be Azure size names, and the AKS-only kata size must match the foundation', () => {
+  for (const key of ['nodePoolVmSize', 'kataVmSize']) {
+    const malformed = sourceFixture({ parameterValues: { [key]: { value: 'D4ds v5' } } });
+    assert.throws(() => resolveSource(malformed.config, malformed.deps), new RegExp(`Parameter ${key} must be`));
+  }
+  const aksOnly = { config: { template: 'infra/bicep/aks-redeploy.bicep' } };
+  const matching = sourceFixture({ ...aksOnly, parameterValues: { kataVmSize: { value: 'Standard_D4ds_v5' } },
+    foundationValues: { kataVmSize: { value: 'Standard_D4ds_v5' } } });
+  assert.equal(resolveSource(matching.config, matching.deps).kataVmSize, 'Standard_D4ds_v5');
+  for (const sizes of [
+    { parameterValues: { kataVmSize: { value: 'Standard_D4ds_v5' } } },
+    { foundationValues: { kataVmSize: { value: 'Standard_D4ds_v5' } } },
+  ]) {
+    const mismatch = sourceFixture({ ...aksOnly, ...sizes });
+    assert.throws(() => resolveSource(mismatch.config, mismatch.deps), /kataVmSize must match/);
+  }
+});
 test('AKS-only source rejects App Routing DNS inputs because it does not update the cluster', () => {
   const { config, deps } = sourceFixture({
     config: { template: 'infra/bicep/aks-redeploy.bicep' },

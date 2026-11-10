@@ -19,15 +19,15 @@ const aksOnlyFederatedCredentials = resourceGroup =>
     subject: `system:serviceaccount:agentweaver:${service}`,
     audiences: ['api://AzureADTokenExchange'],
   }));
-// Keep this declaration aligned with infra/bicep/modules/aks-kata-pool.bicep.
-const AKS_ONLY_AGENT_POOLS = [
+// Keep this declaration aligned with infra/bicep/modules/aks-kata-pool.bicep and the kataVmSize default.
+const aksOnlyAgentPools = vmSize => [
   {
     operation: 'createOrUpdate',
     name: 'kata',
     mode: 'User',
     osSKU: 'AzureLinux',
     workloadRuntime: 'KataVmIsolation',
-    vmSize: 'Standard_D4s_v5',
+    vmSize: vmSize ?? 'Standard_D4s_v5',
     autoscale: { minCount: 1, maxCount: 2 },
     sshAccess: 'Disabled',
   },
@@ -68,7 +68,7 @@ function addNestedDeploymentChanges(result, source, resourceGroup) {
           'and Kata node pool deployments. These declarations are create-or-update operations; ' +
           'existing FIC and node pool state was not queried.',
         federatedIdentityCredentials: aksOnlyFederatedCredentials(resourceGroup),
-        agentPools: AKS_ONLY_AGENT_POOLS,
+        agentPools: aksOnlyAgentPools(source.kataVmSize),
       },
     }, null, 2),
   };

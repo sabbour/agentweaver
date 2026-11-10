@@ -58,10 +58,19 @@ The foundation probe Job overlay owns explicit egress and executable runtime pro
 
 AKS has two node pools:
 
-| Pool | Mode | VM size | Autoscale | Purpose |
+| Pool | Mode | Default VM size | Autoscale | Purpose |
 | --- | --- | --- | --- | --- |
 | `system` | System | `Standard_D2s_v5` | 2-3 nodes | Product services and AKS add-ons. |
 | `kata` | User | `Standard_D4s_v5` | 1-2 nodes | Sandbox pods that use RuntimeClass `kata-vm-isolation`. |
+
+To use other sizes, set `nodePoolVmSize` and `kataVmSize` in the
+full-foundation parameter file of the target. If you set `kataVmSize`, set the
+same value in the AKS-only parameter file of that target; the installer stops
+when the two values differ. The `kata` size must be a Generation 2 size that
+supports nested virtualization; see
+[Pod sandboxing with AKS](https://learn.microsoft.com/azure/aks/use-pod-sandboxing).
+The `aweast2np01` target uses `Standard_D2ds_v5` and `Standard_D4ds_v5`,
+because its subscription cannot use the default sizes in `eastus2`.
 
 The `kata` pool uses Azure Linux with `workloadRuntime: KataVmIsolation`
 (AKS Pod Sandboxing). SSH access to its nodes is disabled. The pool has no
@@ -71,15 +80,18 @@ on a `kata` node, which can reduce the space for sandboxes.
 The pool keeps at least one node. A node scale-up takes longer than the
 30-second sandbox scheduling budget, so a sandbox cannot wait for a new node.
 
-Cost: `Standard_D4s_v5` Linux pay-as-you-go in `eastus2` is USD 0.192 per hour
+Cost: with the default size, `Standard_D4s_v5` Linux pay-as-you-go in
+`eastus2` is USD 0.192 per hour
 (Azure retail price, November 2026). That is about USD 140 per node per month,
 plus the managed OS disk. The pool has a maximum of two nodes. Check the
 [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/)
 for your region and agreement.
 
-Quota: the `system` pool can use up to 6 vCPUs and the `kata` pool up to 8
-vCPUs, both in the DSv5 family. Make sure that the regional DSv5 vCPU quota of
-the subscription is at least 14. Otherwise the autoscaler cannot add nodes.
+Quota: with the default sizes, the `system` pool can use up to 6 vCPUs and the
+`kata` pool up to 8 vCPUs, both in the DSv5 family. Make sure that the regional
+DSv5 vCPU quota of the subscription is at least 14. Otherwise the autoscaler
+cannot add nodes. Other sizes use the quota family and price of those sizes.
+For example, `aweast2np01` needs at least 14 vCPUs of DDSv5 quota.
 
 Both `main.bicep` and `aks-redeploy.bicep` create or update the pool with
 `modules/aks-kata-pool.bicep`. The module is a nested deployment, so the
