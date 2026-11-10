@@ -266,6 +266,9 @@ const FUNCTIONS = {
     'guard_spend_budget_cursor_mutation()',
     'reject_spend_budget_truncate()',
     'reject_p1_invocation_provenance_mutation()',
+    // Migration 046 uses these owner-only functions to validate inserts and close jobs on cancellation.
+    'guard_workflow_generation_job_insert()',
+    'close_workflow_generation_jobs_on_cancel()',
   ],
 };
 

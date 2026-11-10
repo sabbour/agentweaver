@@ -17,7 +17,7 @@ const digest = character => `sha256:${character.repeat(64)}`;
 const range = (minSchema, maxSchema, supportedVersions = Array.from(
   { length: maxSchema - minSchema + 1 }, (_, index) => minSchema + index)) =>
   ({ minSchema, maxSchema, supportedVersions });
-const coreRange = () => range(31, 45, [31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45]);
+const coreRange = () => range(31, 46, [31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46]);
 const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' });
 const fail = (stderr = 'failed', status = 1) => ({ status, stdout: '', stderr });
 const CLIENT_ID = '12345678-1234-4123-8123-123456789abc';
@@ -225,7 +225,7 @@ test('grant markers must match the reviewed plan exactly', () => {
   assert.throws(() => verifyGrantsMarker(goodLogs['events-and-sessions'], expected), /does not match/);
 });
 
-test('the reviewed plan includes 035 through 045, skips reserved Core 034, and matches the hash', () => {
+test('the reviewed plan includes 035 through 046, skips reserved Core 034, and matches the hash', () => {
   assert.equal(p1PostgresPlanHash(), REVIEWED_PLAN_SHA256);
   assert.ok(!plan.coreVersions.includes(17));
   assert.ok(plan.coreVersions.includes(32));
@@ -238,7 +238,7 @@ test('the reviewed plan includes 035 through 045, skips reserved Core 034, and m
   assert.ok(plan.coreVersions.includes(40));
   assert.ok(plan.coreVersions.includes(41));
   assert.ok(plan.coreVersions.includes(42));
-  assert.equal(Math.max(...plan.coreVersions), 45);
+  assert.equal(Math.max(...plan.coreVersions), 46);
   assert.deepEqual(plan.eventsVersions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
   assert.deepEqual(plan.environmentVersions, Array.from({ length: 12 }, (_, index) => index + 1));
 });
@@ -799,11 +799,11 @@ test('service ordering does not treat skipped Core 034 as compatible', () => {
     ranges: { [orchestrator.expected]: coreRange() },
     targetSchema: { orchestrator: 34 },
     currentSchema: { orchestrator: 33 },
-  }), /supported versions: 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45\), not 34/);
+  }), /supported versions: 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46\), not 34/);
 });
 
 test('the schema range comes from the readiness check in the migrator source', () => {
-  // Orchestrator requires 31 and optionally accepts 032, 033, and 035 through 045 during rollout.
+  // Orchestrator requires 31 and optionally accepts 032, 033, and 035 through 046 during rollout.
   // Git output passes through redaction, which must not change the parsed text.
   const read = (path, component) => schemaRangeFromSource(redact(readFileSync(path, 'utf8')), component);
   assert.deepEqual(read('services/orchestrator/Agentweaver.Orchestrator/CoordinationOwnerMigrator.cs',
@@ -828,7 +828,7 @@ test('the schema range comes from the readiness check in the migrator source', (
   assert.equal(schemaRangeFromSource(older, 'Agentweaver.Other'), undefined);
 });
 
-test('pinned owner readiness shapes preserve the Core 034 gap through current Core 045', async () => {
+test('pinned owner readiness shapes preserve the Core 034 gap through current Core 046', async () => {
   // These pinned source projections cover the pre-032, pre-035, and post-035 readiness shapes.
   const oldCommit = 'aab23a5daeca847966e92944a653423f2541d665';
   const newCommit = '077884663e7f7b727199fa56d405c005ccebe650';
@@ -888,7 +888,7 @@ test('pinned owner readiness shapes preserve the Core 034 gap through current Co
   assert.equal(newRange.maxSchema, 35);
   assert.equal(currentRange.minSchema, Math.max(...compatibility.currentImage.requiredCoreVersions));
   assert.equal(currentRange.maxSchema, Math.max(...compatibility.currentImage.optionalCoreVersions));
-  assert.deepEqual(currentRange.supportedVersions, [31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45]);
+  assert.deepEqual(currentRange.supportedVersions, [31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46]);
   assert.ok(!currentRange.supportedVersions.includes(34));
   assert.equal(oldRange.maxSchema, compatibility.preRepositoryIdentityImage.maximumKnownCoreVersion);
   assert.ok(oldRange.maxSchema < 33);
@@ -905,7 +905,7 @@ test('pinned owner readiness shapes preserve the Core 034 gap through current Co
   assert.ok(plan.coreVersions.includes(41));
 });
 
-test('old-to-new owner upgrade deploys before Core 045 when schema 031 is recorded, otherwise plans a gap', async () => {
+test('old-to-new owner upgrade deploys before Core 046 when schema 031 is recorded, otherwise plans a gap', async () => {
   for (const current of [31, undefined]) {
     // The new owner accepts the complete old schema at startup, so it can roll out before 040.
     // An unrecorded schema cannot prove that and takes the bounded planned-gap path instead.
@@ -923,19 +923,19 @@ test('old-to-new owner upgrade deploys before Core 045 when schema 031 is record
       assert.equal(receipt.serviceOrder.order, current ? 'deploy-first' : 'planned-readiness-gap');
       const names = receipt.steps.map(step => step.name);
       assert.equal(names.indexOf('app-ready') < names.indexOf('orchestrator-migrated'), Boolean(current));
-      assert.equal(fake.cluster.get(`configmap/${STATE_NAME}`).data['orchestrator.schema'], '45');
+      assert.equal(fake.cluster.get(`configmap/${STATE_NAME}`).data['orchestrator.schema'], '46');
       assert.equal(receipt.readinessGap?.planned, current ? undefined : true);
     } finally { fake.done(); }
   }
 });
 
-test('a matching or absent old target image cannot bypass the Core 045 compatibility gate', async () => {
+test('a matching or absent old target image cannot bypass the Core 046 compatibility gate', async () => {
   for (const running of [undefined, imageReference('Agentweaver.Orchestrator', digest('a'))]) {
     const fake = world({ appImages: { orchestrator: running },
       schemaRanges: { [digest('a')]: range(31, 32), [digest('b')]: range(11, 11) } });
     try {
       await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']),
-        receiptDir: fake.receiptDir }, fake.deps), /accepts schema 31-32, not 45 from the reviewed plan/);
+        receiptDir: fake.receiptDir }, fake.deps), /accepts schema 31-32, not 46 from the reviewed plan/);
       assert.ok(!fake.calls.some(call => call.args[4] === 'create'));
     } finally { fake.done(); }
   }
