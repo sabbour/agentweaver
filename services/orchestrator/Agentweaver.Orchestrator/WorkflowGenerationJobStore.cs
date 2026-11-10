@@ -74,7 +74,17 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
         insert.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, create.RuntimeInstanceId);
         insert.Parameters.AddWithValue("registrationRevision", NpgsqlDbType.Bigint, create.RegistrationRevision);
         insert.Parameters.AddWithValue("model", NpgsqlDbType.Varchar, create.ModelSelectionReference);
-        var inserted = await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
+        bool inserted;
+        try
+        {
+            inserted = await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
+        }
+        catch (PostgresException exception) when (
+            exception.SqlState == "55000" && exception.MessageText == "workflow_generation_run_unavailable")
+        {
+            throw new CoordinationException(
+                "workflow_generation_run_unavailable", StatusCodes.Status409Conflict, exception);
+        }
         var job = await ReadByKeyAsync(
             connection,
             transaction,
@@ -226,6 +236,7 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
         await using var command = new NpgsqlCommand($"""
             UPDATE {_table}
             SET status = 'completed', execution_phase = 'quiesced',
+                failure_code = NULL, failure_message = NULL,
                 result_json = @result::jsonb, updated_at = clock_timestamp()
             WHERE project_id = @project AND job_id = @job
               AND (status = 'running' OR
@@ -252,7 +263,10 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
             SET status = 'failed',
                 execution_phase = CASE WHEN @quiesced THEN 'quiesced' ELSE execution_phase END,
                 failure_code = @code, failure_message = @message, updated_at = clock_timestamp()
-            WHERE project_id = @project AND job_id = @job AND status IN ('queued', 'running')
+            WHERE project_id = @project AND job_id = @job
+              AND (status IN ('queued', 'running') OR
+                   (status = 'failed' AND execution_phase = 'send-admitted' AND
+                    failure_code = 'workflow_generation_outcome_indeterminate'))
             """, connection);
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
         command.Parameters.AddWithValue("job", NpgsqlDbType.Uuid, jobId);

@@ -269,14 +269,29 @@ start model work. Invalid definitions and roles outside the accepted team fail
 with typed errors. A generated definition remains a draft; it does not select
 or confirm a workflow or plan.
 
+If the work queue is full when a job needs scheduling, POST returns
+`503 workflow_generation_queue_full`. The job can already be stored. Retry
+the identical request with the same `Idempotency-Key` and current authority
+to schedule or reconcile that job.
+If the run becomes terminal while the job is being saved, POST can return
+`409 workflow_generation_run_unavailable`.
+
 Migration 046 adds the job table and closes queued work when a run is cancelled.
-It preserves an admitted native turn as unresolved until the worker confirms
-that it stopped. Cleanup waits for that work. An identical POST can reconcile
-the same native request after a lost reply. The owner does not create a second
-turn or make an automatic paid retry when the outcome is uncertain. The runtime
-database role needs `SELECT`, `INSERT`, and `UPDATE` on the job table. It has no
-`DELETE` grant. The migration is optional during rollout; readiness rejects an
-applied but incomplete schema.
+It preserves an admitted native turn as unresolved until completion is verified.
+Cleanup stays pending without holding a runtime-start worker. An authorized
+retry of the cancellation can schedule cleanup again after an in-flight worker
+verifies completion. Cancellation retries do not independently verify stored
+proof. If no worker verifies the turn, cleanup remains pending, even when a
+receipt was stored. If proof is lost before it is stored, the current contract
+cannot recover it after cancellation. Cleanup does not start another turn.
+
+For an active run, an identical POST can attempt to reconcile the saved native
+request after a lost reply or a temporary storage failure. The result can remain
+indeterminate if completion evidence is unavailable. The owner does not create
+a second request ID or make an automatic paid retry. The runtime database role
+needs `SELECT`, `INSERT`, and `UPDATE` on the job table. It has no `DELETE`
+grant. The migration is optional during rollout; readiness rejects an applied
+but incomplete schema.
 
 These are Orchestrator owner routes. Gateway admission and the CLI acceptance
 journey remain pending PR 4. The diagram shows the owner source flow, not a
@@ -294,19 +309,22 @@ sequenceDiagram
     Caller->>Core: POST workflow request with Idempotency-Key
     Core->>Projects: Check current authority and accepted selection
     Core->>DB: Save job and stable native request ID
-    Core->>Core: Queue the saved job on a bounded worker
-    Core-->>Caller: 202 with status and result URLs
-    Core->>Projects: Recheck authority, root, selection, fence and decision
-    Core->>DB: Persist send-admitted phase
-    Core->>Host: Send the same read-only native request
-    Host->>Events: Append user, assistant and cache material
-    Events-->>Host: Return material acknowledgments
-    Host-->>Core: Return native completion evidence
-    Core->>Events: Read and verify acknowledged material
-    Core->>DB: Store validated typed draft and completion evidence
-    Caller->>Core: GET status or result
-    Core->>Projects: Recheck actor and project authority
-    Core-->>Caller: Return job status or completed result
+    alt Work queue is full
+        Core-->>Caller: 503, retry the same request and key
+    else Job is queued
+        Core-->>Caller: 202 with status and result URLs
+        Core->>Projects: Recheck authority, root, selection, fence and decision
+        Core->>DB: Persist send-admitted phase
+        Core->>Host: Send the same read-only native request
+        Host->>Events: Append user, assistant and cache material
+        Events-->>Host: Return material acknowledgments
+        Host-->>Core: Return native completion evidence
+        Core->>Events: Read and verify acknowledged material
+        Core->>DB: Store validated typed draft and completion evidence
+        Caller->>Core: GET status or result
+        Core->>Projects: Recheck actor and project authority
+        Core-->>Caller: Return job status or completed result
+    end
 ```
 
 ### Understand workflows, plans, and gates

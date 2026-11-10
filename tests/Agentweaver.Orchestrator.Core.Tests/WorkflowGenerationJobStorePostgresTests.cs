@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
@@ -16,7 +18,7 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
     private const string RunId = "workflow-generation-run";
     private const string TenantId = "workflow-generation-tenant";
     private const string ActorIssuer = "https://identity.example/";
-    private const string ActorId = "workflow-generation-actor";
+    private const string ActorId = "6294c6de-f698-43d2-8dcb-d29cb289e671";
     private readonly string _schema = "workflow_generation_" + Guid.NewGuid().ToString("N");
     private WorkflowGenerationJobStore _store = null!;
 
@@ -122,6 +124,137 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
     }
 
     [Fact]
+    public async Task CancellationPreventsReadmissionOfAnIndeterminateJob()
+    {
+        var job = (await _store.CreateOrGetAsync(Create("uncertain-cancel"), CancellationToken.None)).Job;
+        await _store.TryBeginExecutionAsync(ProjectId, job.JobId, CancellationToken.None);
+        Assert.True(await _store.MarkSendAdmittedAsync(ProjectId, job.JobId, CancellationToken.None));
+        await _store.FailAsync(
+            ProjectId, job.JobId, "workflow_generation_outcome_indeterminate", "The outcome is not known.",
+            quiesced: false, CancellationToken.None);
+
+        await CancelRunAsync();
+
+        var cancelled = await _store.ReadAsync(ProjectId, job.JobId, CancellationToken.None);
+        Assert.Equal("cancelled", cancelled!.Status);
+        Assert.Equal("send-admitted", cancelled.ExecutionPhase);
+        Assert.False(WorkflowGenerationExecution.CanEnqueue(cancelled));
+        Assert.False(await _store.MarkSendAdmittedAsync(ProjectId, job.JobId, CancellationToken.None));
+        Assert.True(await _store.HasUnresolvedNativeWorkAsync(ProjectId, RunId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task CleanupWorkerReturnsAndLeavesTheCancelledAdmittedJobAndIntentPending()
+    {
+        var job = (await _store.CreateOrGetAsync(Create("cleanup"), CancellationToken.None)).Job;
+        await _store.TryBeginExecutionAsync(ProjectId, job.JobId, CancellationToken.None);
+        Assert.True(await _store.MarkSendAdmittedAsync(ProjectId, job.JobId, CancellationToken.None));
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".runtime_run_start_intents
+                (tenant_id, project_id, run_id, root_session_id, accepted_selection_hash,
+                 execution_fence, intent_id, bootstrap_operation_id, consume_operation_id,
+                 exchange_operation_id, state, current_step, cleanup_obligation)
+            VALUES (@tenant, @project, @run, 'root', repeat('a', 64), 1,
+                    @intent, @bootstrap, @consume, @exchange, 'cleanup_pending', 'cleanup', true)
+            """, connection))
+        {
+            insert.Parameters.AddWithValue("tenant", TenantId);
+            insert.Parameters.AddWithValue("project", ProjectId);
+            insert.Parameters.AddWithValue("run", RunId);
+            insert.Parameters.AddWithValue("intent", Guid.NewGuid());
+            insert.Parameters.AddWithValue("bootstrap", Guid.NewGuid());
+            insert.Parameters.AddWithValue("consume", Guid.NewGuid());
+            insert.Parameters.AddWithValue("exchange", Guid.NewGuid());
+            await insert.ExecuteNonQueryAsync();
+        }
+        await CancelRunAsync();
+
+        var startStore = new CoordinationRuntimeRunStartStore(fixture.DataSource, _schema);
+        var credential = new SecretCredential("cleanup-test", DateTimeOffset.UtcNow.AddMinutes(1));
+        var continuation = new RuntimeRunStartCleanupContinuation(
+            startStore, null!, null!, _store,
+            new RuntimeRunStartOptions(new Uri("https://environment.test/"), new Uri("https://broker.test/")),
+            null!);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        try
+        {
+            await continuation.ContinueAsync(
+                new RuntimeRunStartCleanupWork(
+                    ProjectId, RunId, TenantId, new CoordinationActor(ActorIssuer, ActorId),
+                    new RuntimeActorAuthorization(credential, TenantId)),
+                deadline.Token);
+        }
+        finally
+        {
+            credential.Invalidate();
+        }
+
+        var pending = await startStore.FindCleanupIntentAsync(TenantId, ProjectId, RunId, CancellationToken.None);
+        Assert.NotNull(pending);
+        Assert.Equal("cleanup_pending", pending.State);
+        Assert.True(pending.CleanupObligation);
+        var cancelled = await _store.ReadAsync(ProjectId, job.JobId, CancellationToken.None);
+        Assert.Equal("cancelled", cancelled!.Status);
+        Assert.Equal("send-admitted", cancelled.ExecutionPhase);
+        Assert.True(await _store.HasUnresolvedNativeWorkAsync(ProjectId, RunId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task CancellationHoldingRunLockRejectsConcurrentJobAcceptance()
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using (var cancel = new NpgsqlCommand($"""
+            SELECT 1 FROM "{_schema}".accepted_runs
+            WHERE project_id = @project AND run_id = @run FOR UPDATE;
+            UPDATE "{_schema}".accepted_runs
+            SET execution_state = 'cancelled', execution_fence = execution_fence + 1,
+                cancelled_at = clock_timestamp(), completed_at = clock_timestamp()
+            WHERE project_id = @project AND run_id = @run;
+            INSERT INTO "{_schema}".project_run_cancellations
+                (tenant_id, project_id, run_id, actor_issuer, actor_subject,
+                 idempotency_key_hash, request_fingerprint, result)
+            VALUES (@tenant, @project, @run, @issuer, @actor, repeat('b', 64), repeat('c', 64), jsonb_build_object());
+            """, connection, transaction))
+        {
+            cancel.Parameters.AddWithValue("tenant", TenantId);
+            cancel.Parameters.AddWithValue("project", ProjectId);
+            cancel.Parameters.AddWithValue("run", RunId);
+            cancel.Parameters.AddWithValue("issuer", ActorIssuer);
+            cancel.Parameters.AddWithValue("actor", ActorId);
+            await cancel.ExecuteNonQueryAsync();
+        }
+
+        var create = Create("concurrent-cancel");
+        var acceptance = _store.CreateOrGetAsync(create, CancellationToken.None);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using (var observer = await fixture.DataSource.OpenConnectionAsync(deadline.Token))
+        {
+            while (true)
+            {
+                await using var blocked = new NpgsqlCommand("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM pg_stat_activity
+                        WHERE @blocker = ANY(pg_blocking_pids(pid))
+                          AND query LIKE '%workflow_generation_jobs%')
+                    """, observer);
+                blocked.Parameters.AddWithValue("blocker", connection.ProcessID);
+                if ((bool)(await blocked.ExecuteScalarAsync(deadline.Token))!)
+                    break;
+                await Task.Delay(20, deadline.Token);
+            }
+        }
+        Assert.False(acceptance.IsCompleted);
+        await transaction.CommitAsync();
+
+        var failure = await Assert.ThrowsAsync<CoordinationException>(() => acceptance);
+        Assert.Equal("workflow_generation_run_unavailable", failure.Code);
+        Assert.Equal(409, failure.StatusCode);
+        Assert.Null(await _store.ReadAsync(ProjectId, create.JobId, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task ValidDefinitionWithoutPersistedNativeCompletionCannotBeCompleted()
     {
         var job = (await _store.CreateOrGetAsync(Create("completion"), CancellationToken.None)).Job;
@@ -157,6 +290,43 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
         Assert.Equal("running", (await _store.ReadAsync(ProjectId, job.JobId, CancellationToken.None))!.Status);
     }
 
+    [Fact]
+    public async Task ReconciledCompletionClearsThePersistedIndeterminateFailure()
+    {
+        var job = (await _store.CreateOrGetAsync(Create("reconciled"), CancellationToken.None)).Job;
+        await _store.TryBeginExecutionAsync(ProjectId, job.JobId, CancellationToken.None);
+        Assert.True(await _store.MarkSendAdmittedAsync(ProjectId, job.JobId, CancellationToken.None));
+        await _store.FailAsync(
+            ProjectId, job.JobId, "workflow_generation_outcome_indeterminate", "The outcome is not known.",
+            quiesced: false, CancellationToken.None);
+        var failed = await _store.ReadAsync(ProjectId, job.JobId, CancellationToken.None);
+        Assert.Equal("workflow_generation_outcome_indeterminate", failed!.FailureCode);
+        Assert.True(WorkflowGenerationExecution.CanEnqueue(failed));
+
+        var completion = CreateCompletion(job);
+        var ledgerReceipt = RuntimeRootTurnCompletionLedgerReceipt.Create(completion, DateTimeOffset.UtcNow);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            await new RuntimeExecutionEvidenceLedgerStore(_schema).AppendRootTurnCompletionAsync(
+                connection, transaction, ledgerReceipt, CancellationToken.None);
+            await transaction.CommitAsync();
+        }
+        var result = CreateValidResult(job, completion.ToEvidence());
+        Assert.True(await _store.CompleteAsync(ProjectId, job.JobId, result, CancellationToken.None));
+
+        var completed = await _store.ReadAsync(ProjectId, job.JobId, CancellationToken.None);
+        Assert.NotNull(completed);
+        Assert.Equal("completed", completed.Status);
+        Assert.Equal("quiesced", completed.ExecutionPhase);
+        Assert.Null(completed.FailureCode);
+        Assert.Null(completed.FailureMessage);
+        var envelope = WorkflowGenerationExecution.CreateEnvelope(completed);
+        Assert.Equal(result.ArtifactId, envelope.Artifact!.ArtifactId);
+        Assert.Null(envelope.Failure);
+        Assert.True(await _store.HasPersistedCompletionAsync(completed, completed.Result, CancellationToken.None));
+    }
+
     private WorkflowGenerationJobCreate Create(string idempotencyKey)
     {
         const string prompt = "Create a safe workflow.";
@@ -179,7 +349,7 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
             1,
             Guid.NewGuid(),
             1,
-            "model:provider/alpha");
+            "model:provider-alpha");
     }
 
     private async Task CancelRunAsync()
@@ -199,7 +369,9 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
         await command.ExecuteNonQueryAsync();
     }
 
-    private static WorkflowGenerationJobResult CreateValidResult(WorkflowGenerationJob job)
+    private static WorkflowGenerationJobResult CreateValidResult(
+        WorkflowGenerationJob job,
+        RuntimeRootTurnCompletionEvidence? actualEvidence = null)
     {
         var definition = WorkflowTestData.Definition(WorkflowDefinitionOrigin.Generated);
         var definitionJson = JsonSerializer.Serialize(definition, JsonOptions);
@@ -253,9 +425,78 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
             Guid.ParseExact(artifactHash[..32], "N"),
             definition,
             definitionHash,
-            evidence,
+            actualEvidence ?? evidence,
             job.ConfigurationRevision,
             job.AcceptedSelectionHash);
+    }
+
+    internal static RuntimeRootTurnCompletionReceipt CreateCompletion(
+        WorkflowGenerationJob job,
+        RuntimeRegistration? actualRegistration = null,
+        RuntimeGrantReceipt? actualGrant = null,
+        string? actualOutput = null)
+    {
+        var binding = actualRegistration?.Binding ?? new RuntimeBinding(
+            job.ActorIssuer, job.ActorId, job.TenantId, job.ProjectId, job.RunId, job.SessionId,
+            RuntimeActionContract.CoordinatorRootStepId, "root-turn", 1, job.ConfigurationRevision, 1,
+            "context-v1", job.AcceptedSelectionHash, job.ExecutionFence, "environment", "placement", 1,
+            "profile", new Uri("https://runtime.test/runtime/v1/configure"),
+            new Uri("https://runtime.test/runtime/v1/observe"))
+        {
+            ModelSelectionReference = job.ModelSelectionReference,
+            ModelSourceMode = ModelSourceMode.HostedCopilot,
+            PlacementProviderId = "sandbox",
+            EnvironmentLifecycleGeneration = 1,
+            EnvironmentLeaseRevision = 1,
+            EnvironmentCurrentFencingGeneration = 1,
+            EnvironmentProviderFencingGeneration = 1,
+            Image = new SandboxImageIdentity("sha256:" + new string('a', 64), "linux/amd64", 1)
+        };
+        var registration = actualRegistration ?? new RuntimeRegistration(
+            job.RuntimeInstanceId, job.RegistrationRevision, binding, RuntimeRegistrationState.Active,
+            DateTimeOffset.UtcNow.AddMinutes(5));
+        var source = new SdkSessionFacts(
+            job.RuntimeInstanceId, RuntimeContractValidation.NativeSessionId(binding), "sdk-1", "runtime-1",
+            job.ModelSelectionReference, "model", new string('c', 64), 1,
+            "hosted-copilot", SdkMeterSources.CopilotNanoAiu, job.AcceptedSelectionHash,
+            job.RegistrationRevision);
+        var grant = actualGrant ?? new RuntimeGrantReceipt(
+            Guid.NewGuid(), job.RuntimeInstanceId, job.RegistrationRevision, 1, job.ActorIssuer,
+            RuntimeCredentialPurpose.Observe, binding.ObservationEndpoint, RuntimeCredentialState.Active,
+            new string('d', 64), registration.ExpiresAt, DateTimeOffset.UtcNow);
+        var definition = WorkflowTestData.Definition(WorkflowDefinitionOrigin.Generated);
+        var output = actualOutput ?? JsonSerializer.Serialize(definition, JsonOptions);
+        var cursor = "native-cursor";
+        var cursorHash = WorkflowGenerationJobStore.Hash(cursor);
+        var native = new RuntimeNativeTurnObservation(
+            source, Guid.NewGuid().ToString("D"), "native-turn", Guid.NewGuid(), Guid.NewGuid(),
+            Guid.NewGuid(), DateTimeOffset.UtcNow, cursor, WorkflowGenerationJobStore.Hash(output), null);
+        var assistantId = new Guid(SHA256.HashData(
+            Encoding.UTF8.GetBytes($"agentweaver:a2a:assistant:{job.NativeRequestId:N}")).AsSpan(0, 16));
+
+        SessionMaterialAcknowledgment Material(Guid eventId, long position, SessionMaterialKind kind, string content)
+        {
+            var bytes = Encoding.UTF8.GetBytes(content);
+            var material = new SessionMaterialBinding(
+                1, kind, job.TenantId, RuntimeContractValidation.Hash(bytes), job.RuntimeInstanceId,
+                job.RegistrationRevision, job.ExecutionFence, job.AcceptedSelectionHash,
+                source.SdkVersion, source.RuntimeVersion, source.ModelSelectionReference, source.ModelId);
+            return new SessionMaterialAcknowledgment(
+                1, new SessionIdentity(job.ProjectId, job.RunId, job.SessionId), eventId, position,
+                new SessionObjectReference(
+                    new ObjectKey($"material/{eventId:N}"), SessionMaterialValidation.Purpose(kind), bytes.Length)
+                {
+                    Material = material
+                });
+        }
+
+        return new RuntimeRootTurnCompletionReceipt(
+            1, job.NativeRequestId, job.PromptSha256, registration, source, grant, native,
+            new string('e', 64), cursorHash, new string('f', 64), 1,
+            Material(job.NativeRequestId, 1, SessionMaterialKind.TurnContent, job.Prompt),
+            Material(assistantId, 2, SessionMaterialKind.TurnContent, output),
+            Material(Guid.NewGuid(), 3, SessionMaterialKind.SdkCache, "cache"),
+            0, 0, cursor, cursorHash, cursorHash, 0, true).Validate();
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)

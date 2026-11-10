@@ -46,8 +46,9 @@ DECLARE
 BEGIN
     SELECT execution_state INTO current_state
     FROM {schema}.accepted_runs
-    WHERE project_id = NEW.project_id AND run_id = NEW.run_id;
-    IF current_state IS DISTINCT FROM 'active' OR EXISTS (
+    WHERE project_id = NEW.project_id AND run_id = NEW.run_id
+    FOR SHARE;
+    IF current_state IS NULL OR current_state NOT IN ('idle', 'active', 'blocked') OR EXISTS (
         SELECT 1 FROM {schema}.project_run_cancellations
         WHERE project_id = NEW.project_id AND run_id = NEW.run_id
     ) THEN
@@ -76,7 +77,8 @@ BEGIN
         failure_message = 'The run was cancelled.',
         updated_at = clock_timestamp()
     WHERE project_id = NEW.project_id AND run_id = NEW.run_id
-      AND status IN ('queued', 'running');
+      AND (status IN ('queued', 'running') OR
+           (status = 'failed' AND execution_phase = 'send-admitted'));
     RETURN NEW;
 END;
 $$;
