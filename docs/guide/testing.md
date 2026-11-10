@@ -579,6 +579,19 @@ the owner HTTP client. The third needs Docker. It checks that only a current
 TenantAdmin or PlatformAdmin can read the report. These tests don't call
 deployed owner services.
 
+## Test the platform egress provider
+
+Run the platform egress tests:
+
+```powershell
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj --filter FullyQualifiedName~PlatformEgress
+```
+
+These tests check host validation, the provider conformance kit, Cilium
+rendering and readback against a fake Kubernetes store, and the fail-closed
+reconciler. They use a fake policy source. They do not prove Cilium
+enforcement on a cluster or exact-host rules on Kata.
+
 ## Planned GitHub Canvas adapter acceptance
 
 GitHub Canvas adapter cases are unexecuted requirements, not a passing suite

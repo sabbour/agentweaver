@@ -187,6 +187,7 @@ CLI/API compatibility policy.
 | A regression changes an offending artifact or contract | Focused assertion fails on its content, identity or state transition, not only exit code | Test-design criterion; inspect the actual assertion |
 | A job produces no expected test/coverage receipt | Guard fails rather than count an empty run as passing | CI/coverage contract tests |
 | A live acceptance prerequisite or cleanup result is missing | Preserve failed/blocked status; do not aggregate into pass | Harness/CLI result tests; complete model-dependent live acceptance is separate |
+| A new platform egress provider is added | It must pass the shared conformance kit in `PlatformEgressTests.cs` | Controlled tests with a fake store; not datapath proof |
 
 The principal risk is overclaiming evidence. Source owners must identify the
 exact revision, executable, environment, executed suite and limitations.

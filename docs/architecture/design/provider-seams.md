@@ -828,6 +828,28 @@ explicit rather than treated as an authorization guarantee
 ([R16](../decisions/0001-platform-architecture.md#risk-register),
 [R17](../decisions/0001-platform-architecture.md#risk-register)).
 
+### Platform egress provider
+
+The shared AgentHost egress baseline uses a second contract on the same L3L4
+provider: `IPlatformEgressProvider` in `Agentweaver.Abstractions`. The
+provider gets only the mode, the exact hosts, the generation, and an opaque
+source hash. It does not see users, projects, requests, or audit data.
+
+| Capability | Required | Meaning |
+| --- | --- | --- |
+| `egress.private-range-exclusion` | Yes | Denies the excluded ranges in both modes. |
+| `egress.status` | Yes | Reports the generation, the intent hash, and the source hash. |
+| `egress.public-https` | For `PublicHttps` | Allows public addresses on TCP 443. |
+| `egress.exact-host` | For `Allowlist` | Renders allow rules for exact DNS names on TCP 443 only. |
+| `egress.blocked-attempts`, `egress.allowed-flows`, `egress.run-attribution`, `egress.enforced-status`, `egress.tls-trust` | No | Optional reporting and trust functions. |
+
+The provider returns `Failed` with `capability_unavailable` for a mode that it
+does not advertise, and changes nothing. Every provider must pass the
+conformance kit in `PlatformEgressTests.cs`. The Cilium provider does not
+advertise `egress.exact-host` until the Kata spike (#2633) proves it. The
+policy comes only from `IPlatformEgressPolicySource`. See
+[Environment egress](../environment-egress.md#platform-egress-provider-and-reconciler).
+
 ## Cost
 
 ### Durable usage and pricing

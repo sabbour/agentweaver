@@ -106,7 +106,7 @@ The figure is a structural component view, not runtime request order or deployme
 `Agentweaver.EventsAndSessions` references the shared contracts, provider catalog/resolver,
 PostgreSQL outbox/inbox library, and telemetry helper. `Agentweaver.Environment` references the shared contracts, provider
 catalog/resolver, Azure Files Storage provider, and Agent Sandbox provider. Its
-egress flow and evidence boundary are described in
+egress flow, platform egress provider, and evidence boundary are described in
 [Environment egress](./environment-egress.md). Its Sandbox lease contract is
 described in [Environment Sandbox](./environment-sandbox.md).
 `AzureFilesCsiWorkspaceVolumeProvider` implements `IWorkspaceVolumeProvider` and calls the Kubernetes API;

@@ -111,6 +111,13 @@ generation and intent hash. Empty or revoked intent uses explicit deny-all
 rules. Readback proves the stored policy matches; it does not prove packet-level
 datapath enforcement.
 
+`CiliumPlatformEgressProvider` renders the shared AgentHost egress baseline into
+one deploy-created object, `agenthost-platform-egress`.
+`PlatformEgressReconciler` applies only an admitted policy source snapshot and
+fails closed when the snapshot is absent. Environment does not run the
+reconciler yet. See
+[Environment egress](../architecture/environment-egress.md#platform-egress-provider-and-reconciler).
+
 ### Manage workspace data
 
 The Azure Files adapter requires the configured StorageClass, Azure Files

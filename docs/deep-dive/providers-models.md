@@ -24,6 +24,7 @@ names an accepted model choice, not a provider-seam enum value.
 | --- | --- |
 | `ProviderContracts.cs` | Seam cardinality, descriptors, candidates, negotiations, and pins |
 | `NetworkPolicyContracts.cs` | Narrowing intent and layered network bindings |
+| `PlatformEgressContracts.cs` | Platform egress provider, capabilities, exact-host validation, and the admitted policy source |
 | `ModelSourceMode.cs` and `RuntimeModelBindingPin.cs` | Hosted/BYOK model identity |
 | `ProviderCatalogConfiguration.cs` and `ProviderCatalog.cs` | Catalog loading, validation, and selection maps |
 | `ProviderResolver.cs` | Resolution, negotiation checks, and binding verification |
