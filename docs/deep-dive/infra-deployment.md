@@ -201,17 +201,36 @@ Gateway/API, browser and native .NET CLI remain the supported client paths.
 ### Build and publish
 
 The image workflow builds all ten images used by the root Kustomize overlay
-when service code, Docker build inputs, or component versions change. AgentHost
-and Identity Broker use their existing Dockerfiles and build contexts, Web
-builds its frontend and host, and the other seven images use .NET container
-publishing. Each image is pushed directly to GHCR with a `sha-<commit>` tag.
-The workflow summary lists each registry digest and the AgentHost compressed
-pull size.
+when service code, Docker build inputs, or component versions change. AgentHost,
+Identity Broker, and Orchestrator use Dockerfiles; Web builds its frontend and
+host; the other six images use .NET container publishing. Each image is pushed
+directly to GHCR with a `sha-<commit>` tag. The workflow summary lists each
+registry digest and the AgentHost compressed pull size.
 For an ACR candidate, `npm run azure:build-acr-candidate` uses those Docker
-and .NET build paths from a detached exact-source worktree. It pushes the same
-ten `linux/amd64` images to ACR and verifies the source commit, Git tree,
-component version, digest, and AgentHost compressed pull size. This local
-command does not replace the automatic GHCR workflow.
+and .NET build paths from a detached exact-source worktree. It downloads the
+pinned OPA binary for the two ACS images. It pushes the same ten `linux/amd64`
+images to ACR and verifies the source commit, Git tree, component version,
+digest, and AgentHost compressed pull size. This local command does not
+replace the automatic GHCR workflow.
+
+### ACS runtime assets
+
+The Orchestrator and AgentHost source builds include the Linux-x64
+`AgentControlSpecification` package from a checked-in local feed. The root
+`NuGet.Config` maps only this package to `eng/acs/nuget`; other packages restore
+from nuget.org. Each Dockerfile restores and publishes with the `linux-x64`
+runtime identifier, verifies the native library hash, and runs an image probe
+before the build can finish.
+
+Each image build downloads OPA `0.70.0` from the official OPA site, checks its
+SHA-256, and places it at `/app/opa`. The image sets `ACS_OPA_PATH=/app/opa`.
+The probe runs inside each final image. It loads the image's native library
+and checks OPA allow, deny, and fail-closed behavior. It does not use a
+fallback OPA path. For package source, build pins, and hashes, see the
+[ACS runtime asset record](https://github.com/sabbour/agentweaver/blob/v1/eng/acs/README.md).
+
+This source build does not activate ACS or change stored policy data. It does
+not show a live deployment or policy authorization.
 
 The package workflow runs separately when `releases/foundation.json` changes.
 It packs versioned contracts and libraries and pushes NuGet packages to GitHub

@@ -19,3 +19,4 @@ scripts/ui-harness/.auth/
 .squad-workstream
 # Squad: local config (machine-specific, never commit)
 .squad/config.json
+eng/acs/opa_linux_amd64_static

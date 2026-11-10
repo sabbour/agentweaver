@@ -2,6 +2,12 @@
   "version": 1,
   "dependencies": {
     "net10.0": {
+      "AgentControlSpecification": {
+        "type": "Direct",
+        "requested": "[0.4.0-beta.0, )",
+        "resolved": "0.4.0-beta.0",
+        "contentHash": "vtILlhbuAJ2TSi9BZwZuGcXLxj5YwxudIwO0kRo91rowwmRWBme8RRdaxOc+i2fccRBk1C3nppVAo2P1N5nQ6Q=="
+      },
       "OpenIddict.Validation.AspNetCore": {
         "type": "Direct",
         "requested": "[7.7.1, )",
@@ -240,27 +246,27 @@
       "agentweaver.agentruntime": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )",
-          "Agentweaver.Identity": "[1.6.0, )",
+          "Agentweaver.Abstractions": "[1.7.0, )",
+          "Agentweaver.Identity": "[1.7.0, )",
           "GitHub.Copilot.SDK": "[1.0.18, )"
         }
       },
       "agentweaver.identity": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )"
+          "Agentweaver.Abstractions": "[1.7.0, )"
         }
       },
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )"
+          "Agentweaver.Abstractions": "[1.7.0, )"
         }
       },
       "agentweaver.sourcecontrol": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )",
+          "Agentweaver.Abstractions": "[1.7.0, )",
           "Agentweaver.Providers": "[1.1.0, )"
         }
       },
@@ -269,6 +275,14 @@
         "dependencies": {
           "OpenTelemetry.Extensions.Hosting": "[1.15.3, )"
         }
+      }
+    },
+    "net10.0/linux-x64": {
+      "AgentControlSpecification": {
+        "type": "Direct",
+        "requested": "[0.4.0-beta.0, )",
+        "resolved": "0.4.0-beta.0",
+        "contentHash": "vtILlhbuAJ2TSi9BZwZuGcXLxj5YwxudIwO0kRo91rowwmRWBme8RRdaxOc+i2fccRBk1C3nppVAo2P1N5nQ6Q=="
       }
     }
   }

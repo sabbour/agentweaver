@@ -22,9 +22,10 @@
       "agentweaver.identity": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )"
+          "Agentweaver.Abstractions": "[1.7.0, )"
         }
       }
-    }
+    },
+    "net10.0/linux-x64": {}
   }
 }

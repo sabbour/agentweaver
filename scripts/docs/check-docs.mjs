@@ -123,7 +123,8 @@ export function findMissingDocumentation(changedPaths, rules) {
   const failures = [];
   for (const rule of rules) {
     const affected = changedPaths.filter((file) =>
-      rule.sourcePrefixes.some((prefix) => file.startsWith(prefix)));
+      rule.sourcePrefixes.some((prefix) => file.startsWith(prefix)) &&
+      !(rule.sourceExclusions ?? []).some((prefix) => file.startsWith(prefix)));
     if (!affected.length) continue;
     const missing = rule.required.filter((file) => !changed.has(file));
     if (missing.length) failures.push({ rule: rule.name, affected, missing });

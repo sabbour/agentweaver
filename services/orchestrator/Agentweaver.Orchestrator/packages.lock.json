@@ -2,6 +2,12 @@
   "version": 1,
   "dependencies": {
     "net10.0": {
+      "AgentControlSpecification": {
+        "type": "Direct",
+        "requested": "[0.4.0-beta.0, )",
+        "resolved": "0.4.0-beta.0",
+        "contentHash": "vtILlhbuAJ2TSi9BZwZuGcXLxj5YwxudIwO0kRo91rowwmRWBme8RRdaxOc+i2fccRBk1C3nppVAo2P1N5nQ6Q=="
+      },
       "Azure.Identity": {
         "type": "Direct",
         "requested": "[1.17.1, )",
@@ -396,13 +402,13 @@
       "agentweaver.identity": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )"
+          "Agentweaver.Abstractions": "[1.7.0, )"
         }
       },
       "agentweaver.orchestrator.core": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )",
+          "Agentweaver.Abstractions": "[1.7.0, )",
           "Agentweaver.Providers": "[1.1.0, )",
           "Microsoft.AgentGovernance": "[4.0.0, )"
         }
@@ -416,15 +422,28 @@
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )"
+          "Agentweaver.Abstractions": "[1.7.0, )"
         }
       },
       "agentweaver.sourcecontrol": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.6.0, )",
+          "Agentweaver.Abstractions": "[1.7.0, )",
           "Agentweaver.Providers": "[1.1.0, )"
         }
+      }
+    },
+    "net10.0/linux-x64": {
+      "AgentControlSpecification": {
+        "type": "Direct",
+        "requested": "[0.4.0-beta.0, )",
+        "resolved": "0.4.0-beta.0",
+        "contentHash": "vtILlhbuAJ2TSi9BZwZuGcXLxj5YwxudIwO0kRo91rowwmRWBme8RRdaxOc+i2fccRBk1C3nppVAo2P1N5nQ6Q=="
+      },
+      "System.Security.Cryptography.ProtectedData": {
+        "type": "Transitive",
+        "resolved": "4.5.0",
+        "contentHash": "wLBKzFnDCxP12VL9ANydSYhk59fC4cvOr9ypYQLPnAj48NQIhqnjdD2yhP8yEKyBJEjERWS9DisKL7rX5eU25Q=="
       }
     }
   }

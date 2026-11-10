@@ -6,6 +6,7 @@
 **/*.key
 .git
 .vs
+.scratch
 node_modules
 artifacts
 Temp

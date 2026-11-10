@@ -159,6 +159,11 @@
       "sourcePrefixes": [
         "services/orchestrator/Agentweaver.Orchestrator/"
       ],
+      "sourceExclusions": [
+        "services/orchestrator/Agentweaver.Orchestrator/Agentweaver.Orchestrator.csproj",
+        "services/orchestrator/Agentweaver.Orchestrator/Dockerfile",
+        "services/orchestrator/Agentweaver.Orchestrator/packages.lock.json"
+      ],
       "required": [
         "docs/architecture/design/sessions-and-coordination.md",
         "docs/architecture/design/services-and-release.md",
@@ -188,9 +193,35 @@
         "services/orchestrator/Agentweaver.Orchestrator/",
         "tools/Agentweaver.FoundationProbe/"
       ],
+      "sourceExclusions": [
+        "services/orchestrator/Agentweaver.Orchestrator/Agentweaver.Orchestrator.csproj",
+        "services/orchestrator/Agentweaver.Orchestrator/Dockerfile",
+        "services/orchestrator/Agentweaver.Orchestrator/packages.lock.json"
+      ],
       "required": [
         "docs/architecture/overview.md",
         "docs/diagrams/src/flagship/v1-foundation-dependencies.json"
+      ]
+    },
+    {
+      "name": "ACS Linux image assets",
+      "sourcePrefixes": [
+        "NuGet.Config",
+        "eng/acs/",
+        "services/agenthost/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj",
+        "services/agenthost/Agentweaver.AgentHost/Dockerfile",
+        "services/agenthost/Agentweaver.AgentHost/packages.lock.json",
+        "services/orchestrator/Agentweaver.Orchestrator/Agentweaver.Orchestrator.csproj",
+        "services/orchestrator/Agentweaver.Orchestrator/Dockerfile",
+        "services/orchestrator/Agentweaver.Orchestrator/packages.lock.json",
+        "tests/Agentweaver.Acs.ImageProbe/",
+        ".github/workflows/v1-integration-images.yml",
+        "scripts/release/build-acr-candidate.mjs"
+      ],
+      "required": [
+        "docs/deep-dive/infra-deployment.md",
+        "docs/architecture/azure.md",
+        "docs/diagrams/src/flagship/v1-azure-foundation.json"
       ]
     },
     {

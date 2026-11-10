@@ -1,0 +1,13 @@
+agent_control_specification_version: 0.4.0-alpha.1
+policies:
+  image_probe:
+    type: rego
+    bundle: ./policy
+    query: data.agent_control_specification.image_probe.pre_model_call_verdict
+intervention_points:
+  pre_model_call:
+    policy_target: $.model_request
+    policy_target_kind: model_request
+    policy:
+      id: image_probe
+      query: data.agent_control_specification.image_probe.pre_model_call_verdict

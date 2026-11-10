@@ -96,11 +96,19 @@ test('builds and verifies all ten images from one detached source worktree', asy
     assert.equal(report.agentHost.compressedPullBytes, 123);
     assert.equal(verified.length, 10);
     assert.equal(measuredImage, `${registry}/agentweaver-agenthost@${digests['agentweaver-agenthost']}`);
-    const dockerBuild = calls.find(({ name, args }) =>
+    const dockerBuilds = calls.filter(({ name, args }) =>
       name === 'docker' && args[0] === 'buildx' && args[1] === 'build');
-    assert.ok(dockerBuild.args.includes('linux/amd64'));
-    assert.ok(dockerBuild.args.includes(`org.opencontainers.image.revision=${sourceSha}`));
-    assert.ok(dockerBuild.args.includes(`io.agentweaver.source-tree=${sourceTree}`));
+    assert.equal(dockerBuilds.length, 4);
+    for (const dockerBuild of dockerBuilds) {
+      assert.ok(dockerBuild.args.includes('linux/amd64'));
+      assert.ok(dockerBuild.args.includes(`org.opencontainers.image.revision=${sourceSha}`));
+      assert.ok(dockerBuild.args.includes(`io.agentweaver.source-tree=${sourceTree}`));
+    }
+    assert.ok(dockerBuilds.some(({ args }) =>
+      args.some(argument => argument.endsWith(
+        path.join('services', 'orchestrator', 'Agentweaver.Orchestrator', 'Dockerfile')))));
+    const opaDownload = calls.find(({ name, args }) => name === 'curl' && args.includes('--output'));
+    assert.ok(opaDownload.args.includes('https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static'));
     const dotnetPublish = calls.find(({ name, args }) =>
       name === 'dotnet' && args[0] === 'publish' && args.includes('-t:PublishContainer'));
     assert.ok(dotnetPublish.args.includes(`-p:ContainerRegistry=${registry}`));

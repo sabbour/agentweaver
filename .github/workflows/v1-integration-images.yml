@@ -9,9 +9,13 @@ on:
       - Directory.Build.*
       - Directory.Packages.props
       - global.json
+      - NuGet.Config
       - "**/*.csproj"
       - "**/packages.lock.json"
+      - Agentweaver.slnx
       - apps/web/**
+      - eng/acs/**
+      - tests/Agentweaver.Acs.ImageProbe/**
       - packages/**
       - releases/foundation.json
       - services/**
@@ -62,8 +66,9 @@ jobs:
             project: apps/web/host/Agentweaver.Web.Host.csproj
           - id: Agentweaver.Orchestrator
             repository: agentweaver.orchestrator
-            mode: dotnet
-            project: services/orchestrator/Agentweaver.Orchestrator/Agentweaver.Orchestrator.csproj
+            mode: docker
+            context: .
+            dockerfile: services/orchestrator/Agentweaver.Orchestrator/Dockerfile
           - id: Agentweaver.Environment
             repository: agentweaver.environment
             mode: dotnet
@@ -154,8 +159,33 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download and verify pinned OPA
+        if: matrix.id == 'Agentweaver.AgentHost' || matrix.id == 'Agentweaver.Orchestrator'
+        run: |
+          mkdir -p eng/acs
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 \
+            https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static \
+            --output eng/acs/opa_linux_amd64_static
+          echo '00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084  eng/acs/opa_linux_amd64_static' | sha256sum --check -
+          chmod 0755 eng/acs/opa_linux_amd64_static
+
       - name: Build and push AgentHost
         if: matrix.id == 'Agentweaver.AgentHost'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          provenance: false
+          tags: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ steps.source.outputs.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
+            io.agentweaver.source-tree=${{ steps.source.outputs.tree }}
+            org.opencontainers.image.version=${{ steps.source.outputs.version }}
+
+      - name: Build and push Orchestrator
+        if: matrix.id == 'Agentweaver.Orchestrator'
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
