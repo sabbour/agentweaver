@@ -11,29 +11,14 @@ import { guardAzureTarget } from './lib/guardrails.mjs';
 import { buildDeployArgs, cliConfig, cliOptions } from './deploy.mjs';
 
 // Keep these declarations aligned with the AKS redeploy federation module's default services.
-const AKS_ONLY_FEDERATED_CREDENTIALS = [
-  {
+const aksOnlyFederatedCredentials = resourceGroup =>
+  ['foundation-probe', 'identity-broker', 'identity-broker-migration'].map(service => ({
     operation: 'createOrUpdate',
-    managedIdentityName: 'agentweaver-id-foundation-probe',
-    federatedCredentialName: 'foundation-probe-workload-identity',
-    subject: 'system:serviceaccount:agentweaver:foundation-probe',
+    managedIdentityName: `${resourceGroup}-id-${service}`,
+    federatedCredentialName: `${service}-workload-identity`,
+    subject: `system:serviceaccount:agentweaver:${service}`,
     audiences: ['api://AzureADTokenExchange'],
-  },
-  {
-    operation: 'createOrUpdate',
-    managedIdentityName: 'agentweaver-id-identity-broker',
-    federatedCredentialName: 'identity-broker-workload-identity',
-    subject: 'system:serviceaccount:agentweaver:identity-broker',
-    audiences: ['api://AzureADTokenExchange'],
-  },
-  {
-    operation: 'createOrUpdate',
-    managedIdentityName: 'agentweaver-id-identity-broker-migration',
-    federatedCredentialName: 'identity-broker-migration-workload-identity',
-    subject: 'system:serviceaccount:agentweaver:identity-broker-migration',
-    audiences: ['api://AzureADTokenExchange'],
-  },
-];
+  }));
 // Keep this declaration aligned with infra/bicep/modules/aks-kata-pool.bicep.
 const AKS_ONLY_AGENT_POOLS = [
   {
@@ -62,7 +47,7 @@ export function buildWhatIfArgs(options) {
  * Adds nested AKS federation declarations to a successful what-if result.
  * This reports Bicep create-or-update operations without querying existing FIC state.
  */
-function addNestedDeploymentChanges(result, source) {
+function addNestedDeploymentChanges(result, source, resourceGroup) {
   if (source.scope !== 'aks-only' || result.status !== 0) return result;
 
   let whatIf;
@@ -82,7 +67,7 @@ function addNestedDeploymentChanges(result, source) {
         note: 'The top-level what-if omits resources in the nested workload-identity federation ' +
           'and Kata node pool deployments. These declarations are create-or-update operations; ' +
           'existing FIC and node pool state was not queried.',
-        federatedIdentityCredentials: AKS_ONLY_FEDERATED_CREDENTIALS,
+        federatedIdentityCredentials: aksOnlyFederatedCredentials(resourceGroup),
         agentPools: AKS_ONLY_AGENT_POOLS,
       },
     }, null, 2),
@@ -105,7 +90,7 @@ export function plan(config, { execAz = runAz, sourceResolver = resolveSource } 
   }
   const result = execAz(buildWhatIfArgs({ resourceGroup: config.resourceGroup, ...source,
     sourceSha: source.sha, subscription: config.subscriptionId }), { check: false });
-  return addNestedDeploymentChanges(result, source);
+  return addNestedDeploymentChanges(result, source, config.resourceGroup);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

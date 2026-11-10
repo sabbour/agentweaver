@@ -30,6 +30,18 @@ test('offline dry-run never reads account or mutates', async () => {
   assert.equal(result.scope, 'infrastructure-only');
 });
 
+test('P0-only options reject a registered separate target before any Azure call', async () => {
+  for (const option of ['bootstrapFoundationProbeInputs', 'bootstrapFoundationProbePostgres',
+    'alignExistingIdentityBrokerHostname']) {
+    await assert.rejects(
+      deploy({ ...fixture, resourceGroup: 'aweast2np01', execute: true, [option]: true }, {
+        sourceResolver: () => { throw new Error('source read'); },
+        execAz: () => { throw new Error('cloud call'); },
+      }),
+      /accept only the agentweaver target/);
+  }
+});
+
 test('AKS-only deployment reads the cluster without submitting pool or AKS configuration', async () => {
   const az = fakeAzure();
   const calls = [];
@@ -173,7 +185,9 @@ test('runtime and Probe inputs are separately default-off and plans never invoke
       acceptanceRedirectUri: 'http://127.0.0.1:18641/callback',
       brokerImage: 'ghcr.io/sabbour/agentweaver.identity.broker@sha256:' + 'a'.repeat(64),
     };
-    const result = await deploy({ ...fixture, ...runtime }, {
+    // The CLI config has no vault name; the runtime check must use the approved source value.
+    const { keyVaultName: _cliHasNoVault, ...cliFixture } = fixture;
+    const result = await deploy({ ...cliFixture, ...runtime }, {
       sourceResolver: () => source, execAz() { throw new Error('cloud call'); },
       initializeIdentityBrokerRuntime() { throw new Error('dry-run runtime write'); },
       initializeFoundationProbeInputs() { throw new Error('dry-run Probe write'); },

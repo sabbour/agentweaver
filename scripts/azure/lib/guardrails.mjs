@@ -8,20 +8,18 @@
 // caller has passed `--execute` on the CLI explicitly; every entry point
 // defaults to a read-only plan.
 import { validateAppRoutingDnsZoneResourceIds } from './app-routing-dns.mjs';
-
-// Guard every deployment against shared or 0.x resource groups by allowing only the v1 target.
-const DEDICATED_NAME_PATTERN = /^agentweaver$/;
+import { INSTALL_TARGETS, installTarget } from './targets.mjs';
 
 const IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
-/** Rejects a resource-group or target name that is not the explicitly approved dedicated P0 name. */
+/** Rejects a resource-group or target name that is not a registered dedicated v1 target. */
 export function assertDedicatedTarget(name, kind = 'resource group') {
-  if (typeof name !== 'string' || !DEDICATED_NAME_PATTERN.test(name)) {
+  if (!installTarget(name)) {
     throw new Error(
-      `Refusing ${kind} "${name}": must match the dedicated v1 P0 naming convention ` +
-        `${DEDICATED_NAME_PATTERN} and must not be a shared/0.x target.`,
+      `Refusing ${kind} "${name}": it is not a registered dedicated v1 target ` +
+        `(${Object.keys(INSTALL_TARGETS).join(', ')}) and must not be a shared/0.x target.`,
     );
   }
   return name;

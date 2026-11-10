@@ -128,6 +128,10 @@ export async function deploy(config, {
   initializeFoundationProbeInputs = bootstrapFoundationProbeInputs,
 } = {}) {
   if (!config.newFoundation) assertDedicatedTarget(config.resourceGroup);
+  if (config.resourceGroup !== 'agentweaver' && (config.bootstrapFoundationProbeInputs ||
+      config.bootstrapFoundationProbePostgres || config.alignExistingIdentityBrokerHostname)) {
+    throw new Error('Foundation Probe and existing Broker hostname alignment options accept only the agentweaver target.');
+  }
   assertSubscription(config.subscriptionId, config.allowedSubscriptionId);
   assertTenant(config.tenantId, config.allowedTenantId);
   const routingRequested = Boolean(config.bootstrapIdentityRouting || config.identityRoutingOnly);
@@ -139,9 +143,8 @@ export async function deploy(config, {
   )) {
     throw new Error('Identity-routing-only cannot be combined with callback registration or unrelated bootstrap options.');
   }
-  if (config.bootstrapIdentityBrokerRuntime) {
-    assertBrokerRuntimeInputs({ ...config, clusterName: `${config.resourceGroup}-aks` });
-  } else if (config.acceptanceRunId || config.acceptanceRedirectUri || config.brokerImage) {
+  if (!config.bootstrapIdentityBrokerRuntime &&
+      (config.acceptanceRunId || config.acceptanceRedirectUri || config.brokerImage)) {
     throw new Error('Broker runtime inputs require --bootstrap-identity-broker-runtime.');
   }
   if (routingRequested) {
@@ -165,6 +168,11 @@ export async function deploy(config, {
   }
   const source = sourceResolver(config);
   if (config.newFoundation) assertNewFoundation(config, source);
+  if (config.bootstrapIdentityBrokerRuntime) {
+    // The approved parameters own the vault name; the CLI does not accept one.
+    assertBrokerRuntimeInputs({ ...config, clusterName: `${config.resourceGroup}-aks`,
+      keyVaultName: source.keyVaultName });
+  }
   if (source.nodePoolMinCount !== 2 || source.nodePoolMaxCount !== 3) {
     throw new Error('Reviewed deployment source must bind the approved system autoscaler bounds 2-3.');
   }

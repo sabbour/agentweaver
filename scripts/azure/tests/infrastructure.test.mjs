@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parse } from 'yaml';
 import { runAz, run } from '../lib/exec.mjs';
+import { INSTALL_TARGETS } from '../lib/targets.mjs';
 
 test('Broker deploys its internal TLS secret to the production HTTPS listener', () => {
   const deployment = parse(readFileSync('deploy/k8s/base/identity-broker/deployment.yaml', 'utf8'));
@@ -38,7 +39,7 @@ test('limited P1 identity setup grants Events access only to session-material', 
   const template = JSON.parse(compiled.stdout);
   const names = ['projects-config', 'environment', 'knowledge', 'events-and-sessions', 'orchestrator'];
   assert.deepEqual(template.variables.serviceNames, names);
-  assert.deepEqual(template.parameters.namePrefix.allowedValues, ['agentweaver']);
+  assert.deepEqual(template.parameters.namePrefix.allowedValues, Object.keys(INSTALL_TARGETS));
   const identities = template.resources.find(resource =>
     resource.type === 'Microsoft.ManagedIdentity/userAssignedIdentities');
   assert.equal(identities.copy.count, "[length(variables('services'))]");
@@ -95,7 +96,7 @@ test('P0 storage and focused repair define only private session-material access'
   const repair = JSON.parse(runAz([
     'bicep', 'build', '--file', 'infra/bicep/p1-session-material-access.bicep', '--stdout',
   ]).stdout);
-  assert.deepEqual(repair.parameters.namePrefix.allowedValues, ['agentweaver']);
+  assert.deepEqual(repair.parameters.namePrefix.allowedValues, Object.keys(INSTALL_TARGETS));
   assert.equal(repair.resources.length, 2);
   const repairContainerDeployment = repair.resources.find(resource =>
     resource.name === "[format('{0}-session-material-container', parameters('namePrefix'))]");

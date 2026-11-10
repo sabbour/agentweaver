@@ -19,11 +19,12 @@ function targetGuard(overrides = {}, config = {}, calls = []) {
   return { target, calls };
 }
 
-test('dedicated resource-group target accepts only the v1 P0 name', () => {
+test('dedicated resource-group target accepts only registered v1 targets', () => {
   assert.equal(assertDedicatedTarget('agentweaver'), 'agentweaver');
+  assert.equal(assertDedicatedTarget('aweast2np01'), 'aweast2np01');
   for (const name of ['agentweaver-prod', 'agentweaver-integration', 'agentweaver_bad',
-    'agentweaver-legacy', '', undefined, 'shared-rg']) {
-    assert.throws(() => assertDedicatedTarget(name), /dedicated v1 P0 naming convention/);
+    'agentweaver-legacy', 'aweast2np02', 'toString', '', undefined, 'shared-rg']) {
+    assert.throws(() => assertDedicatedTarget(name), /registered dedicated v1 target/);
   }
 });
 
@@ -83,7 +84,7 @@ test('target input mismatches fail before Azure reads', () => {
     [{ allowedSubscriptionId: undefined }, /No allowed subscription/],
     [{ tenantId: 'other' }, /Refusing tenant/],
     [{ allowedTenantId: undefined }, /No allowed tenant/],
-    [{ resourceGroup: 'shared-rg' }, /dedicated v1 P0 naming convention/],
+    [{ resourceGroup: 'shared-rg' }, /registered dedicated v1 target/],
     [{ keyVaultName: undefined }, /Key Vault name must be configured/],
   ]) {
     const calls = [];

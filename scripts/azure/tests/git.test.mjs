@@ -42,7 +42,7 @@ function sourceFixture(overrides = {}) {
   const parameters = JSON.stringify({ parameters: parameterValues });
   const files = { [template]: 'targetScope = \'resourceGroup\'\n', [parameterPath]: parameters };
   if (aksOnly) {
-    files['infra/bicep/parameters/p0-integration.approved.json'] = JSON.stringify({
+    files[overrides.foundationPath ?? 'infra/bicep/parameters/p0-integration.approved.json'] = JSON.stringify({
       parameters: {
         nodePoolMinCount: { value: 2 }, nodePoolMaxCount: { value: 3 },
         namePrefix: { value: 'agentweaver' },
@@ -172,6 +172,27 @@ test('AKS-only source accepts only its reviewed template and parameter file', ()
   }
 });
 
+test('AKS-only source selects the parameter files of the registered target', () => {
+  const target = 'aweast2np01';
+  const selected = {
+    config: { template: 'infra/bicep/aks-redeploy.bicep', resourceGroup: target,
+      parametersFile: 'infra/bicep/parameters/aweast2np01-aks-redeploy.approved.json' },
+    parameterValues: { namePrefix: { value: target } },
+    foundationPath: 'infra/bicep/parameters/aweast2np01.approved.json',
+    foundationValues: { namePrefix: { value: target }, keyVaultName: { value: 'aweast2np01-kv1' } },
+  };
+  const { config, deps } = sourceFixture(selected);
+  const receipt = resolveSource(config, deps);
+  assert.equal(receipt.parametersFile.endsWith('aweast2np01-aks-redeploy.approved.json'), true);
+  assert.equal(receipt.keyVaultName, 'aweast2np01-kv1');
+
+  const crossed = sourceFixture({ ...selected,
+    config: { ...selected.config, parametersFile: 'infra/bicep/parameters/p0-aks-redeploy.approved.json' } });
+  assert.throws(() => resolveSource(crossed.config, crossed.deps), /parameter file of the selected target/);
+  const unlisted = sourceFixture({ ...selected, config: { ...selected.config, resourceGroup: 'awunlisted01' },
+    parameterValues: { namePrefix: { value: 'awunlisted01' } } });
+  assert.throws(() => resolveSource(unlisted.config, unlisted.deps), /parameter file of the selected target/);
+});
 test('AKS-only source rejects App Routing DNS inputs because it does not update the cluster', () => {
   const { config, deps } = sourceFixture({
     config: { template: 'infra/bicep/aks-redeploy.bicep' },
