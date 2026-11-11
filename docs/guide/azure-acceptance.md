@@ -198,14 +198,18 @@ checks. It does not create an Agentweaver project, run, role, or test fixture.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-native-workspace-acceptance.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-native-workspace-acceptance.png'" alt="The native .NET CLI opens an exact Workspace review in the browser. The Broker checks its current cookie and antiforgery token, creates an owner-bound Repo App selection, and returns it only after HTTPS code exchange with an S256 verifier. The CLI then reads refs, a tree and a file through typed Gateway operations with current owner checks. The selection is not part of the callback, OAuth tokens, logs or evidence." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-native-workspace-acceptance.png'" alt="The native .NET CLI opens an exact Workspace review in the browser. The Broker checks its current cookie and antiforgery token, creates an owner-bound Repo App selection, and returns it only after HTTPS code exchange with an S256 verifier. The CLI then reads refs, a tree and a file through typed Gateway operations with current owner checks. The selection is not part of the callback, OAuth tokens, logs or evidence. This check does not exercise child startup or terminal cleanup." />
   </a>
-  <figcaption>This native source check is separate from the Foundation Probe and Azure deployment checks. It does not prove a live browser, deployment, or the full acceptance journey.</figcaption>
+  <figcaption>This native source check is separate from the Foundation Probe and Azure deployment checks. It does not exercise child startup or terminal cleanup, or prove a live browser, deployment, or the full acceptance journey.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-native-workspace-acceptance.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-native-workspace-acceptance.drawio'">Open editable draw.io source</a></p>
 
-Run it only with an approved non-production target, a signed-in owner who can
-read the project, and the exact configured Repo App connection and repository.
+The [child startup and cleanup owner sequence](../deep-dive/testing-strategy.md#separate-canonical-acceptance-from-compatibility-tests)
+is separate from this check.
+
+Run the repository-read check only with an approved non-production target, a
+signed-in owner who can read the project, and the exact configured Repo App
+connection and repository.
 The check performs normal OAuth sign-in when needed. It also creates a
 short-lived Broker selection record for each repository read. It does not
 change or delete GitHub repository data. Do not run it against production.

@@ -55,6 +55,10 @@ internal sealed record RuntimeRunStartContinueWork(
     RuntimeOwnerContext Owner,
     RuntimeActorAuthorization Actor) : RuntimeRunStartWork(Actor);
 
+internal sealed record RuntimeRunStartChildWork(
+    RuntimeOwnerContext Owner,
+    RuntimeActorAuthorization Actor) : RuntimeRunStartWork(Actor);
+
 internal sealed record RuntimeRunStartCleanupWork(
     string ProjectId,
     string RunId,
@@ -101,6 +105,10 @@ internal sealed class RuntimeRunStartBackgroundService(
                             await scope.ServiceProvider.GetRequiredService<RuntimeRunStartContinuation>()
                                 .ContinueAsync(start.Owner, start.Actor, token).ConfigureAwait(false);
                             break;
+                        case RuntimeRunStartChildWork child:
+                            await scope.ServiceProvider.GetRequiredService<RuntimeRunStartContinuation>()
+                                .ContinueChildAsync(child.Owner, child.Actor, token).ConfigureAwait(false);
+                            break;
                         case RuntimeRunStartCleanupWork cleanup:
                             await scope.ServiceProvider.GetRequiredService<RuntimeRunStartCleanupContinuation>()
                                 .ContinueAsync(cleanup, token).ConfigureAwait(false);
@@ -140,10 +148,104 @@ internal sealed class RuntimeRunStartDispatcher(
     RuntimeRunStartContinuation continuation,
     ProjectsRunSelectionClient projects,
     CoordinationOwnerStore sessions,
+    CoordinatorDecisionOwnerStore decisions,
+    CoordinatorRunSelectionContextStore selectionContexts,
+    PostgresMafCheckpointStore checkpoints,
+    EventsAddressedMessageClient events,
     TimeProvider timeProvider,
     OrchestratorOptions options)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    public async Task<RuntimeStartupSummary> EnqueueChildAsync(
+        HttpContext context,
+        SessionIdentity root,
+        MafExecutionDispatchIntent dispatch,
+        long executionFence,
+        CancellationToken cancellationToken)
+    {
+        var intent = await store.ReadIntentForStatusAsync(
+            root.ProjectId, root.RunId, dispatch.ChildSessionId, cancellationToken).ConfigureAwait(false)
+            ?? throw new CoordinationException("runtime_child_start_intent_unavailable", StatusCodes.Status409Conflict);
+        var binding = CoordinationRuntimeRunStartStore.ReadChildBinding(intent);
+        if (binding.ParentRootSessionId != root.SessionId ||
+            binding.ChildSessionId != dispatch.ChildSessionId ||
+            binding.AssociationId != dispatch.AssociationId ||
+            binding.DispatchMessageId != dispatch.MessageId || binding.PromptHash != dispatch.PromptHash ||
+            intent.ExecutionFence != executionFence)
+            throw new CoordinationException("runtime_child_start_binding_conflict", StatusCodes.Status409Conflict);
+        if (intent.CleanupObligation)
+            return intent.Summary;
+
+        var actorIdentity = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        if (binding.ActorIssuer != actorIdentity.Issuer || binding.ActorId != actorIdentity.Subject)
+            throw new CoordinationException("runtime_child_start_owner_stale", StatusCodes.Status409Conflict);
+        var identity = new SessionIdentity(root.ProjectId, root.RunId, dispatch.ChildSessionId);
+        // Dispatch polling must not wait for a startup worker; a busy lease means startup is in progress.
+        await using (var lease = await store.TryAcquireAsync(intent, cancellationToken).ConfigureAwait(false))
+        {
+            if (lease is null)
+                return intent.State == "ready" ? intent.Summary with { State = "pending" } : intent.Summary;
+            intent = await store.ReadAsync(intent, cancellationToken).ConfigureAwait(false) ?? intent;
+            if (intent.CleanupObligation || intent.State == "blocked" && intent.CurrentStep == "retirement")
+                return intent.Summary;
+            var completed = await sessions.ReadCompletedTurnBoundaryAsync(
+                actorIdentity, identity, executionFence, binding.InitialStateVersion, cancellationToken)
+                .ConfigureAwait(false);
+            if (completed is null)
+            {
+                var boundary = await sessions.AdvanceTurnBoundaryAsync(
+                    actorIdentity, identity, executionFence, binding.InitialStateVersion, cancellationToken)
+                    .ConfigureAwait(false);
+                var claim = await events.ClaimNextAsync(context, identity, cancellationToken).ConfigureAwait(false);
+                if (claim is not null)
+                {
+                    if (claim.Owner != CoordinationIdentity.ClaimOwner(actorIdentity) ||
+                        claim.Message.Recipient != identity || claim.Message.RecipientFence != executionFence)
+                        throw new CoordinationException("events_claim_contract_invalid", StatusCodes.Status502BadGateway);
+                    var presented = claim.Message.Status == AddressedMessageStatus.Delivered
+                        ? claim.Message
+                        : await events.PresentAsync(
+                            context, identity, claim.Message.MessageId, claim.Message.ClaimFence, cancellationToken)
+                            .ConfigureAwait(false);
+                    await sessions.RecordPresentationAsync(
+                        actorIdentity, identity, presented, cancellationToken).ConfigureAwait(false);
+                    boundary = boundary with { PresentedMessage = presented };
+                }
+                _ = await sessions.CompleteTurnBoundaryAsync(
+                    actorIdentity, identity, executionFence, binding.InitialStateVersion,
+                    boundary.StateVersion, boundary.PresentedMessage, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        var owner = await CoordinationEndpoints.ReadRuntimeOwnerContextCoreAsync(
+            root.ProjectId, root.RunId, identity.SessionId, context, options, projects, sessions,
+            decisions, selectionContexts, checkpoints, cancellationToken).ConfigureAwait(false);
+        intent = await store.EnsureChildIntentAsync(owner, cancellationToken).ConfigureAwait(false);
+        var actor = await CreateActorAsync(context, timeProvider).ConfigureAwait(false);
+        try
+        {
+            if (intent.State == "ready")
+            {
+                var summary = await continuation.RevalidateReadyAsync(intent, actor, cancellationToken)
+                    .ConfigureAwait(false);
+                actor.Bearer.Invalidate();
+                return summary;
+            }
+            if (intent.CleanupObligation || intent.State == "blocked" && intent.CurrentStep == "retirement")
+            {
+                actor.Bearer.Invalidate();
+                return intent.Summary;
+            }
+            EnqueueOrThrow(queue, new RuntimeRunStartChildWork(owner, actor));
+            return intent.Summary;
+        }
+        catch
+        {
+            actor.Bearer.Invalidate();
+            throw;
+        }
+    }
 
     public async Task<RuntimeStartupSummary?> EnqueueAsync(
         HttpContext context,
@@ -363,14 +465,29 @@ internal sealed class RuntimeRunStartContinuation(
     public async Task ContinueAsync(
         RuntimeOwnerContext owner,
         RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken) =>
+        await ContinueCoreAsync(owner, actor, isChild: false, cancellationToken).ConfigureAwait(false);
+
+    public async Task ContinueChildAsync(
+        RuntimeOwnerContext owner,
+        RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken) =>
+        await ContinueCoreAsync(owner, actor, isChild: true, cancellationToken).ConfigureAwait(false);
+
+    private async Task ContinueCoreAsync(
+        RuntimeOwnerContext owner,
+        RuntimeActorAuthorization actor,
+        bool isChild,
         CancellationToken cancellationToken)
     {
         if (!actor.Bearer.IsUsable())
             return;
-        var intent = await store.EnsureIntentAsync(owner, cancellationToken).ConfigureAwait(false);
+        var intent = await (isChild
+            ? store.EnsureChildIntentAsync(owner, cancellationToken)
+            : store.EnsureIntentAsync(owner, cancellationToken)).ConfigureAwait(false);
         await using var lease = await store.AcquireAsync(intent, cancellationToken).ConfigureAwait(false);
         intent = await store.ReadAsync(intent, cancellationToken).ConfigureAwait(false) ?? intent;
-        if (intent.CleanupObligation)
+        if (intent.CleanupObligation || isChild && intent.CurrentStep == "retirement")
             return;
 
         var callerToken = cancellationToken;
@@ -380,7 +497,7 @@ internal sealed class RuntimeRunStartContinuation(
         try
         {
             RequireUsable(actor);
-            if (intent.CurrentStep == "retirement")
+            if (!isChild && intent.CurrentStep == "retirement")
             {
                 var replacement = await RetireFailedBootstrapAsync(
                     intent, owner, actor, cancellationToken).ConfigureAwait(false);
@@ -399,9 +516,9 @@ internal sealed class RuntimeRunStartContinuation(
             var placement = await RuntimeOwnerHttpTransport.SendRuntimeRunStartAsync<RuntimeRunStartPlacementReceipt>(
                 clients.CreateClient("runtime-run-start-environment"),
                 options.EnvironmentOwnerAddress,
-                "/internal/runtime/run-start/placement",
+                isChild ? "/internal/runtime/run-start/child-placement" : "/internal/runtime/run-start/placement",
                 actor,
-                new RuntimeRunStartPlacementRequest(1, owner, null, intent.BootstrapOperationId),
+                new RuntimeRunStartPlacementRequest(isChild ? 2 : 1, owner, null, intent.BootstrapOperationId),
                 cancellationToken).ConfigureAwait(false);
             placement.Validate();
             if (placement.EnvironmentId != RuntimeRunStartKeys.EnvironmentId(owner) ||
@@ -415,8 +532,11 @@ internal sealed class RuntimeRunStartContinuation(
                 cancellationToken, ("placement", placement)).ConfigureAwait(false);
 
             RequireUsable(actor);
-            var registration = await registrations.RegisterAsync(
-                actor, owner, placement.EnvironmentId, placement.SourceProfileId, cancellationToken)
+            var registration = await (isChild
+                ? registrations.RegisterChildStartAsync(
+                    actor, owner, placement.EnvironmentId, placement.SourceProfileId, cancellationToken)
+                : registrations.RegisterAsync(
+                    actor, owner, placement.EnvironmentId, placement.SourceProfileId, cancellationToken))
                 .ConfigureAwait(false);
             RequireRegistration(owner, placement, registration);
             intent = await SaveAsync(
@@ -474,16 +594,10 @@ internal sealed class RuntimeRunStartContinuation(
                     placement.EnvironmentId, registration.Binding.ProfileId, cancellationToken)
                     .ConfigureAwait(false);
                 RequireCurrentReadiness(placement, registration, activated, readiness);
-                var receipt = new
-                {
-                    placement = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(placement, JsonOptions)),
-                    registration = RegistrationReceipt(registration),
-                    bootstrap = BootstrapReceipt(bootstrap),
-                    activation = activated,
-                    readiness
-                };
+                var receipt = ReadReceiptLinks(intent);
+                receipt["readiness"] = JsonSerializer.SerializeToElement(readiness, JsonOptions);
                 _ = await store.CommitReadyAsync(
-                    intent, owner, intent.RowVersion, receipt, cancellationToken).ConfigureAwait(false);
+                    intent, owner, intent.RowVersion, receipt, cancellationToken, isChild).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
@@ -496,7 +610,8 @@ internal sealed class RuntimeRunStartContinuation(
                     current.RuntimeInstanceId, ReadReceiptLinks(current), CancellationToken.None)
                     .ConfigureAwait(false);
         }
-        catch (RuntimeAuthorizationException exception) when (exception.Code == "runtime_delivery_failed")
+        catch (RuntimeAuthorizationException exception) when (
+            exception.Code == "runtime_delivery_failed" && !isChild)
         {
             var current = await store.ReadAsync(intent, CancellationToken.None).ConfigureAwait(false) ?? intent;
             if (!current.CleanupObligation && current.State != "ready")
@@ -513,6 +628,24 @@ internal sealed class RuntimeRunStartContinuation(
                     CancellationToken.None).ConfigureAwait(false);
                 _ = await RetireFailedBootstrapAsync(current, owner, actor, callerToken).ConfigureAwait(false);
             }
+        }
+        catch (RuntimeAuthorizationException exception) when (
+            exception.Code == "runtime_delivery_failed" && isChild)
+        {
+            // Children have no retirement contract. The used bootstrap operation cannot be retried, so the
+            // intent keeps its placement and registration links until terminal cleanup releases them.
+            var current = await store.ReadAsync(intent, CancellationToken.None).ConfigureAwait(false) ?? intent;
+            if (!current.CleanupObligation && current.State != "ready")
+                _ = await store.UpdateAsync(
+                    current,
+                    current.RowVersion,
+                    "blocked",
+                    "retirement",
+                    exception.Code,
+                    current.EnvironmentId,
+                    current.RuntimeInstanceId,
+                    ReadReceiptLinks(current),
+                    CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -962,6 +1095,12 @@ internal sealed class RuntimeRunStartContinuation(
         receipt.ValidateFor(request);
         if (receipt.State != "released")
             return null;
+        // Revoke before the attempt is replaced, so the retired registration never stays active unowned.
+        var revoked = await registrations.RevokeAfterPlacementReleaseAsync(registration, cancellationToken)
+            .ConfigureAwait(false);
+        if (revoked.State != RuntimeRegistrationState.Revoked ||
+            revoked.RuntimeInstanceId != registration.RuntimeInstanceId)
+            throw new RuntimeAuthorizationException("runtime_start_retirement_registration_invalid");
         return await store.ReplaceFailedBootstrapAttemptAsync(
             intent, intent.RowVersion, receipt, cancellationToken).ConfigureAwait(false);
     }
@@ -1057,7 +1196,9 @@ internal sealed class RuntimeRunStartContinuation(
         CancellationToken cancellationToken,
         params (string Key, object Value)[] receipts)
     {
-        _ = await store.EnsureIntentAsync(owner, cancellationToken).ConfigureAwait(false);
+        _ = await (owner.AgentId == RuntimeActionContract.CoordinatorRootStepId
+            ? store.EnsureIntentAsync(owner, cancellationToken)
+            : store.EnsureChildIntentAsync(owner, cancellationToken)).ConfigureAwait(false);
         var links = ReadReceiptLinks(intent);
         foreach (var (key, value) in receipts)
             links[key] = JsonSerializer.SerializeToElement(value, JsonOptions);
@@ -1130,7 +1271,22 @@ internal sealed class RuntimeRunStartContinuation(
             binding.ExecutionFence,
             0,
             1,
-            1);
+            1)
+        {
+            WorkflowStepId = binding.WorkflowStepId,
+            ModelCredentialReference = binding.ModelCredentialReference,
+            ModelSourceMode = binding.ModelSourceMode,
+            ModelBindingPin = binding.ModelBindingPin,
+            ModelConnectionId = binding.ModelConnectionId,
+            ModelConnectionScope = binding.ModelConnectionScope,
+            ReasoningEffort = binding.ReasoningEffort,
+            MaxModelTurns = binding.MaxModelTurns,
+            MaxToolCalls = binding.MaxToolCalls,
+            MaxPromptTokens = binding.MaxPromptTokens,
+            MaxRevisionAttempts = binding.MaxRevisionAttempts,
+            CopilotSoftCreditLimit = binding.CopilotSoftCreditLimit,
+            CopilotHardCreditLimit = binding.CopilotHardCreditLimit
+        };
 
     private static void RequireRegistration(
         RuntimeOwnerContext owner,
@@ -1146,7 +1302,20 @@ internal sealed class RuntimeRunStartContinuation(
             binding.ActorIssuer != owner.ActorIssuer || binding.ActorId != owner.ActorId ||
             binding.TenantId != owner.TenantId || binding.ProjectId != owner.ProjectId ||
             binding.RunId != owner.RunId || binding.SessionId != owner.SessionId ||
-            binding.AgentId != RuntimeActionContract.CoordinatorRootStepId ||
+            binding.AgentId != owner.AgentId || binding.TurnId != owner.TurnId ||
+            binding.WorkflowStepId != owner.WorkflowStepId ||
+            binding.ModelSelectionReference != owner.ModelSelectionReference ||
+            binding.ModelCredentialReference != owner.ModelCredentialReference ||
+            binding.ModelSourceMode != owner.ModelSourceMode ||
+            binding.ModelBindingPin != owner.ModelBindingPin ||
+            binding.ModelConnectionId != owner.ModelConnectionId ||
+            binding.ModelConnectionScope != owner.ModelConnectionScope ||
+            binding.ReasoningEffort != owner.ReasoningEffort ||
+            binding.MaxModelTurns != owner.MaxModelTurns || binding.MaxToolCalls != owner.MaxToolCalls ||
+            binding.MaxPromptTokens != owner.MaxPromptTokens ||
+            binding.MaxRevisionAttempts != owner.MaxRevisionAttempts ||
+            binding.CopilotSoftCreditLimit != owner.CopilotSoftCreditLimit ||
+            binding.CopilotHardCreditLimit != owner.CopilotHardCreditLimit ||
             !IsResolvedProfileId(placement.SourceProfileId, binding.ProfileId) ||
             binding.AcceptedSelectionHash != owner.AcceptedSelectionHash ||
             binding.ExecutionFence != owner.ExecutionFence ||
@@ -1310,17 +1479,63 @@ internal sealed class RuntimeRunStartCleanupContinuation(
     {
         if (!work.Actor.Bearer.IsUsable())
             return;
+        var intents = await store.FindCleanupIntentsAsync(
+            work.TenantId, work.ProjectId, work.RunId, cancellationToken).ConfigureAwait(false);
+        if (intents.Count == 0)
+            return;
         if (await workflowGenerationJobs.HasUnresolvedNativeWorkAsync(
                 work.ProjectId, work.RunId, cancellationToken).ConfigureAwait(false))
         {
-            // shortcut: lost responses or verifier exits block cleanup; add authorized receipt recovery after cancellation.
-            return;
+            var proofIntent = intents.FirstOrDefault(intent => !IsChild(intent)) ?? intents[0];
+            await workflowGenerationJobs.ReconcileTerminalQuiescenceAsync(
+                work.ProjectId, work.RunId, async token =>
+                {
+                    var selection = await projects.ReadSelectionForCancelAsync(
+                        work.Actor, work.Caller, work.ProjectId, work.RunId, token).ConfigureAwait(false);
+                    CoordinationOwnerStore.RequireProjectRunCancellationAuthority(work.Caller, selection);
+                    if (selection.Authorization.TenantId != work.TenantId || !work.Actor.Bearer.IsUsable())
+                        throw new CoordinationException("run_cancel_permission_denied", StatusCodes.Status403Forbidden);
+                    var contractVersion = await store.IsTerminalCleanupGuardInstalledAsync(token)
+                        .ConfigureAwait(false) ? 2 : 1;
+                    _ = await store.ReadCleanupProjectionAsync(
+                        work.ProjectId, work.RunId, proofIntent.RootSessionId, selection, token,
+                        contractVersion, requireQuiescence: false).ConfigureAwait(false);
+                }, cancellationToken).ConfigureAwait(false);
+            if (await workflowGenerationJobs.HasUnresolvedNativeWorkAsync(
+                    work.ProjectId, work.RunId, cancellationToken).ConfigureAwait(false))
+                return;
         }
-        var intent = await store.FindCleanupIntentAsync(
-            work.TenantId, work.ProjectId, work.RunId, cancellationToken).ConfigureAwait(false);
-        if (intent is null || intent.State == "cleanup_complete")
-            return;
+        Exception? firstFailure = null;
+        foreach (var intent in intents.OrderByDescending(IsChild))
+        {
+            if (intent.State == "cleanup_complete")
+                continue;
+            try
+            {
+                await ContinueIntentAsync(work, intent, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception failure) when (failure is not OperationCanceledException)
+            {
+                firstFailure ??= failure;
+            }
+        }
+        if (firstFailure is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(firstFailure).Throw();
+    }
 
+    private static bool IsChild(RuntimeRunStartIntent intent)
+    {
+        using var links = JsonDocument.Parse(intent.ReceiptLinks);
+        return links.RootElement.TryGetProperty("childStart", out _);
+    }
+
+    private async Task ContinueIntentAsync(
+        RuntimeRunStartCleanupWork work,
+        RuntimeRunStartIntent intent,
+        CancellationToken cancellationToken)
+    {
+        if (!work.Actor.Bearer.IsUsable())
+            return;
         await using var lease = await store.AcquireAsync(intent, cancellationToken).ConfigureAwait(false);
         intent = await store.ReadAsync(intent, cancellationToken).ConfigureAwait(false) ?? intent;
         if (!intent.CleanupObligation || intent.State == "cleanup_complete" || !work.Actor.Bearer.IsUsable())
@@ -1331,21 +1546,36 @@ internal sealed class RuntimeRunStartCleanupContinuation(
         CoordinationOwnerStore.RequireProjectRunCancellationAuthority(work.Caller, selection);
         if (selection.Authorization.TenantId != work.TenantId)
             throw new CoordinationException("run_cancel_permission_denied", StatusCodes.Status403Forbidden);
+        var contractVersion = await store.IsTerminalCleanupGuardInstalledAsync(cancellationToken)
+            .ConfigureAwait(false) ? 2 : 1;
         var projection = await store.ReadCleanupProjectionAsync(
-            work.ProjectId, work.RunId, intent.RootSessionId, selection, cancellationToken)
+            work.ProjectId, work.RunId, intent.RootSessionId, selection, cancellationToken, contractVersion)
             .ConfigureAwait(false);
         if (projection.CleanupDisposition == "cleanup_complete" || !work.Actor.Bearer.IsUsable())
             return;
 
+        async Task RequireCurrentAsync(CancellationToken token)
+        {
+            var refreshed = await projects.ReadSelectionForCancelAsync(
+                work.Actor, work.Caller, work.ProjectId, work.RunId, token).ConfigureAwait(false);
+            CoordinationOwnerStore.RequireProjectRunCancellationAuthority(work.Caller, refreshed);
+            if (refreshed.Authorization.TenantId != work.TenantId || !work.Actor.Bearer.IsUsable())
+                throw new CoordinationException("run_cancel_permission_denied", StatusCodes.Status403Forbidden);
+            var latest = await store.ReadCleanupProjectionAsync(
+                work.ProjectId, work.RunId, intent.RootSessionId, refreshed, token, contractVersion).ConfigureAwait(false);
+            projection.ValidateFor(latest);
+        }
+
         var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeRunStartCleanupReceipt>(
             clients.CreateClient("runtime-run-start-environment"),
             options.EnvironmentOwnerAddress,
-            "/internal/runtime/run-start/placement",
+            contractVersion == 2 ? "/internal/runtime/run-start/terminal-cleanup" :
+                "/internal/runtime/run-start/placement",
             work.Actor,
-            new RuntimeRunStartPlacementRequest(1, null, projection),
+            new RuntimeRunStartPlacementRequest(contractVersion, null, projection),
             cancellationToken).ConfigureAwait(false);
         receipt.Validate();
-        if (receipt.IntentId != intent.IntentId)
+        if (receipt.ContractVersion != projection.ContractVersion || receipt.IntentId != intent.IntentId)
             throw new RuntimeAuthorizationException("runtime_start_cleanup_receipt_invalid");
         if (projection.ReceiptLinks.TryGetProperty("placement", out var savedPlacement))
         {
@@ -1355,7 +1585,9 @@ internal sealed class RuntimeRunStartCleanupContinuation(
                 receipt.SandboxOperationId != placement.SandboxOperationId ||
                 receipt.ResourceGeneration != placement.SandboxResource.Generation ||
                 receipt.ProviderFencingGeneration != placement.ProviderFencingGeneration ||
-                receipt.SandboxIdempotencyKey != placement.SandboxIdempotencyKey)
+                receipt.SandboxIdempotencyKey != placement.SandboxIdempotencyKey ||
+                receipt.ContractVersion == 2 && receipt.CleanupDisposition == "cleanup_complete" &&
+                    receipt.SandboxResource != placement.SandboxResource)
                 throw new RuntimeAuthorizationException("runtime_start_cleanup_receipt_invalid");
         }
         else if (receipt.LeaseState != "absent" &&
@@ -1366,27 +1598,99 @@ internal sealed class RuntimeRunStartCleanupContinuation(
             throw new RuntimeAuthorizationException("runtime_start_cleanup_receipt_invalid");
         if (!work.Actor.Bearer.IsUsable())
             return;
+        await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
         if (receipt.CleanupDisposition == "cleanup_complete")
         {
             await RevokeOwnedRegistrationsAsync(
-                intent, projection, cancellationToken).ConfigureAwait(false);
+                intent, projection, receipt, RequireCurrentAsync, cancellationToken).ConfigureAwait(false);
+            await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
             _ = await store.MarkCleanupCompleteAsync(
-                intent, intent.RowVersion, receipt, cancellationToken).ConfigureAwait(false);
+                intent, intent.RowVersion, receipt, projection, cancellationToken).ConfigureAwait(false);
         }
         else
             _ = await store.RecordCleanupPendingAsync(
-                intent, intent.RowVersion, receipt, cancellationToken).ConfigureAwait(false);
+                intent, intent.RowVersion, receipt, projection, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RevokeOwnedRegistrationsAsync(
         RuntimeRunStartIntent intent,
         RuntimeRunStartCleanupProjection projection,
+        RuntimeRunStartCleanupReceipt receipt,
+        Func<CancellationToken, Task> requireCurrent,
         CancellationToken cancellationToken)
     {
         var owned = new Dictionary<Guid, RuntimeRegistration>();
-        if (projection.ReceiptLinks.TryGetProperty("registration", out var currentRegistrationElement) &&
-            currentRegistrationElement.Deserialize<RuntimeRegistration>(JsonOptions) is { } current)
+        RuntimeRunStartPlacementReceipt? savedPlacement = null;
+        if (projection.ReceiptLinks.TryGetProperty("placement", out var placementElement))
+            savedPlacement = placementElement.Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions)
+                ?? throw new RuntimeAuthorizationException("runtime_start_cleanup_registration_invalid");
+        if (projection.ReceiptLinks.TryGetProperty("registration", out var currentRegistrationElement))
+        {
+            var current = currentRegistrationElement.Deserialize<RuntimeRegistration>(JsonOptions)
+                ?? throw new RuntimeAuthorizationException("runtime_start_cleanup_registration_invalid");
             owned[current.RuntimeInstanceId] = current;
+        }
+        var resource = savedPlacement?.SandboxResource ?? receipt.SandboxResource;
+        if (owned.Count != 0 && resource is null)
+            throw new RuntimeAuthorizationException("runtime_start_cleanup_registration_invalid");
+        if (savedPlacement is not null)
+            savedPlacement.Validate();
+        var candidates = await registrations.ReadCleanupCandidatesAsync(
+            intent.ProjectId, intent.RunId, intent.RootSessionId, cancellationToken).ConfigureAwait(false);
+        var retired = await ReadActiveRetiredRegistrationAsync(intent, projection, cancellationToken)
+            .ConfigureAwait(false);
+        if (resource is null && candidates.Any(candidate => candidate.State == RuntimeRegistrationState.Active &&
+                candidate.RuntimeInstanceId != retired?.RuntimeInstanceId))
+            throw new RuntimeAuthorizationException("runtime_start_cleanup_registration_invalid");
+        if (resource is not null)
+        {
+            var matches = new List<RuntimeRegistration>();
+            var environmentId = RuntimeRunStartKeys.EnvironmentId(
+                intent.TenantId, intent.ProjectId, intent.RunId,
+                intent.RootSessionId, intent.AcceptedSelectionHash);
+            foreach (var candidate in candidates)
+            {
+                var binding = candidate.Binding;
+                if (binding.EnvironmentId != environmentId ||
+                    binding.PlacementUid != resource.ResourceId ||
+                    binding.PlacementGeneration != resource.Generation)
+                    continue;
+                if (binding.TenantId != intent.TenantId || binding.ProjectId != intent.ProjectId ||
+                    binding.RunId != intent.RunId || binding.SessionId != intent.RootSessionId ||
+                    binding.AcceptedSelectionHash != intent.AcceptedSelectionHash ||
+                    binding.ExecutionFence != intent.ExecutionFence ||
+                    binding.PlacementProviderId != resource.ProviderId ||
+                    binding.EnvironmentProviderFencingGeneration != receipt.ProviderFencingGeneration ||
+                    binding.EnvironmentCurrentFencingGeneration != receipt.ProviderFencingGeneration ||
+                    savedPlacement is not null &&
+                        (binding.EnvironmentLifecycleGeneration != savedPlacement.LifecycleGeneration ||
+                         binding.EnvironmentLeaseRevision != savedPlacement.LeaseRevision ||
+                         binding.EnvironmentCurrentFencingGeneration != savedPlacement.CurrentFencingGeneration ||
+                         binding.EnvironmentProviderFencingGeneration != savedPlacement.ProviderFencingGeneration))
+                    throw new RuntimeAuthorizationException("runtime_start_cleanup_registration_invalid");
+                if (projection.ReceiptLinks.TryGetProperty("childStart", out _))
+                {
+                    var child = CoordinationRuntimeRunStartStore.ReadChildBinding(intent);
+                    if (binding.ActorIssuer != child.ActorIssuer || binding.ActorId != child.ActorId ||
+                        binding.AgentId != child.AgentId || binding.WorkflowStepId != child.WorkflowStepId ||
+                        binding.ModelSelectionReference != child.ModelSelectionReference ||
+                        binding.ContextRevision != child.ContextRevision)
+                        throw new RuntimeAuthorizationException("runtime_start_cleanup_registration_invalid");
+                }
+                else if (binding.AgentId != RuntimeActionContract.CoordinatorRootStepId ||
+                         binding.WorkflowStepId is not null)
+                    throw new RuntimeAuthorizationException("runtime_start_cleanup_registration_invalid");
+                await store.RequireRegistrationCleanupOwnerAsync(intent, candidate, cancellationToken)
+                    .ConfigureAwait(false);
+                matches.Add(candidate);
+            }
+            if (matches.Count > 1)
+                throw new RuntimeAuthorizationException("runtime_start_cleanup_registration_ambiguous");
+            if (matches.Count == 1 && matches[0].State == RuntimeRegistrationState.Active)
+                owned[matches[0].RuntimeInstanceId] = matches[0];
+            if (owned.Count != 0 && (matches.Count != 1 || !owned.ContainsKey(matches[0].RuntimeInstanceId)))
+                throw new RuntimeAuthorizationException("runtime_start_cleanup_registration_invalid");
+        }
         if (projection.ReceiptLinks.TryGetProperty("replacementOperationId", out var operationElement) &&
             operationElement.TryGetGuid(out var operationId) && operationId != Guid.Empty)
         {
@@ -1449,15 +1753,48 @@ internal sealed class RuntimeRunStartCleanupContinuation(
             }
         }
 
+        if (retired is not null)
+            owned[retired.RuntimeInstanceId] = retired;
+        if (candidates.Any(candidate => candidate.State == RuntimeRegistrationState.Active &&
+                !owned.ContainsKey(candidate.RuntimeInstanceId)))
+            throw new RuntimeAuthorizationException("runtime_start_cleanup_registration_ambiguous");
         foreach (var registration in owned.Values)
         {
             if (registration.State != RuntimeRegistrationState.Active)
                 throw new RuntimeAuthorizationException("runtime_replacement_cleanup_registration_invalid");
+            await requireCurrent(cancellationToken).ConfigureAwait(false);
             var revoked = await registrations.RevokeAfterPlacementReleaseAsync(
                 registration, cancellationToken).ConfigureAwait(false);
             if (revoked.State != RuntimeRegistrationState.Revoked ||
                 revoked.RuntimeInstanceId != registration.RuntimeInstanceId)
                 throw new RuntimeAuthorizationException("runtime_replacement_cleanup_registration_invalid");
         }
+    }
+
+    /// <summary>
+    /// Returns the registration of a released bootstrap attempt that older code replaced without revoking.
+    /// </summary>
+    private async Task<RuntimeRegistration?> ReadActiveRetiredRegistrationAsync(
+        RuntimeRunStartIntent intent,
+        RuntimeRunStartCleanupProjection projection,
+        CancellationToken cancellationToken)
+    {
+        if (!projection.ReceiptLinks.TryGetProperty("retiredBootstrap", out var retiredElement))
+            return null;
+        if (!retiredElement.TryGetProperty("registration", out var registrationElement) ||
+            registrationElement.Deserialize<RuntimeRegistration>(JsonOptions) is not { } saved ||
+            !retiredElement.TryGetProperty("retirement", out var retirementElement) ||
+            retirementElement.Deserialize<RuntimeRunStartRetirementReceipt>(JsonOptions)?.State != "released")
+            throw new RuntimeAuthorizationException("runtime_start_cleanup_registration_invalid");
+        var binding = saved.Binding;
+        if (binding.TenantId != intent.TenantId || binding.ProjectId != intent.ProjectId ||
+            binding.RunId != intent.RunId || binding.SessionId != intent.RootSessionId ||
+            binding.AcceptedSelectionHash != intent.AcceptedSelectionHash ||
+            binding.ExecutionFence != intent.ExecutionFence)
+            throw new RuntimeAuthorizationException("runtime_start_cleanup_registration_invalid");
+        var current = await registrations.ReadAsync(saved.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
+        return current is { State: RuntimeRegistrationState.Active } && current.Revision == saved.Revision
+            ? current
+            : null;
     }
 }

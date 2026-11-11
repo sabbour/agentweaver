@@ -151,9 +151,9 @@ and readiness evidence. The response and session status report `pending`,
 The startup intent stores operation IDs, owner fences, and non-credential
 receipts. It does not store bearer credentials. A retry needs fresh
 authenticated run authority. Replaying a start request can queue recovery
-without sending the first message again. Cancelling a run records a cleanup
-obligation for the saved placement; cleanup releases only that placement and
-does not delete retained workspace data or start a replacement Host.
+without sending the first message again. Terminal cleanup releases only owned
+placements; it does not delete retained workspace data or start a replacement
+Host.
 First-start provisioning rechecks current authority before it completes the
 Sandbox lease. Resume provisioning records a provider effect that already
 returned before the final authority check. Neither path reports readiness
@@ -163,6 +163,66 @@ The continuation and its durable state live in
 `RuntimeRunStartOrchestration.cs` and `CoordinationRuntimeRunStartStore.cs`.
 Environment owns first placement in `EnvironmentRuntimeRunStartManager.cs`.
 The real activation route is in `EnvironmentRuntimeBootstrapEndpoints.cs`.
+
+### Start child runtimes
+
+Dispatch saves a child-start intent in the same transaction as the committed
+spawn. The intent binds the child to its parent, work-plan item, selected agent
+and model, accepted selection, execution fence, and current owner. The intent
+and its stable operation IDs remain available if a reply is lost. No bearer
+credential is saved. Each intent is also a durable cleanup obligation before
+placement starts. Completion or an authorized terminal cleanup request moves
+the intent to pending cleanup, even when startup stopped before a reply.
+
+After commit, dispatch queues a child-specific continuation. A later authorized
+dispatch can resume the same intent; the continuation does not depend on an
+outbox consumer. Environment provisions the child's placement. Orchestrator
+creates the matching registration, obtains Broker bootstrap, and asks
+Environment to activate the Host. Each stage records its intent and receipt
+before the next stage. Current owner, selection, registration, image, model,
+and placement checks must pass before dispatch sends a task message.
+
+`childRuntimeStartup` reports the bounded startup state for each association.
+`pending` or `blocked` does not mean that a model turn was sent. A missing or
+stale readiness receipt stops the send. Retrying requires fresh run authority
+and reuses the saved operation IDs; an expired queued credential cannot
+authorize another resource or turn.
+
+### Clean terminal runs
+
+Cleanup applies to `completed`, `failed`, `indeterminate`, and `cancelled`
+runs without changing their terminal outcome. Completion records the startup
+obligations. An authorized cancellation request can also request or resume
+cleanup for an already-terminal run. You can supply `expectedTerminalState`
+and `expectedTerminalFence` together to require an exact match with the current
+run. Cancellation, including an exact retry, requires a fence later than the
+startup fence.
+
+The version 2 cleanup projection binds the current terminal state and fence to
+one startup intent, selection, and resource receipts. Environment rechecks
+that projection and the exact Sandbox resource and provider generation before
+retirement. If a placement reply was lost, it recovers the lease by the saved
+operation key and checks any saved registration against that resource.
+Orchestrator rechecks authority and resource identity before it revokes a
+registration or commits cleanup. An unknown or conflicting resource remains
+pending.
+
+Cleanup processes children before the root. Untracked children, unmatched
+active registrations, unresolved native work, or an unfinished child keep the
+aggregate pending. `runtimeCleanup` on run and session status reports
+`state`, `total`, `pending`, and `complete`; an unknown resource or unresolved
+work contributes a pending aggregate entry, not an exact resource count.
+Workspace data remains retained. Projects setup cleanup already retains a
+project with any run selection, so it does not archive a project while its
+owned resources are unresolved.
+
+Terminal cleanup version 2 requires Orchestrator migration 047 and its enabled
+recovery guard. The guard prevents recovery from advancing a failed or
+indeterminate run after cleanup has been admitted. Until the guard is active,
+version 2 cleanup fails closed; the legacy version 1 root-cancellation path
+still requires the advanced cancellation fence. See the
+[cleanup contract](../reference/contracts.md#terminal-runtime-cleanup) for
+the coordinated rollout.
 
 ### Replace a coordinator root Host
 

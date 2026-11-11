@@ -34,26 +34,7 @@ public sealed class RuntimeRunStartOrchestrationTests
             EnvironmentProviderFencingGeneration = source.Binding.EnvironmentCurrentFencingGeneration
         };
         var registration = source with { Binding = binding };
-        var owner = new RuntimeOwnerContext(
-            1,
-            binding.ActorIssuer,
-            binding.ActorId,
-            binding.TenantId,
-            binding.ProjectId,
-            binding.RunId,
-            binding.SessionId,
-            binding.AgentId,
-            binding.ModelSelectionReference!,
-            binding.TurnId,
-            binding.ProjectRevision,
-            binding.ProjectConfigurationRevision,
-            binding.PlatformRuntimeRevision,
-            binding.ContextRevision,
-            binding.AcceptedSelectionHash,
-            binding.ExecutionFence,
-            0,
-            1,
-            1);
+        var owner = RuntimeRunStartContinuation.CreateOwnerContext(binding);
         var bootstrapOperationId = Guid.NewGuid();
         var placement = new RuntimeRunStartPlacementReceipt(
             1,
@@ -413,28 +394,15 @@ public sealed class RuntimeRunStartOrchestrationTests
             EnvironmentLeaseRevision = 1,
             PlacementProviderId = "sandbox"
         };
-        var owner = new RuntimeOwnerContext(
-            1,
-            binding.ActorIssuer,
-            binding.ActorId,
-            binding.TenantId,
-            binding.ProjectId,
-            binding.RunId,
-            binding.SessionId,
-            binding.AgentId,
-            binding.ModelSelectionReference!,
-            binding.TurnId,
-            binding.ProjectRevision,
-            binding.ProjectConfigurationRevision,
-            binding.PlatformRuntimeRevision,
-            binding.ContextRevision,
-            binding.AcceptedSelectionHash,
-            binding.ExecutionFence,
-            0,
-            1,
-            1);
+        var owner = RuntimeRunStartContinuation.CreateOwnerContext(binding);
         var environmentId = RuntimeRunStartKeys.EnvironmentId(owner);
-        var registration = source with { Binding = binding with { EnvironmentId = environmentId } };
+        var connectionString = await _postgres.CreateDatabaseAsync();
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        const string schema = "runtime_run_start_test";
+        await CoordinationOwnerMigrator.MigrateAsync(dataSource, schema);
+        var registrationStore = new RuntimeRegistrationStore(dataSource, schema, TimeProvider.System);
+        var registration = await registrationStore.RegisterAsync(
+            binding with { EnvironmentId = environmentId }, DateTimeOffset.UtcNow.AddMinutes(10), default);
         var bootstrapOperationId = Guid.NewGuid();
         var placement = new RuntimeRunStartPlacementReceipt(
             1,
@@ -472,10 +440,6 @@ public sealed class RuntimeRunStartOrchestrationTests
             JsonSerializer.Serialize(new { placement, registration }, JsonOptions),
             false,
             1);
-        var connectionString = await _postgres.CreateDatabaseAsync();
-        await using var dataSource = NpgsqlDataSource.Create(connectionString);
-        const string schema = "runtime_run_start_test";
-        await CoordinationOwnerMigrator.MigrateAsync(dataSource, schema);
         await using (var connection = await dataSource.OpenConnectionAsync())
         {
             await using var run = new NpgsqlCommand($"""
@@ -563,7 +527,8 @@ public sealed class RuntimeRunStartOrchestrationTests
         using var ownerClients = new RuntimeRunStartRecoveryClientFactory();
         var continuation = new RuntimeRunStartContinuation(
             store,
-            null!,
+            new RuntimeRegistrationOwner(
+                null!, null!, null!, null!, null!, null!, registrationStore, null!, TimeProvider.System),
             null!,
             new RuntimeRunStartOptions(new Uri("https://environment.test/"), new Uri("https://broker.test/")),
             ownerClients,
@@ -594,6 +559,9 @@ public sealed class RuntimeRunStartOrchestrationTests
             Assert.Equal(registration.Revision, savedRetirement.RegistrationRevision);
             var firstPlacementAttempt = Assert.Single(ownerClients.PlacementRequests);
             Assert.Equal(firstRecoveryState.BootstrapOperationId, firstPlacementAttempt.BootstrapOperationId);
+            // The released attempt's registration is revoked before the attempt is replaced.
+            Assert.Equal(RuntimeRegistrationState.Revoked,
+                (await registrationStore.ReadAsync(registration.RuntimeInstanceId, default))!.State);
 
             await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 continuation.ContinueAsync(owner, actor, CancellationToken.None));
@@ -629,6 +597,109 @@ public sealed class RuntimeRunStartOrchestrationTests
         Assert.Equal(registration.RuntimeInstanceId,
             retired.GetProperty("registration").GetProperty("runtimeInstanceId").GetGuid());
         Assert.Equal("released", retired.GetProperty("retirement").GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task ChildBlockedAfterBootstrapDeliveryFailureKeepsLinksAndIsNotRetried()
+    {
+        const string issuer = "https://identity.example/";
+        const string actorId = "child-owner";
+        const string tenant = "tenant-1";
+        const string project = "project-1";
+        const string run = "run-1";
+        const string root = "root";
+        const string child = "child-1";
+        var selectionHash = new string('a', 64);
+        var connectionString = await _postgres.CreateDatabaseAsync();
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        const string schema = "runtime_child_retirement_test";
+        await CoordinationOwnerMigrator.MigrateAsync(dataSource, schema);
+        var binding = new RuntimeChildStartBinding(
+            root, child, "plan-1", "association-1", null, "step-1", "worker", "model-ref", issuer, actorId,
+            "context-1", 1, 2, Guid.NewGuid(), Guid.NewGuid(), new string('b', 64));
+        var links = JsonSerializer.Serialize(new
+        {
+            childStart = binding,
+            placement = new { marker = "placement" },
+            registration = new { marker = "registration" }
+        }, JsonOptions);
+        await using (var connection = await dataSource.OpenConnectionAsync())
+        await using (var seed = new NpgsqlCommand($"""
+            INSERT INTO {schema}.accepted_runs
+                (project_id, run_id, tenant_id, accepted_selection, accepted_selection_hash,
+                 accepted_by_issuer, accepted_by_subject)
+            VALUES (@project, @run, @tenant, '{"{}"}'::jsonb, @selection, @issuer, @actor);
+            INSERT INTO {schema}.coordination_sessions
+                (project_id, run_id, session_id, root_session_id, node_kind,
+                 writer_issuer, writer_subject, execution_fence)
+            VALUES (@project, @run, @root, @root, 'coordinator', @issuer, @actor, 1);
+            INSERT INTO {schema}.coordination_sessions
+                (project_id, run_id, session_id, parent_session_id, root_session_id, node_kind,
+                 writer_issuer, writer_subject, execution_fence, logical_turn_ordinal, turn_state, state_version)
+            VALUES (@project, @run, @child, @root, @root, 'child_work', @issuer, @actor, 1, 1, 'active', 2);
+            INSERT INTO {schema}.coordinator_decisions
+                (project_id, run_id, session_id, request_id, decision_id, actor_issuer, actor_subject,
+                 execution_fence, state_version, action_kind, idempotency_key, command_hash,
+                 decision_state, decision)
+            VALUES (@project, @run, @root, 'request-1', @decision, @issuer, @actor, 1, 1, 'spawn',
+                    'decision-1', repeat('c', 64), 'accepted', '{"{}"}'::jsonb);
+            INSERT INTO {schema}.runtime_run_start_intents
+                (tenant_id, project_id, run_id, root_session_id, accepted_selection_hash,
+                 execution_fence, intent_id, bootstrap_operation_id, consume_operation_id,
+                 exchange_operation_id, state, current_step, failure_code, receipt_links)
+            VALUES (@tenant, @project, @run, @child, @selection, 1, @intent, @bootstrap, @consume,
+                    @exchange, 'blocked', 'retirement', 'runtime_delivery_failed', @links);
+            """, connection))
+        {
+            seed.Parameters.AddWithValue("project", project);
+            seed.Parameters.AddWithValue("run", run);
+            seed.Parameters.AddWithValue("tenant", tenant);
+            seed.Parameters.AddWithValue("selection", selectionHash);
+            seed.Parameters.AddWithValue("issuer", issuer);
+            seed.Parameters.AddWithValue("actor", actorId);
+            seed.Parameters.AddWithValue("root", root);
+            seed.Parameters.AddWithValue("child", child);
+            seed.Parameters.AddWithValue("decision", Guid.NewGuid());
+            seed.Parameters.AddWithValue("intent", Guid.NewGuid());
+            seed.Parameters.AddWithValue("bootstrap", Guid.NewGuid());
+            seed.Parameters.AddWithValue("consume", Guid.NewGuid());
+            seed.Parameters.AddWithValue("exchange", Guid.NewGuid());
+            seed.Parameters.AddWithValue("links", NpgsqlTypes.NpgsqlDbType.Jsonb, links);
+            await seed.ExecuteNonQueryAsync();
+        }
+        var owner = new RuntimeOwnerContext(
+            1, issuer, actorId, tenant, project, run, child, "worker", "model-ref", "turn-1", 1, 1, 1,
+            "context-1", selectionHash, 1, 1, 2, 1)
+        {
+            WorkflowStepId = "step-1"
+        };
+        var store = new CoordinationRuntimeRunStartStore(dataSource, schema);
+        var before = await store.EnsureChildIntentAsync(owner, CancellationToken.None);
+        using var clients = new RuntimeRunStartRecoveryClientFactory();
+        var continuation = new RuntimeRunStartContinuation(
+            store, null!, null!,
+            new RuntimeRunStartOptions(new Uri("https://environment.test/"), new Uri("https://broker.test/")),
+            clients, TimeProvider.System);
+        var credential = new SecretCredential("child-retirement-actor", DateTimeOffset.UtcNow.AddMinutes(1));
+        try
+        {
+            await continuation.ContinueChildAsync(
+                owner, new RuntimeActorAuthorization(credential, tenant), CancellationToken.None);
+        }
+        finally
+        {
+            credential.Invalidate();
+        }
+
+        // The used bootstrap operation is not retried; the links stay for terminal cleanup.
+        Assert.Empty(clients.PlacementRequests);
+        Assert.Empty(clients.RetirementRequests);
+        var after = await store.ReadAsync(before, CancellationToken.None);
+        Assert.Equal(before, after);
+        Assert.Equal(("blocked", "retirement"), (after!.State, after.CurrentStep));
+        using var saved = JsonDocument.Parse(after.ReceiptLinks);
+        Assert.True(saved.RootElement.TryGetProperty("placement", out _));
+        Assert.True(saved.RootElement.TryGetProperty("registration", out _));
     }
 
     private static (

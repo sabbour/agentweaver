@@ -18,6 +18,7 @@ public sealed class MafDurableDispatchPostgresTests(CoordinationPostgresFixture 
     private MafExecutionCheckpointStore _checkpoints = null!;
     private SessionIdentity _root;
     private long _fence;
+    private string _selectionHash = null!;
 
     public async Task InitializeAsync()
     {
@@ -33,6 +34,7 @@ public sealed class MafDurableDispatchPostgresTests(CoordinationPostgresFixture 
                 [new ProjectsPermissionGrant("acceptRunSelection", 1)])]));
         _root = new SessionIdentity(selected.ProjectId, selected.RunId, "root");
         _owner = new CoordinationOwnerStore(fixture.DataSource, _schema);
+        _selectionHash = CoordinationOwnerStore.HashSelection(selected);
         _fence = (await _owner.AcceptRootAsync(
             _actor, authorized, _root.SessionId, CancellationToken.None)).ExecutionFence;
         _checkpoints = CreateCheckpoints(_fence);
@@ -115,6 +117,35 @@ public sealed class MafDurableDispatchPostgresTests(CoordinationPostgresFixture 
         Assert.Equal(first.CommandId, replay.CommandId);
         Assert.Equal((1L, 1L), await CountChildrenAndSpawnsAsync());
         Assert.Equal(1, (await _checkpoints.ReadLatestAsync(CancellationToken.None))!.State.Revision);
+    }
+
+    [Fact]
+    public async Task ConcurrentSpawnAndRestartReuseOneChildStartObligation()
+    {
+        var plan = ConflictingPlan();
+        var action = new MafExecutionAction(plan.Workflow.Definition.Steps[0], plan.Plan.Items[0]);
+        var concurrent = await Task.WhenAll(SpawnAsync(plan, action), SpawnAsync(plan, action));
+        Assert.Equal(concurrent[0].CommandId, concurrent[1].CommandId);
+
+        var starts = new CoordinationRuntimeRunStartStore(fixture.DataSource, _schema);
+        var childId = concurrent[0].Node.Identity.SessionId;
+        var intent = await starts.ReadIntentForStatusAsync(_root.ProjectId, _root.RunId, childId, CancellationToken.None);
+        Assert.NotNull(intent);
+        Assert.Equal("accepted", intent.CurrentStep);
+        Assert.NotEqual(Guid.Empty, intent.IntentId);
+        Assert.NotEqual(Guid.Empty, intent.BootstrapOperationId);
+        var binding = CoordinationRuntimeRunStartStore.ReadChildBinding(intent);
+        Assert.Equal(childId, binding.ChildSessionId);
+        Assert.Equal(plan.Plan.Items[0].AgentId, binding.AgentId);
+        Assert.Equal(plan.Plan.Items[0].ModelSelectionReference, binding.ModelSelectionReference);
+
+        _owner = new CoordinationOwnerStore(fixture.DataSource, _schema);
+        _checkpoints = CreateCheckpoints(_fence);
+        Assert.Equal(concurrent[0].CommandId, (await SpawnAsync(plan, action)).CommandId);
+        var restarted = new CoordinationRuntimeRunStartStore(fixture.DataSource, _schema);
+        Assert.Equal(intent, await restarted.ReadIntentForStatusAsync(
+            _root.ProjectId, _root.RunId, childId, CancellationToken.None));
+        Assert.Equal((1L, 1L), await CountChildrenAndSpawnsAsync());
     }
 
     [Fact]
@@ -211,6 +242,9 @@ public sealed class MafDurableDispatchPostgresTests(CoordinationPostgresFixture 
         Assert.Equal("checkpoint_execution_fence_stale", failure.Code);
         Assert.Equal((0L, 0L), await CountChildrenAndSpawnsAsync());
         Assert.Null(await CreateCheckpoints(_fence).ReadLatestAsync(CancellationToken.None));
+        var child = MafExecutionPlanner.CreateChildSessionId(_root, plan.Plan.Id, action.WorkItem!.Id);
+        Assert.Null(await new CoordinationRuntimeRunStartStore(fixture.DataSource, _schema)
+            .ReadIntentForStatusAsync(_root.ProjectId, _root.RunId, child, CancellationToken.None));
     }
 
     [Fact]
@@ -280,6 +314,15 @@ public sealed class MafDurableDispatchPostgresTests(CoordinationPostgresFixture 
                     MafExecutionPlanner.RequireReadyDispatchAction(
                         plan, latest?.State.Progress ?? MafExecutionProgress.Empty,
                         latest?.State.FixedWorkAssociations, action);
+                await new CoordinationRuntimeRunStartStore(fixture.DataSource, _schema)
+                    .PersistChildIntentInTransactionAsync(
+                        connection, transaction, "tenant-1", _root.ProjectId, _root.RunId,
+                        _selectionHash, _fence,
+                        new RuntimeChildStartBinding(
+                            _root.SessionId, child, plan.Plan.Id, item.Id, null, action.Step.Id,
+                            item.AgentId, item.ModelSelectionReference, _actor.Issuer, _actor.Subject,
+                            "selection-1", 1, spawned.Node.StateVersion,
+                            spawned.CommandId, intent.MessageId, intent.PromptHash), token);
                 var next = CoordinationEndpoints.PrepareRunningCheckpoint(
                     latest, plan.Plan.Id, 1, item.Id, null, intent);
                 if (next is not null)

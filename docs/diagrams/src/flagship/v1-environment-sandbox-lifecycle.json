@@ -1,14 +1,14 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Coordinator AgentHost first-start, readiness, and cleanup",
-  "alt": "Orchestrator starts the root AgentHost only after durable run admission. Environment checks the current actor, selection, and fences before it creates the retained 1 GiB workspace and first Sandbox placement. Orchestrator then registers the runtime, requests Broker bootstrap, and calls the real Environment activation route. Readiness is committed only after current registration, placement, and Host evidence pass. Environment records each provider attempt before an external effect and saves its exact outcome under the owner lock. Unknown or unresolved calls block release and generation advance. Cleanup releases the saved placement and does not delete retained workspace data. Claim expiry permits recovery but does not prove that a provider call stopped.",
+  "title": "Root and child AgentHost startup, readiness, and terminal cleanup",
+  "alt": "Orchestrator records the root start or committed child spawn and its stable operation IDs before Environment provisions the placement. Environment checks current authority, selection, and fences, then creates a retained workspace and Sandbox. Orchestrator registers the runtime, requests Broker bootstrap, and activates the Host through Environment. Readiness requires current registration, placement, and Host evidence before child dispatch. Terminal cleanup checks native quiescence and cleans children before the root. Environment releases only the exact owned resource and retains workspace data. Unknown or unresolved calls remain pending.",
   "autonumber": true,
   "participants": [
     {
       "id": "orchestrator",
       "label": "Orchestrator",
-      "subLabel": "Accepted run, durable start intent, and readiness commit",
+      "subLabel": "Run or child intent, owner checks, and readiness commit",
       "icon": "server",
       "fluentIcon": "api",
       "badge": { "text": "Coordinator", "tone": "neutral" }
@@ -42,13 +42,13 @@
     {
       "type": "note",
       "over": ["orchestrator", "environment"],
-      "label": "Start follows durable root and first-message admission. Direct-root and invocation-bound admission use the same path. A pending response is not readiness."
+      "label": "Root start follows admission. Child start follows a committed, owner-bound spawn and uses the same durable startup stages. Pending is not readiness."
     },
     {
       "type": "message",
       "from": "orchestrator",
       "to": "environment",
-      "label": "After accepted root and first-message admission, send the fenced start request with the run actor and accepted selection",
+      "label": "Persist the root or child startup intent and stable operation IDs; request the fenced placement with current actor and selection",
       "line": "solid",
       "arrow": "filled"
     },
@@ -168,20 +168,20 @@
       "type": "message",
       "from": "orchestrator",
       "to": "orchestrator",
-      "label": "Commit Ready under current intent fence; no model turn is sent",
+      "label": "Commit Ready under the current intent fence; only then can child dispatch send a task",
       "line": "solid",
       "arrow": "filled"
     },
     {
       "type": "note",
       "over": ["orchestrator", "agenthost"],
-      "label": "Cancel releases only the saved placement. It never replaces or activates the Host. Workspace data stays retained, and the intent stores no credential bytes."
+      "label": "Terminal runs keep their outcome. Prove native work stopped; clean children before the root. Workspace data stays retained."
     },
     {
       "type": "message",
       "from": "orchestrator",
       "to": "environment",
-      "label": "After cancellation, revalidate fresh authority and selection; use the terminal run projection and exact saved placement",
+      "label": "Revalidate authority and the terminal state/fence; send the exact intent and saved or recovered placement",
       "line": "solid",
       "arrow": "filled"
     },

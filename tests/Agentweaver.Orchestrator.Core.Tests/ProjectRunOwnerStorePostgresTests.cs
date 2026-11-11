@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
+using System.Data;
 using System.Text.Json;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
 using Agentweaver.Providers;
 using Npgsql;
@@ -749,12 +751,12 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
             [new ProjectsAuthority("project", Project, [new ProjectsPermissionGrant("cancelRun", 1)])])
         };
 
-    /// <summary>Terminal success or failure is preserved and receives only a no-op cancellation receipt.</summary>
+    /// <summary>Terminal outcomes are preserved while their resources are marked for cleanup.</summary>
     [Theory]
     [InlineData("completed")]
     [InlineData("failed")]
     [InlineData("indeterminate")]
-    public async Task AlreadyEndedRunReturnsSuccessfulNoOp(string state)
+    public async Task AlreadyEndedRunPreservesOutcomeAndRequestsCleanup(string state)
     {
         var row = await Create("ended", new CreateProjectRunRequest("Hello", 1));
         await _store.AcceptRootAsync(_actor, Selection(row.RunId), row.RootSessionId, CancellationToken.None);
@@ -776,9 +778,421 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
         Assert.True(result.AlreadyTerminal);
         Assert.Null(result.CancelledAt);
         var cleanup = await ReadRuntimeStartCleanupAsync(row.RunId);
-        Assert.False(cleanup.Obligation);
-        Assert.Equal("pending", cleanup.State);
+        Assert.True(cleanup.Obligation);
+        Assert.Equal("cleanup_pending", cleanup.State);
+        var replay = await _store.CancelProjectRunAsync(_actor, CancellationSelection(row.RunId, _actor),
+            "terminal", new(), NoCheck, CancellationToken.None);
+        Assert.Equal(result, replay);
+        Assert.Equal(cleanup, await ReadRuntimeStartCleanupAsync(row.RunId));
         Assert.Equal(0L, await CountAsync("outbox_events"));
+    }
+
+    /// <summary>Runs completed by older code stay completed; cancel never rewrites a completed outcome.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CancelKeepsALegacyCompletedRunCompleted(bool completedAtOnly)
+    {
+        var row = await Create("legacy-completed", new CreateProjectRunRequest("Hello", 1));
+        await _store.AcceptRootAsync(_actor, Selection(row.RunId), row.RootSessionId, CancellationToken.None);
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var legacy = new NpgsqlCommand(completedAtOnly
+            ? $"UPDATE \"{_schema}\".accepted_runs SET completed_at = now() WHERE run_id = @run"
+            : $"""
+              UPDATE "{_schema}".coordination_sessions SET lifecycle_state = 'completed'
+              WHERE run_id = @run AND parent_session_id IS NULL
+              """, connection))
+        {
+            legacy.Parameters.AddWithValue("run", row.RunId);
+            Assert.Equal(1, await legacy.ExecuteNonQueryAsync());
+        }
+        var before = await ReadExecutionAsync(row.RunId);
+        Assert.Equal("idle", before.State);
+
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var direct = new NpgsqlCommand($"""
+            UPDATE "{_schema}".accepted_runs SET execution_state = 'cancelled' WHERE run_id = @run
+            """, connection))
+        {
+            direct.Parameters.AddWithValue("run", row.RunId);
+            var guarded = await Assert.ThrowsAsync<PostgresException>(() => direct.ExecuteNonQueryAsync());
+            Assert.Equal("run_terminal_state_final", guarded.MessageText);
+        }
+
+        var result = await _store.CancelProjectRunAsync(_actor, CancellationSelection(row.RunId, _actor),
+            "legacy", new(), NoCheck, CancellationToken.None);
+        Assert.Equal("completed", result.State);
+        Assert.True(result.AlreadyTerminal);
+        Assert.Null(result.CancelledAt);
+        var after = await ReadExecutionAsync(row.RunId);
+        Assert.Equal(("completed", before.Fence), (after.State, after.Fence));
+
+        var cleanup = await _store.CancelProjectRunAsync(_actor, CancellationSelection(row.RunId, _actor),
+            "legacy-cleanup", new() { ExpectedTerminalState = "completed", ExpectedTerminalFence = before.Fence },
+            NoCheck, CancellationToken.None);
+        Assert.Equal("completed", cleanup.State);
+
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var direct = new NpgsqlCommand($"""
+            UPDATE "{_schema}".accepted_runs SET execution_state = 'cancelled' WHERE run_id = @run
+            """, connection))
+        {
+            direct.Parameters.AddWithValue("run", row.RunId);
+            var guarded = await Assert.ThrowsAsync<PostgresException>(() => direct.ExecuteNonQueryAsync());
+            Assert.Equal("run_terminal_state_final", guarded.MessageText);
+        }
+    }
+
+    [Fact]
+    public async Task TerminalCleanupBlocksNewAndStaleSnapshotRecoveryWithoutAStartupIntent()
+    {
+        var row = await CreateFailedRunAsync("cleanup-recovery");
+        var before = await ReadExecutionAsync(row.RunId);
+        await using var staleConnection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var stale = await staleConnection.BeginTransactionAsync(IsolationLevel.RepeatableRead);
+        await using (var snapshot = new NpgsqlCommand(
+            $"SELECT execution_fence FROM \"{_schema}\".accepted_runs WHERE run_id = @run",
+            staleConnection, stale))
+        {
+            snapshot.Parameters.AddWithValue("run", row.RunId);
+            Assert.Equal(before.Fence, (long)(await snapshot.ExecuteScalarAsync())!);
+        }
+
+        var request = new CancelProjectRunRequest
+        {
+            ExpectedTerminalState = "failed",
+            ExpectedTerminalFence = before.Fence
+        };
+        var receipt = await _store.CancelProjectRunAsync(
+            _actor, CancellationSelection(row.RunId, _actor), "cleanup", request, NoCheck, CancellationToken.None);
+        Assert.True(receipt.AlreadyTerminal);
+        Assert.Equal("failed", receipt.State);
+        Assert.Equal(before, await ReadExecutionAsync(row.RunId));
+        Assert.Equal(0L, await CountAsync("runtime_run_start_intents"));
+
+        await using (var staleUpdate = new NpgsqlCommand($"""
+            UPDATE "{_schema}".accepted_runs
+            SET execution_state = 'idle', execution_fence = execution_fence + 1
+            WHERE run_id = @run
+            """, staleConnection, stale))
+        {
+            staleUpdate.Parameters.AddWithValue("run", row.RunId);
+            var staleFailure = await Assert.ThrowsAsync<PostgresException>(() => staleUpdate.ExecuteNonQueryAsync());
+            Assert.Equal(PostgresErrorCodes.SerializationFailure, staleFailure.SqlState);
+        }
+
+        await using (var current = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var oldWriter = new NpgsqlCommand($"""
+            UPDATE "{_schema}".accepted_runs
+            SET execution_state = 'idle', execution_fence = execution_fence + 1
+            WHERE run_id = @run
+            """, current))
+        {
+            oldWriter.Parameters.AddWithValue("run", row.RunId);
+            var guarded = await Assert.ThrowsAsync<PostgresException>(() => oldWriter.ExecuteNonQueryAsync());
+            Assert.Equal("runtime_start_cleanup_recovery_blocked", guarded.MessageText);
+        }
+        var recovery = new RecoverRunExecutionRequest(before.Fence, before.Version, "new-recovery", "operator", "ref");
+        var blocked = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.RecoverRunExecutionAsync(_actor, Project, row.RunId, recovery, CancellationToken.None));
+        Assert.Equal("runtime_start_cleanup_recovery_blocked", blocked.Code);
+    }
+
+    [Fact]
+    public async Task CleanupExpectationCannotCancelARecoveredRunAndRecoveryReplayRemainsStable()
+    {
+        var row = await CreateFailedRunAsync("recovery-wins");
+        var failed = await ReadExecutionAsync(row.RunId);
+        var recovery = new RecoverRunExecutionRequest(failed.Fence, failed.Version, "recover", "operator", "ref");
+        var store = new CoordinationOwnerStore(_fixture.DataSource, _schema, TimeProvider.System);
+        var recovered = await store.RecoverRunExecutionAsync(
+            _actor, Project, row.RunId, recovery, CancellationToken.None);
+        var stale = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.CancelProjectRunAsync(_actor, CancellationSelection(row.RunId, _actor), "stale",
+                new CancelProjectRunRequest
+                {
+                    ExpectedTerminalState = "failed",
+                    ExpectedTerminalFence = failed.Fence
+                }, NoCheck, CancellationToken.None));
+        Assert.Equal("terminal_cleanup_expectation_stale", stale.Code);
+        Assert.Equal("idle", (await ReadExecutionAsync(row.RunId)).State);
+        Assert.Equal(0L, await CountAsync("project_run_cancellations"));
+
+        await SetFailedAsync(row.RunId);
+        var failedAgain = await ReadExecutionAsync(row.RunId);
+        await _store.CancelProjectRunAsync(_actor, CancellationSelection(row.RunId, _actor), "cleanup",
+            new CancelProjectRunRequest
+            {
+                ExpectedTerminalState = "failed",
+                ExpectedTerminalFence = failedAgain.Fence
+            }, NoCheck, CancellationToken.None);
+        var replay = await store.RecoverRunExecutionAsync(
+            _actor, Project, row.RunId, recovery, CancellationToken.None);
+        Assert.True(replay.IsDuplicate);
+        Assert.Equal(recovered.OperationId, replay.OperationId);
+        Assert.Equal("failed", (await ReadExecutionAsync(row.RunId)).State);
+    }
+
+    [Fact]
+    public async Task HistoricalFailureReplayCannotAdmitCleanupForANewerFence()
+    {
+        Assert.Equal("""{"reason":null}""",
+            JsonSerializer.Serialize(new CancelProjectRunRequest(), new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        var row = await CreateFailedRunAsync("legacy-replay");
+        await InsertRuntimeStartIntentAsync(row);
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var remove = new NpgsqlCommand($"""
+            DROP TRIGGER accepted_run_terminal_cleanup_guard ON "{_schema}".accepted_runs;
+            DROP FUNCTION "{_schema}".guard_terminal_cleanup_recovery();
+            DELETE FROM "{_schema}".coordination_schema_migrations WHERE version = 47;
+            """, connection))
+            await remove.ExecuteNonQueryAsync();
+        var selection = CancellationSelection(row.RunId, _actor);
+        var original = await _store.CancelProjectRunAsync(
+            _actor, selection, "legacy", new(), NoCheck, CancellationToken.None);
+        Assert.True(original.AlreadyTerminal);
+        Assert.False((await ReadRuntimeStartCleanupAsync(row.RunId)).Obligation);
+        var failed = await ReadExecutionAsync(row.RunId);
+        var store = new CoordinationOwnerStore(_fixture.DataSource, _schema, TimeProvider.System);
+        await store.RecoverRunExecutionAsync(_actor, Project, row.RunId,
+            new RecoverRunExecutionRequest(failed.Fence, failed.Version, "recover-legacy", "operator", "ref"),
+            CancellationToken.None);
+        await SetFailedAsync(row.RunId);
+        await CoordinationOwnerMigrator.MigrateAsync(_fixture.DataSource, _schema);
+
+        Assert.Equal(original, await _store.CancelProjectRunAsync(
+            _actor, selection, "legacy", new(), NoCheck, CancellationToken.None));
+        Assert.False((await ReadRuntimeStartCleanupAsync(row.RunId)).Obligation);
+        await _store.CancelProjectRunAsync(_actor, selection, "fresh", new(), NoCheck, CancellationToken.None);
+        Assert.True((await ReadRuntimeStartCleanupAsync(row.RunId)).Obligation);
+    }
+
+    [Fact]
+    public async Task DisabledGuardBlocksVersionTwoButPreservesLegacyCancelledCleanup()
+    {
+        var row = await Create("disabled-guard", new CreateProjectRunRequest("Hello", 1));
+        await _store.AcceptRootAsync(_actor, Selection(row.RunId), row.RootSessionId, CancellationToken.None);
+        await InsertRuntimeStartIntentAsync(row);
+        var selection = CancellationSelection(row.RunId, _actor);
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var disable = new NpgsqlCommand($"""
+            ALTER TABLE "{_schema}".accepted_runs DISABLE TRIGGER accepted_run_terminal_cleanup_guard
+            """, connection))
+            await disable.ExecuteNonQueryAsync();
+
+        var cancelled = await _store.CancelProjectRunAsync(
+            _actor, selection, "legacy", new(), NoCheck, CancellationToken.None);
+        Assert.Equal("cancelled", cancelled.State);
+        var starts = new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema);
+        var legacy = await starts.ReadCleanupProjectionAsync(
+            Project, row.RunId, row.RootSessionId, selection, CancellationToken.None);
+        Assert.Equal(1, legacy.ContractVersion);
+        Assert.True(legacy.CancellationFence > legacy.ExecutionFence);
+        var failure = await Assert.ThrowsAsync<CoordinationException>(() =>
+            starts.ReadCleanupProjectionAsync(
+                Project, row.RunId, row.RootSessionId, selection, CancellationToken.None, contractVersion: 2));
+        Assert.Equal("runtime_start_cleanup_guard_unavailable", failure.Code);
+        Assert.Equal(cancelled, await _store.CancelProjectRunAsync(
+            _actor, selection, "legacy", new(), NoCheck, CancellationToken.None));
+
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var sameFence = new NpgsqlCommand($"""
+            UPDATE "{_schema}".runtime_run_start_intents SET execution_fence = @fence
+            WHERE project_id = @project AND run_id = @run
+            """, connection))
+        {
+            sameFence.Parameters.AddWithValue("project", Project);
+            sameFence.Parameters.AddWithValue("run", row.RunId);
+            sameFence.Parameters.AddWithValue("fence", legacy.CancellationFence);
+            await sameFence.ExecuteNonQueryAsync();
+        }
+        Assert.Equal(cancelled, await _store.CancelProjectRunAsync(
+            _actor, selection, "legacy", new(), NoCheck, CancellationToken.None));
+        var stale = await Assert.ThrowsAsync<CoordinationException>(() =>
+            starts.ReadCleanupProjectionAsync(
+                Project, row.RunId, row.RootSessionId, selection, CancellationToken.None));
+        Assert.Equal("runtime_start_cleanup_fence_stale", stale.Code);
+    }
+
+    [Fact]
+    public async Task CleanupReadsWorkOnSchemasBeforeTheGenerationJobAndStartIntentTables()
+    {
+        var row = await CreateFailedRunAsync("older-schema");
+        await InsertRuntimeStartIntentAsync(row);
+        var selection = CancellationSelection(row.RunId, _actor);
+        await _store.CancelProjectRunAsync(_actor, selection, "cleanup", new(), NoCheck, CancellationToken.None);
+        var starts = new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema);
+
+        await DropTableAsync("workflow_generation_jobs");
+        Assert.Equal("failed", (await starts.ReadCleanupProjectionAsync(
+            Project, row.RunId, row.RootSessionId, selection, CancellationToken.None, contractVersion: 2)).RunState);
+        Assert.NotNull(await starts.ReadCleanupSummaryAsync(Tenant, Project, row.RunId, CancellationToken.None));
+
+        await DropTableAsync("runtime_run_start_intents");
+        Assert.Null(await starts.ReadCleanupSummaryAsync(Tenant, Project, row.RunId, CancellationToken.None));
+        Assert.Empty(await starts.FindCleanupIntentsAsync(Tenant, Project, row.RunId, CancellationToken.None));
+        var unavailable = await Assert.ThrowsAsync<CoordinationException>(() => starts.ReadCleanupProjectionAsync(
+            Project, row.RunId, row.RootSessionId, selection, CancellationToken.None));
+        Assert.Equal("runtime_start_cleanup_unavailable", unavailable.Code);
+    }
+
+    [Fact]
+    public async Task ChildStartIntentRequiresTheTerminalCleanupGuard()
+    {
+        var row = await Create("child-schema", new CreateProjectRunRequest("Hello", 1));
+        await _store.AcceptRootAsync(_actor, Selection(row.RunId), row.RootSessionId, CancellationToken.None);
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var drop = new NpgsqlCommand(
+            $"DELETE FROM \"{_schema}\".coordination_schema_migrations WHERE version = 47", connection))
+            await drop.ExecuteNonQueryAsync();
+
+        var starts = new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema);
+        await using var write = await _fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await write.BeginTransactionAsync();
+        var pending = await Assert.ThrowsAsync<CoordinationException>(() => starts.PersistChildIntentInTransactionAsync(
+            write, transaction, Tenant, Project, row.RunId, new string('a', 64), 1,
+            new RuntimeChildStartBinding(row.RootSessionId, "child-1", "plan-1", "association-1", null, "step-1",
+                "worker", "model-ref", _actor.Issuer, _actor.Subject, "context-1", 1, 1, Guid.NewGuid(),
+                Guid.NewGuid(), new string('b', 64)), CancellationToken.None));
+        Assert.Equal("runtime_child_start_schema_pending", pending.Code);
+        Assert.Equal(503, pending.StatusCode);
+    }
+
+    private async Task DropTableAsync(string table)
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var drop = new NpgsqlCommand($"DROP TABLE \"{_schema}\".{table} CASCADE", connection);
+        await drop.ExecuteNonQueryAsync();
+    }
+
+    [Fact]
+    public async Task RootCleanupWaitsForTrackedChildrenAndUnmatchedActiveRegistrations()
+    {
+        var row = await CreateFailedRunAsync("aggregate-cleanup");
+        await InsertRuntimeStartIntentAsync(row);
+        const string child = "legacy-child";
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordination_sessions
+                (project_id, run_id, session_id, parent_session_id, root_session_id, node_kind,
+                 writer_issuer, writer_subject, execution_fence)
+            VALUES (@project, @run, @child, @root, @root, 'child_work', @issuer, @actor, 1)
+            """, connection))
+        {
+            insert.Parameters.AddWithValue("project", Project);
+            insert.Parameters.AddWithValue("run", row.RunId);
+            insert.Parameters.AddWithValue("child", child);
+            insert.Parameters.AddWithValue("root", row.RootSessionId);
+            insert.Parameters.AddWithValue("issuer", _actor.Issuer);
+            insert.Parameters.AddWithValue("actor", _actor.Subject);
+            await insert.ExecuteNonQueryAsync();
+        }
+        var selection = CancellationSelection(row.RunId, _actor);
+        await _store.CancelProjectRunAsync(_actor, selection, "cleanup", new(), NoCheck, CancellationToken.None);
+        var starts = new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema);
+        async Task<RuntimeRunStartCleanupProjection> RootProjection() =>
+            await starts.ReadCleanupProjectionAsync(
+                Project, row.RunId, row.RootSessionId, selection, CancellationToken.None, contractVersion: 2);
+        // A child session without a start intent had no runtime started by this path.
+        Assert.Equal("failed", (await RootProjection()).RunState);
+
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".runtime_run_start_intents
+                (tenant_id, project_id, run_id, root_session_id, accepted_selection_hash,
+                 execution_fence, intent_id, bootstrap_operation_id, consume_operation_id,
+                 exchange_operation_id, state, current_step, cleanup_obligation, receipt_links)
+            VALUES (@tenant, @project, @run, @child, @selection, 1, @intent, @bootstrap,
+                    @consume, @exchange, 'cleanup_pending', 'cleanup', true,
+                    jsonb_build_object('childStart', jsonb_build_object()))
+            """, connection))
+        {
+            insert.Parameters.AddWithValue("tenant", Tenant);
+            insert.Parameters.AddWithValue("project", Project);
+            insert.Parameters.AddWithValue("run", row.RunId);
+            insert.Parameters.AddWithValue("child", child);
+            insert.Parameters.AddWithValue("selection",
+                CoordinationOwnerStore.HashSelection(selection.Selection).ToLowerInvariant());
+            insert.Parameters.AddWithValue("intent", Guid.NewGuid());
+            insert.Parameters.AddWithValue("bootstrap", Guid.NewGuid());
+            insert.Parameters.AddWithValue("consume", Guid.NewGuid());
+            insert.Parameters.AddWithValue("exchange", Guid.NewGuid());
+            await insert.ExecuteNonQueryAsync();
+        }
+        Assert.Equal("runtime_start_child_cleanup_pending",
+            (await Assert.ThrowsAsync<CoordinationException>(RootProjection)).Code);
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var complete = new NpgsqlCommand($"""
+            UPDATE "{_schema}".runtime_run_start_intents SET state = 'cleanup_complete'
+            WHERE project_id = @project AND run_id = @run AND root_session_id = @child
+            """, connection))
+        {
+            complete.Parameters.AddWithValue("project", Project);
+            complete.Parameters.AddWithValue("run", row.RunId);
+            complete.Parameters.AddWithValue("child", child);
+            await complete.ExecuteNonQueryAsync();
+        }
+        Assert.Equal("failed", (await RootProjection()).RunState);
+
+        var runtime = Guid.NewGuid();
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".runtime_registration_heads(runtime_instance_id, binding_hash, current_revision)
+            VALUES (@runtime, repeat('d', 64), 1);
+            INSERT INTO "{_schema}".runtime_registration_revisions
+                (runtime_instance_id, revision, binding_json, binding_hash, state, expires_at, recorded_at)
+            VALUES (@runtime, 1,
+                    jsonb_build_object('ProjectId', @project, 'RunId', @run, 'SessionId', @child)::text,
+                    repeat('d', 64), 0, clock_timestamp() + interval '1 hour', clock_timestamp())
+            """, connection))
+        {
+            insert.Parameters.AddWithValue("runtime", runtime);
+            insert.Parameters.AddWithValue("project", Project);
+            insert.Parameters.AddWithValue("run", row.RunId);
+            insert.Parameters.AddWithValue("child", child);
+            await insert.ExecuteNonQueryAsync();
+        }
+        Assert.Equal("runtime_start_child_cleanup_pending",
+            (await Assert.ThrowsAsync<CoordinationException>(RootProjection)).Code);
+        var summary = await starts.ReadCleanupSummaryAsync(Tenant, Project, row.RunId, CancellationToken.None);
+        Assert.Equal("pending", summary!.State);
+        Assert.True(summary.Pending > 0);
+    }
+
+    private async Task<CoordinationOwnerStore.ProjectRunRequestRow> CreateFailedRunAsync(string key)
+    {
+        var row = await Create(key, new CreateProjectRunRequest("Hello", 1));
+        await _store.AcceptRootAsync(_actor, Selection(row.RunId), row.RootSessionId, CancellationToken.None);
+        await SetFailedAsync(row.RunId);
+        return row;
+    }
+
+    private async Task SetFailedAsync(string runId)
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            UPDATE "{_schema}".accepted_runs
+            SET execution_state = 'failed', execution_cause_code = 'fixture_failure',
+                execution_reference = 'fixture_reference'
+            WHERE project_id = @project AND run_id = @run
+            """, connection);
+        command.Parameters.AddWithValue("project", Project);
+        command.Parameters.AddWithValue("run", runId);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
+    private async Task<(string State, long Fence, long Version)> ReadExecutionAsync(string runId)
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT execution_state, execution_fence, state_version
+            FROM "{_schema}".accepted_runs WHERE project_id = @project AND run_id = @run
+            """, connection);
+        command.Parameters.AddWithValue("project", Project);
+        command.Parameters.AddWithValue("run", runId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (reader.GetString(0), reader.GetInt64(1), reader.GetInt64(2));
     }
 
     private Task<CoordinationOwnerStore.ProjectRunRequestRow> Create(string key, CreateProjectRunRequest request) =>
@@ -806,7 +1220,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
                 (tenant_id, project_id, run_id, root_session_id, accepted_selection_hash,
                  execution_fence, intent_id, bootstrap_operation_id, consume_operation_id,
                  exchange_operation_id)
-            SELECT @tenant, @project, @run, @root, accepted_selection_hash, execution_fence,
+            SELECT @tenant, @project, @run, @root, lower(accepted_selection_hash), execution_fence,
                    @intent, @bootstrap, @consume, @exchange
             FROM "{_schema}".accepted_runs WHERE project_id = @project AND run_id = @run
             """, connection);

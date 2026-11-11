@@ -78,6 +78,33 @@ define the authenticated Environment response and bounded root-only Host consume
 native CLI acceptance remains separate. It adds no
 sign-in flow, live grant, or deployment evidence.
 
+## Terminal runtime cleanup
+
+The internal version 2 `RuntimeRunStartCleanupProjection` carries the terminal
+run state and fence, startup intent ID and version, startup fence, accepted
+selection, parent root, and saved receipts. It is not caller-issued authority:
+Orchestrator and Environment revalidate the current authenticated owner and
+exact resource before retirement. The version 2 receipt can carry the exact
+Sandbox resource when one is known. A missing or conflicting resource stays
+pending rather than authorizing a different registration or placement.
+
+For `cancelled`, the terminal fence must be greater than the startup fence.
+For `completed`, `failed`, or `indeterminate`, the current terminal fence can
+equal the startup fence. Active runs and stale projections are rejected.
+Version 1 remains limited to coordinator-root cancellation and the advanced
+fence. Retained workspaces are not deleted by this cleanup.
+
+Version 2 requires Orchestrator migration 047 and the enabled
+`accepted_run_terminal_cleanup_guard`. A failed or indeterminate run cannot
+recover after an exact terminal cleanup marker has been committed. Before
+applying migration 047, roll out guard-aware Orchestrator code, drain older
+replicas **and their in-flight work**, and update the compatible Identity and
+Environment owners. The maintenance runner checks the requested immutable
+Orchestrator and Environment images in Deployment templates and active Pods;
+that check does not prove that external in-flight work has drained. Older
+Orchestrator images reject schema 047. Do not roll back across the migration
+without a separately reviewed recovery plan.
+
 ## Caller attention
 
 The Orchestrator's `UserNotification` projects persisted pending coordinator

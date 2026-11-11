@@ -11,9 +11,10 @@ test('Image compatibility preserves reserved gaps while accepting reviewed migra
   // The runner can read this source-owned contract before choosing deployment and migration order.
   assert.deepEqual(compatibility.applyByDefault, core);
   assert.deepEqual(compatibility.currentImage.requiredCoreVersions,
-    core.filter(version => ![32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46].includes(version)));
-  assert.deepEqual(compatibility.currentImage.optionalCoreVersions, [32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46]);
+    core.filter(version => ![32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47].includes(version)));
+  assert.deepEqual(compatibility.currentImage.optionalCoreVersions, [32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47]);
   assert.equal(compatibility.runtimeRunStartIntentsVersion, 42);
+  assert.equal(compatibility.terminalCleanupRecoveryGuardVersion, 47);
   assert.equal(compatibility.currentImage.repositoryIdentityWriteVersion, 33);
   assert.equal(compatibility.currentImage.beforeRepositoryIdentityUpdateError, 'database_update_pending');
   assert.equal(compatibility.rootModelTurnAdmissionsVersion, 36);
@@ -23,7 +24,7 @@ test('Image compatibility preserves reserved gaps while accepting reviewed migra
   assert.equal(compatibility.sourceControlPullRequestOperationsVersion, 38);
   assert.equal(compatibility.sourceControlPullRequestOperationsPrerequisiteVersion, 12);
   assert.deepEqual(compatibility.rolloutOrder,
-    ['deployCurrentImages', 'applyCore032And033And035And036And037And038And039And040And041And042And043And044And045And046']);
+    ['deployCurrentImages', 'drainOlderOrchestratorReplicas', 'applyCore032And033And035And036And037And038And039And040And041And042And043And044And045And046And047']);
   assert.deepEqual(compatibility.separateApprovalRequired, []);
   assert.equal(compatibility.preRepositoryIdentityImage.acceptsCore033, false);
   assert.equal(core.includes(32), true);
@@ -186,11 +187,11 @@ test('Only reviewed owner functions receive direct runtime EXECUTE', () => {
 });
 
 // The Core catalog includes feature migrations and preserves the reserved 034 gap.
-test('Core plan includes migration 046 and exact owner grants', () => {
+test('Core plan includes migration 047 and exact owner grants', () => {
   // The plan must include every shipped resource and only the table operations its owner requires.
   const plan = buildP1PostgresPlan();
   assert.deepEqual(plan.coreVersions,
-    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46]);
+    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47]);
   assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
     .find(table => table.table === 'runtime_run_start_intents'),
   { table: 'runtime_run_start_intents', privileges: ['SELECT', 'INSERT', 'UPDATE'] });
@@ -334,7 +335,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
     for (const [, filename] of mappings)
       assert.ok(readFileSync(new URL(`Migrations/${filename}`, directory)).length > 0);
     if (owner.startsWith('orchestrator/')) {
-      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46])'));
+      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47])'));
       assert.ok(source.includes('(applied.Contains(21) && !applied.Contains(20))'));
       assert.ok(source.includes('(applied.Contains(22) && !applied.Contains(21))'));
       assert.ok(source.includes('(applied.Contains(23) && !applied.Contains(22))'));
@@ -344,10 +345,11 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       const allowed = source.match(/WHERE version NOT IN \(([\d, ]+)\)/);
       assert.deepEqual(allowed[1].split(',').map(Number), versions);
       assert.ok(source.includes("tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal"));
-      assert.equal((source.match(/tgtype = 19/g) ?? []).length, 2);
+      assert.equal((source.match(/tgtype = 19/g) ?? []).length, 3);
+      assert.ok(source.includes('(applied.Contains(47) && !applied.Contains(46))'));
       assert.ok(source.includes('(applied.Contains(30) && !applied.Contains(26))'));
       assert.ok(source.includes('(applied.Contains(31) && (!applied.Contains(30) || !applied.Contains(25)))'));
-      assert.ok(source.includes('Enumerable.Range(57, 55)'));
+      assert.ok(source.includes('Enumerable.Range(57, 56)'));
       assert.ok(source.includes('(applied.Contains(33) && !applied.Contains(24))'));
       assert.ok(source.includes('(applied.Contains(36) && !applied.Contains(21))'));
       assert.ok(source.includes('(applied.Contains(37) && !applied.Contains(21))'));
@@ -417,8 +419,11 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     ['chief_of_staff_priority_links', ['SELECT', 'INSERT', 'DELETE']],
   ])
     assert.deepEqual(orchestrator.tables.find(item => item.table === table).privileges, privileges);
-  assert.deepEqual(plan.services.map(service => service.functions.length), [6, 1, 4, 4, 25]);
-  assert.equal(plan.services.flatMap(service => service.functions).length, 40);
+  assert.deepEqual(plan.services.map(service => service.functions.length), [6, 1, 4, 4, 26]);
+  assert.equal(plan.services.flatMap(service => service.functions).length, 41);
+  assert.deepEqual(
+    orchestrator.functions.find(item => item.signature === 'guard_terminal_cleanup_recovery()'),
+    { signature: 'guard_terminal_cleanup_recovery()', execute: false });
   assert.deepEqual(plan.services.find(service => service.schema === 'environment').functions, [{
     signature: 'enforce_p1_creation_link_immutability()',
     execute: false,
@@ -473,7 +478,11 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
         /CREATE(?: OR REPLACE)? FUNCTION (?:"?\{schema\}"?|projects_config|environment)\.([a-z_0-9]+)\(([\s\S]*?)\)/g)]
         .map(match => `${match[1]}(${match[2].trim() ? match[2].split(',')
           .map(parameter => parameter.trim().split(/\s+/).at(-1)).join(', ') : ''})`));
-    assert.deepEqual(functions.sort(), plan.services[index].functions.map(item => item.signature).sort());
+    const duplicates = functions.filter((name, position) => functions.indexOf(name) !== position);
+    assert.deepEqual(duplicates, owner.startsWith('orchestrator/')
+      ? ['close_workflow_generation_jobs_on_cancel()'] : []);
+    assert.deepEqual([...new Set(functions)].sort(),
+      plan.services[index].functions.map(item => item.signature).sort());
   }
   assert.equal(plan.services.flatMap(service =>
     service.functions.filter(item => item.execute)).length, 3);

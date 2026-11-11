@@ -73,6 +73,161 @@ internal sealed class CoordinationRuntimeRunStartStore
         return intent;
     }
 
+    public async Task PersistChildIntentInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string tenantId,
+        string projectId,
+        string runId,
+        string selectionHash,
+        long executionFence,
+        RuntimeChildStartBinding binding,
+        CancellationToken cancellationToken)
+    {
+        await RequireChildStartSchemaAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        var proposed = new RuntimeRunStartIntent(
+            tenantId, projectId, runId, binding.ChildSessionId, selectionHash.ToLowerInvariant(),
+            executionFence, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+            "pending", "accepted", null, null, null,
+            JsonSerializer.Serialize(new { childStart = binding }, JsonOptions), false, 1);
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO {_schema}.runtime_run_start_intents
+                (tenant_id, project_id, run_id, root_session_id, accepted_selection_hash,
+                 execution_fence, intent_id, bootstrap_operation_id, consume_operation_id,
+                 exchange_operation_id, receipt_links)
+            VALUES (@tenant, @project, @run, @root, @selection, @fence, @intent,
+                    @bootstrap, @consume, @exchange, @receipts)
+            ON CONFLICT (tenant_id, project_id, run_id, root_session_id, accepted_selection_hash)
+                DO NOTHING
+            """, connection, transaction))
+        {
+            AddKey(insert, proposed);
+            insert.Parameters.AddWithValue("intent", proposed.IntentId);
+            insert.Parameters.AddWithValue("bootstrap", proposed.BootstrapOperationId);
+            insert.Parameters.AddWithValue("consume", proposed.ConsumeOperationId);
+            insert.Parameters.AddWithValue("exchange", proposed.ExchangeOperationId);
+            insert.Parameters.AddWithValue("receipts", NpgsqlDbType.Jsonb, proposed.ReceiptLinks);
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        var current = await ReadIntentAsync(
+            connection, transaction, proposed, forUpdate: true, cancellationToken).ConfigureAwait(false)
+            ?? throw new CoordinationException("runtime_start_intent_unavailable", StatusCodes.Status503ServiceUnavailable);
+        if (current.ExecutionFence != executionFence || ReadChildBinding(current) != binding)
+            throw new CoordinationException("runtime_child_start_binding_conflict", StatusCodes.Status409Conflict);
+    }
+
+    public async Task<RuntimeRunStartIntent> EnsureChildIntentAsync(
+        RuntimeOwnerContext owner, CancellationToken cancellationToken)
+    {
+        if (owner.ContractVersion != 1 || owner.AgentId == CoordinationEndpoints.CoordinatorRuntimeAgentId ||
+            owner.LogicalTurnOrdinal < 1 || owner.ExecutionFence <= 0 ||
+            string.IsNullOrWhiteSpace(owner.WorkflowStepId))
+            throw new CoordinationException("runtime_child_start_owner_invalid", StatusCodes.Status409Conflict);
+        var key = new RuntimeRunStartIntent(
+            owner.TenantId, owner.ProjectId, owner.RunId, owner.SessionId,
+            owner.AcceptedSelectionHash.ToLowerInvariant(), owner.ExecutionFence,
+            Guid.Empty, Guid.Empty, Guid.Empty, Guid.Empty, "", "", null, null, null, "{}", false, 0);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await RequireChildStartSchemaAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        var observed = await ReadIntentAsync(connection, transaction, key, forUpdate: false, cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new CoordinationException("runtime_child_start_intent_unavailable", StatusCodes.Status409Conflict);
+        await RequireCurrentChildAsync(connection, transaction, observed, owner, cancellationToken)
+            .ConfigureAwait(false);
+        var intent = await ReadIntentAsync(connection, transaction, key, forUpdate: true, cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new CoordinationException("runtime_child_start_intent_unavailable", StatusCodes.Status409Conflict);
+        if (intent.CleanupObligation || intent.ExecutionFence != owner.ExecutionFence ||
+            ReadChildBinding(intent) != ReadChildBinding(observed))
+            throw new CoordinationException("runtime_child_start_owner_stale", StatusCodes.Status409Conflict);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return intent;
+    }
+
+    internal static RuntimeChildStartBinding ReadChildBinding(RuntimeRunStartIntent intent)
+    {
+        using var links = JsonDocument.Parse(intent.ReceiptLinks);
+        if (!links.RootElement.TryGetProperty("childStart", out var value) ||
+            value.Deserialize<RuntimeChildStartBinding>(JsonOptions) is not { } binding)
+            throw new CoordinationException("runtime_child_start_binding_invalid", StatusCodes.Status409Conflict);
+        return binding;
+    }
+
+    private async Task RequireCurrentChildAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RuntimeRunStartIntent intent,
+        RuntimeOwnerContext owner,
+        CancellationToken cancellationToken)
+    {
+        var binding = ReadChildBinding(intent);
+        if (intent.CleanupObligation || owner.TenantId != intent.TenantId ||
+            owner.ProjectId != intent.ProjectId || owner.RunId != intent.RunId ||
+            owner.SessionId != intent.RootSessionId || binding.ChildSessionId != owner.SessionId ||
+            owner.AcceptedSelectionHash != intent.AcceptedSelectionHash ||
+            owner.ExecutionFence != intent.ExecutionFence ||
+            owner.ActorIssuer != binding.ActorIssuer || owner.ActorId != binding.ActorId ||
+            owner.AgentId != binding.AgentId || owner.ModelSelectionReference != binding.ModelSelectionReference ||
+            owner.WorkflowStepId != binding.WorkflowStepId || owner.ContextRevision != binding.ContextRevision ||
+            owner.DecisionStateVersion != binding.DecisionStateVersion)
+            throw new CoordinationException("runtime_child_start_owner_stale", StatusCodes.Status409Conflict);
+        await using var command = new NpgsqlCommand($"""
+            SELECT r.tenant_id, r.accepted_selection_hash, r.execution_fence, r.execution_state,
+                   r.accepted_by_issuer, r.accepted_by_subject,
+                   s.parent_session_id, s.root_session_id, s.node_kind, s.lifecycle_state,
+                   s.turn_state, s.logical_turn_ordinal, s.state_version, s.execution_fence,
+                   s.work_plan_item_id, s.writer_issuer, s.writer_subject,
+                   (SELECT d.state_version FROM {_schema}.coordinator_decisions d
+                    WHERE d.project_id = r.project_id AND d.run_id = r.run_id
+                      AND d.session_id = s.root_session_id
+                    ORDER BY d.state_version DESC LIMIT 1)
+            FROM {_schema}.accepted_runs r
+            JOIN {_schema}.coordination_sessions s
+              ON s.project_id = r.project_id AND s.run_id = r.run_id
+            WHERE r.project_id = @project AND r.run_id = @run AND s.session_id = @session
+              AND r.completed_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM {_schema}.coordination_sessions root
+                  WHERE root.project_id = r.project_id AND root.run_id = r.run_id
+                    AND root.parent_session_id IS NULL AND root.lifecycle_state = 'completed')
+            FOR UPDATE OF r, s
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", owner.ProjectId);
+        command.Parameters.AddWithValue("run", owner.RunId);
+        command.Parameters.AddWithValue("session", owner.SessionId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+            reader.GetString(0) != owner.TenantId ||
+            !string.Equals(reader.GetString(1).Trim(), owner.AcceptedSelectionHash, StringComparison.OrdinalIgnoreCase) ||
+            reader.GetInt64(2) != owner.ExecutionFence ||
+            reader.GetString(3) is "completed" or "failed" or "indeterminate" or "cancelled" ||
+            reader.GetString(4) != owner.ActorIssuer || reader.GetString(5) != owner.ActorId ||
+            reader.IsDBNull(6) || reader.GetString(6) != binding.ParentRootSessionId ||
+            reader.GetString(7) != binding.ParentRootSessionId ||
+            reader.GetString(8) != "child_work" || reader.GetString(9) != "active" ||
+            reader.GetString(10) != "active" || reader.GetInt64(11) != owner.LogicalTurnOrdinal ||
+            reader.GetInt64(12) != owner.OwnerStateVersion || reader.GetInt64(13) != owner.ExecutionFence ||
+            (reader.IsDBNull(14) ? null : reader.GetString(14)) != binding.WorkPlanItemId ||
+            reader.GetString(15) != owner.ActorIssuer || reader.GetString(16) != owner.ActorId ||
+            reader.IsDBNull(17) || reader.GetInt64(17) != owner.DecisionStateVersion)
+            throw new CoordinationException("runtime_child_start_owner_stale", StatusCodes.Status409Conflict);
+    }
+
+    /// <summary>
+    /// Child runtimes need the migration 047 terminal guard, because only version 2 cleanup can release them.
+    /// </summary>
+    private async Task RequireChildStartSchemaAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        if (!await IsTerminalCleanupGuardInstalledAsync(connection, transaction, _schema, cancellationToken)
+                .ConfigureAwait(false))
+            throw new CoordinationException(
+                "runtime_child_start_schema_pending", StatusCodes.Status503ServiceUnavailable);
+    }
+
     public async Task<RuntimeRunStartLock> AcquireAsync(
         RuntimeRunStartIntent intent, CancellationToken cancellationToken)
     {
@@ -84,6 +239,28 @@ internal sealed class CoordinationRuntimeRunStartStore
             command.Parameters.AddWithValue("key", LockKey(intent));
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             return new RuntimeRunStartLock(connection, LockKey(intent));
+        }
+        catch
+        {
+            await connection.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>Takes the intent lease only when no other owner holds it; request paths must not wait.</summary>
+    public async Task<RuntimeRunStartLock?> TryAcquireAsync(
+        RuntimeRunStartIntent intent, CancellationToken cancellationToken)
+    {
+        var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var command = new NpgsqlCommand(
+                "SELECT pg_try_advisory_lock(hashtextextended(@key, 0))", connection);
+            command.Parameters.AddWithValue("key", LockKey(intent));
+            if ((bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!)
+                return new RuntimeRunStartLock(connection, LockKey(intent));
+            await connection.DisposeAsync().ConfigureAwait(false);
+            return null;
         }
         catch
         {
@@ -621,12 +798,24 @@ internal sealed class CoordinationRuntimeRunStartStore
         string runId,
         string rootSessionId,
         AuthorizedRunSelection selection,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int contractVersion = 1,
+        bool requireQuiescence = true)
     {
+        if (contractVersion is not (1 or 2))
+            throw new CoordinationException("runtime_start_cleanup_unavailable", StatusCodes.Status409Conflict);
         var selectionHash = CoordinationOwnerStore.HashSelection(selection.Selection).ToLowerInvariant();
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        if (!await TableExistsAsync(connection, null, "runtime_run_start_intents", cancellationToken)
+                .ConfigureAwait(false))
+            throw new CoordinationException("runtime_start_cleanup_unavailable", StatusCodes.Status409Conflict);
+        if (contractVersion == 2 &&
+            !await IsTerminalCleanupGuardInstalledAsync(connection, null, _schema, cancellationToken)
+                .ConfigureAwait(false))
+            throw new CoordinationException("runtime_start_cleanup_guard_unavailable", StatusCodes.Status503ServiceUnavailable);
         string tenantId;
-        long cancellationFence;
+        string runState;
+        long terminalFence;
         await using (var run = new NpgsqlCommand($"""
             SELECT tenant_id, accepted_selection_hash, execution_fence, execution_state
             FROM {_schema}.accepted_runs
@@ -637,20 +826,35 @@ internal sealed class CoordinationRuntimeRunStartStore
             run.Parameters.AddWithValue("run", runId);
             await using var reader = await run.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
-                reader.GetString(3) != "cancelled" ||
+                (contractVersion == 1
+                    ? reader.GetString(3) != "cancelled"
+                    : reader.GetString(3) is not ("cancelled" or "completed" or "failed" or "indeterminate")) ||
                 !string.Equals(reader.GetString(1).Trim(), selectionHash, StringComparison.OrdinalIgnoreCase))
                 throw new CoordinationException("runtime_start_cleanup_unavailable", StatusCodes.Status409Conflict);
             tenantId = reader.GetString(0);
-            cancellationFence = reader.GetInt64(2);
+            terminalFence = reader.GetInt64(2);
+            runState = reader.GetString(3);
         }
 
+        if (contractVersion == 2 && runState != "cancelled" &&
+            !await HasTerminalCleanupMarkerAsync(
+                connection, null, _schema, tenantId, projectId, runId, runState, terminalFence, cancellationToken)
+                .ConfigureAwait(false))
+            throw new CoordinationException("runtime_start_cleanup_unavailable", StatusCodes.Status409Conflict);
+        if (requireQuiescence && await HasUnresolvedNativeWorkAsync(
+                connection, null, projectId, runId, cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException("runtime_start_cleanup_work_pending", StatusCodes.Status409Conflict);
         await using var command = new NpgsqlCommand($"""
-            SELECT execution_fence, intent_id, bootstrap_operation_id, consume_operation_id,
-                   exchange_operation_id, state, current_step, failure_code, environment_id,
-                   runtime_instance_id, receipt_links::text, cleanup_obligation, row_version
-            FROM {_schema}.runtime_run_start_intents
-            WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
-              AND root_session_id = @root AND accepted_selection_hash = @selection
+            SELECT i.execution_fence, i.intent_id, i.bootstrap_operation_id, i.consume_operation_id,
+                   i.exchange_operation_id, i.state, i.current_step, i.failure_code, i.environment_id,
+                   i.runtime_instance_id, i.receipt_links::text, i.cleanup_obligation, i.row_version,
+                   s.root_session_id
+            FROM {_schema}.runtime_run_start_intents i
+            JOIN {_schema}.coordination_sessions s
+              ON s.project_id = i.project_id AND s.run_id = i.run_id
+             AND s.session_id = i.root_session_id
+            WHERE i.tenant_id = @tenant AND i.project_id = @project AND i.run_id = @run
+              AND i.root_session_id = @root AND i.accepted_selection_hash = @selection
             """, connection);
         command.Parameters.AddWithValue("tenant", tenantId);
         command.Parameters.AddWithValue("project", projectId);
@@ -660,28 +864,152 @@ internal sealed class CoordinationRuntimeRunStartStore
         await using var intentReader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await intentReader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
             !intentReader.GetBoolean(11) ||
-            intentReader.GetString(5) is not ("cleanup_pending" or "cleanup_complete"))
+            intentReader.GetString(5) is not ("cleanup_pending" or "cleanup_complete") ||
+            contractVersion == 1 && intentReader.GetString(13) != rootSessionId)
             throw new CoordinationException("runtime_start_cleanup_unavailable", StatusCodes.Status409Conflict);
         var executionFence = intentReader.GetInt64(0);
-        if (cancellationFence <= executionFence)
+        if (runState == "cancelled" ? terminalFence <= executionFence : terminalFence < executionFence)
             throw new CoordinationException("runtime_start_cleanup_fence_stale", StatusCodes.Status409Conflict);
         using var links = JsonDocument.Parse(intentReader.GetString(10));
-        return new RuntimeRunStartCleanupProjection(
-            1,
+        var projection = new RuntimeRunStartCleanupProjection(
+            contractVersion,
             tenantId,
             projectId,
             runId,
             rootSessionId,
             selectionHash,
-            "cancelled",
-            cancellationFence,
+            runState,
+            contractVersion == 1 ? terminalFence : 0,
             intentReader.GetGuid(1),
             intentReader.GetInt64(12),
             executionFence,
             intentReader.GetGuid(2),
             intentReader.IsDBNull(8) ? null : intentReader.GetString(8),
             intentReader.GetString(5),
-            links.RootElement.Clone()).Validate();
+            links.RootElement.Clone())
+        {
+            TerminalFence = contractVersion == 2 ? terminalFence : null,
+            ParentRootSessionId = contractVersion == 2 ? intentReader.GetString(13) : null
+        }.Validate();
+        var isRoot = intentReader.GetString(13) == rootSessionId;
+        await intentReader.CloseAsync().ConfigureAwait(false);
+        if (requireQuiescence && isRoot && await HasIncompleteChildCleanupAsync(
+                connection, null, projectId, runId, rootSessionId, cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException("runtime_start_child_cleanup_pending", StatusCodes.Status409Conflict);
+        return projection;
+    }
+
+    private async Task<bool> HasUnresolvedNativeWorkAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        // Workflow generation jobs start at migration 046; earlier schemas have no such work.
+        var hasJobs = await TableExistsAsync(
+            connection, transaction, "workflow_generation_jobs", cancellationToken).ConfigureAwait(false);
+        var jobs = hasJobs
+            ? $"""
+                SELECT 1 FROM {_schema}.workflow_generation_jobs
+                WHERE project_id = @project AND run_id = @run
+                  AND execution_phase = 'send-admitted'
+                  AND status IN ('running', 'cancelled', 'failed')
+                UNION ALL
+                """
+            : string.Empty;
+        var quiescedJob = hasJobs
+            ? $"""
+                  AND NOT EXISTS (
+                      SELECT 1 FROM {_schema}.workflow_generation_jobs j
+                      WHERE j.project_id = a.project_id AND j.run_id = a.run_id
+                        AND j.native_request_id = a.request_id AND j.execution_phase = 'quiesced')
+                """
+            : string.Empty;
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                {jobs}
+                SELECT 1 FROM {_schema}.maf_execution_dispatches
+                WHERE project_id = @project AND run_id = @run
+                  AND dispatch_state IN ('sending', 'terminal_pending_accounting', 'indeterminate')
+                UNION ALL
+                SELECT 1 FROM {_schema}.maf_root_model_turn_admissions a
+                WHERE a.project_id = @project AND a.run_id = @run
+                  AND NOT EXISTS (
+                      SELECT 1 FROM {_schema}.maf_runtime_evidence_receipts e
+                      WHERE e.project_id = a.project_id AND e.run_id = a.run_id
+                        AND e.attempt_id = a.request_id
+                        AND e.receipt_kind IN ('native-root-turn-completion', 'numeric-limit-native-no-send'))
+                {quiescedJob}
+            )
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", runId);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+    }
+
+    private async Task<bool> TableExistsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        string table,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("SELECT to_regclass(@table) IS NOT NULL", connection, transaction);
+        command.Parameters.AddWithValue("table", NpgsqlDbType.Text, $"{_schema}.{table}");
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+    }
+
+    internal static async Task<bool> IsTerminalCleanupGuardInstalledAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        string schema,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (SELECT 1 FROM {schema}.coordination_schema_migrations WHERE version = 47)
+                AND EXISTS (
+                    SELECT 1 FROM pg_trigger
+                    WHERE tgrelid = to_regclass(@runs)
+                      AND tgname = 'accepted_run_terminal_cleanup_guard'
+                      AND tgfoid = to_regprocedure(@guard)
+                      AND tgtype = 19 AND tgenabled = 'O' AND NOT tgisinternal)
+            """, connection, transaction);
+        command.Parameters.AddWithValue("runs", $"{schema}.accepted_runs");
+        command.Parameters.AddWithValue("guard", $"{schema}.guard_terminal_cleanup_recovery()");
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+    }
+
+    public async Task<bool> IsTerminalCleanupGuardInstalledAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await IsTerminalCleanupGuardInstalledAsync(
+            connection, null, _schema, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static async Task<bool> HasTerminalCleanupMarkerAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        string schema,
+        string tenantId,
+        string projectId,
+        string runId,
+        string state,
+        long fence,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1 FROM {schema}.project_run_cancellations
+                WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
+                  AND result -> 'terminalCleanup' ->> 'state' = @state
+                  AND result -> 'terminalCleanup' ->> 'fence' = @fence)
+            """, connection, transaction);
+        command.Parameters.AddWithValue("tenant", tenantId);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", runId);
+        command.Parameters.AddWithValue("state", state);
+        command.Parameters.AddWithValue("fence", fence.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
     }
 
     public async Task<RuntimeRunStartIntent?> FindCleanupIntentAsync(
@@ -690,7 +1018,121 @@ internal sealed class CoordinationRuntimeRunStartStore
         string runId,
         CancellationToken cancellationToken)
     {
+        var intents = await FindCleanupIntentsAsync(
+            tenantId, projectId, runId, cancellationToken).ConfigureAwait(false);
+        if (intents.Count > 1)
+            throw new CoordinationException("runtime_start_cleanup_ambiguous", StatusCodes.Status409Conflict);
+        return intents.Count == 0 ? null : intents[0];
+    }
+
+    public async Task<RuntimeCleanupSummary?> ReadCleanupSummaryAsync(
+        string tenantId, string projectId, string runId, CancellationToken cancellationToken)
+    {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        // Runtime start intents begin at migration 042; earlier schemas have no runtime cleanup to report.
+        if (!await TableExistsAsync(connection, null, "runtime_run_start_intents", cancellationToken)
+                .ConfigureAwait(false))
+            return null;
+        var intents = await FindCleanupIntentsAsync(
+            tenantId, projectId, runId, cancellationToken).ConfigureAwait(false);
+        if (intents.Count == 0)
+        {
+            await using var run = new NpgsqlCommand($"""
+                SELECT execution_state FROM {_schema}.accepted_runs
+                WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
+                """, connection);
+            run.Parameters.AddWithValue("tenant", tenantId);
+            run.Parameters.AddWithValue("project", projectId);
+            run.Parameters.AddWithValue("run", runId);
+            if (await run.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)
+                is not ("completed" or "failed" or "indeterminate" or "cancelled"))
+                return null;
+        }
+        var complete = intents.Count(intent => intent.State == "cleanup_complete");
+        var pending = intents.Count - complete;
+        var unknown = await HasUntrackedCleanupResourcesAsync(
+            connection, tenantId, projectId, runId, cancellationToken).ConfigureAwait(false);
+        var unresolved = await HasUnresolvedNativeWorkAsync(
+            connection, null, projectId, runId, cancellationToken).ConfigureAwait(false);
+        if (unknown || unresolved)
+            pending++;
+        if (intents.Count == 0 && pending == 0)
+            return null;
+        return new RuntimeCleanupSummary(
+            pending == 0 ? "complete" : "pending", complete + pending, pending, complete);
+    }
+
+    private async Task<bool> HasIncompleteChildCleanupAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        string projectId,
+        string runId,
+        string rootSessionId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1 FROM {_schema}.coordination_sessions s
+                JOIN {_schema}.runtime_run_start_intents i
+                  ON i.project_id = s.project_id AND i.run_id = s.run_id
+                 AND i.root_session_id = s.session_id AND i.receipt_links ? 'childStart'
+                WHERE s.project_id = @project AND s.run_id = @run AND s.root_session_id = @root
+                  AND s.node_kind = 'child_work'
+                  AND NOT (i.cleanup_obligation AND i.state = 'cleanup_complete')
+                UNION ALL
+                SELECT 1 FROM {_schema}.runtime_registration_heads h
+                JOIN {_schema}.runtime_registration_revisions v
+                  ON v.runtime_instance_id = h.runtime_instance_id AND v.revision = h.current_revision
+                WHERE v.state = 0 AND v.binding_json::jsonb ->> 'ProjectId' = @project
+                  AND v.binding_json::jsonb ->> 'RunId' = @run
+                  AND v.binding_json::jsonb ->> 'SessionId' IS DISTINCT FROM @root)
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", runId);
+        command.Parameters.AddWithValue("root", rootSessionId);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+    }
+
+    private async Task<bool> HasUntrackedCleanupResourcesAsync(
+        NpgsqlConnection connection,
+        string tenantId,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1 FROM {_schema}.runtime_run_start_intents i
+                WHERE i.tenant_id = @tenant AND i.project_id = @project AND i.run_id = @run
+                  AND i.receipt_links ? 'childStart' AND NOT i.cleanup_obligation
+                UNION ALL
+                SELECT 1 FROM {_schema}.runtime_registration_heads h
+                JOIN {_schema}.runtime_registration_revisions v
+                  ON v.runtime_instance_id = h.runtime_instance_id AND v.revision = h.current_revision
+                WHERE v.state = 0 AND v.binding_json::jsonb ->> 'ProjectId' = @project
+                  AND v.binding_json::jsonb ->> 'RunId' = @run
+                  AND NOT EXISTS (
+                      SELECT 1 FROM {_schema}.runtime_run_start_intents i
+                      WHERE i.tenant_id = @tenant AND i.project_id = @project AND i.run_id = @run
+                        AND i.root_session_id = v.binding_json::jsonb ->> 'SessionId'
+                        AND i.cleanup_obligation AND i.state <> 'cleanup_complete'))
+            """, connection);
+        command.Parameters.AddWithValue("tenant", tenantId);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", runId);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+    }
+
+    public async Task<IReadOnlyList<RuntimeRunStartIntent>> FindCleanupIntentsAsync(
+        string tenantId,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        if (!await TableExistsAsync(connection, null, "runtime_run_start_intents", cancellationToken)
+                .ConfigureAwait(false))
+            return [];
         await using var command = new NpgsqlCommand($"""
             SELECT root_session_id, accepted_selection_hash, execution_fence, intent_id,
                    bootstrap_operation_id, consume_operation_id, exchange_operation_id, state,
@@ -699,53 +1141,95 @@ internal sealed class CoordinationRuntimeRunStartStore
             FROM {_schema}.runtime_run_start_intents
             WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
               AND cleanup_obligation
-            LIMIT 2
+            ORDER BY root_session_id
+            LIMIT 102
             """, connection);
         command.Parameters.AddWithValue("tenant", tenantId);
         command.Parameters.AddWithValue("project", projectId);
         command.Parameters.AddWithValue("run", runId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-            return null;
-        var intent = new RuntimeRunStartIntent(
-            tenantId, projectId, runId,
-            reader.GetString(0), reader.GetString(1), reader.GetInt64(2),
-            reader.GetGuid(3), reader.GetGuid(4), reader.GetGuid(5), reader.GetGuid(6),
-            reader.GetString(7), reader.GetString(8),
-            reader.IsDBNull(9) ? null : reader.GetString(9),
-            reader.IsDBNull(10) ? null : reader.GetString(10),
-            reader.IsDBNull(11) ? null : reader.GetGuid(11),
-            reader.GetString(12), reader.GetBoolean(13), reader.GetInt64(14));
-        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-            throw new CoordinationException("runtime_start_cleanup_ambiguous", StatusCodes.Status409Conflict);
-        return intent;
+        var intents = new List<RuntimeRunStartIntent>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            intents.Add(new RuntimeRunStartIntent(
+                tenantId, projectId, runId,
+                reader.GetString(0), reader.GetString(1), reader.GetInt64(2),
+                reader.GetGuid(3), reader.GetGuid(4), reader.GetGuid(5), reader.GetGuid(6),
+                reader.GetString(7), reader.GetString(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9),
+                reader.IsDBNull(10) ? null : reader.GetString(10),
+                reader.IsDBNull(11) ? null : reader.GetGuid(11),
+                reader.GetString(12), reader.GetBoolean(13), reader.GetInt64(14)));
+        }
+        if (intents.Count > 101)
+            throw new CoordinationException("runtime_start_cleanup_limit_exceeded", StatusCodes.Status409Conflict);
+        return intents;
+    }
+
+    public async Task RequireRegistrationCleanupOwnerAsync(
+        RuntimeRunStartIntent intent,
+        RuntimeRegistration registration,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            SELECT r.accepted_by_issuer, r.accepted_by_subject, s.writer_issuer, s.writer_subject
+            FROM {_schema}.accepted_runs r
+            JOIN {_schema}.coordination_sessions s
+              ON s.project_id = r.project_id AND s.run_id = r.run_id
+            WHERE r.project_id = @project AND r.run_id = @run AND s.session_id = @session
+            """, connection);
+        command.Parameters.AddWithValue("project", intent.ProjectId);
+        command.Parameters.AddWithValue("run", intent.RunId);
+        command.Parameters.AddWithValue("session", intent.RootSessionId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+            reader.GetString(0) != registration.Binding.ActorIssuer ||
+            reader.GetString(1) != registration.Binding.ActorId ||
+            reader.GetString(2) != registration.Binding.ActorIssuer ||
+            reader.GetString(3) != registration.Binding.ActorId)
+            throw new CoordinationException("runtime_start_cleanup_registration_stale", StatusCodes.Status409Conflict);
     }
 
     public Task<RuntimeRunStartIntent> RecordCleanupPendingAsync(
         RuntimeRunStartIntent intent,
         long expectedVersion,
         RuntimeRunStartCleanupReceipt receipt,
+        RuntimeRunStartCleanupProjection projection,
         CancellationToken cancellationToken) =>
-        UpdateCleanupAsync(intent, expectedVersion, "cleanup_pending", receipt, cancellationToken);
+        UpdateCleanupAsync(intent, expectedVersion, "cleanup_pending", receipt, projection, cancellationToken);
 
     public Task<RuntimeRunStartIntent> MarkCleanupCompleteAsync(
         RuntimeRunStartIntent intent,
         long expectedVersion,
         RuntimeRunStartCleanupReceipt receipt,
+        RuntimeRunStartCleanupProjection projection,
         CancellationToken cancellationToken) =>
-        UpdateCleanupAsync(intent, expectedVersion, "cleanup_complete", receipt, cancellationToken);
+        UpdateCleanupAsync(intent, expectedVersion, "cleanup_complete", receipt, projection, cancellationToken);
 
     private async Task<RuntimeRunStartIntent> UpdateCleanupAsync(
         RuntimeRunStartIntent intent,
         long expectedVersion,
         string state,
         RuntimeRunStartCleanupReceipt receipt,
+        RuntimeRunStartCleanupProjection projection,
         CancellationToken cancellationToken)
     {
         receipt.Validate();
+        projection.Validate();
         if (receipt.IntentId != intent.IntentId ||
             (state == "cleanup_complete") != (receipt.CleanupDisposition == "cleanup_complete"))
             throw new CoordinationException("runtime_start_cleanup_receipt_invalid", StatusCodes.Status409Conflict);
+        using var originalLinks = JsonDocument.Parse(intent.ReceiptLinks);
+        if (projection.IntentId != intent.IntentId || projection.IntentVersion != expectedVersion ||
+            projection.TenantId != intent.TenantId || projection.ProjectId != intent.ProjectId ||
+            projection.RunId != intent.RunId || projection.RootSessionId != intent.RootSessionId ||
+            projection.AcceptedSelectionHash != intent.AcceptedSelectionHash ||
+            projection.ExecutionFence != intent.ExecutionFence ||
+            projection.BootstrapOperationId != intent.BootstrapOperationId ||
+            projection.EnvironmentId != intent.EnvironmentId ||
+            !JsonElement.DeepEquals(projection.ReceiptLinks, originalLinks.RootElement))
+            throw new CoordinationException("runtime_start_cleanup_stale", StatusCodes.Status409Conflict);
         var links = ReadReceiptLinks(intent);
         if (receipt.LeaseState == "absent")
         {
@@ -763,7 +1247,10 @@ internal sealed class CoordinationRuntimeRunStartStore
                 receipt.SandboxOperationId,
                 receipt.ResourceGeneration,
                 receipt.ProviderFencingGeneration,
-                receipt.SandboxIdempotencyKey!).Validate();
+                receipt.SandboxIdempotencyKey!)
+            {
+                SandboxResource = receipt.SandboxResource
+            }.Validate();
             if (links.TryGetValue("cleanupAttempt", out var savedAttemptElement))
             {
                 var savedAttempt = savedAttemptElement.Deserialize<RuntimeRunStartCleanupAttempt>(JsonOptions)
@@ -793,19 +1280,62 @@ internal sealed class CoordinationRuntimeRunStartStore
         var json = JsonSerializer.Serialize(links, JsonOptions);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        string parentRootSessionId;
         await using (var run = new NpgsqlCommand($"""
-            SELECT execution_state, execution_fence
-            FROM {_schema}.accepted_runs
-            WHERE project_id = @project AND run_id = @run
-            FOR UPDATE
+            SELECT r.execution_state, r.execution_fence, r.tenant_id, r.accepted_selection_hash,
+                   s.root_session_id
+            FROM {_schema}.accepted_runs r
+            JOIN {_schema}.coordination_sessions s
+              ON s.project_id = r.project_id AND s.run_id = r.run_id AND s.session_id = @session
+            WHERE r.project_id = @project AND r.run_id = @run
+            FOR UPDATE OF r
             """, connection, transaction))
         {
             run.Parameters.AddWithValue("project", intent.ProjectId);
             run.Parameters.AddWithValue("run", intent.RunId);
+            run.Parameters.AddWithValue("session", intent.RootSessionId);
             await using var reader = await run.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
-                reader.GetString(0) != "cancelled" || reader.GetInt64(1) <= intent.ExecutionFence)
+                reader.GetString(0) != projection.RunState ||
+                reader.GetInt64(1) != (projection.TerminalFence ?? projection.CancellationFence) ||
+                reader.GetString(2) != projection.TenantId ||
+                !string.Equals(reader.GetString(3).Trim(), projection.AcceptedSelectionHash,
+                    StringComparison.OrdinalIgnoreCase) ||
+                projection.ContractVersion == 2 && reader.GetString(4) != projection.ParentRootSessionId)
                 throw new CoordinationException("runtime_start_cleanup_fence_stale", StatusCodes.Status409Conflict);
+            parentRootSessionId = reader.GetString(4);
+        }
+        if (projection.ContractVersion == 2 &&
+            (!await IsTerminalCleanupGuardInstalledAsync(connection, transaction, _schema, cancellationToken)
+                .ConfigureAwait(false) ||
+             projection.RunState != "cancelled" &&
+             !await HasTerminalCleanupMarkerAsync(
+                 connection, transaction, _schema, intent.TenantId, intent.ProjectId, intent.RunId,
+                 projection.RunState, projection.TerminalFence!.Value, cancellationToken).ConfigureAwait(false)))
+            throw new CoordinationException("runtime_start_cleanup_guard_unavailable", StatusCodes.Status503ServiceUnavailable);
+        if (await HasUnresolvedNativeWorkAsync(
+                connection, transaction, intent.ProjectId, intent.RunId, cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException("runtime_start_cleanup_work_pending", StatusCodes.Status409Conflict);
+        if (state == "cleanup_complete")
+        {
+            if (intent.RootSessionId == parentRootSessionId && await HasIncompleteChildCleanupAsync(
+                    connection, transaction, intent.ProjectId, intent.RunId, parentRootSessionId, cancellationToken)
+                .ConfigureAwait(false))
+                throw new CoordinationException("runtime_start_child_cleanup_pending", StatusCodes.Status409Conflict);
+            await using var active = new NpgsqlCommand($"""
+                SELECT EXISTS (
+                    SELECT 1 FROM {_schema}.runtime_registration_heads h
+                    JOIN {_schema}.runtime_registration_revisions v
+                      ON v.runtime_instance_id = h.runtime_instance_id AND v.revision = h.current_revision
+                    WHERE v.state = 0 AND v.binding_json::jsonb ->> 'ProjectId' = @project
+                      AND v.binding_json::jsonb ->> 'RunId' = @run
+                      AND v.binding_json::jsonb ->> 'SessionId' = @session)
+                """, connection, transaction);
+            active.Parameters.AddWithValue("project", intent.ProjectId);
+            active.Parameters.AddWithValue("run", intent.RunId);
+            active.Parameters.AddWithValue("session", intent.RootSessionId);
+            if ((bool)(await active.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!)
+                throw new CoordinationException("runtime_start_registration_cleanup_pending", StatusCodes.Status409Conflict);
         }
         await using var update = new NpgsqlCommand($"""
             UPDATE {_schema}.runtime_run_start_intents
@@ -998,7 +1528,7 @@ internal sealed class CoordinationRuntimeRunStartStore
 
     public async Task<RuntimeRunStartIntent> CommitReadyAsync(
         RuntimeRunStartIntent intent, RuntimeOwnerContext owner, long expectedVersion, object receiptLinks,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool isChild = false)
     {
         if (owner.TenantId != intent.TenantId || owner.ProjectId != intent.ProjectId ||
             owner.RunId != intent.RunId || owner.SessionId != intent.RootSessionId ||
@@ -1023,8 +1553,12 @@ internal sealed class CoordinationRuntimeRunStartStore
                 reader.GetString(2) is "completed" or "failed" or "indeterminate" or "cancelled")
                 throw new CoordinationException("runtime_start_run_terminal", StatusCodes.Status409Conflict);
         }
-        await RequireCurrentRootAsync(connection, transaction, owner, cancellationToken)
-            .ConfigureAwait(false);
+        if (isChild)
+            await RequireCurrentChildAsync(connection, transaction, intent, owner, cancellationToken)
+                .ConfigureAwait(false);
+        else
+            await RequireCurrentRootAsync(connection, transaction, owner, cancellationToken)
+                .ConfigureAwait(false);
         var updated = await UpdateInTransactionAsync(
             connection, transaction, intent, expectedVersion, "ready", "ready", null,
             intent.EnvironmentId, intent.RuntimeInstanceId, receiptLinks, cancellationToken).ConfigureAwait(false);
@@ -1036,6 +1570,12 @@ internal sealed class CoordinationRuntimeRunStartStore
         NpgsqlConnection connection, NpgsqlTransaction transaction, string schema,
         string projectId, string runId, CancellationToken cancellationToken)
     {
+        await using (var available = new NpgsqlCommand("SELECT to_regclass(@table) IS NOT NULL", connection, transaction))
+        {
+            available.Parameters.AddWithValue("table", $"{schema}.runtime_run_start_intents");
+            if (!(bool)(await available.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!)
+                return;
+        }
         await using var update = new NpgsqlCommand($"""
             UPDATE {schema}.runtime_run_start_intents
             SET state = CASE WHEN state = 'cleanup_complete' THEN state ELSE 'cleanup_pending' END,

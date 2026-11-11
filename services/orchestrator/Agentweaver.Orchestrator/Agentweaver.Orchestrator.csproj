@@ -65,5 +65,6 @@
     <EmbeddedResource Include="Migrations\044_runtime_replacement_operations.sql" />
     <EmbeddedResource Include="Migrations\045_runtime_root_turn_replay.sql" />
     <EmbeddedResource Include="Migrations\046_workflow_generation_jobs.sql" />
+    <EmbeddedResource Include="Migrations\047_terminal_cleanup_recovery_guard.sql" />
   </ItemGroup>
 </Project>

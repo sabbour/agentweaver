@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Persistence.Postgres;
 using Microsoft.AspNetCore.Http;
@@ -12,6 +14,12 @@ namespace Agentweaver.Orchestrator;
 /// <summary>Persists interactive input and serializes start and cancel across service replicas.</summary>
 internal sealed partial class CoordinationOwnerStore
 {
+    private static readonly JsonSerializerOptions CancellationReceiptJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Skip
+    };
+
     /// <summary>Creates one durable run identity per actor, tenant, project, and idempotency key.</summary>
     internal async Task<ProjectRunRequestRow> CreateProjectRunAsync(
         CoordinationActor actor, string tenantId, string projectId, string key,
@@ -184,6 +192,10 @@ internal sealed partial class CoordinationOwnerStore
         RequireProjectRunCancellationAuthority(actor, selection);
         if (request.Reason is { Length: > 2048 })
             throw new CoordinationException("cancel_reason_invalid", StatusCodes.Status400BadRequest);
+        if ((request.ExpectedTerminalState is null) != (request.ExpectedTerminalFence is null) ||
+            request.ExpectedTerminalState is not (null or "completed" or "failed" or "indeterminate" or "cancelled") ||
+            request.ExpectedTerminalFence is < 1)
+            throw new CoordinationException("terminal_cleanup_expectation_invalid", StatusCodes.Status400BadRequest);
         var projectId = selection.Selection.ProjectId;
         var runId = selection.Selection.RunId;
         var tenantId = selection.Authorization.TenantId;
@@ -205,6 +217,18 @@ internal sealed partial class CoordinationOwnerStore
         if (run is not null &&
             (run.TenantId != tenantId || run.SelectionHash != HashSelection(selection.Selection)))
             throw new CoordinationException("accepted_run_conflict", StatusCodes.Status409Conflict);
+        if (run is not null && run.ExecutionState is "idle" or "active" or "blocked" &&
+            await NormalizeLegacyCompletedRunAsync(connection, transaction, projectId, runId, cancellationToken)
+                .ConfigureAwait(false))
+            run = run with { ExecutionState = "completed" };
+        if (request.ExpectedTerminalState is not null &&
+            (run is null || run.ExecutionState != request.ExpectedTerminalState ||
+             run.Fence != request.ExpectedTerminalFence))
+            throw new CoordinationException("terminal_cleanup_expectation_stale", StatusCodes.Status409Conflict);
+        var guardInstalled = await CoordinationRuntimeRunStartStore.IsTerminalCleanupGuardInstalledAsync(
+            connection, transaction, _schema, cancellationToken).ConfigureAwait(false);
+        if (request.ExpectedTerminalState is not null && !guardInstalled)
+            throw new CoordinationException("runtime_start_cleanup_guard_unavailable", StatusCodes.Status503ServiceUnavailable);
         await using (var replay = new NpgsqlCommand($"""
             SELECT request_fingerprint, result::text FROM {_schema}.project_run_cancellations
             WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
@@ -219,10 +243,22 @@ internal sealed partial class CoordinationOwnerStore
             {
                 if (reader.GetString(0) != fingerprint)
                     throw new CoordinationException("idempotency_conflict", StatusCodes.Status409Conflict);
-                var receipt = JsonSerializer.Deserialize<CancelProjectRunResponse>(reader.GetString(1), JsonOptions)
+                var savedResult = reader.GetString(1);
+                var receipt = JsonSerializer.Deserialize<CancelProjectRunResponse>(
+                    savedResult, CancellationReceiptJsonOptions)
                     ?? throw new CoordinationException("cancel_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
                 await reader.DisposeAsync();
-                if (run?.ExecutionState == "cancelled")
+                using var savedDocument = JsonDocument.Parse(savedResult);
+                var hasExactMarker = run is not null &&
+                    savedDocument.RootElement.TryGetProperty("terminalCleanup", out var marker) &&
+                    marker.ValueKind == JsonValueKind.Object &&
+                    marker.TryGetProperty("state", out var state) &&
+                    state.GetString() == run.ExecutionState &&
+                    marker.TryGetProperty("fence", out var fence) &&
+                    fence.TryGetInt64(out var savedFence) && savedFence == run.Fence;
+                if (run is not null &&
+                    (guardInstalled && hasExactMarker ||
+                     run.ExecutionState == "cancelled" && receipt.State == "cancelled"))
                     await CoordinationRuntimeRunStartStore.CaptureCleanupInTransactionAsync(
                         connection, transaction, _schema, projectId, runId, cancellationToken)
                         .ConfigureAwait(false);
@@ -272,10 +308,30 @@ internal sealed partial class CoordinationOwnerStore
             if (pending is not null)
                 await SetProjectRunRequestStateAsync(connection, transaction, projectId, runId, "cancelled", cancellationToken);
         }
-        if (run is not null && result.State == "cancelled")
+        var saveTerminalMarker = run is not null && guardInstalled &&
+            (result.State is "cancelled" or "completed" or "failed" or "indeterminate");
+        if (saveTerminalMarker)
+        {
+            // A row version makes a concurrent repeatable-read recovery reject its older snapshot.
+            await using var touch = new NpgsqlCommand($"""
+                UPDATE {_runs} SET updated_at = updated_at
+                WHERE project_id = @project AND run_id = @run
+                  AND execution_state = @state AND execution_fence = @fence
+                """, connection, transaction);
+            AddRunScope(touch, projectId, runId);
+            touch.Parameters.AddWithValue("state", result.State);
+            touch.Parameters.AddWithValue("fence", nextFence);
+            if (await touch.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                throw new CoordinationException("terminal_cleanup_expectation_stale", StatusCodes.Status409Conflict);
+        }
+        if (run is not null && (saveTerminalMarker || result.State == "cancelled"))
             await CoordinationRuntimeRunStartStore.CaptureCleanupInTransactionAsync(
                 connection, transaction, _schema, projectId, runId, cancellationToken)
                 .ConfigureAwait(false);
+        var savedReceipt = JsonSerializer.SerializeToNode(result, JsonOptions)!.AsObject();
+        if (saveTerminalMarker)
+            savedReceipt["terminalCleanup"] = JsonSerializer.SerializeToNode(
+                new { state = result.State, fence = nextFence }, JsonOptions);
         await using (var save = new NpgsqlCommand($"""
             INSERT INTO {_schema}.project_run_cancellations
                 (tenant_id, project_id, run_id, actor_issuer, actor_subject,
@@ -287,7 +343,7 @@ internal sealed partial class CoordinationOwnerStore
             AddProjectRunActor(save, actor, tenantId);
             save.Parameters.AddWithValue("key", keyHash);
             save.Parameters.AddWithValue("fingerprint", fingerprint);
-            save.Parameters.AddWithValue("result", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(result, JsonOptions));
+            save.Parameters.AddWithValue("result", NpgsqlDbType.Jsonb, savedReceipt.ToJsonString(JsonOptions));
             await save.ExecuteNonQueryAsync(cancellationToken);
         }
         if (!alreadyTerminal)
@@ -300,6 +356,47 @@ internal sealed partial class CoordinationOwnerStore
         await transaction.CommitAsync(cancellationToken);
         return result;
     }
+
+    /// <summary>
+    /// Records a run that completed before terminal states were stored as completed, at the same fence.
+    /// </summary>
+    /// <remarks>
+    /// The caller holds the run row lock. Older code set only completed_at, and runs that ended before
+    /// migration 022 have only a completed root session.
+    /// </remarks>
+    private async Task<bool> NormalizeLegacyCompletedRunAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, string projectId, string runId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            UPDATE {_runs} AS r
+            SET execution_state = 'completed', state_version = state_version + 1, updated_at = clock_timestamp()
+            WHERE r.project_id = @project AND r.run_id = @run AND {LegacyCompletedRunPredicate()}
+            """, connection, transaction);
+        AddRunScope(command, projectId, runId);
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
+    }
+
+    private async Task<bool> IsLegacyCompletedRunAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, string projectId, string runId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1 FROM {_runs} AS r
+                WHERE r.project_id = @project AND r.run_id = @run AND {LegacyCompletedRunPredicate()})
+            """, connection, transaction);
+        AddRunScope(command, projectId, runId);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+    }
+
+    private string LegacyCompletedRunPredicate() => $"""
+        r.execution_state IN ('idle', 'active', 'blocked')
+        AND (r.completed_at IS NOT NULL OR EXISTS (
+            SELECT 1 FROM {_sessions} AS root
+            WHERE root.project_id = r.project_id AND root.run_id = r.run_id
+              AND root.parent_session_id IS NULL AND root.lifecycle_state = 'completed'))
+        """;
 
     /// <summary>Locks request state before accepted-run locks; only start is restricted to its creator.</summary>
     private async Task<ProjectRunRequestRow?> LockProjectRunRequestAsync(

@@ -161,6 +161,21 @@ public sealed class EnvironmentSandboxManager(
         await ProvisionCoordinatorRootAsync(
             caller, expectedOwner, request, requireCurrent, cancellationToken).ConfigureAwait(false);
 
+    internal async Task<EnvironmentSandboxResult> ProvisionChildFirstStartAsync(
+        CurrentCallerRequest caller,
+        RuntimeOwnerContext expectedOwner,
+        SandboxProvisionApiRequest request,
+        Func<CancellationToken, Task> requireCurrent,
+        CancellationToken cancellationToken)
+    {
+        if (expectedOwner.AgentId == RuntimeActionContract.CoordinatorRootStepId ||
+            expectedOwner.LogicalTurnOrdinal < 1 ||
+            string.IsNullOrWhiteSpace(expectedOwner.WorkflowStepId))
+            throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
+        return await ProvisionCoordinatorRootAsync(
+            caller, expectedOwner, request, requireCurrent, cancellationToken).ConfigureAwait(false);
+    }
+
     internal Task<EnvironmentSandboxResult> ProvisionCoordinatorReplacementAsync(
         CurrentCallerRequest caller,
         RuntimeReplacementPlacementRequest request,
@@ -1048,8 +1063,7 @@ public sealed class EnvironmentSandboxManager(
         CancellationToken cancellationToken)
     {
         projection.Validate();
-        if (projection.RunState != "cancelled" ||
-            projection.CleanupDisposition != "cleanup_pending" ||
+        if (projection.CleanupDisposition != "cleanup_pending" ||
             projection.TenantId.Length == 0)
             throw new RuntimeAuthorizationException("runtime_start_cleanup_binding_invalid");
 
@@ -1109,13 +1123,19 @@ public sealed class EnvironmentSandboxManager(
             (lease.OperationId != savedCleanupAttempt.SandboxOperationId ||
              lease.ResourceGeneration != savedCleanupAttempt.ResourceGeneration ||
              lease.ProviderFencingGeneration != savedCleanupAttempt.ProviderFencingGeneration ||
+             savedCleanupAttempt.SandboxResource is not null &&
+                savedCleanupAttempt.SandboxResource != lease.ProvisionedResource?.Resource ||
              recovery?.Request.IdempotencyKey != savedCleanupAttempt.SandboxIdempotencyKey))
             throw new RuntimeAuthorizationException("runtime_start_cleanup_attempt_stale");
         var attachment = recovery?.Workspace.Negotiation;
         var releaseKey = $"coordinator-release-{projection.IntentId:N}";
+        // A root bootstrap retirement whose reply was lost already owns the release; continue it.
+        var retirementKey = $"coordinator-bootstrap-retire-{projection.BootstrapOperationId:N}";
+        var ownedRelease = lease.ReleaseIdempotencyKey == releaseKey ||
+            lease.ReleaseIdempotencyKey == retirementKey && lease.RetirementReason == SandboxRetirementReason.AuthorizedAbandon;
         var advancedRetirementFence = placement is not null &&
             (lease.State is SandboxLeaseState.Releasing or SandboxLeaseState.Released) &&
-            lease.ReleaseIdempotencyKey == releaseKey &&
+            ownedRelease &&
             lease.RetirementReason == SandboxRetirementReason.AuthorizedAbandon &&
             placement.CurrentFencingGeneration < long.MaxValue &&
             lease.CurrentFencingGeneration == placement.CurrentFencingGeneration + 1;
@@ -1149,10 +1169,29 @@ public sealed class EnvironmentSandboxManager(
                 placement is not null && resource.Resource != placement.SandboxResource)
             throw new RuntimeAuthorizationException("runtime_start_cleanup_attempt_stale");
 
+        if (projection.ReceiptLinks.TryGetProperty("registration", out var savedRegistration))
+        {
+            var registration = savedRegistration.Deserialize<RuntimeRegistration>(JsonOptions)
+                ?? throw new RuntimeAuthorizationException("runtime_start_cleanup_attempt_invalid");
+            var binding = registration.Binding;
+            var registeredResource = lease.ProvisionedResource?.Resource;
+            if (registeredResource is null || binding.TenantId != projection.TenantId ||
+                binding.ProjectId != projection.ProjectId || binding.RunId != projection.RunId ||
+                binding.SessionId != projection.RootSessionId ||
+                binding.AcceptedSelectionHash != projection.AcceptedSelectionHash ||
+                binding.ExecutionFence != projection.ExecutionFence ||
+                binding.EnvironmentId != expectedEnvironmentId ||
+                binding.EnvironmentLifecycleGeneration != fence.LifecycleGeneration ||
+                binding.EnvironmentProviderFencingGeneration != lease.ProviderFencingGeneration ||
+                binding.PlacementProviderId != registeredResource.ProviderId ||
+                binding.PlacementUid != registeredResource.ResourceId ||
+                binding.PlacementGeneration != registeredResource.Generation)
+                throw new RuntimeAuthorizationException("runtime_start_cleanup_attempt_stale");
+        }
+
         if (lease.State is SandboxLeaseState.Released or SandboxLeaseState.Failed)
         {
-            if (lease.State == SandboxLeaseState.Released &&
-                lease.ReleaseIdempotencyKey == releaseKey)
+            if (lease.State == SandboxLeaseState.Released && ownedRelease)
             {
                 var cleanupCancellationAuthorization = await egressManager.GetAuthorizedRunCancellationContextAsync(
                     caller, owner, cancellationToken).ConfigureAwait(false);
@@ -1185,7 +1224,7 @@ public sealed class EnvironmentSandboxManager(
             fence, new EnvironmentEgressManager.AuthorizedSelection(cancellationAuthorization, savedSelection));
         if (lease.State == SandboxLeaseState.Releasing)
         {
-            if (lease.ReleaseIdempotencyKey != releaseKey)
+            if (!ownedRelease)
                 throw new RuntimeAuthorizationException("runtime_start_cleanup_attempt_stale");
         }
         else

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -109,6 +110,8 @@ public static partial class CoordinationEndpoints
             var scribeClient = context.RequestServices.GetService<MafScribeKnowledgeClient>();
             var sourceControlClient = context.RequestServices.GetService<MafSourceControlOwnerClient>();
             var registrationOwner = context.RequestServices.GetService<RuntimeRegistrationOwner>();
+            var childStartDispatcher = context.RequestServices.GetService<RuntimeRunStartDispatcher>();
+            var childProvisioning = new ConcurrentDictionary<string, RuntimeStartupSummary>(StringComparer.Ordinal);
             var actionGrants = context.RequestServices.GetService<ExecutableActionGrantOwnerStore>();
             var identity = new SessionIdentity(projectId, runId, sessionId);
             var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
@@ -650,6 +653,15 @@ public static partial class CoordinationEndpoints
                     return pending.Snapshot.State.Results[intent.AssociationId];
                 MafExecutionEgressGuard.RequireSameReceipt(
                     intent.EgressReceipt, await VerifyEgressAsync(token).ConfigureAwait(false));
+                if (childStartDispatcher is null)
+                    throw new CoordinationException(
+                        "runtime_child_start_unavailable", StatusCodes.Status503ServiceUnavailable);
+                await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                var startup = await childStartDispatcher.EnqueueChildAsync(
+                    context, identity, intent, decision.State.Fence, token).ConfigureAwait(false);
+                childProvisioning[intent.AssociationId] = startup;
+                if (startup.State != "ready")
+                    return null;
                 // A null registration means the child runtime is not registered or not ready yet.
                 // The dispatch is not sent now and is retried later.
                 var registration = await ReadDispatchRegistrationAsync(intent, token).ConfigureAwait(false);
@@ -2484,6 +2496,15 @@ public static partial class CoordinationEndpoints
                         EgressReceipt = egressReceipt
                     };
                     var childIdentity = new SessionIdentity(projectId, runId, childSessionId);
+                    var childStarts = context.RequestServices.GetService<CoordinationRuntimeRunStartStore>()
+                        ?? throw new CoordinationException(
+                            "runtime_child_start_unavailable", StatusCodes.Status503ServiceUnavailable);
+                    var childAgentId = fixedAssociation?.AgentId ?? action.WorkItem?.AgentId
+                        ?? throw new CoordinationException(
+                            "runtime_child_start_binding_invalid", StatusCodes.Status409Conflict);
+                    var childModel = fixedAssociation?.ModelSelectionReference ?? action.WorkItem?.ModelSelectionReference
+                        ?? throw new CoordinationException(
+                            "runtime_child_start_binding_invalid", StatusCodes.Status409Conflict);
                     var spawn = new SpawnSessionRequest(
                         childSessionId,
                         CoordinationSessionKind.ChildWork,
@@ -2534,6 +2555,16 @@ public static partial class CoordinationEndpoints
                                     latest?.State.FixedWorkAssociations, action);
                             await RequireChildSpawnConsumedAsync(
                                 connection, transaction, spawnAuthorizationIntent, token).ConfigureAwait(false);
+                            await childStarts.PersistChildIntentInTransactionAsync(
+                                connection, transaction, selection.Authorization.TenantId, projectId, runId,
+                                decision.SelectionHash, decision.State.Fence,
+                                new RuntimeChildStartBinding(
+                                    identity.SessionId, childSessionId, plan.Plan.Id, associationId,
+                                    action.WorkItem?.Id, action.Step.Id, childAgentId, childModel,
+                                    actor.Issuer, actor.Subject, selection.Selection.ContextRevision,
+                                    decision.StateVersion, spawned.Node.StateVersion,
+                                    spawned.CommandId, intent.MessageId, intent.PromptHash), token)
+                                .ConfigureAwait(false);
                             var next = PrepareRunningCheckpoint(
                                 latest, plan.Plan.Id, decision.StateVersion, associationId, fixedAssociation, intent);
                             if (next is null)
@@ -2656,7 +2687,8 @@ public static partial class CoordinationEndpoints
                 finalFrontier.IsComplete)
             {
                 CompletedResults = checkpoint.State.Results,
-                WallTimeLimitReached = wallTimeLimitReached || IsWallTimeLimitReached()
+                WallTimeLimitReached = wallTimeLimitReached || IsWallTimeLimitReached(),
+                ChildRuntimeStartup = childProvisioning.ToImmutableDictionary(StringComparer.Ordinal)
             });
         }, cancellationToken);
 

@@ -26,7 +26,7 @@ public sealed class EnvironmentRuntimeOwnerContextClient(
     /// <summary>Reads the separate terminal projection with fresh unbound cancellation authority.</summary>
     public async Task<RuntimeRunStartCleanupProjection> ReadCleanupAsync(
         RuntimeActorAuthorization actor, string projectId, string runId, string sessionId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, int contractVersion = 1)
     {
         if (options is null)
             throw new RuntimeAuthorizationException("runtime_owner_context_unavailable");
@@ -35,7 +35,7 @@ public sealed class EnvironmentRuntimeOwnerContextClient(
                 client, options.OrchestratorOwnerAddress,
                 $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}" +
                 $"/coordination/sessions/{Uri.EscapeDataString(sessionId)}/runtime-owner-context",
-                actor, cancellationToken).ConfigureAwait(false);
+                actor, cancellationToken, contractVersion).ConfigureAwait(false);
         return projection.Validate();
     }
 

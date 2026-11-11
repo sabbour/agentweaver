@@ -16,6 +16,7 @@ using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
 using Agentweaver.Providers.Sandbox.AgentSandbox;
+using Agentweaver.Providers.Storage.AzureFiles;
 using GitHub.Copilot;
 using EventsHost::Agentweaver.EventsAndSessions;
 using Microsoft.AspNetCore.Builder;
@@ -156,6 +157,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     public async Task PublicNativeChildrenJoinBeforeIndependentReviewGate()
         => await RunPublicConfirmedPlanRevalidatesPrePlanRootRegistrationBeforeEgressAsync("native");
 
+    [Fact]
+    public async Task PublicDispatchStartsAnUnregisteredChildAndReusesItsLostPlacement()
+        => await RunPublicConfirmedPlanRevalidatesPrePlanRootRegistrationBeforeEgressAsync("production");
+
     private async Task RunPublicConfirmedPlanRevalidatesPrePlanRootRegistrationBeforeEgressAsync(string scenario)
     {
         using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
@@ -178,7 +183,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                  action: allow
                  priority: 100
              """]);
-        var catalog = CreateSourceControlProviderCatalog(policy);
+        var storage = scenario == "production"
+            ? new AzureFilesCsiOptions(
+                AzureFilesCsiOptions.CurrentOptionsSchemaVersion,
+                "runtime-storage-options", "agentweaver", "azure-files", 1, 60, 100)
+            : null;
+        var catalog = CreateSourceControlProviderCatalog(policy, storage);
         await using var projects = await ProjectsConfigResourceServer.StartAsync(
             _connectionString, signingKey, providerCatalog: catalog);
         var adminToken = await IssueTokenAsync(
@@ -259,7 +269,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             RequiredAdapterVersion = AgtPolicyProvider.AdapterVersion.ToString(),
                             RequiredOptionsSchemaVersion = AgtPolicyProvider.OptionsSchemaVersion,
                             RequiredCapabilities = PolicyProviderCapabilities.All
-                        }
+                        },
+                        ..(storage is null ? [] : new[]
+                        {
+                            new ProviderRequirement
+                            {
+                                Seam = ProviderSeam.Storage,
+                                RequiredAdapterVersion = AzureFilesCsiProviderMetadata.AdapterVersion.ToString(),
+                                RequiredOptionsSchemaVersion = AzureFilesCsiOptions.CurrentOptionsSchemaVersion,
+                                RequiredCapabilities = AzureFilesCsiProviderMetadata.CreateRegistration(storage)
+                                    .Descriptor.AdvertisedCapabilities
+                            }
+                        })
                     ]
                 }
             });
@@ -300,7 +321,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ["Identity__Issuer"] = IdentityBrokerWebApplicationFactory.Issuer,
             ["Identity__Audience"] = "https://api.test"
         });
-        using var nativeEnvironment = scenario == "native"
+        using var nativeEnvironment = scenario is "native" or "production"
             ? new TemporaryEnvironment(new Dictionary<string, string?>
             {
                 ["Orchestrator__RuntimeUsage__BrokerOwnerAddress"] = "https://broker.test/",
@@ -337,23 +358,28 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var environments = new ConcurrentDictionary<string, RuntimePlacementTestServer>(StringComparer.Ordinal);
         environments["root-environment"] = environment;
         var runtimeEnvironments = new ConcurrentDictionary<Guid, string>();
+        var childStarts = new RuntimeRunStartOwnerProbe();
         if (scenario == "native")
             Assert.True(routes.TryAdd("environment.test",
                 () => new NativeJoinEnvironmentRouter(environments, runtimeEnvironments)));
+        else if (scenario == "production")
+            Assert.True(routes.TryAdd("environment.test", () => childStarts.CreateHandler(
+                () => new NativeJoinEnvironmentRouter(environments, runtimeEnvironments),
+                onlyChildStart: true)));
         else
             Assert.True(routes.TryAdd("environment.test", environment.CreateHandler));
         var sandbox = new ControlledSandboxResourceProvider(AgentSandboxProviderMetadata.ProviderId);
         await using var baseEvents = new EventsIntegrationFactory(
             _connectionString, eventsSchema, signingKey, projects.CreateHandler,
             () => new RuntimeServiceRouter(routes, failures),
-            nativeUsageHandler: scenario == "native"
+            nativeUsageHandler: scenario is "native" or "production"
                 ? () => new RuntimeServiceRouter(routes, failures)
                 : null,
-            sessionMaterialObjects: scenario == "native" ? new RuntimeMaterialObjects() : null,
-            simulateDirectTls: scenario == "native");
+            sessionMaterialObjects: scenario is "native" or "production" ? new RuntimeMaterialObjects() : null,
+            simulateDirectTls: scenario is "native" or "production");
         await using var events = baseEvents.WithWebHostBuilder(builder =>
         {
-            if (scenario == "native")
+            if (scenario is "native" or "production")
                 builder.ConfigureTestServices(services => services.RemoveAll<ILoggerProvider>());
         });
         Assert.True(routes.TryAdd("events.test", () => events.Server.CreateHandler()));
@@ -365,13 +391,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             runtimeUsageHandler: () => new RuntimeServiceRouter(routes, failures));
         await using var factory = baseFactory.WithWebHostBuilder(builder =>
         {
-            if (scenario == "native")
+            if (scenario is "native" or "production")
                 builder.ConfigureTestServices(services => services.RemoveAll<ILoggerProvider>());
             builder.ConfigureTestServices(services =>
             {
+                if (scenario == "production")
+                    services.AddSingleton(childStarts.LoggerProvider);
                 ConfigureTestHttpClient(services, "runtime-suspend-environment",
-                      () => new RuntimeServiceRouter(routes, failures));
-                  ConfigureTestHttpClient(services, nameof(MafBuildTestEnvironmentClient),
+                    () => new RuntimeServiceRouter(routes, failures));
+                ConfigureTestHttpClient(services, "runtime-suspend-host",
+                    () => new RuntimeServiceRouter(routes, failures));
+                ConfigureTestHttpClient(services, nameof(MafBuildTestEnvironmentClient),
                     () => new RuntimeServiceRouter(routes, failures));
                 ConfigureTestHttpClient(services, "maf-execution-host",
                     () => new RuntimeServiceRouter(routes, failures,
@@ -495,7 +525,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var workflow = new WorkflowDefinition("native-join", "1.0.0", "native-join-v1",
             WorkflowDefinitionOrigin.Generated, 2,
             [
-                new("implement", "Complete the accepted tasks.", WorkflowStepMode.Open, 0, new(2, 2),
+                new("implement", "Complete the accepted tasks.", WorkflowStepMode.Open, 0,
+                    scenario == "production" ? new(1, 1) : new(2, 2),
                     [], ["implementer"], ["implementation"], ["isolated-worktree"], [], null, null),
                 new("review", "Review both completed results.", WorkflowStepMode.Platform, 1, new(0, 1),
                     ["implement"], [], [], [], [], null, WorkflowPlatformGate.IndependentReview)
@@ -505,7 +536,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await DecideAsync("/decisions/gates/workflow-gate/answer",
             new AnswerCoordinatorGateRequest(version, "workflow-answer", "approve", null));
         var plan = new WorkPlan("native-plan", workflow.Id, workflow.Revision, workflow.CatalogVersion,
-            new[] { "first", "second" }.Select(id => new WorkPlanItem(
+            (scenario == "production" ? new[] { "first" } : ["first", "second"]).Select(id => new WorkPlanItem(
                 id, "implement", $"Complete {id}.", $"Return the completed {id} result.", "implementer",
                 "test-agent", "implementation", "platform-model", AgentSandboxProviderMetadata.ProviderId,
                 "isolated-worktree", [], [$"results/{id}.txt"])).ToImmutableArray());
@@ -581,11 +612,22 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var stillVerified = await SendJsonAsync(environmentClient, HttpMethod.Post,
             "/api/network-egress/verify", runToken, egressRequest);
         await AssertStatusAsync(stillVerified, HttpStatusCode.OK);
+        if (scenario == "production")
+        {
+            await VerifyProductionChildStartupAsync(
+                project.ProjectId, runToken, version, plan, snapshot, selectionDocument.RootElement.Clone(),
+                signingKey, projects, connection, routes, failures, environments, runtimeEnvironments,
+                factory, client, dataSource, ownerSchema, childStarts);
+            return;
+        }
         using var dispatch = await SendJsonAsync(client, HttpMethod.Post, rootPath + "/actions/dispatch", runToken,
             new MafExecutionDispatchRequest(version, plan.Id));
-        // Spawn commits before delivery; unconfigured children do not yet have active runtime owner turns.
-        await AssertStatusAsync(dispatch, HttpStatusCode.Conflict, string.Join('\n', failures));
-        Assert.Contains("runtime_owner_context_unavailable", await dispatch.Content.ReadAsStringAsync());
+        // Spawn commits before delivery; child startup is pending until its owner confirms readiness.
+        await AssertStatusAsync(dispatch, HttpStatusCode.OK, string.Join('\n', failures));
+        var dispatchResult = await ReadJsonAsync<MafExecutionDispatchResponse>(dispatch);
+        Assert.Equal(2, dispatchResult.ChildRuntimeStartup.Count);
+        Assert.All(dispatchResult.ChildRuntimeStartup.Values, startup => Assert.NotEqual("ready", startup.State));
+        Assert.Empty(dispatchResult.CompletedResults);
         var binding = CoordinationEndpoints.CreateExecutionCheckpointBinding(
             new(project.ProjectId, RunId, "root"),
             new CoordinationActor(registration.Binding.ActorIssuer, subject),
@@ -608,10 +650,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 client, HttpMethod.Get, childPath + "/status", runToken, [TenantId]);
             await AssertStatusAsync(childStatusResponse, HttpStatusCode.OK);
             var childStatus = await ReadJsonAsync<SessionStatusSnapshot>(childStatusResponse);
-            using var childTurn = await SendJsonAsync(client, HttpMethod.Post,
-                childPath + "/turn-boundary", runToken,
-                new TurnBoundaryRequest(childStatus.ExecutionFence, childStatus.StateVersion));
-            await AssertStatusAsync(childTurn, HttpStatusCode.OK);
+            Assert.Equal(intent.ChildSessionId, childStatus.Identity.SessionId);
             using var childOwner = await SendAsync(client, HttpMethod.Get,
                 $"/internal/projects/{project.ProjectId}/runs/{RunId}" +
                 $"/coordination/sessions/{intent.ChildSessionId}/runtime-owner-context",
@@ -1592,6 +1631,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 using var body = JsonDocument.Parse(await request.Content.ReadAsByteArrayAsync(cancellationToken));
                 if (body.RootElement.TryGetProperty("runtimeInstanceId", out var runtimeId))
                     runtimeEnvironments.TryGetValue(runtimeId.GetGuid(), out environmentId);
+                else if (body.RootElement.TryGetProperty("registration", out var registration) &&
+                    registration.TryGetProperty("runtimeInstanceId", out var registeredRuntimeId))
+                    runtimeEnvironments.TryGetValue(registeredRuntimeId.GetGuid(), out environmentId);
                 else if (body.RootElement.TryGetProperty("fence", out var fence) &&
                     fence.TryGetProperty("owner", out var owner))
                     environmentId = owner.GetProperty("environmentId").GetString();

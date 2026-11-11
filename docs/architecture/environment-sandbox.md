@@ -14,9 +14,9 @@ connects the lifecycle, placement and recovery views.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'" alt="Orchestrator starts the root AgentHost only after durable run admission. Environment checks the current actor, selection, and fences before it creates the retained 1 GiB workspace and first Sandbox placement. Orchestrator then registers the runtime, requests Broker bootstrap, and calls the real Environment activation route. Readiness is committed only after current registration, placement, and Host evidence pass. Provider cleanup uses the saved owner and attempt; it does not delete retained workspace data." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'" alt="Orchestrator records the root start or committed child spawn before Environment provisions a retained workspace and Sandbox. It registers the runtime, requests Broker bootstrap, and activates the Host through Environment. Child dispatch waits for exact readiness. Terminal cleanup checks native work, processes children before the root, and releases only the owned resource. Workspace data remains retained." />
   </a>
-  <figcaption>Coordinator first-start, Environment placement, AgentHost activation, and Sandbox provider-call recovery. A ready lease requires exact Workspace and network observations; retirement releases Sandbox placement only, not the Environment or its Workspace data. Every provider call has a durable attempt. Late cleanup uses the active owner fence for authorization and retains its saved source fence for provider identity.</figcaption>
+  <figcaption>Root and child startup, Environment placement, AgentHost activation, and terminal Sandbox cleanup. A ready lease requires exact Workspace and network observations. Retirement releases Sandbox placement, not the Environment or its Workspace data. Every provider call has a durable attempt. Cleanup uses the current owner fence for authorization and retains the saved provider fence for resource identity.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.drawio'">Open editable draw.io source</a></p>
 
@@ -44,10 +44,16 @@ does not send a model turn. A retry requires fresh authenticated run authority;
 the durable intent stores operation IDs and non-credential receipts, not bearer
 credentials.
 
-Cancellation records a cleanup obligation from the saved startup intent.
-Cleanup releases only the exact saved placement. It does not create a new
-placement, activate a Host, or delete workspace data. The separate Orchestrator
-runtime-start flow is described in the
+Dispatch uses the same placement and activation owners for a committed child,
+with a separate child-specific authority check and a durable startup intent.
+Missing or stale readiness prevents its task message from being sent.
+
+Terminal cleanup uses the saved startup intent for the root and each child.
+Environment rechecks the current terminal projection and releases only the
+exact resource and provider fence. A lost placement reply is recovered through
+the saved operation key; a conflicting registration or resource remains
+pending. Cleanup does not create a placement, activate a Host, or delete
+workspace data. The separate Orchestrator runtime-start flow is described in the
 [runtime deep dive](../deep-dive/orchestration.md#start-the-root-agenthost).
 
 <figure class="aw-diagram" tabindex="0">

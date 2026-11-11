@@ -314,6 +314,122 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
         return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
     }
 
+    internal async Task ReconcileTerminalQuiescenceAsync(
+        string projectId,
+        string runId,
+        Func<CancellationToken, Task> requireCurrent,
+        CancellationToken cancellationToken)
+    {
+        if (!await IsAvailableAsync(cancellationToken).ConfigureAwait(false))
+            return;
+        var jobs = new List<Guid>();
+        await using (var connection = await dataSource.OpenConnectionAsync(cancellationToken))
+        await using (var command = new NpgsqlCommand($"""
+            SELECT job_id FROM {_table}
+            WHERE project_id = @project AND run_id = @run
+              AND execution_phase = 'send-admitted'
+              AND status IN ('running', 'cancelled', 'failed')
+            ORDER BY created_at, job_id
+            LIMIT 101
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", projectId);
+            command.Parameters.AddWithValue("run", runId);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                jobs.Add(reader.GetGuid(0));
+        }
+
+        foreach (var jobId in jobs)
+        {
+            await WithExecutionLockAsync(projectId, jobId, async token =>
+            {
+                var job = await ReadAsync(projectId, jobId, token).ConfigureAwait(false);
+                if (job is null || job.RunId != runId || job.ExecutionPhase != "send-admitted" ||
+                    job.Status is not ("running" or "cancelled" or "failed") ||
+                    !await HasQuiescenceProofAsync(job, token).ConfigureAwait(false))
+                    return;
+                await requireCurrent(token).ConfigureAwait(false);
+                await MarkQuiescedAsync(projectId, jobId, token).ConfigureAwait(false);
+            }, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<bool> HasQuiescenceProofAsync(
+        WorkflowGenerationJob job,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand($"""
+            SELECT e.receipt_kind, e.receipt_json::text
+            FROM {_evidenceTable} e
+            JOIN {_schema}.maf_root_model_turn_admissions a
+              ON a.project_id = e.project_id AND a.run_id = e.run_id AND a.request_id = e.attempt_id
+            WHERE e.project_id = @project AND e.run_id = @run AND e.attempt_id = @request
+              AND e.receipt_kind IN ('native-root-turn-completion', 'numeric-limit-native-no-send')
+              AND a.root_session_id = @session AND a.tenant_id = @tenant
+              AND a.actor_issuer = @issuer AND a.actor_id = @actor
+              AND a.accepted_selection_hash = @selection AND a.prompt_hash = @prompt
+              AND a.execution_fence = @fence AND a.decision_state_version = @decision
+            """, connection);
+        command.Parameters.AddWithValue("project", job.ProjectId);
+        command.Parameters.AddWithValue("run", job.RunId);
+        command.Parameters.AddWithValue("request", job.NativeRequestId);
+        command.Parameters.AddWithValue("session", job.SessionId);
+        command.Parameters.AddWithValue("tenant", job.TenantId);
+        command.Parameters.AddWithValue("issuer", job.ActorIssuer);
+        command.Parameters.AddWithValue("actor", job.ActorId);
+        command.Parameters.AddWithValue("selection", job.AcceptedSelectionHash);
+        command.Parameters.AddWithValue("prompt", job.PromptSha256);
+        command.Parameters.AddWithValue("fence", job.ExecutionFence);
+        command.Parameters.AddWithValue("decision", job.ExpectedDecisionStateVersion);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            try
+            {
+                var json = reader.GetString(1);
+                if (reader.GetString(0) == "native-root-turn-completion")
+                {
+                    var stored = JsonSerializer.Deserialize<RuntimeRootTurnCompletionLedgerReceipt>(json, JsonOptions);
+                    if (stored is null)
+                        continue;
+                    var completion = stored.Validate().Completion;
+                    var binding = completion.Registration.Binding;
+                    var evidence = completion.ToEvidence();
+                    if (stored.ProjectId == job.ProjectId && stored.RunId == job.RunId &&
+                        binding.TenantId == job.TenantId && binding.SessionId == job.SessionId &&
+                        binding.ActorIssuer == job.ActorIssuer && binding.ActorId == job.ActorId &&
+                        evidence.RequestId == job.NativeRequestId && evidence.PromptSha256 == job.PromptSha256 &&
+                        evidence.RuntimeInstanceId == job.RuntimeInstanceId &&
+                        evidence.RegistrationRevision == job.RegistrationRevision &&
+                        evidence.ExecutionFence == job.ExecutionFence &&
+                        evidence.AcceptedSelectionHash == job.AcceptedSelectionHash &&
+                        evidence.ModelSelectionReference == job.ModelSelectionReference)
+                        return true;
+                }
+                else
+                {
+                    var stored = JsonSerializer.Deserialize<RuntimeNumericLimitNativeNoSendReceipt>(json, JsonOptions);
+                    if (stored is null)
+                        continue;
+                    stored.Validate();
+                    if (stored.ProjectId == job.ProjectId && stored.RunId == job.RunId &&
+                        stored.RootSessionId == job.SessionId && stored.SessionId == job.SessionId &&
+                        stored.AttemptId == job.NativeRequestId && stored.RuntimeInstanceId == job.RuntimeInstanceId &&
+                        stored.RegistrationRevision == job.RegistrationRevision &&
+                        stored.ExecutionFence == job.ExecutionFence)
+                        return true;
+                }
+            }
+            catch (Exception exception) when (exception is JsonException or RuntimeAuthorizationException)
+            {
+                // Invalid evidence cannot authorize cleanup.
+            }
+        }
+        return false;
+    }
+
     internal async Task<bool> WithExecutionLockAsync(
         string projectId,
         Guid jobId,

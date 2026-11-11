@@ -800,6 +800,40 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task RuntimeOwnerReadSharesTheAdmissionLockButStillBlocksRunChanges()
+    {
+        await StartActiveTurnAsync(_child.Identity, _acceptedRoot.StateVersion);
+        await using var admission = await _fixture.DataSource.OpenConnectionAsync();
+        await using var admissionTransaction = await admission.BeginTransactionAsync();
+        await using (var read = new NpgsqlCommand($"""
+            SELECT 1 FROM "{_schema}".accepted_runs
+            WHERE project_id = @project AND run_id = @run FOR SHARE
+            """, admission, admissionTransaction))
+        {
+            read.Parameters.AddWithValue("project", _root.ProjectId);
+            read.Parameters.AddWithValue("run", _root.RunId);
+            Assert.Equal(1, await read.ExecuteScalarAsync());
+        }
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var owner = await _store.ReadRuntimeOwnerStateAsync(_actor, _child.Identity, timeout.Token);
+        Assert.Equal(_acceptedRoot.ExecutionFence, owner.ExecutionFence);
+
+        await using var writer = await _fixture.DataSource.OpenConnectionAsync();
+        await using var writerTransaction = await writer.BeginTransactionAsync();
+        await using (var limit = new NpgsqlCommand("SET LOCAL lock_timeout = '250ms'", writer, writerTransaction))
+            await limit.ExecuteNonQueryAsync();
+        await using var update = new NpgsqlCommand($"""
+            UPDATE "{_schema}".accepted_runs SET execution_fence = execution_fence + 1
+            WHERE project_id = @project AND run_id = @run
+            """, writer, writerTransaction);
+        update.Parameters.AddWithValue("project", _root.ProjectId);
+        update.Parameters.AddWithValue("run", _root.RunId);
+        var blocked = await Assert.ThrowsAsync<PostgresException>(() => update.ExecuteNonQueryAsync());
+        Assert.Equal(PostgresErrorCodes.LockNotAvailable, blocked.SqlState);
+    }
+
+    [Fact]
     public async Task RuntimeRegistrationCanReadTheAcceptedCoordinatorRootWithoutRelaxingChildOwnerReads()
     {
         var acceptedSelectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
@@ -1714,6 +1748,34 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             Assert.False(payload.RootElement.GetProperty("physicalEffectsReplayed").GetBoolean());
         }
         Assert.False(await reader.ReadAsync());
+    }
+
+    [Fact]
+    public async Task FailureReportCannotReplaceALegacyCompletedOutcome()
+    {
+        var active = await StartActiveTurnAsync(_root, _acceptedRoot.StateVersion);
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var legacy = new NpgsqlCommand(
+            $"UPDATE \"{_schema}\".accepted_runs SET completed_at = now() WHERE run_id = @run", connection))
+        {
+            legacy.Parameters.AddWithValue("run", _root.RunId);
+            Assert.Equal(1, await legacy.ExecuteNonQueryAsync());
+        }
+
+        var error = await Assert.ThrowsAsync<CoordinationException>(() => _store.ReportRunFailureAsync(
+            _actor,
+            _root,
+            new ReportRunFailureRequest(
+                _acceptedRoot.ExecutionFence,
+                _acceptedRoot.StateVersion,
+                active.StateVersion,
+                "failure-legacy-completed",
+                OwnerRunFailureState.Failed,
+                "logical_execution_failed",
+                "work-item-1"),
+            CancellationToken.None));
+        Assert.Equal("execution_failure_conflict", error.Code);
+        Assert.Equal(409, error.StatusCode);
     }
 
     [Fact]

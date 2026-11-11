@@ -195,6 +195,10 @@ public sealed record MafExecutionDispatchResponse(
     /// Gets whether the accepted run wall-time limit prevented further dispatch.
     /// </summary>
     public bool WallTimeLimitReached { get; init; }
+
+    /// <summary>Gets bounded child startup status keyed by work-plan association.</summary>
+    public ImmutableDictionary<string, RuntimeStartupSummary> ChildRuntimeStartup { get; init; } =
+        ImmutableDictionary<string, RuntimeStartupSummary>.Empty.WithComparers(StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -551,6 +555,9 @@ public sealed record SessionStatusSnapshot(
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeStartupSummary? RuntimeStartup { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeCleanupSummary? RuntimeCleanup { get; init; }
 }
 
 /// <summary>
@@ -741,7 +748,11 @@ public sealed record OwnerRunStatus(
     string ExecutionState,
     long StateVersion,
     string? CauseCode = null,
-    string? Reference = null);
+    string? Reference = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeCleanupSummary? RuntimeCleanup { get; init; }
+}
 
 /// <summary>
 /// Selects whether a reported run failure is definitive or leaves execution indeterminate.
