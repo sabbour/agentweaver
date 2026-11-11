@@ -184,6 +184,14 @@ approved target before executing. The local Azure CLI identity must already
 have the required AKS and namespace permissions; the deployment does not
 grant access or provision Azure resources.
 
+For a first install, run certificate-only routing and the
+[Broker ConfigMap-only stage](../scripts/azure/README.md#bootstrap-the-first-install-broker-configmap)
+before this Kustomize deployment. After the workloads and Services are ready,
+run full identity routing. Do not run the full Broker runtime bootstrap after
+Kustomize as part of this sequence; the standalone bootstrap's exact base
+egress-policy hash does not match the policy that Kustomize intentionally
+renders.
+
 The command resolves selected manifest references to digests in the selected
 registry and keeps live references, including their registries, for omitted
 repositories. Use `--registry <acr-login-server>` to select ACR for the images
@@ -224,7 +232,8 @@ checks that the Broker Deployment references this map. A missing, malformed,
 or different map stops the command before writes. The helper reports changed
 field or key names without values. After a successful check, it omits the
 unchanged immutable map from the final apply. It does not create, replace, or
-repair the map; use a separately reviewed design for those cases.
+repair the map; for a first install, use the
+[Broker ConfigMap-only stage](../scripts/azure/README.md#bootstrap-the-first-install-broker-configmap).
 
 When `environment-runtime-config` changes, the helper checks permissions
 before writes, stops the Environment Deployment, waits for its Pods and the

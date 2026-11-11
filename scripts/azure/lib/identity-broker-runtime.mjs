@@ -1,14 +1,16 @@
 /** Creates and verifies the identity broker's runtime Kubernetes resources in the P0 namespace. */
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { run, runAz, redact } from './exec.mjs';
 import { assertApprovedKeyVaultName, assertDedicatedTarget } from './guardrails.mjs';
 import { assertP0KubernetesPermissions, withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 import {
-  assertPublicBrokerRegistration, observeExistingP0BrokerRouting, planPublicBrokerCallback,
-  projectIdentityRoutingReadback,
+  assertPublicBrokerRegistration, managedBrokerHostname, observeExistingP0BrokerRouting,
+  planPublicBrokerCallback, preflightPublicBrokerRegistration, projectIdentityRoutingReadback,
 } from './identity-broker-routing.mjs';
+import { parseKustomizeResources } from '../../release/kustomize-runtime.mjs';
+import { applyTargetValues, targetValuePairs } from '../../release/target-values.mjs';
 
 const NAMESPACE = 'agentweaver';
 const CONFIG = 'identity-broker-runtime-config-v3';
@@ -18,6 +20,18 @@ const SENTINEL = 'ghcr.io/sabbour/agentweaver.identity.broker:receipt-pinned';
 const SCOPES = ['openid', 'profile', 'email', 'api.read', 'offline_access'];
 const WEB_SCOPES = [...SCOPES, 'projects.admin', 'projects.orchestrator'];
 const CLI_SCOPES = ['openid', 'api.read', 'offline_access'];
+
+function assertBrokerAcceptanceRedirectUri(value) {
+  let redirect;
+  try { redirect = new URL(value); } catch {
+    throw new Error('Broker acceptance redirect must be an explicit HTTP loopback callback.');
+  }
+  if (redirect.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(redirect.hostname) ||
+      !redirect.port || Number(redirect.port) < 1 || redirect.pathname !== '/callback' || redirect.search || redirect.hash ||
+      redirect.username || redirect.password) {
+    throw new Error('Broker acceptance redirect must be an explicit HTTP loopback callback with a port and no credentials, query, or fragment.');
+  }
+}
 
 /** Checks the required broker runtime source and target inputs before resource generation. */
 export function assertBrokerRuntimeInputs(config) {
@@ -29,14 +43,17 @@ export function assertBrokerRuntimeInputs(config) {
       !/^ghcr\.io\/sabbour\/agentweaver\.identity\.broker@sha256:[0-9a-f]{64}$/.test(config.brokerImage ?? '')) {
     throw new Error('Broker runtime setup requires the exact registered target cluster, upstream public client, acceptance run UUID, and immutable Broker image.');
   }
-  let redirect;
-  try { redirect = new URL(config.acceptanceRedirectUri); } catch {
-    throw new Error('Broker acceptance redirect must be an explicit HTTP loopback callback.');
-  }
-  if (redirect.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(redirect.hostname) ||
-      !redirect.port || Number(redirect.port) < 1 || redirect.pathname !== '/callback' || redirect.search || redirect.hash ||
-      redirect.username || redirect.password) {
-    throw new Error('Broker acceptance redirect must be an explicit HTTP loopback callback with a port and no credentials, query, or fragment.');
+  assertBrokerAcceptanceRedirectUri(config.acceptanceRedirectUri);
+}
+
+/** Checks the exact target inputs needed to stage the source-rendered Broker ConfigMap. */
+export function assertBrokerConfigOnlyInputs(config) {
+  assertApprovedKeyVaultName(config.resourceGroup, config.keyVaultName);
+  assertDedicatedTarget(config.resourceGroup);
+  if (config.clusterName !== `${config.resourceGroup}-aks` ||
+      !GUID.test(config.subscriptionId ?? '') || !GUID.test(config.tenantId ?? '') ||
+      !GUID.test(config.upstreamClientId ?? '')) {
+    throw new Error('Broker ConfigMap setup requires the exact registered target cluster, upstream public client, tenant, and subscription.');
   }
 }
 
@@ -101,14 +118,16 @@ export function projectBrokerRuntimeResource(value) {
     if (value.items.length > 1) throw new Error('Exact Broker runtime lookup returned multiple objects.');
     return value.items.length ? projectBrokerRuntimeResource(value.items[0]) : null;
   }
-  const result = { kind: value?.kind, metadata: {
+  const result = { apiVersion: value?.apiVersion, kind: value?.kind, metadata: {
     name: value?.metadata?.name, namespace: value?.metadata?.namespace, uid: value?.metadata?.uid,
     service: value?.metadata?.labels?.['agentweaver.io/service'],
     owner: value?.metadata?.labels?.['agentweaver.io/managed-by'],
+    environment: value?.metadata?.labels?.['agentweaver.io/environment'],
   } };
   if (value?.kind === 'ConfigMap') {
     // Compare complete configuration without returning any operator-provided value.
     result.dataHash = orderedHash(value.data ?? {});
+    result.binaryDataHash = orderedHash(value.binaryData ?? {});
     result.immutable = value.immutable;
   } else if (['ServiceAccount', 'Deployment', 'Service', 'CiliumNetworkPolicy'].includes(value?.kind)) {
     result.specHash = brokerObjectHash(value);
@@ -156,6 +175,188 @@ function orderedHash(value) {
         : item;
     }
     return createHash('sha256').update(JSON.stringify(ordered(value))).digest('hex');
+}
+
+function configMapValues(resource, field) {
+  const values = resource[field];
+  if (values === undefined) return {};
+  if (!values || typeof values !== 'object' || Array.isArray(values) ||
+      Object.values(values).some(value => typeof value !== 'string')) {
+    throw new Error(`Kustomize Broker ConfigMap has invalid ${field}.`);
+  }
+  return values;
+}
+
+function assertBrokerConfigSource(candidate, identity, config, keyVaultName, issuer, portalHostname, callbackUri) {
+  if (candidate?.apiVersion !== 'v1' || candidate.kind !== 'ConfigMap' ||
+      candidate.metadata?.name !== CONFIG || candidate.metadata?.namespace !== NAMESPACE ||
+      candidate.immutable !== true) {
+    throw new Error('Kustomize must render the exact immutable Broker ConfigMap for the P0 target.');
+  }
+  const data = configMapValues(candidate, 'data');
+  configMapValues(candidate, 'binaryData');
+  const required = {
+    ConnectionStrings__IdentityBroker:
+      `Host=${config.resourceGroup}-pg.postgres.database.azure.com;Database=agentweaver;` +
+      `Username=${config.resourceGroup}-id-identity-broker;SSL Mode=VerifyFull`,
+    IdentityBroker__Issuer: issuer,
+    IdentityBroker__WebOrigin: `https://${portalHostname}`,
+    IdentityBroker__ExternalProvider__Authority: `https://login.microsoftonline.com/${config.tenantId}/v2.0`,
+    IdentityBroker__ExternalProvider__ClientId: config.upstreamClientId,
+    IdentityBroker__SecretRedemption__Audience: issuer,
+    IdentityBroker__SecretRedemption__VaultHost: `${keyVaultName.toLowerCase()}.vault.azure.net`,
+    IdentityBroker__SecretRedemption__VaultUri: `https://${keyVaultName.toLowerCase()}.vault.azure.net/`,
+    IdentityBroker__SecretRedemption__WorkloadIdentityTenantId: config.tenantId,
+    IdentityBroker__SecretRedemption__WorkloadIdentityClientId: identity.clientId,
+    IdentityBroker__Clients__0__Resources__0: issuer,
+    IdentityBroker__Clients__1__Resources__0: issuer,
+    IdentityBroker__Clients__1__RedirectUris__0: `https://${portalHostname}/auth/callback`,
+    IdentityBroker__Clients__2__Resources__0: issuer,
+  };
+  for (const [field, expected] of Object.entries(required)) {
+    if (data[field] !== expected) {
+      throw new Error(`Kustomize Broker ConfigMap does not match the exact target, certificate, callback, or identity at data[${field}].`);
+    }
+  }
+  assertBrokerAcceptanceRedirectUri(data.IdentityBroker__Clients__0__RedirectUris__0);
+  if (callbackUri !== `${issuer}signin-oidc`) {
+    throw new Error('Registered Broker callback does not match the issuer derived from the available managed certificates.');
+  }
+}
+
+function renderBrokerConfigCandidate(config, execKubectl) {
+  const root = resolve(config.repoRoot ?? process.cwd());
+  const rendered = execKubectl(['kustomize', join(root, 'deploy', 'k8s')], {
+    ...OPTIONS, cwd: root,
+  });
+  if (rendered.status !== 0) {
+    throw new Error(`Broker ConfigMap source render failed: ${redact(rendered.stderr)}`);
+  }
+  const resources = parseKustomizeResources(applyTargetValues(rendered.stdout,
+    targetValuePairs(root, config.resourceGroup))).items;
+  const candidates = resources.filter(resource =>
+    resource?.kind === 'ConfigMap' && resource.metadata?.name === CONFIG);
+  const deployments = resources.filter(resource =>
+    resource?.kind === 'Deployment' && resource.metadata?.name === 'identity-broker' &&
+    resource.metadata?.namespace === NAMESPACE);
+  const referencesConfig = deployment => {
+    const pod = deployment.spec?.template?.spec;
+    return (pod?.containers ?? []).some(container =>
+      container.envFrom?.some(source => source.configMapRef?.name === CONFIG)) ||
+      (pod?.volumes ?? []).some(volume => volume.configMap?.name === CONFIG ||
+        volume.projected?.sources?.some(source => source.configMap?.name === CONFIG));
+  };
+  if (candidates.length !== 1 || deployments.length !== 1 || !referencesConfig(deployments[0])) {
+    throw new Error(`Kustomize must render exactly one ConfigMap/${CONFIG} and one Broker Deployment that references it.`);
+  }
+  return candidates[0];
+}
+
+function brokerConfigMapMatches(current, candidate) {
+  return Boolean(current?.metadata?.uid && current.apiVersion === candidate.apiVersion &&
+    current.kind === candidate.kind &&
+    current.metadata?.name === candidate.metadata.name &&
+    current.metadata?.namespace === candidate.metadata.namespace &&
+    current.immutable === true && candidate.immutable === true &&
+    current.dataHash === orderedHash(configMapValues(candidate, 'data')) &&
+    current.binaryDataHash === orderedHash(configMapValues(candidate, 'binaryData')));
+}
+
+/**
+ * Creates only the target-rendered Broker ConfigMap needed before first Kustomize deployment.
+ * The stage checks target identity, certificates, callback, source parity, and permissions before its only write.
+ */
+export function bootstrapIdentityBrokerConfigOnly(config, {
+  withKubeconfig = withP0UserKubeconfig, execAz = runAz,
+  execKubectl = (args, options) => run('kubectl', args, options),
+} = {}) {
+  assertBrokerConfigOnlyInputs(config);
+  const keyVaultName = assertApprovedKeyVaultName(config.resourceGroup, config.keyVaultName);
+  const registration = preflightPublicBrokerRegistration({
+    ...config, registerBrokerCallback: false, confirmBrokerCallback: undefined,
+  }, { execAz });
+  function azureJson(args, projectJson) {
+    const result = execAz(args, { ...OPTIONS, projectJson, preserveProjectedJson: true });
+    if (result.status !== 0) throw new Error(`Broker ConfigMap target lookup failed: ${redact(result.stderr)}`);
+    return JSON.parse(result.stdout);
+  }
+  const identityName = `${config.resourceGroup}-id-identity-broker`;
+  const identity = azureJson(['identity', 'show', '--resource-group', config.resourceGroup, '--name', identityName,
+    '--subscription', config.subscriptionId, '-o', 'json'],
+  value => ({ id: value.id, clientId: value.clientId, principalId: value.principalId }));
+  const expectedIdentityId = `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}` +
+    `/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${identityName}`;
+  if (identity.id?.toLowerCase() !== expectedIdentityId.toLowerCase() ||
+      !GUID.test(identity.clientId ?? '') || !GUID.test(identity.principalId ?? '')) {
+    throw new Error('Broker ConfigMap identity does not match the approved native target.');
+  }
+  const cluster = azureJson(['aks', 'show', '--resource-group', config.resourceGroup, '--name', config.clusterName,
+    '--subscription', config.subscriptionId, '-o', 'json'],
+  value => ({ issuer: value.oidcIssuerProfile?.issuerUrl, location: value.location }));
+  const fic = azureJson(['identity', 'federated-credential', 'show', '--resource-group', config.resourceGroup,
+    '--identity-name', identityName, '--name', 'identity-broker-workload-identity',
+    '--subscription', config.subscriptionId, '-o', 'json'],
+  value => ({ issuer: value.issuer, subject: value.subject, audiences: value.audiences }));
+  if (!/^[a-z0-9]+$/.test(cluster.location ?? '') ||
+      !cluster.issuer?.startsWith(`https://${cluster.location}.oic.prod-aks.azure.com/${config.tenantId}/`) ||
+      fic.issuer !== cluster.issuer || fic.subject !== `system:serviceaccount:${NAMESPACE}:identity-broker` ||
+      fic.audiences?.length !== 1 || fic.audiences[0] !== 'api://AzureADTokenExchange') {
+    throw new Error('Broker ConfigMap federation does not match the actual cluster issuer and exact ServiceAccount.');
+  }
+  const candidate = renderBrokerConfigCandidate(config, execKubectl);
+  return withKubeconfig(config, base => {
+    const read = (resource, name, projection = projectBrokerRuntimeResource, namespace = NAMESPACE) => {
+      const result = execKubectl([...base, '--namespace', namespace, '--request-timeout=30s',
+        'get', resource, '--field-selector', `metadata.name=${name}`, '-o', 'json'],
+      { ...OPTIONS, projectJson: projection, preserveProjectedJson: true });
+      if (result.status !== 0) throw new Error(`Broker ConfigMap source read failed: ${redact(result.stderr)}`);
+      return JSON.parse(result.stdout);
+    };
+    const certificates = [
+      ['agentweaver-gateway', read('defaultdomaincertificates', 'identity-broker',
+        projectIdentityRoutingReadback, 'agentweaver-gateway')],
+      [NAMESPACE, read('defaultdomaincertificates', 'identity-broker',
+        projectIdentityRoutingReadback, NAMESPACE)],
+    ];
+    const hostnames = certificates.map(([namespace, certificate]) => {
+      if (certificate?.metadata?.labels?.['agentweaver.io/service'] !== 'identity-broker') {
+        throw new Error('Managed Broker certificate is not the exact owned routing object.');
+      }
+      return managedBrokerHostname(certificate, namespace);
+    });
+    if (hostnames[0] !== hostnames[1]) {
+      throw new Error('Managed Broker certificates report different AKS wildcard domains.');
+    }
+    const hostname = hostnames[1];
+    const issuer = `https://${hostname}/`;
+    const portalHostname = `portal.${hostname.slice('agentweaver.'.length)}`;
+    assertBrokerConfigSource(candidate, identity, config, keyVaultName, issuer, portalHostname,
+      registration.callbackUri);
+    const existing = read('configmaps', CONFIG);
+    if (existing && !brokerConfigMapMatches(existing, candidate)) {
+      throw new Error('Existing Broker ConfigMap differs from the exact rendered source; refusing replacement.');
+    }
+    assertP0KubernetesPermissions(base, execKubectl,
+      existing ? [] : [['create', 'configmaps', NAMESPACE]], 'Identity Broker ConfigMap bootstrap');
+    let createResult;
+    if (!existing) {
+      createResult = execKubectl([...base, '--namespace', NAMESPACE, '--request-timeout=30s',
+        'create', '--filename', '-', '-o', 'name'],
+      { ...OPTIONS, input: JSON.stringify(candidate) });
+    }
+    const readback = read('configmaps', CONFIG);
+    if (!brokerConfigMapMatches(readback, candidate)) {
+      if (createResult?.status !== 0) {
+        throw new Error(`Broker ConfigMap create failed or remains unverified: ${redact(createResult.stderr)}`);
+      }
+      throw new Error('Broker ConfigMap readback did not preserve the exact rendered source.');
+    }
+    return {
+      namespace: NAMESPACE, configMap: CONFIG, configMapUid: readback.metadata.uid,
+      configMapCreated: !existing && createResult.status === 0,
+      issuer, portalHostname, callbackUri: registration.callbackUri, sourceVerified: true,
+    };
+  });
 }
 
 /**

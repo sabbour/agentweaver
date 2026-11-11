@@ -259,6 +259,24 @@ An omitted AgentHost image must already be pinned to the digest in its retained
 runtime tuple. A tag or mismatched digest stops deployment before writes;
 select AgentHost explicitly to update it.
 
+#### First-install Broker dependency order
+
+The Kustomize helper requires the exact immutable
+`identity-broker-runtime-config-v3` ConfigMap before its first cluster write.
+It does not create the map. The full Broker runtime bootstrap waits for aligned
+routes, while full routing requires the private MCP Service that Kustomize
+creates. This creates a first-install dependency loop.
+
+Break the loop with this order: certificate-only routing, the ConfigMap-only
+stage, Kustomize deployment, then full identity routing after the Services
+exist. The ConfigMap-only stage checks the target-rendered source, target
+identity and federation, both managed certificates, the existing callback,
+and create permission. It creates only the immutable ConfigMap. It does not
+create a Service, route, or policy. Do not run full Broker runtime bootstrap
+after Kustomize in this sequence; its source policy hash does not match the
+policy that Kustomize renders. See the
+[operator procedure](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#bootstrap-the-first-install-broker-configmap).
+
 The command resolves selected image references to immutable digests, runs
 only the selected services' migrations with runtime-grant reconciliation,
 renders `deploy/k8s`, applies the namespaced resources to the selected context,

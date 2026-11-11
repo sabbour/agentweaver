@@ -2,9 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { applyTargetValues, targetValuePairs } from '../../release/target-values.mjs';
 import { alignExistingP0BrokerHostname, observeExistingP0BrokerRouting } from '../lib/identity-broker-routing.mjs';
-import { assertBrokerRuntimeInputs, bootstrapIdentityBrokerRuntime, brokerAcceptanceConfiguration,
-  brokerObjectHash, projectBrokerRuntimeResource } from '../lib/identity-broker-runtime.mjs';
+import { assertBrokerConfigOnlyInputs, assertBrokerRuntimeInputs, bootstrapIdentityBrokerConfigOnly,
+  bootstrapIdentityBrokerRuntime, brokerAcceptanceConfiguration, brokerObjectHash,
+  projectBrokerRuntimeResource } from '../lib/identity-broker-runtime.mjs';
 
 const namespace = 'agentweaver';
 const clientId = '11111111-1111-1111-1111-111111111111';
@@ -407,6 +409,171 @@ test('runtime configuration retains the run-owned acceptance client and seeds th
     ConnectionStrings__IdentityBroker: 'Host=server;Password=PRIVATE',
   } });
   assert.ok(!JSON.stringify(projected).includes('PRIVATE'));
+});
+
+test('config-only bootstrap stages the exact source map and fails closed on drift or uncertain writes', () => {
+  const sourceMap = JSON.parse(readFileSync(path.join(config.repoRoot, 'deploy', 'k8s',
+    'runtime-configs', 'identity-broker-runtime-config.json'), 'utf8'));
+  const targetName = 'awwus2np01';
+  const targetMap = JSON.parse(applyTargetValues(JSON.stringify(sourceMap),
+    targetValuePairs(config.repoRoot, targetName)));
+  assert.equal(targetMap.data.IdentityBroker__Issuer,
+    'https://agentweaver.6af2d5d83827af00019b70e2.westus2.aksapp.io/');
+  assert.equal(targetMap.data.IdentityBroker__SecretRedemption__VaultHost, 'awwus2np01-kv1.vault.azure.net');
+  assert.equal(targetMap.data.IdentityBroker__SecretRedemption__WorkloadIdentityClientId,
+    '4cb6b3eb-db18-44e9-a624-0dc969d0417b');
+  const sourceHostname = new URL(targetMap.data.IdentityBroker__Issuer).hostname;
+  const sourceDomain = sourceHostname.slice('agentweaver.'.length);
+  const runtimeConfig = {
+    resourceGroup: targetName, clusterName: `${targetName}-aks`,
+    subscriptionId: clientId, tenantId: targetMap.data.IdentityBroker__SecretRedemption__WorkloadIdentityTenantId,
+    keyVaultName: targetMap.data.IdentityBroker__SecretRedemption__VaultHost.replace(/\.vault\.azure\.net$/, ''),
+    upstreamClientId: targetMap.data.IdentityBroker__ExternalProvider__ClientId,
+    repoRoot: config.repoRoot,
+  };
+  const runtimeIdentity = {
+    clientId: targetMap.data.IdentityBroker__SecretRedemption__WorkloadIdentityClientId,
+    principalId,
+  };
+  const clusterLocation = 'westus2';
+  const clusterIssuer = `https://${clusterLocation}.oic.prod-aks.azure.com/${runtimeConfig.tenantId}/cluster/`;
+  const sourceCallback = `https://${sourceHostname}/signin-oidc`;
+  assertBrokerConfigOnlyInputs(runtimeConfig);
+  const deployment = {
+    apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'identity-broker', namespace },
+    spec: { template: { spec: { containers: [{
+      name: 'identity-broker', envFrom: [{ configMapRef: { name: 'identity-broker-runtime-config-v3' } }],
+    }] } } },
+  };
+  const certificate = (certificateNamespace, domain = `*.${zone}`) => {
+    const value = object('DefaultDomainCertificate', { target: { secret: 'identity-broker-tls' } }, {
+      domain, conditions: [{ type: 'Available', status: 'True', observedGeneration: 1 }],
+    });
+    value.metadata.namespace = certificateNamespace;
+    return value;
+  };
+  const createFixture = ({
+    callback = sourceCallback,
+    sourceIssuer = sourceMap.data.IdentityBroker__Issuer,
+    gatewayDomain = `*.${sourceDomain}`,
+    p0Domain = `*.${sourceDomain}`,
+    sourceBinaryData,
+    denyCreate = false,
+    uncertainCreate = false,
+    existingConfig,
+  } = {}) => {
+    const calls = [];
+    const created = new Map();
+    const renderedMap = {
+      ...structuredClone(sourceMap),
+      data: { ...sourceMap.data, IdentityBroker__Issuer: sourceIssuer },
+      ...(sourceBinaryData ? { binaryData: { ...sourceBinaryData } } : {}),
+    };
+    if (existingConfig) created.set(`configmaps/${renderedMap.metadata.name}`, structuredClone(existingConfig));
+    const certificates = {
+      'agentweaver-gateway': certificate('agentweaver-gateway', gatewayDomain),
+      [namespace]: certificate(namespace, p0Domain),
+    };
+    const deps = {
+      withKubeconfig: (_config, action) => action(['--kubeconfig', 'owned']),
+      execAz(args, options) {
+        let value;
+        if (args[0] === 'account') value = {
+          id: runtimeConfig.subscriptionId, tenantId: runtimeConfig.tenantId, state: 'Enabled',
+        };
+        if (args[0] === 'aks') value = {
+          id: `/subscriptions/${runtimeConfig.subscriptionId}/resourceGroups/${targetName}/providers/Microsoft.ContainerService/managedClusters/${runtimeConfig.clusterName}`,
+          location: clusterLocation,
+          oidcIssuerProfile: { issuerUrl: clusterIssuer },
+          ingressProfile: { webAppRouting: { defaultDomain: { enabled: true, domainName: sourceDomain } } },
+        };
+        if (args[0] === 'identity' && args[1] === 'show') value = {
+          id: `/subscriptions/${runtimeConfig.subscriptionId}/resourceGroups/${targetName}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${targetName}-id-identity-broker`,
+          ...runtimeIdentity,
+        };
+        if (args[0] === 'identity' && args[1] === 'federated-credential') value = {
+          issuer: clusterIssuer, subject: `system:serviceaccount:${namespace}:identity-broker`,
+          audiences: ['api://AzureADTokenExchange'],
+        };
+        if (args[0] === 'ad') value = {
+          id: applicationObjectId, appId: runtimeConfig.upstreamClientId, signInAudience: 'AzureADMyOrg',
+          isFallbackPublicClient: true, publicClient: { redirectUris: [callback] },
+        };
+        return ok(JSON.stringify(options.projectJson(value)));
+      },
+      execKubectl(args, options) {
+        calls.push(args);
+        if (args[0] === 'kustomize') {
+          return ok(`${JSON.stringify(renderedMap)}\n---\n${JSON.stringify(deployment)}`);
+        }
+        if (args.includes('auth')) return ok(denyCreate ? 'no\n' : 'yes\n');
+        if (args.includes('get')) {
+          const resource = args[args.indexOf('get') + 1];
+          const targetNamespace = args[args.indexOf('--namespace') + 1];
+          if (resource === 'defaultdomaincertificates') {
+            return ok(JSON.stringify(options.projectJson(certificates[targetNamespace])));
+          }
+          if (resource === 'configmaps') {
+            const value = created.get(`configmaps/${sourceMap.metadata.name}`);
+            return ok(JSON.stringify(options.projectJson({ items: value ? [value] : [] })));
+          }
+        }
+        assert.ok(args.includes('create'));
+        const value = JSON.parse(options.input);
+        value.metadata.uid = 'native-config-uid';
+        created.set(`configmaps/${value.metadata.name}`, value);
+        return uncertainCreate
+          ? { status: 1, stdout: '', stderr: 'response lost after create' }
+          : ok(`configmap/${value.metadata.name}\n`);
+      },
+    };
+    return { calls, created, deps, sourceMap };
+  };
+
+  const first = createFixture();
+  const receipt = bootstrapIdentityBrokerConfigOnly(runtimeConfig, first.deps);
+  assert.equal(receipt.configMapCreated, true);
+  assert.equal(receipt.issuer, targetMap.data.IdentityBroker__Issuer);
+  assert.equal(receipt.callbackUri, sourceCallback);
+  assert.deepEqual(first.created.get('configmaps/identity-broker-runtime-config-v3').data, targetMap.data);
+  const createWrites = calls => calls.filter(args => args.includes('create') && !args.includes('auth')).length;
+  assert.equal(createWrites(first.calls), 1);
+  assert.equal(first.calls.some(args => ['httproutes', 'services', 'deployments'].includes(
+    args[args.indexOf('get') + 1])), false);
+  assert.equal(bootstrapIdentityBrokerConfigOnly(runtimeConfig, first.deps).configMapCreated, false);
+  assert.equal(createWrites(first.calls), 1);
+
+  const uncertain = createFixture({ uncertainCreate: true });
+  assert.equal(bootstrapIdentityBrokerConfigOnly(runtimeConfig, uncertain.deps).configMapCreated, false);
+  assert.equal(createWrites(uncertain.calls), 1);
+
+  for (const [name, options, expected] of [
+    ['unregistered callback', { callback: 'https://wrong.example/signin-oidc' }, /exact route-derived callback/],
+    ['certificate issuer drift', {
+      gatewayDomain: '*.fedcba9876543210.westus2.aksapp.io',
+      p0Domain: '*.fedcba9876543210.westus2.aksapp.io',
+    }, /data\[IdentityBroker__Issuer\]/],
+    ['certificate mismatch', { gatewayDomain: '*.fedcba9876543210.westus2.aksapp.io' }, /different AKS wildcard domains/],
+    ['rendered issuer drift', { sourceIssuer: 'https://wrong.example/' }, /data\[IdentityBroker__Issuer\]/],
+    ['create denied', { denyCreate: true }, /required permission "create configmaps"/],
+  ]) {
+    const fixture = createFixture(options);
+    assert.throws(() => bootstrapIdentityBrokerConfigOnly(runtimeConfig, fixture.deps), expected, name);
+    assert.equal(createWrites(fixture.calls), 0, name);
+  }
+
+  const data = createFixture();
+  bootstrapIdentityBrokerConfigOnly(runtimeConfig, data.deps);
+  data.created.get('configmaps/identity-broker-runtime-config-v3').data.IdentityBroker__Issuer =
+    'https://stale.example/';
+  assert.throws(() => bootstrapIdentityBrokerConfigOnly(runtimeConfig, data.deps), /refusing replacement/);
+  assert.equal(createWrites(data.calls), 1);
+
+  const binary = createFixture({ sourceBinaryData: { 'config.bin': 'YQ==' } });
+  bootstrapIdentityBrokerConfigOnly(runtimeConfig, binary.deps);
+  binary.created.get('configmaps/identity-broker-runtime-config-v3').binaryData['config.bin'] = 'Yg==';
+  assert.throws(() => bootstrapIdentityBrokerConfigOnly(runtimeConfig, binary.deps), /refusing replacement/);
+  assert.equal(createWrites(binary.calls), 1);
 });
 
 test('runtime setup creates absent native objects once and never overwrites conflicting state', () => {

@@ -80,6 +80,9 @@ binds the approved subscription, tenant, resource group, source SHA, source
 tree, and input hash. The AKS API must be public:
 `apiServerAccessProfile.enablePrivateCluster` must be `false`. A public DNS
 name does not make a private AKS API public.
+For a first install, follow the
+[Broker ConfigMap order](./deploy-to-azure.md#first-install-broker-configmap-order) before
+running Kustomize.
 
 For an existing environment, use the guarded AKS-only path to refresh the three
 existing workload-identity federation records. It reads the cluster issuer and

@@ -468,6 +468,9 @@ separate.
 4. Resolve all required runtime ConfigMap values before applying the product
    bundle. For an existing installation, use the
    [immutable ConfigMap update procedure](#replace-an-immutable-runtime-configmap).
+   For a first install, stage the Broker map after both managed certificates
+   are Available and before Kustomize deployment. Follow the
+   [Broker ConfigMap bootstrap procedure](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#bootstrap-the-first-install-broker-configmap).
    The Projects & Config map includes only the approved privileged-setup
    issuer, tenant, and subject. Review the exact values in the
    [runtime configuration reference](../reference/runtime-configuration.md#projects-config-settings);
@@ -563,13 +566,25 @@ Before a migration or Kubernetes write, the local helper requires the live
 `identity-broker-runtime-config-v3` ConfigMap to match the complete rendered
 Broker map. It also checks that the Broker Deployment references this map. A
 missing, malformed, or different map stops the command before writes. The
-helper does not create, replace, or repair the map; use a separately reviewed
-setup path for those cases.
+helper does not create, replace, or repair the map. For a first install, use
+the [Broker ConfigMap bootstrap procedure](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#bootstrap-the-first-install-broker-configmap).
 
-For a fresh installation, complete the managed certificate procedure from the
-[Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#application-routing-source-setting)
-before deployment. After product Services exist, configure the separate
-managed Gateway and routing resources. The deployment command does not
+### First-install Broker ConfigMap order
+
+For a fresh installation, follow this order:
+
+1. Complete certificate-only routing from the
+   [Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#application-routing-source-setting).
+2. Create the exact Broker ConfigMap with the
+   [ConfigMap-only installer stage](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#bootstrap-the-first-install-broker-configmap).
+3. Run the Kustomize workload deployment.
+4. After the product Services exist, run full identity routing.
+
+Do not run `--bootstrap-identity-broker-runtime` after Kustomize deployment as
+part of this first-install sequence. Kustomize intentionally removes four
+entries from the Broker egress policy. The standalone runtime bootstrap checks
+the untrimmed source policy hash and rejects the rendered policy. Kustomize
+creates the Broker workload resources. The deployment command does not
 provision Azure resources, certificates, runtime configuration, or external
 permissions.
 

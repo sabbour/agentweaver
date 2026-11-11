@@ -155,7 +155,11 @@ rendered Broker map, including `data`, `binaryData`, and `immutable`. The
 Broker Deployment must reference that map. A missing, malformed, or different
 map stops deployment. When the check passes, the helper omits the unchanged
 Broker map from the final apply. The helper does not create, replace, or repair
-that map.
+that map. For a first install, the separate ConfigMap-only stage creates the
+map after it validates the target-rendered source, Broker identity and
+federation, managed certificates, callback, and create permission. It creates
+no other resource. See the
+[first-install deployment order](../guide/deploy-to-azure.md#first-install-broker-configmap-order).
 
 ## PostgreSQL connection and workload identity
 

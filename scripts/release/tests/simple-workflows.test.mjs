@@ -1315,6 +1315,29 @@ test('Broker preflight rejects any data drift before Kubernetes writes without e
   }
 });
 
+test('Kustomize accepts the exact rendered Broker ConfigMap before its first write', async () => {
+  const directory = scratch();
+  const calls = [];
+  try {
+    await deployKustomize({ imageTag: selectedTag }, {
+      root: directory, exec: fakeExec(calls), log() {},
+    });
+    const sourceMap = JSON.parse(readFileSync(path.join(directory, 'deploy', 'k8s',
+      'runtime-configs', 'identity-broker-runtime-config.json'), 'utf8'));
+    assert.deepEqual(brokerRuntimeConfig.data, sourceMap.data);
+    const preflight = calls.findIndex(call => call.command === 'kubectl' &&
+      call.args[0] === 'get' && call.args[1] === 'configmap' && call.args[2] === brokerRuntimeConfigName);
+    const firstWrite = calls.findIndex(call => call.command === 'kubectl' &&
+      ['create', 'delete', 'apply', 'scale', 'annotate', 'patch', 'replace'].includes(call.args[0]));
+    assert.ok(preflight >= 0);
+    assert.ok(firstWrite > preflight);
+    assert.equal(kubernetesWriteCalls(calls).some(call =>
+      call.args[0] === 'create' && call.args.includes(`configmap/${brokerRuntimeConfigName}`)), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('Broker preflight fails closed for unreadable, malformed, missing, or invalid resources', async () => {
   const cases = [
     ['missing live map', { missingBrokerRuntimeConfig: true }, /Live ConfigMap\/identity-broker-runtime-config-v3 is missing/],

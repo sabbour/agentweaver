@@ -30,6 +30,14 @@ and read-only bootstrap verification checks those grants after migration.
 See [Broker database permissions](../reference/runtime-configuration#identity-broker-migration-history-and-grants).
 These steps do not change the resource topology shown below.
 
+For a first workload install, Kustomize checks the exact immutable Broker
+ConfigMap before its first cluster write; it does not create the map. The
+operator stages the managed certificates, then runs a separate ConfigMap-only
+stage that checks the rendered target map, Broker identity and federation, both
+certificates, and callback before its only write. Kustomize can then create the
+private Services. Full routing runs afterward and keeps its existing Service
+and route checks. See the [first-install order](../guide/deploy-to-azure.md#first-install-broker-configmap-order).
+
 The Orchestrator and Events & Sessions migrations use the separate migration
 identity. The Events & Sessions Job repeats its Sessions and Messaging settings
 from the runtime map because the host validates them before `--migrate`.
