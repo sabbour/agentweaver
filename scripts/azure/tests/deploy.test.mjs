@@ -237,6 +237,57 @@ test('runtime and Probe inputs are separately default-off and plans never invoke
     await assert.rejects(deploy({ ...fixture, brokerImage: runtime.brokerImage }), /require --bootstrap/);
 });
 
+test('Broker ConfigMap-only mode is default-off, isolated from ARM deployment, and never invokes runtime setup', async () => {
+    const option = 'bootstrap-identity-broker-config-only';
+    assert.equal(cliOptions[option].type, 'boolean');
+    assert.equal(cliOptions[option].default, false);
+    assert.equal(cliConfig({}).bootstrapIdentityBrokerConfigOnly, false);
+    assert.equal(cliConfig({ [option]: true }).bootstrapIdentityBrokerConfigOnly, true);
+
+    const brokerSource = { ...source, scope: 'aks-only' };
+    const planned = await deploy({ ...fixture, bootstrapIdentityBrokerConfigOnly: true,
+      upstreamClientId: ids.subscriptionId }, {
+      sourceResolver: () => brokerSource, execAz() { throw new Error('plan cloud call'); },
+      initializeIdentityBrokerConfigOnly() { throw new Error('plan ConfigMap write'); },
+    });
+    assert.equal(planned.executed, false);
+    assert.equal(planned.bootstrapIdentityBrokerConfigOnly, true);
+    assert.equal(planned.args, undefined);
+
+    const calls = [];
+    const steps = [];
+    const az = fakeAzure();
+    const result = await deploy({ ...fixture, execute: true, bootstrapIdentityBrokerConfigOnly: true,
+      upstreamClientId: ids.subscriptionId }, {
+      sourceResolver: () => brokerSource,
+      execAz(args, options) {
+        calls.push(args);
+        return az(args, options);
+      },
+      preflightIdentityBrokerRegistration() { throw new Error('unexpected duplicate registration preflight'); },
+      initializeIdentityBrokerConfigOnly(config) {
+        steps.push('config-only');
+        assert.equal(config.clusterName, 'agentweaver-aks');
+        assert.equal(config.keyVaultName, brokerSource.keyVaultName);
+        assert.equal(config.upstreamClientId, ids.subscriptionId);
+        return { configMap: 'identity-broker-runtime-config-v3', configMapCreated: true };
+      },
+      initializeIdentityBrokerRuntime() { throw new Error('full runtime bootstrap must not run'); },
+      initializeIdentityPostgres() { throw new Error('PostgreSQL bootstrap must not run'); },
+    });
+    assert.deepEqual(steps, ['config-only']);
+    assert.deepEqual(result.receipt.identityBrokerConfig, {
+      configMap: 'identity-broker-runtime-config-v3', configMapCreated: true,
+    });
+    assert.equal(calls.some(args => args[0] === 'deployment'), false);
+
+    await assert.rejects(deploy({ ...fixture, bootstrapIdentityBrokerConfigOnly: true,
+      bootstrapIdentityRouting: true, upstreamClientId: ids.subscriptionId }, {
+      sourceResolver() { throw new Error('source must not be read'); },
+      execAz() { throw new Error('cloud call'); },
+    }), /cannot be combined/);
+});
+
 test('dry-run never invokes PostgreSQL bootstrap, even when requested', async () => {
   let postgresCalled = false;
   const result = await deploy({ ...fixture, bootstrapIdentityPostgres: true }, {

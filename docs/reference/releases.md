@@ -78,6 +78,11 @@ access, read Secret data, or manage Namespaces. A migration failure stops before
 the root workload apply. Earlier migrations or workload updates may have
 completed if a later step fails; inspect state before retrying.
 
+For a first install, run certificate-only routing and the separate Broker
+ConfigMap-only installer before this command. The Kustomize helper does not
+create or repair that map. Follow the
+[first-install order](../guide/deploy-to-azure.md#first-install-broker-configmap-order).
+
 The preflight also validates and preserves an active Identity Broker GitHub
 provider successor ConfigMap, its environment bindings, the explicit
 `SecretKeyRef`, and its fingerprint. It stops before workload writes if

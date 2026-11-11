@@ -766,9 +766,46 @@ stage is a separate, default-off option. It requires
 verification. Explicit callback registration can be combined with this stage
 when the exact route-derived URI is confirmed.
 
-After the release bootstrap creates the product Services, run the same
-guarded command again without `--identity-routing-certificates-only`. The full
-phase first verifies that the MCP Service is the exact private HTTPS backend,
+#### Bootstrap the first-install Broker ConfigMap
+
+After both certificates are Available, and before Kustomize deployment, run
+the separate default-off ConfigMap-only stage. It requires the same reviewed
+AKS-only source and target inputs. It does not need Gateway placement or a
+Broker image:
+
+```powershell
+node scripts\azure\deploy.mjs `
+  --resource-group <approved-resource-group> `
+  --template infra\bicep\aks-redeploy.bicep `
+  --parameters infra\bicep\parameters\<approved-aks-only-parameters>.json `
+  --subscription <subscription-id> `
+  --allowed-subscription <subscription-id> `
+  --tenant <tenant-id> `
+  --allowed-tenant <tenant-id> `
+  --identity-upstream-client-id <public-client-guid> `
+  --bootstrap-identity-broker-config-only `
+  --execute
+```
+
+The stage checks the selected target, Broker identity and federation, both
+managed certificates, the existing Entra application, and its exact
+certificate-derived callback. It renders the tracked Kustomize source with
+the selected target values. The rendered map must match the target, identity,
+issuer, Portal host, and callback. If the source or a live map differs, the
+stage stops without replacing it.
+
+The stage checks create permission before its only write. It creates only the
+immutable `identity-broker-runtime-config-v3` ConfigMap, then reads it back.
+An exact existing map is a no-op. If a create result is uncertain, check the
+map again before you retry; the stage never patches, deletes, or replaces it.
+It does not create routes, Services, policies, ServiceAccounts, Deployments,
+SQL resources, or Entra settings. Without `--execute`, it prints a plan and
+makes no Azure or Kubernetes calls.
+
+Run the ordinary Kustomize workload deployment after this stage. After the
+release bootstrap creates the product Services, run the certificate command
+again without `--identity-routing-certificates-only`. The full phase first
+verifies that the MCP Service is the exact private HTTPS backend,
 then applies the Gateway, Broker/auth alias, Web, Gateway API/API alias,
 same-origin Copilot BFF, and MCP HTTPRoutes, corresponding BackendTLSPolicies,
 and narrow Cilium ingress policies. The single wildcard `https` listener
@@ -790,6 +827,12 @@ It waits for the Gateway and route conditions with bounded commands.
 The installer reads the public issuer from the admitted route hostname.
 Current-generation conditions and exact certificate, listener, parent,
 controller, backend, and namespace references must match.
+
+Do not run `--bootstrap-identity-broker-runtime` after Kustomize deployment as
+part of this first-install sequence. Kustomize intentionally removes four
+entries from the Broker egress policy. The standalone runtime bootstrap checks
+the untrimmed source policy hash and rejects that rendered policy. Keep both
+checks unchanged; Kustomize already creates the Broker workload resources.
 
 ### Identity-routing-only mode for an existing platform
 
@@ -824,13 +867,15 @@ create-only writes, so a concurrent change fails closed. It does not register
 an Entra callback or change runtime URLs or the canonical issuer. Route
 execution and namespace-policy approval remain separately authorized actions.
 
-Before an identity routing or Broker runtime deployment, the installer checks
-the enabled Azure account, exact AKS cluster, managed Application Routing
-domain, and existing Entra application. It derives
+Before identity routing, Broker runtime setup, or the ConfigMap-only stage,
+the installer checks the enabled Azure account, exact AKS cluster, managed
+Application Routing domain, and existing Entra application. It derives
 `https://agentweaver.<managed-domain>/signin-oidc` from the AKS domain before
-the what-if or any infrastructure write. This also works before the first
-certificate or route exists. Create the platform and its managed domain first;
-the installer does not infer a callback for a missing cluster or custom domain.
+an infrastructure or ConfigMap write. This callback preflight can run before
+the first certificate or route exists. The ConfigMap-only stage requires both
+managed certificates to be Available before it writes the map. Create the
+platform and its managed domain first; the installer does not infer a callback
+for a missing cluster or custom domain.
 
 The existing application must have the exact client ID in the selected tenant,
 `AzureADMyOrg` single-tenant mode, public-client flow enabled, and the exact
@@ -871,6 +916,7 @@ following is permitted.
 Failure prevents a successful installer receipt.
 The routing option does not create the Broker's runtime ConfigMap, signing
 Secret, key-ring PVC, OAuth registrations, or runtime Deployment.
+The ConfigMap-only stage above creates only the immutable runtime ConfigMap.
 Its receipt supplies `runtimeConfigInputs.IdentityBroker__Issuer` and
 `runtimeConfigInputs.IdentityBroker__ExternalProvider__ClientId` for the approved
 runtime ConfigMap. These inputs do not include a client secret.

@@ -14,7 +14,10 @@ import {
   preflightPublicBrokerRegistration,
 } from './lib/identity-broker-routing.mjs';
 import { bootstrapIdentityBrokerState } from './lib/identity-broker-state.mjs';
-import { assertBrokerRuntimeInputs, bootstrapIdentityBrokerRuntime } from './lib/identity-broker-runtime.mjs';
+import {
+  assertBrokerConfigOnlyInputs, assertBrokerRuntimeInputs, bootstrapIdentityBrokerConfigOnly,
+  bootstrapIdentityBrokerRuntime,
+} from './lib/identity-broker-runtime.mjs';
 import {
   activateIdentityBrokerProviderSetup,
   buildIdentityBrokerProviderPlan,
@@ -153,6 +156,7 @@ export async function deploy(config, {
   initializeIdentityBrokerState = bootstrapIdentityBrokerState,
   alignIdentityBrokerHostname = alignExistingP0BrokerHostname,
   initializeIdentityBrokerRuntime = bootstrapIdentityBrokerRuntime,
+  initializeIdentityBrokerConfigOnly = bootstrapIdentityBrokerConfigOnly,
   preflightIdentityBrokerRegistration = preflightPublicBrokerRegistration,
   initializeFoundationProbeInputs = bootstrapFoundationProbeInputs,
 } = {}) {
@@ -160,6 +164,17 @@ export async function deploy(config, {
   if (config.resourceGroup !== 'agentweaver' && (config.bootstrapFoundationProbeInputs ||
       config.bootstrapFoundationProbePostgres || config.alignExistingIdentityBrokerHostname)) {
     throw new Error('Foundation Probe and existing Broker hostname alignment options accept only the agentweaver target.');
+  }
+  if (config.bootstrapIdentityBrokerConfigOnly && (
+    config.newFoundation || config.bootstrapIdentityPostgres || config.bootstrapRuntimeIdentities ||
+    config.bootstrapIdentityRouting || config.identityRoutingOnly || config.identityRoutingCertificatesOnly ||
+    config.bootstrapIdentityBrokerState || config.alignExistingIdentityBrokerHostname ||
+    config.bootstrapIdentityBrokerRuntime || config.bootstrapFoundationProbeInputs ||
+    config.bootstrapFoundationProbePostgres || config.gatewayNamespace || config.gatewaySecurityPolicy ||
+    config.verifyBrokerReadiness || config.registerBrokerCallback || config.confirmBrokerCallback ||
+    config.acceptanceRunId || config.acceptanceRedirectUri || config.brokerImage
+  )) {
+    throw new Error('Broker ConfigMap-only mode cannot be combined with deployment, routing, runtime, or callback options.');
   }
   assertSubscription(config.subscriptionId, config.allowedSubscriptionId);
   assertTenant(config.tenantId, config.allowedTenantId);
@@ -173,7 +188,7 @@ export async function deploy(config, {
   )) {
     throw new Error('Identity-routing-only cannot be combined with callback registration or unrelated bootstrap options.');
   }
-  if (!config.bootstrapIdentityBrokerRuntime &&
+  if (!config.bootstrapIdentityBrokerRuntime && !config.bootstrapIdentityBrokerConfigOnly &&
       (config.acceptanceRunId || config.acceptanceRedirectUri || config.brokerImage)) {
     throw new Error('Broker runtime inputs require --bootstrap-identity-broker-runtime.');
   }
@@ -192,7 +207,8 @@ export async function deploy(config, {
       throw new Error('Callback confirmation requires --register-identity-broker-callback.');
     }
   } else if (config.identityRoutingCertificatesOnly || config.gatewayNamespace || config.gatewaySecurityPolicy ||
-      config.upstreamClientId && !config.bootstrapIdentityBrokerRuntime ||
+      config.upstreamClientId && !config.bootstrapIdentityBrokerRuntime &&
+        !config.bootstrapIdentityBrokerConfigOnly ||
       config.verifyBrokerReadiness || config.registerBrokerCallback || config.confirmBrokerCallback) {
     throw new Error('Identity routing inputs require the separate --bootstrap-identity-routing option.');
   }
@@ -203,28 +219,38 @@ export async function deploy(config, {
     assertBrokerRuntimeInputs({ ...config, clusterName: `${config.resourceGroup}-aks`,
       keyVaultName: source.keyVaultName });
   }
+  if (config.bootstrapIdentityBrokerConfigOnly) {
+    assertBrokerConfigOnlyInputs({ ...config, clusterName: `${config.resourceGroup}-aks`,
+      keyVaultName: source.keyVaultName });
+  }
   if (source.nodePoolMinCount !== 2 || source.nodePoolMaxCount !== 3) {
     throw new Error('Reviewed deployment source must bind the approved system autoscaler bounds 2-3.');
   }
   if (config.identityRoutingOnly && source.scope !== 'aks-only') {
     throw new Error('Identity-routing-only requires the reviewed AKS-only template and parameters.');
   }
+  if (config.bootstrapIdentityBrokerConfigOnly && source.scope !== 'aks-only') {
+    throw new Error('Broker ConfigMap-only mode requires the reviewed AKS-only template and parameters.');
+  }
   if (config.bootstrapRuntimeIdentities && source.scope !== 'aks-only') {
     throw new Error('Runtime identity setup requires the reviewed AKS-only template and parameters.');
   }
   const deploymentName = `${config.resourceGroup}-${source.scope === 'aks-only' ? 'aks-' : ''}${source.sha.slice(0, 12)}`;
   const clusterId = `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${config.resourceGroup}-aks`;
-  let args = config.identityRoutingOnly ? undefined : buildDeployArgs({ resourceGroup: config.resourceGroup, ...source,
+  const noDeployment = config.identityRoutingOnly || config.bootstrapIdentityBrokerConfigOnly;
+  let args = noDeployment ? undefined : buildDeployArgs({ resourceGroup: config.resourceGroup, ...source,
     subscription: config.subscriptionId, sourceSha: source.sha, deploymentName,
     newFoundation: config.newFoundation, nodeResourceGroup: `${config.resourceGroup}-aks-nodes` });
   const summary = { ...source, resourceGroup: config.resourceGroup,
-    ...(config.identityRoutingOnly ? { identityRoutingOnly: true } : { deploymentName, args }), executed: false,
+    ...(config.identityRoutingOnly ? { identityRoutingOnly: true }
+      : config.bootstrapIdentityBrokerConfigOnly ? {} : { deploymentName, args }), executed: false,
     bootstrapIdentityPostgres: Boolean(config.bootstrapIdentityPostgres),
     bootstrapRuntimeIdentities: Boolean(config.bootstrapRuntimeIdentities),
     bootstrapIdentityRouting: routingRequested,
     bootstrapIdentityBrokerState: Boolean(config.bootstrapIdentityBrokerState),
     alignExistingIdentityBrokerHostname: Boolean(config.alignExistingIdentityBrokerHostname),
     bootstrapIdentityBrokerRuntime: Boolean(config.bootstrapIdentityBrokerRuntime),
+    bootstrapIdentityBrokerConfigOnly: Boolean(config.bootstrapIdentityBrokerConfigOnly),
     bootstrapFoundationProbeInputs: Boolean(config.bootstrapFoundationProbeInputs),
     bootstrapFoundationProbePostgres: Boolean(config.bootstrapFoundationProbePostgres),
     ...(routingRequested ? { identityRoutingPlan: {
@@ -286,6 +312,24 @@ export async function deploy(config, {
       } };
     } catch (error) {
       throw new Error(`Identity routing bootstrap failed: ${error.message}`);
+    }
+  }
+  if (config.bootstrapIdentityBrokerConfigOnly) {
+    try {
+      assertSourceUnchanged('after Broker ConfigMap preflight');
+      const identityBrokerConfig = await initializeIdentityBrokerConfigOnly({
+        repoRoot: config.repoRoot, resourceGroup: config.resourceGroup,
+        subscriptionId: config.subscriptionId, tenantId: config.tenantId,
+        clusterName: `${config.resourceGroup}-aks`, keyVaultName: source.keyVaultName,
+        upstreamClientId: config.upstreamClientId,
+      });
+      return { ...summary, executed: true, receipt: {
+        scope: source.scope, sourceSha: source.sha, sourceTree: source.sourceTree, sourceHash: source.sourceHash,
+        subscriptionId: config.subscriptionId, tenantId: config.tenantId, resourceGroup: config.resourceGroup,
+        identityBrokerConfig,
+      } };
+    } catch (error) {
+      throw new Error(`Identity Broker ConfigMap bootstrap failed: ${error.message}`);
     }
   }
   const existingIdentityPostgres = (config.bootstrapIdentityPostgres || config.bootstrapFoundationProbePostgres ||
@@ -551,6 +595,7 @@ export function cliConfig(values) {
     bootstrapIdentityBrokerState: values['bootstrap-identity-broker-state'] ?? false,
     alignExistingIdentityBrokerHostname: values['align-existing-identity-broker-hostname'] ?? false,
     bootstrapIdentityBrokerRuntime: values['bootstrap-identity-broker-runtime'] ?? false,
+    bootstrapIdentityBrokerConfigOnly: values['bootstrap-identity-broker-config-only'] ?? false,
     acceptanceRunId: values['identity-acceptance-run-id'],
     acceptanceRedirectUri: values['identity-acceptance-redirect-uri'],
     brokerImage: values['identity-broker-image'],
@@ -583,6 +628,7 @@ export async function setupIdentityBrokerProviders(config, dependencies = {}) {
       config.bootstrapIdentityRouting || config.identityRoutingOnly ||
       config.identityRoutingCertificatesOnly || config.bootstrapIdentityBrokerState ||
       config.alignExistingIdentityBrokerHostname || config.bootstrapIdentityBrokerRuntime ||
+      config.bootstrapIdentityBrokerConfigOnly ||
       config.bootstrapFoundationProbeInputs || config.bootstrapFoundationProbePostgres ||
       config.gatewayNamespace || config.gatewaySecurityPolicy || config.upstreamClientId ||
       config.verifyBrokerReadiness || config.registerBrokerCallback || config.confirmBrokerCallback) {
@@ -629,6 +675,7 @@ export const cliOptions = {
   'bootstrap-identity-broker-state': { type: 'boolean', default: false },
   'align-existing-identity-broker-hostname': { type: 'boolean', default: false },
   'bootstrap-identity-broker-runtime': { type: 'boolean', default: false },
+  'bootstrap-identity-broker-config-only': { type: 'boolean', default: false },
   'identity-acceptance-run-id': { type: 'string' },
   'identity-acceptance-redirect-uri': { type: 'string' },
   'identity-broker-image': { type: 'string' },
