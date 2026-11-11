@@ -230,7 +230,8 @@ describe('BoardPage', () => {
     mocks.promoteBacklogWorkPlan.mockResolvedValue({ promotionId: 'promotion-1' });
     mocks.readProjectBacklog
       .mockResolvedValueOnce(graph([]))
-      .mockResolvedValueOnce(graph([task('promoted-1', 'Design')], 6));
+      .mockResolvedValueOnce(graph([], 8))
+      .mockResolvedValueOnce(graph([task('promoted-1', 'Design')], 9));
     mocks.useProjectRunList.mockImplementation((_projectId: string, options?: { states?: string[] }) =>
       options?.states?.[0] === 'active'
         ? runList([{
@@ -260,7 +261,7 @@ describe('BoardPage', () => {
         workPlanId: 'plan-1',
         expectedDecisionStateVersion: 4,
         expectedExecutionFence: 2,
-        expectedGraphRevision: 5,
+        expectedGraphRevision: 8,
         idempotencyKey: expect.any(String),
       }),
       'tenant-1',
@@ -269,10 +270,10 @@ describe('BoardPage', () => {
     expect(await screen.findByText('Design')).toBeTruthy();
     expect(mocks.apiCall).toHaveBeenCalledWith(
       expect.any(Function), { projectId: 'p1', runId: 'run-1' });
-    expect(mocks.readProjectBacklog).toHaveBeenCalledTimes(2);
+    expect(mocks.readProjectBacklog).toHaveBeenCalledTimes(3);
   });
 
-  it('retains the same promotion request after a conflict so the result can be checked', async () => {
+  it('requires a new preview after a promotion conflict', async () => {
     mocks.previewBacklogWorkPlanPromotion.mockResolvedValue({
       rootSessionId: 'root-1',
       workPlanId: 'plan-1',
@@ -280,9 +281,13 @@ describe('BoardPage', () => {
       executionFence: 2,
       items: [{ workPlanItemId: 'item-1', title: 'Build', task: 'Build the feature.', dependsOn: [] }],
     });
-    mocks.promoteBacklogWorkPlan
-      .mockRejectedValueOnce(new GatewayError(409, { code: 'coordinator_selection_stale' }, 'Conflict'))
-      .mockResolvedValueOnce({ promotionId: 'promotion-1' });
+    mocks.promoteBacklogWorkPlan.mockRejectedValueOnce(
+      new GatewayError(409, { code: 'coordinator_selection_stale' }, 'Conflict'),
+    );
+    mocks.readProjectBacklog
+      .mockResolvedValueOnce(graph([]))
+      .mockResolvedValueOnce(graph([], 7))
+      .mockResolvedValueOnce(graph([], 8));
     mocks.useProjectRunList.mockImplementation((_projectId: string, options?: { states?: string[] }) =>
       options?.states?.[0] === 'active'
         ? runList([{
@@ -295,12 +300,15 @@ describe('BoardPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Preview work-plan promotion for Implement feature' }));
     await screen.findByText('Build the feature.');
     fireEvent.click(screen.getByRole('button', { name: 'Promote work plan' }));
-    expect(await screen.findByText(/may have completed/)).toBeTruthy();
+    expect(await screen.findByText('The work plan or backlog changed. Preview work-plan promotion again.')).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(mocks.promoteBacklogWorkPlan).toHaveBeenCalledOnce();
+    expect(mocks.readProjectBacklog).toHaveBeenCalledTimes(3);
 
-    const firstRequest = mocks.promoteBacklogWorkPlan.mock.calls[0][3];
-    fireEvent.click(screen.getByRole('button', { name: 'Retry promotion' }));
-    await screen.findByText('Work plan promoted to Backlog.');
-    expect(mocks.promoteBacklogWorkPlan.mock.calls[1][3]).toEqual(firstRequest);
+    fireEvent.click(screen.getByRole('button', { name: 'Preview work-plan promotion for Implement feature' }));
+    await screen.findByText('Build the feature.');
+    expect(mocks.previewBacklogWorkPlanPromotion).toHaveBeenCalledTimes(2);
+    expect(mocks.promoteBacklogWorkPlan).toHaveBeenCalledOnce();
   });
 
   it('offers run sign-in when the preview needs a run-bound session', async () => {
@@ -324,7 +332,11 @@ describe('BoardPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Preview work-plan promotion for Implement feature' }));
     expect(mocks.previewBacklogWorkPlanPromotion).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole('button', { name: 'Sign in to this run' }));
-    await waitFor(() => expect(mocks.authorize).toHaveBeenCalledWith({ projectId: 'p1', runId: 'run-1' }));
+    await waitFor(() => expect(mocks.authorize).toHaveBeenCalledWith(
+      { projectId: 'p1', runId: 'run-1' },
+      undefined,
+      false,
+    ));
     fireEvent.click(screen.getByRole('button', { name: 'Preview work-plan promotion for Implement feature' }));
     expect(await screen.findByText('Build the feature.')).toBeTruthy();
     expect(mocks.previewBacklogWorkPlanPromotion).toHaveBeenCalledWith(
@@ -355,7 +367,7 @@ describe('BoardPage', () => {
 
     expect(await screen.findByText("You don't have permission to promote a work plan in this project.")).toBeTruthy();
     expect(screen.getByText('No tasks yet')).toBeTruthy();
-    expect(mocks.readProjectBacklog).toHaveBeenCalledTimes(1);
+    expect(mocks.readProjectBacklog).toHaveBeenCalledTimes(2);
   });
 
   it('uses the Dashboard run metrics and shows review, problem, and history lanes', async () => {

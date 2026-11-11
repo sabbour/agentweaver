@@ -63,7 +63,8 @@ interface AuthContextValue {
   consent: BrokerConsentPrompt | null;
   error: string | null;
   configurationError: string | null;
-  authorize: (binding?: RunBinding | null) => Promise<void>;
+  /** `activate` defaults to true; false stores a run session without changing the active session. */
+  authorize: (binding?: RunBinding | null, popupOverride?: Window | null, activate?: boolean) => Promise<void>;
   /**
    * Makes a session for `binding` available without a prompt. It reuses a held session or
    * asks the Broker once with `prompt=none`. Returns false when the Broker needs the user;
@@ -205,6 +206,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     promise: Promise<AuthSession | null>;
   }>());
   const transactionRef = useRef<AuthorizationTransaction | null>(null);
+  const consentSessionModeRef = useRef<SessionMode | null>(null);
   const pollAbortRef = useRef<AbortController | null>(null);
   const authorizationFrameRef = useRef<HTMLIFrameElement | null>(null);
   const silentAttemptedRef = useRef(false);
@@ -239,6 +241,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // and for a fresh unbound sign-in.
     sessionsRef.current.clear();
     ensureRef.current.clear();
+    consentSessionModeRef.current = null;
     if (next) sessionsRef.current.set(bindingKey(next.binding), next);
     setActiveSession(next);
   }, [setActiveSession]);
@@ -455,6 +458,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (popupCallbackUrl) {
           if (!await consumeAuthorizationResponse(popupCallbackUrl, transaction, mode))
             throw new Error('The sign-in response is invalid.');
+          consentSessionModeRef.current = null;
           popup?.close();
           return true;
         }
@@ -499,6 +503,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                   result.requested_scopes.some((scope) => !config.scopes.includes(scope))) {
                 throw new Error('The Broker consent response does not match this registered client and its configured scopes.');
               }
+              consentSessionModeRef.current = mode;
               popup?.close();
               setConsent(result);
               return false;
@@ -549,8 +554,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const authorize = useCallback(async (
     requestedBinding: RunBinding | null = null,
     popupOverride?: Window | null,
+    activate = true,
   ) => {
-    await runAuthorization(requestedBinding, popupOverride, false);
+    await runAuthorization(requestedBinding, popupOverride, false, activate ? null : 'store');
   }, [runAuthorization]);
 
   /** Returns a session for `binding`, reusing a held one or trying one silent sign-in. */
@@ -600,8 +606,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         : null;
       const response = await submitBrokerConsent(defaultAuthorizationConfig(), consent, approve);
       // Same rule as runAuthorization: a run-bound consent keeps the sessions already held.
-      const mode: SessionMode = transaction.binding && sessionRef.current ? 'activate' : 'replace';
+      const mode = consentSessionModeRef.current
+        ?? (transaction.binding && sessionRef.current ? 'activate' : 'replace');
       if (await consumeAuthorizationResponse(response.url, transaction, mode)) {
+        consentSessionModeRef.current = null;
         popup?.close();
         return;
       }
@@ -610,13 +618,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       if (!popup)
         throw new Error('Allow the sign-in popup to continue.');
-      await authorize(transaction.binding, popup);
+      await authorize(transaction.binding, popup, mode !== 'store');
     } catch (reason) {
       popup?.close();
       setError(reason instanceof Error ? reason.message : 'Broker consent failed.');
       if (!approve) clearAuthorizationTransaction();
     } finally {
-      if (!approve) setConsent(null);
+      if (!approve) {
+        consentSessionModeRef.current = null;
+        setConsent(null);
+      }
       setBusy(false);
     }
   }, [authorize, consent, consumeAuthorizationResponse]);
