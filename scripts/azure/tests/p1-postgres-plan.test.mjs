@@ -316,9 +316,12 @@ test('Initializer protected-table count matches the plan', () => {
   const protectedTables = plan.services.flatMap(service =>
     service.tables.filter(table => table.mutationDenialRequired));
   const lockTables = plan.services.flatMap(service => service.tables.filter(table => table.lockColumn));
+  const appendOnlyLedgers = protectedTables.filter(table =>
+    table.mutationDenialGuards?.some(guard => guard.triggerType === 34)).length;
   const checks = readFileSync(new URL('../../../tools/P1PostgresInitializer/InitializerChecks.cs', import.meta.url), 'utf8');
   assert.ok(checks.includes(`protectedTables.Length != ${protectedTables.length} ||`));
-  assert.ok(checks.includes(`lockTables.Length != ${lockTables.length})`));
+  assert.ok(checks.includes(`lockTables.Length != ${lockTables.length} ||`));
+  assert.ok(checks.includes(`appendOnlyLedgers != ${appendOnlyLedgers}`));
 });
 
 // Both owner catalogs must agree with the separately reviewed initializer plan.
