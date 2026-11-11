@@ -9,6 +9,7 @@ import {
   assertTargetContext,
   deployKustomize,
   ENVIRONMENT_RBAC_REQUIREMENTS,
+  ensureAgentHostPlatformEgressSeed,
   parseDeployKustomizeArgs,
   parseImageManifest,
   requireLiveByokBindingsPreserved,
@@ -474,6 +475,14 @@ function fakeExec(calls, {
         !isEnvironmentCheck && denyRuntimePermission === permission;
       return { status: 0, stdout: denied ? 'no\n' : 'yes\n', stderr: '' };
     }
+    if (args[0] === 'get' && args[1] === 'ciliumnetworkpolicies.cilium.io' &&
+        args[2] === 'agenthost-platform-egress') {
+      return {
+        status: 0,
+        stdout: live.platformEgressPolicy ? JSON.stringify(live.platformEgressPolicy) : '',
+        stderr: '',
+      };
+    }
     if (args[0] === 'get' && args[1] === 'configmap') {
       const name = args[2];
       if (name === brokerRuntimeConfigName && brokerConfigMapReadFailure) {
@@ -593,6 +602,19 @@ function fakeExec(calls, {
       const resource = parse(options.input);
       if (resource.kind === 'List' && smokeCreateError) {
         return { status: 1, stdout: '', stderr: smokeCreateError };
+      }
+      if (resource.kind === 'CiliumNetworkPolicy' &&
+          resource.metadata?.name === 'agenthost-platform-egress') {
+        if (live.platformEgressPolicy) {
+          return {
+            status: 1,
+            stdout: '',
+            stderr: 'Error from server (AlreadyExists): ciliumnetworkpolicies.cilium.io "agenthost-platform-egress" already exists',
+          };
+        }
+        live.platformEgressPolicy = structuredClone(resource);
+        live.platformEgressPolicy.metadata.resourceVersion = '1';
+        return { status: 0, stdout: 'ciliumnetworkpolicy created\n', stderr: '' };
       }
       if (resource.kind === 'ConfigMap') {
         const name = resource.metadata.name;
@@ -1012,6 +1034,125 @@ test('deploy allows AgentHost model egress to exactly the rendered HostedCopilot
   const widened = render({});
   widened[1].spec.egress.push({ toEntities: ['world'] });
   assert.throws(() => stampAgentHostModelEgress(widened), /DNS-only CiliumNetworkPolicy\/agenthost-model-egress/);
+});
+
+test('provider egress seed preserves an existing object on every run', () => {
+  const existing = {
+    apiVersion: 'cilium.io/v2',
+    kind: 'CiliumNetworkPolicy',
+    metadata: {
+      name: 'agenthost-platform-egress',
+      namespace: 'agentweaver',
+      resourceVersion: '42',
+      annotations: { 'provider.example/owner': 'environment' },
+    },
+    spec: { egress: [{ toEndpoints: [{ matchLabels: { 'example.com/target': 'kept' } }] }] },
+  };
+  const bytes = JSON.stringify(existing);
+  const calls = [];
+  const exec = (command, args, options) => {
+    calls.push({ command, args, options });
+    return { status: 0, stdout: bytes, stderr: '' };
+  };
+
+  assert.equal(ensureAgentHostPlatformEgressSeed(exec, 'selected-context', root), false);
+  assert.equal(ensureAgentHostPlatformEgressSeed(exec, 'selected-context', root), false);
+  assert.deepEqual(calls.map(call => call.args[0]), ['get', 'get']);
+  assert.equal(JSON.stringify(existing), bytes);
+  assert.equal(existing.metadata.resourceVersion, '42');
+});
+
+test('provider egress seed creates the exact DNS-only policy only when absent', () => {
+  const calls = [];
+  const exec = (command, args, options) => {
+    calls.push({ command, args, options });
+    return args[0] === 'get'
+      ? { status: 0, stdout: '', stderr: '' }
+      : { status: 0, stdout: 'created\n', stderr: '' };
+  };
+
+  assert.equal(ensureAgentHostPlatformEgressSeed(exec, 'selected-context', root), true);
+  assert.deepEqual(calls.map(call => call.args[0]), ['get', 'create']);
+  assert.deepEqual(parse(calls[1].options.input), {
+    apiVersion: 'cilium.io/v2',
+    kind: 'CiliumNetworkPolicy',
+    metadata: {
+      name: 'agenthost-platform-egress',
+      namespace: 'agentweaver',
+      labels: { 'agentweaver.io/service': 'agenthost' },
+    },
+    spec: {
+      endpointSelector: { matchLabels: { 'agentweaver.io/workload': 'agenthost' } },
+      egress: [{
+        toEndpoints: [{
+          matchLabels: {
+            'k8s:io.kubernetes.pod.namespace': 'kube-system',
+            'k8s:k8s-app': 'kube-dns',
+          },
+        }],
+        toPorts: [{
+          ports: [
+            { port: '53', protocol: 'UDP' },
+            { port: '53', protocol: 'TCP' },
+          ],
+        }],
+      }],
+    },
+  });
+  const kustomization = readYaml('deploy/k8s/base/kustomization.yaml');
+  assert.equal(kustomization.resources.includes('agenthost-platform-egress.yaml'), false);
+});
+
+test('provider egress seed stops after a failed read without creating', () => {
+  const calls = [];
+  const exec = (command, args) => {
+    calls.push({ command, args });
+    return { status: 1, stdout: '', stderr: 'Error from server (Forbidden): access denied' };
+  };
+
+  assert.throws(() => ensureAgentHostPlatformEgressSeed(exec, 'selected-context', root),
+    /Could not read CiliumNetworkPolicy\/agenthost-platform-egress/);
+  assert.equal(calls.length, 1);
+});
+
+test('provider egress seed stops after a failed create', () => {
+  const calls = [];
+  const exec = (command, args) => {
+    calls.push({ command, args });
+    return args[0] === 'get'
+      ? { status: 0, stdout: '', stderr: '' }
+      : { status: 1, stdout: '', stderr: 'Error from server (Forbidden): create denied' };
+  };
+
+  assert.throws(() => ensureAgentHostPlatformEgressSeed(exec, 'selected-context', root),
+    /Could not create CiliumNetworkPolicy\/agenthost-platform-egress/);
+  assert.deepEqual(calls.map(call => call.args[0]), ['get', 'create']);
+});
+
+test('provider egress seed treats an AlreadyExists race as a no-op', () => {
+  const calls = [];
+  const exec = (command, args) => {
+    calls.push({ command, args });
+    return args[0] === 'get'
+      ? { status: 0, stdout: '', stderr: '' }
+      : { status: 1, stdout: '', stderr: 'Error from server (AlreadyExists): policy already exists' };
+  };
+
+  assert.equal(ensureAgentHostPlatformEgressSeed(exec, 'selected-context', root), false);
+  assert.deepEqual(calls.map(call => call.args[0]), ['get', 'create']);
+});
+
+test('provider egress seed does not treat other errors mentioning AlreadyExists as a race', () => {
+  const exec = (command, args) => args[0] === 'get'
+    ? { status: 0, stdout: '', stderr: '' }
+    : {
+      status: 1,
+      stdout: '',
+      stderr: 'Error from server (InternalError): failed to write audit record: AlreadyExists',
+    };
+
+  assert.throws(() => ensureAgentHostPlatformEgressSeed(exec, 'selected-context', root),
+    /Could not create CiliumNetworkPolicy\/agenthost-platform-egress/);
 });
 
 test('install smoke check probes one keyless URL per configured BYOK host', () => {
@@ -2662,11 +2803,22 @@ test('deploy creates only a missing product StorageClass before migrations', asy
       root: directory, exec: fakeExec(calls, { liveStorageClass: null }), log() {},
     });
     const creates = calls.filter(call => call.command === 'kubectl' && call.args[0] === 'create');
-    const storageClass = parse(creates[0].options.input);
+    const policySeed = parse(creates[0].options.input);
+    assert.equal(policySeed.kind, 'CiliumNetworkPolicy');
+    assert.equal(policySeed.metadata.name, 'agenthost-platform-egress');
+    assert.equal(creates[0].args.includes('--namespace'), true);
+    const storageClassIndex = creates.findIndex(call => parse(call.options.input).kind === 'StorageClass');
+    const storageClass = parse(creates[storageClassIndex].options.input);
     assert.equal(storageClass.kind, 'StorageClass');
     assert.equal(storageClass.metadata.name, 'agentweaver-workspace-azurefile');
-    assert.equal(creates[0].args.includes('--namespace'), false);
+    assert.equal(creates[storageClassIndex].args.includes('--namespace'), false);
     assert.equal(creates.filter(call => parse(call.options.input).kind === 'StorageClass').length, 1);
+    assert.ok(calls.findIndex(call => call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'CiliumNetworkPolicy') <
+      calls.findIndex(call => call.args[0] === 'apply'));
+    const applied = parse(calls.find(call => call.args[0] === 'apply').options.input);
+    assert.equal(applied.items.some(resource =>
+      resource.kind === 'CiliumNetworkPolicy' && resource.metadata.name === 'agenthost-platform-egress'), false);
 
     const existing = [];
     await deployKustomize({ imageTag: selectedTag }, { root: directory, exec: fakeExec(existing), log() {} });

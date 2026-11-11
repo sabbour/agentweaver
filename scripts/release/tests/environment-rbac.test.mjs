@@ -55,6 +55,7 @@ test('proposed Environment RBAC matches the reviewed namespaced and cluster perm
       ['', ['events'], ['list']],
       ['', ['persistentvolumeclaims'], ['get', 'create', 'delete']],
       ['cilium.io', ['ciliumnetworkpolicies'], ['get', 'create', 'update', 'delete']],
+      ['cilium.io', ['ciliumnetworkpolicies'], ['patch'], 'agenthost-platform-egress'],
       ['', ['pods'], ['create', 'patch', 'delete']],
       ['', ['pods/log'], ['get']],
       ['', ['pods/exec', 'pods/attach'], ['create']],

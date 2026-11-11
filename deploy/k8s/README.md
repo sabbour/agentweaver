@@ -51,8 +51,11 @@ prerequisites:
    and routing resources using the Azure operator guide.
 
 The deployment command does not provision Azure resources, certificates,
-runtime configuration, or external permissions. It creates only the
-cluster-scoped workspace StorageClass in `cluster/` when that class is missing.
+runtime configuration, or external permissions. It creates the cluster-scoped
+workspace StorageClass in `cluster/` when that class is missing. It also
+creates the DNS-only
+`CiliumNetworkPolicy/agenthost-platform-egress` in namespace `agentweaver`
+when that policy is missing.
 
 ## Kustomize layout
 
@@ -105,6 +108,14 @@ before writes. The error names changed fields or keys, not values. If the check
 passes, the helper leaves this unchanged ConfigMap out of the final apply. It
 does not create, replace, or repair the Broker map; that requires a separate
 reviewed design.
+
+Before its first Kubernetes write, the helper reads the exact
+`agenthost-platform-egress` policy. If the policy is missing, it creates a
+DNS-only seed for AgentHost pods and kube-dns. If the policy exists, the helper
+does not change it. The policy stays outside the Kustomize bundle, so later
+deployments do not reset provider-owned rules. This seed does not activate the
+platform policy source or reconciler. The legacy `agenthost-model-egress`
+policy and its rendered model hosts remain unchanged.
 
 Projects & Config's runtime identity is DDL-restricted. The migration Job uses
 Kubernetes Workload Identity, not a token Secret. The one-time setup provisions

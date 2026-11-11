@@ -314,8 +314,12 @@ The parts are:
 - `CiliumPlatformEgressProvider` owns one object:
   `CiliumNetworkPolicy/agenthost-platform-egress` in the AgentHost namespace,
   with the selector `agentweaver.io/workload: agenthost`. The deploy creates
-  the object with a DNS-only spec. The provider only reads and replaces it.
-  If the object is missing, the apply fails with `policy_object_missing`.
+  the object with a DNS-only spec only when it is missing. The deploy reads the
+  exact object first, does not write an existing object, and keeps the seed
+  outside the Kustomize bundle. If another create wins the race, the deploy
+  treats `AlreadyExists` as a no-op. Other read or create errors stop the
+  deployment. The provider only reads and replaces the object. If the object is
+  missing, the apply fails with `policy_object_missing`.
 - `PublicHttps` renders one `toCIDRSet` rule for `0.0.0.0/0` and `::/0` on
   TCP 443, with the excluded ranges in `except`. `Allowlist` renders DNS
   `matchName` rules and `toFQDNs` `matchName` rules for each exact host on
@@ -360,8 +364,9 @@ sequenceDiagram
 ```
 
 Environment does not run the reconciler yet. #2659 connects it to the
-canonical policy source. Until then, no platform egress policy is applied and
-the deploy-managed AgentHost egress policies stay in effect.
+canonical policy source. Until then, the DNS-only seed may exist, but no
+source-derived platform egress rules are applied. The deploy-managed AgentHost
+egress policies stay in effect.
 
 The focused tests use a fake policy source and a fake Kubernetes store. They
 include a conformance kit that every `IPlatformEgressProvider` must pass. They
