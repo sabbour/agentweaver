@@ -25,6 +25,7 @@ the exact inputs for that run. Later edits do not rewrite the snapshot.
 | `ProjectAuthorization.cs` | Current membership, roles, scopes, and effective permissions |
 | `ProjectConfiguration.cs` | Typed settings, validation, limits, and egress narrowing |
 | `ProjectsConfigService.cs` | Project lifecycle, revision writes, and run selection |
+| `ModelProviderDraftService.cs` and `ModelProviderDraftRecords.cs` | Customer-provided model-provider metadata in Draft heads and immutable revisions |
 | `ProjectsConfigDbContext.cs` and `ProjectConfigRecords.cs` | Service-owned persistence |
 | `ProjectsConfigCastingService.cs` and `ProjectsConfigCastingTransferService.cs` | Reviewed team proposals and transfers |
 | `ProjectBlueprintCatalog.cs`, `AgentSuiteBlueprintConverter.cs`, and `BlueprintPackages/` | 0.x blueprints, their AgentSuite conversion, and the ported 0.x package validator |
@@ -77,6 +78,15 @@ model references are listed separately and are not treated as eligible.
 When you update a revision, supply the expected current revision. The service
 appends a new revision and advances the head. If another writer wins first,
 your update conflicts instead of overwriting its change.
+
+Customer-provided model-provider metadata has a separate Draft-only store.
+Every read and write requires `api.read` and `projects.admin`. Platform requests
+must be unbound and made by a PlatformAdmin. Project requests must match the
+exact project binding, have no run binding, and be made by a project Owner or
+PlatformAdmin. Draft metadata does not change model eligibility or accepted run
+selections. This source slice adds no HTTP route, activation, credentials, or
+rate-card data. See
+[issue #2635](https://github.com/sabbour/agentweaver/issues/2635).
 
 ### Accept a run selection
 

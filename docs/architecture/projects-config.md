@@ -12,6 +12,14 @@ resources. This page describes source, not a release or deployment. The
 [Projects deep dive](../deep-dive/projects-config.md) explains revision races
 and the acceptance transaction.
 
+Projects & Config also stores customer-provided model-provider metadata as
+Draft heads and immutable revisions. This owner-internal service does not add
+an HTTP route, activate a provider, or change deployment-owned model eligibility
+or accepted run selections. Every read and write requires `api.read` and
+`projects.admin`; platform requests must be unbound, and project requests must
+match the exact project binding with no run binding. See
+[issue #2635](https://github.com/sabbour/agentweaver/issues/2635).
+
 ## Project creation authority
 
 Creating a project also makes its authenticated creator an active Owner. The

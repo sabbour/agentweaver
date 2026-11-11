@@ -1,3 +1,4 @@
+using Agentweaver.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 
@@ -19,6 +20,9 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
     public DbSet<PlatformRuntimeRevisionRecord> PlatformRuntimeRevisions => Set<PlatformRuntimeRevisionRecord>();
     public DbSet<ProjectRunSelectionRecord> RunSelections => Set<ProjectRunSelectionRecord>();
     public DbSet<ProjectSetupOperationRecord> ProjectSetupOperations => Set<ProjectSetupOperationRecord>();
+    public DbSet<ModelProviderDraftHeadRecord> ModelProviderDrafts => Set<ModelProviderDraftHeadRecord>();
+    public DbSet<ModelProviderDraftRevisionRecord> ModelProviderDraftRevisions =>
+        Set<ModelProviderDraftRevisionRecord>();
     public DbSet<ProjectMarketplaceSourceRecord> MarketplaceSources => Set<ProjectMarketplaceSourceRecord>();
     public DbSet<ProjectCastingProposalRecord> CastingProposals => Set<ProjectCastingProposalRecord>();
     public DbSet<ProjectCastingGenerationRequestRecord> CastingGenerationRequests =>
@@ -208,6 +212,130 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 .HasForeignKey(configuration => configuration.HeadId)
                 .HasPrincipalKey(head => head.Id)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<ModelProviderDraftHeadRecord>(entity =>
+        {
+            entity.ToTable("model_providers", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_model_providers_scope_project",
+                    "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL)");
+                table.HasCheckConstraint("ck_model_providers_state", "state = 'Draft'");
+                table.HasCheckConstraint("ck_model_providers_revision", "current_revision > 0");
+                table.HasCheckConstraint(
+                    "ck_model_providers_reasoning_efforts",
+                    "cardinality(reasoning_efforts) <= 6 AND " +
+                    "reasoning_efforts <@ ARRAY['none', 'minimal', 'low', 'medium', 'high', 'xhigh']::text[]");
+                table.HasCheckConstraint(
+                    "ck_model_providers_prompt_capacity",
+                    "prompt_capacity_tokens IS NULL OR prompt_capacity_tokens > 0");
+            });
+            entity.HasKey(head => head.ProviderId).HasName("pk_model_providers");
+            entity.Property(head => head.ProviderId).HasColumnName("provider_id")
+                .HasMaxLength(ModelProviderDraftLimits.ProviderId);
+            entity.Property(head => head.Scope).HasColumnName("scope")
+                .HasConversion<string>().HasMaxLength(16);
+            entity.Property(head => head.ProjectId).HasColumnName("project_id")
+                .HasMaxLength(ModelProviderDraftLimits.ProjectId);
+            entity.Property(head => head.DisplayName).HasColumnName("display_name")
+                .HasMaxLength(ModelProviderDraftLimits.DisplayName).IsRequired();
+            entity.Property(head => head.ProviderType).HasColumnName("type")
+                .HasMaxLength(16).IsRequired();
+            entity.Property(head => head.BaseUrl).HasColumnName("base_url")
+                .HasMaxLength(ModelProviderDraftLimits.BaseUrl).IsRequired();
+            entity.Property(head => head.Deployment).HasColumnName("deployment")
+                .HasMaxLength(ModelProviderDraftLimits.Deployment).IsRequired();
+            entity.Property(head => head.WireApi).HasColumnName("wire_api")
+                .HasMaxLength(ModelProviderDraftLimits.WireApi);
+            entity.Property(head => head.AzureApiVersion).HasColumnName("azure_api_version")
+                .HasMaxLength(ModelProviderDraftLimits.AzureApiVersion);
+            entity.Property(head => head.ReasoningEfforts).HasColumnName("reasoning_efforts")
+                .HasColumnType("text[]").IsRequired();
+            entity.Property(head => head.PromptCapacityTokens).HasColumnName("prompt_capacity_tokens");
+            entity.Property(head => head.State).HasColumnName("state")
+                .HasConversion<string>().HasMaxLength(16);
+            entity.Property(head => head.CurrentRevision).HasColumnName("current_revision").IsConcurrencyToken();
+            entity.Property(head => head.CreatedByActorId).HasColumnName("created_by_actor_id")
+                .HasMaxLength(ModelProviderDraftLimits.ActorId).IsRequired();
+            entity.Property(head => head.CreatedAt).HasColumnName("created_at");
+            entity.Property(head => head.UpdatedByActorId).HasColumnName("updated_by_actor_id")
+                .HasMaxLength(ModelProviderDraftLimits.ActorId).IsRequired();
+            entity.Property(head => head.UpdatedAt).HasColumnName("updated_at");
+            entity.HasOne<ProjectRecord>()
+                .WithMany()
+                .HasForeignKey(head => head.ProjectId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(head => new { head.Scope, head.ProjectId, head.DisplayName })
+                .HasDatabaseName("ix_model_providers_scope_project_name");
+        });
+
+        modelBuilder.Entity<ModelProviderDraftRevisionRecord>(entity =>
+        {
+            entity.ToTable("model_provider_revisions", table =>
+            {
+                table.HasCheckConstraint("ck_model_provider_revisions_revision", "provider_revision > 0");
+                table.HasCheckConstraint(
+                    "ck_model_provider_revisions_scope_project",
+                    "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "ck_model_provider_revisions_request_fingerprint",
+                    "request_fingerprint ~ '^[0-9a-f]{64}$'");
+                table.HasCheckConstraint(
+                    "ck_model_provider_revisions_configuration_hash",
+                    "configuration_hash ~ '^[0-9a-f]{64}$'");
+                table.HasCheckConstraint(
+                    "ck_model_provider_revisions_reasoning_efforts",
+                    "cardinality(reasoning_efforts) <= 6 AND " +
+                    "reasoning_efforts <@ ARRAY['none', 'minimal', 'low', 'medium', 'high', 'xhigh']::text[]");
+                table.HasCheckConstraint(
+                    "ck_model_provider_revisions_prompt_capacity",
+                    "prompt_capacity_tokens IS NULL OR prompt_capacity_tokens > 0");
+            });
+            entity.HasKey(revision => new { revision.ProviderId, revision.ProviderRevision })
+                .HasName("pk_model_provider_revisions");
+            entity.Property(revision => revision.ProviderId).HasColumnName("provider_id")
+                .HasMaxLength(ModelProviderDraftLimits.ProviderId);
+            entity.Property(revision => revision.Scope).HasColumnName("scope")
+                .HasConversion<string>().HasMaxLength(16);
+            entity.Property(revision => revision.ProjectId).HasColumnName("project_id")
+                .HasMaxLength(ModelProviderDraftLimits.ProjectId);
+            entity.Property(revision => revision.ProviderRevision).HasColumnName("provider_revision");
+            entity.Property(revision => revision.OperationId).HasColumnName("operation_id");
+            entity.Property(revision => revision.RequestFingerprint).HasColumnName("request_fingerprint")
+                .HasMaxLength(ModelProviderDraftLimits.Hash).IsRequired();
+            entity.Property(revision => revision.DisplayName).HasColumnName("display_name")
+                .HasMaxLength(ModelProviderDraftLimits.DisplayName).IsRequired();
+            entity.Property(revision => revision.ProviderType).HasColumnName("type")
+                .HasMaxLength(16).IsRequired();
+            entity.Property(revision => revision.BaseUrl).HasColumnName("base_url")
+                .HasMaxLength(ModelProviderDraftLimits.BaseUrl).IsRequired();
+            entity.Property(revision => revision.Deployment).HasColumnName("deployment")
+                .HasMaxLength(ModelProviderDraftLimits.Deployment).IsRequired();
+            entity.Property(revision => revision.WireApi).HasColumnName("wire_api")
+                .HasMaxLength(ModelProviderDraftLimits.WireApi);
+            entity.Property(revision => revision.AzureApiVersion).HasColumnName("azure_api_version")
+                .HasMaxLength(ModelProviderDraftLimits.AzureApiVersion);
+            entity.Property(revision => revision.ReasoningEfforts).HasColumnName("reasoning_efforts")
+                .HasColumnType("text[]").IsRequired();
+            entity.Property(revision => revision.PromptCapacityTokens).HasColumnName("prompt_capacity_tokens");
+            entity.Property(revision => revision.ConfigurationHash).HasColumnName("configuration_hash")
+                .HasMaxLength(ModelProviderDraftLimits.Hash).IsRequired();
+            entity.Property(revision => revision.CredentialVersion).HasColumnName("credential_version")
+                .HasMaxLength(256);
+            entity.Property(revision => revision.RateCardId).HasColumnName("rate_card_id")
+                .HasMaxLength(128);
+            entity.Property(revision => revision.RateCardVersion).HasColumnName("rate_card_version");
+            entity.Property(revision => revision.CreatedByActorId).HasColumnName("created_by_actor_id")
+                .HasMaxLength(ModelProviderDraftLimits.ActorId).IsRequired();
+            entity.Property(revision => revision.CreatedAt).HasColumnName("created_at");
+            entity.HasOne<ModelProviderDraftHeadRecord>()
+                .WithMany()
+                .HasForeignKey(revision => revision.ProviderId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(revision => revision.OperationId)
+                .IsUnique()
+                .HasDatabaseName("ux_model_provider_revisions_operation_id");
         });
 
         modelBuilder.Entity<ProjectRunSelectionRecord>(entity =>

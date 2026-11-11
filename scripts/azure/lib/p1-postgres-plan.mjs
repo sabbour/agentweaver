@@ -66,8 +66,8 @@ const GROUPS = {
     // assignment only through the column-scoped UPDATE in UPDATE_COLUMNS below.
     SELECT: 'tenant_memberships __ef_migrations_history',
     'SELECT,UPDATE': 'platform_runtime_heads',
-    'SELECT,INSERT,UPDATE': 'projects marketplace_sources project_casting_proposals casting_generation_requests hosted_model_reasoning_catalog',
-    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_role_assignments authority_audit',
+    'SELECT,INSERT,UPDATE': 'projects marketplace_sources project_casting_proposals casting_generation_requests hosted_model_reasoning_catalog model_providers',
+    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_role_assignments authority_audit model_provider_revisions',
   },
   environment: {
     SELECT: '__ef_migrations_history',
@@ -187,6 +187,20 @@ const LOCK_GUARDS = {
 };
 
 const APPEND_ONLY_GUARDS = {
+  projects_config: {
+    model_provider_revisions: [
+      {
+        trigger: 'model_provider_revisions_immutable',
+        function: 'reject_immutable_record_mutation()', triggerType: 27,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'model_provider_revisions_no_truncate',
+        function: 'reject_immutable_record_mutation()', triggerType: 34,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+    ],
+  },
   orchestrator: {
     maf_runtime_evidence_receipts: [
       {

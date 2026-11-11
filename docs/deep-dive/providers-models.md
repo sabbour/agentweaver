@@ -129,6 +129,12 @@ configuration. The resulting native prompt setting controls compaction; it does
 not guarantee that every internal provider request stays below a hard
 admission threshold.
 
+Projects & Config also stores customer-provided model-provider metadata in
+Draft-only revisions. These records do not change the deployment-owned model
+eligibility snapshot or enter an accepted run selection. This source slice adds
+no HTTP route, activation, credentials, or rate-card data. See
+[issue #2635](https://github.com/sabbour/agentweaver/issues/2635).
+
 ### Diagnose resolution failures
 
 Catalog and resolver failures identify invalid configuration, missing or

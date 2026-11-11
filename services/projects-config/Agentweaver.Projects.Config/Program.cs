@@ -171,6 +171,7 @@ builder.Services.AddDbContextFactory<ProjectsConfigDbContext>((provider, options
 // model choices are reported as unavailable.
 builder.Services.AddSingleton(ModelBindingCapabilities.FromConfiguration(builder.Configuration));
 builder.Services.AddScoped<ProjectsConfigService>();
+builder.Services.AddScoped<ModelProviderDraftService>();
 // History stays in Knowledge, so use the mounted backend CA and forward only the request caller.
 builder.Services.AddHttpClient<KnowledgeAgentHistoryClient>(client =>
 {
