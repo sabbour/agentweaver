@@ -150,6 +150,10 @@ checkpoint. Version 2 prepares the saved repository seed and uses a separate
 read-only collector. Native output remains retained until the verified Events
 acknowledgment permits cleanup. Environment owns execution evidence; Core owns
 workflow completion.
+The BuildTest command Pod accepts only the Linux/amd64 selectors and the exact
+selectors from the configured RuntimeClass. Missing, malformed, duplicate,
+conflicting, or extra selectors fail validation. See
+[Sandbox contracts and lifecycle](../architecture/environment-sandbox.md#buildtest-command-and-output-collection).
 
 ### Reconcile uncertain operations
 
