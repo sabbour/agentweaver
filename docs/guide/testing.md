@@ -777,6 +777,12 @@ Host restores the same saved SDK cache. The replacement receipt must show no
 native send or tool effect. The runner sends the same casting request again
 and checks the Orchestrator replay receipt.
 
+The runner sends the setup receipt locator when it creates the pending run.
+Orchestrator checks the receipt with the exact run-bound token at start, before
+it accepts a root or delivers the first message. If first-start verification
+fails, the run stays pending and that attempt creates no root or first message.
+If a later delivery retry fails, the runner uses the existing cleanup path.
+
 This journey does not test authority revocation, stale-binding denial,
 changed-payload retry, optional-cache absence or expiry, or missing or expired
 required turn material. A passed session-material row does not imply that

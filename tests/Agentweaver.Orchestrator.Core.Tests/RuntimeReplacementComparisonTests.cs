@@ -250,7 +250,7 @@ public sealed class RuntimeReplacementComparisonTests(
         var request = new CreateProjectRunRequest(
             "Start from P1 setup", 1, P1SetupInvocationId: _receipt.InvocationId);
         var row = await _owner.CreateProjectRunAsync(
-            _actor, Tenant, Project, "compare-p1", request, CancellationToken.None, _receipt);
+            _actor, Tenant, Project, "compare-p1", request, CancellationToken.None);
         _selection = Selection(row.RunId);
 
         Task Bind(

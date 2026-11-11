@@ -16,6 +16,43 @@ public sealed class ApiAcceptanceFixtureSetupTests
     private const string Issuer = "https://issuer.example/";
     private const string TenantId = "tenant-1";
 
+    [Theory]
+    [InlineData("error")]
+    [InlineData("code")]
+    public void HttpFailurePreservesProblemCode(string field)
+    {
+        GatewayResponse response = new(
+            403,
+            new JsonObject { [field] = "p1_setup_receipt_permission_denied" },
+            new Dictionary<string, string>(),
+            new JsonObject());
+
+        ApiAcceptanceFixtureSetup.AcceptanceHttpException error =
+            ApiAcceptanceFixtureSetup.HttpFailure("start", "createProjectRun", response);
+
+        Assert.Equal(403, error.Status);
+        Assert.Equal("p1_setup_receipt_permission_denied", error.ProblemCode);
+    }
+
+    [Fact]
+    public void HttpFailureUsesLegacyCodeWhenErrorIsNotAProblemCode()
+    {
+        GatewayResponse response = new(
+            403,
+            new JsonObject
+            {
+                ["error"] = "request failed",
+                ["code"] = "p1_setup_receipt_permission_denied",
+            },
+            new Dictionary<string, string>(),
+            new JsonObject());
+
+        ApiAcceptanceFixtureSetup.AcceptanceHttpException error =
+            ApiAcceptanceFixtureSetup.HttpFailure("start", "createProjectRun", response);
+
+        Assert.Equal("p1_setup_receipt_permission_denied", error.ProblemCode);
+    }
+
     [Fact]
     public async Task NativeSetupUsesAssignmentListContractAndCleansUpBeforeRunSetup()
     {

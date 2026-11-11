@@ -63,9 +63,9 @@ public sealed class P1RuntimeRoleInvocationBindingPostgresTests(CoordinationPost
                 Assert.Equal(RuntimeRole, await identity.ExecuteScalarAsync());
 
             var created = await store.CreateProjectRunAsync(
-                actor, Tenant, Project, "runtime-role-p1", request, CancellationToken.None, receipt);
+                actor, Tenant, Project, "runtime-role-p1", request, CancellationToken.None);
             Assert.Equal(created, await store.CreateProjectRunAsync(
-                actor, Tenant, Project, "runtime-role-p1", request, CancellationToken.None, receipt));
+                actor, Tenant, Project, "runtime-role-p1", request, CancellationToken.None));
 
             var selection = CreateSelection(actor, created.RunId);
             var deliveries = 0;

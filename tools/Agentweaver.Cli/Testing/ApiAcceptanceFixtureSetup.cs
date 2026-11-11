@@ -1731,9 +1731,12 @@ internal static class ApiAcceptanceFixtureSetup
         CancellationToken ct) =>
         await CallJsonAsync(api, operation, invocation, (IReadOnlyCollection<int>)expected, ct).ConfigureAwait(false);
 
-    private static AcceptanceHttpException HttpFailure(string step, string operation, GatewayResponse response)
+    internal static AcceptanceHttpException HttpFailure(string step, string operation, GatewayResponse response)
     {
-        string? code = ApiAcceptanceSupport.GetString(response.Body as JsonObject ?? [], "code");
+        var body = response.Body as JsonObject ?? [];
+        string? code = ApiAcceptanceSupport.GetString(body, "error");
+        if (!ProblemCode.IsMatch(code ?? ""))
+            code = ApiAcceptanceSupport.GetString(body, "code");
         return new AcceptanceHttpException(response.Status,
             ProblemCode.IsMatch(code ?? "") ? code : null,
             $"The P1 owner {operation} call returned an unexpected HTTP result during {step}.");
@@ -1906,7 +1909,7 @@ internal static class ApiAcceptanceFixtureSetup
         state.Cleanup["steps"] = steps;
     }
 
-    private sealed class AcceptanceHttpException(int status, string? problemCode, string message) : Exception(message)
+    internal sealed class AcceptanceHttpException(int status, string? problemCode, string message) : Exception(message)
     {
         public int Status { get; } = status;
         public string? ProblemCode { get; } = problemCode;
