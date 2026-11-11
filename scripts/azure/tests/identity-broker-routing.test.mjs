@@ -913,6 +913,55 @@ test('routing refuses to overwrite an object changed after ownership inventory',
     kubectlCommand(call.args)[2] === 'gateway-copilot-bff'), false);
 });
 
+function routePatches(calls, name) {
+  return calls.filter(call => kubectlCommand(call.args)[0] === 'patch' && kubectlCommand(call.args)[2] === name)
+    .map(call => { const command = kubectlCommand(call.args); return JSON.parse(command[command.indexOf('--patch') + 1]); });
+}
+
+test('routing rereads and retries a routing object after a status-only resourceVersion change', () => {
+  const native = snapshot();
+  const { calls, dependencies } = transport({ native });
+  const original = dependencies.execKubectl;
+  let statusWrites = 0;
+  dependencies.execKubectl = (args, options) => {
+    const command = kubectlCommand(args);
+    if (command[0] === 'patch' && command[2] === 'web-application' && statusWrites === 0) {
+      statusWrites += 1;
+      native.webRoute.metadata.resourceVersion = '2';
+    }
+    return original(args, options);
+  };
+  assert.equal(bootstrapIdentityRouting(config, dependencies).routingConfigured, true);
+  assert.deepEqual(routePatches(calls, 'web-application').map(patch => patch[1].value), ['1', '2']);
+  assert.equal(routePatches(calls, 'web-application')[1][0].value, 'HTTPRoute-web-application-uid');
+});
+
+test('routing fails closed when a routing object changes identity, spec, or labels after inventory', () => {
+  for (const [change, expected] of [
+    [route => { route.metadata.generation = 2; }, /changed its identity, spec, or labels after ownership inventory/],
+    [route => { route.metadata.uid = 'replacement-uid'; }, /changed its identity, spec, or labels after ownership inventory/],
+    [route => { route.spec.hostnames = ['other.example']; }, /changed its identity, spec, or labels after ownership inventory/],
+    [route => { route.metadata.labels['agentweaver.io/service'] = 'other'; },
+      /changed its identity, spec, or labels after ownership inventory/],
+    [() => {}, /status changed during 3 conditional updates\. Run identity routing again\./],
+  ]) {
+    const native = snapshot();
+    const { calls, dependencies } = transport({ native });
+    const original = dependencies.execKubectl;
+    dependencies.execKubectl = (args, options) => {
+      const command = kubectlCommand(args);
+      if (command[0] === 'patch' && command[2] === 'gateway-api-host') {
+        native.apiHostRoute.metadata.resourceVersion = String(Number(native.apiHostRoute.metadata.resourceVersion) + 1);
+        change(native.apiHostRoute);
+      }
+      return original(args, options);
+    };
+    assert.throws(() => bootstrapIdentityRouting(config, dependencies), expected);
+    assert.equal(routePatches(calls, 'gateway-api-host').length, change.length ? 1 : 3);
+    assert.equal(routePatches(calls, 'gateway-copilot-bff').length, 0);
+  }
+});
+
 test('routing validates the selected account before subscription-free directory reads or Kubernetes changes', () => {
   for (const selected of [
     { id: applicationObjectId, tenantId: config.tenantId, state: 'Enabled' },

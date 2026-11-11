@@ -892,7 +892,11 @@ an offline routing summary. With `--execute` it performs Azure read preflight
 and Kubernetes routing writes, but skips ARM what-if/create entirely, so it
 cannot refresh the nested workload-identity FICs. Existing objects are
 updated only with UID/resourceVersion preconditions; absent objects use
-create-only writes, so a concurrent change fails closed. It does not register
+create-only writes, so a concurrent change fails closed. If only the status of
+an existing object changes after the inventory read (for example, when the
+Gateway controller updates HTTPRoute status), the installer reads the object
+again. It retries with the new resourceVersion, for a maximum of 3 attempts,
+only when the UID, generation, spec, and owned labels did not change. It does not register
 an Entra callback or change runtime URLs or the canonical issuer. Route
 execution and namespace-policy approval remain separately authorized actions.
 

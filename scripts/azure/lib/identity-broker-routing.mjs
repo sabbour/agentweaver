@@ -14,6 +14,7 @@ const P0_NAMESPACE = 'agentweaver';
 const GATEWAY_NAMESPACE = 'agentweaver-gateway';
 const CONTROLLER = 'istio.aks.azure.com/gateway-controller';
 const COMMAND_OPTIONS = { check: false, timeout: 35_000 };
+const MANAGED_OBJECT_PATCH_ATTEMPTS = 3;
 const GUID_PATTERN = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const HTTP2_ROUTE_PROBE = fileURLToPath(new URL('./http2-route-probe.mjs', import.meta.url));
 
@@ -951,18 +952,42 @@ export function bootstrapIdentityRouting(config, {
       if (!desired.spec || !existing.metadata?.uid || !existing.metadata?.resourceVersion) {
         throw new Error(`Existing ${desired.kind} lacks the identity required for a conditional routing update.`);
       }
-      const patch = [
-        { op: 'test', path: '/metadata/uid', value: existing.metadata.uid },
-        { op: 'test', path: '/metadata/resourceVersion', value: existing.metadata.resourceVersion },
-        { op: 'replace', path: '/spec', value: desired.spec },
-        ...Object.entries(desired.metadata.labels ?? {}).map(([key, value]) => ({
-          op: Object.hasOwn(existing.metadata.labels ?? {}, key) ? 'replace' : 'add',
-          path: `/metadata/labels/${key.replaceAll('~', '~0').replaceAll('/', '~1')}`,
-          value,
-        })),
-      ];
-      command(['patch', desired.kind.toLowerCase(), desired.metadata.name, '--type=json', '--patch',
-        JSON.stringify(patch), ...(namespace ? ['--namespace', namespace] : [])]);
+      const kind = desired.kind.toLowerCase();
+      const name = desired.metadata.name;
+      let resourceVersion = existing.metadata.resourceVersion;
+      for (let attempt = 1; ; attempt += 1) {
+        const patch = [
+          { op: 'test', path: '/metadata/uid', value: existing.metadata.uid },
+          { op: 'test', path: '/metadata/resourceVersion', value: resourceVersion },
+          { op: 'replace', path: '/spec', value: desired.spec },
+          ...Object.entries(desired.metadata.labels ?? {}).map(([key, value]) => ({
+            op: Object.hasOwn(existing.metadata.labels ?? {}, key) ? 'replace' : 'add',
+            path: `/metadata/labels/${key.replaceAll('~', '~0').replaceAll('/', '~1')}`,
+            value,
+          })),
+        ];
+        try {
+          command(['patch', kind, name, '--type=json', '--patch',
+            JSON.stringify(patch), ...(namespace ? ['--namespace', namespace] : [])]);
+          return;
+        } catch (error) {
+          // A controller status write changes only resourceVersion; the generation guards the full spec.
+          const current = JSON.parse(command(['get', kind, `--field-selector=metadata.name=${name}`,
+            ...(namespace ? ['--namespace', namespace] : []), '-o', 'json']));
+          if (current?.metadata?.resourceVersion === resourceVersion) throw error;
+          if (!current || current.metadata?.uid !== existing.metadata.uid ||
+              !Number.isInteger(existing.metadata.generation) ||
+              current.metadata.generation !== existing.metadata.generation ||
+              JSON.stringify(current.spec) !== JSON.stringify(existing.spec) ||
+              JSON.stringify(current.metadata.labels) !== JSON.stringify(existing.metadata.labels)) {
+            throw new Error(`Existing ${desired.kind} ${name} changed its identity, spec, or labels after ownership inventory. Refusing routing changes.`);
+          }
+          if (attempt >= MANAGED_OBJECT_PATCH_ATTEMPTS) {
+            throw new Error(`Existing ${desired.kind} ${name} status changed during ${attempt} conditional updates. Run identity routing again.`);
+          }
+          resourceVersion = current.metadata.resourceVersion;
+        }
+      }
     }
     const p0 = JSON.parse(command(['get', 'namespace', P0_NAMESPACE, '-o', 'json']));
     for (const mode of ['enforce', 'audit', 'warn']) {
