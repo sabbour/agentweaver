@@ -847,6 +847,29 @@ behavior or body of a route that keeps its operation ID. When you add or change
 a feature on a critical path, update the journey and this file in the same pull
 request.
 
+## Record release acceptance results
+
+For version-level coverage and sign-off, use the single
+`Release acceptance: vX.Y.Z` tracker issue for that version milestone. Follow
+the [release acceptance checklist](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#release-acceptance).
+Do not keep a completed implementation issue open only to hold a live-test
+task; move that task to the tracker after source delivery is complete.
+
+For a native API item, link the approved input manifest and its hash, then link
+the unmodified evidence output and hash for each attempt. Record the tested
+apphost and source or deployment identity, plus the cleanup result. For a
+browser item, link the browser procedure and its separate retained evidence.
+Keep API and browser results separate. Preserve failed or blocked attempts; add
+a new attempt when you test corrected source.
+
+A successful dry run validates input only and writes no evidence; validation
+failure may write a blocked result to the requested output. A dry run is not a
+passed acceptance item. A fixture-based browser test is not a deployed browser
+pass. Use retained team-accessible evidence storage, and do not post sensitive
+operator inputs or private screenshots in public comments. The tracker does
+not change the authorization, target, cleanup, or other limits in the
+procedures above.
+
 ## Test API, UI, and retained MCP compatibility code
 
 Run the controlled local adapter tests with:
