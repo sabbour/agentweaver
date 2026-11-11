@@ -149,6 +149,25 @@ These records contain no credentials or option values. Follow
 a provider. See [Providers and models](../architecture/providers-models) for
 resolver limits.
 
+### Customer-provided model-provider draft contract
+
+`ModelProviderBindingScope` is `Platform` or `Project`. Contract version 1 of
+`ModelProviderBindingRevision` in `Agentweaver.Abstractions` carries the
+provider ID, scope and project ID, display name, provider type, HTTPS base URL,
+deployment, optional wire API and Azure API version, reasoning efforts,
+optional prompt capacity, provider revision, optional credential-version and
+rate-card references, and a configuration hash.
+
+The Projects & Config draft service stores metadata in a mutable Draft head and
+an append-only revision ledger. Draft revisions have no credential or rate-card
+reference. They contain no key, secret name, header, or price. This source slice
+adds no HTTP route and does not change model eligibility or accepted run
+selections. Every read and write requires `api.read` and `projects.admin`.
+Platform calls require an unbound PlatformAdmin request. Project calls require
+an exact project binding with no run binding and a project Owner or
+PlatformAdmin. See
+[issue #2635](https://github.com/sabbour/agentweaver/issues/2635).
+
 The authenticated
 `GET /api/v1/projects/{projectId}/configuration/choices` endpoint returns
 current project-scoped model references, supported reasoning efforts, and

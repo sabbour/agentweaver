@@ -155,7 +155,7 @@ internal static class InitializerChecks
                 .Select(table => (Service: service, Table: table))).ToArray();
         var lockTables = protectedTables.Where(item => item.Table.LockColumn is not null).ToArray();
         // The plan protects fourteen row-lock columns plus three append-only ledgers.
-        if (services.Length != 5 || protectedTables.Length != 15 || lockTables.Length != 14)
+        if (services.Length != 5 || protectedTables.Length != 16 || lockTables.Length != 14)
             throw new InvalidOperationException(
                 "The exact fourteen row-lock columns and three append-only ledger mutation guards are required.");
 

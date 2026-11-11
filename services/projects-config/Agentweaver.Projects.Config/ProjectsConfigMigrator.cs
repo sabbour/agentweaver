@@ -44,10 +44,8 @@ public static class ProjectsConfigMigrator
     }
 
     /// <summary>
-    /// Verifies the runtime authority boundary: SELECT on authority tables, no membership writes, no deletes,
-    /// no access to setup-operation receipts, and either no role-assignment writes or exactly the
-    /// role-assignment API grants (INSERT on assignments and audit, and UPDATE only on the four revoke columns).
-    /// The hosted reasoning catalog also requires SELECT, INSERT, and UPDATE, with no DELETE or TRUNCATE.
+    /// Verifies the runtime authority boundary, including the exact draft-provider table grants.
+    /// Role-assignment writes are optional, but when present they must match the role-assignment API grants.
     /// </summary>
     /// <exception cref="InvalidOperationException">The database principal does not match the required grants.</exception>
     public static async Task VerifyRuntimeAuthorityReadOnlyAsync(
@@ -97,6 +95,18 @@ public static class ProjectsConfigMigrator
                AND has_table_privilege(current_user, 'projects_config.hosted_model_reasoning_catalog', 'UPDATE')
                AND NOT has_table_privilege(current_user, 'projects_config.hosted_model_reasoning_catalog', 'DELETE')
                AND NOT has_table_privilege(current_user, 'projects_config.hosted_model_reasoning_catalog', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'projects_config.model_providers', 'SELECT')
+               AND has_table_privilege(current_user, 'projects_config.model_providers', 'INSERT')
+               AND has_table_privilege(current_user, 'projects_config.model_providers', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'projects_config.model_providers', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'projects_config.model_providers', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'projects_config.model_provider_revisions', 'SELECT')
+               AND has_table_privilege(current_user, 'projects_config.model_provider_revisions', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'projects_config.model_provider_revisions', 'UPDATE')
+               AND NOT has_any_column_privilege(
+                   current_user, 'projects_config.model_provider_revisions', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'projects_config.model_provider_revisions', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'projects_config.model_provider_revisions', 'TRUNCATE')
                AND NOT has_table_privilege(current_user, 'projects_config.project_setup_operations', 'SELECT')
                AND NOT has_table_privilege(current_user, 'projects_config.project_setup_operations', 'INSERT')
                AND NOT has_table_privilege(current_user, 'projects_config.project_setup_operations', 'UPDATE')
@@ -130,7 +140,7 @@ public static class ProjectsConfigMigrator
             connection);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
             throw new InvalidOperationException(
-                "The Projects & Config runtime database principal must have SELECT on authority tables, no membership writes, no DELETE or TRUNCATE on authority tables, SELECT/INSERT/UPDATE but no DELETE/TRUNCATE on hosted_model_reasoning_catalog, no access to project_setup_operations, EXECUTE on projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean), issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint), and read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint), and no schema CREATE privilege. Role-assignment writes are optional, but when present they must be exactly INSERT on project_role_assignments and authority_audit plus UPDATE on project_role_assignments (state, revision, revoked_by, revoked_at).");
+                "The Projects & Config runtime database principal must have SELECT on authority tables, no membership writes, no DELETE or TRUNCATE on authority tables, SELECT/INSERT/UPDATE but no DELETE/TRUNCATE on hosted_model_reasoning_catalog and model_providers, SELECT/INSERT but no UPDATE/DELETE/TRUNCATE on model_provider_revisions, no access to project_setup_operations, EXECUTE on projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean), issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint), and read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint), and no schema CREATE privilege. Role-assignment writes are optional, but when present they must be exactly INSERT on project_role_assignments and authority_audit plus UPDATE on project_role_assignments (state, revision, revoked_by, revoked_at).");
     }
 
     /// <summary>

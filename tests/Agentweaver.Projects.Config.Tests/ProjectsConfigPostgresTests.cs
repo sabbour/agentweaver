@@ -210,6 +210,16 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var bindingService = new ProjectsConfigService(
             db, CreateProviderCatalog(), TimeProvider.System,
             modelBindings: ProjectModelChoicesTests.SampleBindings());
+        var boundOwner = await ResolveCallerAsync(
+            db, owner.ActorId, tenantId, ["api.read", "projects.admin"], boundProjectId: project.ProjectId);
+        var draftProviderId = "draft-only-" + suffix;
+        await new ModelProviderDraftService(db, TimeProvider.System).SaveAsync(
+            boundOwner,
+            ModelProviderBindingScope.Project,
+            project.ProjectId,
+            draftProviderId,
+            DraftRequest(Guid.NewGuid(), 0),
+            CancellationToken.None);
         var bound = await bindingService.GetProjectConfigurationChoicesAsync(
             owner, project.ProjectId, CancellationToken.None);
         Assert.Equal(project.ProjectId, bound.ProjectId);
@@ -217,6 +227,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         Assert.Null(bound.Models.UnavailableReason);
         Assert.Equal("models-r7", bound.Models.BindingsRevision);
         Assert.Equal(["byok-coder", "hosted-reasoning"], bound.Models.Choices.Select(item => item.Reference).ToArray());
+        Assert.DoesNotContain(bound.Models.Choices, item => item.Reference == draftProviderId);
         Assert.Equal(["none", "minimal", "low", "xhigh"], bound.Models.Choices[0].ReasoningEfforts.ToArray());
         Assert.Equal("verifiedAtRunStart", bound.Models.Choices[1].ReasoningEffortSource);
         Assert.DoesNotContain(bound.Models.Choices, item => item.Reference == "retired");
@@ -1420,6 +1431,14 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             CancellationToken.None);
 
         var request = RunRequest(configuration.Revision, platformRevision.Revision);
+        var draftProviderId = "draft-only-" + Guid.NewGuid().ToString("N");
+        await new ModelProviderDraftService(context, TimeProvider.System).SaveAsync(
+            platformAdmin,
+            ModelProviderBindingScope.Platform,
+            null,
+            draftProviderId,
+            DraftRequest(Guid.NewGuid(), 0),
+            CancellationToken.None);
         var missingContext = await Assert.ThrowsAsync<ProjectConfigException>(() => service.AcceptRunSelectionAsync(
             orchestrator,
             project.ProjectId,
@@ -1479,6 +1498,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var selection = await service.AcceptRunSelectionAsync(
             orchestrator, project.ProjectId, "run-immutable-1", request, CancellationToken.None);
         Assert.Equal("project-model", selection.ModelSelection.Reference);
+        Assert.DoesNotContain(draftProviderId, request.Context.AvailableModelSelectionReferences);
         Assert.Equal(ModelSourceMode.Byok, selection.ModelSelection.SourceMode);
         var sandboxSelection = Assert.Single(selection.Providers.Where(provider =>
             provider.Seam == ProviderSeam.Sandbox));
@@ -3144,6 +3164,10 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                 $"GRANT SELECT ON projects_config.authority_audit TO \"{roleName}\"");
             await ExecuteOwnerSqlAsync(
                 $"GRANT SELECT, INSERT, UPDATE ON projects_config.hosted_model_reasoning_catalog TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT, INSERT, UPDATE ON projects_config.model_providers TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT, INSERT ON projects_config.model_provider_revisions TO \"{roleName}\"");
 
             var runtimeConnectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
             {
@@ -3504,13 +3528,21 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         ProjectsConfigDbContext db,
         string subject,
         string tenantId,
-        string[] scopes)
+        string[] scopes,
+        string? boundProjectId = null,
+        string? boundRunId = null)
     {
+        var claims = new List<Claim>
+        {
+            new("sub", subject),
+            new("scope", string.Join(' ', scopes)),
+        };
+        if (boundProjectId is not null)
+            claims.Add(new Claim("project_id", boundProjectId));
+        if (boundRunId is not null)
+            claims.Add(new Claim("run_id", boundRunId));
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
-        [
-            new Claim("sub", subject),
-            new Claim("scope", string.Join(' ', scopes)),
-        ], "test"));
+            claims, "test"));
         return new ProjectAuthorizationOwner(db, new ProjectsConfigIdentityOptions(TestIssuer))
             .ResolveAsync(principal, [tenantId], CancellationToken.None);
     }

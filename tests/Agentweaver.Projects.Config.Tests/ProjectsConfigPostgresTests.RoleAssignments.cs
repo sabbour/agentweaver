@@ -433,6 +433,10 @@ public sealed partial class ProjectsConfigPostgresTests
                 $"GRANT SELECT ON projects_config.tenant_memberships, projects_config.project_role_assignments, projects_config.authority_audit TO \"{roleName}\"");
             await OwnerSqlAsync(
                 $"GRANT SELECT, INSERT, UPDATE ON projects_config.hosted_model_reasoning_catalog TO \"{roleName}\"");
+            await OwnerSqlAsync(
+                $"GRANT SELECT, INSERT, UPDATE ON projects_config.model_providers TO \"{roleName}\"");
+            await OwnerSqlAsync(
+                $"GRANT SELECT, INSERT ON projects_config.model_provider_revisions TO \"{roleName}\"");
             await OwnerSqlAsync($"""
                 GRANT EXECUTE ON FUNCTION projects_config.lock_casting_authority(
                     uuid, text, text, text, bigint, text, boolean) TO "{roleName}"

@@ -73,6 +73,248 @@ namespace Agentweaver.Projects.Config.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Agentweaver.Projects.Config.ModelProviderDraftHeadRecord", b =>
+                {
+                    b.Property<string>("ProviderId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("provider_id");
+
+                    b.Property<string>("AzureApiVersion")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("azure_api_version");
+
+                    b.Property<string>("BaseUrl")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)")
+                        .HasColumnName("base_url");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedByActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("created_by_actor_id");
+
+                    b.Property<long>("CurrentRevision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint")
+                        .HasColumnName("current_revision");
+
+                    b.Property<string>("Deployment")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("deployment");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("display_name");
+
+                    b.Property<string>("ProjectId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<int?>("PromptCapacityTokens")
+                        .HasColumnType("integer")
+                        .HasColumnName("prompt_capacity_tokens");
+
+                    b.Property<string>("ProviderType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("type");
+
+                    b.PrimitiveCollection<string[]>("ReasoningEfforts")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("reasoning_efforts");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("scope");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("state");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<string>("UpdatedByActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("updated_by_actor_id");
+
+                    b.Property<string>("WireApi")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("wire_api");
+
+                    b.HasKey("ProviderId")
+                        .HasName("pk_model_providers");
+
+                    b.HasIndex("ProjectId");
+
+                    b.HasIndex("Scope", "ProjectId", "DisplayName")
+                        .HasDatabaseName("ix_model_providers_scope_project_name");
+
+                    b.ToTable("model_providers", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_model_providers_prompt_capacity", "prompt_capacity_tokens IS NULL OR prompt_capacity_tokens > 0");
+
+                            t.HasCheckConstraint("ck_model_providers_reasoning_efforts", "cardinality(reasoning_efforts) <= 6 AND reasoning_efforts <@ ARRAY['none', 'minimal', 'low', 'medium', 'high', 'xhigh']::text[]");
+
+                            t.HasCheckConstraint("ck_model_providers_revision", "current_revision > 0");
+
+                            t.HasCheckConstraint("ck_model_providers_scope_project", "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_model_providers_state", "state = 'Draft'");
+                        });
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ModelProviderDraftRevisionRecord", b =>
+                {
+                    b.Property<string>("ProviderId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("provider_id");
+
+                    b.Property<long>("ProviderRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("provider_revision");
+
+                    b.Property<string>("AzureApiVersion")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("azure_api_version");
+
+                    b.Property<string>("BaseUrl")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)")
+                        .HasColumnName("base_url");
+
+                    b.Property<string>("ConfigurationHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("configuration_hash");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedByActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("created_by_actor_id");
+
+                    b.Property<string>("CredentialVersion")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("credential_version");
+
+                    b.Property<string>("Deployment")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("deployment");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("display_name");
+
+                    b.Property<Guid>("OperationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("operation_id");
+
+                    b.Property<string>("ProjectId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<int?>("PromptCapacityTokens")
+                        .HasColumnType("integer")
+                        .HasColumnName("prompt_capacity_tokens");
+
+                    b.Property<string>("ProviderType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("type");
+
+                    b.Property<string>("RateCardId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("rate_card_id");
+
+                    b.Property<long?>("RateCardVersion")
+                        .HasColumnType("bigint")
+                        .HasColumnName("rate_card_version");
+
+                    b.PrimitiveCollection<string[]>("ReasoningEfforts")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("reasoning_efforts");
+
+                    b.Property<string>("RequestFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("request_fingerprint");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("scope");
+
+                    b.Property<string>("WireApi")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("wire_api");
+
+                    b.HasKey("ProviderId", "ProviderRevision")
+                        .HasName("pk_model_provider_revisions");
+
+                    b.HasIndex("OperationId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_model_provider_revisions_operation_id");
+
+                    b.ToTable("model_provider_revisions", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_model_provider_revisions_configuration_hash", "configuration_hash ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_model_provider_revisions_prompt_capacity", "prompt_capacity_tokens IS NULL OR prompt_capacity_tokens > 0");
+
+                            t.HasCheckConstraint("ck_model_provider_revisions_reasoning_efforts", "cardinality(reasoning_efforts) <= 6 AND reasoning_efforts <@ ARRAY['none', 'minimal', 'low', 'medium', 'high', 'xhigh']::text[]");
+
+                            t.HasCheckConstraint("ck_model_provider_revisions_request_fingerprint", "request_fingerprint ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_model_provider_revisions_revision", "provider_revision > 0");
+
+                            t.HasCheckConstraint("ck_model_provider_revisions_scope_project", "(scope = 'Platform' AND project_id IS NULL) OR (scope = 'Project' AND project_id IS NOT NULL)");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Projects.Config.PlatformRuntimeHeadRecord", b =>
                 {
                     b.Property<string>("Id")
@@ -1156,6 +1398,23 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
                         .WithMany()
                         .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ModelProviderDraftHeadRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ModelProviderDraftRevisionRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ModelProviderDraftHeadRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProviderId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

@@ -107,6 +107,19 @@ The model resolver remains a separate existing concern. Its effective Copilot or
 binding is pinned with the run and selects the Cost provider, but Model is not a new seam. A new run may
 resolve new defaults; an existing run keeps its pinned choices.
 
+### Customer-provided model provider drafts
+
+Projects & Config stores customer-provided model provider metadata as a Draft head and an immutable revision
+ledger. A draft can have Platform or Project scope. Each revision records the provider type, HTTPS base URL,
+deployment, supported reasoning efforts, optional prompt capacity, and a configuration hash. Draft metadata
+does not enable a provider or change run-time model selection. This source slice adds persistence, not an HTTP
+route, activation, credentials, or rate-card data.
+
+Every read and write requires both `api.read` and `projects.admin`. Platform drafts require an unbound
+PlatformAdmin request. Project drafts require a request bound to that exact project, with no run binding, and
+the caller must be a project Owner or PlatformAdmin. Saves use an expected revision and an operation ID:
+stale revisions conflict, and a repeated operation ID replays only the same request.
+
 ### Descriptors and capability negotiation
 
 An adapter registers a `ProviderDescriptor`: seam, stable provider ID, adapter version, advertised
