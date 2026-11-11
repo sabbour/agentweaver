@@ -1124,19 +1124,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 cleanupIntent.AcceptedSelectionHash,
                 CoordinationOwnerStore.HashSelection(cleanupSelection.Selection),
                 StringComparer.OrdinalIgnoreCase);
-            if (hasLegacyChild)
-            {
-                var legacyFailure = await Assert.ThrowsAsync<CoordinationException>(() =>
-                    startStore.ReadCleanupProjectionAsync(
-                        project.ProjectId, pending.RunId, pending.RootSessionId, cleanupSelection,
-                        CancellationToken.None));
-                Assert.Equal("runtime_start_child_cleanup_pending", legacyFailure.Code);
-                var aggregate = await startStore.ReadCleanupSummaryAsync(
-                    TenantId, project.ProjectId, pending.RunId, CancellationToken.None);
-                Assert.Equal("pending", aggregate!.State);
-                Assert.Equal(0, runtimeRunStartOwners.CleanupCount);
-            }
-            else
+            // A child with no start intent owns no runtime from this path, so it does not hold root cleanup.
             {
                 var cleanupProjection = await startStore.ReadCleanupProjectionAsync(
                     project.ProjectId, pending.RunId, pending.RootSessionId, cleanupSelection,
@@ -1346,7 +1334,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.True(receipt.AlreadyTerminal);
         }
         Assert.Equal(1, runtimeRunStartOwners.UniquePlacementCount);
-        Assert.Equal(hasLegacyChild ? 0 : 2, runtimeRunStartOwners.CleanupCount);
+        Assert.Equal(2, runtimeRunStartOwners.CleanupCount);
         await RevokeRoleAsync(
             projects.PrivilegedFixtureDataSource,
             orchestratorAssignment.AssignmentId,

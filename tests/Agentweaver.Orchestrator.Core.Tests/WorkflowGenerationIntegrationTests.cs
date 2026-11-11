@@ -44,6 +44,7 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
     private OrchestratorOptions _options = null!;
     private CoordinationOwnerStore _sessions = null!;
     private RuntimeRegistrationOwner _registrationOwner = null!;
+    private RuntimeRegistration _registration = null!;
     private long _decisionVersion;
     private readonly List<HttpClient> _ownerClients = [];
 
@@ -150,6 +151,7 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
                 new RuntimeRegistrationOwnerOptions(new Uri("https://environment.test/"))),
             TimeProvider.System);
         _registrationOwner = registrationOwner;
+        _registration = registration;
         _jobs = new WorkflowGenerationJobStore(fixture.DataSource, _schema);
         _materials = new MaterialHandler();
         _host = new HostHandler(registration, _materials);
@@ -427,8 +429,9 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
         var cleanupHandler = new FixedHandler(request =>
         {
             environmentCalls++;
+            // Migration 047 installs the terminal guard, so cleanup uses contract version 2.
             return Response(request, new RuntimeRunStartCleanupReceipt(
-                1, intentId, Guid.Empty, 0, 0, null, "absent", "cleanup_complete"));
+                2, intentId, Guid.Empty, 0, 0, null, "absent", "cleanup_complete"));
         });
         var startStore = new CoordinationRuntimeRunStartStore(fixture.DataSource, _schema);
         var cleanup = new RuntimeRunStartCleanupContinuation(
@@ -460,6 +463,9 @@ public sealed class WorkflowGenerationIntegrationTests(CoordinationPostgresFixtu
             var quiesced = await _jobs.ReadAsync(Project, jobId, deadline.Token);
             Assert.Equal("cancelled", quiesced!.Status);
             Assert.Equal("quiesced", quiesced.ExecutionPhase);
+            // The seeded intent has no placement link, so cleanup cannot prove that it owns the fixture
+            // registration. It refuses to complete while that registration is active.
+            await _registrationOwner.RevokeAfterPlacementReleaseAsync(_registration, deadline.Token);
             await cleanup.ContinueAsync(cleanupWork, deadline.Token);
             Assert.Equal(1, environmentCalls);
             Assert.Equal("cleanup_complete",

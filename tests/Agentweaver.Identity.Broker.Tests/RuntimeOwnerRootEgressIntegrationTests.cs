@@ -153,7 +153,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     public async Task PublicConfirmedPlanRevalidatesPrePlanRootRegistrationBeforeEgress(string scenario)
         => await RunPublicConfirmedPlanRevalidatesPrePlanRootRegistrationBeforeEgressAsync(scenario);
 
-    [LinuxOnlyFact]
+    // Dispatch now sends only to a child that its start intent made ready (#2604 PR2). This proof seeds child
+    // registrations outside that path, so it cannot reach a turn. #2604 PR3 moves the join proof to child startup.
+    [LinuxOnlyFact(Skip = "Seeds child registrations that dispatch no longer accepts; #2604 PR3 replaces this join proof.")]
     public async Task PublicNativeChildrenJoinBeforeIndependentReviewGate()
         => await RunPublicConfirmedPlanRevalidatesPrePlanRootRegistrationBeforeEgressAsync("native");
 
