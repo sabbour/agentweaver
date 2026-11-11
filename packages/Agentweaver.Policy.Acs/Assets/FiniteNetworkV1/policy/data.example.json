@@ -1,0 +1,19 @@
+{
+  "agentweaver": {
+    "platform_egress": {
+      "profile": "finite-network-v1",
+      "mode": "Allowlist",
+      "approved": [],
+      "system": {
+        "catalog": "hosted-copilot-v1",
+        "destinations": [
+          { "host": "api.business.githubcopilot.com", "port": 443 },
+          { "host": "api.enterprise.githubcopilot.com", "port": 443 },
+          { "host": "api.github.com", "port": 443 },
+          { "host": "api.githubcopilot.com", "port": 443 },
+          { "host": "api.individual.githubcopilot.com", "port": 443 }
+        ]
+      }
+    }
+  }
+}

@@ -35,6 +35,14 @@ public sealed class NativeAcsArtifactValidator
         "input.policy_target.value.human_oid",
         "input.policy_target.value.human_tenant_id"
     };
+    private static readonly HashSet<string> AllowedNetworkInputPaths = new(StringComparer.Ordinal)
+    {
+        "input.policy_target.value.network.check_kind",
+        "input.policy_target.value.network.protocol",
+        "input.policy_target.value.network.port",
+        "input.policy_target.value.network.destination.kind",
+        "input.policy_target.value.network.destination.value"
+    };
     private static readonly HashSet<string> UnsafeBuiltins = new(StringComparer.Ordinal)
     {
         "http.send",
@@ -151,6 +159,7 @@ public sealed class NativeAcsArtifactValidator
         if (diagnostics.Count > 0)
             return Result(false, diagnostics);
 
+        var isNetworkArtifact = NativeAcsFiniteNetworkProfile.IsCandidate(artifact);
         string manifest;
         Dictionary<string, string> regoModules;
         var definedRulePaths = new HashSet<string>(StringComparer.Ordinal);
@@ -176,7 +185,13 @@ public sealed class NativeAcsArtifactValidator
                         break;
                     }
 
-                    ValidateInputFacts(file.RelativePath, text, diagnostics, definedRulePaths, remainingMilliseconds);
+                    ValidateInputFacts(
+                        file.RelativePath,
+                        text,
+                        diagnostics,
+                        definedRulePaths,
+                        remainingMilliseconds,
+                        isNetworkArtifact);
                 }
                 else if (file.RelativePath.EndsWith(".json", StringComparison.Ordinal))
                 {
@@ -204,6 +219,13 @@ public sealed class NativeAcsArtifactValidator
         {
             Add(diagnostics, "artifact_read", "The ACS artifact could not be read.");
             return Result(false, diagnostics);
+        }
+
+        if (NativeAcsFiniteNetworkProfile.IsCandidate(artifact))
+        {
+            var networkProfile = NativeAcsFiniteNetworkProfile.Validate(artifact);
+            foreach (var diagnostic in networkProfile.Diagnostics)
+                Add(diagnostics, diagnostic.Code, diagnostic.Message, diagnostic.RelativePath);
         }
 
         ValidateManifest(
@@ -265,7 +287,8 @@ public sealed class NativeAcsArtifactValidator
         string module,
         ImmutableArray<NativeAcsDiagnostic>.Builder diagnostics,
         HashSet<string> definedRulePaths,
-        int timeoutMilliseconds)
+        int timeoutMilliseconds,
+        bool allowNetworkFacts)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -327,7 +350,7 @@ public sealed class NativeAcsArtifactValidator
             }
 
             using var document = JsonDocument.Parse(output);
-            ValidateAstInputFacts(document.RootElement, relativePath, diagnostics);
+            ValidateAstInputFacts(document.RootElement, relativePath, diagnostics, allowNetworkFacts);
             CollectRulePaths(document.RootElement, definedRulePaths);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
@@ -619,7 +642,8 @@ public sealed class NativeAcsArtifactValidator
     private static void ValidateAstInputFacts(
         JsonElement element,
         string relativePath,
-        ImmutableArray<NativeAcsDiagnostic>.Builder diagnostics)
+        ImmutableArray<NativeAcsDiagnostic>.Builder diagnostics,
+        bool allowNetworkFacts)
     {
         if (element.ValueKind == JsonValueKind.Object)
         {
@@ -640,7 +664,9 @@ public sealed class NativeAcsArtifactValidator
                         (parsedPath == "input" || parsedPath.StartsWith("input.", StringComparison.Ordinal))
                             ? parsedPath
                             : null;
-                    if (inputPath is null || !AllowedInputPaths.Contains(inputPath))
+                    if (inputPath is null ||
+                        (!AllowedInputPaths.Contains(inputPath) &&
+                         !(allowNetworkFacts && AllowedNetworkInputPaths.Contains(inputPath))))
                         Add(diagnostics, "unknown_fact", "The Rego module reads an unsupported input fact.", relativePath);
                 }
 
@@ -658,11 +684,11 @@ public sealed class NativeAcsArtifactValidator
                             firstType.ValueKind == JsonValueKind.String &&
                             firstType.GetString() == "var";
                         foreach (var segment in valueSegments.Skip(firstIsRootVariable ? 1 : 0))
-                            ValidateAstInputFacts(segment, relativePath, diagnostics);
+                            ValidateAstInputFacts(segment, relativePath, diagnostics, allowNetworkFacts);
                     }
                     else
                     {
-                        ValidateAstInputFacts(property.Value, relativePath, diagnostics);
+                        ValidateAstInputFacts(property.Value, relativePath, diagnostics, allowNetworkFacts);
                     }
                 }
 
@@ -710,13 +736,13 @@ public sealed class NativeAcsArtifactValidator
                     }
                 }
 
-                ValidateAstInputFacts(property.Value, relativePath, diagnostics);
+                ValidateAstInputFacts(property.Value, relativePath, diagnostics, allowNetworkFacts);
             }
         }
         else if (element.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in element.EnumerateArray())
-                ValidateAstInputFacts(item, relativePath, diagnostics);
+                ValidateAstInputFacts(item, relativePath, diagnostics, allowNetworkFacts);
         }
     }
 

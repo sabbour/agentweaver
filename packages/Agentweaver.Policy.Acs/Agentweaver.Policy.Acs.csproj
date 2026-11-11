@@ -6,6 +6,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Assets\FiniteNetworkV1\manifest.yaml" LogicalName="Agentweaver.Policy.Acs.FiniteNetworkV1.manifest.yaml" />
+    <EmbeddedResource Include="Assets\FiniteNetworkV1\policy\network.rego" LogicalName="Agentweaver.Policy.Acs.FiniteNetworkV1.policy.network.rego" />
+    <EmbeddedResource Include="Assets\FiniteNetworkV1\catalogs\hosted-copilot-v1.json" LogicalName="Agentweaver.Policy.Acs.FiniteNetworkV1.catalogs.hosted-copilot-v1.json" />
     <PackageReference Include="AgentControlSpecification" Version="0.4.0-beta.0" />
     <PackageReference Include="YamlDotNet" Version="18.0.0" />
     <ProjectReference Include="..\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />

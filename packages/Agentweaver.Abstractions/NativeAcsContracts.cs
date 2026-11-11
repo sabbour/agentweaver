@@ -14,6 +14,16 @@ public sealed record NativeAcsArtifact(
 /// <summary>A verified Entra human identity. Callers must not infer it from another claim.</summary>
 public sealed record NativeAcsVerifiedHumanIdentity(string TenantId, string ObjectId);
 
+/// <summary>One server-owned, typed destination fact for bounded network evaluation.</summary>
+public sealed record NativeAcsNetworkDestinationFacts(string Kind, string Value);
+
+/// <summary>Bounded facts for one network permission check.</summary>
+public sealed record NativeAcsNetworkEvaluationFacts(
+    string CheckKind,
+    string Protocol,
+    int Port,
+    NativeAcsNetworkDestinationFacts Destination);
+
 /// <summary>
 /// Bounded runtime facts for native ACS evaluation. A null human identity means that verified
 /// human facts are unavailable; callers must not infer them from Broker subject, actor ID, or UPN.
@@ -23,7 +33,8 @@ public sealed record NativeAcsEvaluationSnapshot(
     string TenantId,
     string AgentId,
     string ActionId,
-    NativeAcsVerifiedHumanIdentity? VerifiedHumanIdentity = null);
+    NativeAcsVerifiedHumanIdentity? VerifiedHumanIdentity = null,
+    NativeAcsNetworkEvaluationFacts? Network = null);
 
 /// <summary>A bounded validation diagnostic. It does not include source snippets.</summary>
 public sealed record NativeAcsDiagnostic(

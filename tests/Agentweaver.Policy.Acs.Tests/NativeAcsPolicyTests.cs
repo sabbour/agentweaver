@@ -350,6 +350,25 @@ public sealed class NativeAcsPolicyTests
     }
 
     [NativeAcsFact]
+    public void NetworkFactsDoNotExpandTheActionProfileInputGate()
+    {
+        var artifact = CreateArtifact("""
+            package agent_control_specification.native_profile
+            import rego.v1
+
+            default pre_model_call_verdict := {"decision": "deny"}
+
+            pre_model_call_verdict := {"decision": "allow"} if {
+                input.policy_target.value.network.destination.value == "approved.example.com"
+            }
+            """);
+
+        var result = new NativeAcsArtifactValidator(RequireNativeRuntime()).Validate(artifact);
+
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "unknown_fact");
+    }
+
+    [NativeAcsFact]
     public async Task HardDenyPrecedesAllowAndUnavailableHumanFactsRemainUnavailable()
     {
         var opaPath = RequireNativeRuntime();
