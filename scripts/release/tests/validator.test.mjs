@@ -68,6 +68,7 @@ const projectReferences = new Map([
   ]],
   ['Agentweaver.Environment', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Policy.Acs\\Agentweaver.Policy.Acs.csproj',
     '..\\..\\..\\packages\\Agentweaver.Identity\\Agentweaver.Identity.csproj',
     '..\\..\\..\\packages\\Agentweaver.Persistence.Postgres\\Agentweaver.Persistence.Postgres.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
@@ -268,7 +269,8 @@ test('the historical P0 NuGet baseline still records exactly the eight original 
   const packages = fixture.components.filter(({ id }) => packageIds.includes(id));
   assert.deepEqual(packages.map(({ id }) => id).sort(), packageIds);
   assert.ok(fixture.compatibility
-    .filter(({ consumer }) => consumer !== 'Agentweaver.Policy.Acs')
+    .filter(({ consumer, dependency }) => consumer !== 'Agentweaver.Policy.Acs'
+      && dependency !== 'Agentweaver.Policy.Acs')
     .every(({ versions }) => versions[0] === '0.0.0'));
 
   const baseline = JSON.parse(readFileSync(path.join(root, 'releases', 'initial-baseline.json'), 'utf8'));
@@ -301,7 +303,9 @@ test('draft dependency declarations allow pure version preparation without chang
   const sourceManifest = JSON.parse(readSource(receipt.manifestPath));
   const preparedVersions = new Map(prepared.plan.components.map(({ id, toVersion }) => [id, toVersion]));
   for (const { consumer, dependency, versions } of fixture.compatibility) {
-    if (consumer !== 'Agentweaver.Policy.Acs') assert.ok(versions.includes('0.0.0'));
+    if (consumer !== 'Agentweaver.Policy.Acs' && dependency !== 'Agentweaver.Policy.Acs') {
+      assert.ok(versions.includes('0.0.0'));
+    }
     assert.ok(versions.includes(fixture.components.find(component => component.id === dependency).version));
     assert.equal(new Set(versions).size, versions.length);
   }
