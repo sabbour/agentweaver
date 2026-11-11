@@ -315,6 +315,87 @@ public sealed class RuntimeUsageSourceReceiptTests
             RuntimeNativeTurnContract.AccountingSnapshotRequest(recorded, wrong));
     }
 
+    [Theory]
+    [InlineData("model")]
+    [InlineData("sdk-session")]
+    [InlineData("source")]
+    [InlineData("native-event")]
+    [InlineData("usage-event")]
+    [InlineData("stale-accounting-revision")]
+    [InlineData("unpriced")]
+    public void ChildCompletionMustMatchPersistedNativeAndPricedEvidence(string fault)
+    {
+        var (admission, request, observation) = NativeTurn();
+        var registration = admission.Registration;
+        var recorded = new RuntimeNativeTurnRecordedReceipt(
+            admission, observation, RuntimeNativeTurnContract.ObservationHash(observation), 3);
+        var sourceHash = RuntimeUsageSourceReceiptContract.HashSource(registration, admission.Source);
+        var evidence = new RuntimeChildTurnAccountingEvidence(recorded, sourceHash, 4, "priced");
+        var receipt = ChildCompletion(request, admission, observation, recorded, sourceHash);
+        Assert.Same(receipt, receipt.ValidateAgainstAccountingEvidence(request, registration, evidence));
+        (receipt, evidence) = fault switch
+        {
+            "model" => (receipt with { ModelId = "foreign-model" }, evidence),
+            "sdk-session" => (receipt with { SdkSessionId = "foreign-session" }, evidence),
+            "source" => (receipt, evidence with { SourceSha256 = new string('e', 64) }),
+            "native-event" => (receipt with
+            {
+                NativeCompletionReceiptEventId = Guid.NewGuid()
+            }, evidence),
+            "usage-event" => (receipt with { UsageEventIds = [] }, evidence),
+            "stale-accounting-revision" => (receipt with { AccountingOwnerRevision = 3 }, evidence),
+            "unpriced" => (receipt, evidence with { AccountingStatus = "unpriced" }),
+            _ => throw new ArgumentOutOfRangeException(nameof(fault))
+        };
+
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            receipt.ValidateAgainstAccountingEvidence(request, registration, evidence));
+    }
+
+    private static RuntimeChildTurnCompletionReceipt ChildCompletion(
+        RuntimeA2ASendRequest request,
+        RuntimeNativeTurnAdmissionReceipt admission,
+        RuntimeNativeTurnObservation observation,
+        RuntimeNativeTurnRecordedReceipt recorded,
+        string sourceHash)
+    {
+        var registration = admission.Registration;
+        var binding = registration.Binding;
+        return new RuntimeChildTurnCompletionReceipt(
+            1,
+            admission.MessageId,
+            RuntimeFixedCreditGuardContract.HashHostRequest(request),
+            admission.PromptHash,
+            observation.OutputHash,
+            "plan",
+            "association",
+            binding.SessionId,
+            admission.Source.SdkSessionId,
+            registration.RuntimeInstanceId,
+            registration.Revision,
+            RuntimeContractValidation.RegistrationHash(registration),
+            binding.AcceptedSelectionHash,
+            binding.ExecutionFence,
+            sourceHash,
+            new("sha256:" + new string('d', 64), "linux/amd64", 1),
+            admission.Source.ModelSelectionReference,
+            admission.Source.ModelId,
+            RuntimeRootTurnCompletionEvidenceContract.ModelSourceModeName(binding.ModelSourceMode!.Value),
+            admission.Source.ReasoningEffort,
+            Guid.Parse(observation.NativeMessageId),
+            observation.NativeTurnStartEventId,
+            observation.NativeTurnEndEventId,
+            observation.NativeCompletionReceiptEventId,
+            observation.CompletedAt,
+            RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(observation.DurableCursor)),
+            recorded.CanonicalPayloadHash,
+            recorded.OwnerRevision,
+            4,
+            observation.UsageEventIds,
+            new(Guid.NewGuid(), 1, SessionMaterialKind.TurnContent, new string('b', 64), new string('c', 64)),
+            new(Guid.NewGuid(), 2, SessionMaterialKind.TurnContent, new string('d', 64), new string('e', 64)));
+    }
+
     // Pinned-card identity stays auditable on both priced and Unpriced accounting receipts.
     private static RuntimeUsageCostReceiptReference AccountingReference(RuntimeUsageSourceReceipt native, bool unpriced) =>
         new(native.ReceiptId, new(native.Usage.EventId, native.Usage.Attribution, new string('f', 64),

@@ -741,6 +741,29 @@ cache. The cache baseline must be complete and contain no extra event. Read
 user or assistant text through the existing authorized historical-turn route;
 there is no public SDK-cache read route.
 
+### Native child-turn completion
+
+The child A2A response can include a `RuntimeChildTurnCompletionReceipt` after
+the Host records native completion, persists usage accounting, and receives
+Events acknowledgments for child user and assistant material. The receipt binds
+request, prompt, and output hashes to the WorkPlan association, logical child
+session, native SDK session ID, runtime registration, accepted selection,
+execution fence, source, image, model selection, actual model, native
+completion event IDs, usage event IDs, and material acknowledgment references.
+The logical child session comes from the runtime registration. The SDK session
+ID comes from the native request context. The receipt does not contain prompt
+or output text.
+
+Orchestrator validates the receipt against the exact dispatch request and
+current registration, then joins it to the persisted source, native observation,
+and accounting status. The native event IDs, usage IDs, model, source hash, and
+owner revisions must match. Task completion requires priced accounting; an
+unpriced entry can remain visible in the usage ledger but cannot prove task
+success. Orchestrator stores the verified receipt with the completed checkpoint
+result. Dispatch returns bounded `completionEvidence` entries from that
+checkpoint; a missing or stale receipt does not count as successful task
+completion.
+
 The Gateway exposes ordinary Host replacement through
 `POST /api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-replacements`
 and status through the matching `GET` route. The strict
@@ -1202,7 +1225,7 @@ All runtime responses are no-store.
 | `POST /runtime/v1/configure/activate` | `RuntimeHostConfigureRequest`: version 1, exact registration, consume/exchange operation IDs, and delivered configuration. Exact replay returns the existing immutable session. Workflow-bound Hosted Copilot supports a hard credit limit through prepared-dispatch and native-begin admission. An unbound positive hard limit still fails with `runtime_usage_affinity_unavailable`; the prepared session is cleaned up and readiness is withheld. |
 | `POST /runtime/v1/refresh` | `RuntimeHostRefreshRequest`: exact `RuntimeHostSessionProof` and operation ID. Current Identity and owner authority control rotation and replay. |
 | `GET /runtime/v1/readiness` | Returns the existing noncredential `RuntimeHostReadinessReceipt` after it revalidates the caller, current registration, session, Observe grant, and readiness evidence. Ordinary configuration includes source-derived recovery mode and evidence bound to the current Host instance; NativeCache reports the exact source acknowledgment, while JournalRebuild reports the authenticated journal position/hash. It does not start an SDK session or send a turn. |
-| `POST /runtime/v1/a2a/message:send` | `RuntimeA2ASendRequest`: one user text message, GUID message ID, native context ID, exact runtime proof, and delivery mode. Optional `readOnlyToolsOnly` metadata restricts that turn to the SDK `view` tool. `immediate` precedes pending `enqueue` work only at the next native idle boundary. A hard-cap denial returns only after the Host records the complete empty native range as source-owned no-send evidence. |
+| `POST /runtime/v1/a2a/message:send` | `RuntimeA2ASendRequest`: one user text message, GUID message ID, native context ID, exact runtime proof, and delivery mode. Optional `readOnlyToolsOnly` metadata restricts that turn to the SDK `view` tool. `immediate` precedes pending `enqueue` work only at the next native idle boundary. A hard-cap denial returns only after the Host records the complete empty native range as source-owned no-send evidence. A completed native child turn can include `RuntimeChildTurnCompletionReceipt` in the response. |
 | `GET /health/live` | Process liveness. It does not prove permission or readiness. |
 | `GET /health/ready` | Fresh registration/source/lease/isolation/workspace/egress evidence plus authenticated configuration and measured startup ceilings. Missing evidence returns `503`. |
 

@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator.Core;
@@ -23,6 +24,23 @@ internal sealed record BacklogTaskClaimReceipt(
     string SelectionHash,
     long ExecutionFence,
     long DecisionStateVersion);
+
+internal sealed record BacklogTaskCompletionCandidate(
+    BacklogTaskReference Task,
+    long TaskRevision,
+    long ClaimTaskRevision,
+    BacklogTaskState TaskState,
+    bool IsArchived,
+    bool IsAutomationInvocationPending,
+    string Title,
+    string? Description,
+    Guid ClaimId,
+    string ClaimRequestHash,
+    string ClaimRunId,
+    string ClaimRootSessionId,
+    string ClaimSelectionHash,
+    long ClaimExecutionFence,
+    long ClaimDecisionStateVersion);
 
 /// <summary>
 /// Stores project backlog graphs and performs task claims in the Orchestrator PostgreSQL schema.
@@ -628,13 +646,14 @@ internal sealed class BacklogOwnerStore
         // Root admission, initial decision and task claim commit together or all roll back.
         var acceptedRoot = await coordination.AcceptRootInTransactionAsync(
             connection, transaction, actor, selection, rootSessionId, cancellationToken,
-            readRunAdmission, revalidateCurrentAuthority)
+            readRunAdmission, revalidateCurrentAuthority, reuseExistingRoot: true)
             .ConfigureAwait(false);
+        var claimRootSessionId = acceptedRoot.RootSessionId;
         var initializedRoot = await decisions.InitializeRootInTransactionAsync(
             connection,
             transaction,
             actor,
-            new SessionIdentity(task.ProjectId, selection.Selection.RunId, rootSessionId),
+            new SessionIdentity(task.ProjectId, selection.Selection.RunId, claimRootSessionId),
             selection,
             selectionContext,
             cancellationToken).ConfigureAwait(false);
@@ -649,7 +668,7 @@ internal sealed class BacklogOwnerStore
             if (existingClaim.RequestHash != requestHash ||
                 existingClaim.ClaimId != claimId ||
                 existingClaim.RunId != selection.Selection.RunId ||
-                existingClaim.RootSessionId != rootSessionId ||
+                existingClaim.RootSessionId != claimRootSessionId ||
                 existingClaim.SelectionHash != selectionHash ||
                 existingClaim.ExecutionFence != acceptedRoot.ExecutionFence)
             {
@@ -696,7 +715,7 @@ internal sealed class BacklogOwnerStore
             idempotencyKey,
             requestHash,
             selection.Selection.RunId,
-            rootSessionId,
+            claimRootSessionId,
             selectionHash,
             acceptedRoot.ExecutionFence,
             initializedRoot.StateVersion,
@@ -711,10 +730,74 @@ internal sealed class BacklogOwnerStore
             claimId,
             "preparing",
             selection.Selection.RunId,
-            rootSessionId,
+            claimRootSessionId,
             selectionHash,
             acceptedRoot.ExecutionFence,
             initializedRoot.StateVersion));
+    }
+
+    /// <summary>Reads the unique task claim bound to a completed run root without treating its phase as proof.</summary>
+    internal async Task<BacklogTaskCompletionCandidate?> ReadTaskCompletionCandidateAsync(
+        string projectId,
+        string runId,
+        string rootSessionId,
+        string selectionHash,
+        long executionFence,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            SELECT task_id, task_revision, claim_task_revision, task_state, is_archived,
+                   automation_invocation_pending, title, description, claim_id, claim_request_hash,
+                   claim_run_id, claim_root_session_id, claim_selection_hash, claim_execution_fence,
+                   claim_decision_state_version
+            FROM {_tasks}
+            WHERE project_id = @project AND claim_id IS NOT NULL
+              AND claim_run_id = @run AND claim_root_session_id = @root
+              AND claim_selection_hash = @selection AND claim_execution_fence = @fence
+            ORDER BY task_id
+            LIMIT 2
+            """, connection);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, runId);
+        command.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, rootSessionId);
+        command.Parameters.AddWithValue("selection", NpgsqlDbType.Varchar, selectionHash);
+        command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, executionFence);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return null;
+        if (!Enum.TryParse<BacklogTaskState>(reader.GetString(3), ignoreCase: true, out var state) ||
+            !Enum.IsDefined(state) || reader.IsDBNull(2) || reader.IsDBNull(8) ||
+            reader.IsDBNull(9) || reader.IsDBNull(10) || reader.IsDBNull(11) ||
+            reader.IsDBNull(12) || reader.IsDBNull(13) || reader.IsDBNull(14))
+            throw new CoordinationException(
+                "backlog_claim_invalid", StatusCodes.Status503ServiceUnavailable);
+        var candidate = new BacklogTaskCompletionCandidate(
+            new BacklogTaskReference(projectId, reader.GetString(0)),
+            reader.GetInt64(1),
+            reader.GetInt64(2),
+            state,
+            reader.GetBoolean(4),
+            reader.GetBoolean(5),
+            reader.GetString(6),
+            reader.IsDBNull(7) ? null : reader.GetString(7),
+            reader.GetGuid(8),
+            reader.GetString(9),
+            reader.GetString(10),
+            reader.GetString(11),
+            reader.GetString(12),
+            reader.GetInt64(13),
+            reader.GetInt64(14));
+        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return null;
+        if (candidate.TaskState != BacklogTaskState.Claimed || candidate.IsArchived ||
+            candidate.IsAutomationInvocationPending || candidate.ClaimId == Guid.Empty ||
+            candidate.TaskRevision < 0 || candidate.ClaimTaskRevision < 0 ||
+            candidate.ClaimDecisionStateVersion < 1 ||
+            string.IsNullOrWhiteSpace(candidate.Title))
+            return null;
+        return candidate;
     }
 
     /// <summary>

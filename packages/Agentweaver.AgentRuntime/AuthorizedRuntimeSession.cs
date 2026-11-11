@@ -577,7 +577,11 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
     /// Begins a step-bound turn with the owner, records its native SDK events and output,
     /// and commits the returned cache under the same current registration.
     /// </summary>
-    internal async Task<(string Response, RuntimeNativeTurnRecordedReceipt Receipt)> SendNativeTurnAsync(
+    internal async Task<(
+        string Response,
+        RuntimeNativeTurnRecordedReceipt Receipt,
+        SessionMaterialAcknowledgment UserMaterial,
+        SessionMaterialAcknowledgment AssistantMaterial)> SendNativeTurnAsync(
         RuntimeA2ASendRequest request, RuntimeSessionMaterialHttpClient material,
         RuntimeUsageSourceHttpClient source, CancellationToken cancellationToken)
     {
@@ -629,7 +633,8 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             var admission = begin.Admission
                 ?? throw new RuntimeAuthorizationException("runtime_native_turn_begin_result_invalid");
             await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
-            await CommitTurnContentAsync(material, message.MessageId, "user", prompt, cancellationToken)
+            var userMaterial = await CommitTurnContentAsync(
+                material, message.MessageId, "user", prompt, cancellationToken)
                 .ConfigureAwait(false);
             await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
             var turn = await _session.SendTurnWithNativeReceiptAsync(
@@ -637,11 +642,16 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
             var recorded = await source.RecordNativeTurnAsync(this, admission, turn.Receipt, cancellationToken)
                 .ConfigureAwait(false);
-            await CommitTurnContentAsync(material, Guid.NewGuid(), "assistant", turn.Response, cancellationToken)
+            var assistantMaterial = await CommitTurnContentAsync(
+                material,
+                CreateA2AAssistantEventId(message.MessageId),
+                "assistant",
+                turn.Response,
+                cancellationToken)
                 .ConfigureAwait(false);
             await CommitNativeCacheAsync(material, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
             _lastNativeTurn = recorded;
-            return (turn.Response, recorded);
+            return (turn.Response, recorded, userMaterial, assistantMaterial);
         }
         finally
         {

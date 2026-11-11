@@ -102,7 +102,8 @@ internal sealed partial class CoordinationOwnerStore
         CancellationToken cancellationToken,
         Func<CancellationToken, Task<RuntimeRunAdmissionReceipt>>? readRunAdmission = null,
         Func<CancellationToken, Task>? revalidateCurrentAuthority = null,
-        bool requireNewRoot = false)
+        bool requireNewRoot = false,
+        bool reuseExistingRoot = false)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
@@ -199,7 +200,7 @@ internal sealed partial class CoordinationOwnerStore
                 cancellationToken)
                 .ConfigureAwait(false);
         }
-        if (root is null || root.SessionId != sessionId ||
+        if (root is null || !reuseExistingRoot && root.SessionId != sessionId ||
             root.WriterIssuer != actor.Issuer || root.WriterSubject != actor.Subject)
             throw new CoordinationException("root_session_conflict", StatusCodes.Status409Conflict);
 

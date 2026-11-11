@@ -1845,7 +1845,7 @@ internal sealed class RuntimeUsageSourceStore(
     /// Requires that the dispatch's recorded output and usage have a completed accounting record.
     /// </summary>
     /// <exception cref="RuntimeAuthorizationException">Thrown when accounting is pending, output hashes differ, or stored references are invalid.</exception>
-    internal async Task RequireNativeTurnAccountedWithinTransactionAsync(
+    internal async Task<RuntimeChildTurnAccountingEvidence> RequireNativeTurnAccountedWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeA2ASendRequest message, string answer, CancellationToken cancellationToken)
     {
@@ -1875,8 +1875,11 @@ internal sealed class RuntimeUsageSourceStore(
             reader.GetString(1) is not ("priced" or "unpriced"))
             throw new RuntimeAuthorizationException("runtime_native_accounting_pending");
         var references = Deserialize<ImmutableArray<RuntimeUsageCostReceiptReference>>(reader.GetString(0));
-        RuntimeNativeTurnContract.AccountingSnapshotRequest(
-            new(admission, observation, dispatch.ReportHash, dispatch.OwnerRevision - 1), references);
+        var recorded = new RuntimeNativeTurnRecordedReceipt(
+            admission, observation, dispatch.ReportHash, checked(dispatch.OwnerRevision - 1));
+        RuntimeNativeTurnContract.AccountingSnapshotRequest(recorded, references);
+        return new RuntimeChildTurnAccountingEvidence(
+            recorded, source.CanonicalPayloadHash, dispatch.OwnerRevision, reader.GetString(1));
     }
 
     /// <summary>

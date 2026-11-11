@@ -544,7 +544,7 @@ public sealed record RuntimeRootTurnCompletionReceipt(
         return new Guid(bytes.AsSpan(0, 16));
     }
 
-    private static RuntimeMaterialAcknowledgmentEvidence ProjectMaterial(
+    internal static RuntimeMaterialAcknowledgmentEvidence ProjectMaterial(
         SessionMaterialAcknowledgment acknowledgment)
     {
         var material = acknowledgment.Reference.Material!;
@@ -723,7 +723,18 @@ public sealed record RuntimeA2AMetadata(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     bool ContinueAfterCallerDisconnect = false,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-    bool ReadOnlyToolsOnly = false);
+    bool ReadOnlyToolsOnly = false)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeA2AChildDispatchBinding? ChildDispatch { get; init; }
+}
+
+/// <summary>Owner-selected work-plan binding for a child runtime dispatch.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeA2AChildDispatchBinding(
+    int ContractVersion,
+    string WorkPlanId,
+    string AssociationId);
 
 /// <summary>Validated A2A text message shape sent to the runtime.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -748,4 +759,279 @@ public sealed record RuntimeA2AResponse(
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeRootTurnReplayEvidence? RootReplay { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeChildTurnCompletionReceipt? ChildCompletion { get; init; }
 }
+
+/// <summary>Verified evidence that one associated child completed a native model turn and usage accounting.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeChildTurnCompletionReceipt(
+    int ContractVersion,
+    Guid RequestId,
+    string RequestSha256,
+    string PromptSha256,
+    string OutputSha256,
+    string WorkPlanId,
+    string AssociationId,
+    string ChildSessionId,
+    string SdkSessionId,
+    Guid RuntimeInstanceId,
+    long RegistrationRevision,
+    string RegistrationSha256,
+    string AcceptedSelectionHash,
+    long ExecutionFence,
+    string SourceSha256,
+    SandboxImageIdentity Image,
+    string ModelSelectionReference,
+    string ModelId,
+    string ModelSourceMode,
+    string? ReasoningEffort,
+    Guid NativeMessageId,
+    Guid NativeTurnStartEventId,
+    Guid NativeTurnEndEventId,
+    Guid NativeCompletionReceiptEventId,
+    DateTimeOffset NativeCompletedAt,
+    string NativeCursorSha256,
+    string NativePayloadSha256,
+    long NativeOwnerRevision,
+    long AccountingOwnerRevision,
+    ImmutableArray<Guid> UsageEventIds,
+    RuntimeMaterialAcknowledgmentEvidence UserMaterial,
+    RuntimeMaterialAcknowledgmentEvidence AssistantMaterial)
+{
+    /// <summary>Checks the receipt against the exact child request and completed response.</summary>
+    public RuntimeChildTurnCompletionReceipt ValidateFor(
+        RuntimeA2ASendRequest request,
+        RuntimeA2AResponse response,
+        RuntimeRegistration registration,
+        string workPlanId,
+        string associationId)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(response);
+        ArgumentNullException.ThrowIfNull(registration);
+        _ = ValidateEvidenceFor(workPlanId, associationId);
+        var message = request.Message;
+        if (message is null ||
+            message.Parts is not [{ Kind: "text", Text: { Length: > 0 } prompt }] ||
+            response.Parts is not [{ Kind: "text", Text: { Length: > 0 } answer }])
+            throw new RuntimeAuthorizationException("runtime_child_turn_receipt_invalid");
+        var binding = registration.Binding;
+        var sourceMode = binding.ModelSourceMode;
+        var image = binding.Image;
+        var childDispatch = message.Metadata.ChildDispatch;
+        RuntimeContractValidation.ValidateHash(RequestSha256);
+        RuntimeContractValidation.ValidateHash(PromptSha256);
+        RuntimeContractValidation.ValidateHash(OutputSha256);
+        RuntimeContractValidation.ValidateHash(RegistrationSha256);
+        RuntimeContractValidation.ValidateHash(AcceptedSelectionHash);
+        RuntimeContractValidation.ValidateHash(SourceSha256);
+        RuntimeContractValidation.ValidateHash(NativeCursorSha256);
+        RuntimeContractValidation.ValidateHash(NativePayloadSha256);
+        if (ContractVersion != 1 ||
+            RequestId == Guid.Empty ||
+            RequestId != message.MessageId ||
+            RequestSha256 != RuntimeFixedCreditGuardContract.HashHostRequest(request) ||
+            childDispatch is null || childDispatch.ContractVersion != 1 ||
+            childDispatch.WorkPlanId != workPlanId ||
+            childDispatch.AssociationId != associationId ||
+            message.Metadata.Runtime.Registration != registration ||
+            binding.WorkflowStepId is null ||
+            PromptSha256 != RuntimeContractValidation.Hash(
+                System.Text.Encoding.UTF8.GetBytes(prompt)) ||
+            OutputSha256 != RuntimeContractValidation.Hash(
+                System.Text.Encoding.UTF8.GetBytes(answer)) ||
+            WorkPlanId != workPlanId || AssociationId != associationId ||
+            ChildSessionId != binding.SessionId ||
+            SdkSessionId != message.ContextId ||
+            SdkSessionId != RuntimeContractValidation.NativeSessionId(binding) ||
+            RuntimeInstanceId != registration.RuntimeInstanceId ||
+            RegistrationRevision != registration.Revision ||
+            RegistrationSha256 != RuntimeContractValidation.RegistrationHash(registration) ||
+            AcceptedSelectionHash != binding.AcceptedSelectionHash ||
+            ExecutionFence != binding.ExecutionFence ||
+            sourceMode is null ||
+            ModelSourceMode != RuntimeRootTurnCompletionEvidenceContract.ModelSourceModeName(sourceMode.Value) ||
+            image is null || Image != image ||
+            ModelSelectionReference != registration.Binding.ModelSelectionReference ||
+            ReasoningEffort != registration.Binding.ReasoningEffort ||
+            string.IsNullOrWhiteSpace(ModelId) || ModelId.Length > 256 ||
+            response.Kind != "message" || response.MessageId == Guid.Empty ||
+            response.ContextId != SdkSessionId || response.Role != "agent")
+            throw new RuntimeAuthorizationException("runtime_child_turn_receipt_invalid");
+        return this;
+    }
+
+    /// <summary>Checks the persisted receipt shape and its plan-association binding.</summary>
+    public RuntimeChildTurnCompletionReceipt ValidateEvidenceFor(
+        string workPlanId, string associationId)
+    {
+        RuntimeContractValidation.ValidateIdentifier(workPlanId);
+        RuntimeContractValidation.ValidateIdentifier(associationId);
+        RuntimeContractValidation.ValidateHash(RequestSha256);
+        RuntimeContractValidation.ValidateHash(PromptSha256);
+        RuntimeContractValidation.ValidateHash(OutputSha256);
+        RuntimeContractValidation.ValidateHash(RegistrationSha256);
+        RuntimeContractValidation.ValidateHash(AcceptedSelectionHash);
+        RuntimeContractValidation.ValidateHash(SourceSha256);
+        RuntimeContractValidation.ValidateHash(NativeCursorSha256);
+        RuntimeContractValidation.ValidateHash(NativePayloadSha256);
+        if (ContractVersion != 1 || RequestId == Guid.Empty ||
+            WorkPlanId != workPlanId || AssociationId != associationId ||
+            string.IsNullOrWhiteSpace(ChildSessionId) || ChildSessionId.Length > 256 ||
+            ChildSessionId.Any(char.IsControl) ||
+            string.IsNullOrWhiteSpace(SdkSessionId) || SdkSessionId.Length > 256 ||
+            SdkSessionId.Any(char.IsControl) ||
+            RuntimeInstanceId == Guid.Empty || RegistrationRevision < 1 || ExecutionFence < 1 ||
+            Image is null || string.IsNullOrWhiteSpace(ModelSelectionReference) ||
+            ModelSelectionReference.Length > 256 || ModelSelectionReference.Any(char.IsControl) ||
+            string.IsNullOrWhiteSpace(ModelId) || ModelId.Length > 256 || ModelId.Any(char.IsControl) ||
+            ModelSourceMode is not ("hosted-copilot" or "byok") ||
+            ReasoningEffort?.Length > 128 ||
+            NativeMessageId == Guid.Empty ||
+            NativeTurnStartEventId == Guid.Empty ||
+            NativeTurnEndEventId == Guid.Empty ||
+            NativeCompletionReceiptEventId == Guid.Empty ||
+            NativeCompletedAt == default ||
+            NativeOwnerRevision < 1 || AccountingOwnerRevision < 1 ||
+            UsageEventIds.IsDefault || UsageEventIds.Length > 512 ||
+            UsageEventIds.Any(id => id == Guid.Empty) ||
+            UsageEventIds.Distinct().Count() != UsageEventIds.Length ||
+            UserMaterial is null || AssistantMaterial is null ||
+            UserMaterial.EventId != RequestId ||
+            AssistantMaterial.EventId != RuntimeRootTurnCompletionReceipt.AssistantEventId(RequestId) ||
+            UserMaterial.Kind != SessionMaterialKind.TurnContent ||
+            AssistantMaterial.Kind != SessionMaterialKind.TurnContent ||
+            UserMaterial.ContentSha256 != PromptSha256 ||
+            AssistantMaterial.ContentSha256 != OutputSha256 ||
+            UserMaterial.Position <= 0 ||
+            AssistantMaterial.Position <= UserMaterial.Position)
+            throw new RuntimeAuthorizationException("runtime_child_turn_receipt_invalid");
+        RuntimeContractValidation.ValidateHash(UserMaterial.BindingSha256);
+        RuntimeContractValidation.ValidateHash(AssistantMaterial.BindingSha256);
+        return this;
+    }
+
+    /// <summary>Checks the child receipt against the native source, completion events, and priced accounting retained by the owner.</summary>
+    public RuntimeChildTurnCompletionReceipt ValidateAgainstAccountingEvidence(
+        RuntimeA2ASendRequest request,
+        RuntimeRegistration registration,
+        RuntimeChildTurnAccountingEvidence evidence)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(registration);
+        ArgumentNullException.ThrowIfNull(evidence);
+        var recorded = evidence.Recorded;
+        RuntimeNativeTurnContract.ValidateRecorded(recorded);
+        var admission = recorded.Admission;
+        var source = admission.Source;
+        var observation = recorded.Observation;
+        RuntimeNativeTurnContract.ValidateAdmission(admission, registration, source, request);
+        RuntimeContractValidation.ValidateHash(evidence.SourceSha256);
+        var binding = registration.Binding;
+        var sourceMode = registration.Binding.ModelSourceMode;
+        if (!Guid.TryParse(observation.NativeMessageId, out var nativeMessageId) ||
+            evidence.AccountingStatus != "priced" ||
+            evidence.SourceSha256 != RuntimeUsageSourceReceiptContract.HashSource(registration, source) ||
+            evidence.AccountingOwnerRevision <= recorded.OwnerRevision ||
+            admission.Registration != registration ||
+            ChildSessionId != binding.SessionId ||
+            SdkSessionId != request.Message.ContextId ||
+            SdkSessionId != source.SdkSessionId ||
+            RuntimeInstanceId != registration.RuntimeInstanceId ||
+            RegistrationRevision != registration.Revision ||
+            RegistrationSha256 != RuntimeContractValidation.RegistrationHash(registration) ||
+            AcceptedSelectionHash != binding.AcceptedSelectionHash ||
+            ExecutionFence != binding.ExecutionFence ||
+            SourceSha256 != evidence.SourceSha256 ||
+            RequestId != admission.MessageId ||
+            RequestSha256 != RuntimeFixedCreditGuardContract.HashHostRequest(request) ||
+            PromptSha256 != admission.PromptHash ||
+            OutputSha256 != observation.OutputHash ||
+            ModelSelectionReference != source.ModelSelectionReference ||
+            ModelId != source.ModelId ||
+            ReasoningEffort != source.ReasoningEffort ||
+            sourceMode is null ||
+            ModelSourceMode != RuntimeRootTurnCompletionEvidenceContract.ModelSourceModeName(sourceMode.Value) ||
+            NativeMessageId != nativeMessageId ||
+            NativeTurnStartEventId != observation.NativeTurnStartEventId ||
+            NativeTurnEndEventId != observation.NativeTurnEndEventId ||
+            NativeCompletionReceiptEventId != observation.NativeCompletionReceiptEventId ||
+            NativeCompletedAt != observation.CompletedAt ||
+            NativeCursorSha256 != RuntimeContractValidation.Hash(
+                System.Text.Encoding.UTF8.GetBytes(observation.DurableCursor)) ||
+            NativePayloadSha256 != recorded.CanonicalPayloadHash ||
+            NativeOwnerRevision != recorded.OwnerRevision ||
+            AccountingOwnerRevision != evidence.AccountingOwnerRevision ||
+            !UsageEventIds.SequenceEqual(observation.UsageEventIds))
+            throw new RuntimeAuthorizationException("runtime_child_turn_receipt_invalid");
+        return this;
+    }
+
+    /// <summary>Builds a safe receipt from the admitted native turn and its completed accounting snapshot.</summary>
+    public static RuntimeChildTurnCompletionReceipt Create(
+        RuntimeA2ASendRequest request,
+        RuntimeNativeTurnRecordedReceipt recorded,
+        RuntimeNativeTurnAccountingReceipt accounting,
+        SessionMaterialAcknowledgment userMaterial,
+        SessionMaterialAcknowledgment assistantMaterial)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(recorded);
+        ArgumentNullException.ThrowIfNull(accounting);
+        var registration = recorded.Admission.Registration;
+        var source = recorded.Admission.Source;
+        var binding = registration.Binding;
+        var dispatch = request.Message.Metadata.ChildDispatch
+            ?? throw new RuntimeAuthorizationException("runtime_child_turn_receipt_invalid");
+        var native = recorded.Observation;
+        var image = binding.Image
+            ?? throw new RuntimeAuthorizationException("runtime_child_turn_receipt_invalid");
+        var sourceMode = binding.ModelSourceMode
+            ?? throw new RuntimeAuthorizationException("runtime_child_turn_receipt_invalid");
+        var nativeMessageId = Guid.TryParse(native.NativeMessageId, out var parsed)
+            ? parsed
+            : throw new RuntimeAuthorizationException("runtime_child_turn_receipt_invalid");
+        return new RuntimeChildTurnCompletionReceipt(
+            1,
+            request.Message.MessageId,
+            RuntimeFixedCreditGuardContract.HashHostRequest(request),
+            recorded.Admission.PromptHash,
+            native.OutputHash,
+            dispatch.WorkPlanId,
+            dispatch.AssociationId,
+            binding.SessionId,
+            request.Message.ContextId,
+            registration.RuntimeInstanceId,
+            registration.Revision,
+            RuntimeContractValidation.RegistrationHash(registration),
+            binding.AcceptedSelectionHash,
+            binding.ExecutionFence,
+            RuntimeUsageSourceReceiptContract.HashSource(registration, source),
+            image,
+            source.ModelSelectionReference,
+            source.ModelId,
+            RuntimeRootTurnCompletionEvidenceContract.ModelSourceModeName(sourceMode),
+            source.ReasoningEffort,
+            nativeMessageId,
+            native.NativeTurnStartEventId,
+            native.NativeTurnEndEventId,
+            native.NativeCompletionReceiptEventId,
+            native.CompletedAt,
+            RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(native.DurableCursor)),
+            recorded.CanonicalPayloadHash,
+            recorded.OwnerRevision,
+            accounting.OwnerRevision,
+            native.UsageEventIds,
+            RuntimeRootTurnCompletionReceipt.ProjectMaterial(userMaterial),
+            RuntimeRootTurnCompletionReceipt.ProjectMaterial(assistantMaterial));
+    }
+}
+
+/// <summary>Owner-read native completion and pricing evidence for one child dispatch.</summary>
+public sealed record RuntimeChildTurnAccountingEvidence(
+    RuntimeNativeTurnRecordedReceipt Recorded,
+    string SourceSha256,
+    long AccountingOwnerRevision,
+    string AccountingStatus);

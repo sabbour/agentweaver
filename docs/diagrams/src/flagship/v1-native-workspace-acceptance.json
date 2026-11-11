@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Native Workspace repository-read check",
-  "alt": "The native .NET CLI opens an exact Workspace review in the browser. The Broker checks its current cookie and antiforgery token, creates an owner-bound Repo App selection, and returns it only after HTTPS code exchange with an S256 verifier. The CLI then reads refs, a tree and a file through typed Gateway operations with current owner checks. The selection is not part of the callback, OAuth tokens, logs or evidence. This check does not exercise child startup or terminal cleanup.",
+  "alt": "The native .NET CLI opens an exact Workspace review in the browser. The Broker checks its current cookie and antiforgery token, creates an owner-bound Repo App selection, and returns it only after HTTPS code exchange with an S256 verifier. The CLI then reads refs, a tree and a file through typed Gateway operations with current owner checks. The selection is not part of the callback, OAuth tokens, logs or evidence. This source-only check does not exercise run B task dispatch, child-turn completion receipts, child startup, or terminal cleanup.",
   "autonumber": true,
   "participants": [
     {
@@ -59,7 +59,7 @@
         "broker",
         "gateway"
       ],
-      "label": "Source-only check. It does not create an Agentweaver project, run, role or test fixture. It does not prove a live deployment or the full acceptance journey."
+      "label": "Source-only check. No project, run, role or fixture. It proves neither run B task success, child startup/cleanup, nor a live deployment or full journey."
     },
     {
       "type": "message",
@@ -139,7 +139,7 @@
         "native-cli",
         "gateway"
       ],
-      "label": "Child startup and terminal cleanup are separate owner flows. This check does not exercise them."
+      "label": "Run B receipts, child startup, and terminal cleanup are separate flows; this check does not exercise them."
     }
   ]
 }
