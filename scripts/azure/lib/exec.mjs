@@ -134,6 +134,7 @@ function spawnPlatformSafe(command, args, spawnOptions) {
 export function run(command, args, options = {}) {
   const {
     check = true, cwd, env, input, timeout, projectJson, preserveProjectedJson = false,
+    allowEmptyJson = false,
     maxBuffer = DEFAULT_MAX_BUFFER,
   } = options;
   if (preserveProjectedJson && typeof projectJson !== 'function') {
@@ -170,6 +171,8 @@ export function run(command, args, options = {}) {
   let stdout;
   if (projectJson === undefined) {
     stdout = redact(result.stdout ?? '');
+  } else if (allowEmptyJson && result.status === 0 && !String(result.stdout ?? '').trim()) {
+    stdout = '';
   } else {
     if (typeof projectJson !== 'function') throw new TypeError('projectJson must be a function.');
     try {

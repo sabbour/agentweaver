@@ -178,6 +178,14 @@ test('run fails closed when projected JSON is malformed or the projection throws
   }
 });
 
+test('run allows empty projected JSON only when requested', () => {
+  const args = ['-e', ''];
+  const options = { projectJson: value => value, preserveProjectedJson: true };
+  assert.throws(() => run(process.execPath, args, options),
+    /JSON output could not be safely projected/);
+  assert.equal(run(process.execPath, args, { ...options, allowEmptyJson: true }).stdout, '');
+});
+
 test('run never shells out through a string (no injection surface)', () => {
   // If this were shell-interpreted, `; echo pwned` would execute a second
   // command. With shell:false and a literal argument array, it is passed
