@@ -8,6 +8,7 @@ using Agentweaver.Cli.Api;
 
 namespace Agentweaver.Cli.Tests;
 
+[Collection(CliEnvironmentCollection.Name)]
 public sealed class GatewayClientTests
 {
     private const string SelectionCodeHeader = "X-Agentweaver-Team-Sync-Selection";

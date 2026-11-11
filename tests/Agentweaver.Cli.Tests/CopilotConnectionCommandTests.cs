@@ -9,6 +9,7 @@ using Agentweaver.Cli.Api;
 
 namespace Agentweaver.Cli.Tests;
 
+[Collection(CliEnvironmentCollection.Name)]
 public sealed class CopilotConnectionCommandTests
 {
     private const string Gateway = "https://gateway.example/";
