@@ -483,9 +483,9 @@ jobs:
       - name: Test coverage report guards
         if: ${{ !cancelled() }}
         run: node --test scripts/coverage/tests/*.test.mjs scripts/ci/tests/*.test.mjs
-      - name: Test project issue-to-merge workflow
+      - name: Test workflow canvas extension
         if: ${{ !cancelled() }}
-        run: node --test .github/extensions/agentweaver-issue-to-merge/workflow.test.mjs
+        run: node --test .github/extensions/agentweaver-workflow-canvas/canvas.test.mjs
       - name: Record coverage attempt
         if: ${{ !cancelled() && env.COLLECT_COVERAGE == 'true' }}
         env:

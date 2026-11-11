@@ -217,8 +217,8 @@ run from an older revision is not evidence that the current revision passed.
 The `v1 foundation CI` workflow keeps the required `foundation` check as an
 always-reported aggregate. It fails if any selected job fails, is cancelled,
 or is unexpectedly skipped. Release composition validation, controlled API
-journeys, CI/coverage guards, and issue-to-merge contracts still run on every
-candidate. `v1-docs-ci.yml` remains the separate documentation check.
+journeys, and CI/coverage guards still run on every candidate. `v1-docs-ci.yml`
+remains the separate documentation check.
 
 Changed-path detection skips expensive .NET, Web, image, and tooling suites
 for documentation/metadata-only PRs. Unrelated workflow edits do not run those
