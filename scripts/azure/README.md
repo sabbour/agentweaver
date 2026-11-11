@@ -488,46 +488,67 @@ node scripts\azure\bootstrap-p1-postgres.mjs --apply-pending-migrations --max-co
 Run `--inspect` again after applying, and prove each new version from the live
 history.
 
+### Bootstrapping the first TenantAdmin
+
+After the Projects & Config Deployment is ready and the approved user has
+signed in through the Identity Broker, run the one-shot
+`--bootstrap-first-tenant-admin` command from a clean checkout at the fetched
+`origin/v1` tip. The target's immutable runtime ConfigMap must contain that
+user's approved issuer, subject, and tenant. The command does not accept a
+different identity as an argument.
+
+Use the exact immutable Projects & Config image approved for the target. The
+runner verifies the image and source, checks the approved ConfigMap and
+maintenance Lease, and verifies that the `projects-config-migration`
+ServiceAccount uses the target's managed identity. It creates one Job from the
+existing hardened migration template. The Job uses Workload Identity; the
+runner does not require an operator PostgreSQL token or create a credential
+Secret.
+
+```powershell
+npm run db:maintenance:projects-config -- --image ghcr.io/sabbour/agentweaver.projects.config@sha256:<digest> --bootstrap-first-tenant-admin
+npm run db:maintenance:projects-config -- --image ghcr.io/sabbour/agentweaver.projects.config@sha256:<digest> --bootstrap-first-tenant-admin --execute
+```
+
+For a registered separate target, add `--resource-group <target>`. The runner
+removes the Job and writes a sanitized receipt outside the checkout. It reports
+`created`, `already-present`, or `conflict`. A conflict means another active
+TenantAdmin exists, so the command makes no grant. If a Job fails or its result
+is unclear, stop and inspect the receipt and cluster state before another
+attempt.
+
 ### Bootstrapping the first PlatformAdmin
 
-After Projects & Config migrations have been applied, the
-`db:maintenance:projects-config` runner can execute the one-shot
-`--bootstrap-first-platform-admin` command. The runner verifies the published
-Projects & Config image digest and source, checks the immutable runtime
-ConfigMap and database-maintenance Lease, then uses the existing hardened Job
-template with the approved issuer, subject, and tenant. The command verifies
-the migration history itself. This mode does not migrate or apply runtime
-grants.
+After the first TenantAdmin is ready and Projects & Config migrations have
+been applied, run `--bootstrap-first-platform-admin`. The runner uses the same
+approved ConfigMap, verified workload identity, image checks, Lease, and Job
+template. The command verifies the migration history. It does not migrate or
+apply runtime grants.
 
-Without `--execute`, it checks the publication, approved identity source, and
-Lease, then writes a plan receipt outside the checkout. For execution, supply
-the same password-free migration connection and short-lived PostgreSQL token
-used by the migration runner through
-`AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION` and
-`AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN`. It creates a temporary
-credential Secret and one bootstrap Job under the Lease, removes both, and
-records the stable result as `created`, `already-present`, or `conflict`.
+Without `--execute`, it checks the image, source, approved identity, workload
+identity, and Lease, then writes a plan receipt outside the checkout. Add
+`--execute` to create the Job:
 
 ```powershell
-npm run db:maintenance:projects-config -- --publication .\artifacts\release\publication.json --bootstrap-first-platform-admin
-npm run db:maintenance:projects-config -- --publication .\artifacts\release\publication.json --bootstrap-first-platform-admin --execute
+npm run db:maintenance:projects-config -- --image ghcr.io/sabbour/agentweaver.projects.config@sha256:<digest> --bootstrap-first-platform-admin
+npm run db:maintenance:projects-config -- --image ghcr.io/sabbour/agentweaver.projects.config@sha256:<digest> --bootstrap-first-platform-admin --execute
 ```
 
-Before retrying a failed bootstrap, inspect its live state with the same
-publication and migration credentials:
+The runner reports `created`, `already-present`, or `conflict`. A conflict
+means another active PlatformAdmin exists, so the command makes no grant.
+Before retrying a failed or unclear bootstrap, run the read-only inspection:
 
 ```powershell
-npm run db:maintenance:projects-config -- --publication .\artifacts\release\publication.json --inspect-first-platform-admin
+npm run db:maintenance:projects-config -- --image ghcr.io/sabbour/agentweaver.projects.config@sha256:<digest> --inspect-first-platform-admin
 ```
 
-Inspection runs directly without `--execute`. Its pinned-image Job uses the
-same Lease and temporary credential Secret, but the database transaction is
-`REPEATABLE READ` and `READ ONLY`; it verifies migration history and performs
-no writes or migrations. The sanitized receipt reports the approved
-membership, active assignment IDs/revisions/states, matching membership and
-role-assignment audit rows, and only a count of other active PlatformAdmins.
-Do not retry if an assignment is missing its matching audit evidence or the
-inspection result is incomplete or ambiguous.
+Inspection runs directly without `--execute`, under the same Lease and
+Workload Identity. Its database transaction is `REPEATABLE READ` and
+`READ ONLY`. It does not grant, revoke, repair, or migrate data. The sanitized
+receipt reports the approved membership, active assignment IDs, revisions and
+states, matching membership and role-assignment audit rows, and only a count
+of other active PlatformAdmins. Do not retry if an assignment is missing its
+matching audit evidence or the inspection result is incomplete or ambiguous.
 
 `npm run platform:runtime-defaults` signs in through the browser helper with
 `P1_SETUP_SCOPES`, reads `/api/v1/platform/runtime-defaults`, and compares it

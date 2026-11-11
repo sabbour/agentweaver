@@ -31,6 +31,7 @@ const inspectionOutput = [
 function createWorld({
   jobOutcome = 'Complete',
   bootstrapLog = 'The first PlatformAdmin was created.',
+  tenantBootstrapLog = 'The first TenantAdmin was created.',
   inspectionLog = [
     'PLATFORM_ADMIN_INSPECTION_V1',
     'MEMBERSHIP|Absent|-|0',
@@ -50,6 +51,8 @@ function createWorld({
       ProjectsConfig__PrivilegedSetup__ApprovedTenantId: bootstrapTenantId,
     },
   },
+  migrationServiceAccountClientId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+  expectedMigrationClientId = migrationServiceAccountClientId,
   originV1 = deploymentSourceSha,
 } = {}) {
   const directory = path.join(
@@ -61,6 +64,9 @@ function createWorld({
   const receipts = [];
   const exec = (command, args, settings = {}) => {
     calls.push({ command, args, settings });
+    if (command === 'az' && args[0] === 'identity' && args[1] === 'show') {
+      return { status: 0, stdout: `${expectedMigrationClientId}\n`, stderr: '' };
+    }
     if (command === 'git') {
       if (['status', 'fetch', 'merge-base'].includes(args[0])) return { status: 0, stdout: '', stderr: '' };
       if (args[0] === 'rev-parse' && args[1] === 'HEAD') {
@@ -72,6 +78,20 @@ function createWorld({
       throw new Error(`unexpected git ${args.join(' ')}`);
     }
     if (command !== 'kubectl') throw new Error(`unexpected command ${command}`);
+    if (args.includes('get') && args.includes('serviceaccount')) {
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          kind: 'ServiceAccount',
+          metadata: {
+            name: 'projects-config-migration',
+            namespace: DB_MAINTENANCE_TARGET.namespace,
+            annotations: { 'azure.workload.identity/client-id': migrationServiceAccountClientId },
+          },
+        }),
+        stderr: '',
+      };
+    }
     if (args.includes('create') && args.includes('--filename')) {
       const object = JSON.parse(settings.input);
       objects.set(`${object.kind.toLowerCase()}/${object.metadata.name}`, object);
@@ -98,9 +118,10 @@ function createWorld({
       };
     }
     if (args.includes('logs')) {
-      const output = args.some(argument => argument.includes('platform-admin-inspection'))
-        ? inspectionLog
-        : bootstrapLog;
+      const output = args.some(argument => argument.includes('tenant-admin-bootstrap'))
+        ? tenantBootstrapLog
+        : args.some(argument => argument.includes('platform-admin-inspection'))
+          ? inspectionLog : bootstrapLog;
       return { status: 0, stdout: `${output}\n`, stderr: '' };
     }
     if (args.includes('get') && args.includes('pods')) {
@@ -155,6 +176,19 @@ function withMigrationCredentials(callback, connection) {
   });
 }
 
+function withoutMigrationCredentials(callback) {
+  const oldConnection = process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION;
+  const oldToken = process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN;
+  delete process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION;
+  delete process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN;
+  return Promise.resolve().then(callback).finally(() => {
+    if (oldConnection === undefined) delete process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION;
+    else process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION = oldConnection;
+    if (oldToken === undefined) delete process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN;
+    else process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN = oldToken;
+  });
+}
+
 test('migration arguments are dry-run by default and require an immutable image', () => {
   assert.equal(parseProjectsConfigMigrationArgs(['--help']).help, true);
   assert.throws(() => parseProjectsConfigMigrationArgs([]), /--image is required/);
@@ -162,6 +196,12 @@ test('migration arguments are dry-run by default and require an immutable image'
   assert.throws(() => parseProjectsConfigMigrationArgs(['--image', 'x']), /immutable Projects & Config GHCR reference/);
   assert.equal(parseProjectsConfigMigrationArgs(['--image', image]).execute, false);
   assert.throws(() => parseProjectsConfigMigrationArgs(['--publication', 'receipt.json']), /unknown argument/);
+  assert.equal(parseProjectsConfigMigrationArgs([
+    '--image', image, '--bootstrap-first-tenant-admin',
+  ]).bootstrapFirstTenantAdmin, true);
+  assert.throws(() => parseProjectsConfigMigrationArgs([
+    '--image', image, '--bootstrap-first-tenant-admin', '--bootstrap-first-platform-admin',
+  ]), /mutually exclusive/);
   assert.equal(parseProjectsConfigMigrationArgs([
     '--image', image, '--bootstrap-first-platform-admin',
   ]).bootstrapFirstPlatformAdmin, true);
@@ -250,10 +290,10 @@ test('Projects & Config execution stops before Kubernetes writes without its sch
   }
 });
 
-test('PlatformAdmin inspection runs read-only without --execute and writes a sanitized receipt', async () => {
+test('PlatformAdmin inspection runs read-only without an operator token and writes a sanitized receipt', async () => {
   const world = createWorld({ inspectionLog: inspectionOutput });
   try {
-    const receipt = await withMigrationCredentials(() => runProjectsConfigMigration({
+    const receipt = await withoutMigrationCredentials(() => runProjectsConfigMigration({
       ...world.options, inspectFirstPlatformAdmin: true,
     }, world.overrides));
 
@@ -280,22 +320,25 @@ test('PlatformAdmin inspection runs read-only without --execute and writes a san
       }],
       otherActivePlatformAdminCount: 1,
     });
-    assert.deepEqual(receipt.cleanup, { job: true, secret: true, lock: true });
+    assert.deepEqual(receipt.cleanup, { job: true, lock: true });
     assert.ok(receipt.plannedSteps.includes('create-platform-admin-inspection-job'));
     assert.equal(receipt.plannedSteps.includes('create-migration-job'), false);
     assert.equal(receipt.plannedSteps.includes('apply-runtime-grants'), false);
     assert.equal(receipt.bootstrap, undefined);
     assert.equal(receipt.grants, undefined);
     assert.equal(world.calls.some(call => call.command === 'grants'), false);
-    const secretCreate = world.calls.find(call =>
+    assert.equal(world.calls.some(call =>
       call.command === 'kubectl' && call.args.includes('create') &&
-      JSON.parse(call.settings.input ?? '{}').kind === 'Secret');
-    const inspectionConnection = JSON.parse(secretCreate.settings.input).stringData['migration-connection'];
-    assert.ok(inspectionConnection.includes('SSL Mode=VerifyFull'));
-    assert.ok(inspectionConnection.endsWith(';GSS Encryption Mode=Disable'));
+      JSON.parse(call.settings.input ?? '{}').kind === 'Secret'), false);
+    assert.ok(world.calls.some(call => call.command === 'az' &&
+      call.args.includes(`${DB_MAINTENANCE_TARGET.resourceGroup}-id-projects-config-migration`)));
     assert.ok(world.kubeconfigOptions[0].requiredPermissions.some(permission =>
       JSON.stringify(permission) === JSON.stringify([
         'get', 'configmaps', DB_MAINTENANCE_TARGET.namespace,
+      ])));
+    assert.ok(world.kubeconfigOptions[0].requiredPermissions.some(permission =>
+      JSON.stringify(permission) === JSON.stringify([
+        'get', 'serviceaccounts', DB_MAINTENANCE_TARGET.namespace,
       ])));
     const jobCreate = world.calls.find(call =>
       call.command === 'kubectl' && call.args.includes('create') &&
@@ -306,6 +349,15 @@ test('PlatformAdmin inspection runs read-only without --execute and writes a san
       'dotnet', 'Agentweaver.Projects.Config.dll', '--inspect-first-platform-admin',
     ]);
     assert.equal(container.image, image);
+    assert.equal(job.spec.template.spec.serviceAccountName, 'projects-config-migration');
+    assert.equal(container.env.find(entry =>
+      entry.name === 'ProjectsConfig__Migration__WorkloadIdentity__ClientId').value,
+    'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+    assert.equal(container.env.some(entry =>
+      entry.name === 'ProjectsConfig__Migration__AccessToken'), false);
+    assert.ok(container.env.find(entry =>
+      entry.name === 'ConnectionStrings__ProjectsConfigMigration')?.value
+      .endsWith(';GSS Encryption Mode=Disable'));
     assert.equal(world.objects.size, 0);
     const safeReceipt = JSON.stringify(receipt);
     for (const secret of [bootstrapSubject, bootstrapTenantId, bootstrapIssuer, 'test-access-token', 'Username=']) {
@@ -320,12 +372,12 @@ test('PlatformAdmin inspection rejects spoofed or extra output and still cleans 
   const spoofed = `${inspectionOutput}\nissuer=${bootstrapIssuer}`;
   const world = createWorld({ inspectionLog: spoofed });
   try {
-    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration({
+    await assert.rejects(withoutMigrationCredentials(() => runProjectsConfigMigration({
       ...world.options, inspectFirstPlatformAdmin: true,
     }, world.overrides)), /extra output/);
     const receipt = JSON.stringify(world.receipts[0].receipt);
     assert.equal(receipt.includes(bootstrapIssuer), false);
-    assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, secret: true, lock: true });
+    assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, lock: true });
     assert.equal(world.objects.size, 0);
   } finally {
     world.dispose();
@@ -339,10 +391,10 @@ test('PlatformAdmin inspection rejects a non-protocol prelude and duplicate prot
   ]) {
     const world = createWorld({ inspectionLog });
     try {
-      await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration({
+      await assert.rejects(withoutMigrationCredentials(() => runProjectsConfigMigration({
         ...world.options, inspectFirstPlatformAdmin: true,
       }, world.overrides)), /expected versioned output|extra output/);
-      assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, secret: true, lock: true });
+      assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, lock: true });
       assert.equal(world.objects.size, 0);
     } finally {
       world.dispose();
@@ -359,13 +411,13 @@ test('PlatformAdmin inspection records sanitized command failures', async () => 
     ].join('\n'),
   });
   try {
-    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration({
+    await assert.rejects(withoutMigrationCredentials(() => runProjectsConfigMigration({
       ...world.options, inspectFirstPlatformAdmin: true,
     }, world.overrides)), /inspection command failed; review the sanitized diagnostic/);
     assert.equal(world.receipts[0].receipt.platformAdminInspection.outcome, 'failed');
     assert.equal(world.receipts[0].receipt.platformAdminInspection.diagnostic,
       'ExceptionType=InvalidOperationException; Category=invalid-bootstrap-configuration');
-    assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, secret: true, lock: true });
+    assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, lock: true });
   } finally {
     world.dispose();
   }
@@ -382,11 +434,100 @@ test('PlatformAdmin bootstrap dry run verifies the approved ConfigMap and avoids
     assert.equal(receipt.operation, 'bootstrap-first-platform-admin');
     assert.deepEqual(receipt.steps.map(step => step.name), [
       'image-verified', 'migration-lock-checked', 'bootstrap-identity-config-verified',
+      'migration-workload-identity-verified',
     ]);
     assert.ok(receipt.plannedSteps.includes('create-platform-admin-bootstrap-job'));
+    assert.equal(receipt.plannedSteps.some(step => step.includes('secret')), false);
     assert.equal(world.calls.some(call =>
       call.command === 'kubectl' && ['create', 'delete', 'apply'].some(verb => call.args.includes(verb))), false);
     assert.equal(world.calls.some(call => call.command === 'grants'), false);
+  } finally {
+    world.dispose();
+  }
+});
+
+test('TenantAdmin bootstrap uses the verified workload identity and creates no credential Secret', async () => {
+  for (const [tenantBootstrapLog, expectedOutcome] of [
+    ['The first TenantAdmin was created.', 'created'],
+    ['The approved TenantAdmin already exists; no changes were made.', 'already-present'],
+  ]) {
+    const world = createWorld({ tenantBootstrapLog });
+    try {
+      const receipt = await withoutMigrationCredentials(() => runProjectsConfigMigration({
+        ...world.options, execute: true, bootstrapFirstTenantAdmin: true,
+      }, world.overrides));
+      assert.equal(receipt.result, 'succeeded');
+      assert.equal(receipt.schemaVersion, 1);
+      assert.equal(receipt.operation, 'bootstrap-first-tenant-admin');
+      assert.deepEqual(receipt.bootstrap, { outcome: expectedOutcome });
+      assert.deepEqual(receipt.cleanup, { job: true, lock: true });
+
+      const jobCreate = world.calls.find(call =>
+        call.command === 'kubectl' && call.args.includes('create') &&
+        JSON.parse(call.settings.input ?? '{}').kind === 'Job');
+      const job = JSON.parse(jobCreate.settings.input);
+      const container = job.spec.template.spec.containers[0];
+      assert.deepEqual(container.command, [
+        'dotnet', 'Agentweaver.Projects.Config.dll', '--bootstrap-first-tenant-admin',
+      ]);
+      assert.equal(container.image, image);
+      assert.equal(job.spec.template.spec.serviceAccountName, 'projects-config-migration');
+      assert.equal(job.spec.template.spec.automountServiceAccountToken, false);
+      assert.equal(container.env.find(entry =>
+        entry.name === 'ProjectsConfig__Migration__WorkloadIdentity__ClientId').value,
+      'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+      assert.equal(container.env.some(entry =>
+        entry.name === 'ProjectsConfig__Migration__AccessToken'), false);
+      for (const key of [
+        'ProjectsConfig__Authentication__Authority',
+        'ProjectsConfig__PrivilegedSetup__ApprovedIssuer',
+        'ProjectsConfig__PrivilegedSetup__ApprovedSubject',
+        'ProjectsConfig__PrivilegedSetup__ApprovedTenantId',
+      ]) {
+        assert.deepEqual(
+          container.env.find(entry => entry.name === key)?.valueFrom?.configMapKeyRef,
+          { name: 'projects-config-runtime-config', key });
+      }
+      assert.equal(world.calls.some(call =>
+        call.command === 'kubectl' && call.args.includes('create') &&
+        JSON.parse(call.settings.input ?? '{}').kind === 'Secret'), false);
+      assert.equal(world.objects.size, 0);
+    } finally {
+      world.dispose();
+    }
+  }
+});
+
+test('TenantAdmin bootstrap refuses an unexpected workload identity before creating a Job', async () => {
+  const world = createWorld({
+    migrationServiceAccountClientId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    expectedMigrationClientId: 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff',
+  });
+  try {
+    await assert.rejects(withoutMigrationCredentials(() => runProjectsConfigMigration({
+      ...world.options, execute: true, bootstrapFirstTenantAdmin: true,
+    }, world.overrides)), /does not name the approved migration identity/);
+    assert.equal(world.calls.some(call =>
+      call.command === 'kubectl' && ['create', 'delete'].some(verb => call.args.includes(verb))), false);
+    assert.equal(world.objects.size, 0);
+  } finally {
+    world.dispose();
+  }
+});
+
+test('TenantAdmin bootstrap conflict is recorded and cleaned up without retry', async () => {
+  const world = createWorld({
+    jobOutcome: 'Failed',
+    tenantBootstrapLog:
+      'First TenantAdmin bootstrap refused because another active TenantAdmin exists for this tenant.',
+  });
+  try {
+    await assert.rejects(withoutMigrationCredentials(() => runProjectsConfigMigration({
+      ...world.options, execute: true, bootstrapFirstTenantAdmin: true,
+    }, world.overrides)), /refused because another active TenantAdmin exists/);
+    assert.deepEqual(world.receipts[0].receipt.bootstrap, { outcome: 'conflict' });
+    assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, lock: true });
+    assert.equal(world.objects.size, 0);
   } finally {
     world.dispose();
   }
@@ -399,13 +540,13 @@ test('PlatformAdmin bootstrap creates one pinned Job, parses the stable outcome,
   ]) {
     const world = createWorld({ bootstrapLog });
     try {
-      const receipt = await withMigrationCredentials(() => runProjectsConfigMigration({
+      const receipt = await withoutMigrationCredentials(() => runProjectsConfigMigration({
         ...world.options, execute: true, bootstrapFirstPlatformAdmin: true,
       }, world.overrides));
       assert.equal(receipt.result, 'succeeded');
       assert.equal(receipt.bootstrap.outcome, expectedOutcome);
       assert.equal(receipt.grants, undefined);
-      assert.deepEqual(receipt.cleanup, { job: true, secret: true, lock: true });
+      assert.deepEqual(receipt.cleanup, { job: true, lock: true });
       assert.equal(world.calls.some(call => call.command === 'grants'), false);
       assert.deepEqual(
         world.kubeconfigOptions[0].requiredPermissions.find(permission =>
@@ -420,6 +561,15 @@ test('PlatformAdmin bootstrap creates one pinned Job, parses the stable outcome,
         'dotnet', 'Agentweaver.Projects.Config.dll', '--bootstrap-first-platform-admin',
       ]);
       assert.equal(container.image, image);
+      assert.equal(job.spec.template.spec.serviceAccountName, 'projects-config-migration');
+      assert.equal(container.env.find(entry =>
+        entry.name === 'ProjectsConfig__Migration__WorkloadIdentity__ClientId').value,
+      'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+      assert.equal(container.env.some(entry =>
+        entry.name === 'ProjectsConfig__Migration__AccessToken'), false);
+      assert.equal(world.calls.some(call =>
+        call.command === 'kubectl' && call.args.includes('create') &&
+        JSON.parse(call.settings.input ?? '{}').kind === 'Secret'), false);
       for (const key of [
         'ProjectsConfig__Authentication__Authority',
         'ProjectsConfig__PrivilegedSetup__ApprovedIssuer',
@@ -457,7 +607,7 @@ test('PlatformAdmin bootstrap failure records its stable outcome and sanitized d
     ].join('\n'),
   });
   try {
-    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration({
+    await assert.rejects(withoutMigrationCredentials(() => runProjectsConfigMigration({
       ...world.options, execute: true, bootstrapFirstPlatformAdmin: true,
     }, world.overrides)), /command failed; review the sanitized diagnostic in the receipt/);
     assert.equal(world.receipts[0].receipt.result, 'failed');
@@ -465,7 +615,7 @@ test('PlatformAdmin bootstrap failure records its stable outcome and sanitized d
     assert.equal(
       world.receipts[0].receipt.bootstrap.diagnostic,
       'ExceptionType=DbUpdateException; InnerExceptionType=PostgresException; SqlState=23505; ConstraintName=unknown; TableName=unknown');
-    assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, secret: true, lock: true });
+    assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, lock: true });
     assert.equal(world.objects.size, 0);
   } finally {
     world.dispose();
@@ -488,7 +638,7 @@ test('PlatformAdmin bootstrap rejects untrusted diagnostic text without persisti
       ].join('\n'),
     });
     try {
-      await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration({
+      await assert.rejects(withoutMigrationCredentials(() => runProjectsConfigMigration({
         ...world.options, execute: true, bootstrapFirstPlatformAdmin: true,
       }, world.overrides)), /unexpected diagnostic output/);
       const receipt = JSON.stringify(world.receipts[0].receipt);
@@ -508,12 +658,12 @@ test('PlatformAdmin bootstrap conflict is recorded as a stable outcome and clean
     bootstrapLog: 'First PlatformAdmin bootstrap refused because another active PlatformAdmin exists.',
   });
   try {
-    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration({
+    await assert.rejects(withoutMigrationCredentials(() => runProjectsConfigMigration({
       ...world.options, execute: true, bootstrapFirstPlatformAdmin: true,
     }, world.overrides)), /refused because another active PlatformAdmin exists/);
     assert.equal(world.receipts[0].receipt.result, 'failed');
     assert.deepEqual(world.receipts[0].receipt.bootstrap, { outcome: 'conflict' });
-    assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, secret: true, lock: true });
+    assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, lock: true });
     assert.equal(world.calls.some(call => call.command === 'grants'), false);
     assert.equal(world.objects.size, 0);
   } finally {
@@ -536,9 +686,9 @@ test('PlatformAdmin bootstrap fails closed when ConfigMap issuer differs from au
     },
   });
   try {
-    await assert.rejects(runProjectsConfigMigration({
+    await assert.rejects(withoutMigrationCredentials(() => runProjectsConfigMigration({
       ...world.options, bootstrapFirstPlatformAdmin: true,
-    }, world.overrides), /does not match the authentication authority/);
+    }, world.overrides)), /does not match the authentication authority/);
     assert.equal(world.calls.some(call =>
       call.command === 'kubectl' && ['create', 'delete'].some(verb => call.args.includes(verb))), false);
   } finally {
