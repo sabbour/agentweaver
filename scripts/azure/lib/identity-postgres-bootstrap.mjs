@@ -194,19 +194,22 @@ function buildProxy(repoRoot, outputDirectory, {
 export const P1_OWNERSHIP_HANDOVER_MARKER = 'P1_POSTGRES_OWNERSHIP_HANDOVER_VERIFIED ';
 
 const P1_MODES = new Set([
-  'initialize', 'inspect', 'apply-pending', 'apply-pending-dry-run',
+  'initialize', 'inspect', 'repair-projects-config-connect',
+  'apply-pending', 'apply-pending-dry-run',
 ]);
 // Each initializer mode prints its own final marker line. The runner accepts success only when it sees the
 // marker for the mode it asked for, so a run that stopped early or ran a different mode cannot pass.
 const P1_MARKERS = {
   initialize: 'P1_POSTGRES_OPERATOR_INITIALIZATION_FINISHED runtimeIdentityProof=false deploymentProof=false',
   inspect: 'P1_POSTGRES_INSPECTION_FINISHED writes=false',
+  'repair-projects-config-connect': 'P1_POSTGRES_PROJECTS_CONFIG_CONNECT_REPAIRED database=agentweaver',
   'apply-pending-dry-run': 'P1_POSTGRES_PENDING_MIGRATIONS_DRY_RUN writes=false',
   'apply-pending': 'P1_POSTGRES_PENDING_MIGRATIONS_APPLIED runtimeIdentityProof=false deploymentProof=false',
 };
 const P1_VERIFICATION = {
   initialize: 'operator-initialization',
   inspect: 'read-only-inspection',
+  'repair-projects-config-connect': 'projects-config-connect-repaired',
   'apply-pending-dry-run': 'read-only-pending-migration-dry-run',
   'apply-pending': 'pending-migrations-applied',
 };
@@ -221,6 +224,9 @@ export function p1InitializerArguments(mode, settings) {
   // Inspection needs only the source commit and plan hash. It takes no Core merge, maxima or receipt.
   const source = ['--source-sha', settings.sourceSha];
   if (mode === 'inspect') return ['--inspect', ...source, '--plan-sha256', settings.planSha256];
+  if (mode === 'repair-projects-config-connect')
+    return ['--repair-projects-config-connect', ...source, '--plan-sha256', settings.planSha256,
+      '--receipt', settings.receiptPath];
   const bound = [...source, '--core-merge-sha', settings.coreMergeSha, '--plan-sha256', settings.planSha256];
   // Fresh initialization keeps its original argument list.
   if (mode === 'initialize') return ['--initialize', ...bound, '--receipt', settings.receiptPath];
@@ -288,11 +294,11 @@ export async function bootstrapIdentityPostgres({
     // A missing mode means the original fresh-initialize call.
     const p1Mode = p1Initializer.mode ?? 'initialize';
     if (!P1_MODES.has(p1Mode))
-      throw new Error('The P1 initializer mode must be initialize, inspect, apply-pending, or apply-pending-dry-run.');
-    // Only fresh initialization runs Identity bootstrap; inspection and incremental continuation target an
-    // initialized database, so Identity Broker is verified read-only first and never re-bootstrapped.
-    const writesReceipt = ['initialize', 'apply-pending'].includes(p1Mode);
-    const needsCoreMerge = p1Mode !== 'inspect';
+      throw new Error('The P1 initializer mode must be initialize, inspect, repair-projects-config-connect, apply-pending, or apply-pending-dry-run.');
+    // Only fresh initialization runs Identity bootstrap. Inspection, repair, and migration continuation
+    // target an initialized database, so Identity Broker is verified read-only and never re-bootstrapped.
+    const writesReceipt = ['initialize', 'repair-projects-config-connect', 'apply-pending'].includes(p1Mode);
+    const needsCoreMerge = !['inspect', 'repair-projects-config-connect'].includes(p1Mode);
     const pendingMode = p1Mode.startsWith('apply-pending');
     const receiptPath = typeof p1Initializer.receiptPath === 'string'
       ? resolve(p1Initializer.receiptPath) : '';
@@ -300,7 +306,7 @@ export async function bootstrapIdentityPostgres({
     // Validate every setting before opening any tunnel:
     // - verifyOnly must be false only for initialize, so an initialized database is never re-bootstrapped;
     // - the source and plan hashes must be exact, and the plan hash must match this checkout;
-    // - the Core merge SHA is required except for inspection;
+    // - the Core merge SHA is required except for inspection and the Projects CONNECT repair;
     // - maxima are required for the pending modes and forbidden for the others;
     // - writing modes need a new receipt path inside Temp; read-only modes must not pass one.
     if (verifyOnly !== (p1Mode !== 'initialize') || !GUID_PATTERN.test(runtimePrincipalObjectId ?? '') ||
@@ -319,13 +325,20 @@ export async function bootstrapIdentityPostgres({
           : p1Initializer.receiptPath !== undefined)) {
       throw new Error('Combined PostgreSQL initialization requires exact lowercase source hashes, explicit maximum versions for continuation, and a new receipt under the source Temp directory only for writing modes.');
     }
-    // A separate target names itself. Only fresh initialization creates the projects-config migration principal.
+    const needsProjectsConfigMigrationPrincipal =
+      ['initialize', 'repair-projects-config-connect'].includes(p1Mode);
+    if (p1Mode === 'repair-projects-config-connect' &&
+        (p1Initializer.installTarget === undefined || p1Initializer.installTarget === 'agentweaver' ||
+         p1Initializer.installTarget !== resourceGroup)) {
+      throw new Error('Projects CONNECT repair requires a registered separate target.');
+    }
+    // A separate target names itself. Fresh initialization creates the Projects role; repair checks its existing identity.
     if (p1Initializer.installTarget !== undefined &&
         (p1Initializer.installTarget !== resourceGroup || resourceGroup === 'agentweaver' ||
-         (p1Mode === 'initialize'
+         (needsProjectsConfigMigrationPrincipal
            ? !GUID_PATTERN.test(p1Initializer.projectsConfigMigrationPrincipalObjectId ?? '')
            : p1Initializer.projectsConfigMigrationPrincipalObjectId !== undefined))) {
-      throw new Error('A separate-target P1 initializer requires its own resource group, and the projects-config migration principal only for fresh initialization.');
+      throw new Error('A separate-target P1 initializer requires its own resource group, and the Projects migration principal only for initialization or repair.');
     }
   }
 

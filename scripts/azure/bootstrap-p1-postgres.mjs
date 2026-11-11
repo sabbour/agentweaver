@@ -22,20 +22,26 @@ import {
 import { bootstrapIdentityPostgres } from './lib/identity-postgres-bootstrap.mjs';
 
 const CORE_MERGE_SHA_PATTERN = /^[0-9a-f]{40}$/;
-const MODES = new Set(['initialize', 'inspect', 'apply-pending', 'apply-pending-dry-run']);
+const MODES = new Set([
+  'initialize', 'inspect', 'repair-projects-config-connect',
+  'apply-pending', 'apply-pending-dry-run',
+]);
 const isVersion = value => Number.isSafeInteger(value) && value > 0 && value < 10_000;
 
 /** Maps CLI switches to one mode, rejecting ambiguous or partial combinations. */
 export function p1PostgresMode(values) {
   // Each mode switch selects a different operation, so naming more than one is a usage error.
-  const selected = ['inspect', 'apply-pending-migrations']
+  const selected = ['inspect', 'repair-projects-config-connect', 'apply-pending-migrations']
     .filter(name => values[name]);
   if (selected.length > 1) {
-    throw new Error('Use only one of --inspect or --apply-pending-migrations.');
+    throw new Error('Use only one of --inspect, --repair-projects-config-connect, or --apply-pending-migrations.');
   }
   // Inspection is already read-only, so a dry run on top of it is a usage error.
   if (values.inspect && values['dry-run']) throw new Error('--dry-run does not apply to --inspect.');
+  if (values['repair-projects-config-connect'] && values['dry-run'])
+    throw new Error('--dry-run does not apply to --repair-projects-config-connect.');
   if (values.inspect) return 'inspect';
+  if (values['repair-projects-config-connect']) return 'repair-projects-config-connect';
   if (values['apply-pending-migrations']) return values['dry-run'] ? 'apply-pending-dry-run' : 'apply-pending';
   // --dry-run alone would silently mean a fresh initialize plan, so reject it instead of guessing.
   if (values['dry-run']) {
@@ -55,9 +61,11 @@ function parseVersion(value) {
 /**
  * Uses approved plan principals and bootstrap values to run both database stages on one temporary tunnel.
  * Without execute, this returns the source-bound plan and does not call Azure or create temporary resources.
- * Mode initialize bootstraps Identity Broker and fresh-initializes an empty database. Mode inspect and the
- * apply-pending modes target an already initialized database: Identity Broker is verified read-only, and
- * apply-pending applies only planned Core/Events versions up to the explicit approved maxima.
+ * Mode initialize bootstraps Identity Broker and fresh-initializes an empty database. The inspect,
+ * repair-projects-config-connect, and apply-pending modes target an initialized database: Identity Broker
+ * is verified read-only. The repair mode grants only the Projects migration role's database CONNECT
+ * privilege. The apply-pending modes apply only planned Core/Events versions up to
+ * the explicit approved maxima.
  */
 export async function bootstrapP1Postgres({
   repoRoot = process.cwd(),
@@ -80,9 +88,9 @@ export async function bootstrapP1Postgres({
   // Inspection and the Projects & Config grant step do not touch Core, so they must not take a Core
   // merge. Every other mode is bound to the reviewed Core merge commit and needs its exact SHA.
   const pending = mode.startsWith('apply-pending');
-  const needsCoreMerge = mode !== 'inspect';
+  const needsCoreMerge = !['inspect', 'repair-projects-config-connect'].includes(mode);
   if (needsCoreMerge ? !CORE_MERGE_SHA_PATTERN.test(coreMergeSha ?? '') : coreMergeSha !== undefined) {
-    throw new Error('P1 PostgreSQL initialization and continuation require an exact Core merge SHA; inspection takes none.');
+    throw new Error('Initialization and migration continuation require an exact Core merge SHA; inspection and Projects CONNECT repair take none.');
   }
   // Pending-migration modes must name the highest approved Core and Events versions. The initializer
   // later requires each to equal the end of the source catalog, so a newer source cannot apply more.
@@ -91,6 +99,8 @@ export async function bootstrapP1Postgres({
     : maxCoreVersion !== undefined || maxEventsVersion !== undefined) {
     throw new Error('Only pending-migration continuation takes, and requires, explicit maximum Core and Events versions.');
   }
+  if (mode === 'repair-projects-config-connect' && resourceGroup === 'agentweaver')
+    throw new Error('Projects CONNECT repair is limited to a registered separate target.');
 
   const registered = installTarget(resourceGroup);
   if (!registered) throw new Error(`Resource group '${resourceGroup}' is not a registered install target.`);
@@ -140,7 +150,7 @@ export async function bootstrapP1Postgres({
   const postgresValues = readPostgresValues(config, boundAz);
   // The default target already has this PostgreSQL role. A fresh separate target gets it from the initializer.
   let projectsConfigMigrationPrincipalObjectId;
-  if (resourceGroup !== 'agentweaver' && mode === 'initialize') {
+  if (resourceGroup !== 'agentweaver' && ['initialize', 'repair-projects-config-connect'].includes(mode)) {
     projectsConfigMigrationPrincipalObjectId = boundAz(['identity', 'show', '--resource-group', resourceGroup,
       '--name', `${resourceGroup}-id-projects-config-migration`, '--query', 'principalId', '-o', 'tsv'], { check: false })
       .stdout?.trim();
@@ -150,7 +160,7 @@ export async function bootstrapP1Postgres({
   }
 
   // Only modes that write to the database get a receipt file. Read-only modes leave nothing behind.
-  const writesReceipt = ['initialize', 'apply-pending'].includes(mode);
+  const writesReceipt = ['initialize', 'repair-projects-config-connect', 'apply-pending'].includes(mode);
   const receiptPath = writesReceipt
     ? join(repoRoot, 'Temp', `p1-postgres-${randomUUID().replaceAll('-', '')}.jsonl`) : undefined;
   const receipt = await initializePostgres({
@@ -185,6 +195,7 @@ const cliOptions = {
   'core-merge-sha': { type: 'string' },
   execute: { type: 'boolean', default: false },
   inspect: { type: 'boolean', default: false },
+  'repair-projects-config-connect': { type: 'boolean', default: false },
   'apply-pending-migrations': { type: 'boolean', default: false },
   'dry-run': { type: 'boolean', default: false },
   'max-core-version': { type: 'string' },

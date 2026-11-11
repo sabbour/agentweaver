@@ -351,10 +351,11 @@ then uses the PostgreSQL server, cluster, and five principal object IDs of that
 target, so its hash is different. The PostgreSQL role names stay
 `agentweaver-id-<service>`. Run `npm run db:maintenance:setup -- --resource-group <target> --execute`
 first: the initializer creates the PostgreSQL role for the
-`<target>-id-projects-config-migration` identity. Only `--initialize` needs
-that identity. `--inspect` and `--apply-pending-migrations` also accept a
-separate target. The reviewed `--continue-after-projects-config` mode reads the
-plan of an earlier source and supports only `agentweaver`.
+`<target>-id-projects-config-migration` identity. `--initialize` and
+`--repair-projects-config-connect` need that identity.
+`--inspect` and `--apply-pending-migrations` also accept a separate target. The
+reviewed `--continue-after-projects-config` mode reads the plan of an earlier
+source and supports only `agentweaver`.
 The Environment runtime bootstrap profile replacement store receives exactly
 `SELECT, INSERT` on `environment.runtime_bootstrap_profile_replacements`. It
 receives no `UPDATE`, `DELETE`, or default privileges. The source catalog lists
@@ -396,6 +397,33 @@ Run the continuation checks against a disposable PostgreSQL container:
 ```powershell
 dotnet test tests\Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~P1PostgresContinuationPostgresTests
 ```
+
+### Repair Projects migration database CONNECT
+
+Use `--repair-projects-config-connect` when an initialized separate target is
+missing the database `CONNECT` grant for
+`agentweaver-id-projects-config-migration`. The mode is limited to a registered
+separate target. It checks the source plan, the target Entra identity, the
+existing PostgreSQL role mapping, the `agentweaver` database, and ownership of
+the `projects_config` schema before it writes.
+
+The mode grants only database `CONNECT`. It reads back the direct database ACL
+and the effective `CONNECT` privilege before it commits. If the role already
+has exactly that direct grant, the mode makes no change. If the role has any
+other direct database privilege, the mode stops and leaves the ACL unchanged.
+It does not create roles or schemas, run migrations, or change any other grant.
+It writes a stage receipt under `Temp`.
+
+Run this command from a clean checkout whose `HEAD` matches fetched `origin/v1`:
+
+```powershell
+node scripts\azure\bootstrap-p1-postgres.mjs --resource-group awwus2np01 --repair-projects-config-connect --execute
+```
+
+The command does not need a Core merge SHA. It verifies Identity Broker in
+read-only mode and uses the same private tunnel for the P1 check. Its success
+marker proves only the database grant and readback. It does not prove runtime
+identity or deployment.
 
 ### Applying later approved migrations
 

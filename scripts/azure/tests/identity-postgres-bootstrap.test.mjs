@@ -146,9 +146,12 @@ function dependencies({
   const execDotnet = (args, settings) => {
     dotnetInvocation = { args, settings };
     dotnetInvocations.push(dotnetInvocation);
-    if (args.includes('--initialize') || args.includes('--inspect') || args.includes('--apply-pending-migrations')) {
+    if (args.includes('--initialize') || args.includes('--inspect') ||
+        args.includes('--repair-projects-config-connect') || args.includes('--apply-pending-migrations')) {
       if (assertTunnelActiveForP1) assert.equal(portForwardStopped, false);
       const marker = args.includes('--inspect') ? 'P1_POSTGRES_INSPECTION_FINISHED writes=false'
+        : args.includes('--repair-projects-config-connect')
+          ? 'P1_POSTGRES_PROJECTS_CONFIG_CONNECT_REPAIRED database=agentweaver'
         : args.includes('--dry-run') ? 'P1_POSTGRES_PENDING_MIGRATIONS_DRY_RUN writes=false'
           : args.includes('--apply-pending-migrations')
             ? 'P1_POSTGRES_PENDING_MIGRATIONS_APPLIED runtimeIdentityProof=false deploymentProof=false'
@@ -320,28 +323,72 @@ test('separate-target P1 initialization passes the target and Projects migration
   assert.equal(inspectEnv.AGENTWEAVER_INSTALL_TARGET, 'awwus2np01');
   assert.equal(Object.hasOwn(inspectEnv, 'P1Initializer__ProjectsConfigMigrationPrincipalObjectId'), false);
 
+  const repair = {
+    mode: 'repair-projects-config-connect',
+    sourceSha: p1Initializer.sourceSha,
+    planSha256: p1Initializer.planSha256,
+    receiptPath: join(options.repoRoot, 'Temp', 'p1-postgres-repair.jsonl'),
+    installTarget: 'awwus2np01',
+    projectsConfigMigrationPrincipalObjectId: principal,
+  };
+  const repaired = dependencies({ assertTunnelActiveForP1: true });
+  const repairReceipt = await bootstrapIdentityPostgres({
+    ...target, verifyOnly: true, p1Initializer: repair,
+  }, repaired.deps);
+  assert.deepEqual(repaired.dotnetInvocations.at(-1).args.slice(-7), [
+    '--repair-projects-config-connect',
+    '--source-sha', repair.sourceSha,
+    '--plan-sha256', repair.planSha256,
+    '--receipt', repair.receiptPath,
+  ]);
+  assert.equal(repaired.dotnetInvocations.at(-1).settings.env.AGENTWEAVER_INSTALL_TARGET, 'awwus2np01');
+  assert.equal(repaired.dotnetInvocations.at(-1).settings.env.P1Initializer__ProjectsConfigMigrationPrincipalObjectId, principal);
+  assert.equal(repairReceipt.p1Initializer.verification, 'projects-config-connect-repaired');
+  assert.deepEqual(repairReceipt.cleanup, {
+    portForwardStopped: true, podRemoved: true, configMapRemoved: true,
+    kubeconfigRemoved: true, proxyFilesRemoved: true,
+  });
+
   for (const [input, value] of [
     [options, p1Initializer],
     [target, { ...p1Initializer, projectsConfigMigrationPrincipalObjectId: undefined }],
     [{ ...target, verifyOnly: true }, { ...inspection, projectsConfigMigrationPrincipalObjectId: principal }],
     [target, { ...p1Initializer, planSha256: p1PostgresPlanHash() }],
+    [options, repair],
+    [target, { ...repair, projectsConfigMigrationPrincipalObjectId: undefined }],
+    [{ ...target, verifyOnly: true }, { ...repair, coreMergeSha: 'b'.repeat(40) }],
   ]) {
     const rejected = dependencies();
     await assert.rejects(bootstrapIdentityPostgres({ ...input, p1Initializer: value }, rejected.deps),
-      /separate-target P1 initializer|Combined PostgreSQL initialization requires/);
+      /separate target|separate-target P1 initializer|Combined PostgreSQL initialization requires/);
     assert.equal(rejected.calls.length, 0);
   }
 });
 
 /** Initialized-database modes verify Identity read-only, then run the bounded P1 mode on the same tunnel. */
-test('inspection and pending continuation never re-bootstrap Identity and pass explicit maxima', async () => {
+test('inspection, Projects CONNECT repair, and pending continuation never re-bootstrap Identity', async () => {
   const sourceSha = 'a'.repeat(40);
   const coreMergeSha = 'b'.repeat(40);
   const planSha256 = p1PostgresPlanHash();
   const receiptPath = join(options.repoRoot, 'Temp', 'p1-postgres-pending.jsonl');
+  const repairReceiptPath = join(options.repoRoot, 'Temp', 'p1-postgres-repair.jsonl');
+  const separateTarget = {
+    ...options,
+    resourceGroup: 'awwus2np01',
+    clusterName: 'awwus2np01-aks',
+    postgresHost: 'awwus2np01-pg.postgres.database.azure.com',
+  };
+  const projectsPrincipal = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
   const cases = [
     [{ mode: 'inspect', sourceSha, planSha256 },
       ['--inspect', '--source-sha', sourceSha, '--plan-sha256', planSha256], 'read-only-inspection'],
+    [{ mode: 'repair-projects-config-connect', sourceSha,
+      planSha256: p1PostgresPlanHash(buildP1PostgresPlan('awwus2np01')),
+      receiptPath: repairReceiptPath, installTarget: 'awwus2np01',
+      projectsConfigMigrationPrincipalObjectId: projectsPrincipal },
+      ['--repair-projects-config-connect', '--source-sha', sourceSha,
+        '--plan-sha256', p1PostgresPlanHash(buildP1PostgresPlan('awwus2np01')),
+        '--receipt', repairReceiptPath], 'projects-config-connect-repaired', separateTarget],
     [{ mode: 'apply-pending-dry-run', sourceSha, coreMergeSha, planSha256, maxCoreVersion: 23, maxEventsVersion: 10 },
       ['--apply-pending-migrations', '--source-sha', sourceSha, '--core-merge-sha', coreMergeSha,
         '--plan-sha256', planSha256, '--max-core-version', '23', '--max-events-version', '10', '--dry-run'],
@@ -351,9 +398,9 @@ test('inspection and pending continuation never re-bootstrap Identity and pass e
         '--plan-sha256', planSha256, '--max-core-version', '23', '--max-events-version', '10', '--receipt', receiptPath],
       'pending-migrations-applied'],
   ];
-  for (const [p1Initializer, expected, verification] of cases) {
+  for (const [p1Initializer, expected, verification, target = options] of cases) {
     const fakes = dependencies({ assertTunnelActiveForP1: true });
-    const receipt = await bootstrapIdentityPostgres({ ...options, verifyOnly: true, p1Initializer }, fakes.deps);
+    const receipt = await bootstrapIdentityPostgres({ ...target, verifyOnly: true, p1Initializer }, fakes.deps);
     assert.equal(fakes.dotnetInvocations.length, 2);
     assert.ok(fakes.dotnetInvocations[0].args.includes('--verify-identity-postgres-bootstrap'));
     assert.ok(!fakes.dotnetInvocations.some(call => call.args.includes('--bootstrap-identity-postgres')));

@@ -773,8 +773,8 @@ internal sealed record PostgresPlan(
     int FormatVersion, TargetPlan Target, ServicePlan[] Services, int[] CoreVersions, int[] EventsVersions,
     int[] EnvironmentVersions);
 /// <summary>Connection and Entra operator identity selected for a PostgreSQL initialization.</summary>
-internal sealed record TargetPlan(string TenantId, string PostgresHost, string Database, string OperatorName,
-    string OperatorObjectId, string ConnectionHost, int ConnectionPort);
+internal sealed record TargetPlan(string ResourceGroup, string TenantId, string PostgresHost, string Database,
+    string OperatorName, string OperatorObjectId, string ConnectionHost, int ConnectionPort);
 /// <summary>Exact schema, runtime principal, relation, and function contract for one service.</summary>
 internal sealed record ServicePlan(string Service, string Schema, string Role, string PrincipalObjectId,
     TablePlan[] Tables, FunctionPlan[] Functions)

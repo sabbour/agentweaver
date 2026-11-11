@@ -24,11 +24,155 @@ public sealed class P1PostgresContinuationPostgresTests(ProbePostgresFixture fix
             connection, state.Plan.Services[0], CancellationToken.None);
         await state.AssertProjectsPrefixAsync(
             connection, requireOnlyProjectsSchema: true, CancellationToken.None);
+        Assert.False(await ScalarAsync<bool>(connection, """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_catalog.aclexplode(
+                    (SELECT datacl FROM pg_catalog.pg_database WHERE datname = current_database())) acl
+                WHERE acl.grantee = (SELECT oid FROM pg_catalog.pg_roles
+                    WHERE rolname = @owner))
+            """, ("owner", P1PostgresContinuation.ProjectsConfigMigrationOwner)));
         Assert.True(await ScalarAsync<bool>(connection, """
             SELECT EXISTS (
                 SELECT 1 FROM pg_catalog.pg_auth_members
                 WHERE roleid = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @owner)
                   AND member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user))
+            """, ("owner", P1PostgresContinuation.ProjectsConfigMigrationOwner)));
+    }
+
+    [Fact]
+    public async Task SeparateTargetProjectsMigrationConnectIsExactAndRepairIsIdempotent()
+    {
+        await using var state = await ContinuationState.CreateAsync(fixture);
+        await state.GrantProjectsMigrationOwnerSetMembershipAsync();
+        await state.CreatePrincipalFunctionAsync();
+        await using (var admin = await state.TargetAdminDataSource.OpenConnectionAsync())
+            await ExecuteAsync(admin,
+                $"REVOKE CONNECT ON DATABASE {InitializerChecks.Quote(state.Plan.Target.Database)} FROM PUBLIC");
+
+        await using var connection = await state.DataSource.OpenConnectionAsync();
+        await P1PostgresContinuation.AssertProjectsMigrationOwnerReadyAsync(
+            connection, state.OperatorName, CancellationToken.None);
+        await P1PostgresContinuation.MigrateProjectsConfigAsDedicatedOwnerAsync(
+            connection, state.Plan.Services[0], CancellationToken.None,
+            state.Plan.Target.Database, state.OperatorName);
+
+        Assert.True(await ScalarAsync<bool>(connection, """
+            SELECT count(*) = 1 AND bool_and(
+                a.grantor = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user)
+                AND privilege_type = 'CONNECT' AND NOT is_grantable)
+            FROM pg_catalog.pg_database d
+            CROSS JOIN LATERAL pg_catalog.aclexplode(d.datacl) a
+            WHERE d.datname = current_database()
+              AND a.grantee = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @owner)
+            """, ("owner", P1PostgresContinuation.ProjectsConfigMigrationOwner)));
+        Assert.True(await ScalarAsync<bool>(connection, """
+            SELECT pg_catalog.has_database_privilege(@owner, current_database(), 'CONNECT')
+            """, ("owner", P1PostgresContinuation.ProjectsConfigMigrationOwner)));
+
+        await using var repair = await connection.BeginTransactionAsync();
+        Assert.False(await P1PostgresContinuation.GrantProjectsMigrationConnectAsync(
+            connection, repair, state.Plan.Target.Database, state.OperatorName, CancellationToken.None));
+        await repair.CommitAsync();
+        Assert.True(await ScalarAsync<bool>(connection, """
+            SELECT count(*) = 1 AND bool_and(
+                privilege_type = 'CONNECT' AND NOT is_grantable)
+            FROM pg_catalog.pg_database d
+            CROSS JOIN LATERAL pg_catalog.aclexplode(d.datacl) a
+            WHERE d.datname = current_database()
+              AND a.grantee = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @owner)
+            """, ("owner", P1PostgresContinuation.ProjectsConfigMigrationOwner)));
+    }
+
+    [Fact]
+    public async Task InitializedProjectsSchemaRepairAddsOnlyConnectAndIsIdempotent()
+    {
+        await using var state = await ContinuationState.CreateAsync(fixture);
+        await state.CreateProjectsPrefixAsync();
+        await using (var admin = await state.TargetAdminDataSource.OpenConnectionAsync())
+            await ExecuteAsync(admin,
+                $"REVOKE CONNECT ON DATABASE {InitializerChecks.Quote(state.Plan.Target.Database)} FROM PUBLIC");
+
+        await using var connection = await state.DataSource.OpenConnectionAsync();
+        await using (var repair = await connection.BeginTransactionAsync())
+        {
+            Assert.True(await P1PostgresContinuation.GrantProjectsMigrationConnectAsync(
+                connection, repair, state.Plan.Target.Database, state.OperatorName, CancellationToken.None));
+            await repair.CommitAsync();
+        }
+
+        Assert.True(await ScalarAsync<bool>(connection, """
+            SELECT count(*) = 1 AND bool_and(
+                a.privilege_type = 'CONNECT'
+                AND a.grantor = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user)
+                AND NOT a.is_grantable)
+            FROM pg_catalog.pg_database d
+            CROSS JOIN LATERAL pg_catalog.aclexplode(d.datacl) a
+            WHERE d.datname = current_database()
+              AND a.grantee = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @owner)
+            """, ("owner", P1PostgresContinuation.ProjectsConfigMigrationOwner)));
+        Assert.True(await ScalarAsync<bool>(connection, """
+            SELECT pg_catalog.has_database_privilege(@owner, current_database(), 'CONNECT')
+            """, ("owner", P1PostgresContinuation.ProjectsConfigMigrationOwner)));
+
+        await using var retry = await connection.BeginTransactionAsync();
+        Assert.False(await P1PostgresContinuation.GrantProjectsMigrationConnectAsync(
+            connection, retry, state.Plan.Target.Database, state.OperatorName, CancellationToken.None));
+        await retry.CommitAsync();
+    }
+
+    [Fact]
+    public async Task ProjectsMigrationConnectRepairRejectsWrongDatabaseBeforeGranting()
+    {
+        await using var state = await ContinuationState.CreateAsync(fixture);
+        await state.CreateProjectsPrefixAsync();
+        await using var connection = await state.DataSource.OpenConnectionAsync();
+        await using var repair = await connection.BeginTransactionAsync();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            P1PostgresContinuation.GrantProjectsMigrationConnectAsync(
+                connection, repair, "another_database", state.OperatorName, CancellationToken.None));
+        await repair.RollbackAsync();
+        Assert.False(await ScalarAsync<bool>(connection, """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_catalog.aclexplode(
+                    (SELECT datacl FROM pg_catalog.pg_database WHERE datname = current_database())) acl
+                WHERE acl.grantee = (SELECT oid FROM pg_catalog.pg_roles
+                    WHERE rolname = @owner))
+            """, ("owner", P1PostgresContinuation.ProjectsConfigMigrationOwner)));
+    }
+
+    [Fact]
+    public async Task FreshProjectsConnectGrantFailureRollsBackSchemaCreation()
+    {
+        await using var state = await ContinuationState.CreateAsync(fixture);
+        await state.GrantProjectsMigrationOwnerSetMembershipAsync();
+        await state.CreatePrincipalFunctionAsync();
+        await using (var admin = await state.TargetAdminDataSource.OpenConnectionAsync())
+        {
+            await ExecuteAsync(admin,
+                $"REVOKE CONNECT ON DATABASE {InitializerChecks.Quote(state.Plan.Target.Database)} FROM PUBLIC");
+            await ExecuteAsync(admin,
+                $"GRANT TEMPORARY ON DATABASE {InitializerChecks.Quote(state.Plan.Target.Database)} TO {InitializerChecks.Quote(P1PostgresContinuation.ProjectsConfigMigrationOwner)}");
+        }
+
+        await using var connection = await state.DataSource.OpenConnectionAsync();
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            P1PostgresContinuation.MigrateProjectsConfigAsDedicatedOwnerAsync(
+                connection, state.Plan.Services[0], CancellationToken.None,
+                state.Plan.Target.Database, state.OperatorName));
+
+        Assert.Contains("other than the exact CONNECT grant", failure.Message, StringComparison.Ordinal);
+        Assert.False(await ScalarAsync<bool>(connection, """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = 'projects_config')
+            """));
+        Assert.False(await ScalarAsync<bool>(connection, """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_catalog.aclexplode(
+                    (SELECT datacl FROM pg_catalog.pg_database WHERE datname = current_database())) acl
+                WHERE acl.grantee = (SELECT oid FROM pg_catalog.pg_roles
+                    WHERE rolname = @owner)
+                  AND acl.privilege_type = 'CONNECT')
             """, ("owner", P1PostgresContinuation.ProjectsConfigMigrationOwner)));
     }
 
