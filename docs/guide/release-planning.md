@@ -127,6 +127,45 @@ only after publication and reconciliation are complete and no required
 validation work remains. A published release with unfinished checks can
 retain an open milestone; explain the remaining work in its description.
 
+## Track release acceptance
+
+Create one GitHub issue named `Release acceptance: vX.Y.Z` for each version
+milestone, and assign it to that milestone. Use this issue to track release
+acceptance, not implementation work. The milestone remains a target; reconcile
+actual shipment against published versions and source history.
+
+At the release cut, compare merged pull requests in `v1` history, component
+changesets and published versions, and the tracker. Include the representative
+integration project, focused API and/or UI scenarios for every new feature
+(including features whose implementation issues are closed), risk-based
+regression scenarios, and applicable archive, operating-system, installation,
+documentation, cleanup, and carried-forward checks. Do not infer coverage from
+open issues or pending changesets alone. Use the
+[release acceptance checklist](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#release-acceptance)
+for the tracker fields and sign-off criteria.
+
+### Close implementation issues after merge
+
+An implementation issue tracks source delivery. After its work is complete:
+
+1. Confirm that the pull request is merged and that its commit is in the
+   target `v1` history.
+2. Confirm that the merged pull request or pull request set completes the
+   issue's full source scope. Keep any real implementation gap in a focused
+   issue; do not close a partially completed issue.
+3. Move any remaining live-acceptance task to the matching release tracker.
+   Keep the scenario and its required evidence there.
+4. Comment on the implementation issue with links to the merged pull request
+   and tracker item.
+5. Close the implementation issue as completed manually, then verify that
+   GitHub shows it as closed.
+
+Pull requests target `v1`, while `dev` is the default branch. GitHub closing
+keywords do not close an issue when its pull request merges into `v1`; do not
+rely on `Closes #…` or similar keywords. Keep later acceptance updates on the
+release tracker and any focused repair issue. Do not keep a completed
+implementation issue open only for acceptance work.
+
 <a id="complete-acceptance-and-track-repairs"></a>
 
 ## Follow up on release gaps
@@ -134,15 +173,16 @@ retain an open milestone; explain the remaining work in its description.
 Follow the [component release reference](../reference/releases.md) and
 [release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md)
 for versioning, NuGet package publishing, direct GHCR image builds, and
-Kustomize deployment. Keep package publication, image publication, and
-workload deployment as separate operations.
+Kustomize deployment. Keep package publication, image publication, workload
+deployment, and release acceptance as separate records.
 
-If a required check finds a defect, create a focused repair issue in the next
-patch milestone. Link the affected change and describe the observed result.
-Use the approved release and deployment procedures for any corrected
-publication or deployment. Update the original issue only when its required
-work is complete; a merged repair or a release tag alone does not show that a
-corrected workload is running.
+If a required acceptance check finds a defect, create or reuse a focused repair
+issue in the next unreleased patch milestone. Link the failed tracker item and
+its evidence to the repair issue. Keep the original implementation issue
+closed unless its closure was factually wrong. Record a corrected-source test
+as a new attempt; a merged repair or release tag alone does not show that a
+corrected workload is running. Use the approved release and deployment
+procedures for any corrected publication or deployment.
 
 ## Verify the plan
 

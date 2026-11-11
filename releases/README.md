@@ -88,6 +88,64 @@ Orchestrator.
 After the ACR work is complete, remove that login with
 `docker logout <acr-login-server>`.
 
+## Release acceptance
+
+Create one GitHub issue named `Release acceptance: vX.Y.Z` for each version
+milestone, and assign it to that milestone. Use ordinary Markdown in the issue;
+this checklist does not add a schema or automation. The tracker records
+acceptance obligations. It does not replace implementation issues or authorize
+publication or deployment.
+
+At the release cut, reconcile the candidate's merged pull requests and `v1`
+source history, component-scoped changesets, actual published versions, and
+the tracker. Do not derive coverage from open issues or pending changesets
+alone. Keep package publication, image publication, workload deployment, and
+acceptance as separate results.
+
+Start the tracker with:
+
+- The version milestone and release owner.
+- The candidate source and component versions, when selected.
+- Separate links to package publication, image publication, deployment, and
+  acceptance records.
+- The approved target reference and access limits. Do not include sensitive
+  target details or credentials.
+
+Include these checks in the tracker:
+
+- The representative integration project for the release. Use the existing
+  full-flow journey for its implemented scope, and keep known gaps or unrun
+  checks visible.
+- A focused API and/or UI scenario for every new feature, including features
+  whose implementation issues are already closed.
+- A focused regression scenario for each repair, based on its actual risk.
+- Separate archive, operating-system, installation, or documentation checks
+  where applicable.
+- Cleanup work and unresolved obligations carried from earlier attempts.
+
+Use one row per independently verifiable item, with a stable item name. Link
+its original issue, merged pull requests, and relevant component changesets.
+Record the scenario, surface, expected observable result, and owner. Reference
+the approved native manifest and its hash, or the browser procedure. Record
+each dated attempt's result and link to retained, team-accessible evidence with
+its hash, tested source/apphost/deployment identity, and cleanup disposition.
+Link a repair issue when one is needed. Keep browser evidence separate from
+native API results, and do not edit native results to add release metadata.
+
+Use `Pending`, `Passed`, `Failed`, `Blocked`, or `Not applicable` with a scope
+reason for each result. A pass for one item does not clear other required
+checks. A required `Pending`, `Failed`, or `Blocked` item
+prevents the tracker from closing as passed and the milestone from being
+presented as fully validated. Keep required known gaps visible. Do not treat a
+dry run as acceptance, a fixture-based UI test as a deployed browser pass, or
+publication or deployment as proof of product acceptance. A justified `Not
+applicable` result needs an explicit scope reason.
+
+Run API scenarios with the native CLI as described in the
+[testing guide](../docs/guide/testing.md#run-api-acceptance-with-the-native-cli).
+Use only an explicitly approved non-production target for live tests. The
+tracker does not grant authorization or model-spend permission.
+
 ## Deploy an exact v1 source commit
 
 Use this command for intermediate acceptance of a commit whose ten images are
