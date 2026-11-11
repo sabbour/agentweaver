@@ -55,9 +55,13 @@ internal static class BrokerCliScopePermissions
     public static async Task MigrateAsync(
         IOpenIddictApplicationManager applications, CancellationToken cancellationToken)
     {
-        var application = await applications.FindByClientIdAsync(ClientId, cancellationToken)
-            ?? throw new InvalidOperationException(
-                $"Client '{ClientId}' is missing. Startup will not create its all-registered-scopes permission.");
+        var application = await applications.FindByClientIdAsync(ClientId, cancellationToken);
+        if (application is null)
+        {
+            await applications.CreateAsync(CreateMigratedDescriptor(), cancellationToken);
+            return;
+        }
+
         var current = new OpenIddictApplicationDescriptor();
         await applications.PopulateAsync(current, application, cancellationToken);
 

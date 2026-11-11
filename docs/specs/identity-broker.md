@@ -92,16 +92,17 @@ the broker validates the exact run-bound grant.
 
 Startup creates missing clients and scopes, but never auto-creates the CLI
 registration or grants its all-registered-scopes permission.
-The separate `--migrate-cli-scope-permission` command requires applied schema
-migrations and adds the permission only when the persisted CLI application
-matches the exact prior public registration; it is idempotent and refuses
-missing or drifted registrations. It does not run schema migrations or change
-other registration fields. Apply this one-time permission migration before
-rolling out the Broker build that requires it; older Broker processes still
-enforce their original client scope permissions, and restarting an older build
-afterward fails its strict registration check. `--migrate` remains schema-only.
-Production execution and the subsequent rollout require explicit operator
-approval. Startup refuses changes to registered redirects,
+The `--migrate` command applies schema migrations and runtime grants, then
+reconciles the CLI registration in a serializable transaction. The separate
+`--migrate-cli-scope-permission` command requires applied schema migrations and
+runs the same registration migration. If the registration is missing, the
+migration creates the exact migrated public CLI descriptor. If it matches the
+exact prior public registration, the migration adds only the permission. An
+already migrated registration is unchanged. The migration is idempotent and
+refuses any other existing registration without changing it. The deployment
+helper waits for the Broker migration Job before it applies the Broker
+workload. Production execution and the subsequent rollout require explicit
+operator approval. Startup refuses changes to registered redirects,
 permissions, requirements, type, consent policy, credentials, or scope resources.
 Confidential-client reconciliation uses native secret verification, never plaintext-to-hash comparison.
 Credential changes require an explicit administrative migration.

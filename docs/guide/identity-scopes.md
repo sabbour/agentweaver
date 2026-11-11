@@ -30,6 +30,10 @@ scope currently or later registered in the Broker catalog. It is not a literal
 unknown scopes and keeps explicit consent. This lets the CLI request scopes
 registered for another configured client, including `projects.admin` and
 `projects.orchestrator`, without changing the other clients' permissions.
+The Broker migration Job creates this exact registration when it is missing,
+adds the permission to an exact prior registration, and refuses a different
+existing registration. The deploy helper waits for the Job before it applies
+the Broker workload.
 The Broker also attaches the resource audiences configured on each requested
 scope, so the CLI may receive those audiences too. Because newly registered
 scopes become requestable, scope owners must not protect internal resources

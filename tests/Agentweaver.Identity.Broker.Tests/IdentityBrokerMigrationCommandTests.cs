@@ -106,8 +106,12 @@ public sealed class IdentityBrokerMigrationCommandTests(PostgresContainerFixture
             migrationPasswordConnection.ConnectionString))
         {
             using var setupScope = setupProvider.CreateScope();
-            await setupScope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>()
-                .CreateAsync(BrokerCliScopePermissions.CreatePreviousDescriptor());
+            var applications = setupScope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+            var seeded = await applications.FindByClientIdAsync(BrokerCliScopePermissions.ClientId);
+            Assert.NotNull(seeded);
+            Assert.True(await applications.HasPermissionAsync(
+                seeded, BrokerCliScopePermissions.AllRegisteredScopes));
+            await applications.DeleteAsync(seeded);
         }
 
         await IdentityBrokerMigrationCommand.RunCliScopePermissionMigrationAsync(
@@ -119,8 +123,12 @@ public sealed class IdentityBrokerMigrationCommandTests(PostgresContainerFixture
             var applications = verifyScope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
             var application = await applications.FindByClientIdAsync(BrokerCliScopePermissions.ClientId);
             Assert.NotNull(application);
-            Assert.True(await applications.HasPermissionAsync(
-                application, BrokerCliScopePermissions.AllRegisteredScopes));
+            Assert.True(await applications.HasPermissionAsync(application,
+                BrokerCliScopePermissions.AllRegisteredScopes));
+            var descriptor = new OpenIddictApplicationDescriptor();
+            await applications.PopulateAsync(descriptor, application);
+            var expected = BrokerCliScopePermissions.CreateMigratedDescriptor();
+            Assert.True(expected.Permissions.SetEquals(descriptor.Permissions));
         }
 
         var runtimeCredential = new PasswordTokenCredential(runtimePassword);

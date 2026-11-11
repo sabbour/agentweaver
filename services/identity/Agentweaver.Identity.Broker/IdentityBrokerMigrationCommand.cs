@@ -71,6 +71,8 @@ internal static class IdentityBrokerMigrationCommand
             if (!await IdentityBrokerPostgresBootstrapCommand.ApplyRuntimeGrantsIfMigratedAsync(
                     connection, settings.RuntimeRole, settings.MigrationRole, cancellationToken).ConfigureAwait(false))
                 throw new InvalidOperationException("Identity broker migrations completed without migration history.");
+
+            await MigrateCliScopePermissionsAsync(dataSource, options, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -94,35 +96,43 @@ internal static class IdentityBrokerMigrationCommand
                 .UseNpgsql(dataSource, npgsql => npgsql.MigrationsHistoryTable(
                     "__ef_migrations_history", IdentityBrokerDbContext.Schema))
                 .Options;
-            await IdentityBrokerMigrator.VerifyMigrationsAppliedAsync(dataSource, dbOptions, cancellationToken)
-                .ConfigureAwait(false);
-
-            var services = new ServiceCollection();
-            services.AddLogging();
-            services.AddDbContext<IdentityBrokerDbContext>(options =>
-            {
-                options.UseNpgsql(dataSource, npgsql => npgsql.MigrationsHistoryTable(
-                    "__ef_migrations_history", IdentityBrokerDbContext.Schema));
-                options.UseOpenIddict();
-            });
-            services.AddOpenIddict()
-                .AddCore(options => options.UseEntityFrameworkCore()
-                    .UseDbContext<IdentityBrokerDbContext>());
-
-            await using var provider = services.BuildServiceProvider();
-            using var scope = provider.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                System.Data.IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
-            await BrokerCliScopePermissions.MigrateAsync(
-                scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>(),
-                cancellationToken).ConfigureAwait(false);
-            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            await MigrateCliScopePermissionsAsync(dataSource, dbOptions, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             DisposeCredential(credential);
         }
+    }
+
+    private static async Task MigrateCliScopePermissionsAsync(
+        NpgsqlDataSource dataSource,
+        DbContextOptions<IdentityBrokerDbContext> dbOptions,
+        CancellationToken cancellationToken)
+    {
+        await IdentityBrokerMigrator.VerifyMigrationsAppliedAsync(dataSource, dbOptions, cancellationToken)
+            .ConfigureAwait(false);
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDbContext<IdentityBrokerDbContext>(options =>
+        {
+            options.UseNpgsql(dataSource, npgsql => npgsql.MigrationsHistoryTable(
+                "__ef_migrations_history", IdentityBrokerDbContext.Schema));
+            options.UseOpenIddict();
+        });
+        services.AddOpenIddict()
+            .AddCore(options => options.UseEntityFrameworkCore()
+                .UseDbContext<IdentityBrokerDbContext>());
+
+        await using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
+        await using var transaction = await db.Database.BeginTransactionAsync(
+            System.Data.IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        await BrokerCliScopePermissions.MigrateAsync(
+            scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>(),
+            cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static MigrationSettings ReadSettings(IConfiguration configuration)
