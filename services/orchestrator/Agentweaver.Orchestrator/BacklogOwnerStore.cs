@@ -595,8 +595,6 @@ internal sealed class BacklogOwnerStore
         });
         var claimId = Guid.ParseExact(requestHash[..32], "N");
         var rootSessionId = claimId.ToString("N");
-        var selectionContext = CoordinatorWorkflowCatalog.CreateRunSelectionContext(
-            selection.Selection.Snapshot);
 
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -655,8 +653,8 @@ internal sealed class BacklogOwnerStore
             actor,
             new SessionIdentity(task.ProjectId, selection.Selection.RunId, claimRootSessionId),
             selection,
-            selectionContext,
-            cancellationToken).ConfigureAwait(false);
+            preparedSelectionContext: null,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
         if (initializedRoot.SelectionHash != selectionHash ||
             initializedRoot.State.Fence != acceptedRoot.ExecutionFence)
             throw new CoordinationException("backlog_claim_conflict", StatusCodes.Status409Conflict);
@@ -681,6 +679,9 @@ internal sealed class BacklogOwnerStore
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return BacklogCoreResult<BacklogTaskClaimReceipt>.Success(existingClaim.ToReceipt(task));
         }
+
+        if (initializedRoot.StateVersion != 1)
+            throw new CoordinationException("backlog_claim_conflict", StatusCodes.Status409Conflict);
 
         var prerequisites = await evidenceReader.ReadCurrentForClaimAsync(
             connection,
@@ -794,6 +795,7 @@ internal sealed class BacklogOwnerStore
         if (candidate.TaskState != BacklogTaskState.Claimed || candidate.IsArchived ||
             candidate.IsAutomationInvocationPending || candidate.ClaimId == Guid.Empty ||
             candidate.TaskRevision < 0 || candidate.ClaimTaskRevision < 0 ||
+            candidate.TaskRevision != candidate.ClaimTaskRevision ||
             candidate.ClaimDecisionStateVersion < 1 ||
             string.IsNullOrWhiteSpace(candidate.Title))
             return null;

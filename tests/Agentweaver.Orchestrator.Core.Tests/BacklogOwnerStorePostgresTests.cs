@@ -545,6 +545,61 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task TaskCompletionCandidateRequiresTheClaimedTaskRevisionToRemainCurrent()
+    {
+        var task = TaskRef("completion-revision");
+        var added = await _backlog.AddTaskAsync(
+            task, new BacklogTaskContent("Completion requirements"), 0, CancellationToken.None);
+        Assert.True(added.IsSuccess);
+        var graph = added.Value!;
+        var readied = await _backlog.SetTaskStateAsync(
+            task, BacklogTaskState.Ready, graph.Revision, 0, CancellationToken.None);
+        Assert.True(readied.IsSuccess);
+        var readyTask = Assert.Single(readied.Value!.Tasks);
+        var selection = Selection("run-completion-revision");
+        var claim = await _backlog.ClaimTaskAsync(
+            _actor,
+            selection,
+            task,
+            readied.Value.Revision,
+            readyTask.Revision,
+            "completion-revision-claim",
+            _evidence,
+            _coordination,
+            _decisions,
+            _ => Task.CompletedTask,
+            CancellationToken.None);
+        Assert.True(claim.IsSuccess);
+        var receipt = claim.Value!;
+
+        var current = await _backlog.ReadTaskCompletionCandidateAsync(
+            task.ProjectId,
+            receipt.RunId,
+            receipt.RootSessionId,
+            receipt.SelectionHash,
+            receipt.ExecutionFence,
+            CancellationToken.None);
+        Assert.NotNull(current);
+        var candidate = current!;
+        Assert.Equal(candidate.ClaimTaskRevision, candidate.TaskRevision);
+
+        var edited = await _backlog.SetTaskContentAsync(
+            task,
+            new BacklogTaskContent("Edited requirements"),
+            readied.Value.Revision + 1,
+            candidate.TaskRevision,
+            CancellationToken.None);
+        Assert.True(edited.IsSuccess);
+        Assert.Null(await _backlog.ReadTaskCompletionCandidateAsync(
+            task.ProjectId,
+            receipt.RunId,
+            receipt.RootSessionId,
+            receipt.SelectionHash,
+            receipt.ExecutionFence,
+            CancellationToken.None));
+    }
+
+    [Fact]
     public async Task ConcurrentClaimsCreateOneTaskClaimRootAndInitialDecision()
     {
         var task = TaskRef("feature");

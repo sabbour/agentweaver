@@ -102,12 +102,11 @@ internal sealed class CoordinatorDecisionOwnerStore
         CoordinationActor actor,
         SessionIdentity identity,
         AuthorizedRunSelection selection,
-        WorkPlanRunSelectionContext preparedSelectionContext,
+        WorkPlanRunSelectionContext? preparedSelectionContext,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
-        ArgumentNullException.ThrowIfNull(preparedSelectionContext);
         if (!ReferenceEquals(transaction.Connection, connection))
             throw new ArgumentException("The transaction must belong to the supplied connection.", nameof(transaction));
         ValidateInput(actor, identity, selection);

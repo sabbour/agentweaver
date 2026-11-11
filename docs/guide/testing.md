@@ -133,7 +133,7 @@ These tests use test-owned stores and owner responses. They do not prove that
 Knowledge or the Gateway is deployed. The Knowledge suite checks that project
 search works without `ReadRunSelection` and still requires `AccessPrivateKnowledge`.
 
-## Test native two-host dispatch and joining
+## Test child dispatch and task completion
 
 On Linux with a Docker-compatible engine, provide two isolated mountpoints
 before running the focused composition test. The production Host rejects an
@@ -145,19 +145,29 @@ container engine. Run the following command inside that Linux environment:
 
 ```powershell
 dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~PublicNativeChildrenJoinBeforeIndependentReviewGate
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~PublicNativeTaskCompletionRequiresClaimAndNoOutputWitness
 ```
 
 This source test uses disposable Testcontainers PostgreSQL and enters through
-the public confirmed-plan dispatch route. Two distinct production
-`RuntimeAgentHost` instances execute the accepted child tasks. The SDK wire
-peer, Kubernetes responses, and external object storage are controlled fixtures;
-they are not live providers or paid model execution. Completed child results
-must come from the runtime path, not pre-seeded checkpoint results.
+the public confirmed-plan dispatch route. It starts a production
+`RuntimeAgentHost` child through the PR2 placement continuation, with no seeded
+child registration. The SDK wire peer, Kubernetes responses, and external
+object storage are controlled fixtures; they are not live providers or paid
+model execution. Completed child results must come from the runtime path, not
+pre-seeded checkpoint results.
 
-The test holds child completion to check that the selected platform gate cannot
-run early, then joins real runtime accounting and results and verifies a public
-dispatch retry is rejected with 409 while the selected gate is pending. The
-fixture answers that gate through its public route afterward. Completed child
+`PublicNativeChildrenJoinBeforeIndependentReviewGate` holds child completion
+until the child startup worker has released its lease. It checks that dispatch
+returns `pending` while another owner holds that lease, then polls until the
+child receipt is stored. The independent-review gate stays pending, so the response
+has child completion evidence but no task-completion evidence. A lost Host
+reply and a lost dispatch reply both recover the same child result without a
+second model turn.
+
+`PublicNativeTaskCompletionRequiresClaimAndNoOutputWitness` runs a separate
+one-item plan with no declared outputs and no review step. It checks that
+dispatch returns task-completion evidence only after the claim, completed plan
+checkpoint, child receipt, and valid no-output witness agree. Completed child
 sessions no longer expose runtime owner context; teardown verifies the Broker's
 authority-loss path revoked each source grant and that local Host/SDK resources
 were disposed.

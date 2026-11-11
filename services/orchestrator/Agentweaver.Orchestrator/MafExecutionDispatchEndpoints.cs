@@ -813,12 +813,48 @@ public static partial class CoordinationEndpoints
                         return (
                             currentIntent.Snapshot.State.Results[intent.AssociationId],
                             currentIntent.Snapshot.State.ChildTurnReceipts.GetValueOrDefault(intent.AssociationId));
-                    MafExecutionEgressGuard.RequireSameReceipt(
-                        intent.EgressReceipt, await VerifyEgressAsync(token).ConfigureAwait(false));
-                    // Native dispatches require the usage source owner to record admission and cost.
                     if (runtimeSourceOwner is null)
                         throw new CoordinationException(
                             "maf_execution_native_source_unavailable", StatusCodes.Status503ServiceUnavailable);
+                    MafExecutionEgressGuard.RequireSameReceipt(
+                        intent.EgressReceipt, await VerifyEgressAsync(token).ConfigureAwait(false));
+                    var childIdentity = new SessionIdentity(
+                        projectId, runId, registration.Binding.SessionId);
+                    var assistantMaterial = await events.TryReadSessionMaterialAsync(
+                        context, childIdentity, RuntimeRootTurnCompletionReceipt.AssistantEventId(intent.MessageId),
+                        SessionMaterialKind.TurnContent, sendActor, token).ConfigureAwait(false);
+                    if (assistantMaterial is not null)
+                    {
+                        var userMaterial = await events.ReadSessionMaterialAsync(
+                            context, childIdentity, intent.MessageId, SessionMaterialKind.TurnContent,
+                            sendActor, token).ConfigureAwait(false);
+                        var recoveredAnswer = Encoding.UTF8.GetString(assistantMaterial.Bytes);
+                        if (recoveredAnswer.Length > AddressedMessageValidation.MaximumTextLength ||
+                            recoveredAnswer.Any(character => char.IsControl(character) &&
+                                character is not ('\r' or '\n' or '\t')))
+                            throw new CoordinationException(
+                                "maf_execution_host_response_invalid", StatusCodes.Status503ServiceUnavailable);
+                        var recoveredResponse = new RuntimeA2AResponse(
+                            "message",
+                            Guid.NewGuid(),
+                            RuntimeContractValidation.NativeSessionId(registration.Binding),
+                            "agent",
+                            [new("text", recoveredAnswer)]);
+                        var recoveredAccounting = await runtimeSourceOwner!.RequireNativeTurnAccountedAsync(
+                            context, registration, message, recoveredAnswer,
+                            (connection, transaction, currentToken) =>
+                                decisions.RequireCurrentDispatchStateInTransactionAsync(
+                                    connection, transaction, actor, identity, selection, selectionContext,
+                                    decision.StateVersion, decision.State.Fence, plan.Plan.Id, currentToken), token)
+                            .ConfigureAwait(false);
+                        var recoveredCompletion = RuntimeChildTurnCompletionReceipt.Create(
+                            message, recoveredAccounting, userMaterial.Material, assistantMaterial.Material)
+                            .ValidateFor(
+                                message, recoveredResponse, registration, plan.Plan.Id, intent.AssociationId)
+                            .ValidateAgainstAccountingEvidence(message, registration, recoveredAccounting);
+                        return (recoveredAnswer, recoveredCompletion);
+                    }
+                    // Native dispatches require the usage source owner to record admission and cost.
                     // Read the current project budgets for each dispatch, so a lowered project budget
                     // applies to the next dispatch without restarting the run.
                     var projectSpendBudgets = await projects.ReadCurrentProjectSpendBudgetsAsync(
@@ -1300,11 +1336,15 @@ public static partial class CoordinationEndpoints
                     claim.ClaimRootSessionId != identity.SessionId ||
                     claim.ClaimSelectionHash != decision.SelectionHash ||
                     claim.ClaimExecutionFence != decision.State.Fence ||
-                    claim.ClaimDecisionStateVersion > witness.DecisionStateVersion ||
+                    claim.ClaimDecisionStateVersion >= witness.DecisionStateVersion ||
+                    claim.TaskRevision != claim.ClaimTaskRevision ||
                     childReceipt.WorkPlanId != plan.Plan.Id ||
                     childReceipt.AssociationId != item.Id ||
                     childReceipt.ChildSessionId != expectedChildSessionId ||
-                    childReceipt.AcceptedSelectionHash != decision.SelectionHash ||
+                    !string.Equals(
+                        childReceipt.AcceptedSelectionHash,
+                        decision.SelectionHash,
+                        StringComparison.OrdinalIgnoreCase) ||
                     childReceipt.ExecutionFence != decision.State.Fence ||
                     childReceipt.ModelSelectionReference != item.ModelSelectionReference ||
                     childReceipt.OutputSha256 != RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(output)) ||

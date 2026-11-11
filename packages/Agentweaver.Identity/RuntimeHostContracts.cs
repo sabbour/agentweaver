@@ -537,7 +537,7 @@ public sealed record RuntimeRootTurnCompletionReceipt(
             CacheBaselineIsComplete);
     }
 
-    internal static Guid AssistantEventId(Guid requestId)
+    public static Guid AssistantEventId(Guid requestId)
     {
         var bytes = System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes($"agentweaver:a2a:assistant:{requestId:N}"));
@@ -977,9 +977,31 @@ public sealed record RuntimeChildTurnCompletionReceipt(
         SessionMaterialAcknowledgment userMaterial,
         SessionMaterialAcknowledgment assistantMaterial)
     {
+        ArgumentNullException.ThrowIfNull(accounting);
+        return Create(request, recorded, accounting.OwnerRevision, userMaterial, assistantMaterial);
+    }
+
+    /// <summary>Rebuilds a receipt from owner-verified accounting evidence after a lost host reply.</summary>
+    public static RuntimeChildTurnCompletionReceipt Create(
+        RuntimeA2ASendRequest request,
+        RuntimeChildTurnAccountingEvidence evidence,
+        SessionMaterialAcknowledgment userMaterial,
+        SessionMaterialAcknowledgment assistantMaterial)
+    {
+        ArgumentNullException.ThrowIfNull(evidence);
+        return Create(
+            request, evidence.Recorded, evidence.AccountingOwnerRevision, userMaterial, assistantMaterial);
+    }
+
+    private static RuntimeChildTurnCompletionReceipt Create(
+        RuntimeA2ASendRequest request,
+        RuntimeNativeTurnRecordedReceipt recorded,
+        long accountingOwnerRevision,
+        SessionMaterialAcknowledgment userMaterial,
+        SessionMaterialAcknowledgment assistantMaterial)
+    {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(recorded);
-        ArgumentNullException.ThrowIfNull(accounting);
         var registration = recorded.Admission.Registration;
         var source = recorded.Admission.Source;
         var binding = registration.Binding;
@@ -1022,7 +1044,7 @@ public sealed record RuntimeChildTurnCompletionReceipt(
             RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(native.DurableCursor)),
             recorded.CanonicalPayloadHash,
             recorded.OwnerRevision,
-            accounting.OwnerRevision,
+            accountingOwnerRevision,
             native.UsageEventIds,
             RuntimeRootTurnCompletionReceipt.ProjectMaterial(userMaterial),
             RuntimeRootTurnCompletionReceipt.ProjectMaterial(assistantMaterial));

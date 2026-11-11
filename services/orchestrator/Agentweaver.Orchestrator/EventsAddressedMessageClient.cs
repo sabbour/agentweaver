@@ -465,6 +465,30 @@ internal sealed class EventsAddressedMessageClient(
         Guid eventId,
         SessionMaterialKind kind,
         RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken) =>
+        await ReadSessionMaterialCoreAsync(
+            context, identity, eventId, kind, actor, allowNotFound: false, cancellationToken)
+            .ConfigureAwait(false)
+        ?? throw new CoordinationException(
+            "events_session_material_unavailable", StatusCodes.Status502BadGateway);
+
+    internal Task<SessionMaterialReadResult?> TryReadSessionMaterialAsync(
+        HttpContext context,
+        SessionIdentity identity,
+        Guid eventId,
+        SessionMaterialKind kind,
+        RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken) =>
+        ReadSessionMaterialCoreAsync(
+            context, identity, eventId, kind, actor, allowNotFound: true, cancellationToken);
+
+    private async Task<SessionMaterialReadResult?> ReadSessionMaterialCoreAsync(
+        HttpContext context,
+        SessionIdentity identity,
+        Guid eventId,
+        SessionMaterialKind kind,
+        RuntimeActorAuthorization actor,
+        bool allowNotFound,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -479,10 +503,10 @@ internal sealed class EventsAddressedMessageClient(
             actor,
             body: null,
             maximumBytes: checked(SessionMaterialValidation.MaximumBytes * 2),
-            allowNotFound: false,
-            cancellationToken).ConfigureAwait(false)
-            ?? throw new CoordinationException(
-                "events_session_material_unavailable", StatusCodes.Status502BadGateway);
+            allowNotFound,
+            cancellationToken).ConfigureAwait(false);
+        if (result is null)
+            return null;
         try
         {
             SessionMaterialValidation.Validate(result.Material.Reference);
