@@ -92,6 +92,56 @@ describe('Gateway backlog and issue client', () => {
     expect(JSON.parse(String(init?.body))).toEqual(request);
   });
 
+  it('previews a confirmed work plan with a read-only GET', async () => {
+    const preview = {
+      rootSessionId: 'root session',
+      workPlanId: 'plan-1',
+      decisionStateVersion: 4,
+      executionFence: 2,
+      items: [{ workPlanItemId: 'item-1', title: 'Build', task: 'Build the feature.', dependsOn: [] }],
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json(preview));
+    await expect(client(fetcher).previewBacklogWorkPlanPromotion(
+      'token', 'p 1', 'run/1', 'root session', 'tenant-1')).resolves.toEqual(preview);
+    const [url, init] = fetcher.mock.calls[0];
+    expect(url).toBe(
+      'https://gateway.example.test/api/v1/projects/p%201/runs/run%2F1/backlog/promotions/preview?rootSessionId=root+session');
+    expect(init?.method).toBeUndefined();
+    expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+  });
+
+  it('rejects a malformed preview before the Board can confirm it', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json({
+      rootSessionId: 'root',
+      workPlanId: 'plan-1',
+      decisionStateVersion: 4,
+      executionFence: 2,
+      items: [{ workPlanItemId: 'item-1', title: 'Build', task: 'Build it.', dependsOn: ['missing'] }],
+    }));
+    await expect(client(fetcher).previewBacklogWorkPlanPromotion('token', 'p1', 'r1', 'root'))
+      .rejects.toMatchObject({ status: 502, code: 'owner_contract_invalid' });
+  });
+
+  it('promotes a work plan with the previewed revisions and idempotency key', async () => {
+    const receipt = {
+      promotionId: 'promotion-1', projectId: 'p 1', runId: 'r1', rootSessionId: 'root',
+      workPlanId: 'plan-1', workflowId: 'workflow', workflowRevision: 'rev-1',
+      decisionStateVersion: 4, executionFence: 2, graphRevision: 9,
+      promotedAt: '2026-01-01T00:00:00Z', tasks: [{ taskId: 'task-1', workItemId: 'item-1' }],
+    };
+    const request = {
+      rootSessionId: 'root', workPlanId: 'plan-1', expectedDecisionStateVersion: 4,
+      expectedExecutionFence: 2, expectedGraphRevision: 8, idempotencyKey: 'key-1',
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json(receipt));
+    await expect(client(fetcher).promoteBacklogWorkPlan('token', 'p 1', 'r1', request))
+      .resolves.toEqual(receipt);
+    const [url, init] = fetcher.mock.calls[0];
+    expect(url).toBe('https://gateway.example.test/api/v1/projects/p%201/runs/r1/backlog/promotions');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual(request);
+  });
+
   it('uses the first backlog issue message when a write is rejected', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json({
       issues: [{ code: 'staleGraphRevision', path: 'expectedGraphRevision', message: 'The graph revision is stale.' }],

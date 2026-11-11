@@ -7,6 +7,8 @@ import type { BacklogGraph, BacklogTaskSnapshot, ProjectAuthorizationContextResp
 
 const mocks = vi.hoisted(() => ({
   readProjectBacklog: vi.fn(),
+  previewBacklogWorkPlanPromotion: vi.fn(),
+  promoteBacklogWorkPlan: vi.fn(),
   listProjectIssues: vi.fn(),
   captureBacklogTask: vi.fn(),
   editBacklogTaskContent: vi.fn(),
@@ -20,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   getAuthorizationContext: vi.fn(),
   getProject: vi.fn(),
   apiCall: vi.fn(),
+  ensureSession: vi.fn(),
+  authorize: vi.fn(),
   useProjectMetrics: vi.fn(),
   useProjectRunList: vi.fn(),
   session: { accessToken: 'token', binding: null },
@@ -32,6 +36,8 @@ vi.mock('./AuthContext', () => ({
     session: mocks.session,
     authorizationContext: mocks.authorizationContext,
     apiCall: mocks.apiCall,
+    ensureSession: mocks.ensureSession,
+    authorize: mocks.authorize,
   }),
 }));
 
@@ -54,6 +60,8 @@ vi.mock('./api', async (importOriginal) => ({
   ...await importOriginal<typeof import('./api')>(),
   gatewayClient: {
     readProjectBacklog: mocks.readProjectBacklog,
+    previewBacklogWorkPlanPromotion: mocks.previewBacklogWorkPlanPromotion,
+    promoteBacklogWorkPlan: mocks.promoteBacklogWorkPlan,
     listProjectIssues: mocks.listProjectIssues,
     captureBacklogTask: mocks.captureBacklogTask,
     editBacklogTaskContent: mocks.editBacklogTaskContent,
@@ -97,6 +105,7 @@ function graph(
 function runList(items: Array<{
   projectId: string;
   runId: string;
+  rootSessionId?: string | null;
   label: string;
   executionState: string | null;
   time: { label: string; value: string };
@@ -173,7 +182,11 @@ beforeEach(() => {
   mocks.authorizationData = context(['readProjects', 'writeProjects']);
   mocks.apiCall.mockReset().mockImplementation((operation: (token: string, tenant: string) => Promise<unknown>) =>
     operation(mocks.session.accessToken, mocks.authorizationContext.tenantId));
+  mocks.ensureSession.mockReset().mockResolvedValue(true);
+  mocks.authorize.mockReset().mockResolvedValue(undefined);
   mocks.readProjectBacklog.mockReset().mockResolvedValue(graph([]));
+  mocks.previewBacklogWorkPlanPromotion.mockReset();
+  mocks.promoteBacklogWorkPlan.mockReset();
   mocks.listProjectIssues.mockReset().mockResolvedValue({ projectId: 'p1', items: [], nextCursor: null });
   mocks.captureBacklogTask.mockReset();
   mocks.editBacklogTaskContent.mockReset();
@@ -202,6 +215,149 @@ beforeEach(() => {
 });
 
 describe('BoardPage', () => {
+  it('previews a confirmed work plan without writing, then promotes it at the current graph revision', async () => {
+    const preview = {
+      rootSessionId: 'root-1',
+      workPlanId: 'plan-1',
+      decisionStateVersion: 4,
+      executionFence: 2,
+      items: [
+        { workPlanItemId: 'design', title: 'Design', task: 'Write the design.', dependsOn: [] },
+        { workPlanItemId: 'build', title: 'Build', task: 'Build the feature.', dependsOn: ['design'] },
+      ],
+    };
+    mocks.previewBacklogWorkPlanPromotion.mockResolvedValue(preview);
+    mocks.promoteBacklogWorkPlan.mockResolvedValue({ promotionId: 'promotion-1' });
+    mocks.readProjectBacklog
+      .mockResolvedValueOnce(graph([]))
+      .mockResolvedValueOnce(graph([task('promoted-1', 'Design')], 6));
+    mocks.useProjectRunList.mockImplementation((_projectId: string, options?: { states?: string[] }) =>
+      options?.states?.[0] === 'active'
+        ? runList([{
+          projectId: 'p1', runId: 'run-1', rootSessionId: 'root-1', label: 'Implement feature',
+          executionState: 'active', time: { label: 'Started', value: '2026-01-03T00:00:00Z' },
+        }])
+        : runList());
+    renderBoard();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview work-plan promotion for Implement feature' }));
+    expect(await screen.findByText('Write the design.')).toBeTruthy();
+    expect(screen.getByText('Depends on: Design')).toBeTruthy();
+    expect(mocks.previewBacklogWorkPlanPromotion).toHaveBeenCalledWith(
+      'token', 'p1', 'run-1', 'root-1', 'tenant-1');
+    expect(mocks.ensureSession).toHaveBeenCalledWith({ projectId: 'p1', runId: 'run-1' }, false);
+    expect(mocks.apiCall).toHaveBeenCalledWith(
+      expect.any(Function), { projectId: 'p1', runId: 'run-1' });
+    expect(mocks.promoteBacklogWorkPlan).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Promote work plan' }));
+    await waitFor(() => expect(mocks.promoteBacklogWorkPlan).toHaveBeenCalledWith(
+      'token',
+      'p1',
+      'run-1',
+      expect.objectContaining({
+        rootSessionId: 'root-1',
+        workPlanId: 'plan-1',
+        expectedDecisionStateVersion: 4,
+        expectedExecutionFence: 2,
+        expectedGraphRevision: 5,
+        idempotencyKey: expect.any(String),
+      }),
+      'tenant-1',
+    ));
+    expect(await screen.findByText('Work plan promoted to Backlog.')).toBeTruthy();
+    expect(await screen.findByText('Design')).toBeTruthy();
+    expect(mocks.apiCall).toHaveBeenCalledWith(
+      expect.any(Function), { projectId: 'p1', runId: 'run-1' });
+    expect(mocks.readProjectBacklog).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains the same promotion request after a conflict so the result can be checked', async () => {
+    mocks.previewBacklogWorkPlanPromotion.mockResolvedValue({
+      rootSessionId: 'root-1',
+      workPlanId: 'plan-1',
+      decisionStateVersion: 4,
+      executionFence: 2,
+      items: [{ workPlanItemId: 'item-1', title: 'Build', task: 'Build the feature.', dependsOn: [] }],
+    });
+    mocks.promoteBacklogWorkPlan
+      .mockRejectedValueOnce(new GatewayError(409, { code: 'coordinator_selection_stale' }, 'Conflict'))
+      .mockResolvedValueOnce({ promotionId: 'promotion-1' });
+    mocks.useProjectRunList.mockImplementation((_projectId: string, options?: { states?: string[] }) =>
+      options?.states?.[0] === 'active'
+        ? runList([{
+          projectId: 'p1', runId: 'run-1', rootSessionId: 'root-1', label: 'Implement feature',
+          executionState: 'active', time: { label: 'Started', value: '2026-01-03T00:00:00Z' },
+        }])
+        : runList());
+    renderBoard();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview work-plan promotion for Implement feature' }));
+    await screen.findByText('Build the feature.');
+    fireEvent.click(screen.getByRole('button', { name: 'Promote work plan' }));
+    expect(await screen.findByText(/may have completed/)).toBeTruthy();
+
+    const firstRequest = mocks.promoteBacklogWorkPlan.mock.calls[0][3];
+    fireEvent.click(screen.getByRole('button', { name: 'Retry promotion' }));
+    await screen.findByText('Work plan promoted to Backlog.');
+    expect(mocks.promoteBacklogWorkPlan.mock.calls[1][3]).toEqual(firstRequest);
+  });
+
+  it('offers run sign-in when the preview needs a run-bound session', async () => {
+    mocks.ensureSession.mockResolvedValueOnce(false).mockResolvedValue(true);
+    mocks.previewBacklogWorkPlanPromotion.mockResolvedValue({
+      rootSessionId: 'root-1',
+      workPlanId: 'plan-1',
+      decisionStateVersion: 4,
+      executionFence: 2,
+      items: [{ workPlanItemId: 'item-1', title: 'Build', task: 'Build the feature.', dependsOn: [] }],
+    });
+    mocks.useProjectRunList.mockImplementation((_projectId: string, options?: { states?: string[] }) =>
+      options?.states?.[0] === 'active'
+        ? runList([{
+          projectId: 'p1', runId: 'run-1', rootSessionId: 'root-1', label: 'Implement feature',
+          executionState: 'active', time: { label: 'Started', value: '2026-01-03T00:00:00Z' },
+        }])
+        : runList());
+    renderBoard();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview work-plan promotion for Implement feature' }));
+    expect(mocks.previewBacklogWorkPlanPromotion).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in to this run' }));
+    await waitFor(() => expect(mocks.authorize).toHaveBeenCalledWith({ projectId: 'p1', runId: 'run-1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview work-plan promotion for Implement feature' }));
+    expect(await screen.findByText('Build the feature.')).toBeTruthy();
+    expect(mocks.previewBacklogWorkPlanPromotion).toHaveBeenCalledWith(
+      'token', 'p1', 'run-1', 'root-1', 'tenant-1');
+  });
+
+  it('keeps the Board unchanged when promotion is denied', async () => {
+    mocks.previewBacklogWorkPlanPromotion.mockResolvedValue({
+      rootSessionId: 'root-1',
+      workPlanId: 'plan-1',
+      decisionStateVersion: 4,
+      executionFence: 2,
+      items: [{ workPlanItemId: 'item-1', title: 'Build', task: 'Build the feature.', dependsOn: [] }],
+    });
+    mocks.promoteBacklogWorkPlan.mockRejectedValue(new GatewayError(403, { code: 'forbidden' }, 'Forbidden'));
+    mocks.useProjectRunList.mockImplementation((_projectId: string, options?: { states?: string[] }) =>
+      options?.states?.[0] === 'active'
+        ? runList([{
+          projectId: 'p1', runId: 'run-1', rootSessionId: 'root-1', label: 'Implement feature',
+          executionState: 'active', time: { label: 'Started', value: '2026-01-03T00:00:00Z' },
+        }])
+        : runList());
+    renderBoard();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview work-plan promotion for Implement feature' }));
+    await screen.findByText('Build the feature.');
+    fireEvent.click(screen.getByRole('button', { name: 'Promote work plan' }));
+
+    expect(await screen.findByText("You don't have permission to promote a work plan in this project.")).toBeTruthy();
+    expect(screen.getByText('No tasks yet')).toBeTruthy();
+    expect(mocks.readProjectBacklog).toHaveBeenCalledTimes(1);
+  });
+
   it('uses the Dashboard run metrics and shows review, problem, and history lanes', async () => {
     mocks.useProjectMetrics.mockReturnValue({
       metrics: {

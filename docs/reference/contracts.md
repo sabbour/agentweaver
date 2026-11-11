@@ -409,6 +409,7 @@ returns `400`.
 | `GET /api/v1/authorization/context` | Fresh no-store Projects & Config context for the validated Broker bearer and optional tenant selector; no query parameters. The context is informational, not an authorization grant. |
 | `GET /api/v1/projects/{projectId}/runs/{runId}/events` | Bounded replay from the committed Events journal. The owner remains responsible for current run authorization. |
 | `GET /api/v1/projects/{projectId}/runs/{runId}/events/live` | SSE fan-out from committed Events pages. The Gateway rechecks exact run-bound `ReadProjects` authority before writing each event; each `id` is the Events journal cursor and is accepted on reconnect through `Last-Event-ID` or `cursor`. |
+| `GET /api/v1/projects/{projectId}/runs/{runId}/backlog/promotions/preview?rootSessionId={rootSessionId}` and `POST /api/v1/projects/{projectId}/runs/{runId}/backlog/promotions` | Orchestrator-owned confirmed work-plan preview and promotion. Both require current Coordination authority and the accepted run selection. These Gateway routes are not MCP tools; see [Plan promotion and task origin](./api.md#plan-promotion-and-task-origin). |
 | Other `/api/v1` routes | Explicit routes in the live OpenAPI catalog delegate to Projects & Config, Orchestrator, Knowledge, or Events; no generic pass-through exists. |
 
 The context route delegates to the existing Projects & Config

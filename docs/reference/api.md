@@ -1293,7 +1293,9 @@ Graph reads, task creation, state/archive changes, and dependency edits also
 have project-scoped operations described above. The Gateway and MCP expose the
 claim operation at
 `/api/v1/projects/{projectId}/runs/{runId}/backlog/tasks/{taskId}/claim`.
-Claims use the current accepted run selection and Coordination authority.
+Claims use the current accepted run selection and Coordination authority. The
+Gateway also exposes work-plan promotion preview and confirmation. These
+promotion routes are not available through MCP.
 
 | Method | Suffix | Purpose |
 | --- | --- | --- |
@@ -1304,17 +1306,30 @@ Claims use the current accepted run selection and Coordination authority.
 | PUT | `/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Add dependency. |
 | DELETE | `/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Remove dependency. |
 | POST | `/tasks/{taskId}/claim` | Atomically claim eligible work with current prerequisite evidence. |
-| POST | `/promotions` | Promote the run's confirmed work plan into backlog tasks. |
+| GET | `/promotions/preview?rootSessionId={rootSessionId}` | Read the current confirmed work plan without changing the backlog. |
+| POST | `/promotions` | Promote the run's confirmed work plan into backlog tasks after explicit confirmation. |
 
 #### Plan promotion and task origin
+
+The Gateway exposes these promotion routes at
+`/api/v1/projects/{projectId}/runs/{runId}/backlog/promotions/preview` and
+`/api/v1/projects/{projectId}/runs/{runId}/backlog/promotions`. Both require
+current Coordination authority and the accepted run selection. They are
+Gateway-only routes and are not MCP tools.
+
+The preview request requires the `rootSessionId` query parameter. It returns
+the current `rootSessionId`, `workPlanId`, `decisionStateVersion`,
+`executionFence`, and `items`. Each item contains its stable
+`workPlanItemId`, `title`, `task`, and `dependsOn` IDs. The preview does not
+write to the backlog. It does not read local files or call a model.
 
 `POST /promotions` turns the current confirmed work plan of a coordinator run
 into backlog tasks. The body contains `rootSessionId`, `workPlanId`,
 `expectedDecisionStateVersion`, `expectedExecutionFence`,
-`expectedGraphRevision`, and `idempotencyKey` (1-128 characters). The owner
-checks that the plan is still the confirmed, dispatchable plan of the root
-session, that the fence and decision version match, and that the run has no
-registered children and no MAF dispatch records.
+`expectedGraphRevision`, and `idempotencyKey` (1-128 characters). The Board
+sends the graph revision it currently displays. The owner checks that the
+revision, confirmed plan, execution fence, and decision version are current,
+and that the run has no registered children and no MAF dispatch records.
 
 Each plan item becomes one open task. The task title is the item title and the
 description is the item task text. The task ID is `plan-` followed by 32
@@ -1328,7 +1343,13 @@ A retry with the same key and values returns the stored promotion. The
 response is a `BacklogPlanPromotion` with `promotionId`, `projectId`, `runId`,
 `rootSessionId`, `workPlanId`, `workflowId`, `workflowRevision`,
 `decisionStateVersion`, `executionFence`, `graphRevision`, `promotedAt`, and
-`tasks` (`taskId` and `workItemId`, ordered by `workItemId`).
+`tasks` (`taskId` and `workItemId`, ordered by `workItemId`). A completed
+identical retry returns its stored result before the owner reads the current
+decision or selection context. The owner still checks current authority.
+
+The owner commits the tasks, dependencies, promotion record, and task origins
+in one transaction. A denied request, failed write, or stale graph or plan
+conflict leaves the backlog unchanged.
 
 | Code | Status | Meaning |
 | --- | --- | --- |

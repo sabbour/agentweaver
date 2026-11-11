@@ -21,6 +21,7 @@ import {
   makeStyles,
   mergeClasses,
   MessageBar,
+  MessageBarActions,
   MessageBarBody,
   Select,
   Text,
@@ -35,7 +36,7 @@ import { CaptureTaskForm } from '../components/board/CaptureTaskForm';
 import { columnAccentColor } from '../components/board/columnMeta';
 import { useCtrlScrollZoom, ZoomControls } from '../components/board/useCtrlScrollZoom';
 import { EmptyState, ErrorState } from '../components/ui/States';
-import { GatewayError } from './api';
+import { GatewayError, gatewayClient } from './api';
 import { useAuth } from './AuthContext';
 import {
   boardColumns,
@@ -59,11 +60,18 @@ import {
 } from './boardData';
 import type { BoardRequestScope } from './boardData';
 import type { BoardColumn } from './boardData';
-import type { BacklogGraph, BacklogTaskSnapshot, ProjectIssueSummary } from './contracts';
+import type {
+  BacklogGraph,
+  BacklogTaskSnapshot,
+  BacklogWorkPlanPromotionPreview,
+  PromoteBacklogWorkPlanRequest,
+  ProjectIssueSummary,
+} from './contracts';
 import { ErrorNotice, Loading, PageHeading, Panel } from './pageParts';
 import { permissionsForProject, useAuthorizationContext } from './projectData';
 import { metricTiles, metricsErrorMessage, useProjectMetrics } from './projectMetrics';
 import { RunList } from './RunList';
+import type { RunListItem } from './runListData';
 import { runListErrorMessage, useProjectRunList } from './runListData';
 
 /** Route state set by Start task after it adds a task, so the Board can confirm it. */
@@ -84,6 +92,18 @@ interface BoardDragSnapshot {
   graphRevision: number;
   taskRevision: number;
   scope: BoardRequestScope;
+}
+
+interface BoardWorkPlanPromotion {
+  key: string;
+  scope: BoardRequestScope;
+  projectId: string;
+  runId: string;
+  rootSessionId: string;
+  status: 'loading' | 'ready' | 'promoting';
+  preview: BacklogWorkPlanPromotionPreview | null;
+  request: PromoteBacklogWorkPlanRequest | null;
+  error: string | null;
 }
 
 type QueueState = 'backlog' | 'ready';
@@ -826,11 +846,13 @@ function RunListGroup({
   description,
   data,
   emptyText,
+  onPreviewWorkPlanPromotion,
 }: {
   title: string;
   description: string;
   data: ReturnType<typeof useProjectRunList>;
   emptyText: string;
+  onPreviewWorkPlanPromotion?: (item: RunListItem, trigger: HTMLButtonElement) => void;
 }) {
   return (
     <div>
@@ -840,12 +862,17 @@ function RunListGroup({
         description={description}
         data={data}
         emptyText={data.loading ? 'Loading runs…' : data.error != null ? 'Run list could not be loaded.' : emptyText}
+        onPreviewWorkPlanPromotion={onPreviewWorkPlanPromotion}
       />
     </div>
   );
 }
 
-function RunOverviewSection({ projectId, refreshKey }: { projectId: string; refreshKey: number }) {
+function RunOverviewSection({ projectId, refreshKey, onPreviewWorkPlanPromotion }: {
+  projectId: string;
+  refreshKey: number;
+  onPreviewWorkPlanPromotion?: (item: RunListItem, trigger: HTMLButtonElement) => void;
+}) {
   const styles = useStyles();
   const metrics = useProjectMetrics(projectId || null, '30d');
   const openRuns = useProjectRunList(projectId, { states: ['active', 'idle'] });
@@ -884,10 +911,10 @@ function RunOverviewSection({ projectId, refreshKey }: { projectId: string; refr
         ))}
       </div>
       <div className={styles.runLists}>
-        <RunListGroup title="Open runs" description="Runs that are working or open." data={openRuns} emptyText="No open runs." />
-        <RunListGroup title="Human review" description="Runs waiting for your decision or input." data={reviewRuns} emptyText="No runs need input." />
-        <RunListGroup title="Problems" description="Runs that failed or have an unknown outcome." data={problemRuns} emptyText="No problem runs." />
-        <RunListGroup title="Run history" description="Finished runs, newest first." data={historyRuns} emptyText="No finished runs." />
+        <RunListGroup title="Open runs" description="Runs that are working or open." data={openRuns} emptyText="No open runs." onPreviewWorkPlanPromotion={onPreviewWorkPlanPromotion} />
+        <RunListGroup title="Human review" description="Runs waiting for your decision or input." data={reviewRuns} emptyText="No runs need input." onPreviewWorkPlanPromotion={onPreviewWorkPlanPromotion} />
+        <RunListGroup title="Problems" description="Runs that failed or have an unknown outcome." data={problemRuns} emptyText="No problem runs." onPreviewWorkPlanPromotion={onPreviewWorkPlanPromotion} />
+        <RunListGroup title="Run history" description="Finished runs, newest first." data={historyRuns} emptyText="No finished runs." onPreviewWorkPlanPromotion={onPreviewWorkPlanPromotion} />
       </div>
     </Panel>
   );
@@ -898,7 +925,7 @@ export function BoardPage() {
   const styles = useStyles();
   const { projectId = '' } = useParams();
   const location = useLocation();
-  const { apiCall, session, authorizationContext: confirmedAuthorization } = useAuth();
+  const { apiCall, authorize, ensureSession, session, authorizationContext: confirmedAuthorization } = useAuth();
   const authorization = useAuthorizationContext();
 
   // Capture and edit need write access. Until the access check loads, or if it
@@ -968,6 +995,8 @@ export function BoardPage() {
     taskRevision: number;
     scope: BoardRequestScope;
   } | null>(null);
+  const [workPlanPromotion, setWorkPlanPromotion] = useState<BoardWorkPlanPromotion | null>(null);
+  const [runSignInBinding, setRunSignInBinding] = useState<{ projectId: string; runId: string } | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ taskId: string; scope: BoardRequestScope } | null>(null);
   const pendingDeleteRef = useRef<{ taskId: string; scope: BoardRequestScope } | null>(null);
   const [pendingMove, setPendingMove] = useState<{ taskId: string; scope: BoardRequestScope } | null>(null);
@@ -976,6 +1005,8 @@ export function BoardPage() {
   const dragRef = useRef<BoardDragSnapshot | null>(null);
   const deleteTriggerRef = useRef<HTMLButtonElement | null>(null);
   const cancelDeleteRef = useRef<HTMLButtonElement | null>(null);
+  const promotionTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const cancelPromotionRef = useRef<HTMLButtonElement | null>(null);
   const boardHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const focusHeadingAfterDelete = useRef<BoardRequestScope | null>(null);
   const captured = (location.state as BoardLocationState | null)?.capturedTaskTitle;
@@ -1015,6 +1046,134 @@ export function BoardPage() {
     reload();
     setRunOverviewRefreshKey((key) => key + 1);
   }, [reload]);
+  const signInForWorkPlanPromotion = useCallback(async (binding: { projectId: string; runId: string }) => {
+    await authorize(binding);
+    if (!await ensureSession(binding, false)) return;
+    setRunSignInBinding(null);
+    setActionError(null);
+    setWorkPlanPromotion((previous) => previous?.projectId === binding.projectId && previous.runId === binding.runId
+      ? { ...previous, error: null }
+      : previous);
+  }, [authorize, ensureSession, setActionError]);
+  const openWorkPlanPromotionPreview = useCallback(async (item: RunListItem, trigger: HTMLButtonElement) => {
+    const rootSessionId = item.rootSessionId;
+    if (!canWrite || item.projectId !== projectId || !rootSessionId?.trim() || !isScopeCurrent(scope)) return;
+    const binding = { projectId: item.projectId, runId: item.runId };
+    const key = crypto.randomUUID();
+    const current: BoardWorkPlanPromotion = {
+      key,
+      scope,
+      projectId: item.projectId,
+      runId: item.runId,
+      rootSessionId,
+      status: 'loading',
+      preview: null,
+      request: null,
+      error: null,
+    };
+    promotionTriggerRef.current = trigger;
+    setWorkPlanPromotion(current);
+    setActionError(null);
+    setNotice(null);
+    try {
+      if (!await ensureSession(binding, false)) {
+        setWorkPlanPromotion(null);
+        setRunSignInBinding(binding);
+        setActionError('Sign in to this run, then preview work-plan promotion again.');
+        return;
+      }
+      setRunSignInBinding(null);
+      const preview = await apiCall((token, tenant) => gatewayClient.previewBacklogWorkPlanPromotion(
+        token, item.projectId, item.runId, rootSessionId, tenant), binding);
+      if (!isScopeCurrent(scope)) return;
+      setWorkPlanPromotion((previous) => previous?.key === key && previous.scope === scope
+        ? { ...previous, status: 'ready', preview }
+        : previous);
+    } catch (reason) {
+      if (!isScopeCurrent(scope)) return;
+      setWorkPlanPromotion((previous) => previous?.key === key ? null : previous);
+      if (reason instanceof GatewayError && reason.status === 401) {
+        setRunSignInBinding(binding);
+        setActionError('Sign in to this run, then preview work-plan promotion again.');
+        return;
+      }
+      setActionError(reason instanceof GatewayError && reason.status === 409
+        ? 'This run no longer has a current confirmed work plan. Refresh the Board and try again.'
+        : `Work-plan preview failed. ${reason instanceof Error ? reason.message : String(reason)}`);
+      if (reason instanceof GatewayError && reason.status === 409) refreshBoard();
+    }
+  }, [apiCall, canWrite, ensureSession, isScopeCurrent, projectId, refreshBoard, scope, setActionError, setNotice]);
+  const closeWorkPlanPromotion = useCallback(() => {
+    const current = workPlanPromotion;
+    if (!current || current.status === 'promoting') return;
+    setWorkPlanPromotion(null);
+    setRunSignInBinding(null);
+    window.requestAnimationFrame(() => {
+      if (isScopeCurrent(current.scope)) promotionTriggerRef.current?.focus();
+    });
+  }, [isScopeCurrent, workPlanPromotion]);
+  const confirmWorkPlanPromotion = useCallback(async () => {
+    const current = workPlanPromotion;
+    const graph = board.graph;
+    if (!current || !current.preview || !graph || current.status === 'promoting' || !canWrite
+      || !isScopeCurrent(current.scope)) return;
+    const request = current.request ?? {
+      rootSessionId: current.rootSessionId,
+      workPlanId: current.preview.workPlanId,
+      expectedDecisionStateVersion: current.preview.decisionStateVersion,
+      expectedExecutionFence: current.preview.executionFence,
+      expectedGraphRevision: graph.revision,
+      idempotencyKey: current.key,
+    };
+    setWorkPlanPromotion({ ...current, status: 'promoting', request, error: null });
+    const binding = { projectId: current.projectId, runId: current.runId };
+    try {
+      if (!await ensureSession(binding, false)) {
+        setRunSignInBinding(binding);
+        setWorkPlanPromotion({ ...current, status: 'ready', request, error: 'Sign in to this run, then retry this same confirmation.' });
+        return;
+      }
+      setRunSignInBinding(null);
+      await apiCall((token, tenant) => gatewayClient.promoteBacklogWorkPlan(
+        token, current.projectId, current.runId, request, tenant), binding);
+      if (!isScopeCurrent(current.scope)) return;
+      setRunSignInBinding(null);
+      setWorkPlanPromotion(null);
+      setNotice('Work plan promoted to Backlog.');
+      refreshBoard();
+      window.requestAnimationFrame(() => {
+        if (isScopeCurrent(current.scope)) promotionTriggerRef.current?.focus();
+      });
+    } catch (reason) {
+      if (!isScopeCurrent(current.scope)) return;
+      if (reason instanceof GatewayError && reason.status === 409) {
+        setWorkPlanPromotion({
+          ...current,
+          status: 'ready',
+          request,
+          error: 'The request returned a conflict and may have completed. Retry this same confirmation to check the result. If it still conflicts, close this dialog, refresh the Board, and preview again.',
+        });
+        refreshBoard();
+        return;
+      }
+      if (reason instanceof GatewayError && reason.status === 401) setRunSignInBinding(binding);
+      const message = reason instanceof GatewayError && reason.status === 403
+        ? "You don't have permission to promote a work plan in this project."
+        : reason instanceof GatewayError && reason.status === 401
+          ? 'Sign in to this run, then retry this same confirmation.'
+          : `Promotion could not be confirmed. Retry this confirmation to check the result. ${reason instanceof Error ? reason.message : String(reason)}`;
+      setWorkPlanPromotion({ ...current, status: 'ready', request, error: message });
+    }
+  }, [apiCall, board.graph, canWrite, ensureSession, isScopeCurrent, refreshBoard, setActionError, setNotice, workPlanPromotion]);
+  const activeWorkPlanPromotion = workPlanPromotion?.scope === scope ? workPlanPromotion : null;
+  const promotionDialogOpen = activeWorkPlanPromotion !== null;
+  const activeWorkPlanPreview = activeWorkPlanPromotion?.preview ?? null;
+  const previewItemTitles = new Map(
+    activeWorkPlanPreview?.items.map((item) => [item.workPlanItemId, item.title]) ?? [],
+  );
+  useLayoutEffect(() => {
+    if (promotionDialogOpen) cancelPromotionRef.current?.focus();
+  }, [promotionDialogOpen, activeWorkPlanPromotion?.key]);
   const graphRevision = board.graph?.revision;
 
   // Called by the capture form. Errors are rethrown as plain messages because the form shows `error.message`.
@@ -1289,7 +1448,11 @@ export function BoardPage() {
         page="Board"
         actions={<Button appearance="secondary" icon={<ArrowSyncRegular />} disabled={board.loading || pendingForScope || pendingMoveForScope} onClick={refreshBoard}>Refresh</Button>}
       />
-      <RunOverviewSection projectId={projectId} refreshKey={runOverviewRefreshKey} />
+      <RunOverviewSection
+        projectId={projectId}
+        refreshKey={runOverviewRefreshKey}
+        onPreviewWorkPlanPromotion={canWrite ? openWorkPlanPromotionPreview : undefined}
+      />
 
       {/* The capture form is shown only to users who can write, and only once the board has loaded. */}
       {board.graph && canWrite && (
@@ -1310,7 +1473,18 @@ export function BoardPage() {
         <MessageBar intent="success"><MessageBarBody>{`Added "${captured}" to Backlog.`}</MessageBarBody></MessageBar>
       )}
       {notice && <MessageBar intent="success"><MessageBarBody>{notice}</MessageBarBody></MessageBar>}
-      {actionError && <MessageBar intent="error"><MessageBarBody>{actionError}</MessageBarBody></MessageBar>}
+      {actionError && (
+        <MessageBar intent="error">
+          <MessageBarBody>{actionError}</MessageBarBody>
+          {runSignInBinding && (
+            <MessageBarActions>
+              <Button appearance="primary" size="small" onClick={() => void signInForWorkPlanPromotion(runSignInBinding)}>
+                Sign in to this run
+              </Button>
+            </MessageBarActions>
+          )}
+        </MessageBar>
+      )}
       {confirmationStale && (
         <MessageBar intent="warning">
           <MessageBarBody role="status">The board changed while you were confirming. Review the task before deleting it.</MessageBarBody>
@@ -1468,6 +1642,75 @@ export function BoardPage() {
                 onClick={() => void confirmDelete()}
               >
                 Delete task
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+      <Dialog
+        open={promotionDialogOpen}
+        onOpenChange={(_, data) => {
+          if (!data.open && activeWorkPlanPromotion?.status !== 'promoting') closeWorkPlanPromotion();
+        }}
+      >
+        <DialogSurface
+          aria-describedby="board-work-plan-promotion-description"
+          aria-busy={activeWorkPlanPromotion?.status === 'loading' || activeWorkPlanPromotion?.status === 'promoting' || undefined}
+        >
+          <DialogBody>
+            <DialogTitle>Promote work plan to Backlog?</DialogTitle>
+            <DialogContent>
+              <Text as="p" id="board-work-plan-promotion-description">
+                Review the confirmed work plan. This preview does not change the backlog.
+              </Text>
+              {activeWorkPlanPromotion?.status === 'loading' && <Loading label="Loading confirmed work plan" />}
+              {activeWorkPlanPreview && (
+                <div>
+                  {activeWorkPlanPreview.items.map((item) => (
+                    <div key={item.workPlanItemId}>
+                      <Text as="h3">{item.title}</Text>
+                      <Text as="p">{item.task}</Text>
+                      {item.dependsOn.length > 0 && (
+                        <Text as="p">Depends on: {item.dependsOn.map((id) => previewItemTitles.get(id) ?? id).join(', ')}</Text>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {activeWorkPlanPromotion?.error && (
+                <MessageBar intent="error">
+                  <MessageBarBody role="alert">{activeWorkPlanPromotion.error}</MessageBarBody>
+                  {runSignInBinding?.projectId === activeWorkPlanPromotion.projectId &&
+                    runSignInBinding.runId === activeWorkPlanPromotion.runId && (
+                      <MessageBarActions>
+                        <Button
+                          appearance="primary"
+                          size="small"
+                          onClick={() => void signInForWorkPlanPromotion(runSignInBinding)}
+                        >
+                          Sign in to this run
+                        </Button>
+                      </MessageBarActions>
+                    )}
+                </MessageBar>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button
+                appearance="secondary"
+                ref={cancelPromotionRef}
+                disabled={activeWorkPlanPromotion?.status === 'promoting'}
+                onClick={closeWorkPlanPromotion}
+              >
+                Cancel
+              </Button>
+              <Button
+                appearance="primary"
+                disabled={!activeWorkPlanPromotion?.preview || !board.graph
+                  || activeWorkPlanPromotion.status === 'loading' || activeWorkPlanPromotion.status === 'promoting'}
+                onClick={() => void confirmWorkPlanPromotion()}
+              >
+                {activeWorkPlanPromotion?.error ? 'Retry promotion' : 'Promote work plan'}
               </Button>
             </DialogActions>
           </DialogBody>

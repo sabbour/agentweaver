@@ -830,7 +830,7 @@ internal sealed class BacklogOwnerStore
     /// <exception cref="CoordinationException">
     /// The request is invalid, conflicts with a stored promotion, the plan is no longer current, or the run already started execution.
     /// </exception>
-    public async Task<BacklogCoreResult<BacklogPlanPromotion>> PromoteWorkPlanAsync(
+    public Task<BacklogCoreResult<BacklogPlanPromotion>> PromoteWorkPlanAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
         string rootSessionId,
@@ -842,10 +842,38 @@ internal sealed class BacklogOwnerStore
         WorkPlanRunSelectionContext? selectionContext,
         CoordinatorDecisionOwnerStore decisions,
         Func<CancellationToken, Task> revalidateCurrentAuthority,
+        CancellationToken cancellationToken) =>
+        PromoteWorkPlanAsync(
+            actor,
+            selection,
+            rootSessionId,
+            workPlanId,
+            expectedDecisionStateVersion,
+            expectedExecutionFence,
+            expectedGraphRevision,
+            idempotencyKey,
+            _ => Task.FromResult(selectionContext),
+            decisions,
+            revalidateCurrentAuthority,
+            cancellationToken);
+
+    public async Task<BacklogCoreResult<BacklogPlanPromotion>> PromoteWorkPlanAsync(
+        CoordinationActor actor,
+        AuthorizedRunSelection selection,
+        string rootSessionId,
+        string workPlanId,
+        long expectedDecisionStateVersion,
+        long expectedExecutionFence,
+        long expectedGraphRevision,
+        string idempotencyKey,
+        Func<CancellationToken, Task<WorkPlanRunSelectionContext?>> selectionContextProvider,
+        CoordinatorDecisionOwnerStore decisions,
+        Func<CancellationToken, Task> revalidateCurrentAuthority,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(selection);
+        ArgumentNullException.ThrowIfNull(selectionContextProvider);
         ArgumentNullException.ThrowIfNull(decisions);
         ArgumentNullException.ThrowIfNull(revalidateCurrentAuthority);
         var projectId = selection.Selection.ProjectId;
@@ -934,6 +962,7 @@ internal sealed class BacklogOwnerStore
         // Lock the run owner binding row and read the confirmed plan again inside this transaction.
         // MAF dispatch takes the same lock, so the plan can't be dispatched while it's promoted.
         var identity = new SessionIdentity(projectId, runId, rootSessionId);
+        var selectionContext = await selectionContextProvider(cancellationToken).ConfigureAwait(false);
         var state = await decisions.ReadConfirmedWorkPlanForPromotionInTransactionAsync(
             connection, transaction, actor, identity, selection, selectionContext,
             expectedDecisionStateVersion, expectedExecutionFence, workPlanId, cancellationToken)

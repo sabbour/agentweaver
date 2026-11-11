@@ -615,6 +615,10 @@ project backlog tasks with `POST .../backlog/promotions`. Promotion is allowed
 only before the run starts execution: the run must have no registered
 children and no MAF dispatch records.
 
+The Board first reads a preview of the confirmed plan. This read does not
+change the backlog. The user must confirm before the Board sends the promotion
+request with the graph revision it currently displays.
+
 1. Lock the project backlog graph rows.
 2. Lock the run's owner binding row and validate the confirmed plan, decision
    version, execution fence, and selection again.
@@ -625,8 +629,10 @@ children and no MAF dispatch records.
 Dispatch takes the same owner binding lock and rejects a promoted plan, so a
 plan is either promoted or dispatched, not both. The decision state is not
 changed. A retry with the same idempotency key returns the stored promotion.
-Tasks captured directly have no origin record. For request and response
-shapes, see [Plan promotion and task origin](../reference/api.md#plan-promotion-and-task-origin).
+For a completed identical retry, the owner checks current authority but does
+not need to read current decision or selection context again. Tasks captured
+directly have no origin record. For request and response shapes, see
+[Plan promotion and task origin](../reference/api.md#plan-promotion-and-task-origin).
 
 ### Enforce policy and runtime authority
 

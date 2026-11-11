@@ -35,6 +35,9 @@ import type {
   BacklogGraphRevisionRequest,
   ClaimBacklogTaskRequest,
   BacklogTaskClaimReceipt,
+  BacklogWorkPlanPromotionPreview,
+  PromoteBacklogWorkPlanRequest,
+  BacklogPlanPromotion,
   ProjectIssuePage,
   ProjectIssueStateFilter,
   ProjectMetrics,
@@ -2267,6 +2270,61 @@ export class AgentweaverGatewayClient {
     return this.request<BacklogTaskClaimReceipt>(
       token,
       `/projects/${encodeSegments(projectId, 'runs', runId, 'backlog', 'tasks', taskId, 'claim')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads the confirmed work plan for a read-only promotion preview. */
+  async previewBacklogWorkPlanPromotion(
+    token: string,
+    projectId: string,
+    runId: string,
+    rootSessionId: string,
+    tenantSelector?: string | null,
+  ): Promise<BacklogWorkPlanPromotionPreview> {
+    const query = new URLSearchParams({ rootSessionId });
+    const preview = await this.request<BacklogWorkPlanPromotionPreview>(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'backlog', 'promotions', 'preview')}?${query}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    if (!preview || typeof preview !== 'object'
+      || preview.rootSessionId !== rootSessionId
+      || typeof preview.workPlanId !== 'string' || preview.workPlanId.length === 0
+      || !Number.isSafeInteger(preview.decisionStateVersion) || preview.decisionStateVersion < 1
+      || !Number.isSafeInteger(preview.executionFence) || preview.executionFence < 1
+      || !Array.isArray(preview.items)
+      || preview.items.some((item) => !item || typeof item.workPlanItemId !== 'string'
+        || item.workPlanItemId.length === 0
+        || typeof item.title !== 'string'
+        || typeof item.task !== 'string'
+        || !Array.isArray(item.dependsOn)
+        || item.dependsOn.some((id) => typeof id !== 'string')))
+      throw new GatewayError(
+        502, { code: 'owner_contract_invalid' }, 'The service returned an invalid work-plan promotion preview.');
+    const itemIds = new Set(preview.items.map((item) => item.workPlanItemId));
+    if (itemIds.size !== preview.items.length
+      || preview.items.some((item) => item.dependsOn.some((id) => !itemIds.has(id))))
+      throw new GatewayError(
+        502, { code: 'owner_contract_invalid' }, 'The service returned an invalid work-plan promotion preview.');
+    return preview;
+  }
+
+  /** Promotes the previewed work plan. Reuse the same request to retry an unclear result. */
+  promoteBacklogWorkPlan(
+    token: string,
+    projectId: string,
+    runId: string,
+    request: PromoteBacklogWorkPlanRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogPlanPromotion> {
+    return this.request<BacklogPlanPromotion>(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'backlog', 'promotions')}`,
       { method: 'POST', body: JSON.stringify(request) },
       this.baseUrl,
       tenantSelector,

@@ -118,6 +118,27 @@ public sealed class GatewayBacklogOpenApiTests
                 .GetProperty("$ref").GetString());
         Assert.Contains("after the durable claim commits",
             claim.GetProperty("responses").GetProperty("503").GetProperty("description").GetString()!);
+        var preview = paths.GetProperty(
+            "/api/v1/projects/{projectId}/runs/{runId}/backlog/promotions/preview").GetProperty("get");
+        Assert.Equal("previewBacklogWorkPlanPromotion", preview.GetProperty("operationId").GetString());
+        Assert.Contains(preview.GetProperty("parameters").EnumerateArray(), parameter =>
+            parameter.GetProperty("name").GetString() == "rootSessionId" &&
+            parameter.GetProperty("required").GetBoolean());
+        Assert.True(preview.GetProperty("x-agentweaver-mcp-excluded").GetBoolean());
+        Assert.Equal("#/components/schemas/BacklogWorkPlanPromotionPreview",
+            preview.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+
+        var promote = paths.GetProperty(
+            "/api/v1/projects/{projectId}/runs/{runId}/backlog/promotions").GetProperty("post");
+        Assert.Equal("promoteBacklogWorkPlan", promote.GetProperty("operationId").GetString());
+        Assert.True(promote.GetProperty("x-agentweaver-mcp-excluded").GetBoolean());
+        Assert.Equal("#/components/schemas/PromoteBacklogWorkPlanRequest",
+            promote.GetProperty("requestBody").GetProperty("content").GetProperty("application/json")
+                .GetProperty("schema").GetProperty("$ref").GetString());
+        Assert.Equal("#/components/schemas/BacklogPlanPromotion",
+            promote.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
         foreach (var schemaName in new[]
         {
             "BacklogTaskReference",
@@ -134,6 +155,11 @@ public sealed class GatewayBacklogOpenApiTests
             "BacklogGraphRevisionRequest",
             "ClaimBacklogTaskRequest",
             "BacklogTaskClaimReceipt",
+            "BacklogWorkPlanPromotionPreviewItem",
+            "BacklogWorkPlanPromotionPreview",
+            "PromoteBacklogWorkPlanRequest",
+            "BacklogPromotedTask",
+            "BacklogPlanPromotion",
         })
             Assert.False(schemas.GetProperty(schemaName).GetProperty("additionalProperties").GetBoolean());
     }
