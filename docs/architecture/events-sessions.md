@@ -184,6 +184,9 @@ The service owns separate append-only `usage_ledger` and immutable
 `usage_rate_cards` tables. Migration `005_copilot_usage.sql` adds these tables after
 the session journal, addressed messages, project facts, and explicit session forks.
 The migration preserves admitted version-4 schemas and the earlier version-2 project-fact layout.
+Runtime rate cards use the existing card ID/version key and retain validated
+manual or Azure Retail provenance with the canonical `CostRateCard`. Events
+reads these cards locally; this slice adds no Gateway route or retail lookup.
 Migration `006_native_sdk_usage.sql` adds cache-write values and permits unknown
 request counts. Migration `007_native_usage_receipts.sql` adds immutable source
 receipts and run-scoped Cost bindings. Migration `008_row_lock_record_updates.sql`

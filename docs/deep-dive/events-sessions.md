@@ -145,6 +145,11 @@ consumer checks the source, pins Cost binding and rate-card identity,
 deduplicates receipts, and commits accounting with its acknowledgment. A
 client-supplied token count is not an authenticated SDK receipt.
 
+Events also stores runtime rate cards by card ID and version. A card keeps its
+canonical `CostRateCard` and either manual source details or Azure Retail meter
+IDs and region. Events accepts an exact retry and rejects changed content at an
+existing key. The owner-local read does not add a Gateway route.
+
 The usage ledger is separate from telemetry and journal replay. Missing pricing
 stays explicit; it does not become a zero charge. Run admission and
 reconciliation read priced totals through this boundary.
