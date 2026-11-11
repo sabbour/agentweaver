@@ -105,6 +105,7 @@ test('project, schema and functional configuration count; docs, tests, generated
   const exempt = ['packages/Agentweaver.Providers/README.md',
     'packages/Agentweaver.Providers/docs/guide.md',
     'services/identity/Agentweaver.Identity.Broker/packages.lock.json',
+    'packages/Agentweaver.Providers/packages.linux-x64.lock.json',
     'packages/Agentweaver.Providers/obj/Generated.cs',
     'packages/Agentweaver.Providers/Generated/Generated.cs',
     'packages/Agentweaver.Providers/tests/ResolverTests.cs',
