@@ -2,6 +2,7 @@ using Agentweaver.Cli;
 
 namespace Agentweaver.Cli.Tests;
 
+[Collection(CliEnvironmentCollection.Name)]
 public sealed class CliApplicationTests
 {
     [Fact]
