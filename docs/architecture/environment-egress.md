@@ -9,6 +9,29 @@ This page explains the egress mechanism, not a live network test. Cilium
 provides the Kubernetes policy API. Pod placement and runtime registration
 are separate from compiling egress.
 
+## Platform egress snapshot compiler
+
+The shared ACS library validates the closed `finite-network-v1` native profile.
+The pure Environment compiler reads its fixed manifest and Rego module with
+the profile's JSON data. It returns the existing
+`PlatformEgressPolicySnapshot` or a coded failure. The snapshot keeps approved
+and release-managed System destinations in both `Allowlist` and `PublicHttps`
+mode. Its source hash covers the manifest, module, and data. The caller must
+provide the source revision and admission checkpoint.
+
+This compiler is not connected to a Policy source adapter, the egress
+reconciler, or a packet-check entry point. Production assets remain inactive.
+Compilation does not apply or change provider policy, approve an artifact, or
+prove packet enforcement. The existing provider capability check still
+requires exact-host support for `Allowlist`, and private-range exclusions
+remain a separate provider safety gate.
+
+The network profile accepts only its fixed manifest and module and one
+`policy/data.json` file. The file names a trusted, versioned System catalog.
+The validator rejects changed catalog entries, duplicate destinations,
+unknown fields, and other modules or data files. DNS and private-address
+checks remain separate from compilation; the compiler does not resolve DNS.
+
 The same Environment owner manages workspace-volume lifecycle routes and
 registers the Azure Files CSI Storage provider. This article covers only
 egress; the [foundation overview](./overview.md#workspace-volume-lifecycle)
