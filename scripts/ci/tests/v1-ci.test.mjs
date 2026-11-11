@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { classify } from '../v1-changes.mjs';
-import { brokerShardCount, environmentP1RequiredMethods, loadBrokerWeights, measureWeights, partitionMethods, testMatrix, verifyRequiredMethods, verifyTrx } from '../v1-test-plan.mjs';
+import { brokerShardCount, environmentP1RequiredMethods, loadBrokerWeights, measureWeights, nativeAcsRequiredMethods, partitionMethods, testMatrix, verifyRequiredMethods, verifyTrx } from '../v1-test-plan.mjs';
 import { suites } from '../../coverage/dotnet.mjs';
 
 const workflow = readFileSync(new URL('../../../.github/workflows/v1-ci.yml', import.meta.url), 'utf8');
@@ -151,6 +151,18 @@ test('Environment P1 owner tests are explicitly enforced after the actual CI tes
   assert.match(runner, /run\(args\);[\s\S]*verifyTrx\(trx\);[\s\S]*if \(entry.name === 'environment'\) verifyRequiredMethods\(trx, environmentP1RequiredMethods\)/);
 });
 
+test('native ACS tests use the locked Linux runtime and must execute in CI', () => {
+  const runner = readFileSync(new URL('../v1-test-plan.mjs', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../../../tests/Agentweaver.Policy.Acs.Tests/NativeAcsPolicyTests.cs', import.meta.url), 'utf8');
+  const coverageSettings = readFileSync(new URL('../../../coverage.runsettings', import.meta.url), 'utf8');
+  assert.equal(nativeAcsRequiredMethods.length, 5);
+  for (const method of nativeAcsRequiredMethods)
+    assert.ok(source.includes(`Task ${method.split('.').at(-1)}()`) || source.includes(`void ${method.split('.').at(-1)}()`), method);
+  assert.match(runner, /entry\.name === 'native-acs'[\s\S]*--runtime', 'linux-x64'[\s\S]*AgentweaverUseLinuxX64LockFile=true/);
+  assert.match(runner, /entry\.name === 'native-acs'\) verifyRequiredMethods\(trx, nativeAcsRequiredMethods\)/);
+  assert.match(coverageSettings, /\[Agentweaver\.Policy\.Acs\]\*/);
+});
+
 test('workflow preserves aggregate name, source provenance, native checks, release validation and P1', async () => {
   const { parse } = await import('yaml');
   const parsed = parse(workflow);
@@ -171,6 +183,12 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   const cliApphost = jobs.dotnet.steps.find((step) => step.name === 'Select the built CLI apphost for process acceptance');
   assert.equal(cliApphost.if, "matrix.name == 'cli-acceptance'");
   assert.match(cliApphost.run, /AGENTWEAVER_CLI_PATH/);
+  const nativeOpa = jobs.dotnet.steps.find((step) => step.name === 'Download and verify pinned OPA for native ACS tests');
+  assert.equal(nativeOpa.if, "matrix.name == 'native-acs'");
+  assert.match(nativeOpa.run, /opa_linux_amd64_static/);
+  assert.match(nativeOpa.run, /00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084/);
+  const testBuild = jobs.dotnet.steps.find((step) => step.name === 'Restore and build test project');
+  assert.match(testBuild.run, /Agentweaver.Policy.Acs.Tests[\s\S]*--runtime linux-x64 --locked-mode -p:AgentweaverUseLinuxX64LockFile=true/);
   assert.equal(jobs.images.steps.some((step) => step.uses === 'actions/upload-artifact@v4'), false);
   assert.match(parsed.concurrency['cancel-in-progress'], /pull_request/);
   assert.match(parsed.concurrency.group, /github.run_id/);

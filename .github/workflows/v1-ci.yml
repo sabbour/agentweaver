@@ -580,12 +580,27 @@ jobs:
           path: ~/.nuget/packages
           key: v1-nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('global.json', '**/packages.lock.json', '**/*.csproj', '**/*.props', '**/*.targets', '**/NuGet.Config') }}
           restore-keys: v1-nuget-${{ runner.os }}-${{ runner.arch }}-
+      - name: Download and verify pinned OPA for native ACS tests
+        if: matrix.name == 'native-acs'
+        run: |
+          mkdir -p "$RUNNER_TEMP/agentweaver-native-acs"
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 \
+            https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static \
+            --output "$RUNNER_TEMP/agentweaver-native-acs/opa"
+          echo '00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084  '"$RUNNER_TEMP/agentweaver-native-acs/opa" | sha256sum --check -
+          chmod 0755 "$RUNNER_TEMP/agentweaver-native-acs/opa"
+          echo "ACS_OPA_PATH=$RUNNER_TEMP/agentweaver-native-acs/opa" >> "$GITHUB_ENV"
       - name: Restore and build test project
         env:
           TEST_PROJECT: ${{ matrix.project }}
         run: |
-          dotnet restore "tests/$TEST_PROJECT/$TEST_PROJECT.csproj" --locked-mode
-          dotnet build "tests/$TEST_PROJECT/$TEST_PROJECT.csproj" --no-restore --configuration Release
+          if [ "$TEST_PROJECT" = "Agentweaver.Policy.Acs.Tests" ]; then
+            dotnet restore "tests/$TEST_PROJECT/$TEST_PROJECT.csproj" --runtime linux-x64 --locked-mode -p:AgentweaverUseLinuxX64LockFile=true
+            dotnet build "tests/$TEST_PROJECT/$TEST_PROJECT.csproj" --no-restore --configuration Release --runtime linux-x64 -p:AgentweaverUseLinuxX64LockFile=true
+          else
+            dotnet restore "tests/$TEST_PROJECT/$TEST_PROJECT.csproj" --locked-mode
+            dotnet build "tests/$TEST_PROJECT/$TEST_PROJECT.csproj" --no-restore --configuration Release
+          fi
       - name: Select the built CLI apphost for process acceptance
         if: matrix.name == 'cli-acceptance'
         run: |

@@ -75,6 +75,10 @@ kubectl kustomize deploy\k8s
 These commands validate source and render manifests. They do not contact
 Azure, install resources, or prove that the cluster is ready.
 
+The shared `Agentweaver.Policy.Acs` library is not a workload and these
+deployment steps do not activate it. The deployed v4 Policy path continues to
+use its existing YAML adapter.
+
 ## 3. Provision the Azure foundation
 
 Use the installer for an approved full-foundation deployment. The installer

@@ -92,6 +92,30 @@ The AgentSessions suite checks export verification and replay behavior. The
 absence test confirms that the native provider stays the default and the
 platform works without the optional AgentSessions package.
 
+## Test the native ACS profile
+
+The shared ACS library validates a complete manifest and its relative Rego and
+JSON files before native evaluation. It rejects manifest inheritance and
+any bundle or data path that points outside the supplied artifact. The
+pinned ACS package contains a Linux-x64 native library. To run its evaluator
+tests, use Linux and set `ACS_OPA_PATH` to the pinned OPA 0.70.0 executable
+described in the [ACS runtime asset guide](https://github.com/sabbour/agentweaver/blob/v1/eng/acs/README.md).
+
+Run these commands from the repository root. Replace `/path/to/opa` with the
+full path of the pinned OPA executable from the runtime asset guide.
+
+```bash
+export ACS_OPA_PATH='/path/to/opa'
+dotnet restore tests/Agentweaver.Policy.Acs.Tests/Agentweaver.Policy.Acs.Tests.csproj --runtime linux-x64 --locked-mode -p:AgentweaverUseLinuxX64LockFile=true
+dotnet test tests/Agentweaver.Policy.Acs.Tests/Agentweaver.Policy.Acs.Tests.csproj --runtime linux-x64 --no-restore --configuration Release -p:AgentweaverUseLinuxX64LockFile=true
+```
+
+The suite checks content hashes, bounded facts, default deny, hard-deny
+precedence, unavailable verified-human facts, native failures and conversion
+goldens against the existing Policy adapter. Native tests are skipped when the
+pinned OPA executable is not available or the host is not Linux. These tests do
+not activate ACS or change the deployed v4 Policy path.
+
 ## Test project-wide Knowledge discovery
 
 Run the Knowledge service suite to check authorization, existing provider

@@ -21,6 +21,14 @@ export const environmentP1RequiredMethods = [
 ].map((name) => `Agentweaver.Environment.Tests.EnvironmentP1CreationLinkPostgresTests.${name}`)
   .concat('Agentweaver.Environment.Tests.EnvironmentP1CreationReadPostgresTests.ReadsActualOwnerCommittedRecordsWithoutWritesAndRejectsForeignOrStaleJoins');
 
+export const nativeAcsRequiredMethods = [
+  'RejectsOutOfProfileFactsImportsAndUnsafeBuiltins',
+  'NativeDecisionsMatchLegacyActionConversionGoldens',
+  'HardDenyPrecedesAllowAndUnavailableHumanFactsRemainUnavailable',
+  'NativeRuntimeErrorsFailClosed',
+  'NativeEvaluationTimeoutFailsClosed',
+].map((name) => `Agentweaver.Policy.Acs.Tests.NativeAcsPolicyTests.${name}`);
+
 export function loadBrokerWeights(path = brokerWeightsPath) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
@@ -125,6 +133,8 @@ function main([command, name]) {
   const started = Date.now();
   const project = `tests/${entry.project}/${entry.project}.csproj`;
   const args = ['test', project, '--no-build', '--no-restore', '--configuration', 'Release'];
+  if (entry.name === 'native-acs')
+    args.push('--runtime', 'linux-x64', '-p:AgentweaverUseLinuxX64LockFile=true');
   const directory = `artifacts/coverage/dotnet/${entry.name}`;
   rmSync(directory, { recursive: true, force: true });
   mkdirSync(directory, { recursive: true });
@@ -143,6 +153,7 @@ function main([command, name]) {
   const trx = readFileSync(`${directory}/${entry.name}.trx`, 'utf8');
   verifyTrx(trx);
   if (entry.name === 'environment') verifyRequiredMethods(trx, environmentP1RequiredMethods);
+  if (entry.name === 'native-acs') verifyRequiredMethods(trx, nativeAcsRequiredMethods);
   if (methods) {
     const executed = new Set([...trx.matchAll(/<TestMethod\b[^>]*className="([^"]+)"[^>]*name="([^"]+)"/g)]
       .map((match) => `${match[1]}.${match[2]}`));

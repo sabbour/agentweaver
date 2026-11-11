@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "AgentControlSpecification": {
+        "type": "Direct",
+        "requested": "[0.4.0-beta.0, )",
+        "resolved": "0.4.0-beta.0",
+        "contentHash": "vtILlhbuAJ2TSi9BZwZuGcXLxj5YwxudIwO0kRo91rowwmRWBme8RRdaxOc+i2fccRBk1C3nppVAo2P1N5nQ6Q=="
+      },
+      "YamlDotNet": {
+        "type": "Direct",
+        "requested": "[18.0.0, )",
+        "resolved": "18.0.0",
+        "contentHash": "ptHVgcYmLejGuWXV7RMFoEqFKYMXnieOlWLPzEslfDtzZ9ngMhjYwykfqjBN2+fMEAEyobozkj07lKEpR4dssA=="
+      },
+      "agentweaver.abstractions": {
+        "type": "Project"
+      }
+    },
+    "net10.0/linux-x64": {
+      "AgentControlSpecification": {
+        "type": "Direct",
+        "requested": "[0.4.0-beta.0, )",
+        "resolved": "0.4.0-beta.0",
+        "contentHash": "vtILlhbuAJ2TSi9BZwZuGcXLxj5YwxudIwO0kRo91rowwmRWBme8RRdaxOc+i2fccRBk1C3nppVAo2P1N5nQ6Q=="
+      }
+    }
+  }
+}

@@ -11,6 +11,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const fixture = JSON.parse(readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8'));
 // Keep this fixture graph aligned with the checked-in project references.
 const projectReferences = new Map([
+  ['Agentweaver.Policy.Acs', ['..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj']],
   ['Agentweaver.FoundationProbe', ['Agentweaver.Abstractions', 'Agentweaver.Providers',
     'Agentweaver.Persistence.Postgres', 'Agentweaver.Secrets.AzureKeyVault',
     'Agentweaver.ObjectStore.AzureBlob', 'Agentweaver.Telemetry.AzureMonitor']
@@ -187,7 +188,7 @@ test('the Orchestrator host is registered as a prepared service with all project
 });
 
 test('current Abstractions consumers declare 1.6.0 and predeclare 1.7.0 compatibility', () => {
-  const consumers = ['Agentweaver.AgentRuntime', 'Agentweaver.FoundationProbe',
+  const consumers = ['Agentweaver.Policy.Acs', 'Agentweaver.AgentRuntime', 'Agentweaver.FoundationProbe',
     'Agentweaver.Providers', 'Agentweaver.SourceControl', 'Agentweaver.Orchestrator.Core',
     'Agentweaver.Orchestrator', 'Agentweaver.Secrets.AzureKeyVault', 'Agentweaver.Identity',
     'Agentweaver.ObjectStore.AzureBlob', 'Agentweaver.EventsAndSessions', 'Agentweaver.Gateway',
@@ -197,7 +198,9 @@ test('current Abstractions consumers declare 1.6.0 and predeclare 1.7.0 compatib
   const relationships = fixture.compatibility
     .filter(({ dependency }) => dependency === 'Agentweaver.Abstractions');
   assert.deepEqual(relationships.map(({ consumer }) => consumer), consumers);
-  assert.ok(relationships.every(({ versions }) => versions.includes('1.6.0')));
+  assert.ok(relationships
+    .filter(({ consumer }) => consumer !== 'Agentweaver.Policy.Acs')
+    .every(({ versions }) => versions.includes('1.6.0')));
   assert.ok(relationships.every(({ versions }) => versions.includes('1.7.0')));
 });
 
@@ -264,7 +267,9 @@ test('the historical P0 NuGet baseline still records exactly the eight original 
   ].sort();
   const packages = fixture.components.filter(({ id }) => packageIds.includes(id));
   assert.deepEqual(packages.map(({ id }) => id).sort(), packageIds);
-  assert.ok(fixture.compatibility.every(({ versions }) => versions[0] === '0.0.0'));
+  assert.ok(fixture.compatibility
+    .filter(({ consumer }) => consumer !== 'Agentweaver.Policy.Acs')
+    .every(({ versions }) => versions[0] === '0.0.0'));
 
   const baseline = JSON.parse(readFileSync(path.join(root, 'releases', 'initial-baseline.json'), 'utf8'));
   assert.equal(baseline.baselineVersion, '0.0.0');
@@ -295,8 +300,8 @@ test('draft dependency declarations allow pure version preparation without chang
   };
   const sourceManifest = JSON.parse(readSource(receipt.manifestPath));
   const preparedVersions = new Map(prepared.plan.components.map(({ id, toVersion }) => [id, toVersion]));
-  for (const { dependency, versions } of fixture.compatibility) {
-    assert.ok(versions.includes('0.0.0'));
+  for (const { consumer, dependency, versions } of fixture.compatibility) {
+    if (consumer !== 'Agentweaver.Policy.Acs') assert.ok(versions.includes('0.0.0'));
     assert.ok(versions.includes(fixture.components.find(component => component.id === dependency).version));
     assert.equal(new Set(versions).size, versions.length);
   }
@@ -452,7 +457,10 @@ test('scans both XML quote forms and ignores commented-out versions and referenc
   assert.equal(check(fixture, {
     readProject: (file) => file.includes('Providers.csproj') ? singleQuoted : readProject(file),
   }).stage, 'draft');
-  assert.throws(() => check(edit((m) => { m.compatibility = []; }), {
+  assert.throws(() => check(edit((m) => {
+    m.compatibility = m.compatibility.filter(({ consumer, dependency }) =>
+      !(consumer === 'Agentweaver.Providers' && dependency === 'Agentweaver.Abstractions'));
+  }), {
     readProject: (file) => file.includes('Providers.csproj')
       ? singleQuoted.replace('Agentweaver.Abstractions.csproj', 'Unpinned.csproj') : readProject(file),
   }), /not pinned in the manifest/);

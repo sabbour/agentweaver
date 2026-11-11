@@ -63,6 +63,18 @@ implementation. Both advertise the provider-neutral `SessionsCapabilities`
 names from `Agentweaver.Abstractions`. The resolver matches the adapter
 version exactly, so both report Sessions adapter contract `1.0.0`.
 
+### Keep native ACS separate from provider resolution
+
+`NativeAcsArtifact` in `Agentweaver.Abstractions` binds the exact manifest and
+every relative Rego or JSON file by SHA-256. `NativeAcsEvaluationSnapshot`
+carries the existing `SessionIdentity`, tenant, agent, and action IDs. Its
+optional `NativeAcsVerifiedHumanIdentity` remains absent when verified human
+facts are unavailable.
+
+`Agentweaver.Policy.Acs` consumes these contracts. It is not a provider seam
+or an active host. The deployed v4 Policy path continues to use its existing
+YAML adapter. See the [native ACS contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract).
+
 ## 6. Runtime view
 
 ### Resolve and pin a resource

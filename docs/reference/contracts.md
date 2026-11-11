@@ -202,6 +202,27 @@ advertises `SessionsCapabilities.All`; other providers may advertise a smaller
 set, and a provider can be selected only when it satisfies the run's required
 capabilities.
 
+## Native ACS artifact and evaluation contract
+
+`NativeAcsArtifact` in `Agentweaver.Abstractions` contains the exact manifest,
+all relative module and data files, and a SHA-256 hash that binds those bytes.
+The validator checks the complete artifact before it calls the native ACS
+validator. It rejects manifest inheritance, paths outside the supplied
+artifact, cyclic YAML aliases, and nesting deeper than 64 levels.
+`NativeAcsEvaluationSnapshot` uses
+the existing `SessionIdentity` and bounded tenant, agent, and action IDs. A
+caller may supply the optional
+`NativeAcsVerifiedHumanIdentity` only after separate verification. The
+evaluator treats a missing value as unavailable; it does not verify the
+identity source or infer identity from the Broker subject, actor ID, or UPN.
+
+`NativeAcsEvaluationResult` binds the decision to the artifact hash. Invalid
+artifacts and native runtime failures return an error rather than an allow.
+`Agentweaver.Policy.Acs` is a shared library, not an active host or Policy
+store. It does not change the deployed v4 YAML adapter or add an API or
+activation path. The [testing guide](../guide/testing.md#test-the-native-acs-profile)
+describes the focused native tests.
+
 ## Current Environment egress verification
 
 `POST /api/network-egress/verify` is a read-only Environment owner request. It
