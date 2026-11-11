@@ -148,6 +148,13 @@ Environment validates the current registration, placement, AgentHost receipt,
 and readiness evidence. The response and session status report `pending`,
 `ready`, or `blocked`; `pending` is not proof that the Host is ready.
 
+After startup reaches `ready`, a session-status read rechecks current readiness
+and returns the verified runtime instance, registration revision, accepted
+selection, execution fence, model selection and source mode, image digest and
+platform, and Pod UID. This readback works for an ordinary run without a P1
+setup claim. P1 invocation IDs remain optional and do not stand in for runtime
+evidence.
+
 The startup intent stores operation IDs, owner fences, and non-credential
 receipts. It does not store bearer credentials. A retry needs fresh
 authenticated run authority. Replaying a start request can queue recovery
@@ -187,6 +194,18 @@ and placement checks must pass before dispatch sends a task message.
 stale readiness receipt stops the send. Retrying requires fresh run authority
 and reuses the saved operation IDs; an expired queued credential cannot
 authorize another resource or turn.
+
+Dispatch returns while another owner holds the child-start lease. If the
+response reports `pending`, retry the same dispatch request with the same
+decision version and WorkPlan ID. The retry resumes the saved child-start
+intent; it does not create another child or placement.
+
+If Broker delivery fails after the child placement and registration are saved,
+the child intent becomes `blocked` at `retirement`. Environment has no child
+retirement route for this case. Do not retry the used bootstrap operation.
+Keep the placement and registration as cleanup obligations until authorized
+terminal cleanup retires the Environment resource and revokes the registration.
+If Environment cannot confirm retirement, cleanup remains pending.
 
 ### Clean terminal runs
 
@@ -469,19 +488,27 @@ confirm a workflow, or complete work.
 Before proposing work, the run needs an accepted Projects selection and current
 authority. The selected workflow and plan must match that run context.
 
-1. **Accept the root.** Orchestrator reads the accepted Projects selection and
-   current authority, then records the root session and initial decision state.
-   Configured Hosted Copilot credit limits also use Events run admission.
-2. **Propose the outcome.** Core validates the typed outcome specification.
-   Clarifying questions and outcome confirmation become explicit gate state.
-3. **Select a workflow.** Selection uses the authorized workflow catalog.
-   Generated definitions require first-use confirmation.
-4. **Propose a WorkPlan.** Core validates the full plan against the selected
-   workflow and run context. The owner saves the candidate and its confirmation
-   gate.
-5. **Confirm or revise.** An accepted gate answer makes the plan dispatchable.
-   Scope-changing revisions add another confirmation boundary. Accepted
-   revisions consume the configured revision-attempt allowance.
+For a generated workflow and a claimed task, use this order:
+
+1. **Generate the workflow draft.** Finish the generation job before you
+   propose a WorkPlan. A generated definition is still a draft.
+2. **Capture and claim the task.** Claim it on the run's existing accepted
+   coordinator root. An exact retry reuses that claim and root.
+3. **Propose and confirm the outcome.** Core validates the typed outcome
+   specification. Clarifying questions and outcome confirmation become
+   explicit gate state.
+4. **Select and confirm the workflow.** Selection uses the authorized workflow
+   catalog. A generated definition requires first-use confirmation.
+5. **Propose and confirm the WorkPlan.** Core validates the full plan against
+   the selected workflow and run context. The owner saves the candidate and
+   its confirmation gate. Scope-changing revisions add another confirmation
+   boundary and consume the configured revision-attempt allowance.
+6. **Dispatch the accepted plan.** Dispatch provisions ready child runtimes,
+   verifies readiness, and sends the model-backed work.
+
+Do not propose the outcome again after workflow selection. A new outcome
+proposal replaces the outcome and clears the selected workflow and WorkPlan;
+the run must pass through workflow selection and plan confirmation again.
 
 `CoordinatorDecisionOwnerStore` serializes transitions against current owner
 state. The winning transaction commits the decision version with its gate,
@@ -492,6 +519,38 @@ Owner routes are rooted at
 `/api/projects/{projectId}/runs/{runId}/coordination`; Gateway exposes versioned
 public routes. Use [contracts and endpoints](../reference/contracts.md) for
 request shapes.
+
+```mermaid
+sequenceDiagram
+    actor Caller
+    participant O as Orchestrator
+    participant DB as Orchestrator PostgreSQL
+    participant Env as Environment
+    participant Host as Child AgentHost
+    participant Events as Events and Sessions
+    Caller->>O: Generate workflow draft
+    O->>DB: Save native request and typed draft
+    Caller->>O: Capture and claim task on run B
+    O->>DB: Reuse accepted root; save claim and idempotency
+    O-->>Caller: Same claim and root on exact retry
+    Caller->>O: Propose and confirm outcome
+    Caller->>O: Select and confirm generated workflow
+    Caller->>O: Propose and confirm WorkPlan
+    Caller->>O: Dispatch accepted WorkPlan
+    O->>DB: Save child-start intent and checkpoint
+    O->>Env: Provision child placement
+    Env-->>O: Placement and readiness evidence
+    O-->>Caller: Pending while startup lease is held
+    Caller->>O: Retry the same dispatch request
+    O->>Host: Send associated child task
+    Host->>Events: Append native material and usage events
+    Events-->>Host: Acknowledge native events and material
+    Host-->>O: Return child-turn completion receipt
+    O->>DB: Store receipt with checkpoint result
+    O-->>Caller: Return bounded completionEvidence
+    O->>DB: Join claim, plan, checkpoint and output witness
+    O-->>Caller: Return taskCompletion only when every join passes
+```
 
 ### Dispatch ready work
 
@@ -521,6 +580,29 @@ ready dependencies. This is request-driven execution, not an automatic
 scheduler. Command-backed BuildTest delegates resource work to Environment
 while Orchestrator retains the accepted command and checkpoint. Source Control
 output and merge evidence use separate owner paths.
+
+For a completed native child turn, the runtime returns a receipt that binds
+request, prompt, and output hashes to the plan association, child session,
+runtime registration, accepted selection, execution fence, source and image,
+model selection and actual model, native completion events, usage events, and
+acknowledged user and assistant material. Orchestrator joins each field to the
+persisted source, native observation, and accounting status before it stores
+the receipt with the checkpoint result. Task completion requires priced
+accounting. The dispatch response returns bounded
+`completionEvidence` entries; it does not expose prompt or output text through
+the receipt.
+
+If the first response is lost after the child result is saved and an
+independent-review gate is pending, the same dispatch request reads the saved
+result and receipt without sending another child turn.
+
+The optional `taskCompletion` projection appears only when the owner joins a
+unique task claim on the root to the confirmed one-item WorkPlan, completed
+checkpoint, child receipt, and output witness. No request field can set task
+state to done. A pending startup, incomplete checkpoint, missing or stale
+receipt, or failed join does not produce task-completion evidence. See
+[dispatch completion and startup readback](../reference/api.md#dispatch-completion-and-startup-readback)
+for response fields and limits.
 
 ### Promote a plan into backlog tasks
 

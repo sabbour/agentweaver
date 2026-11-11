@@ -1191,6 +1191,39 @@ owner state and returns `blockers: []`. It omits `executionRecovery` and does
 not read decisions or checkpoints. A cancelled lifecycle does not imply idle
 activity, completed effects, or successful physical cleanup.
 
+#### Dispatch completion and startup readback
+
+`POST /sessions/{sessionId}/actions/dispatch` returns the current checkpoint
+projection. If `childRuntimeStartup` reports `pending`, retry the same dispatch
+request with the same decision version and WorkPlan ID. Dispatch does not wait
+for a child-start worker that holds the startup lease.
+
+If the first response is lost after the child result is saved and an
+independent-review gate is pending, retry the same request to read the saved
+result and receipt. The retry does not send the child turn again.
+
+`completionEvidence` contains at most 512 verified child-turn receipts retained
+by the checkpoint. Each receipt binds request, prompt, and output hashes to the
+WorkPlan, association, logical child session, native SDK session ID, runtime
+registration, accepted selection, execution fence, source, image, model
+selection, actual model, native completion and usage event IDs, and the
+acknowledged user and assistant material. The logical child session comes from
+the runtime registration; the SDK session ID comes from the native request
+context. The receipt returns material references, positions, and hashes, not
+prompt or output text.
+
+`taskCompletion` is present only when the Orchestrator joins a unique task claim
+on the root to the confirmed one-item WorkPlan, completed checkpoint, child
+receipt, and output witness. It is an owner-derived projection; clients cannot
+set a task to done. A pending startup, incomplete checkpoint, missing or stale
+receipt, or failed evidence join does not produce task-completion evidence.
+Unpriced usage may remain in the usage ledger but does not prove task success.
+
+When a ready runtime summary is read, the owner rechecks readiness and projects
+the current registration, selection, model source, image digest and platform,
+and Pod UID. This readback does not require P1 setup provenance. P1 invocation
+IDs remain optional and do not replace runtime evidence.
+
 For `IndependentReview`, `platformGateOperations` carries `approvalRequestId`,
 `evidenceHash`, and `reviewDecision` (null while pending). Its effect recovery
 state is `awaitingApproval` until an answer is checkpointed. When dependency
@@ -1318,6 +1351,11 @@ is registered after the transaction. If that registration fails, the task
 claim is still durable; retry the same request with the same key to recover
 the receipt and retry registration. This does not promise exactly-once
 external effects or start an automatic scheduler.
+
+When the run already has an accepted coordinator root, the server uses that
+root for the claim. An exact retry returns the same claim and root; it does not
+create a second root. A conflicting run or selection fails instead of moving
+the claim to another root.
 
 The claim reserves a coordinator root against the run's accepted workflow and
 immutable selection snapshot. Its `preparing` phase is a reservation state,

@@ -38,6 +38,16 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed partial class ProjectsConfigBrokerAuthorizationTests
 {
     [Fact]
+    public void MissingChildCompletionReceiptCannotCompleteDispatch()
+    {
+        var exception = Assert.Throws<OrchestratorHost::Agentweaver.Orchestrator.CoordinationException>(
+            () => OrchestratorHost::Agentweaver.Orchestrator.CoordinationEndpoints
+                .RequireChildCompletionReceipt(null));
+
+        Assert.Equal("maf_execution_child_completion_evidence_missing", exception.Code);
+    }
+
+    [Fact]
     public async Task PlacementEgressRequiresCompletePinnedEvidenceWithoutClaimingHostReadiness()
     {
         var seed = RuntimeCopilotSessionTests.Registration();
@@ -153,14 +163,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     public async Task PublicConfirmedPlanRevalidatesPrePlanRootRegistrationBeforeEgress(string scenario)
         => await RunPublicConfirmedPlanRevalidatesPrePlanRootRegistrationBeforeEgressAsync(scenario);
 
-    // Dispatch now sends only to a child that its start intent made ready (#2604 PR2). This proof seeds child
-    // registrations outside that path, so it cannot reach a turn. #2604 PR3 moves the join proof to child startup.
-    [LinuxOnlyFact(Skip = "Seeds child registrations that dispatch no longer accepts; #2604 PR3 replaces this join proof.")]
-    public async Task PublicNativeChildrenJoinBeforeIndependentReviewGate()
-        => await RunPublicConfirmedPlanRevalidatesPrePlanRootRegistrationBeforeEgressAsync("native");
-
+    // This uses the PR2 child-placement continuation and starts with no child registrations.
     [Fact]
-    public async Task PublicDispatchStartsAnUnregisteredChildAndReusesItsLostPlacement()
+    public async Task PublicNativeChildrenJoinBeforeIndependentReviewGate()
         => await RunPublicConfirmedPlanRevalidatesPrePlanRootRegistrationBeforeEgressAsync("production");
 
     private async Task RunPublicConfirmedPlanRevalidatesPrePlanRootRegistrationBeforeEgressAsync(string scenario)
@@ -245,9 +250,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     EgressBaseline = [],
                     RunLimits = new CopilotRunLimits
                     {
+                        // Native turns need a hard cap and pinned Copilot rate card for priced receipts.
                         // Decision persistence counts the two planned items and their registered children together.
                         MaxModelTurns = 2, MaxToolCalls = 2, MaxChildren = 4, MaxConcurrentChildren = 2,
-                        MaxWallTimeSeconds = 3600
+                        MaxWallTimeSeconds = 3600,
+                        CopilotHardCreditLimit = scenario is "native" or "production" ? 5m : null
                     }
                 }
             });

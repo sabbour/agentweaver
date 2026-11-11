@@ -69,6 +69,19 @@ public sealed class CoordinatorDecisionFlowTests
         Assert.True(planConfirmed.AuthorizesTransition);
         Assert.True(planConfirmed.State.CanDispatch);
         Assert.NotNull(planConfirmed.State.ConfirmedWorkPlan);
+
+        var revisedOutcome = CoordinatorDecisionFlow.ProposeOutcomeSpec(
+            planConfirmed.State,
+            Outcome() with { Id = "outcome-revised" },
+            "outcome-confirmation-2",
+            Owner);
+        Assert.True(revisedOutcome.IsSuccess);
+        Assert.False(revisedOutcome.State!.OutcomeConfirmed);
+        Assert.Null(revisedOutcome.State.SelectedWorkflow);
+        Assert.False(revisedOutcome.State.WorkflowConfirmed);
+        Assert.Null(revisedOutcome.State.ConfirmedWorkPlan);
+        Assert.Null(revisedOutcome.State.CandidateWorkPlan);
+        Assert.False(revisedOutcome.State.CanDispatch);
     }
 
     [Fact]

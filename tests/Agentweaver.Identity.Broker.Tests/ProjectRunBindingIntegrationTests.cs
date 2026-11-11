@@ -574,7 +574,19 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(HttpStatusCode.OK, readyStatusResponse.StatusCode);
             var readyStatus = await readyStatusResponse.Content.ReadFromJsonAsync<SessionStatusSnapshot>(
                 OrchestratorJsonOptions);
-            Assert.Equal("ready", readyStatus?.RuntimeStartup?.State);
+            var startup = Assert.IsType<RuntimeStartupSummary>(readyStatus?.RuntimeStartup);
+            Assert.Equal("ready", startup.State);
+            Assert.Equal(firstRegistration.RuntimeInstanceId, startup.RuntimeInstanceId);
+            Assert.Equal(firstRegistration.Revision, startup.RegistrationRevision);
+            Assert.Equal(binding.AcceptedSelectionHash, startup.AcceptedSelectionHash);
+            Assert.Equal(binding.ExecutionFence, startup.ExecutionFence);
+            Assert.Equal(binding.ModelSelectionReference, startup.ModelSelectionReference);
+            Assert.Equal("hostedCopilot", startup.ModelSourceMode);
+            Assert.Equal(binding.Image?.Digest, startup.ImageDigest);
+            Assert.Equal(binding.Image?.Platform, startup.ImagePlatform);
+            Assert.Equal(firstPlacement.PodUid, startup.PodUid);
+            Assert.Null(startup.P1CoreInvocationId);
+            Assert.Null(startup.P1SetupInvocationId);
         }
         Assert.Equal(placementsBeforeReadyStatus, runtimeRunStartOwners.UniquePlacementCount);
         Assert.Equal(bootstrapRequestsBeforeReadyStatus, runtimeRunStartOwners.ObservedPaths.Count(

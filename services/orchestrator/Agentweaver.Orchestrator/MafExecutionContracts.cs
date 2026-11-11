@@ -332,6 +332,8 @@ internal sealed record MafExecutionCheckpoint(
         ImmutableDictionary<string, MafExecutionDispatchIntent>.Empty.WithComparers(StringComparer.Ordinal);
     public ImmutableDictionary<string, string> Results { get; init; } =
         ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
+    public ImmutableDictionary<string, RuntimeChildTurnCompletionReceipt> ChildTurnReceipts { get; init; } =
+        ImmutableDictionary<string, RuntimeChildTurnCompletionReceipt>.Empty.WithComparers(StringComparer.Ordinal);
     public ImmutableDictionary<string, MafExecutionScribeGateIntent> ScribeIntents { get; init; } =
         ImmutableDictionary<string, MafExecutionScribeGateIntent>.Empty.WithComparers(StringComparer.Ordinal);
     public ImmutableDictionary<string, MafScribeTerminalReceipt> ScribeReceipts { get; init; } =
@@ -441,6 +443,7 @@ internal static class MafExecutionIds
 internal static class MafExecutionCheckpointContract
 {
     internal const string StoreName = "coordinator-execution";
+    internal const int MaximumChildTurnReceipts = 512;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -512,6 +515,13 @@ internal static class MafExecutionCheckpointContract
                 !string.Equals(result, retained, StringComparison.Ordinal))
                 throw new ArgumentException(
                     "A completed dispatch result cannot be changed or removed.", nameof(next));
+        }
+        foreach (var (associationId, receipt) in previous.ChildTurnReceipts)
+        {
+            if (!next.ChildTurnReceipts.TryGetValue(associationId, out var retained) ||
+                !ChildTurnReceiptsMatch(receipt, retained))
+                throw new ArgumentException(
+                    "A persisted child-turn completion receipt cannot be removed or changed.", nameof(next));
         }
         foreach (var (stepId, intent) in previous.BuildTestIntents)
         {
@@ -707,7 +717,7 @@ internal static class MafExecutionCheckpointContract
             throw new ArgumentException("A bounded, bound MAF execution checkpoint is required.", nameof(state));
         if (state.FixedWorkAssociations is null)
             throw new ArgumentException("MAF execution fixed-work associations are required.", nameof(state));
-        if (state.PendingDispatches is null || state.Results is null ||
+        if (state.PendingDispatches is null || state.Results is null || state.ChildTurnReceipts is null ||
             state.BuildTestIntents is null || state.BuildTestReceipts is null ||
             state.OpenPullRequestIntents is null || state.OpenPullRequestReceipts is null ||
             state.MergeIntents is null || state.MergeReceipts is null ||
@@ -749,6 +759,17 @@ internal static class MafExecutionCheckpointContract
                     char.IsControl(character) && character is not ('\r' or '\n' or '\t')))
                 throw new ArgumentException("MAF execution results are invalid.", nameof(state));
         }
+
+        foreach (var (associationId, receipt) in state.ChildTurnReceipts)
+        {
+            if (receipt is null || !IsIdentifier(associationId) ||
+                !state.Results.TryGetValue(associationId, out var result) ||
+                receipt.OutputSha256 != RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(result)))
+                throw new ArgumentException("MAF execution child-turn receipts are invalid.", nameof(state));
+            _ = receipt.ValidateEvidenceFor(state.WorkPlanId, associationId);
+        }
+        if (state.ChildTurnReceipts.Count > MaximumChildTurnReceipts)
+            throw new ArgumentException("MAF execution child-turn receipt history is too large.", nameof(state));
 
         var operationIds = new HashSet<Guid>();
         foreach (var (stepId, intent) in state.BuildTestIntents)
@@ -934,6 +955,12 @@ internal static class MafExecutionCheckpointContract
     /// </summary>
     private static bool IsHash(string? value) =>
         value is { Length: 64 } && value.All(Uri.IsHexDigit);
+
+    private static bool ChildTurnReceiptsMatch(
+        RuntimeChildTurnCompletionReceipt left, RuntimeChildTurnCompletionReceipt right) =>
+        JsonElement.DeepEquals(
+            JsonSerializer.SerializeToElement(left, JsonOptions),
+            JsonSerializer.SerializeToElement(right, JsonOptions));
 
     /// <summary>
     /// Checks that metadata is present, bounded, and free of control characters.

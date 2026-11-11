@@ -457,7 +457,7 @@ internal sealed class RuntimeUsageSourceOwner(
     /// <summary>
     /// Requires the native turn to have been accounted before the caller treats its result as complete.
     /// </summary>
-    internal Task RequireNativeTurnAccountedAsync(
+    internal Task<RuntimeChildTurnAccountingEvidence> RequireNativeTurnAccountedAsync(
         HttpContext context, RuntimeRegistration expected, RuntimeA2ASendRequest message, string answer,
         Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task> requireCurrentOwner,
         CancellationToken cancellationToken) =>
@@ -468,9 +468,8 @@ internal sealed class RuntimeUsageSourceOwner(
                     if (registration != expected)
                         throw new RuntimeAuthorizationException("runtime_registration_stale");
                     await requireCurrentOwner(connection, transaction, currentToken).ConfigureAwait(false);
-                    await store.RequireNativeTurnAccountedWithinTransactionAsync(
+                    return await store.RequireNativeTurnAccountedWithinTransactionAsync(
                         connection, transaction, registration, message, answer, currentToken).ConfigureAwait(false);
-                    return true;
                 }, token), cancellationToken);
 
     /// <summary>

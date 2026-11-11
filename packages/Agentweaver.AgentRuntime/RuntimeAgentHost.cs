@@ -1581,8 +1581,11 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                     var session = await RequireSessionAsync(pending.Proof, pending.Actor, turn.Token).ConfigureAwait(false);
                     string answer;
                     RuntimeNativeTurnRecordedReceipt? recorded = null;
+                    RuntimeNativeTurnAccountingReceipt? accounting = null;
+                    SessionMaterialAcknowledgment? userMaterial = null;
+                    SessionMaterialAcknowledgment? assistantMaterial = null;
                     if (session.Registration.Binding.WorkflowStepId is not null)
-                        (answer, recorded) = await session.SendNativeTurnAsync(
+                        (answer, recorded, userMaterial, assistantMaterial) = await session.SendNativeTurnAsync(
                             pending.Request, _material!, _usageSource!, turn.Token).ConfigureAwait(false);
                     else
                         // The per-message restriction is checked by the tool hook and permission owner path.
@@ -1605,15 +1608,32 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                             return _accountedUsage.TryGetValue(eventId, out var reference)
                                 ? reference : throw new RuntimeAuthorizationException("runtime_usage_accounting_pending");
                         }).ToImmutableArray();
-                        await _usageSource!.CompleteNativeTurnAsync(session, recorded, references, turn.Token)
+                        accounting = await _usageSource!.CompleteNativeTurnAsync(
+                            session, recorded, references, turn.Token)
                             .ConfigureAwait(false);
                     }
-                    pending.Completion.TrySetResult(new(
+                    var response = new RuntimeA2AResponse(
                         "message", Guid.NewGuid(), session.Facts.SdkSessionId, "agent", [new("text", answer)])
                     {
                         RootCompletion = session.LastRootTurnCompletion,
                         RootReplay = session.LastRootTurnReplay
-                    });
+                    };
+                    if (recorded is not null &&
+                        pending.Request.Message.Metadata.ChildDispatch is { } childDispatch)
+                    {
+                        if (accounting is null || userMaterial is null || assistantMaterial is null)
+                            throw new RuntimeAuthorizationException("runtime_child_turn_receipt_invalid");
+                        var completion = RuntimeChildTurnCompletionReceipt.Create(
+                            pending.Request, recorded, accounting, userMaterial, assistantMaterial)
+                            .ValidateFor(
+                                pending.Request,
+                                response,
+                                session.Registration,
+                                childDispatch.WorkPlanId,
+                                childDispatch.AssociationId);
+                        response = response with { ChildCompletion = completion };
+                    }
+                    pending.Completion.TrySetResult(response);
                 }
                 catch (OperationCanceledException) when (turn.IsCancellationRequested)
                 {

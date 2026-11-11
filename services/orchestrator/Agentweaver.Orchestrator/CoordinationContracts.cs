@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
 
 namespace Agentweaver.Orchestrator;
@@ -199,7 +200,38 @@ public sealed record MafExecutionDispatchResponse(
     /// <summary>Gets bounded child startup status keyed by work-plan association.</summary>
     public ImmutableDictionary<string, RuntimeStartupSummary> ChildRuntimeStartup { get; init; } =
         ImmutableDictionary<string, RuntimeStartupSummary>.Empty.WithComparers(StringComparer.Ordinal);
+
+    /// <summary>Gets bounded evidence for completed native child turns.</summary>
+    public ImmutableArray<RuntimeChildTurnCompletionReceipt> CompletionEvidence { get; init; } = [];
+
+    /// <summary>Gets owner-derived task completion evidence when every required proof joins.</summary>
+    public MafExecutionTaskCompletionEvidence? TaskCompletion { get; init; }
 }
+
+/// <summary>Proof projection joining one task claim to its completed plan, child turn, and output witness.</summary>
+public sealed record MafExecutionTaskCompletionEvidence(
+    string State,
+    string TaskId,
+    long TaskRevision,
+    long ClaimTaskRevision,
+    Guid ClaimId,
+    string TaskContentSha256,
+    string RunId,
+    string RootSessionId,
+    string AcceptedSelectionHash,
+    long ExecutionFence,
+    string WorkPlanId,
+    string WorkflowId,
+    string DefinitionRevision,
+    string AssociationId,
+    string ChildSessionId,
+    string ChildOutputSha256,
+    string ChildReceiptSha256,
+    string CheckpointId,
+    long CheckpointRevision,
+    long DecisionStateVersion,
+    string OutputSetSha256,
+    string OutputWitnessProofSha256);
 
 /// <summary>
 /// Request body asking the coordinator to assemble a work-plan result.

@@ -496,6 +496,55 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ClaimReusesTheExistingAcceptedRunRootAndExactRetryDoesNotCreateAnother()
+    {
+        var claimedTask = TaskRef("existing-root-claim");
+        var conflictingTask = TaskRef("existing-root-conflict");
+        var graph = await AddTaskAsync(claimedTask);
+        graph = (await _backlog.AddTaskAsync(
+            conflictingTask, graph.Revision, CancellationToken.None)).Value!;
+        var selection = Selection("run-existing-root");
+        const string existingRootId = "workflow-generation-root";
+        var acceptedRoot = await _coordination.AcceptRootAsync(
+            _actor, selection, existingRootId, CancellationToken.None);
+
+        var first = await ClaimAsync(claimedTask, graph.Revision, selection, "existing-root-claim-key");
+        Assert.True(first.IsSuccess);
+        Assert.Equal(existingRootId, first.Value!.RootSessionId);
+        var retry = await ClaimAsync(claimedTask, graph.Revision, selection, "existing-root-claim-key");
+        Assert.True(retry.IsSuccess);
+        Assert.Equal(first.Value, retry.Value);
+        Assert.Equal(acceptedRoot.RootSessionId, retry.Value!.RootSessionId);
+
+        using var conflictingSnapshot = JsonDocument.Parse("""
+            {
+              "projectConfiguration": {
+                "blueprintWorkflowReferences": [],
+                "agentCharters": [],
+                "casting": []
+              },
+              "runLimits": {
+                "maxChildren": 99,
+                "maxConcurrentChildren": 32
+              }
+            }
+            """);
+        var conflictingSelection = selection with
+        {
+            Selection = selection.Selection with { Snapshot = conflictingSnapshot.RootElement.Clone() }
+        };
+        var currentGraph = (await _backlog.ReadGraphAsync(
+            claimedTask.ProjectId, CancellationToken.None)).Value!;
+        var conflict = await Assert.ThrowsAsync<CoordinationException>(() => ClaimAsync(
+            conflictingTask, currentGraph.Revision, conflictingSelection, "conflicting-root-claim-key"));
+        Assert.Equal("accepted_run_conflict", conflict.Code);
+        Assert.Equal(1, await ReadCountAsync("backlog_tasks", "claim_id IS NOT NULL"));
+        Assert.Equal(1, await ReadCountAsync("accepted_runs", "project_id = 'backlog-project'"));
+        Assert.Equal(1, await ReadCountAsync("coordination_sessions",
+            "project_id = 'backlog-project' AND node_kind = 'coordinator'"));
+    }
+
+    [Fact]
     public async Task ConcurrentClaimsCreateOneTaskClaimRootAndInitialDecision()
     {
         var task = TaskRef("feature");

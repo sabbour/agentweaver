@@ -373,6 +373,7 @@ internal sealed class RuntimeRunStartDispatcher(
         AuthorizedRunSelection? selection,
         CancellationToken cancellationToken)
     {
+        summary = AddVerifiedRuntimeProjection(intent, summary);
         var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
         // Status passes its own selection so its final authority recheck covers this projection.
         selection ??= await projects.ReadAcceptedSelectionWithAuthorityAsync(
@@ -448,6 +449,60 @@ internal sealed class RuntimeRunStartDispatcher(
             ImageDigest = readiness?.Image.Digest,
             ImagePlatform = readiness?.Image.Platform,
             PodUid = placement?.PodUid
+        };
+    }
+
+    private static RuntimeStartupSummary AddVerifiedRuntimeProjection(
+        RuntimeRunStartIntent intent, RuntimeStartupSummary summary)
+    {
+        if (summary.State != "ready")
+            return summary;
+        using var links = JsonDocument.Parse(intent.ReceiptLinks);
+        if (!links.RootElement.TryGetProperty("registration", out var registrationValue) ||
+            !links.RootElement.TryGetProperty("placement", out var placementValue) ||
+            !links.RootElement.TryGetProperty("activation", out var activationValue))
+            throw new CoordinationException(
+                "runtime_start_readiness_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+        var registration = registrationValue.Deserialize<RuntimeRegistration>(JsonOptions)
+            ?? throw new CoordinationException(
+                "runtime_start_readiness_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+        var placement = placementValue.Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions)
+            ?? throw new CoordinationException(
+                "runtime_start_readiness_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+        var readiness = activationValue.Deserialize<RuntimeHostReadinessReceipt>(JsonOptions)
+            ?? throw new CoordinationException(
+                "runtime_start_readiness_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+        var binding = registration.Binding;
+        if (registration.State != RuntimeRegistrationState.Active ||
+            registration.RuntimeInstanceId != readiness.RuntimeInstanceId ||
+            registration.Revision != readiness.RegistrationRevision ||
+            binding.ProjectId != intent.ProjectId || binding.RunId != intent.RunId ||
+            binding.SessionId != intent.RootSessionId ||
+            binding.AcceptedSelectionHash != intent.AcceptedSelectionHash ||
+            binding.ExecutionFence != intent.ExecutionFence ||
+            readiness.ExecutionFence != intent.ExecutionFence ||
+            readiness.Image != binding.Image ||
+            string.IsNullOrWhiteSpace(placement.PodUid))
+            throw new CoordinationException(
+                "runtime_start_readiness_receipt_invalid", StatusCodes.Status503ServiceUnavailable);
+        return summary with
+        {
+            RuntimeInstanceId = registration.RuntimeInstanceId,
+            RegistrationRevision = registration.Revision,
+            AcceptedSelectionHash = binding.AcceptedSelectionHash,
+            ExecutionFence = binding.ExecutionFence,
+            ModelSelectionReference = binding.ModelSelectionReference,
+            ModelSourceMode = binding.ModelSourceMode switch
+            {
+                Agentweaver.Abstractions.ModelSourceMode.Byok => "byok",
+                Agentweaver.Abstractions.ModelSourceMode.HostedCopilot => "hostedCopilot",
+                _ => null
+            },
+            ReasoningEffort = binding.ReasoningEffort,
+            MaxPromptTokens = binding.MaxPromptTokens,
+            ImageDigest = readiness.Image.Digest,
+            ImagePlatform = readiness.Image.Platform,
+            PodUid = placement.PodUid
         };
     }
 }

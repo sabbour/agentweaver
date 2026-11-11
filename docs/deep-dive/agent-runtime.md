@@ -178,13 +178,23 @@ receipt binds the request and content hashes to the source, model, image,
 registration, accepted selection, and execution fence. It also records a
 complete cache-baseline cursor for replacement checks.
 
-An ordinary Host replacement passes that receipt and its cache binding through
-the normal activation path. The new Host must restore the same compatible SDK
-cache and report a complete reconstruction interval with no new native event
-or tool effect before Orchestrator marks the operation ready. An exact retry
-afterward uses replacement-lineage evidence and returns the saved completion;
-it does not call native `Send` again. The general material reader does not gain
-permission to read SDK cache bytes.
+Child model-backed turns use a separate completion receipt. The Host returns
+it only after native completion, usage accounting, and Events acknowledgments
+for the child user and assistant material. The receipt binds request, prompt,
+and output hashes to the child session, WorkPlan association, registration,
+accepted selection, fence, source, image, model selection, actual model, native
+completion events, usage event IDs, and material references. Orchestrator
+validates the receipt against the exact dispatch and stores it with the
+checkpoint result. Dispatch exposes bounded `completionEvidence` entries, not
+the prompt or output text.
+
+A coordinator-root Host replacement passes the root-turn receipt and its cache
+binding through the normal activation path. The new Host must restore the same
+compatible SDK cache and report a complete reconstruction interval with no new
+native event or tool effect before Orchestrator marks the operation ready. An
+exact retry afterward uses replacement-lineage evidence and returns the saved
+completion; it does not call native `Send` again. The general material reader
+does not gain permission to read SDK cache bytes.
 
 ### Diagnose runtime failures
 

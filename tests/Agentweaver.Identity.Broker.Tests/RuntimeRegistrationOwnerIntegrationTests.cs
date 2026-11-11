@@ -1187,7 +1187,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ownerSchema, binding.ProjectId, binding.RunId, cancellationToken));
         sdk.EmitNativeCompletionReceipt = true;
         sdk.EmitUsageWithTurn = accountNativeUsage is not null;
-        var (answer, recorded) = await session.SendNativeTurnAsync(message, material, sourceClient, cancellationToken);
+        var (answer, recorded, _, _) = await session.SendNativeTurnAsync(
+            message, material, sourceClient, cancellationToken);
         Assert.Equal(sdk.AssistantResponse, answer);
         RuntimeNativeTurnContract.ValidateRecorded(recorded);
         Assert.Equal(intent.MessageId, recorded.Admission.MessageId);

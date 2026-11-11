@@ -12,6 +12,7 @@ using Agentweaver.Abstractions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
+using Agentweaver.Providers.Sandbox.AgentSandbox;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -67,8 +68,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await using var sdk = new ControlledCopilotRuntime(TimeSpan.FromMinutes(6))
         {
             EmitUsageAfterCreate = false,
+            EmitUsageWithTurn = true,
+            EmitNativeCompletionReceipt = true,
+            PersistNativeSessionState = true,
             ExpectedAvailableToolsCount = 7,
             ExpectedPrompt = Assert.Single(plan.Items).Task,
+            ModelId = "gpt-6.1-sol",
             SdkCredential = connection.AccessToken,
             BeforeTurnResponse = token => releaseTurn.Task.WaitAsync(token)
         };
@@ -82,7 +87,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 settings["IdentityBroker__RuntimeBootstrap__OrchestratorOwnerAddress"] = "https://orchestrator.test/";
                 settings["IdentityBroker__RuntimeBootstrap__EnvironmentOwnerAddress"] = "https://environment.test/";
                 settings["IdentityBroker__RuntimeBootstrap__BootstrapLifetime"] = "00:01:00";
-                settings["IdentityBroker__RuntimeBootstrap__SourceLifetime"] = "00:02:00";
+                settings["IdentityBroker__RuntimeBootstrap__SourceLifetime"] = "00:10:00";
                 ConfigureRunBindingSettings(settings);
                 connection.ConfigureSettings(settings);
             },
@@ -117,6 +122,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     leaseClockStart: DateTimeOffset.UtcNow,
                     mountPath: "/workspace",
                     volumeId: RuntimeRunStartKeys.WorkspaceVolumeId(owner),
+                    startupBudgets: new AgentSandboxStartupBudgets(120, 120, 120, 120, 120, 600),
                     firstStartWorkspace: true,
                     provisionFirstStartOnDemand: true);
                 Assert.True(environments.TryAdd(environmentId, childEnvironment));
@@ -136,6 +142,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             return await ReadJsonAsync<RuntimeRunStartPlacementReceipt>(placementResponse);
         }, replayToOwner: true);
         var rootPath = $"/api/projects/{projectId}/runs/{RunId}/coordination/sessions/root";
+        var loseNextDispatchReply = 0;
+        var lostDispatchReplyCount = 0;
         async Task<HttpResponseMessage> DispatchAsync(CancellationToken token)
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, rootPath + "/actions/dispatch")
@@ -144,7 +152,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     new MafExecutionDispatchRequest(version, plan.Id), options: CoordinationJsonOptions)
             };
             AddBearerAndTenant(request, runToken, TenantId);
-            return await client.SendAsync(request, token);
+            var response = await client.SendAsync(request, token);
+            if (Interlocked.Exchange(ref loseNextDispatchReply, 0) == 1 && response.IsSuccessStatusCode)
+            {
+                response.Dispose();
+                Interlocked.Increment(ref lostDispatchReplyCount);
+                throw new HttpRequestException("The child completion reply was lost.");
+            }
+            return response;
         }
         async Task<long> ChildRegistrationCountAsync()
         {
@@ -239,7 +254,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 ".scratch", "production-child-workspace", registration.RuntimeInstanceId.ToString("N")));
             Directory.CreateDirectory(workspace);
             var modelBindings = new RuntimeModelBindingsResolver(
-                "production-child-test-v1", new Dictionary<string, RuntimeModelBinding>
+                "native-model-bindings-v1", new Dictionary<string, RuntimeModelBinding>
                 {
                     [registration.Binding.ModelSelectionReference!] = new(sdk.ModelId, ModelSourceMode.HostedCopilot)
                 });
@@ -334,6 +349,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.False(sdk.TurnReceived.Task.IsCompleted);
 
             using var sendCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            Interlocked.Exchange(ref loseNextDispatchReply, 1);
             var send = DispatchAsync(sendCancellation.Token);
             if (await Task.WhenAny(send, sdk.TurnReceived.Task) == send)
             {
@@ -346,10 +362,33 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Single(sdk.Requests, request => request.Method == "session.create");
             Assert.Single(sdk.Requests, request => request.Method == "session.send");
             Assert.Equal(1, await ChildRegistrationCountAsync());
-            sendCancellation.Cancel();
             releaseTurn.TrySetResult();
-            try { using var ignored = await send; }
-            catch (OperationCanceledException) { }
+            await Assert.ThrowsAsync<HttpRequestException>(() => send.WaitAsync(cancellationToken));
+            Assert.Equal(1, lostDispatchReplyCount);
+            using var completedDispatch = await DispatchAsync(cancellationToken);
+            await AssertStatusAsync(completedDispatch, HttpStatusCode.OK, string.Join('\n', failures));
+            var dispatchResult = await ReadJsonAsync<MafExecutionDispatchResponse>(completedDispatch);
+            Assert.False(dispatchResult.IsComplete);
+            var completionEvidence = Assert.Single(dispatchResult.CompletionEvidence);
+            var checkpointBinding = CoordinationEndpoints.CreateExecutionCheckpointBinding(
+                new(projectId, RunId, "root"),
+                new CoordinationActor(owner.ActorIssuer, owner.ActorId),
+                registration.Binding.ExecutionFence,
+                MafExecutionCheckpointStore.CurrentSdkVersion,
+                registration.Binding.ModelSelectionReference!);
+            var checkpointStore = new MafExecutionCheckpointStore(
+                orchestrator.Services.GetRequiredService<PostgresMafCheckpointStore>(),
+                checkpointBinding);
+            var completedCheckpoint = await checkpointStore.ReadLatestAsync(cancellationToken);
+            Assert.NotNull(completedCheckpoint);
+            Assert.Single(completedCheckpoint.State.Results);
+            Assert.Empty(completedCheckpoint.State.PendingDispatches);
+            Assert.True(JsonElement.DeepEquals(
+                JsonSerializer.SerializeToElement(
+                    Assert.Single(completedCheckpoint.State.ChildTurnReceipts.Values), CoordinationJsonOptions),
+                JsonSerializer.SerializeToElement(completionEvidence, CoordinationJsonOptions)));
+            Assert.Single(sdk.Requests, request => request.Method == "session.send");
+            Assert.Single(completedCheckpoint.State.ReviewIntents);
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
@@ -362,7 +401,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         {
             releaseTurn.TrySetResult();
             if (host is not null)
-                await host.DisposeAsync();
+            {
+                try
+                {
+                    await host.DisposeAsync();
+                }
+                catch (RuntimeAuthorizationException error) when (error.Code == "runtime_owner_denied")
+                {
+                    // The owner may revoke the child source grant before local Host teardown.
+                }
+            }
             receiver?.Dispose();
             hostHttp?.Dispose();
             ownerHttp?.Dispose();

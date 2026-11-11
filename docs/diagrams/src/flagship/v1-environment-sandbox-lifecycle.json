@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Root and child AgentHost startup, readiness, and terminal cleanup",
-  "alt": "Orchestrator records the root start or committed child spawn and its stable operation IDs before Environment provisions the placement. Environment checks current authority, selection, and fences, then creates a retained workspace and Sandbox. Orchestrator registers the runtime, requests Broker bootstrap, and activates the Host through Environment. Readiness requires current registration, placement, and Host evidence before child dispatch. Terminal cleanup checks native quiescence and cleans children before the root. Environment releases only the exact owned resource and retains workspace data. Unknown or unresolved calls remain pending.",
+  "alt": "Orchestrator records the root start or committed child spawn and its stable operation IDs before Environment provisions the placement. Environment checks current authority, selection, and fences, then creates a retained workspace and Sandbox. Orchestrator registers the runtime, requests Broker bootstrap, and activates the Host through Environment. Readiness requires current registration, placement, and Host evidence before child dispatch. Ready status returns verified runtime, model selection, image, and Pod fields without requiring a P1 claim. A child blocked after bootstrap delivery failure remains a cleanup obligation until terminal cleanup confirms retirement. Terminal cleanup checks native quiescence and cleans children before the root. Environment releases only the exact owned resource and retains workspace data. Unknown or unresolved calls remain pending.",
   "autonumber": true,
   "participants": [
     {
@@ -42,7 +42,7 @@
     {
       "type": "note",
       "over": ["orchestrator", "environment"],
-      "label": "Root start follows admission. Child start follows a committed, owner-bound spawn and uses the same durable startup stages. Pending is not readiness."
+      "label": "Root and child starts share durable stages; pending is not readiness. Readback returns runtime, model reference/source, image, and Pod without P1 IDs."
     },
     {
       "type": "message",
@@ -175,7 +175,7 @@
     {
       "type": "note",
       "over": ["orchestrator", "agenthost"],
-      "label": "Terminal runs keep their outcome. Prove native work stopped; clean children before the root. Workspace data stays retained."
+      "label": "Terminal runs keep their outcome. Prove native quiescence; clean children before root. Failed delivery stays a cleanup obligation until retirement is confirmed."
     },
     {
       "type": "message",
