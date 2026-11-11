@@ -110,6 +110,27 @@ test('foundation source requires a valid Key Vault name in the reviewed paramete
   }
 });
 
+test('optional BYOK Key Vault name is valid, target-specific, and separate from the core vault', () => {
+  const omitted = sourceFixture();
+  assert.doesNotThrow(() => resolveSource(omitted.config, omitted.deps));
+
+  const configured = sourceFixture({
+    parameterValues: { byokKeyVaultName: { value: 'agentweaver-byok-kv-v1' } },
+  });
+  assert.doesNotThrow(() => resolveSource(configured.config, configured.deps));
+
+  for (const name of [
+    'agentweaver-kv',
+    'other-byok-kv',
+    'agentweaver-bad--vault',
+    'agentweaver-this-name-is-longer-than-twenty-four',
+    42,
+  ]) {
+    const invalid = sourceFixture({ parameterValues: { byokKeyVaultName: { value: name } } });
+    assert.throws(() => resolveSource(invalid.config, invalid.deps), /Key Vault name|target prefix|separate/);
+  }
+});
+
 test('exact source hashes tracked reviewed inputs and binds JSON parameters to target', () => {
   const { config, deps } = sourceFixture();
   const receipt = resolveSource(config, deps);

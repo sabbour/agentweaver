@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "Azure resource and evidence dependencies",
-  "alt": "Structural Azure topology and evidence map. AKS has a public API endpoint with Kubernetes RBAC, managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault, Blob, and AMPLS endpoints use the private-endpoint subnet. Blob has private platform-artifacts and session-material containers. One managed wildcard HTTPS Gateway listener serves exact-host Broker, auth, api, and Portal routes; the canonical agentweaver issuer remains unchanged, and Portal's Copilot BFF remains same-origin. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2; AMPLS is global. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights; the Events & Sessions identity receives Storage Blob Data Contributor only on session-material. The separate database migration Jobs use their migration identity; the Events & Sessions Job mirrors its runtime Sessions and Messaging settings because the host validates them before migration. Identity runtime-table permissions are separate source definitions, not live bootstrap evidence. Source image builds add a verified Linux-x64 ACS library and pinned OPA binary to Orchestrator and AgentHost, then probe each image before publication. This does not claim a live deployment or complete foundation acceptance.",
+  "alt": "Structural Azure topology and evidence map. AKS has a public API endpoint with Kubernetes RBAC, managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; the core Key Vault, optional BYOK Key Vault, Blob, and AMPLS endpoints use the private-endpoint subnet. The optional BYOK vault uses RBAC, purge protection, and disabled public access; only the Identity Broker workload identity receives Key Vault Secrets Officer on that vault. The core vault keeps its existing Broker and Probe Secrets User and App Routing Certificates User assignments. Blob has private platform-artifacts and session-material containers. One managed wildcard HTTPS Gateway listener serves exact-host Broker, auth, api, and Portal routes; the canonical agentweaver issuer remains unchanged, and Portal's Copilot BFF remains same-origin. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2; AMPLS is global. Bicep grants the probe identity Key Vault Secrets User at the core vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights; the Events & Sessions identity receives Storage Blob Data Contributor only on session-material. The separate database migration Jobs use their migration identity; the Events & Sessions Job mirrors its runtime Sessions and Messaging settings because the host validates them before migration. Identity runtime-table permissions are separate source definitions, not live bootstrap evidence. Source image builds add a verified Linux-x64 ACS library and pinned OPA binary to Orchestrator and AgentHost, then probe each image before publication. This does not claim a live deployment or complete foundation acceptance.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [],
@@ -60,8 +60,17 @@
     },
     {
       "id": "keyvault",
-      "label": "Azure Key Vault",
+      "label": "Core Azure Key Vault",
       "subLabel": "Private endpoint; routing Certificate User; CSI rotation 'true' / '2m'",
+      "icon": "key",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/security/Key_Vaults.svg;imageAspect=1",
+      "badge": { "text": "Bicep", "tone": "teal" }
+    },
+    {
+      "id": "byok-keyvault",
+      "label": "BYOK Key Vault",
+      "subLabel": "Private; RBAC; purge protection; Broker Secrets Officer",
       "icon": "key",
       "library": "azure",
       "shape": "image;image=img/lib/azure2/security/Key_Vaults.svg;imageAspect=1",
@@ -114,18 +123,10 @@
     {
       "id": "image-receipt",
       "label": "CI image receipt",
-      "subLabel": "Source SHA/tree-bound registry manifest digest",
+      "subLabel": "Assets + per-image probe; source SHA/tree-bound digest",
       "icon": "box",
       "fluentIcon": "package",
       "badge": { "text": "Source-bound", "tone": "lavender" }
-    },
-    {
-      "id": "acs-image-assets",
-      "label": "ACS image assets",
-      "subLabel": "Orchestrator + AgentHost; Linux-x64 native library; pinned OPA",
-      "icon": "box",
-      "fluentIcon": "package",
-      "badge": { "text": "Each image probed", "tone": "lavender" }
     },
     {
       "id": "acceptance-consumer",
@@ -155,14 +156,14 @@
       { "id": "routing-identity", "type": "card", "position": { "x": 860, "y": 310 }, "data": { "label": "App Routing identity", "subLabel": "AKS-generated resourceId, clientId, and objectId" } },
       { "id": "custom-zones", "type": "card", "position": { "x": 860, "y": 540 }, "data": { "label": "Optional existing DNS zones", "subLabel": "1–5 public/private IDs; roles scoped to each exact zone" } },
       { "id": "postgres", "type": "card", "position": { "x": 80, "y": 310 }, "data": { "label": "Azure Database for PostgreSQL", "subLabel": "Entra-only; private network" } },
-      { "id": "keyvault", "type": "card", "position": { "x": 500, "y": 540 }, "data": { "label": "Azure Key Vault", "subLabel": "Private; routing Certificate User; CSI rotation 'true' / '2m'" } },
+      { "id": "keyvault", "type": "card", "position": { "x": 500, "y": 540 }, "data": { "label": "Core Azure Key Vault", "subLabel": "Private; routing Certificate User; CSI rotation 'true' / '2m'" } },
+      { "id": "byok-keyvault", "type": "card", "position": { "x": 500, "y": 1230 }, "data": { "label": "BYOK Key Vault", "subLabel": "Private; RBAC; purge protection; Broker Secrets Officer" } },
       { "id": "blob", "type": "card", "position": { "x": 860, "y": 80 }, "data": { "label": "Azure Blob Storage", "subLabel": "Private endpoint" } },
       { "id": "monitor", "type": "card", "position": { "x": 860, "y": 1000 }, "data": { "label": "Azure Monitor", "subLabel": "Fresh AppDependencies/AppRequests query after Job completion" } },
       { "id": "probe-identity", "type": "card", "position": { "x": 80, "y": 540 }, "data": { "label": "Foundation Probe identity", "subLabel": "Dedicated user-assigned managed identity" } },
       { "id": "job", "type": "card", "position": { "x": 500, "y": 770 }, "data": { "label": "Foundation Probe Job", "subLabel": "One completed Job; pod UID/owner, namespace, SA, projected ID, success" } },
       { "id": "native-receipt", "type": "card", "position": { "x": 80, "y": 770 }, "data": { "label": "Probe receipt", "subLabel": "Source/target/identity; Key Vault, PostgreSQL, Blob proof" } },
-      { "id": "image-receipt", "type": "card", "position": { "x": 80, "y": 1000 }, "data": { "label": "CI image receipt", "subLabel": "Source SHA/tree-bound registry manifest digest" } },
-      { "id": "acs-image-assets", "type": "card", "position": { "x": 80, "y": 1230 }, "data": { "label": "ACS image assets", "subLabel": "Orchestrator + AgentHost; Linux-x64 native library; pinned OPA" } },
+      { "id": "image-receipt", "type": "card", "position": { "x": 80, "y": 1000 }, "data": { "label": "CI image receipt", "subLabel": "Assets + per-image probe; source SHA/tree-bound digest" } },
       { "id": "acceptance-consumer", "type": "card", "position": { "x": 500, "y": 1000 }, "data": { "label": "External evidence gate", "subLabel": "Complete evidence => deployedAcceptance; otherwise blocked" } },
       { "id": "egress", "type": "card", "position": { "x": 860, "y": 1230 }, "data": { "label": "Probe egress policy", "subLabel": "Overlay-scoped NetworkPolicy" } }
     ]
@@ -183,9 +184,9 @@
     { "from": "job", "to": "native-receipt", "label": "probe output" },
     { "from": "native-receipt", "to": "acceptance-consumer", "label": "validated native receipt" },
     { "from": "image-receipt", "to": "acceptance-consumer", "label": "source-bound image digest" },
-    { "from": "acs-image-assets", "to": "image-receipt", "label": "verified assets and per-image probe" },
     { "from": "monitor", "to": "acceptance-consumer" },
     { "from": "vnet", "to": "keyvault", "label": "KV PE attachment" },
+    { "from": "vnet", "to": "byok-keyvault", "label": "BYOK KV PE attachment" },
     { "from": "vnet", "to": "blob", "label": "Blob PE attachment" },
     { "from": "vnet", "to": "monitor", "label": "AMPLS PE; private Logs /32" },
     { "from": "job", "to": "keyvault", "label": "secret probe" },
