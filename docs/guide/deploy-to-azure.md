@@ -604,6 +604,27 @@ The legacy `agenthost-model-egress` policy and its rendered model hosts stay
 unchanged. A failed read or create stops the deployment. If another creator
 wins the create race, the helper leaves that object unchanged.
 
+### Apply Environment RBAC before an upgrade
+
+The deployment preflight checks the Environment ServiceAccount's effective
+permissions but does not apply its Role. If a preflight reports that the
+ServiceAccount lacks a permission, stop and ask a Kubernetes administrator to
+apply the proposed manifest from the exact source commit. Before you apply it,
+confirm that your current `kubectl` context targets the approved cluster. From
+the repository root in PowerShell, use the same full 40-character commit SHA
+that you passed to `azure:deploy-from-commit`:
+
+```powershell
+kubectl config current-context
+git show <source-sha>:deploy/k8s/proposed/environment-agent-sandbox-rbac.yaml | kubectl apply -f -
+```
+
+Review and approve this RBAC change before you run it. The command applies
+only the Role and bindings in the selected source manifest; do not add broader
+permissions. After the apply succeeds, rerun the deployment command. If the
+preflight says it could not check the permission or impersonate the ServiceAccount,
+resolve that caller authorization instead of treating it as a missing Role rule.
+
 ### Prepare the Broker migration resources
 
 When the Broker image is selected, the helper reads the
@@ -1259,11 +1280,16 @@ because the AgentHost network policies block the Kubernetes API by design.
 
 The proposed rules in
 `deploy/k8s/proposed/environment-agent-sandbox-rbac.yaml` are not in the active
-Kustomize bundle and are not applied by the helper. If Environment replacement,
-apply, or rollout fails, its recovery annotation remains; rerun the same
-deployment command to resume. If the ConfigMap is absent, the helper leaves
-the Deployment stopped until the retry recreates it. Do not clear the
-annotation manually. Other immutable ConfigMaps, including
+Kustomize bundle and are not applied by the helper. The helper checks these
+permissions but does not update the Environment Role. For an existing
+installation, follow the
+[Environment RBAC upgrade procedure](#apply-environment-rbac-before-an-upgrade)
+when the deployment preflight reports a missing permission.
+
+If Environment replacement, apply, or rollout fails, its recovery annotation
+remains; rerun the same deployment command to resume. If the ConfigMap is
+absent, the helper leaves the Deployment stopped until the retry recreates it.
+Do not clear the annotation manually. Other immutable ConfigMaps, including
 `knowledge-runtime-config`, still require the manual procedure above.
 
 Kubelet caches immutable ConfigMap data per node and does not watch it for

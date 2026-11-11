@@ -288,7 +288,10 @@ renders `deploy/k8s`, applies the namespaced resources to the selected context,
 and waits for all nine Deployments. Any failed migration prevents the root
 overlay apply. The local operator identity needs the required AKS and namespace
 permissions; this command neither provisions Azure resources nor grants
-access.
+access. The Environment ServiceAccount Role is also a separate operator-owned
+prerequisite. Preflight checks its effective permissions but does not apply the
+proposed manifest; an explicit denial stops before workload writes and names
+the permission and source file to apply.
 
 For a selected Broker image, the helper reads the target's
 `<resource-group>-id-identity-broker-migration` identity and requires its

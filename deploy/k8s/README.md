@@ -364,3 +364,18 @@ have type `kubernetes.io/tls`. The helper reports every missing Secret or wrong
 type in one error. These checks do not grant permissions or create Secrets. The
 proposed rules in `proposed/environment-agent-sandbox-rbac.yaml` are not part
 of the active Kustomize bundle and are never applied by this command.
+
+For an upgrade, a newer source may require a permission that is not present in
+the live Environment Role. If the preflight reports a missing permission, an
+administrator must apply the manifest from the exact source commit before you
+retry deployment. From the repository root in PowerShell, first confirm that
+`kubectl config current-context` selects the approved cluster. Then apply the
+source manifest using the same full commit SHA that you selected for deployment:
+
+```powershell
+git show <source-sha>:deploy/k8s/proposed/environment-agent-sandbox-rbac.yaml | kubectl apply -f -
+```
+
+This applies only the Role, RoleBinding, ClusterRole, and ClusterRoleBinding
+in that source manifest. The deployment command does not apply them or widen
+their permissions.
