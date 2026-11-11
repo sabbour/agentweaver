@@ -569,6 +569,16 @@ missing, malformed, or different map stops the command before writes. The
 helper does not create, replace, or repair the map. For a first install, use
 the [Broker ConfigMap bootstrap procedure](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#bootstrap-the-first-install-broker-configmap).
 
+Before its first Kubernetes write, the helper also reads
+`CiliumNetworkPolicy/agenthost-platform-egress` in namespace `agentweaver`. If
+the policy is missing, the helper creates a DNS-only seed for AgentHost pods
+and kube-dns. If the policy exists, the helper leaves it unchanged. The policy
+is outside the Kustomize bundle, so a later deploy does not reset provider-owned
+rules. This seed does not activate the platform policy source or reconciler.
+The legacy `agenthost-model-egress` policy and its rendered model hosts stay
+unchanged. A failed read or create stops the deployment. If another creator
+wins the create race, the helper leaves that object unchanged.
+
 ### First-install Broker ConfigMap order
 
 For a fresh installation, follow this order:

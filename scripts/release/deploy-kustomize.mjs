@@ -56,6 +56,9 @@ export const ENVIRONMENT_RBAC_REQUIREMENTS = [
   ...rbacEntries('', 'events', ['list']),
   ...rbacEntries('', 'persistentvolumeclaims', ['get', 'create', 'delete']),
   ...rbacEntries('cilium.io', 'ciliumnetworkpolicies', ['get', 'create', 'update', 'delete']),
+  ...rbacEntries('cilium.io', 'ciliumnetworkpolicies', ['patch'], {
+    resourceName: 'agenthost-platform-egress',
+  }),
   ...rbacEntries('', 'pods', ['get'], { subresource: 'log' }),
   ...rbacEntries('', 'pods', ['create'], { subresource: 'exec' }),
   ...rbacEntries('', 'pods', ['create'], { subresource: 'attach' }),
@@ -126,11 +129,11 @@ Target option:
                                        kubectl context must point at the API server of that target.
 
 The manifest selects published images to update; omitted images keep their
-currently deployed references. The command checks the cluster prerequisites
-and required Secrets,
-creates the workspace StorageClass when it is missing, runs migrations for
-selected services, applies namespaced Kustomize resources, waits for every
-Deployment rollout, and then runs a sandbox smoke check.
+currently deployed references. The command checks the cluster prerequisites and required Secrets, creates
+the provider-owned AgentHost egress seed and workspace StorageClass when each
+is missing, runs migrations for selected services, applies namespaced
+Kustomize resources, waits for every Deployment rollout, and then runs a
+sandbox smoke check.
 `;
 export const DEPLOY_KUSTOMIZE_REGISTRY_OPTION = true;
 export const DEPLOY_KUSTOMIZE_MODEL_BINDINGS_OPTION = true;
@@ -1476,6 +1479,64 @@ export function stampAgentHostModelEgress(resources) {
   return names.map(name => name.matchName);
 }
 
+const AGENTHOST_PLATFORM_EGRESS_POLICY = 'agenthost-platform-egress';
+const AGENTHOST_PLATFORM_EGRESS_SEED = {
+  apiVersion: 'cilium.io/v2',
+  kind: 'CiliumNetworkPolicy',
+  metadata: {
+    name: AGENTHOST_PLATFORM_EGRESS_POLICY,
+    namespace: NAMESPACE,
+    labels: { 'agentweaver.io/service': 'agenthost' },
+  },
+  spec: {
+    endpointSelector: { matchLabels: { 'agentweaver.io/workload': 'agenthost' } },
+    egress: [{
+      toEndpoints: [{
+        matchLabels: {
+          'k8s:io.kubernetes.pod.namespace': 'kube-system',
+          'k8s:k8s-app': 'kube-dns',
+        },
+      }],
+      toPorts: [{
+        ports: [
+          { port: '53', protocol: 'UDP' },
+          { port: '53', protocol: 'TCP' },
+        ],
+      }],
+    }],
+  },
+};
+
+/** Creates the provider-owned DNS seed only when the exact policy is absent. */
+export function ensureAgentHostPlatformEgressSeed(exec, context, root) {
+  const existing = kubectl(exec, context, [
+    'get', 'ciliumnetworkpolicies.cilium.io', AGENTHOST_PLATFORM_EGRESS_POLICY,
+    '--ignore-not-found=true', '--output=json',
+  ], root, `Could not read CiliumNetworkPolicy/${AGENTHOST_PLATFORM_EGRESS_POLICY}`);
+  if (existing.stdout.trim()) {
+    let policy;
+    try {
+      policy = JSON.parse(existing.stdout);
+    } catch {
+      fail(`Kubernetes returned invalid JSON for CiliumNetworkPolicy/${AGENTHOST_PLATFORM_EGRESS_POLICY}.`);
+    }
+    if (policy.apiVersion !== 'cilium.io/v2' || policy.kind !== 'CiliumNetworkPolicy' ||
+        policy.metadata?.name !== AGENTHOST_PLATFORM_EGRESS_POLICY ||
+        policy.metadata?.namespace !== NAMESPACE) {
+      fail(`Kubernetes returned an unexpected object for CiliumNetworkPolicy/${AGENTHOST_PLATFORM_EGRESS_POLICY}.`);
+    }
+    return false;
+  }
+
+  const created = exec('kubectl', [
+    'create', '--filename', '-', '--context', context, '--namespace', NAMESPACE,
+  ], { check: false, cwd: root, input: stringify(AGENTHOST_PLATFORM_EGRESS_SEED) });
+  if (created.status === 0) return true;
+  const diagnostic = (created.stderr || created.stdout || `exit ${created.status}`).trim();
+  if (/^Error from server \(AlreadyExists\):/m.test(diagnostic)) return false;
+  fail(`Could not create CiliumNetworkPolicy/${AGENTHOST_PLATFORM_EGRESS_POLICY}: ${diagnostic}`);
+}
+
 function findJob(resources, name) {
   const matches = resources.filter(resource =>
     resource.kind === 'Job' && resource.metadata?.name === name);
@@ -1795,6 +1856,10 @@ export async function deployKustomize(options, overrides = {}) {
     };
     const jobs = migrationJobs(root, exec, context, digests, registries, requestedImages.keys(), resourceGroup, pairs);
 
+    const createdPlatformEgressSeed = ensureAgentHostPlatformEgressSeed(exec, context, root);
+    log(createdPlatformEgressSeed
+      ? `Created CiliumNetworkPolicy/${AGENTHOST_PLATFORM_EGRESS_POLICY} DNS-only seed.`
+      : `Kept existing CiliumNetworkPolicy/${AGENTHOST_PLATFORM_EGRESS_POLICY}.`);
     if (prerequisites.createStorageClass) {
       must(exec, 'kubectl', ['create', '--filename', '-', '--context', context], {
         cwd: root, input: stringify(prerequisites.createStorageClass),

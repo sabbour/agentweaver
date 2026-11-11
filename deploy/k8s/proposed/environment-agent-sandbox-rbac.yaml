@@ -32,6 +32,10 @@ rules:
   - apiGroups: [cilium.io]
     resources: [ciliumnetworkpolicies]
     verbs: [get, create, update, delete]
+  - apiGroups: [cilium.io]
+    resources: [ciliumnetworkpolicies]
+    resourceNames: [agenthost-platform-egress]
+    verbs: [patch]
   # Build-test only.
   - apiGroups: [""]
     resources: [pods]
