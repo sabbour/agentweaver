@@ -45,6 +45,9 @@ prerequisites:
    keys through the approved operator process.
 4. Confirm the database and Entra workload identities are ready. The deploy
    command runs the selected service migrations before it applies workloads.
+   The Broker migration identity and its database principal must already exist.
+   When a Broker image is selected, the helper creates or validates the Broker
+   migration ServiceAccount, egress policy, and ConfigMap.
 5. Run the infrastructure deployment so that the cluster has the `kata` node
    pool. RuntimeClass `kata-vm-isolation` needs a Ready node in this pool.
 6. After the product Services exist, configure the separate managed Gateway
@@ -67,15 +70,17 @@ when that policy is missing.
 | `provider-catalogs/` | Projects & Config provider catalog snapshot and ConfigMap. |
 | `profiles/` | Optional runtime profiles, including the AgentHost runtime ConfigMap. |
 | `proposed/` | Proposed Agent Sandbox RBAC rules, excluded from the active Kustomize bundle. |
-| `migrations/identity-broker/` | Separate Broker migration ServiceAccount and one-shot Job. |
+| `migrations/identity-broker/` | Separate Broker migration ServiceAccount, ConfigMap, egress policy, and one-shot Job. |
 | `migrations/p1-postgres/` | PostgreSQL migration resources applied by the database maintenance runner. |
 | `routing/identity-broker/` | Portal Web route and Cilium ingress policies included by the root bundle. |
 | `acceptance/foundation-probe/` | Supplemental acceptance probe resources. |
 | `kustomization.yaml` | Root product bundle and image pins. |
 
 The root bundle does not create the managed Gateway, certificates, public DNS,
-PostgreSQL databases, or operator-owned Secrets. Migration Jobs and acceptance
-resources remain separate from the product overlay.
+PostgreSQL databases, or operator-owned Secrets. The deployment helper creates
+the Broker migration Kubernetes resources only when a Broker migration runs.
+Migration Jobs and acceptance resources remain separate from the product
+overlay.
 
 ## Deploy
 
@@ -116,6 +121,24 @@ does not change it. The policy stays outside the Kustomize bundle, so later
 deployments do not reset provider-owned rules. This seed does not activate the
 platform policy source or reconciler. The legacy `agenthost-model-egress`
 policy and its rendered model hosts remain unchanged.
+
+The Azure managed identity, its federated identity credential, and the Broker
+database principal and permissions must already exist. The helper does not
+provision these Azure or database resources.
+
+When the Broker image is selected, the helper renders the Broker migration
+overlay for the selected target. It reads the
+`<resource-group>-id-identity-broker-migration` managed identity from the
+operator-selected Azure subscription. Its client ID and tenant ID must match
+the rendered target values. Before any migration Job runs, the helper checks
+`ServiceAccount/identity-broker-migration`,
+`CiliumNetworkPolicy/identity-broker-migration-egress`, and
+`ConfigMap/identity-broker-migration-config`. It creates missing resources and
+leaves matching resources unchanged. If an existing resource differs, the
+helper stops and reports the resource and changed field paths. It does not
+replace or delete a conflicting resource. Resolve the conflict, then rerun the
+same deployment command. If creation stops partway through, rerun the command;
+the helper keeps matching resources and creates only those that remain missing.
 
 Projects & Config's runtime identity is DDL-restricted. The migration Job uses
 Kubernetes Workload Identity, not a token Secret. The one-time setup provisions
@@ -311,8 +334,11 @@ Only selected images with schema migrations run migration Jobs: Broker runs
 the Broker Job; Environment, Orchestrator, and Events & Sessions each run
 their matching migration Job; Projects & Config runs its migration Job. Web, Gateway,
 MCP, Knowledge, and AgentHost updates do not trigger these deployment
-migration Jobs. The root Kustomize bundle is still applied and all nine
-Deployment rollouts are checked.
+migration Jobs. Before the Broker Job runs, the helper checks and creates any
+missing Broker migration Kubernetes resources. A conflict or failed migration
+stops the deployment before the root Kustomize bundle is applied. The bundle
+is still applied after the migrations pass, and all nine Deployment rollouts
+are checked.
 
 The helper checks permissions before replacing any changed immutable runtime
 ConfigMap. Its allow-list includes `agenthost-runtime-v1` and

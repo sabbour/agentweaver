@@ -3,6 +3,7 @@ kind: Kustomization
 namespace: agentweaver
 resources:
   - serviceaccount.yaml
+  - configmap.yaml
   - job.yaml
   - egress.yaml
 patches:

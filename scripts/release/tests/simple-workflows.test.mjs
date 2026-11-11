@@ -22,6 +22,7 @@ import {
   requireLiveAzureCostPreserved,
   stampEventsRuntimeConfigDigest,
 } from '../model-bindings-overlay.mjs';
+import { applyTargetValues, targetValuePairs } from '../target-values.mjs';
 import { buildIdentityBrokerProviderPlan } from '../../azure/lib/identity-broker-provider-setup.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -34,6 +35,11 @@ const brokerRuntimeConfig = JSON.parse(readFileSync(
 ));
 const brokerRuntimeConfigName = 'identity-broker-runtime-config-v3';
 const readYaml = relativePath => parse(readFileSync(path.join(root, relativePath), 'utf8'));
+const brokerMigrationServiceAccount = readYaml('deploy/k8s/migrations/identity-broker/serviceaccount.yaml');
+const brokerMigrationClientId =
+  brokerMigrationServiceAccount.metadata.annotations['azure.workload.identity/client-id'];
+const brokerMigrationTenantId =
+  brokerMigrationServiceAccount.metadata.annotations['azure.workload.identity/tenant-id'];
 const agentHostRuntimeConfig = readYaml('deploy/k8s/profiles/agenthost/runtime-config.example.yaml');
 const agentHostModelEgress = readYaml('deploy/k8s/base/agenthost-model-egress.yaml');
 const copilotModelHosts = [
@@ -216,6 +222,43 @@ function job(name) {
   };
 }
 
+function brokerMigrationSetupResources(directory, resourceGroup = 'agentweaver') {
+  const overlay = path.join(directory, 'deploy', 'k8s', 'migrations', 'identity-broker');
+  const resources = ['serviceaccount.yaml', 'configmap.yaml', 'egress.yaml'].map(file =>
+    parse(readFileSync(path.join(overlay, file), 'utf8')));
+  const egress = resources.find(resource => resource.kind === 'CiliumNetworkPolicy');
+  for (const rule of egress.spec.egress) {
+    for (const name of [
+      ...(rule.toFQDNs ?? []),
+      ...(rule.toPorts ?? []).flatMap(port => port.rules?.dns ?? []),
+    ]) {
+      if (name.matchName === 'CHANGEME-POSTGRES-HOST') {
+        name.matchName = 'agentweaver-pg.postgres.database.azure.com';
+      }
+    }
+  }
+  const pairs = targetValuePairs(directory, resourceGroup);
+  return resources.map(resource => parse(applyTargetValues(stringify(resource), pairs)));
+}
+
+function writeBrokerOnlyImageManifest(directory) {
+  writeFileSync(path.join(directory, 'images.json'), JSON.stringify({
+    images: { 'agentweaver.identity.broker': selectedTag },
+  }));
+}
+
+function createdBrokerMigrationResources(calls) {
+  const names = new Set([
+    'identity-broker-migration',
+    'identity-broker-migration-egress',
+    'identity-broker-migration-config',
+  ]);
+  return calls.filter(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+    !call.args.includes('--dry-run=server'))
+    .map(call => parse(call.options.input))
+    .filter(resource => names.has(resource.metadata?.name));
+}
+
 function workloadSource(kustomizationPath, name) {
   return parse(readFileSync(path.join(path.dirname(kustomizationPath), 'base', 'workloads',
     deploymentFiles[name]), 'utf8'));
@@ -345,6 +388,11 @@ const canaryNode = region => ({ metadata: { labels: { 'topology.kubernetes.io/re
 
 function fakeExec(calls, {
   failedJob, failedRollout, missingProjectsConfigClientId, liveImageRefs, distinctDigests = false,
+  brokerMigrationLiveResources = [], brokerMigrationReadFailure,
+  brokerMigrationIdentityMismatch = false, brokerMigrationTenantMismatch = false,
+  brokerMigrationCreateRace, brokerMigrationCreateRaceConflict = false, brokerMigrationCreateFailure,
+  brokerMigrationDryRunRace, brokerMigrationDryRunRaceConflict = false,
+  selectedContextServer = 'selected-context',
   liveRuntimeConfig = runtimeConfig, denyRuntimeConfigDelete = false,
   liveBrokerRuntimeConfig = brokerRuntimeConfig, missingBrokerRuntimeConfig = false,
   brokerConfigMapReadFailure = false, brokerConfigMapReadOutput,
@@ -363,12 +411,18 @@ function fakeExec(calls, {
 } = {}) {
   const live = state ?? { runtimeConfig: structuredClone(liveRuntimeConfig), deployments: {} };
   live.configMaps ??= {};
+  live.migrationResources ??= {};
   const withIdentity = resource => {
     const value = structuredClone(resource);
     value.metadata.uid ??= `uid-${value.metadata.name}`;
     value.metadata.resourceVersion ??= '1';
     return value;
   };
+  for (const resource of brokerMigrationLiveResources) {
+    const value = withIdentity(resource);
+    if (value.kind === 'ConfigMap') live.configMaps[value.metadata.name] = value;
+    else live.migrationResources[value.metadata.name] = value;
+  }
   live.configMaps['agenthost-runtime-v1'] ??= withIdentity(agentHostRuntimeConfig);
   live.configMaps['environment-runtime-config'] ??= withIdentity(environmentRuntimeConfig);
   if (!missingBrokerRuntimeConfig) {
@@ -380,6 +434,29 @@ function fakeExec(calls, {
   }
   let podPolls = remainingPodPolls;
   let podListIndex = 0;
+  const racedBrokerMigrationResources = new Set();
+  const storeBrokerMigrationResource = resource => {
+    const value = withIdentity(resource);
+    if (value.kind === 'ConfigMap') live.configMaps[value.metadata.name] = value;
+    else live.migrationResources[value.metadata.name] = value;
+  };
+  const raceBrokerMigrationCreate = (resource, raceName, conflicting) => {
+    const name = resource.metadata.name;
+    if (name !== raceName || racedBrokerMigrationResources.has(name)) return false;
+    const value = structuredClone(resource);
+    if (conflicting) {
+      if (value.kind === 'ServiceAccount') {
+        value.metadata.annotations['azure.workload.identity/client-id'] = serviceClientId;
+      } else if (value.kind === 'CiliumNetworkPolicy') {
+        value.spec.egress.at(-1).toFQDNs[0].matchName = 'conflict.example.test';
+      } else if (value.kind === 'ConfigMap') {
+        value.data.ConnectionStrings__IdentityBrokerMigration = 'conflict';
+      }
+    }
+    storeBrokerMigrationResource(value);
+    racedBrokerMigrationResources.add(name);
+    return true;
+  };
   let failedApplies = failApplyCount;
   let activatedProviderDuringMigration = false;
   const liveDeployment = name => {
@@ -458,9 +535,27 @@ function fakeExec(calls, {
             : digestForTag(existingTag);
       return { status: 0, stdout: `${digest}\n`, stderr: '' };
     }
-    if (command === 'az') return { status: 0, stdout: `${serviceClientId}\n`, stderr: '' };
+    if (command === 'az') {
+      if (args[0] === 'identity' && args[1] === 'show' &&
+          args.includes('--query') && args.includes('{clientId:clientId,tenantId:tenantId}')) {
+        const resourceGroup = args[args.indexOf('--resource-group') + 1];
+        const clientId = targetValuePairs(options.cwd, resourceGroup).reduce(
+          (value, [from, to]) => value === from ? to : value,
+          brokerMigrationClientId,
+        );
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            clientId: brokerMigrationIdentityMismatch ? serviceClientId : clientId,
+            tenantId: brokerMigrationTenantMismatch ? serviceClientId : brokerMigrationTenantId,
+          }),
+          stderr: '',
+        };
+      }
+      return { status: 0, stdout: `${serviceClientId}\n`, stderr: '' };
+    }
     if (command !== 'kubectl') return { status: 1, stdout: '', stderr: `unexpected command ${command}` };
-    if (args[0] === 'config') return { status: 0, stdout: 'selected-context\n', stderr: '' };
+    if (args[0] === 'config') return { status: 0, stdout: `${selectedContextServer}\n`, stderr: '' };
     if (args[0] === 'auth') {
       if (args.some(arg => arg === '--resource-name' || arg.startsWith('--resource-name='))) {
         return { status: 1, stdout: '', stderr: 'error: unknown flag: --resource-name' };
@@ -485,6 +580,10 @@ function fakeExec(calls, {
     }
     if (args[0] === 'get' && args[1] === 'configmap') {
       const name = args[2];
+      if (name === 'identity-broker-migration-config' &&
+          (brokerMigrationReadFailure === name || brokerMigrationReadFailure === true)) {
+        return { status: 1, stdout: '', stderr: 'Error from server (Forbidden): cannot read resource' };
+      }
       if (name === brokerRuntimeConfigName && brokerConfigMapReadFailure) {
         return { status: 1, stdout: 'private-response-value', stderr: 'private-error-value' };
       }
@@ -549,6 +648,19 @@ function fakeExec(calls, {
         },
       } }), stderr: '' };
     }
+    if (args[0] === 'get' &&
+        ((args[1] === 'serviceaccount' && args[2] === 'identity-broker-migration') ||
+         (args[1] === 'ciliumnetworkpolicy' && args[2] === 'identity-broker-migration-egress'))) {
+      if (brokerMigrationReadFailure === args[2] || brokerMigrationReadFailure === true) {
+        return { status: 1, stdout: '', stderr: 'Error from server (Forbidden): cannot read resource' };
+      }
+      const resource = live.migrationResources[args[2]];
+      return {
+        status: 0,
+        stdout: resource ? JSON.stringify(resource) : '',
+        stderr: '',
+      };
+    }
     if (args[0] === 'get' && args[1] === 'storageclass') {
       const storageClass = liveStorageClass === undefined ? {
         metadata: { name: args[2] }, provisioner: 'file.csi.azure.com', mountOptions: [
@@ -594,12 +706,31 @@ function fakeExec(calls, {
         ].map(value => `---\n${JSON.stringify(value)}`).join('\n'), stderr: '' };
       }
       if (relative.endsWith('migrations/identity-broker')) {
-        return { status: 0, stdout: `---\n${JSON.stringify(job('identity-broker-migration'))}`, stderr: '' };
+        const resources = [
+          ...brokerMigrationSetupResources(calls[0].options.cwd),
+          parse(readFileSync(path.join(args[1], 'job.yaml'), 'utf8')),
+        ];
+        return {
+          status: 0,
+          stdout: resources.map(resource => `---\n${stringify(resource)}`).join('\n'),
+          stderr: '',
+        };
       }
       return { status: 1, stdout: '', stderr: `unexpected kustomize path ${relative}` };
     }
     if (args[0] === 'create') {
       const resource = parse(options.input);
+      if (args.includes('--dry-run=server')) {
+        if (raceBrokerMigrationCreate(
+          resource, brokerMigrationDryRunRace, brokerMigrationDryRunRaceConflict,
+        )) {
+          return {
+            status: 1, stdout: '',
+            stderr: `Error from server (AlreadyExists): ${resource.kind.toLowerCase()} "${resource.metadata.name}" already exists`,
+          };
+        }
+        return { status: 0, stdout: `${resource.kind.toLowerCase()}/${resource.metadata.name}\n`, stderr: '' };
+      }
       if (resource.kind === 'List' && smokeCreateError) {
         return { status: 1, stdout: '', stderr: smokeCreateError };
       }
@@ -615,6 +746,25 @@ function fakeExec(calls, {
         live.platformEgressPolicy = structuredClone(resource);
         live.platformEgressPolicy.metadata.resourceVersion = '1';
         return { status: 0, stdout: 'ciliumnetworkpolicy created\n', stderr: '' };
+      }
+      if (resource.kind === 'ServiceAccount' || resource.kind === 'CiliumNetworkPolicy' ||
+          resource.kind === 'ConfigMap' && resource.metadata.name === 'identity-broker-migration-config') {
+        const existing = resource.kind === 'ConfigMap'
+          ? live.configMaps[resource.metadata.name]
+          : live.migrationResources[resource.metadata.name];
+        if (existing || raceBrokerMigrationCreate(
+          resource, brokerMigrationCreateRace, brokerMigrationCreateRaceConflict,
+        )) {
+          return {
+            status: 1, stdout: '',
+            stderr: `Error from server (AlreadyExists): ${resource.kind.toLowerCase()} "${resource.metadata.name}" already exists`,
+          };
+        }
+        if (resource.metadata.name === brokerMigrationCreateFailure) {
+          return { status: 1, stdout: '', stderr: 'Error from server (Forbidden): cannot create resource' };
+        }
+        storeBrokerMigrationResource(resource);
+        return { status: 0, stdout: `${resource.kind.toLowerCase()}/${resource.metadata.name} created\n`, stderr: '' };
       }
       if (resource.kind === 'ConfigMap') {
         const name = resource.metadata.name;
@@ -1594,6 +1744,343 @@ test('active installer stamps the selected AgentHost platform digest and measure
   }
 });
 
+test('Broker migration creates target dependencies before running its Job', async () => {
+  const directory = scratch();
+  const calls = [];
+  const logs = [];
+  try {
+    writeBrokerOnlyImageManifest(directory);
+    const targetPairs = targetValuePairs(directory, 'awwus2np01');
+    const targetClientId = targetPairs.reduce(
+      (value, [from, to]) => value === from ? to : value,
+      brokerMigrationClientId,
+    );
+    const targetBrokerRuntimeConfig = parse(applyTargetValues(
+      JSON.stringify(brokerRuntimeConfig), targetPairs,
+    ));
+    await deployKustomize({
+      imageManifest: 'images.json',
+      resourceGroup: 'awwus2np01',
+    }, {
+      root: directory,
+      exec: fakeExec(calls, {
+        liveBrokerRuntimeConfig: targetBrokerRuntimeConfig,
+        selectedContextServer: 'https://awwus2np01-aks-88n4s6n7.hcp.westus2.azmk8s.io:443',
+      }),
+      log: message => logs.push(message),
+      sleep: async () => {},
+    });
+
+    const created = createdBrokerMigrationResources(calls);
+    assert.deepEqual(created.map(resource => `${resource.kind}/${resource.metadata.name}`), [
+      'ServiceAccount/identity-broker-migration',
+      'CiliumNetworkPolicy/identity-broker-migration-egress',
+      'ConfigMap/identity-broker-migration-config',
+    ]);
+    const brokerJob = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'Job');
+    assert.ok(created.every(resource => calls.findIndex(call =>
+      call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).metadata?.name === resource.metadata.name) < brokerJob));
+
+    const [serviceAccount, egress, configMap] = created;
+    assert.equal(serviceAccount.metadata.annotations['azure.workload.identity/client-id'], targetClientId);
+    assert.equal(serviceAccount.metadata.annotations['azure.workload.identity/tenant-id'], brokerMigrationTenantId);
+    assert.equal(configMap.data.ConnectionStrings__IdentityBrokerMigration,
+      'Host=awwus2np01-pg.postgres.database.azure.com;Database=agentweaver;' +
+      'Username=awwus2np01-id-identity-broker-migration;SSL Mode=VerifyFull');
+    assert.equal(configMap.data.IdentityBroker__Migration__WorkloadIdentityClientId, targetClientId);
+    assert.equal(configMap.data.IdentityBroker__Migration__WorkloadIdentityTenantId, brokerMigrationTenantId);
+    assert.equal(configMap.data.IdentityBroker__Migration__WorkloadIdentityTokenFilePath,
+      '/var/run/secrets/azure/tokens/azure-identity-token');
+    assert.equal(egress.spec.egress.at(-1).toFQDNs[0].matchName,
+      'awwus2np01-pg.postgres.database.azure.com');
+    assert.ok(logs.some(message => message.startsWith('Migration Job identity-broker-migration-') &&
+      message.endsWith(' completed.')));
+    assert.ok(calls.some(call => call.command === 'az' && call.args.includes('awwus2np01-id-identity-broker-migration')));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Broker migration accepts matching existing resources without changing them', async () => {
+  const directory = scratch();
+  const calls = [];
+  try {
+    writeBrokerOnlyImageManifest(directory);
+    const existing = brokerMigrationSetupResources(directory);
+    existing[0].metadata.labels['operator.example/owner'] = 'kept';
+    existing[0].secrets = [{ name: 'kubernetes-added-token' }];
+    existing[0].metadata.uid = 'existing-sa-uid';
+    existing[0].metadata.resourceVersion = '9';
+    existing[1].immutable = false;
+    existing[1].metadata.managedFields = [{ manager: 'operator' }];
+    existing[1].metadata.creationTimestamp = '2026-11-10T00:00:00Z';
+    existing[2].metadata.managedFields = [{ manager: 'operator' }];
+    existing[2].status = { conditions: [] };
+    await deployKustomize({ imageManifest: 'images.json' }, {
+      root: directory,
+      exec: fakeExec(calls, { brokerMigrationLiveResources: existing }),
+      log() {},
+    });
+
+    assert.deepEqual(createdBrokerMigrationResources(calls), []);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'Job'), true);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Broker migration reports an existing resource conflict before creating anything', async () => {
+  const directory = scratch();
+  const calls = [];
+  try {
+    writeBrokerOnlyImageManifest(directory);
+    const existing = brokerMigrationSetupResources(directory);
+    existing[1].data.ConnectionStrings__IdentityBrokerMigration = 'different-connection';
+    await assert.rejects(
+      deployKustomize({ imageManifest: 'images.json' }, {
+        root: directory,
+        exec: fakeExec(calls, { brokerMigrationLiveResources: existing }),
+        log() {},
+      }),
+      /Existing ConfigMap\/identity-broker-migration-config conflicts .*data\.ConnectionStrings__IdentityBrokerMigration/,
+    );
+    assert.deepEqual(createdBrokerMigrationResources(calls), []);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'Job'), false);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'apply'), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Broker migration rejects additional Cilium policy specs', async () => {
+  const directory = scratch();
+  const calls = [];
+  try {
+    writeBrokerOnlyImageManifest(directory);
+    const existing = brokerMigrationSetupResources(directory);
+    existing[2].specs = [{ egress: [{ toEntities: ['world'] }] }];
+    await assert.rejects(
+      deployKustomize({ imageManifest: 'images.json' }, {
+        root: directory,
+        exec: fakeExec(calls, { brokerMigrationLiveResources: existing }),
+        log() {},
+      }),
+      /Existing CiliumNetworkPolicy\/identity-broker-migration-egress conflicts .*specs/,
+    );
+    assert.deepEqual(createdBrokerMigrationResources(calls), []);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'Job'), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Broker migration resumes safely after a partial resource creation', async () => {
+  const directory = scratch();
+  const firstCalls = [];
+  const retryCalls = [];
+  const state = {
+    runtimeConfig: structuredClone(runtimeConfig),
+    deployments: {},
+    configMaps: {},
+    migrationResources: {},
+  };
+  try {
+    writeBrokerOnlyImageManifest(directory);
+    await assert.rejects(
+      deployKustomize({ imageManifest: 'images.json' }, {
+        root: directory,
+        exec: fakeExec(firstCalls, { state, brokerMigrationCreateFailure: 'identity-broker-migration-egress' }),
+        log() {},
+      }),
+      /Could not create CiliumNetworkPolicy\/identity-broker-migration-egress/,
+    );
+    assert.ok(state.migrationResources['identity-broker-migration']);
+    assert.equal(state.migrationResources['identity-broker-migration-egress'], undefined);
+    assert.equal(state.configMaps['identity-broker-migration-config'], undefined);
+    assert.equal(firstCalls.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'Job'), false);
+
+    await deployKustomize({ imageManifest: 'images.json' }, {
+      root: directory,
+      exec: fakeExec(retryCalls, { state }),
+      log() {},
+    });
+    assert.deepEqual(createdBrokerMigrationResources(retryCalls).map(resource =>
+      `${resource.kind}/${resource.metadata.name}`), [
+      'CiliumNetworkPolicy/identity-broker-migration-egress',
+      'ConfigMap/identity-broker-migration-config',
+    ]);
+    assert.equal(retryCalls.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'Job'), true);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Broker migration accepts a matching create race and rejects a conflicting race', async t => {
+  await t.test('matching resource', async () => {
+    const directory = scratch();
+    const calls = [];
+    try {
+      writeBrokerOnlyImageManifest(directory);
+      await deployKustomize({ imageManifest: 'images.json' }, {
+        root: directory,
+        exec: fakeExec(calls, { brokerMigrationCreateRace: 'identity-broker-migration' }),
+        log() {},
+      });
+      assert.deepEqual(createdBrokerMigrationResources(calls).map(resource =>
+        `${resource.kind}/${resource.metadata.name}`), [
+        'ServiceAccount/identity-broker-migration',
+        'CiliumNetworkPolicy/identity-broker-migration-egress',
+        'ConfigMap/identity-broker-migration-config',
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('conflicting resource', async () => {
+    const directory = scratch();
+    const calls = [];
+    try {
+      writeBrokerOnlyImageManifest(directory);
+      await assert.rejects(
+        deployKustomize({ imageManifest: 'images.json' }, {
+          root: directory,
+          exec: fakeExec(calls, {
+            brokerMigrationCreateRace: 'identity-broker-migration',
+            brokerMigrationCreateRaceConflict: true,
+          }),
+          log() {},
+        }),
+        /Existing ServiceAccount\/identity-broker-migration conflicts .*metadata\.annotations\.azure\.workload\.identity\/client-id/,
+      );
+      assert.deepEqual(createdBrokerMigrationResources(calls).map(resource =>
+        `${resource.kind}/${resource.metadata.name}`), [
+        'ServiceAccount/identity-broker-migration',
+      ]);
+      assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+        parse(call.options.input).kind === 'Job'), false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('matching resource during server dry-run', async () => {
+    const directory = scratch();
+    const calls = [];
+    try {
+      writeBrokerOnlyImageManifest(directory);
+      await deployKustomize({ imageManifest: 'images.json' }, {
+        root: directory,
+        exec: fakeExec(calls, { brokerMigrationDryRunRace: 'identity-broker-migration' }),
+        log() {},
+      });
+      assert.deepEqual(createdBrokerMigrationResources(calls).map(resource =>
+        `${resource.kind}/${resource.metadata.name}`), [
+        'CiliumNetworkPolicy/identity-broker-migration-egress',
+        'ConfigMap/identity-broker-migration-config',
+      ]);
+      assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+        parse(call.options.input).kind === 'Job'), true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('conflicting resource during server dry-run', async () => {
+    const directory = scratch();
+    const calls = [];
+    try {
+      writeBrokerOnlyImageManifest(directory);
+      await assert.rejects(
+        deployKustomize({ imageManifest: 'images.json' }, {
+          root: directory,
+          exec: fakeExec(calls, {
+            brokerMigrationDryRunRace: 'identity-broker-migration',
+            brokerMigrationDryRunRaceConflict: true,
+          }),
+          log() {},
+        }),
+        /Existing ServiceAccount\/identity-broker-migration conflicts .*metadata\.annotations\.azure\.workload\.identity\/client-id/,
+      );
+      assert.deepEqual(createdBrokerMigrationResources(calls), []);
+      assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+        parse(call.options.input).kind === 'Job'), false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+test('Broker migration does not treat resource read errors as missing', async () => {
+  const directory = scratch();
+  const calls = [];
+  try {
+    writeBrokerOnlyImageManifest(directory);
+    await assert.rejects(
+      deployKustomize({ imageManifest: 'images.json' }, {
+        root: directory,
+        exec: fakeExec(calls, { brokerMigrationReadFailure: 'identity-broker-migration-egress' }),
+        log() {},
+      }),
+      /Could not read CiliumNetworkPolicy\/identity-broker-migration-egress/,
+    );
+    assert.deepEqual(createdBrokerMigrationResources(calls), []);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'Job'), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Broker migration rejects an Azure identity that differs from target values', async () => {
+  const directory = scratch();
+  const calls = [];
+  try {
+    writeBrokerOnlyImageManifest(directory);
+    await assert.rejects(
+      deployKustomize({ imageManifest: 'images.json' }, {
+        root: directory,
+        exec: fakeExec(calls, { brokerMigrationIdentityMismatch: true }),
+        log() {},
+      }),
+      /rendered Broker migration identity does not match the Azure identity/,
+    );
+    assert.deepEqual(createdBrokerMigrationResources(calls), []);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'Job'), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Broker migration rejects an Azure tenant that differs from target values', async () => {
+  const directory = scratch();
+  const calls = [];
+  try {
+    writeBrokerOnlyImageManifest(directory);
+    await assert.rejects(
+      deployKustomize({ imageManifest: 'images.json' }, {
+        root: directory,
+        exec: fakeExec(calls, { brokerMigrationTenantMismatch: true }),
+        log() {},
+      }),
+      /rendered Broker migration identity does not match the Azure identity/,
+    );
+    assert.deepEqual(createdBrokerMigrationResources(calls), []);
+    assert.equal(calls.some(call => call.command === 'kubectl' && call.args[0] === 'create' &&
+      parse(call.options.input).kind === 'Job'), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('deployment creates existing migration Jobs directly before one namespaced apply', async () => {
   const directory = scratch();
   const kustomizationPath = path.join(directory, 'deploy', 'k8s', 'kustomization.yaml');
@@ -1997,7 +2484,9 @@ test('single Broker image update runs only its matching migration Job', async ()
       .filter(value => value.kind === 'Job');
     assert.deepEqual(createdJobs.map(value => value.metadata.name.split('-').slice(0, -1).join('-')),
       ['identity-broker-migration']);
-    assert.equal(calls.some(call => call.command === 'az'), false);
+    const identityReads = calls.filter(call => call.command === 'az' && call.args[0] === 'identity' &&
+      call.args[1] === 'show' && call.args.includes('agentweaver-id-identity-broker-migration'));
+    assert.equal(identityReads.length, 1);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -2054,7 +2543,8 @@ test('active installer guards both runtime maps, activates Environment, and reco
         call.args[1] === '--raw');
     const creations = calls.map((call, index) => ({ call, index }))
       .filter(({ call }) => call.command === 'kubectl' && call.args[0] === 'create' &&
-        parse(call.options.input).kind === 'ConfigMap');
+        ['agenthost-runtime-v1', 'environment-runtime-config']
+          .includes(parse(call.options.input).metadata?.name));
     const scaleUp = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'scale' &&
       call.args[1] === 'deployment/environment' && call.args.includes('--replicas=3'));
     const apply = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'apply');
@@ -2809,22 +3299,27 @@ test('deploy creates only a missing product StorageClass before migrations', asy
       root: directory, exec: fakeExec(calls, { liveStorageClass: null }), log() {},
     });
     const creates = calls.filter(call => call.command === 'kubectl' && call.args[0] === 'create');
-    const policySeed = parse(creates[0].options.input);
+    const policyCreate = creates.find(call =>
+      parse(call.options.input).metadata?.name === 'agenthost-platform-egress');
+    assert.ok(policyCreate, 'the missing AgentHost policy seed is created');
+    const policySeed = parse(policyCreate.options.input);
     assert.equal(policySeed.kind, 'CiliumNetworkPolicy');
     assert.equal(policySeed.metadata.name, 'agenthost-platform-egress');
-    assert.equal(creates[0].args.includes('--namespace'), true);
-    const storageClassIndex = creates.findIndex(call => parse(call.options.input).kind === 'StorageClass');
-    const storageClass = parse(creates[storageClassIndex].options.input);
+    assert.equal(policyCreate.args.includes('--namespace'), true);
+    const storageClassCreate = creates.find(call =>
+      parse(call.options.input).kind === 'StorageClass');
+    assert.ok(storageClassCreate, 'the missing product StorageClass is created');
+    const storageClass = parse(storageClassCreate.options.input);
     assert.equal(storageClass.kind, 'StorageClass');
     assert.equal(storageClass.metadata.name, 'agentweaver-workspace-azurefile');
-    assert.equal(creates[storageClassIndex].args.includes('--namespace'), false);
+    assert.equal(storageClassCreate.args.includes('--namespace'), false);
     assert.equal(creates.filter(call => parse(call.options.input).kind === 'StorageClass').length, 1);
-    assert.ok(calls.findIndex(call => call.args[0] === 'create' &&
-      parse(call.options.input).kind === 'CiliumNetworkPolicy') <
-      calls.findIndex(call => call.args[0] === 'apply'));
+    assert.ok(calls.indexOf(policyCreate) < calls.findIndex(call => call.args[0] === 'apply'));
     const applied = parse(calls.find(call => call.args[0] === 'apply').options.input);
     assert.equal(applied.items.some(resource =>
       resource.kind === 'CiliumNetworkPolicy' && resource.metadata.name === 'agenthost-platform-egress'), false);
+    const firstMigration = creates.find(call => parse(call.options.input).kind === 'Job');
+    assert.ok(calls.indexOf(storageClassCreate) < calls.indexOf(firstMigration));
 
     const existing = [];
     await deployKustomize({ imageTag: selectedTag }, { root: directory, exec: fakeExec(existing), log() {} });

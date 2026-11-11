@@ -1544,6 +1544,131 @@ function findJob(resources, name) {
   return matches[0];
 }
 
+function findMigrationResource(resources, kind, name) {
+  const matches = resources.filter(resource =>
+    resource.kind === kind && resource.metadata?.name === name);
+  if (matches.length !== 1) fail(`Kustomize must render exactly one ${kind}/${name}.`);
+  return matches[0];
+}
+
+function brokerMigrationResourceDifferences(expected, actual) {
+  const fields = [];
+  for (const field of ['apiVersion', 'kind']) {
+    if (actual[field] !== expected[field]) fields.push(field);
+  }
+  for (const field of ['name', 'namespace']) {
+    if (actual.metadata?.[field] !== expected.metadata?.[field]) fields.push(`metadata.${field}`);
+  }
+  for (const field of ['labels', 'annotations']) {
+    for (const [key, value] of Object.entries(expected.metadata?.[field] ?? {})) {
+      if (actual.metadata?.[field]?.[key] !== value) fields.push(`metadata.${field}.${key}`);
+    }
+  }
+
+  if (expected.kind === 'ServiceAccount') {
+    if ((actual.automountServiceAccountToken ?? true) !==
+        (expected.automountServiceAccountToken ?? true)) {
+      fields.push('automountServiceAccountToken');
+    }
+  } else if (expected.kind === 'CiliumNetworkPolicy') {
+    if (!isDeepStrictEqual(actual.spec, expected.spec)) fields.push('spec');
+    if (!isDeepStrictEqual(actual.specs ?? [], expected.specs ?? [])) fields.push('specs');
+  } else if (expected.kind === 'ConfigMap') {
+    const expectedData = expected.data ?? {};
+    const actualData = actual.data ?? {};
+    for (const key of new Set([...Object.keys(expectedData), ...Object.keys(actualData)])) {
+      if (actualData[key] !== expectedData[key]) fields.push(`data.${key}`);
+    }
+    const expectedBinaryData = expected.binaryData ?? {};
+    const actualBinaryData = actual.binaryData ?? {};
+    for (const key of new Set([...Object.keys(expectedBinaryData), ...Object.keys(actualBinaryData)])) {
+      if (actualBinaryData[key] !== expectedBinaryData[key]) fields.push(`binaryData.${key}`);
+    }
+  }
+  return fields;
+}
+
+function requireMatchingBrokerMigrationResource(expected, actual) {
+  const fields = brokerMigrationResourceDifferences(expected, actual);
+  if (fields.length) {
+    fail(`Existing ${expected.kind}/${expected.metadata.name} conflicts with the rendered Broker migration resource ` +
+      `(different fields: ${fields.join(', ')}).`);
+  }
+}
+
+function readExistingBrokerMigrationResource(exec, context, resource, root) {
+  const name = resource.metadata.name;
+  const kind = resource.kind.toLowerCase();
+  const result = kubectl(exec, context, [
+    'get', kind, name, '--ignore-not-found=true', '--output=json',
+  ], root, `Could not read ${resource.kind}/${name}`);
+  if (!result.stdout.trim()) return undefined;
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    fail(`Kubernetes returned invalid JSON for ${resource.kind}/${name}.`);
+  }
+}
+
+function ensureBrokerMigrationResources(resources, exec, context, root, log) {
+  const missing = [];
+  for (const resource of resources) {
+    const existing = readExistingBrokerMigrationResource(exec, context, resource, root);
+    if (!existing) {
+      missing.push(resource);
+      continue;
+    }
+    requireMatchingBrokerMigrationResource(resource, existing);
+    log(`Using existing ${resource.kind}/${resource.metadata.name}.`);
+  }
+
+  const preflighted = [];
+  for (const resource of missing) {
+    const name = `${resource.kind}/${resource.metadata.name}`;
+    const result = exec('kubectl', [
+      'create', '--dry-run=server', '--field-manager', 'agentweaver-db-maintenance',
+      '--filename', '-', '--output=name',
+      '--context', context, '--namespace', NAMESPACE,
+    ], { check: false, cwd: root, input: stringify(resource) });
+    if (result.status === 0) {
+      preflighted.push(resource);
+      continue;
+    }
+
+    const diagnostic = (result.stderr || result.stdout || `exit ${result.status}`).trim();
+    if (!/already exists/i.test(diagnostic)) {
+      fail(`Could not validate ${name}: ${diagnostic}`);
+    }
+    const raced = readExistingBrokerMigrationResource(exec, context, resource, root);
+    if (!raced) fail(`Could not read ${name} after another deploy created it.`);
+    requireMatchingBrokerMigrationResource(resource, raced);
+    log(`Using existing ${name}.`);
+  }
+
+  for (const resource of preflighted) {
+    const name = `${resource.kind}/${resource.metadata.name}`;
+    const result = exec('kubectl', [
+      'create', '--field-manager', 'agentweaver-db-maintenance', '--filename', '-',
+      '--context', context, '--namespace', NAMESPACE,
+    ], { check: false, cwd: root, input: stringify(resource) });
+    if (result.status !== 0) {
+      const diagnostic = (result.stderr || result.stdout || `exit ${result.status}`).trim();
+      if (!/already exists/i.test(diagnostic)) {
+        fail(`Could not create ${name}: ${diagnostic}`);
+      }
+      const raced = readExistingBrokerMigrationResource(exec, context, resource, root);
+      if (!raced) fail(`Could not read ${name} after another deploy created it.`);
+      requireMatchingBrokerMigrationResource(resource, raced);
+      log(`Using existing ${name}.`);
+      continue;
+    }
+    const created = readExistingBrokerMigrationResource(exec, context, resource, root);
+    if (!created) fail(`Kubernetes did not return ${name} after creation.`);
+    requireMatchingBrokerMigrationResource(resource, created);
+    log(`Created ${name}.`);
+  }
+}
+
 /**
  * Fails unless the kubectl context points at the selected target's API server. The default target
  * only has to avoid every other registered target, so its existing contexts keep working.
@@ -1562,13 +1687,44 @@ export function assertTargetContext(exec, context, root, resourceGroup = 'agentw
 function migrationJobs(root, exec, context, digests, registries, selectedRepositories, resourceGroup, pairs) {
   const selected = new Set(selectedRepositories);
   const jobs = [];
+  let brokerMigrationResources;
   if (selected.has('agentweaver.identity.broker')) {
     const rendered = must(exec, 'kubectl', [
       'kustomize', path.join(root, 'deploy', 'k8s', 'migrations', 'identity-broker'),
     ], { cwd: root }, 'Broker migration Job rendering failed').stdout;
     const resources = parseKustomizeResources(applyTargetValues(rendered, pairs)).items;
-    readResource(exec, context, 'serviceaccount', 'identity-broker-migration', root);
-    readResource(exec, context, 'configmap', 'identity-broker-migration-config', root);
+    const serviceAccount = findMigrationResource(resources, 'ServiceAccount', 'identity-broker-migration');
+    const egress = findMigrationResource(resources, 'CiliumNetworkPolicy', 'identity-broker-migration-egress');
+    const configMap = findMigrationResource(resources, 'ConfigMap', 'identity-broker-migration-config');
+    const clientId = serviceAccount.metadata?.annotations?.['azure.workload.identity/client-id'];
+    const tenantId = serviceAccount.metadata?.annotations?.['azure.workload.identity/tenant-id'];
+    if (!CLIENT_ID.test(clientId ?? '') || !CLIENT_ID.test(tenantId ?? '')) {
+      fail('The rendered Broker migration ServiceAccount has an invalid workload identity.');
+    }
+    const identityResult = must(exec, 'az', [
+      'identity', 'show', '--resource-group', resourceGroup,
+      '--name', `${resourceGroup}-id-identity-broker-migration`,
+      '--query', '{clientId:clientId,tenantId:tenantId}', '--output', 'json',
+    ], { cwd: root }, 'Could not read the Broker migration identity');
+    let identity;
+    try {
+      identity = JSON.parse(identityResult.stdout);
+    } catch {
+      fail('Azure CLI returned invalid Broker migration identity details.');
+    }
+    if (!CLIENT_ID.test(identity?.clientId ?? '') || !CLIENT_ID.test(identity?.tenantId ?? '')) {
+      fail('Azure CLI did not return a valid Broker migration identity.');
+    }
+    if (clientId !== identity.clientId || tenantId !== identity.tenantId ||
+        configMap.data?.IdentityBroker__Migration__WorkloadIdentityClientId !== clientId ||
+        configMap.data?.IdentityBroker__Migration__WorkloadIdentityTenantId !== tenantId) {
+      fail('The rendered Broker migration identity does not match the Azure identity in the selected subscription and target.');
+    }
+    serviceAccount.metadata.annotations['azure.workload.identity/client-id'] = identity.clientId;
+    serviceAccount.metadata.annotations['azure.workload.identity/tenant-id'] = identity.tenantId;
+    configMap.data.IdentityBroker__Migration__WorkloadIdentityClientId = identity.clientId;
+    configMap.data.IdentityBroker__Migration__WorkloadIdentityTenantId = identity.tenantId;
+    brokerMigrationResources = [serviceAccount, egress, configMap];
     jobs.push(prepareJob(findJob(resources, 'identity-broker-migration'), {
       image: migrationImage(digests, 'agentweaver.identity.broker', registries),
       name: `identity-broker-migration-${randomUUID().slice(0, 8)}`,
@@ -1620,7 +1776,7 @@ function migrationJobs(root, exec, context, digests, registries, selectedReposit
     setting.value = clientId;
     jobs.push(job);
   }
-  return jobs;
+  return { jobs, brokerMigrationResources };
 }
 
 function applyImageDigests(kustomization, digests, registries) {
@@ -1854,7 +2010,13 @@ export async function deployKustomize(options, overrides = {}) {
       items: resources.filter(resource => resource.kind !== 'Namespace' &&
         resource !== brokerRuntimeConfig && resource !== brokerDeployment),
     };
-    const jobs = migrationJobs(root, exec, context, digests, registries, requestedImages.keys(), resourceGroup, pairs);
+    const { jobs, brokerMigrationResources } = migrationJobs(
+      root, exec, context, digests, registries, requestedImages.keys(), resourceGroup, pairs,
+    );
+
+    if (brokerMigrationResources) {
+      ensureBrokerMigrationResources(brokerMigrationResources, exec, context, root, log);
+    }
 
     const createdPlatformEgressSeed = ensureAgentHostPlatformEgressSeed(exec, context, root);
     log(createdPlatformEgressSeed

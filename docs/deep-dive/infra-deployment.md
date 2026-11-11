@@ -290,6 +290,17 @@ overlay apply. The local operator identity needs the required AKS and namespace
 permissions; this command neither provisions Azure resources nor grants
 access.
 
+For a selected Broker image, the helper reads the target's
+`<resource-group>-id-identity-broker-migration` identity and requires its
+client ID and tenant ID to match the rendered target values. Before it runs
+any migration Job, it validates the Broker migration ServiceAccount, egress
+policy, and ConfigMap. It creates only missing resources and leaves matching
+resources unchanged. A conflict stops deployment without replacing or deleting
+the resource. If creation stops partway through, a retry accepts matching
+resources and creates only those still missing. The managed identity,
+federated credential, and database principal and permissions remain operator
+prerequisites.
+
 Projects & Config migration uses a dedicated Kubernetes Workload Identity. The
 `projects-config-migration` ServiceAccount uses the
 `agentweaver-id-projects-config-migration` identity, federated with audience
