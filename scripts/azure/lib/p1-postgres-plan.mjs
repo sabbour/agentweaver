@@ -67,7 +67,7 @@ const GROUPS = {
     SELECT: 'tenant_memberships __ef_migrations_history',
     'SELECT,UPDATE': 'platform_runtime_heads',
     'SELECT,INSERT,UPDATE': 'projects marketplace_sources project_casting_proposals casting_generation_requests hosted_model_reasoning_catalog model_providers',
-    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_role_assignments authority_audit model_provider_revisions',
+    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_role_assignments authority_audit model_provider_revisions native_acs_policy_heads native_acs_policy_revisions native_acs_policy_artifact_files native_acs_policy_idempotency native_acs_policy_change_audit native_acs_policy_outbox',
   },
   environment: {
     SELECT: '__ef_migrations_history',
@@ -200,6 +200,73 @@ const APPEND_ONLY_GUARDS = {
         message: 'records in %.% are immutable', sqlState: '55000',
       },
     ],
+    native_acs_policy_revisions: [
+      {
+        trigger: 'native_acs_policy_revisions_immutable',
+        function: 'reject_immutable_record_mutation()', triggerType: 27,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'native_acs_policy_revisions_no_truncate',
+        function: 'reject_immutable_record_mutation()', triggerType: 34,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+    ],
+    native_acs_policy_artifact_files: [
+      {
+        trigger: 'native_acs_policy_artifact_files_immutable',
+        function: 'reject_immutable_record_mutation()', triggerType: 27,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'native_acs_policy_artifact_files_no_truncate',
+        function: 'reject_immutable_record_mutation()', triggerType: 34,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'native_acs_policy_artifact_files_insert_with_revision',
+        function: 'require_native_acs_policy_file_insert_in_revision_transaction()',
+        triggerType: 7,
+        message: 'native ACS policy files must be inserted with their revision',
+        sqlState: '55000',
+      },
+    ],
+    native_acs_policy_idempotency: [
+      {
+        trigger: 'native_acs_policy_idempotency_immutable',
+        function: 'reject_immutable_record_mutation()', triggerType: 27,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'native_acs_policy_idempotency_no_truncate',
+        function: 'reject_immutable_record_mutation()', triggerType: 34,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+    ],
+    native_acs_policy_change_audit: [
+      {
+        trigger: 'native_acs_policy_change_audit_immutable',
+        function: 'reject_immutable_record_mutation()', triggerType: 27,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'native_acs_policy_change_audit_no_truncate',
+        function: 'reject_immutable_record_mutation()', triggerType: 34,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+    ],
+    native_acs_policy_outbox: [
+      {
+        trigger: 'native_acs_policy_outbox_immutable',
+        function: 'reject_immutable_record_mutation()', triggerType: 27,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+      {
+        trigger: 'native_acs_policy_outbox_no_truncate',
+        function: 'reject_immutable_record_mutation()', triggerType: 34,
+        message: 'records in %.% are immutable', sqlState: '55000',
+      },
+    ],
   },
   orchestrator: {
     maf_runtime_evidence_receipts: [
@@ -234,9 +301,12 @@ const APPEND_ONLY_GUARDS = {
 const FUNCTIONS = {
   projects_config: [
     'reject_immutable_record_mutation()',
+    'require_native_acs_policy_file_insert_in_revision_transaction()',
+    'require_native_acs_policy_head_advance()',
     'reject_authority_audit_mutation()',
     'reject_project_setup_operation_mutation()',
     'lock_casting_authority(uuid, text, text, text, bigint, text, boolean)',
+    'lock_native_acs_policy_authority(uuid, text, text, text, bigint, text, text, uuid[], text[], text[], text[], bigint[])',
     'issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
     'read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)',
   ],
@@ -294,6 +364,7 @@ const FUNCTIONS = {
 const UPDATE_COLUMNS = {
   projects_config: {
     project_role_assignments: ['state', 'revision', 'revoked_by', 'revoked_at'],
+    native_acs_policy_heads: ['current_revision', 'updated_at'],
   },
 };
 
@@ -343,6 +414,7 @@ export function buildP1PostgresPlan(targetName = 'agentweaver') {
     functions: FUNCTIONS[schema].map(signature => ({
       signature,
       execute: signature.startsWith('lock_casting_authority(') ||
+        signature.startsWith('lock_native_acs_policy_authority(') ||
         signature.startsWith('issue_p1_project(') ||
         signature.startsWith('read_p1_project('),
     })),

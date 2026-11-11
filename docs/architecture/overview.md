@@ -22,7 +22,7 @@ permission.
 | --- | --- | --- |
 | Gateway/BFF | Authenticate and route a finite HTTP API for browser and native CLI callers | Approve workflow transitions or select arbitrary upstream URLs |
 | Identity Broker | Sign-in, tokens, purpose-bound grants and credential redemption | Assign project roles |
-| Projects & Config | Current project authority and immutable accepted run selections | Provision selected resources |
+| Projects & Config | Current project authority, immutable accepted run selections, and revisioned native ACS artifact storage | Expose a native ACS policy API or activate policies |
 | Orchestrator and Core | Decisions, gates, session tree, execution fences and MAF checkpoints | Treat model text as approval |
 | Environment | Resource lifecycle, network intent, workspace volumes and Sandbox placement | Own workflow completion |
 | AgentHost and AgentRuntime | Guard native SDK turns and tools against current owner bindings | Schedule itself or choose a new model/credential |

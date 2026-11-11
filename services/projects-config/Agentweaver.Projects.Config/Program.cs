@@ -172,6 +172,7 @@ builder.Services.AddDbContextFactory<ProjectsConfigDbContext>((provider, options
 builder.Services.AddSingleton(ModelBindingCapabilities.FromConfiguration(builder.Configuration));
 builder.Services.AddScoped<ProjectsConfigService>();
 builder.Services.AddScoped<ModelProviderDraftService>();
+builder.Services.AddScoped<NativeAcsPolicyStore>();
 // History stays in Knowledge, so use the mounted backend CA and forward only the request caller.
 builder.Services.AddHttpClient<KnowledgeAgentHistoryClient>(client =>
 {

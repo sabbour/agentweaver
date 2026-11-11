@@ -377,7 +377,7 @@ internal static partial class ProjectsConfigRuntimeGrantPlan
     [GeneratedRegex("^[a-z_][a-z0-9_]*$")]
     private static partial Regex IdentifierPattern();
 
-    [GeneratedRegex("^[a-z_][a-z0-9_]*\\([a-z0-9_ ,]*\\)$")]
+    [GeneratedRegex("^[a-z_][a-z0-9_]*\\([a-z0-9_ ,\\[\\]]*\\)$")]
     private static partial Regex FunctionSignaturePattern();
 
     private sealed record TablePlan(string Name, string[] Privileges, string[] UpdateColumns);

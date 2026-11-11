@@ -218,6 +218,18 @@ identity source or infer identity from the Broker subject, actor ID, or UPN.
 
 `NativeAcsEvaluationResult` binds the decision to the artifact hash. Invalid
 artifacts and native runtime failures return an error rather than an allow.
+
+Projects & Config stores complete policy artifacts as immutable revisions. It
+stores the exact manifest bytes and every relative file, with one revision
+head for each policy and scope. A write records its actor-scoped idempotency
+receipt, append-only change audit, and outbox event in the same database
+transaction. The store rechecks the membership and the exact role-assignment
+revision before it commits. Platform writes require an unbound PlatformAdmin
+with `api.read` and `projects.admin`. Project writes require an unbound
+TenantAdmin or project Owner with those scopes. A matching retry returns its
+saved receipt before the current-revision check, but only after current
+authority passes. This source storage slice does not add an HTTP policy API,
+policy activation, or a change to the deployed v4 Policy path.
 `Agentweaver.Policy.Acs` is a shared library, not an active host or Policy
 store. It does not change the deployed v4 YAML adapter or add an API or
 activation path. The [testing guide](../guide/testing.md#test-the-native-acs-profile)
