@@ -1,0 +1,4 @@
+---
+---
+
+Fix the first identity routing run on a new install. The run reads the routing objects before it creates the Gateway. The Gateway controller then writes the status of the existing `web-application` HTTPRoute, which changes its `resourceVersion`, so the conditional patch failed with `The request is invalid`. The installer now reads the object again and retries the patch with the new `resourceVersion`, for a maximum of 3 attempts. It retries only when the UID, `metadata.generation`, spec, and owned labels did not change. A change to the spec, labels, or identity of the object still stops the run, and it does not retry.
