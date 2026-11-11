@@ -103,6 +103,16 @@ function liveResources({ activeMap, activeName, providers = false, drift = false
 
 function createKubectlFixture(options = {}) {
   const state = liveResources(options);
+  const applySecretKeyRefReadback = deployment => {
+    if (!options.readbackSecretKeyRef) return;
+    const entry = deployment.spec.template.spec.containers[0].env.find(item =>
+      item.name === 'IdentityBroker__GitHubRepoApp__OAuthClientSecret');
+    if (entry) {
+      entry.valueFrom.secretKeyRef =
+        options.readbackSecretKeyRef(structuredClone(entry.valueFrom.secretKeyRef));
+    }
+  };
+  applySecretKeyRefReadback(state.deployment);
   const events = [];
   const apiCalls = [];
   const maps = new Map([[state.configMap.metadata.name, state.configMap]]);
@@ -165,6 +175,7 @@ function createKubectlFixture(options = {}) {
       }
       state.deployment.metadata.resourceVersion = 'deployment-rv-2';
       state.deployment.metadata.generation = 2;
+      applySecretKeyRefReadback(state.deployment);
       state.deployment.status = {
         observedGeneration: 2,
         updatedReplicas: 1,
@@ -438,6 +449,40 @@ test('activation is a no-op for the exact current successor and rejects stale re
     error => error.error === 'identity_broker_provider_source_conflict' &&
       error.details.field === 'Deployment.spec');
   assert.deepEqual(drift.events, []);
+});
+
+test('activation accepts reordered secretKeyRef keys on readback and retry', async () => {
+  const fixture = createKubectlFixture({
+    readbackSecretKeyRef: ref => ({
+      key: ref.key,
+      name: ref.name,
+      optional: ref.optional,
+    }),
+  });
+  const activated = await activateIdentityBrokerProviderSetup(input, target, fixture.dependencies);
+  assert.equal(activated.changed, true);
+
+  const retried = await activateIdentityBrokerProviderSetup(input, {
+    ...target,
+    expectedDeploymentResourceVersion: 'deployment-rv-2',
+  }, fixture.dependencies);
+  assert.equal(retried.changed, false);
+  assert.deepEqual(fixture.events, ['create-configmap', 'patch-deployment', 'rollout']);
+});
+
+test('activation readback rejects changed secretKeyRef values', async () => {
+  for (const [field, value] of [['name', 'different-secret'], ['key', 'different-key'],
+    ['optional', true]]) {
+    const fixture = createKubectlFixture({
+      readbackSecretKeyRef: ref => ({ ...ref, [field]: value }),
+    });
+    await assert.rejects(activateIdentityBrokerProviderSetup(input, target, fixture.dependencies), error => {
+      assert.equal(error.error, 'identity_broker_provider_activation_partial');
+      assert.equal(error.details.phase, 'reading_back');
+      return true;
+    }, `${field} mismatch must fail readback`);
+    assert.deepEqual(fixture.events, ['create-configmap', 'patch-deployment', 'rollout']);
+  }
 });
 
 test('managed provider setup pins the OAuth Secret binding but allows non-secret updates', async () => {

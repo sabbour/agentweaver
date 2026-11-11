@@ -1143,10 +1143,13 @@ The patch changes only provider values, the active ConfigMap reference, and
 the provider fingerprint. The old immutable ConfigMap remains in place.
 
 On success, the result reports the active map and verified Deployment
-generation. On an error with code
-`identity_broker_provider_activation_partial`, read the reported active map
-and Deployment state before you retry. If readback shows the old map is still
-active, get fresh resource versions and review the plan again before retrying.
+generation. The final readback checks the provider environment entries and the
+active Secret reference. Property order inside `secretKeyRef` does not affect
+the comparison, but a different reference value still fails. If the installer
+returns `identity_broker_provider_activation_partial`, read the reported
+active map and Deployment state before you retry. If readback shows the old map
+is still active, get fresh resource versions and review the plan again before
+you retry.
 If the new map is active but the Deployment is not ready, resolve the rollout
 failure first; a retry reports the current readback instead of returning a
 false no-op. Stop if readback is unavailable or does not match either state.

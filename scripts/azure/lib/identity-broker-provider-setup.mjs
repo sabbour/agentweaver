@@ -685,10 +685,25 @@ function sameEntries(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function sameProviderEntries(left, right) {
+  const normalizeSecretKeyRefOrder = entry => {
+    const ref = entry?.valueFrom?.secretKeyRef;
+    if (!isRecord(ref)) return entry;
+    return {
+      ...entry,
+      valueFrom: {
+        ...entry.valueFrom,
+        secretKeyRef: Object.fromEntries(Object.keys(ref).sort().map(key => [key, ref[key]])),
+      },
+    };
+  };
+  return sameEntries(left.map(normalizeSecretKeyRefOrder), right.map(normalizeSecretKeyRefOrder));
+}
+
 function resultFromReadback(deployment, configMap, expectedMapName, expectedEnv, expectedFingerprint, baseData) {
   const parts = deploymentParts(deployment, 'Deployment readback');
   if (parts.configRefs[0].configMapRef.name !== expectedMapName ||
-      !sameEntries(providerEntries(parts.container), expectedEnv) ||
+      !sameProviderEntries(providerEntries(parts.container), expectedEnv) ||
       deployment.spec?.template?.metadata?.annotations?.[PROVIDER_SETUP_ANNOTATION] !== expectedFingerprint) {
     conflict('Deployment readback');
   }
@@ -837,7 +852,7 @@ function activateInCluster(plan, base, { execKubectl }, config) {
       plan.rendered.configMap.metadata.name, sourceBase(plan.source));
 
     if (currentState.managed && activeName === desiredMap.metadata.name &&
-        sameEntries(currentState.entries, plan.rendered.deployment.env) &&
+        sameProviderEntries(currentState.entries, plan.rendered.deployment.env) &&
         current.deployment.spec?.template?.metadata?.annotations?.[PROVIDER_SETUP_ANNOTATION] ===
           plan.rendered.deployment.podTemplateAnnotations[PROVIDER_SETUP_ANNOTATION]) {
       const readback = currentRolloutReadback(current.deployment, activeName, activeMap);
@@ -852,7 +867,7 @@ function activateInCluster(plan, base, { execKubectl }, config) {
       };
     }
     if (!currentState.managed && activeName === BASE_CONFIG_MAP &&
-        sameEntries(currentState.entries, plan.rendered.deployment.env)) {
+        sameProviderEntries(currentState.entries, plan.rendered.deployment.env)) {
       const readback = currentRolloutReadback(current.deployment, activeName, activeMap);
       return {
         changed: false,
