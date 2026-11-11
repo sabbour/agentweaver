@@ -23,7 +23,8 @@ const COMPONENTS = [
   { id: 'Agentweaver.Web', repository: 'agentweaver-web', mode: 'web',
     project: path.join('apps', 'web', 'host', 'Agentweaver.Web.Host.csproj') },
   { id: 'Agentweaver.Orchestrator', repository: 'agentweaver.orchestrator', mode: 'docker',
-    dockerfile: path.join('services', 'orchestrator', 'Agentweaver.Orchestrator', 'Dockerfile') },
+    dockerfile: path.join('services', 'orchestrator', 'Agentweaver.Orchestrator', 'Dockerfile'),
+    project: path.join('services', 'orchestrator', 'Agentweaver.Orchestrator', 'Agentweaver.Orchestrator.csproj') },
   { id: 'Agentweaver.Environment', repository: 'agentweaver.environment', mode: 'dotnet',
     project: path.join('services', 'environment', 'Agentweaver.Environment', 'Agentweaver.Environment.csproj') },
   { id: 'Agentweaver.Knowledge', repository: 'agentweaver.knowledge', mode: 'dotnet',
@@ -149,6 +150,13 @@ export async function buildAcrCandidate(
       worktreePath, 'Could not verify the detached source tree').stdout.trim();
     if (checkoutTree !== sourceTree) fail('detached worktree does not match the selected source tree.');
     const manifest = JSON.parse(readFileSync(path.join(worktreePath, 'releases', 'foundation.json'), 'utf8'));
+    const hasAcsRuntime = existsSync(path.join(
+      worktreePath, 'eng', 'acs', 'nuget', 'AgentControlSpecification.0.4.0-beta.0.nupkg',
+    ));
+    const components = COMPONENTS.map(component =>
+      component.id === 'Agentweaver.Orchestrator' && !hasAcsRuntime
+        ? { ...component, mode: 'dotnet' }
+        : component);
     const repositories = COMPONENTS.map(component => component.repository);
     if (repositories.length !== 10 || new Set(repositories).size !== 10 ||
         repositories.some(repository => !IMAGE_REPOSITORIES.includes(repository)) ||
@@ -159,15 +167,16 @@ export async function buildAcrCandidate(
     runAzure(['acr', 'login', '--name', target.name], { cwd: worktreePath });
     command(exec, 'docker', ['buildx', 'inspect', '--bootstrap'], worktreePath,
       'Could not initialize Docker Buildx');
-    command(exec, 'curl', [
-      '--fail', '--location', '--proto', '=https', '--tlsv1.2', '--retry', '5',
-      '--retry-all-errors', '--retry-delay', '5', '--connect-timeout', '20',
-      OPA_URL, '--output', path.join(worktreePath, 'eng', 'acs', 'opa_linux_amd64_static'),
-    ], worktreePath, 'Could not download pinned OPA');
+    if (hasAcsRuntime) {
+      command(exec, 'curl', [
+        '--fail', '--location', '--proto', '=https', '--tlsv1.2', '--retry', '5',
+        '--retry-all-errors', '--retry-delay', '5', '--connect-timeout', '20',
+        OPA_URL, '--output', path.join(worktreePath, 'eng', 'acs', 'opa_linux_amd64_static'),
+      ], worktreePath, 'Could not download pinned OPA');
+    }
 
-    const web = COMPONENTS.find(component => component.mode === 'web');
     let webVersion;
-    for (const component of COMPONENTS) {
+    for (const component of components) {
       const version = sourceVersion(manifest, component.id);
       if (component.mode === 'docker') continue;
       command(exec, 'dotnet', ['restore', component.project, '--locked-mode'], worktreePath,
@@ -186,7 +195,7 @@ export async function buildAcrCandidate(
     }
 
     const images = [];
-    for (const component of COMPONENTS) {
+    for (const component of components) {
       const version = sourceVersion(manifest, component.id);
       if (component.mode === 'dotnet') {
         command(exec, 'dotnet', dotnetArgs({ registry, sourceSha, sourceTree, version, component }),

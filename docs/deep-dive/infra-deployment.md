@@ -208,10 +208,12 @@ directly to GHCR with a `sha-<commit>` tag. The workflow summary lists each
 registry digest and the AgentHost compressed pull size.
 For an ACR candidate, `npm run azure:build-acr-candidate` uses those Docker
 and .NET build paths from a detached exact-source worktree. It downloads the
-pinned OPA binary for the two ACS images. It pushes the same ten `linux/amd64`
-images to ACR and verifies the source commit, Git tree, component version,
-digest, and AgentHost compressed pull size. This local command does not
-replace the automatic GHCR workflow.
+pinned OPA binary when the source includes the ACS package and builds
+Orchestrator with its Dockerfile. For an older commit without the package, the
+builder skips the OPA download and uses .NET container publishing for
+Orchestrator. It pushes the same ten `linux/amd64` images to ACR and verifies
+the source commit, Git tree, component version, digest, and AgentHost compressed
+pull size. This local command does not replace the automatic GHCR workflow.
 
 ### ACS runtime assets
 

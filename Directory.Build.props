@@ -7,6 +7,9 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(AgentweaverUseLinuxX64LockFile)' == 'true'">
+    <NuGetLockFilePath>$(MSBuildProjectDirectory)/packages.linux-x64.lock.json</NuGetLockFilePath>
+  </PropertyGroup>
   <!-- Every product container pack supplies these pins for release and integration images. -->
   <ItemGroup Condition="'$(EnableSdkContainerSupport)' == 'true'
       and '$(AgentweaverImageSourceSha)' != ''

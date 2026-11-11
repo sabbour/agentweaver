@@ -276,14 +276,6 @@
           "OpenTelemetry.Extensions.Hosting": "[1.15.3, )"
         }
       }
-    },
-    "net10.0/linux-x64": {
-      "AgentControlSpecification": {
-        "type": "Direct",
-        "requested": "[0.4.0-beta.0, )",
-        "resolved": "0.4.0-beta.0",
-        "contentHash": "vtILlhbuAJ2TSi9BZwZuGcXLxj5YwxudIwO0kRo91rowwmRWBme8RRdaxOc+i2fccRBk1C3nppVAo2P1N5nQ6Q=="
-      }
     }
   }
 }
