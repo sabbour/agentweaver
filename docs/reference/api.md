@@ -771,22 +771,26 @@ locator, not a caller-supplied receipt, hash, run ID or Core invocation ID. The
 Gateway accepts create bodies up to 256 KiB. Responses never include the first
 message.
 
-When an invocation locator is present, Core uses the same unbound caller bearer to read
-the existing public Projects receipt before saving the request. Missing,
-foreign, revoked or stale receipts leave no request or provenance rows.
-Core saves the full verified receipt and its versioned deterministic hash
-with its own run and root IDs in the request transaction. Retries read Projects
-again and must match that immutable receipt. Projects selection is created
-after the request commits; selection failure leaves a resumable request, not
-an accepted invocation.
+When an invocation locator is present, Core saves the locator with the pending
+request. Create does not read the public Projects receipt. Projects selection
+is created after the request commits; selection failure leaves a resumable
+request, not an accepted invocation.
 
 At bound start, Core checks current Projects selection and authority and calls
-the narrow internal Projects verifier. Core locks the saved request and commits
-the root, initial decision and immutable invocation binding in one transaction. Events
-registration and first-message delivery remain outside that transaction and
-are retryable. Projects locks do not span the Core commit: revocation after
-the remote check can race with that commit. There is no distributed-lock or
-current-at-commit revocation guarantee.
+the narrow internal Projects verifier with the exact run-bound bearer. The
+verifier requires current TenantAdmin authority for the receipt's setup actor.
+Core then locks the saved request and, in one transaction, saves the full
+verified receipt and its versioned deterministic hash, accepts the root,
+creates the initial decision, and writes the immutable invocation binding.
+Events registration and first-message delivery remain outside that transaction
+and are retryable. If verification fails before the first root is accepted, the
+request stays pending and that attempt creates no root, decision, binding or
+first-message delivery. A later delivery retry reuses any root and binding
+already committed. If the journey cannot continue, cancel the owned run through
+the existing cleanup path.
+Projects locks do not span the Core commit: revocation after the remote check
+can race with that commit. There is no distributed-lock or current-at-commit
+revocation guarantee.
 
 <span id="current-p1-invocation-binding"></span>
 

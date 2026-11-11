@@ -514,6 +514,13 @@ authorization bound to both that exact project and run. Setup and run
 authorization must identify the same actor and tenant. An unbound token or
 refresh cannot stand in for exact-run authority.
 
+For P1 journeys, the run request carries the setup receipt locator. Orchestrator
+checks the receipt with the exact run-bound token when the runner starts the
+run. If first-start verification fails, the owned run stays pending and that
+attempt creates no root or first message. A delivery retry reuses a root that
+already committed. The runner must use its existing cleanup path if the journey
+cannot continue.
+
 When a journey accepts a coordinator root and its first message, Orchestrator
 can report `runtimeStartup.state` as `pending` while it starts AgentHost in the
 background. Read the run's session status to check whether startup is still

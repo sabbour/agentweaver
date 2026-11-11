@@ -32,6 +32,9 @@ internal sealed partial class CoordinationOwnerStore
             selection.Selection.ProjectId is not { Length: > 0 })
             throw new CoordinationException("p1_invocation_binding_invalid", StatusCodes.Status409Conflict);
 
+        await PersistP1RunRequestProvenanceAsync(
+            connection, transaction, actor, selection.Authorization.TenantId,
+            selection.Selection.ProjectId, request, verifiedReceipt, cancellationToken).ConfigureAwait(false);
         var provenance = await ReadP1RunRequestProvenanceAsync(
             connection, transaction, selection.Authorization.TenantId,
             selection.Selection.ProjectId, selection.Selection.RunId, forUpdate: true, cancellationToken)

@@ -153,13 +153,8 @@ public static partial class CoordinationEndpoints
         CoordinationOwnerStore.ValidateProjectRunRequest(request);
         var authority = await projects.ReadProjectRunAuthorityAsync(context, projectId, cancellationToken);
         var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
-        var setupReceipt = request.P1SetupInvocationId is { } invocationId
-            ? await projects.ReadP1SetupReceiptForCreationAsync(context, projectId, invocationId,
-                authority, request.ExpectedProjectConfigRevision, cancellationToken)
-                .ConfigureAwait(false)
-            : null;
         var row = await store.CreateProjectRunAsync(
-            actor, authority.TenantId, projectId, key, request, cancellationToken, setupReceipt)
+            actor, authority.TenantId, projectId, key, request, cancellationToken)
             .ConfigureAwait(false);
         await projects.CreateInteractiveSelectionAsync(
             context, projectId, row.RunId, row.ExpectedProjectConfigRevision, cancellationToken);

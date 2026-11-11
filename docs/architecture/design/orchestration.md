@@ -183,13 +183,15 @@ and `INSERT`; row `UPDATE`, `DELETE`, and table `TRUNCATE` are rejected by
 source-owned triggers. This is intentionally separate from `outbox_events`,
 whose lease and delivery state remains mutable.
 
-Migration `040_p1_run_request_provenance.sql` links one existing authenticated
-Projects setup receipt to an owner-created interactive run request. Core saves
-the complete receipt, a versioned hash and the actor/tenant/project/run/root
-identity in the request transaction. With the later exact run-bound bearer,
-Core checks current Projects selection and setup evidence again, locks the
-saved request and provenance on the same connection, then commits the root,
-initial decision and immutable invocation binding together. A root inserted by
+Migration `040_p1_run_request_provenance.sql` links an authenticated Projects
+setup receipt to an owner-created interactive run request. Create stores the
+receipt locator with the pending request. At start, Core uses the exact
+run-bound bearer to check current Projects selection and setup evidence. It
+then saves the complete receipt and versioned hash, locks the request and
+provenance on the same connection, and commits the root, initial decision and
+immutable invocation binding together. If first-start verification fails, the
+request stays pending and that attempt creates no root or binding. A delivery
+retry reuses a root and binding that already committed. A root inserted by
 another acceptance path cannot be enrolled afterward. Events registration and
 message delivery happen after this local commit and can be retried.
 

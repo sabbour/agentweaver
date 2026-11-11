@@ -27,12 +27,10 @@ internal sealed partial class CoordinationOwnerStore
         string tenantId,
         string projectId,
         CreateProjectRunRequest request,
-        P1ProjectSetupReceiptSnapshot? receipt)
+        P1ProjectSetupReceiptSnapshot receipt)
     {
-        if (request.P1SetupInvocationId is null && receipt is null)
-            return;
-        if (request.P1SetupInvocationId is not { } invocationId || receipt is null ||
-            invocationId == Guid.Empty || receipt.InvocationId != invocationId ||
+        if (request.P1SetupInvocationId is not { } invocationId || invocationId == Guid.Empty ||
+            receipt.InvocationId != invocationId ||
             receipt.Issuer != actor.Issuer || receipt.Subject != actor.Subject ||
             receipt.CreatedByActorId != actor.Subject || receipt.TenantId != tenantId ||
             receipt.ProjectId != projectId ||

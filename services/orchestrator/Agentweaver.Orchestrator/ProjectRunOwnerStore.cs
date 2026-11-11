@@ -23,12 +23,10 @@ internal sealed partial class CoordinationOwnerStore
     /// <summary>Creates one durable run identity per actor, tenant, project, and idempotency key.</summary>
     internal async Task<ProjectRunRequestRow> CreateProjectRunAsync(
         CoordinationActor actor, string tenantId, string projectId, string key,
-        CreateProjectRunRequest request, CancellationToken cancellationToken,
-        P1ProjectSetupReceiptSnapshot? setupReceipt = null)
+        CreateProjectRunRequest request, CancellationToken cancellationToken)
     {
         ValidateProjectRunRequest(request);
         CoordinationIdentity.ValidateIdentity(projectId, "project_id");
-        ValidateP1SetupReceiptForRequest(actor, tenantId, projectId, request, setupReceipt);
         var hash = HashProjectRunInput(key);
         var fingerprint = HashProjectRunInput(JsonSerializer.Serialize(request, JsonOptions));
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
@@ -79,10 +77,6 @@ internal sealed partial class CoordinationOwnerStore
                 throw new CoordinationException("idempotency_conflict", StatusCodes.Status409Conflict);
             row = ReadProjectRunRequest(reader);
         }
-        if (row.P1SetupInvocationId is { } invocationId && setupReceipt is not null)
-            await PersistP1RunRequestProvenanceAsync(
-                connection, transaction, actor, tenantId, projectId, row, setupReceipt, cancellationToken)
-                .ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken);
         return row;
     }

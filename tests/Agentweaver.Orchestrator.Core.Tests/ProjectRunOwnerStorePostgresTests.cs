@@ -82,12 +82,23 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
         var receipt = P1Receipt();
         var request = new CreateProjectRunRequest(
             "Start from P1 setup", 1, P1SetupInvocationId: receipt.InvocationId);
-        var first = await CreateP1("p1-create", request, receipt);
-        var replay = await CreateP1("p1-create", request, receipt);
+        var first = await CreateP1("p1-create", request);
+        var replay = await CreateP1("p1-create", request);
 
         Assert.Equal(first, replay);
         Assert.Equal(receipt.InvocationId, first.P1SetupInvocationId);
         Assert.Equal(1L, await CountAsync("project_run_requests"));
+        Assert.Equal(0L, await CountAsync("p1_run_request_provenance"));
+
+        Task StartWithReceipt(P1ProjectSetupReceiptSnapshot setupReceipt) =>
+            _store.StartProjectRunAsync(
+                _actor, Tenant, Project, first.RunId, (_, _) => Task.CompletedTask, NoCheck,
+                CancellationToken.None,
+                acceptRootInTransaction: (connection, transaction, pending, token) =>
+                    _store.AcceptP1InteractiveRootInTransactionAsync(
+                        connection, transaction, _actor, Selection(first.RunId), pending, setupReceipt, token));
+
+        await StartWithReceipt(receipt);
         Assert.Equal(1L, await CountAsync("p1_run_request_provenance"));
         await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
         await using (var query = new NpgsqlCommand($"""
@@ -112,14 +123,19 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
         }
 
         var changed = receipt with { OwnerAuthorityAuditEventId = Guid.NewGuid() };
-        var changedError = await Assert.ThrowsAsync<CoordinationException>(
-            () => CreateP1("p1-create", request, changed));
+        var changedError = await Assert.ThrowsAsync<CoordinationException>(() => StartWithReceipt(changed));
         Assert.Equal("p1_setup_receipt_changed", changedError.Code);
 
-        var reused = await Assert.ThrowsAsync<CoordinationException>(
-            () => CreateP1("p1-reuse", request, receipt));
-        Assert.Equal("p1_setup_invocation_conflict", reused.Code);
-        Assert.Equal(1L, await CountAsync("project_run_requests"));
+        var reused = await CreateP1("p1-reuse", request);
+        var reusedError = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.StartProjectRunAsync(
+                _actor, Tenant, Project, reused.RunId, (_, _) => Task.CompletedTask, NoCheck,
+                CancellationToken.None,
+                acceptRootInTransaction: (connection, transaction, pending, token) =>
+                    _store.AcceptP1InteractiveRootInTransactionAsync(
+                        connection, transaction, _actor, Selection(reused.RunId), pending, receipt, token)));
+        Assert.Equal("p1_setup_invocation_conflict", reusedError.Code);
+        Assert.Equal(2L, await CountAsync("project_run_requests"));
         Assert.Equal(1L, await CountAsync("p1_run_request_provenance"));
 
         await using var guardConnection = await _fixture.DataSource.OpenConnectionAsync();
@@ -138,36 +154,32 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task P1RequestRejectsMissingForeignAndStaleReceiptBeforeAnyWrite()
+    public async Task P1RequestIsCreatedBeforeReceiptVerificationAndRejectsForeignReceiptBeforeRootAcceptance()
     {
         var receipt = P1Receipt();
         var request = new CreateProjectRunRequest(
             "Start from P1 setup", 1, P1SetupInvocationId: receipt.InvocationId);
 
-        var missing = await Assert.ThrowsAsync<CoordinationException>(() =>
-            CreateP1("p1-missing", request, null));
-        Assert.Equal("p1_setup_receipt_stale", missing.Code);
-        Assert.Equal(0L, await CountAsync("project_run_requests"));
+        var row = await CreateP1("p1-deferred", request);
+        Assert.Equal(receipt.InvocationId, row.P1SetupInvocationId);
+        Assert.Equal(1L, await CountAsync("project_run_requests"));
+        Assert.Equal(0L, await CountAsync("p1_run_request_provenance"));
 
-        var foreign = await Assert.ThrowsAsync<CoordinationException>(() =>
-            CreateP1("p1-foreign", request, receipt with { Subject = "foreign-actor" }));
-        Assert.Equal("p1_setup_receipt_stale", foreign.Code);
-        Assert.Equal(0L, await CountAsync("project_run_requests"));
+        var foreign = receipt with { Subject = "foreign-actor" };
+        var error = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.StartProjectRunAsync(
+                _actor, Tenant, Project, row.RunId, (_, _) => Task.CompletedTask, NoCheck,
+                CancellationToken.None,
+                acceptRootInTransaction: (connection, transaction, pending, token) =>
+                    _store.AcceptP1InteractiveRootInTransactionAsync(
+                        connection, transaction, _actor, Selection(row.RunId), pending, foreign, token)));
 
-        var stale = await Assert.ThrowsAsync<CoordinationException>(() =>
-            CreateP1("p1-stale", request, receipt with { ProjectConfigurationRevision = 2 }));
-        Assert.Equal("p1_setup_receipt_stale", stale.Code);
-        Assert.Equal(0L, await CountAsync("project_run_requests"));
-
-        var foreignTenant = await Assert.ThrowsAsync<CoordinationException>(() =>
-            CreateP1("p1-foreign-tenant", request, receipt with { TenantId = "foreign-tenant" }));
-        Assert.Equal("p1_setup_receipt_stale", foreignTenant.Code);
-        Assert.Equal(0L, await CountAsync("project_run_requests"));
-
-        var revokedMembership = await Assert.ThrowsAsync<CoordinationException>(() =>
-            CreateP1("p1-revoked", request, receipt with { MembershipRevision = 0 }));
-        Assert.Equal("p1_setup_receipt_stale", revokedMembership.Code);
-        Assert.Equal(0L, await CountAsync("project_run_requests"));
+        Assert.Equal("p1_setup_receipt_stale", error.Code);
+        Assert.Equal(0L, await CountAsync("p1_run_request_provenance"));
+        Assert.Equal(0L, await CountAsync("accepted_runs"));
+        Assert.Equal(0L, await CountAsync("coordination_sessions"));
+        Assert.Equal(0L, await CountAsync("coordinator_decisions"));
+        Assert.Equal(0L, await CountAsync("p1_invocation_bindings"));
     }
 
     [Fact]
@@ -181,7 +193,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
         };
         var request = new CreateProjectRunRequest(
             "Start from P1 setup", 1, P1SetupInvocationId: receipt.InvocationId);
-        var row = await CreateP1("p1-accept", request, receipt);
+        var row = await CreateP1("p1-accept", request);
         var selection = Selection(row.RunId);
         var sends = 0;
         Task Bind(
@@ -269,7 +281,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
             var receipt = P1Receipt();
             var request = new CreateProjectRunRequest(
                 "Start from P1 setup", 1, P1SetupInvocationId: receipt.InvocationId);
-            var row = await CreateP1(testCase.Key, request, receipt);
+            var row = await CreateP1(testCase.Key, request);
             var selection = testCase.Change(Selection(row.RunId));
             Task Bind(
                 Npgsql.NpgsqlConnection connection,
@@ -282,8 +294,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
             var error = await Assert.ThrowsAsync<CoordinationException>(() => _store.StartProjectRunAsync(
                 _actor, Tenant, Project, row.RunId, NoDelivery, NoCheck, CancellationToken.None,
                 acceptRootInTransaction: Bind));
-            Assert.Equal(testCase.Key == "p1-changed-tenant"
-                ? "p1_setup_provenance_unavailable" : "p1_setup_receipt_stale", error.Code);
+            Assert.Equal("p1_setup_receipt_stale", error.Code);
         }
 
         Assert.Equal(0L, await CountAsync("accepted_runs"));
@@ -291,7 +302,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
         Assert.Equal(0L, await CountAsync("coordinator_decisions"));
         Assert.Equal(0L, await CountAsync("p1_invocation_bindings"));
         Assert.Equal(3L, await CountAsync("project_run_requests"));
-        Assert.Equal(3L, await CountAsync("p1_run_request_provenance"));
+        Assert.Equal(0L, await CountAsync("p1_run_request_provenance"));
     }
 
     [Fact]
@@ -299,8 +310,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
     {
         var receipt = P1Receipt();
         var row = await CreateP1("p1-concurrent",
-            new CreateProjectRunRequest("Concurrent start", 1, P1SetupInvocationId: receipt.InvocationId),
-            receipt);
+            new CreateProjectRunRequest("Concurrent start", 1, P1SetupInvocationId: receipt.InvocationId));
         var selection = Selection(row.RunId);
         Task Bind(NpgsqlConnection connection, NpgsqlTransaction transaction,
             CoordinationOwnerStore.ProjectRunRequestRow pending, CancellationToken token) =>
@@ -324,8 +334,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
     {
         var receipt = P1Receipt();
         var row = await CreateP1("p1-current",
-            new CreateProjectRunRequest("Read current binding", 1, P1SetupInvocationId: receipt.InvocationId),
-            receipt);
+            new CreateProjectRunRequest("Read current binding", 1, P1SetupInvocationId: receipt.InvocationId));
         var selection = Selection(row.RunId);
         Task Bind(NpgsqlConnection connection, NpgsqlTransaction transaction,
             CoordinationOwnerStore.ProjectRunRequestRow pending, CancellationToken token) =>
@@ -367,7 +376,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
         var receipt = P1Receipt();
         var request = new CreateProjectRunRequest(
             "Start from P1 setup", 1, P1SetupInvocationId: receipt.InvocationId);
-        var row = await CreateP1("p1-no-posthoc", request, receipt);
+        var row = await CreateP1("p1-no-posthoc", request);
         var selection = Selection(row.RunId);
         await _store.AcceptRootAsync(_actor, selection, row.RootSessionId, CancellationToken.None);
         Task Bind(
@@ -394,8 +403,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
     {
         var receipt = P1Receipt();
         var row = await CreateP1("p1-legacy-race",
-            new CreateProjectRunRequest("Race acceptance", 1, P1SetupInvocationId: receipt.InvocationId),
-            receipt);
+            new CreateProjectRunRequest("Race acceptance", 1, P1SetupInvocationId: receipt.InvocationId));
         var selection = Selection(row.RunId);
         var application = "p1-race-" + Guid.NewGuid().ToString("N");
         var lockId = Guid.NewGuid().GetHashCode();
@@ -462,7 +470,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
         var receipt = P1Receipt();
         var request = new CreateProjectRunRequest(
             "Start from P1 setup", 1, P1SetupInvocationId: receipt.InvocationId);
-        var row = await CreateP1("p1-rollback", request, receipt);
+        var row = await CreateP1("p1-rollback", request);
         var selection = Selection(row.RunId);
         await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
         await using (var install = new NpgsqlCommand($"""
@@ -491,7 +499,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
         Assert.Equal(0L, await CountAsync("coordinator_decisions"));
         Assert.Equal(0L, await CountAsync("p1_invocation_bindings"));
         Assert.Equal(1L, await CountAsync("project_run_requests"));
-        Assert.Equal(1L, await CountAsync("p1_run_request_provenance"));
+        Assert.Equal(0L, await CountAsync("p1_run_request_provenance"));
     }
 
     [Fact]
@@ -1200,9 +1208,8 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
 
     private Task<CoordinationOwnerStore.ProjectRunRequestRow> CreateP1(
         string key,
-        CreateProjectRunRequest request,
-        P1ProjectSetupReceiptSnapshot? receipt) =>
-        _store.CreateProjectRunAsync(_actor, Tenant, Project, key, request, CancellationToken.None, receipt);
+        CreateProjectRunRequest request) =>
+        _store.CreateProjectRunAsync(_actor, Tenant, Project, key, request, CancellationToken.None);
 
     private Task<StartProjectRunResponse> Start(
         string runId,

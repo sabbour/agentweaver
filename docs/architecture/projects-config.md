@@ -260,13 +260,21 @@ It accepts no body or query and never issues a receipt. It does not relax the
 public GET's unbound-token or `projects.admin` requirements and needs no new
 setup-ledger table access.
 
-The two reads serve different stages: the public unbound read saves the full
-receipt with a new run request; the internal bound read checks it again during
-root acceptance. Core commits its root, initial decision and invocation binding
-in one local transaction. Projects does not participate in that transaction.
-Its locks end when its read finishes, so a revocation can occur before Core
-commits. This accepted race is not a distributed-lock or current-at-commit
-revocation guarantee. No bearer token is saved with the receipt.
+The public GET remains restricted to an unbound `projects.admin` token and
+current TenantAdmin authority. Orchestrator does not call it while creating a
+run. Create stores the setup receipt locator on the pending request.
+
+At start, Orchestrator calls the internal verifier with the exact run-bound
+`projects.orchestrator` bearer. The verifier also requires current TenantAdmin
+authority for the setup actor. Core then stores the verified receipt and hash
+with the root, initial decision and invocation binding in one local
+transaction. If verification fails, the request stays pending and Core creates
+no root or binding on that first acceptance attempt. A later delivery retry
+reuses a root and binding that already committed. Projects does not participate
+in the Core transaction. Its locks end when its read finishes, so a revocation
+can occur before Core commits. This accepted race is not a distributed-lock or
+current-at-commit revocation guarantee. No bearer token is saved with the
+receipt.
 
 ```mermaid
 sequenceDiagram
@@ -274,17 +282,15 @@ sequenceDiagram
     participant Core
     participant Projects
     participant Events
-    Caller->>Core: Create request, unbound bearer, receipt locator
-    Core->>Projects: Read existing receipt with same bearer
-    Projects-->>Core: Verified receipt, locks released
-    Core->>Core: Commit request and immutable receipt snapshot
+    Caller->>Core: Create request with receipt locator
+    Core->>Core: Commit pending request and locator
     Core->>Projects: Create run selection
     Core-->>Caller: Run and root IDs for existing Broker flow
     Caller->>Core: Start with exact run-bound bearer
-    Core->>Projects: Read current selection and verify saved receipt
+    Core->>Projects: Read current selection and verify receipt
     Projects-->>Core: Current evidence, locks released
     Note over Core,Projects: Revocation can race with the later Core commit
-    Core->>Core: Lock saved request; commit root, decision and binding
+    Core->>Core: Lock request; save receipt, root, decision and binding atomically
     Core->>Events: Register session and deliver first message, retryably
 ```
 
