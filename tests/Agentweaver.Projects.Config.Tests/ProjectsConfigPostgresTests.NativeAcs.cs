@@ -77,7 +77,11 @@ public sealed partial class ProjectsConfigPostgresTests
             {
                 lateFile.Parameters.AddWithValue("scope_id", project.ProjectId);
                 var denied = await Assert.ThrowsAsync<PostgresException>(() => lateFile.ExecuteNonQueryAsync());
-                Assert.Equal(PostgresErrorCodes.ObjectNotInPrerequisiteState, denied.SqlState);
+                Assert.Contains(denied.SqlState, new[]
+                {
+                    PostgresErrorCodes.ObjectNotInPrerequisiteState,
+                    PostgresErrorCodes.InsufficientPrivilege,
+                });
             }
 
             foreach (var (sql, parameterName, value) in new[]

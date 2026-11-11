@@ -1,5 +1,6 @@
 ---
 "Agentweaver.Abstractions": minor
+"Agentweaver.Policy.Acs": patch
 "Agentweaver.Projects.Config": minor
 ---
 
