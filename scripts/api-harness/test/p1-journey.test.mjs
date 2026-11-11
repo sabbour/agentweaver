@@ -96,11 +96,6 @@ async function host({
       response.end(JSON.stringify(page));
       return;
     }
-    if (request.headers.authorization === 'Bearer denied') {
-      response.statusCode = deniedStatus;
-      response.end(JSON.stringify({ code: 'forbidden' }));
-      return;
-    }
     const isRunStatus = url.pathname.endsWith('/coordination/status');
     if (isRunStatus) {
       response.end(JSON.stringify({
