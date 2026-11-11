@@ -232,11 +232,20 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 ExpectedRevision = project.ConfigurationRevision,
                 Configuration = new ProjectConfiguration
                 {
-                    AgentCharters =
-                    [
-                        new ProjectAgentCharter("test-agent", "Test agent", "implementer", "Do the accepted work.")
-                    ],
-                    Casting = [new ProjectAgentCast("test-agent", "implementer", 0)]
+                    AgentCharters = scenario == "completion"
+                        ?
+                        [
+                            new ProjectAgentCharter("test-agent", "Test agent", "implementer", "Do the accepted work."),
+                            new ProjectAgentCharter("test-agent-b", "Test agent B", "implementer", "Do the accepted work.")
+                        ]
+                        : [new ProjectAgentCharter("test-agent", "Test agent", "implementer", "Do the accepted work.")],
+                    Casting = scenario == "completion"
+                        ?
+                        [
+                            new ProjectAgentCast("test-agent", "implementer", 0),
+                            new ProjectAgentCast("test-agent-b", "implementer", 1)
+                        ]
+                        : [new ProjectAgentCast("test-agent", "implementer", 0)]
                 }
             });
         await AssertStatusAsync(configured, HttpStatusCode.OK);

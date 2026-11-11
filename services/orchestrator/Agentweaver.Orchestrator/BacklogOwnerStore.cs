@@ -680,6 +680,20 @@ internal sealed class BacklogOwnerStore
             return BacklogCoreResult<BacklogTaskClaimReceipt>.Success(existingClaim.ToReceipt(task));
         }
 
+        await using (var runClaim = new NpgsqlCommand($"""
+            SELECT 1
+            FROM {_tasks}
+            WHERE project_id = @project AND claim_run_id = @run AND claim_id IS NOT NULL
+            LIMIT 1
+            """, connection, transaction))
+        {
+            runClaim.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, task.ProjectId);
+            runClaim.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, selection.Selection.RunId);
+            if (await runClaim.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
+                throw new CoordinationException(
+                    "backlog_claim_conflict", StatusCodes.Status409Conflict);
+        }
+
         if (initializedRoot.StateVersion != 1)
             throw new CoordinationException("backlog_claim_conflict", StatusCodes.Status409Conflict);
 

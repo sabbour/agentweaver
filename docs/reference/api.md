@@ -1210,7 +1210,9 @@ selection, actual model, native completion and usage event IDs, and the
 acknowledged user and assistant material. The logical child session comes from
 the runtime registration; the SDK session ID comes from the native request
 context. The receipt returns material references, positions, and hashes, not
-prompt or output text.
+prompt or output text. For an open WorkPlan item, it also returns the hash of
+the full dispatched item. The owner compares this hash with the current
+confirmed item before it derives task completion.
 
 `taskCompletion` is present only when the Orchestrator joins a unique task claim
 on the root to the confirmed one-item WorkPlan, completed checkpoint, child

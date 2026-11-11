@@ -185,8 +185,10 @@ and output hashes to the child session, WorkPlan association, registration,
 accepted selection, fence, source, image, model selection, actual model, native
 completion events, usage event IDs, and material references. Orchestrator
 validates the receipt against the exact dispatch and stores it with the
-checkpoint result. Dispatch exposes bounded `completionEvidence` entries, not
-the prompt or output text.
+checkpoint result. For an open WorkPlan item, the receipt also binds a hash of
+the full dispatched item. Task completion requires that hash to match the
+current confirmed item. Dispatch exposes bounded `completionEvidence` entries,
+not the prompt or output text.
 
 A coordinator-root Host replacement passes the root-turn receipt and its cache
 binding through the normal activation path. The new Host must restore the same
