@@ -492,8 +492,8 @@ same references, source modes, enabled states, reasoning efforts, and revision.
 Because the ConfigMap is immutable, follow
 [Update an immutable ConfigMap](#update-an-immutable-configmap).
 
-The following settings are supplied only to the explicit migration or first
-TenantAdmin command. They are not part of the runtime ConfigMap:
+The following settings are supplied to an explicit migration or bootstrap
+command. They are not part of the runtime ConfigMap:
 
 | Setting | Contract |
 | --- | --- |
@@ -505,8 +505,10 @@ The automated Kustomize migration Job uses the Workload Identity settings and
 the projected token from its pre-provisioned
 `projects-config-migration` ServiceAccount. It does not use
 `ProjectsConfig__Migration__AccessToken` or a Kubernetes credential Secret.
-The short-lived access-token option remains for explicit operator bootstrap
-commands only.
+Direct one-shot commands can use the short-lived access-token option. The
+supported cluster bootstrap runner uses the ServiceAccount Workload Identity
+and does not create a credential Secret. See
+[Deploy Agentweaver to Azure](../guide/deploy-to-azure.md#bootstrap-the-first-projects-config-tenantadmin).
 
 The migration grants the runtime principal nothing. The migration runner
 requires the reviewed runtime-grant plan to be applied as a separate,

@@ -716,104 +716,47 @@ WHERE "Disabled" = false
 ORDER BY "CreatedAt";
 ```
 
-Set that ID as `ProjectsConfig__PrivilegedSetup__ApprovedSubject` before
-running the command.
-Provide the separate Projects & Config migration/schema-owner connection and a short-lived
-PostgreSQL Entra access token through a Kubernetes Secret. Do not put the
-token in a command argument or log.
+Set that ID as `ProjectsConfig__PrivilegedSetup__ApprovedSubject` in the
+reviewed target values before you render the immutable runtime ConfigMap. Do
+not edit the live ConfigMap by hand. The bootstrap command reads the approved
+issuer, subject, and tenant from that ConfigMap; it does not accept a different
+identity as an argument.
 
-In PowerShell, write the access token to a protected local file without
-printing it:
-
-```powershell
-az account get-access-token --resource-type oss-rdbms --query accessToken --output tsv |
-  Set-Content -NoNewline .\projects-config-access-token.txt
-```
-
-Put the password-free migration connection string in
-`projects-config-migration-connection.txt`. Its Entra role must own the
-Projects & Config schema and migration history. Create a short-lived Secret
-from these files:
+Run the supported bootstrap from a clean checkout at the fetched `origin/v1`
+tip. Use the exact immutable Projects & Config image approved for this target.
+First check the plan:
 
 ```powershell
-kubectl create secret generic projects-config-first-admin `
-  --namespace agentweaver `
-  --from-file=migration-connection=.\projects-config-migration-connection.txt `
-  --from-file=access-token=.\projects-config-access-token.txt
+npm run db:maintenance:projects-config -- `
+  --image ghcr.io/sabbour/agentweaver.projects.config@sha256:<digest> `
+  --bootstrap-first-tenant-admin
 ```
 
-Create a Job with the approved Projects & Config image. Copy the pod labels
-selected by the existing Projects & Config network policy so the Job can reach
-the private PostgreSQL server. Disable service-account token mounting. The
-network policy allows DNS lookups only for exact approved names, so set the
-pod's DNS `ndots` option to `1`. Otherwise the resolver can try cluster
-search-domain names first and fail before it reaches the PostgreSQL name:
-
-```yaml
-dnsConfig:
-  options:
-    - name: ndots
-      value: "1"
-```
-
-Set the container command and environment to the following. The namespace
-LimitRange requires at least `25m` CPU and `32Mi` memory for every container,
-including init or helper containers. A container that requests less is
-rejected, and the Job never creates a pod.
-
-```yaml
-command:
-  - dotnet
-  - Agentweaver.Projects.Config.dll
-  - --bootstrap-first-tenant-admin
-env:
-  - name: ProjectsConfig__Authentication__Authority
-    valueFrom:
-      configMapKeyRef:
-        name: projects-config-runtime-config
-        key: ProjectsConfig__Authentication__Authority
-  - name: ProjectsConfig__PrivilegedSetup__ApprovedIssuer
-    valueFrom:
-      configMapKeyRef:
-        name: projects-config-runtime-config
-        key: ProjectsConfig__PrivilegedSetup__ApprovedIssuer
-  - name: ProjectsConfig__PrivilegedSetup__ApprovedSubject
-    valueFrom:
-      configMapKeyRef:
-        name: projects-config-runtime-config
-        key: ProjectsConfig__PrivilegedSetup__ApprovedSubject
-  - name: ProjectsConfig__PrivilegedSetup__ApprovedTenantId
-    valueFrom:
-      configMapKeyRef:
-        name: projects-config-runtime-config
-        key: ProjectsConfig__PrivilegedSetup__ApprovedTenantId
-  - name: ConnectionStrings__ProjectsConfigMigration
-    valueFrom:
-      secretKeyRef:
-        name: projects-config-first-admin
-        key: migration-connection
-  - name: ProjectsConfig__Migration__AccessToken
-    valueFrom:
-      secretKeyRef:
-        name: projects-config-first-admin
-        key: access-token
-```
-
-Run the Job and read its result:
+For a registered separate target, also add
+`--resource-group <target>`. After you review the target and plan, run:
 
 ```powershell
-kubectl wait --for=condition=complete job/projects-config-first-admin `
-  --namespace agentweaver --timeout=10m
-kubectl logs job/projects-config-first-admin --namespace agentweaver
+npm run db:maintenance:projects-config -- `
+  --image ghcr.io/sabbour/agentweaver.projects.config@sha256:<digest> `
+  --bootstrap-first-tenant-admin --execute
 ```
 
-The command reports whether it created the grant or found the same active
-grant. A different active TenantAdmin stops the command without changes.
-After the Job succeeds, remove the Job and Secret and delete the local token
-file. Sign in as the approved user and load the Projects page. The page should
-open without `403`. The runtime database role stays read-only on authority
-tables until an operator applies the separately approved role-assignment
-grants. See [Runtime authority writes](../reference/runtime-configuration.md#runtime-authority-writes).
+The runner checks the immutable approved identity ConfigMap and verifies that
+the `projects-config-migration` ServiceAccount uses the target's managed
+identity. It creates one Job from the existing migration Job template. That
+Job uses Kubernetes Workload Identity to connect as the schema owner. The
+runner does not require an operator PostgreSQL token or create a credential
+Secret. It removes the Job and writes a sanitized receipt outside the checkout.
+
+The receipt reports `created` or `already-present` when the approved
+TenantAdmin is active. A different active TenantAdmin is a conflict; the
+command makes no grant. If the Job fails or the result is unclear, stop and
+review the receipt and cluster state before another attempt. Do not create a
+Job by copying the migration manifest. After the bootstrap succeeds, sign in
+as the approved user and load the Projects page. The page should open without
+`403`. The runtime database role stays read-only on authority tables until an
+operator applies the separately approved role-assignment grants. See
+[Runtime authority writes](../reference/runtime-configuration.md#runtime-authority-writes).
 
 ### Bootstrap the first PlatformAdmin and configure runtime defaults
 
@@ -827,9 +770,10 @@ The PlatformAdmin bootstrap uses the approved issuer, subject, and tenant in
 uses the immutable Projects & Config image selected for the deployment,
 verifies that the schema is already migrated, and runs one Job under the
 database-maintenance lock.
-The Job uses the approved identity configuration and the same short-lived
-schema-owner database credential as the migration command. The runner removes
-the Job and credential Secret and writes its receipt outside the checkout.
+The Job uses the approved identity configuration and the migration
+ServiceAccount's Workload Identity. The runner removes the Job and writes its
+receipt outside the checkout. It does not need an operator PostgreSQL token or
+create a credential Secret.
 
 From a clean checkout of the fetched `origin/v1` tip, first check the plan:
 
@@ -839,16 +783,9 @@ npm run db:maintenance:projects-config -- `
   --bootstrap-first-platform-admin
 ```
 
-For execution, provide the password-free migration connection and a
-short-lived PostgreSQL access token through the documented environment
-variables. Read them from protected local files without printing their
-contents:
+For execution, run:
 
 ```powershell
-$env:AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION =
-  Get-Content -Raw .\projects-config-migration-connection.txt
-$env:AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN =
-  Get-Content -Raw .\projects-config-access-token.txt
 npm run db:maintenance:projects-config -- `
   --image ghcr.io/sabbour/agentweaver.projects.config@sha256:<digest> `
   --bootstrap-first-platform-admin --execute
@@ -864,9 +801,7 @@ outcome, exception type, an allowlisted configuration category when applicable,
 and validated PostgreSQL metadata. It omits free-form exception messages. A
 failed receipt does not prove that no grant committed. Before deciding
 whether a retry is appropriate, run the repository-owned read-only inspection
-from a clean checkout of the fetched `origin/v1` tip. Use the same publication
-receipt and protected migration connection and access-token environment
-variables shown above:
+from a clean checkout of the fetched `origin/v1` tip:
 
 ```powershell
 npm run db:maintenance:projects-config -- `
@@ -877,14 +812,10 @@ npm run db:maintenance:projects-config -- `
 Inspection is an executing read-only operation; do not add `--execute`. It
 verifies the pinned published image, approved immutable identity configuration,
 and migration history, then runs under the database-maintenance lock using the
-same short-lived credential Secret and Job path. The database transaction is
+migration ServiceAccount's Workload Identity. The database transaction is
 `REPEATABLE READ` and explicitly `READ ONLY`. The command does not grant,
-revoke, repair, or migrate data. The runner removes the Job and Secret and
-writes a sanitized receipt outside the checkout.
-For inspection, the runner disables optional GSS encryption negotiation in the
-Job connection string; the required `SSL Mode=VerifyFull` still validates the
-PostgreSQL server certificate and hostname. This avoids relying on an optional
-native Kerberos library in the minimal service image.
+revoke, repair, or migrate data. The runner removes the Job and writes a
+sanitized receipt outside the checkout.
 
 Read the `platformAdminInspection` object in that receipt. `membership.state`
 is `active` or `absent`; `activeAssignments` lists each active platform

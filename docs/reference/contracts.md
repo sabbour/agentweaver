@@ -1510,6 +1510,15 @@ tenant membership when present. A rerun is a no-op only when that identity is
 the sole active PlatformAdmin; any other active PlatformAdmin stops the
 command. Normal host startup never runs it.
 
+For a cluster bootstrap, run `npm run db:maintenance:projects-config` with
+`--bootstrap-first-tenant-admin` or `--bootstrap-first-platform-admin`. The
+runner creates one Job from the Projects & Config migration template and uses
+the target's verified `projects-config-migration` Workload Identity. It reads
+the configured admin subject from the immutable runtime ConfigMap. It does not
+require an operator PostgreSQL token or create a credential Secret. See
+[Bootstrap the first TenantAdmin](../guide/deploy-to-azure.md#bootstrap-the-first-projects-config-tenantadmin)
+and [Bootstrap the first PlatformAdmin](../guide/deploy-to-azure.md#bootstrap-the-first-platformadmin-and-configure-runtime-defaults).
+
 The runtime database principal is read-only on authority tables, with one
 exception. Authorized Projects & Config operations can insert project role
 assignments and matching `authority_audit` rows; the role-assignment API can

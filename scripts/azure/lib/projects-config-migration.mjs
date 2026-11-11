@@ -34,11 +34,13 @@ Run it from a clean checkout of the fetched origin/v1 tip.
   --image <reference>        Immutable Projects & Config image reference. Required.
   --bootstrap-first-platform-admin
                              Run the approved one-shot PlatformAdmin bootstrap instead of migrations and grants.
+  --bootstrap-first-tenant-admin
+                             Run the approved one-shot TenantAdmin bootstrap instead of migrations and grants.
   --inspect-first-platform-admin
                              Read back the approved PlatformAdmin state and matching audit rows. This flag
                              runs the read-only inspection Job directly; --execute is neither needed nor allowed.
-  --execute                  Create a short-lived credential Secret and one Job. Migration mode applies
-                             the planned runtime grants; bootstrap mode creates the first PlatformAdmin.
+  --execute                  Execute migration or bootstrap. Migration mode creates a credential Secret;
+                             bootstrap modes use the verified migration Workload Identity.
   --receipt-dir <directory>  Receipt directory outside the checkout. Default: ~/.agentweaver/db-maintenance.
   --resource-group <name>    Registered install target. Default: agentweaver.
   --help                     Show this help.
@@ -77,7 +79,7 @@ function requireAncestor(exec, root, sourceSha, description) {
 
 export function parseProjectsConfigMigrationArgs(argv = []) {
   const options = {
-    image: undefined, execute: false, bootstrapFirstPlatformAdmin: false,
+    image: undefined, execute: false, bootstrapFirstTenantAdmin: false, bootstrapFirstPlatformAdmin: false,
     inspectFirstPlatformAdmin: false,
     receiptDir: RECEIPT_DIRECTORY, resourceGroup: 'agentweaver', help: false,
   };
@@ -86,6 +88,7 @@ export function parseProjectsConfigMigrationArgs(argv = []) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg === '--execute') options.execute = true;
+    else if (arg === '--bootstrap-first-tenant-admin') options.bootstrapFirstTenantAdmin = true;
     else if (arg === '--bootstrap-first-platform-admin') options.bootstrapFirstPlatformAdmin = true;
     else if (arg === '--inspect-first-platform-admin') options.inspectFirstPlatformAdmin = true;
     else {
@@ -105,8 +108,9 @@ export function parseProjectsConfigMigrationArgs(argv = []) {
   if (!/^ghcr\.io\/sabbour\/agentweaver\.projects\.config@sha256:[a-f0-9]{64}$/.test(options.image)) {
     fail('--image must be an immutable Projects & Config GHCR reference.');
   }
-  if (options.bootstrapFirstPlatformAdmin && options.inspectFirstPlatformAdmin) {
-    fail('--bootstrap-first-platform-admin and --inspect-first-platform-admin are mutually exclusive.');
+  if ([options.bootstrapFirstTenantAdmin, options.bootstrapFirstPlatformAdmin, options.inspectFirstPlatformAdmin]
+    .filter(Boolean).length > 1) {
+    fail('TenantAdmin bootstrap, PlatformAdmin bootstrap, and PlatformAdmin inspection modes are mutually exclusive.');
   }
   if (options.inspectFirstPlatformAdmin && options.execute) {
     fail('--inspect-first-platform-admin runs directly and must not be combined with --execute.');
@@ -163,6 +167,12 @@ const PLATFORM_ADMIN_BOOTSTRAP_CONFIG = [
   ['ProjectsConfig__PrivilegedSetup__ApprovedSubject', 'ProjectsConfig__PrivilegedSetup__ApprovedSubject'],
   ['ProjectsConfig__PrivilegedSetup__ApprovedTenantId', 'ProjectsConfig__PrivilegedSetup__ApprovedTenantId'],
 ];
+const TENANT_ADMIN_BOOTSTRAP_MESSAGES = new Map([
+  ['The first TenantAdmin was created.', 'created'],
+  ['The approved TenantAdmin already exists; no changes were made.', 'already-present'],
+  ['First TenantAdmin bootstrap refused because another active TenantAdmin exists for this tenant.', 'conflict'],
+  ['First TenantAdmin bootstrap failed. Check the approved identity, migration settings, and database connectivity.', 'failed'],
+]);
 const PLATFORM_ADMIN_BOOTSTRAP_MESSAGES = new Map([
   ['The first PlatformAdmin was created.', 'created'],
   ['The approved PlatformAdmin already exists; no changes were made.', 'already-present'],
@@ -172,6 +182,7 @@ const PLATFORM_ADMIN_BOOTSTRAP_MESSAGES = new Map([
 const PLATFORM_ADMIN_BOOTSTRAP_DIAGNOSTIC_PREFIX = 'PlatformAdmin bootstrap diagnostic: ';
 const PLATFORM_ADMIN_BOOTSTRAP_DIAGNOSTIC_PATTERN =
   /^ExceptionType=[A-Za-z][A-Za-z0-9]{0,127}(?:; InnerExceptionType=[A-Za-z][A-Za-z0-9]{0,127})?(?:; (?:Category=invalid-bootstrap-configuration|SqlState=(?:unknown|[0-9A-Z]{5}); ConstraintName=(?:unknown|[A-Za-z_][A-Za-z0-9_.$-]{0,127}); TableName=(?:unknown|[A-Za-z_][A-Za-z0-9_.$-]{0,127})))?$/;
+const TENANT_ADMIN_BOOTSTRAP_DIAGNOSTIC_PREFIX = 'TenantAdmin bootstrap diagnostic: ';
 const PLATFORM_ADMIN_INSPECTION_FAILURE =
   'First PlatformAdmin inspection failed. Check the approved identity, migration settings, and database connectivity.';
 const PLATFORM_ADMIN_INSPECTION_DIAGNOSTIC_PREFIX = 'PlatformAdmin inspection diagnostic: ';
@@ -179,7 +190,8 @@ const GUID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 const UTC_TIMESTAMP_PATTERN = '\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z';
 
 function prepareJob(template, {
-  name, image, runId, secretName, bootstrapFirstPlatformAdmin = false, inspectFirstPlatformAdmin = false,
+  name, image, runId, secretName, bootstrapFirstTenantAdmin = false,
+  bootstrapFirstPlatformAdmin = false, inspectFirstPlatformAdmin = false, migrationClientId,
 }) {
   const job = structuredClone(template);
   job.metadata.name = name;
@@ -191,14 +203,28 @@ function prepareJob(template, {
   for (const entry of container.env ?? []) {
     if (entry.valueFrom?.secretKeyRef) entry.valueFrom.secretKeyRef.name = secretName;
   }
-  if (bootstrapFirstPlatformAdmin || inspectFirstPlatformAdmin) {
+  if (bootstrapFirstTenantAdmin || bootstrapFirstPlatformAdmin || inspectFirstPlatformAdmin) {
     // Reuse the hardened migration Job template while changing only its command and approved identity inputs.
     container.command = [
       'dotnet',
       'Agentweaver.Projects.Config.dll',
-      inspectFirstPlatformAdmin ? '--inspect-first-platform-admin' : '--bootstrap-first-platform-admin',
+      bootstrapFirstTenantAdmin ? '--bootstrap-first-tenant-admin'
+        : inspectFirstPlatformAdmin ? '--inspect-first-platform-admin' : '--bootstrap-first-platform-admin',
     ];
     container.env ??= [];
+    const workloadClientId = container.env.find(entry =>
+      entry.name === 'ProjectsConfig__Migration__WorkloadIdentity__ClientId');
+    if (!workloadClientId || !migrationClientId) {
+      fail('Projects & Config bootstrap Job has no verified workload identity client ID.');
+    }
+    workloadClientId.value = migrationClientId;
+    if (inspectFirstPlatformAdmin) {
+      const connection = container.env.find(entry => entry.name === 'ConnectionStrings__ProjectsConfigMigration');
+      if (typeof connection?.value !== 'string' || !connection.value.trim()) {
+        fail('Projects & Config inspection Job has no migration connection string.');
+      }
+      connection.value = `${connection.value.replace(/;+$/, '')};GSS Encryption Mode=Disable`;
+    }
     for (const [name, key] of PLATFORM_ADMIN_BOOTSTRAP_CONFIG) {
       container.env.push({
         name,
@@ -216,30 +242,37 @@ function validateJob(job, expected) {
       job.metadata?.namespace !== NAMESPACE || job.spec?.template?.spec?.automountServiceAccountToken !== false) {
     fail('migration Job readback has an unexpected identity or service-account setting.');
   }
-  if (expected.bootstrapFirstPlatformAdmin) {
-    // Bind the privileged command to the pinned image and ConfigMap-only approved identity inputs.
-    const container = job.spec?.template?.spec?.containers?.[0];
-    const configured = new Map((container?.env ?? []).map(entry => [entry.name, entry.valueFrom?.configMapKeyRef]));
-    if (container?.image !== expected.image || JSON.stringify(container?.command) !== JSON.stringify([
-      'dotnet', 'Agentweaver.Projects.Config.dll', '--bootstrap-first-platform-admin',
-    ]) || PLATFORM_ADMIN_BOOTSTRAP_CONFIG.some(([name, key]) => {
-      const reference = configured.get(name);
-      return reference?.name !== 'projects-config-runtime-config' || reference?.key !== key;
-    })) {
-      fail('PlatformAdmin bootstrap Job readback has an unexpected command or identity source.');
-    }
+  if (expected.migrationClientId &&
+      job.spec?.template?.spec?.serviceAccountName !== 'projects-config-migration') {
+    fail('Projects & Config bootstrap Job does not use the verified migration ServiceAccount.');
   }
-  if (expected.inspectFirstPlatformAdmin) {
-    // Bind readback to the pinned image and the same immutable approved identity source as bootstrap.
+  if (expected.bootstrapFirstTenantAdmin || expected.bootstrapFirstPlatformAdmin ||
+      expected.inspectFirstPlatformAdmin) {
+    const command = expected.bootstrapFirstTenantAdmin
+      ? '--bootstrap-first-tenant-admin'
+      : expected.inspectFirstPlatformAdmin
+        ? '--inspect-first-platform-admin'
+        : '--bootstrap-first-platform-admin';
     const container = job.spec?.template?.spec?.containers?.[0];
     const configured = new Map((container?.env ?? []).map(entry => [entry.name, entry.valueFrom?.configMapKeyRef]));
+    const workloadIdentity = new Map((container?.env ?? []).map(entry => [entry.name, entry.value]));
     if (container?.image !== expected.image || JSON.stringify(container?.command) !== JSON.stringify([
-      'dotnet', 'Agentweaver.Projects.Config.dll', '--inspect-first-platform-admin',
-    ]) || PLATFORM_ADMIN_BOOTSTRAP_CONFIG.some(([name, key]) => {
-      const reference = configured.get(name);
-      return reference?.name !== 'projects-config-runtime-config' || reference?.key !== key;
-    })) {
-      fail('PlatformAdmin inspection Job readback has an unexpected command or identity source.');
+      'dotnet', 'Agentweaver.Projects.Config.dll', command,
+    ]) || job.spec?.template?.metadata?.labels?.['azure.workload.identity/use'] !== 'true' ||
+      container?.env?.some(entry => entry.name === 'ProjectsConfig__Migration__AccessToken') ||
+      workloadIdentity.get('ProjectsConfig__Migration__WorkloadIdentity__ClientId') !== expected.migrationClientId ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        workloadIdentity.get('ProjectsConfig__Migration__WorkloadIdentity__TenantId') ?? '') ||
+      workloadIdentity.get('ProjectsConfig__Migration__WorkloadIdentity__TokenFilePath') !==
+        '/var/run/secrets/azure/tokens/azure-identity-token' ||
+      (expected.inspectFirstPlatformAdmin &&
+        !container?.env?.find(entry => entry.name === 'ConnectionStrings__ProjectsConfigMigration')
+          ?.value?.endsWith(';GSS Encryption Mode=Disable')) ||
+      PLATFORM_ADMIN_BOOTSTRAP_CONFIG.some(([name, key]) => {
+        const reference = configured.get(name);
+        return reference?.name !== 'projects-config-runtime-config' || reference?.key !== key;
+      })) {
+      fail('Projects & Config bootstrap Job readback has an unexpected command or identity source.');
     }
   }
 }
@@ -291,6 +324,22 @@ function parsePlatformAdminBootstrapMessage(log) {
   if (diagnostics.length > 1 || (diagnostics.length === 1 &&
       (outcomes[0] !== 'failed' || !PLATFORM_ADMIN_BOOTSTRAP_DIAGNOSTIC_PATTERN.test(diagnostics[0])))) {
     fail('PlatformAdmin bootstrap Job returned unexpected diagnostic output.');
+  }
+  return { outcome: outcomes[0], diagnostic: diagnostics[0] };
+}
+
+function parseTenantAdminBootstrapMessage(log) {
+  const lines = log.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const outcomes = lines.map(line => TENANT_ADMIN_BOOTSTRAP_MESSAGES.get(line)).filter(Boolean);
+  if (outcomes.length !== 1) {
+    fail('TenantAdmin bootstrap Job did not return exactly one stable outcome message.');
+  }
+  const diagnostics = lines
+    .filter(line => line.startsWith(TENANT_ADMIN_BOOTSTRAP_DIAGNOSTIC_PREFIX))
+    .map(line => line.slice(TENANT_ADMIN_BOOTSTRAP_DIAGNOSTIC_PREFIX.length));
+  if (diagnostics.length > 1 || (diagnostics.length === 1 &&
+      (outcomes[0] !== 'failed' || !PLATFORM_ADMIN_BOOTSTRAP_DIAGNOSTIC_PATTERN.test(diagnostics[0])))) {
+    fail('TenantAdmin bootstrap Job returned unexpected diagnostic output.');
   }
   return { outcome: outcomes[0], diagnostic: diagnostics[0] };
 }
@@ -444,28 +493,34 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
   if (!isOutsideCheckout(root, receiptDirectory)) {
     fail('--receipt-dir must be outside the source checkout.');
   }
+  const bootstrapFirstTenantAdmin = options.bootstrapFirstTenantAdmin === true;
   const bootstrapFirstPlatformAdmin = options.bootstrapFirstPlatformAdmin === true;
   const inspectFirstPlatformAdmin = options.inspectFirstPlatformAdmin === true;
-  if (bootstrapFirstPlatformAdmin && inspectFirstPlatformAdmin) {
-    fail('PlatformAdmin bootstrap and inspection modes are mutually exclusive.');
+  if ([bootstrapFirstTenantAdmin, bootstrapFirstPlatformAdmin, inspectFirstPlatformAdmin].filter(Boolean).length > 1) {
+    fail('TenantAdmin bootstrap, PlatformAdmin bootstrap, and PlatformAdmin inspection modes are mutually exclusive.');
   }
   if (inspectFirstPlatformAdmin && options.execute) {
     fail('PlatformAdmin inspection runs directly and must not be combined with --execute.');
   }
-  const platformAdminOperation = bootstrapFirstPlatformAdmin || inspectFirstPlatformAdmin;
+  const bootstrapFirstAdmin = bootstrapFirstTenantAdmin || bootstrapFirstPlatformAdmin;
+  const usesMigrationWorkloadIdentity = bootstrapFirstAdmin || inspectFirstPlatformAdmin;
+  const adminOperation = bootstrapFirstAdmin || inspectFirstPlatformAdmin;
   const executeJob = options.execute || inspectFirstPlatformAdmin;
-  const jobPrefix = bootstrapFirstPlatformAdmin
-    ? 'projects-config-platform-admin-bootstrap'
+  const jobPrefix = bootstrapFirstTenantAdmin
+    ? 'projects-config-tenant-admin-bootstrap'
+    : bootstrapFirstPlatformAdmin
+      ? 'projects-config-platform-admin-bootstrap'
     : inspectFirstPlatformAdmin
       ? 'projects-config-platform-admin-inspection'
       : 'projects-config-migration';
   const receiptPath = path.join(receiptDirectory, `${jobPrefix}-${runId}.json`);
   const receipt = {
     // Keep migration receipts at v2 for rollout consumers; bootstrap receipts have a separate v1 contract.
-    schemaVersion: platformAdminOperation ? 1 : 2,
+    schemaVersion: adminOperation ? 1 : 2,
     runId,
     mode: inspectFirstPlatformAdmin ? 'read-only-inspection' : options.execute ? 'execute' : 'dry-run',
-    operation: bootstrapFirstPlatformAdmin ? 'bootstrap-first-platform-admin'
+    operation: bootstrapFirstTenantAdmin ? 'bootstrap-first-tenant-admin'
+      : bootstrapFirstPlatformAdmin ? 'bootstrap-first-platform-admin'
       : inspectFirstPlatformAdmin ? 'inspect-first-platform-admin' : 'migration',
     result: 'running',
     sourceSha: null,
@@ -528,26 +583,32 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
     if (jobTemplate.kind !== 'Job' || jobTemplate.metadata?.name !== 'projects-config-migration') {
       fail('Projects & Config migration Job template has an unexpected identity.');
     }
-    if (executeJob) {
+    if (executeJob && !usesMigrationWorkloadIdentity) {
       const credentials = readCredentials({ inspectFirstPlatformAdmin, postgresHost: target.postgresHost });
       secrets.push(credentials.connection, credentials.accessToken);
+      receipt.plannedSteps = ['lock', 'create-credential-secret', 'create-migration-job',
+        'verify-job-completion', 'delete-job-and-secret', 'release-lock', 'receipt'];
+    } else if (usesMigrationWorkloadIdentity) {
       receipt.plannedSteps = inspectFirstPlatformAdmin
-        ? ['lock', 'verify-approved-identity-config', 'create-credential-secret',
+        ? ['lock', 'verify-approved-identity-config', 'verify-migration-workload-identity',
           'create-platform-admin-inspection-job', 'verify-inspection-result',
-          'delete-job-and-secret', 'release-lock', 'receipt']
-        : bootstrapFirstPlatformAdmin
-          ? ['lock', 'verify-approved-identity-config', 'create-credential-secret',
+          'delete-job', 'release-lock', 'receipt']
+        : bootstrapFirstTenantAdmin
+          ? ['lock', 'verify-approved-identity-config', 'verify-migration-workload-identity',
+            'create-tenant-admin-bootstrap-job', 'verify-bootstrap-result',
+            'delete-job', 'release-lock', 'receipt']
+          : ['lock', 'verify-approved-identity-config', 'verify-migration-workload-identity',
             'create-platform-admin-bootstrap-job', 'verify-bootstrap-result',
-            'delete-job-and-secret', 'release-lock', 'receipt']
-          : ['lock', 'create-credential-secret', 'create-migration-job',
-            'verify-job-completion', 'delete-job-and-secret', 'release-lock', 'receipt'];
+            'delete-job', 'release-lock', 'receipt'];
     } else {
-      receipt.plannedSteps = bootstrapFirstPlatformAdmin
-        ? ['verify-migration-lock', 'verify-approved-identity-config', 'create-credential-secret',
-          'create-platform-admin-bootstrap-job', 'verify-bootstrap-result',
-          'delete-job-and-secret', 'release-lock', 'receipt']
-        : ['verify-migration-lock', 'create-credential-secret', 'create-migration-job',
-          'verify-job-completion', 'delete-job-and-secret', 'release-lock', 'receipt'];
+      receipt.plannedSteps = bootstrapFirstTenantAdmin
+        ? ['verify-migration-lock', 'verify-approved-identity-config', 'verify-migration-workload-identity',
+          'create-tenant-admin-bootstrap-job', 'verify-bootstrap-result', 'delete-job', 'release-lock', 'receipt']
+        : bootstrapFirstPlatformAdmin
+          ? ['verify-migration-lock', 'verify-approved-identity-config', 'verify-migration-workload-identity',
+            'create-platform-admin-bootstrap-job', 'verify-bootstrap-result', 'delete-job', 'release-lock', 'receipt']
+          : ['verify-migration-lock', 'create-credential-secret', 'create-migration-job',
+            'verify-job-completion', 'delete-job-and-secret', 'release-lock', 'receipt'];
     }
 
     await deps.withKubeconfig({
@@ -579,13 +640,34 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
           fail(`could not verify the database maintenance lock: ${safeDiagnostic(new Error(lockRead.stderr ?? ''), secrets)}`);
         }
         record('migration-lock-checked');
-        if (platformAdminOperation) {
+        let migrationClientId;
+        if (adminOperation) {
           // Check the immutable approved identity source before planning or creating privileged work.
           const configMap = parseJson(
             kubectl(['get', 'configmap', 'projects-config-runtime-config', '--output=json']).stdout,
             'Projects & Config runtime ConfigMap');
           verifyPlatformAdminBootstrapConfig(configMap);
           record('bootstrap-identity-config-verified');
+          const serviceAccount = parseJson(
+            kubectl(['get', 'serviceaccount', 'projects-config-migration', '--output=json']).stdout,
+            'Projects & Config migration ServiceAccount');
+          const serviceAccountClientId =
+            serviceAccount.metadata?.annotations?.['azure.workload.identity/client-id'];
+          const expectedClientId = must(deps.exec('az', [
+            'identity', 'show', '--subscription', target.subscriptionId,
+            '--resource-group', target.resourceGroup,
+            '--name', `${target.resourceGroup}-id-projects-config-migration`,
+            '--query', 'clientId', '-o', 'tsv',
+          ], { cwd: root, check: false }), 'Could not verify the Projects & Config migration identity').stdout.trim();
+          if (serviceAccount.kind !== 'ServiceAccount' ||
+              serviceAccount.metadata?.name !== 'projects-config-migration' ||
+              serviceAccount.metadata?.namespace !== NAMESPACE ||
+              !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(expectedClientId) ||
+              serviceAccountClientId !== expectedClientId) {
+            fail('ServiceAccount/projects-config-migration does not name the approved migration identity.');
+          }
+          migrationClientId = serviceAccountClientId;
+          record('migration-workload-identity-verified');
         }
         if (!executeJob) {
           receipt.result = 'dry-run-passed';
@@ -603,27 +685,29 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
         record('migration-lock-acquired', { runId });
 
         const secretName = `${jobPrefix}-${runId}`;
-        const secret = {
-          apiVersion: 'v1',
-          kind: 'Secret',
-          metadata: { name: secretName, namespace: NAMESPACE, labels: { [RUN_LABEL]: runId } },
-          type: 'Opaque',
-          stringData: {
-            'migration-connection': secrets[0],
-            'access-token': secrets[1],
-          },
-        };
-        kubectl(['create', '--filename', '-'], { input: JSON.stringify(secret) });
-        secretCreated = true;
-        record('credential-secret-created', { secret: secretName });
-
+        if (!usesMigrationWorkloadIdentity) {
+          const secret = {
+            apiVersion: 'v1',
+            kind: 'Secret',
+            metadata: { name: secretName, namespace: NAMESPACE, labels: { [RUN_LABEL]: runId } },
+            type: 'Opaque',
+            stringData: {
+              'migration-connection': secrets[0],
+              'access-token': secrets[1],
+            },
+          };
+          kubectl(['create', '--filename', '-'], { input: JSON.stringify(secret) });
+          secretCreated = true;
+          record('credential-secret-created', { secret: secretName });
+        }
         const name = `${jobPrefix}-${runId}`;
         const job = prepareJob(jobTemplate, {
-          name, image: image.image, runId, secretName,
-          bootstrapFirstPlatformAdmin, inspectFirstPlatformAdmin,
+          name, image: image.image, runId, secretName, migrationClientId,
+          bootstrapFirstTenantAdmin, bootstrapFirstPlatformAdmin, inspectFirstPlatformAdmin,
         });
         validateJob(job, {
-          name, image: image.image, bootstrapFirstPlatformAdmin, inspectFirstPlatformAdmin,
+          name, image: image.image, bootstrapFirstTenantAdmin, bootstrapFirstPlatformAdmin,
+          inspectFirstPlatformAdmin, migrationClientId,
         });
         kubectl(['create', '--filename', '-'], { input: JSON.stringify(job) });
         jobCreated = true;
@@ -631,12 +715,38 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
           bootstrapFirstPlatformAdmin ? 'platform-admin-bootstrap-job-created'
             : inspectFirstPlatformAdmin ? 'platform-admin-inspection-job-created' : 'migration-job-created',
           { job: name, image: image.image });
-        if (bootstrapFirstPlatformAdmin) {
+        if (bootstrapFirstTenantAdmin) {
+          const jobStatus = await waitForJob(kubectl, deps, name, {
+            returnFailure: true,
+            description: 'TenantAdmin bootstrap',
+            bootstrapFirstTenantAdmin: true,
+            image: image.image,
+            migrationClientId,
+          });
+          const { outcome, diagnostic } = parseTenantAdminBootstrapMessage(
+            kubectl(['logs', `job/${name}`, '--tail=20']).stdout);
+          receipt.bootstrap = { outcome };
+          if (diagnostic) receipt.bootstrap.diagnostic = safeDiagnostic(diagnostic, secrets);
+          record('tenant-admin-bootstrap-result', { outcome });
+          if (outcome === 'failed') {
+            fail('First TenantAdmin bootstrap command failed; review the sanitized diagnostic in the receipt.');
+          }
+          if (outcome === 'conflict') {
+            fail('First TenantAdmin bootstrap was refused because another active TenantAdmin exists.');
+          }
+          if (jobStatus !== 'Complete' || !['created', 'already-present'].includes(outcome)) {
+            receipt.bootstrap.outcome = 'failed';
+            fail('TenantAdmin bootstrap Job did not complete with a successful stable outcome.');
+          }
+          record('tenant-admin-bootstrap-job-completed', { job: name, image: image.image });
+          receipt.result = 'succeeded';
+        } else if (bootstrapFirstPlatformAdmin) {
           const jobStatus = await waitForJob(kubectl, deps, name, {
             returnFailure: true,
             description: 'PlatformAdmin bootstrap',
             bootstrapFirstPlatformAdmin: true,
             image: image.image,
+            migrationClientId,
           });
           // Bootstrap command output is limited to stable result messages; raw pod logs are never persisted.
           const { outcome, diagnostic } = parsePlatformAdminBootstrapMessage(
@@ -662,6 +772,7 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
             description: 'PlatformAdmin inspection',
             inspectFirstPlatformAdmin: true,
             image: image.image,
+            migrationClientId,
           });
           const inspection = parsePlatformAdminInspectionOutput(
             kubectl(['logs', `job/${name}`, '--tail=20']).stdout);
@@ -681,7 +792,7 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
           record('migration-job-completed', { job: name, image: image.image });
         }
 
-        if (!platformAdminOperation) receipt.result = 'succeeded';
+        if (!adminOperation) receipt.result = 'succeeded';
       } catch (error) {
         actionError = error;
       } finally {
@@ -729,17 +840,22 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
       requiredPermissions: [
         ['get', `namespace/${NAMESPACE}`],
         ['get', 'leases.coordination.k8s.io', NAMESPACE],
-        ...(platformAdminOperation ? [['get', 'configmaps', NAMESPACE]] : []),
+        ...(adminOperation ? [['get', 'configmaps', NAMESPACE]] : []),
         ...(executeJob ? [
           ['create', 'leases.coordination.k8s.io', NAMESPACE],
           ['delete', 'leases.coordination.k8s.io', NAMESPACE],
-          ['create', 'secrets', NAMESPACE],
-          ['delete', 'secrets', NAMESPACE],
+          ...(!usesMigrationWorkloadIdentity ? [
+            ['create', 'secrets', NAMESPACE],
+            ['delete', 'secrets', NAMESPACE],
+          ] : []),
           ['create', 'jobs', NAMESPACE],
           ['get', 'jobs', NAMESPACE],
           ['delete', 'jobs', NAMESPACE],
           ['list', 'pods', NAMESPACE],
-          ...(platformAdminOperation ? [['get', 'pods', NAMESPACE, 'log']] : []),
+          ...(adminOperation ? [
+            ['get', 'serviceaccounts', NAMESPACE],
+            ['get', 'pods', NAMESPACE, 'log'],
+          ] : []),
         ] : []),
       ],
       permissionContext: 'Projects & Config database migration',
@@ -773,14 +889,19 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
 async function waitForJob(kubectl, deps, name, {
   returnFailure = false,
   description = 'migration',
+  bootstrapFirstTenantAdmin = false,
   bootstrapFirstPlatformAdmin = false,
   inspectFirstPlatformAdmin = false,
+  migrationClientId,
   image,
 } = {}) {
   const deadline = deps.now().getTime() + JOB_TIMEOUT_SECONDS * 1000;
   for (let attempt = 0; ; attempt += 1) {
     const job = parseJson(kubectl(['get', 'job', name, '--output=json']).stdout, 'migration Job readback');
-    validateJob(job, { name, image, bootstrapFirstPlatformAdmin, inspectFirstPlatformAdmin });
+    validateJob(job, {
+      name, image, bootstrapFirstTenantAdmin, bootstrapFirstPlatformAdmin,
+      inspectFirstPlatformAdmin, migrationClientId,
+    });
     const conditions = job.status?.conditions ?? [];
     const terminal = conditions.find(condition =>
       TERMINAL_CONDITIONS.has(condition.type) && condition.status === 'True');
