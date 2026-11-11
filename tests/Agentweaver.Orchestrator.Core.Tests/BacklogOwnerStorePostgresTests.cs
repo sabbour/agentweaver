@@ -529,12 +529,16 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
               }
             }
             """);
+        var currentGraph = (await _backlog.ReadGraphAsync(
+            claimedTask.ProjectId, CancellationToken.None)).Value!;
+        var secondTaskClaim = await Assert.ThrowsAsync<CoordinationException>(() => ClaimAsync(
+            conflictingTask, currentGraph.Revision, selection, "second-task-same-run"));
+        Assert.Equal("backlog_claim_conflict", secondTaskClaim.Code);
+
         var conflictingSelection = selection with
         {
             Selection = selection.Selection with { Snapshot = conflictingSnapshot.RootElement.Clone() }
         };
-        var currentGraph = (await _backlog.ReadGraphAsync(
-            claimedTask.ProjectId, CancellationToken.None)).Value!;
         var conflict = await Assert.ThrowsAsync<CoordinationException>(() => ClaimAsync(
             conflictingTask, currentGraph.Revision, conflictingSelection, "conflicting-root-claim-key"));
         Assert.Equal("accepted_run_conflict", conflict.Code);

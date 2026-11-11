@@ -750,9 +750,11 @@ request, prompt, and output hashes to the WorkPlan association, logical child
 session, native SDK session ID, runtime registration, accepted selection,
 execution fence, source, image, model selection, actual model, native
 completion event IDs, usage event IDs, and material acknowledgment references.
-The logical child session comes from the runtime registration. The SDK session
-ID comes from the native request context. The receipt does not contain prompt
-or output text.
+For an open WorkPlan item, the receipt also carries a hash of the full item
+bound to the native dispatch. The owner compares this hash with the current
+confirmed item before deriving task completion. The logical child session comes
+from the runtime registration. The SDK session ID comes from the native request
+context. The receipt does not contain prompt or output text.
 
 Orchestrator validates the receipt against the exact dispatch request and
 current registration, then joins it to the persisted source, native observation,

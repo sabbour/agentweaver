@@ -797,6 +797,12 @@ public static partial class CoordinationEndpoints
                             1,
                             plan.Plan.Id,
                             intent.AssociationId)
+                        {
+                            WorkItemBindingSha256 = plan.Plan.Items
+                                .SingleOrDefault(item => item.Id == intent.AssociationId) is { } workItem
+                                    ? HashWorkItemBinding(workItem)
+                                    : null
+                        }
                     }));
                 if (IsWallTimeLimitReached())
                     return null;
@@ -1036,6 +1042,9 @@ public static partial class CoordinationEndpoints
                         "maf_execution_prompt_limit_exceeded", StatusCodes.Status409Conflict);
                 return value;
             }
+
+            string HashWorkItemBinding(WorkPlanItem item) =>
+                RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(item));
 
             MafExecutionDispatchIntent RebuildExpectedDispatchIntent(
                 MafExecutionCheckpoint state, MafExecutionDispatchIntent intent)
@@ -1321,6 +1330,12 @@ public static partial class CoordinationEndpoints
                     return null;
 
                 var item = plan.Plan.Items[0];
+                var step = plan.Workflow.Definition.Steps.SingleOrDefault(
+                    candidate => candidate.Id == item.WorkflowStepId);
+                if (step is null)
+                    return null;
+                var expectedPromptHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
+                    BuildPrompt(new MafExecutionAction(step, item), completedCheckpoint.State, item.Id)));
                 var expectedChildSessionId = MafExecutionPlanner.CreateChildSessionId(
                     identity, plan.Plan.Id, item.Id);
                 var backlog = context.RequestServices.GetRequiredService<BacklogOwnerStore>();
@@ -1340,6 +1355,8 @@ public static partial class CoordinationEndpoints
                     claim.TaskRevision != claim.ClaimTaskRevision ||
                     childReceipt.WorkPlanId != plan.Plan.Id ||
                     childReceipt.AssociationId != item.Id ||
+                    childReceipt.WorkItemBindingSha256 != HashWorkItemBinding(item) ||
+                    childReceipt.PromptSha256 != expectedPromptHash ||
                     childReceipt.ChildSessionId != expectedChildSessionId ||
                     !string.Equals(
                         childReceipt.AcceptedSelectionHash,

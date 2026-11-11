@@ -545,10 +545,10 @@ sequenceDiagram
     O->>Host: Send associated child task
     Host->>Events: Append native material and usage events
     Events-->>Host: Acknowledge native events and material
-    Host-->>O: Return child-turn completion receipt
+    Host-->>O: Return child-turn completion receipt and item-binding hash
     O->>DB: Store receipt with checkpoint result
     O-->>Caller: Return bounded completionEvidence
-    O->>DB: Join claim, plan, checkpoint and output witness
+    O->>DB: Join claim, current item hash, checkpoint and output witness
     O-->>Caller: Return taskCompletion only when every join passes
 ```
 
@@ -585,7 +585,11 @@ For a completed native child turn, the runtime returns a receipt that binds
 request, prompt, and output hashes to the plan association, child session,
 runtime registration, accepted selection, execution fence, source and image,
 model selection and actual model, native completion events, usage events, and
-acknowledged user and assistant material. Orchestrator joins each field to the
+acknowledged user and assistant material. For an open WorkPlan item, the
+receipt also carries a hash of the full item that was dispatched. Orchestrator
+compares that hash with the current confirmed item before it derives task
+completion, so a later reassignment or item change cannot reuse the old result.
+Orchestrator joins each field to the
 persisted source, native observation, and accounting status before it stores
 the receipt with the checkpoint result. Task completion requires priced
 accounting. The dispatch response returns bounded

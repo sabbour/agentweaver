@@ -734,7 +734,11 @@ public sealed record RuntimeA2AMetadata(
 public sealed record RuntimeA2AChildDispatchBinding(
     int ContractVersion,
     string WorkPlanId,
-    string AssociationId);
+    string AssociationId)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkItemBindingSha256 { get; init; }
+}
 
 /// <summary>Validated A2A text message shape sent to the runtime.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -800,6 +804,9 @@ public sealed record RuntimeChildTurnCompletionReceipt(
     RuntimeMaterialAcknowledgmentEvidence UserMaterial,
     RuntimeMaterialAcknowledgmentEvidence AssistantMaterial)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkItemBindingSha256 { get; init; }
+
     /// <summary>Checks the receipt against the exact child request and completed response.</summary>
     public RuntimeChildTurnCompletionReceipt ValidateFor(
         RuntimeA2ASendRequest request,
@@ -829,6 +836,8 @@ public sealed record RuntimeChildTurnCompletionReceipt(
         RuntimeContractValidation.ValidateHash(SourceSha256);
         RuntimeContractValidation.ValidateHash(NativeCursorSha256);
         RuntimeContractValidation.ValidateHash(NativePayloadSha256);
+        if (WorkItemBindingSha256 is { } workItemBindingSha256)
+            RuntimeContractValidation.ValidateHash(workItemBindingSha256);
         if (ContractVersion != 1 ||
             RequestId == Guid.Empty ||
             RequestId != message.MessageId ||
@@ -836,6 +845,7 @@ public sealed record RuntimeChildTurnCompletionReceipt(
             childDispatch is null || childDispatch.ContractVersion != 1 ||
             childDispatch.WorkPlanId != workPlanId ||
             childDispatch.AssociationId != associationId ||
+            childDispatch.WorkItemBindingSha256 != WorkItemBindingSha256 ||
             message.Metadata.Runtime.Registration != registration ||
             binding.WorkflowStepId is null ||
             PromptSha256 != RuntimeContractValidation.Hash(
@@ -877,6 +887,8 @@ public sealed record RuntimeChildTurnCompletionReceipt(
         RuntimeContractValidation.ValidateHash(SourceSha256);
         RuntimeContractValidation.ValidateHash(NativeCursorSha256);
         RuntimeContractValidation.ValidateHash(NativePayloadSha256);
+        if (WorkItemBindingSha256 is { } workItemBindingSha256)
+            RuntimeContractValidation.ValidateHash(workItemBindingSha256);
         if (ContractVersion != 1 || RequestId == Guid.Empty ||
             WorkPlanId != workPlanId || AssociationId != associationId ||
             string.IsNullOrWhiteSpace(ChildSessionId) || ChildSessionId.Length > 256 ||
@@ -936,6 +948,7 @@ public sealed record RuntimeChildTurnCompletionReceipt(
             evidence.SourceSha256 != RuntimeUsageSourceReceiptContract.HashSource(registration, source) ||
             evidence.AccountingOwnerRevision <= recorded.OwnerRevision ||
             admission.Registration != registration ||
+            WorkItemBindingSha256 != request.Message.Metadata.ChildDispatch?.WorkItemBindingSha256 ||
             ChildSessionId != binding.SessionId ||
             SdkSessionId != request.Message.ContextId ||
             SdkSessionId != source.SdkSessionId ||
@@ -1047,7 +1060,10 @@ public sealed record RuntimeChildTurnCompletionReceipt(
             accountingOwnerRevision,
             native.UsageEventIds,
             RuntimeRootTurnCompletionReceipt.ProjectMaterial(userMaterial),
-            RuntimeRootTurnCompletionReceipt.ProjectMaterial(assistantMaterial));
+            RuntimeRootTurnCompletionReceipt.ProjectMaterial(assistantMaterial))
+        {
+            WorkItemBindingSha256 = dispatch.WorkItemBindingSha256
+        };
     }
 }
 

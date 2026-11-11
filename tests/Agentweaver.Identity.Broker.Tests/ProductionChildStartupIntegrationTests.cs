@@ -387,6 +387,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(expectIndependentReview, !dispatchResult.IsComplete);
             var completionEvidence = Assert.Single(dispatchResult.CompletionEvidence);
             Assert.Equal(1, lostHostReply.RequestCount);
+            if (!expectIndependentReview)
+                Assert.Equal(
+                    RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(plan.Items[0])),
+                    completionEvidence.WorkItemBindingSha256);
             if (expectIndependentReview)
                 Assert.Null(dispatchResult.TaskCompletion);
             else
@@ -438,6 +442,92 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             else
             {
                 Assert.Empty(completedCheckpoint.State.ReviewIntents);
+
+                using var decisionResponse = await SendAsync(
+                    client, HttpMethod.Get, rootPath + "/decisions", runToken, [TenantId],
+                    cancellationToken: cancellationToken);
+                await AssertStatusAsync(decisionResponse, HttpStatusCode.OK);
+                var decision = await ReadJsonAsync<CoordinatorDecisionStateView>(decisionResponse);
+                var revisedPlan = plan with
+                {
+                    Items = plan.Items.SetItem(0, plan.Items[0] with
+                    {
+                        Task = "Complete the revised task requirements."
+                    })
+                };
+                using var revisionResponse = await SendJsonAsync(
+                    client,
+                    HttpMethod.Post,
+                    rootPath + "/actions/revise_work_plan",
+                    runToken,
+                    new ReviseCoordinatorWorkPlanRequest(
+                        decision.StateVersion, "revise-completed-task", "revision-gate", revisedPlan));
+                await AssertStatusAsync(revisionResponse, HttpStatusCode.OK);
+                var revision = await ReadJsonAsync<CoordinatorDecisionOperationResponse>(revisionResponse);
+                Assert.True(revision.Accepted);
+                var revisionGate = Assert.IsType<CoordinatorGateRequest>(revision.PendingGate);
+                using var revisionAnswer = await SendJsonAsync(
+                    client,
+                    HttpMethod.Post,
+                    rootPath + $"/decisions/gates/{Uri.EscapeDataString(revisionGate.RequestId)}/answer",
+                    runToken,
+                    new AnswerCoordinatorGateRequest(
+                        revision.StateVersion, "approve-revised-plan", "approve", null));
+                await AssertStatusAsync(revisionAnswer, HttpStatusCode.OK);
+                var approvedRevision = await ReadJsonAsync<CoordinatorDecisionOperationResponse>(revisionAnswer);
+                Assert.True(approvedRevision.Accepted);
+
+                using var revisedDispatch = await DispatchAsync(
+                    cancellationToken, approvedRevision.StateVersion);
+                await AssertStatusAsync(revisedDispatch, HttpStatusCode.OK);
+                var revisedResult = await ReadJsonAsync<MafExecutionDispatchResponse>(revisedDispatch);
+                Assert.Null(revisedResult.TaskCompletion);
+
+                using var reassignmentDecisionResponse = await SendAsync(
+                    client, HttpMethod.Get, rootPath + "/decisions", runToken, [TenantId],
+                    cancellationToken: cancellationToken);
+                await AssertStatusAsync(reassignmentDecisionResponse, HttpStatusCode.OK);
+                var reassignmentDecision =
+                    await ReadJsonAsync<CoordinatorDecisionStateView>(reassignmentDecisionResponse);
+                var reassignedPlan = revisedPlan with
+                {
+                    Items = revisedPlan.Items.SetItem(0, revisedPlan.Items[0] with
+                    {
+                        AgentId = "test-agent-b"
+                    })
+                };
+                using var reassignmentResponse = await SendJsonAsync(
+                    client,
+                    HttpMethod.Post,
+                    rootPath + "/actions/revise_work_plan",
+                    runToken,
+                    new ReviseCoordinatorWorkPlanRequest(
+                        reassignmentDecision.StateVersion,
+                        "reassign-completed-task",
+                        "reassignment-gate",
+                        reassignedPlan));
+                await AssertStatusAsync(reassignmentResponse, HttpStatusCode.OK);
+                var reassignment = await ReadJsonAsync<CoordinatorDecisionOperationResponse>(reassignmentResponse);
+                Assert.True(reassignment.Accepted);
+                var reassignmentGate = Assert.IsType<CoordinatorGateRequest>(reassignment.PendingGate);
+                using var reassignmentAnswer = await SendJsonAsync(
+                    client,
+                    HttpMethod.Post,
+                    rootPath + $"/decisions/gates/{Uri.EscapeDataString(reassignmentGate.RequestId)}/answer",
+                    runToken,
+                    new AnswerCoordinatorGateRequest(
+                        reassignment.StateVersion, "approve-agent-reassignment", "approve", null));
+                await AssertStatusAsync(reassignmentAnswer, HttpStatusCode.OK);
+                var approvedReassignment =
+                    await ReadJsonAsync<CoordinatorDecisionOperationResponse>(reassignmentAnswer);
+                Assert.True(approvedReassignment.Accepted);
+
+                using var reassignedDispatch = await DispatchAsync(
+                    cancellationToken, approvedReassignment.StateVersion);
+                await AssertStatusAsync(reassignedDispatch, HttpStatusCode.OK);
+                var reassignedResult = await ReadJsonAsync<MafExecutionDispatchResponse>(reassignedDispatch);
+                Assert.Null(reassignedResult.TaskCompletion);
+                Assert.Single(sdk.Requests, request => request.Method == "session.send");
             }
             Assert.Equal(1, lostHostReply.RequestCount);
             Assert.Single(sdk.Requests, request => request.Method == "session.send");
@@ -449,8 +539,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 Assert.Equal("claimed-task", taskCompletion.TaskId);
                 Assert.True(taskCompletion.TaskRevision > 0);
             }
-            Assert.Equal(1, lostHostReply.RequestCount);
-            Assert.Single(sdk.Requests, request => request.Method == "session.send");
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
