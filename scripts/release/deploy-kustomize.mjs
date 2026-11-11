@@ -367,6 +367,7 @@ function verifyClusterPrerequisites(exec, context, root, resources, log) {
   if (!runtimeClass) fail(`RuntimeClass/${runtimeClassName} is missing. ${KATA_POOL_REMEDY}`);
   const selector = Object.entries(runtimeClass.scheduling?.nodeSelector ?? {})
     .map(([key, value]) => `${key}=${value}`).join(',');
+  let sandboxNodeNames = new Set();
   if (selector) {
     requireClusterPermission(exec, context, root, 'list', 'nodes',
       `check for RuntimeClass/${runtimeClassName} nodes`);
@@ -384,8 +385,9 @@ function verifyClusterPrerequisites(exec, context, root, resources, log) {
       fail(`No Ready, schedulable node matches RuntimeClass/${runtimeClassName} (${selector}); ` +
         `${nodes.length} matching node(s) found. ${KATA_POOL_REMEDY}`);
     }
+    sandboxNodeNames = new Set(nodes.map(node => node.metadata?.name).filter(Boolean));
   }
-  verifyAzureMonitorAgent(exec, context, root, log);
+  verifyAzureMonitorAgent(exec, context, root, log, sandboxNodeNames);
   return { storageClassName, runtimeClassName, createStorageClass };
 }
 
@@ -396,8 +398,9 @@ const REGION_LABEL = 'topology.kubernetes.io/region';
 /**
  * Requires the Azure Monitor add-on agent, which forwards container and network logs, to be ready on every node.
  * A missing agent is accepted only when every node is in a canary (EUAP) region, where the installer skips the add-on.
+ * Unready agent pods are accepted, with a warning, only on sandbox RuntimeClass nodes (see sandboxOnlyUnreadyNodes).
  */
-function verifyAzureMonitorAgent(exec, context, root, log) {
+function verifyAzureMonitorAgent(exec, context, root, log, sandboxNodeNames) {
   const permission = exec('kubectl', ['auth', 'can-i', 'get', 'daemonsets.apps/ama-logs',
     '--namespace', 'kube-system', '--context', context], { check: false, cwd: root });
   if (permission.status !== 0 || permission.stdout.trim().toLowerCase() !== 'yes') {
@@ -424,11 +427,47 @@ function verifyAzureMonitorAgent(exec, context, root, log) {
   }
   const status = daemonSet.status ?? {};
   const desired = status.desiredNumberScheduled ?? 0;
-  if (desired < 1 || status.numberReady !== desired || status.numberAvailable !== desired ||
-      status.updatedNumberScheduled !== desired ||
-      (status.observedGeneration ?? 0) < (daemonSet.metadata?.generation ?? 1)) {
-    fail(`DaemonSet/ama-logs is not ready (${status.numberReady ?? 0}/${desired} ready). ${AZURE_MONITOR_REMEDY}`);
+  const notReady = `DaemonSet/ama-logs is not ready (${status.numberReady ?? 0}/${desired} ready).`;
+  const settled = desired >= 1 && status.updatedNumberScheduled === desired &&
+    (status.observedGeneration ?? 0) >= (daemonSet.metadata?.generation ?? 1);
+  if (settled && status.numberReady === desired && status.numberAvailable === desired) return;
+  if (!settled || !sandboxNodeNames.size) fail(`${notReady} ${AZURE_MONITOR_REMEDY}`);
+  const skipped = sandboxOnlyUnreadyNodes(exec, context, root, daemonSet, sandboxNodeNames, notReady);
+  if (!skipped) fail(`${notReady} ${AZURE_MONITOR_REMEDY}`);
+  log(`Warning: DaemonSet/ama-logs is not ready on sandbox node(s) ${skipped.join(', ')}. The agent is ready on ` +
+    'every other node. This is a known AKS add-on failure on Kata VM isolation nodes. Container Insights, ' +
+    'ContainerNetworkLogs, and egress audit data from these nodes are not collected.');
+}
+
+/**
+ * Returns the sorted sandbox node names that have an unready agent pod, when every agent pod exists and only
+ * pods on sandbox nodes are unready. Returns undefined in every other case.
+ */
+function sandboxOnlyUnreadyNodes(exec, context, root, daemonSet, sandboxNodeNames, notReady) {
+  const permission = exec('kubectl', ['auth', 'can-i', 'list', 'pods', '--namespace', 'kube-system',
+    '--context', context], { check: false, cwd: root });
+  if (permission.status !== 0 || permission.stdout.trim().toLowerCase() !== 'yes') {
+    fail(`${notReady} The selected identity cannot list pods in namespace kube-system; this permission is ` +
+      'required to check whether the agent is unready only on sandbox nodes.');
   }
+  const labels = Object.entries(daemonSet.spec?.selector?.matchLabels ?? {})
+    .map(([key, value]) => `${key}=${value}`).join(',');
+  if (!labels || !daemonSet.metadata?.uid) return undefined;
+  const output = must(exec, 'kubectl', ['get', 'pods', '--namespace', 'kube-system', '--selector', labels,
+    '--output=json', '--context', context], { cwd: root }, 'Could not list ama-logs pods').stdout;
+  let pods;
+  try {
+    pods = JSON.parse(output).items;
+  } catch {
+    fail('Kubernetes returned invalid JSON for the ama-logs pod list.');
+  }
+  if (!Array.isArray(pods)) return undefined;
+  const owned = pods.filter(pod => pod.metadata?.ownerReferences?.some(owner => owner.uid === daemonSet.metadata.uid));
+  if (owned.length !== daemonSet.status.desiredNumberScheduled) return undefined;
+  const unready = owned.filter(pod => !pod.status?.conditions?.some(condition =>
+    condition.type === 'Ready' && condition.status === 'True'));
+  if (!unready.length || unready.some(pod => !sandboxNodeNames.has(pod.spec?.nodeName))) return undefined;
+  return [...new Set(unready.map(pod => pod.spec.nodeName))].sort();
 }
 
 /** True only when the unfiltered node list is not empty and every node has a canary-region label. */
