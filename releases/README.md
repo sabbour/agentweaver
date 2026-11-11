@@ -33,11 +33,12 @@ This package-publication workflow does not publish standalone CLI archives.
 
 ## Container images
 
-Changes to service projects, Docker inputs, or the component manifest on `v1`
-automatically run `.github/workflows/v1-integration-images.yml` (push-triggered,
-not manual). It pushes ten images directly to GHCR as `sha-<40-character-commit>`
-tags; the workflow summary lists each digest. Every image is labeled with the
-exact source commit (`org.opencontainers.image.revision`), its Git tree
+Changes to service code, .NET restore inputs, Docker inputs, or the component
+manifest on `v1` automatically run `.github/workflows/v1-integration-images.yml`
+(push-triggered, not manual). It pushes ten images directly to GHCR as
+`sha-<40-character-commit>` tags; the workflow summary lists each digest. Every
+image is labeled with the exact source commit
+(`org.opencontainers.image.revision`), its Git tree
 (`io.agentweaver.source-tree`), and its `releases/foundation.json` component
 version (`org.opencontainers.image.version`).
 
@@ -51,6 +52,10 @@ gh workflow run v1-integration-images.yml --ref v1 -f source_sha=<40-character-c
 The manual run stops if the commit is not an ancestor of `origin/v1`. The
 workflow summary lists each pushed image digest. There are no image archives,
 publication receipts, or source-claim gates.
+If the selected source has both the Orchestrator Dockerfile and the pinned ACS
+package, the workflow uses that Dockerfile and downloads OPA. If it has neither,
+the workflow uses .NET container publishing for Orchestrator. If only one is
+present, the workflow stops.
 
 To build the same ten images from an exact `v1` commit into Azure Container
 Registry (ACR), use the local candidate builder. Run it from the repository

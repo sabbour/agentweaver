@@ -1039,7 +1039,8 @@ test('v1 image workflow builds the ten existing Kustomize images from exact sour
     type: 'string',
   });
   assert.equal(job.if, "github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/v1'");
-  for (const input of ['.github/workflows/v1-integration-images.yml', 'Directory.Build.*', 'releases/foundation.json'])
+  for (const input of ['.github/workflows/v1-integration-images.yml', 'Directory.Build.*',
+    '**/packages.linux-x64.lock.json', 'releases/foundation.json'])
     assert.ok(workflow.on.push.paths.includes(input), input);
   assert.equal(entries.length, 10);
   assert.deepEqual(
@@ -1061,7 +1062,7 @@ test('v1 image workflow builds the ten existing Kustomize images from exact sour
     ref: '${{ inputs.source_sha || github.sha }}',
     'fetch-depth': 0,
   });
-  assert.equal(steps.filter(({ uses }) => uses === 'docker/build-push-action@v6').length, 3);
+  assert.equal(steps.filter(({ uses }) => uses === 'docker/build-push-action@v6').length, 4);
   assert.equal(steps.filter(({ uses }) => uses === 'docker/build-push-action@v6')
     .every(({ with: options }) => options.provenance === false), true);
   assert.equal(steps.some(({ run = '' }) => run.includes('PublishContainer')), true);
@@ -1107,7 +1108,9 @@ test('v1 image workflow builds the ten existing Kustomize images from exact sour
   ];
   const dockerSteps = steps.filter(({ uses }) => uses === 'docker/build-push-action@v6');
   assert.deepEqual(dockerSteps.map(({ if: condition }) => condition).sort(), [
-    "matrix.id == 'Agentweaver.AgentHost'", "matrix.id == 'Agentweaver.Identity.Broker'", "matrix.mode == 'web'",
+    "matrix.id == 'Agentweaver.AgentHost'", "matrix.id == 'Agentweaver.Identity.Broker'",
+    "matrix.id == 'Agentweaver.Orchestrator' && steps.orchestrator-mode.outputs.mode == 'docker'",
+    "matrix.mode == 'web'",
   ]);
   for (const { with: options } of dockerSteps) {
     assert.match(options.tags, /:sha-\$\{\{ steps\.source\.outputs\.sha \}\}$/);
@@ -1123,6 +1126,27 @@ test('v1 image workflow builds the ten existing Kustomize images from exact sour
     '-p:AgentweaverImageSourceTree=${{ steps.source.outputs.tree }}',
     '-p:AgentweaverImageVersion=${{ steps.source.outputs.version }}',
   ]) assert.ok(publish.run.includes(property), property);
+
+  const orchestratorMode = steps.find(({ id }) => id === 'orchestrator-mode');
+  assert.equal(orchestratorMode.if, "matrix.id == 'Agentweaver.Orchestrator'");
+  assert.match(orchestratorMode.run, /-f "\$dockerfile" && -s "\$package"/);
+  assert.match(orchestratorMode.run, /! -f "\$dockerfile" && ! -s "\$package"/);
+  assert.match(orchestratorMode.run, /Orchestrator Dockerfile and pinned ACS package must both exist/);
+  const legacyRestore = steps.find(({ name }) => name === 'Restore legacy Orchestrator');
+  assert.equal(legacyRestore.if,
+    "matrix.id == 'Agentweaver.Orchestrator' && steps.orchestrator-mode.outputs.mode == 'dotnet'");
+  const legacyPublish = steps.find(({ name }) => name === 'Build and push legacy Orchestrator');
+  assert.equal(legacyPublish.if,
+    "matrix.id == 'Agentweaver.Orchestrator' && steps.orchestrator-mode.outputs.mode == 'dotnet'");
+  assert.ok(legacyPublish.run.includes('-p:ContainerTargetOs=linux'));
+  assert.ok(legacyPublish.run.includes('-p:ContainerTargetArchitecture=x64'));
+  assert.ok(legacyPublish.run.includes('-p:AgentweaverImageSourceSha=${{ steps.source.outputs.sha }}'));
+  const acsOpa = steps.find(({ name }) => name === 'Download and verify pinned OPA');
+  assert.equal(acsOpa.if,
+    "matrix.id == 'Agentweaver.AgentHost' || (matrix.id == 'Agentweaver.Orchestrator' && steps.orchestrator-mode.outputs.mode == 'docker')");
+  const orchestratorDocker = steps.find(({ name }) => name === 'Build and push Orchestrator');
+  assert.equal(orchestratorDocker.if,
+    "matrix.id == 'Agentweaver.Orchestrator' && steps.orchestrator-mode.outputs.mode == 'docker'");
 });
 
 test('v1 package workflow publishes versioned NuGet packages without image receipts', () => {
