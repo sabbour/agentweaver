@@ -359,6 +359,7 @@ public sealed class P1PostgresInitializerTests
                 new("lock_casting_authority(uuid, text, text, text, bigint, text, boolean)", true),
                 new("issue_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)", true),
                 new("read_p1_project(uuid, text, text, text, uuid, bigint, uuid, bigint)", true),
+                new("require_native_acs_policy_head_advance()", false),
             ],
         };
         FunctionState helper = new(1, "helper()", Owner, [new(Owner, Owner, "EXECUTE", false)], false);
@@ -368,7 +369,10 @@ public sealed class P1PostgresInitializerTests
             [new(Owner, Runtime, "EXECUTE", false), new(Owner, Owner, "EXECUTE", false)], true);
         FunctionState read = new(4, service.Functions[3].Signature, Owner,
             [new(Owner, Runtime, "EXECUTE", false), new(Owner, Owner, "EXECUTE", false)], true);
-        InitializerChecks.AssertFunctions(service, [casting, helper, issue, read], Owner, Runtime);
+        FunctionState headAdvance = new(5, service.Functions[4].Signature, Owner,
+            [new(Owner, Owner, "EXECUTE", false)], false);
+        FunctionState[] WithHeadAdvance(params FunctionState[] functions) => [.. functions, headAdvance];
+        InitializerChecks.AssertFunctions(service, WithHeadAdvance(casting, helper, issue, read), Owner, Runtime);
         var castingBeforeGrant = casting with
         {
             Grants = [new(Owner, Owner, "EXECUTE", false)],
@@ -390,19 +394,19 @@ public sealed class P1PostgresInitializerTests
             RuntimeCanExecute = true,
         };
         InitializerChecks.AssertFunctions(
-            service, [castingBeforeGrant, defaultPublicHelper, issueBeforeGrant, readBeforeGrant],
+            service, WithHeadAdvance(castingBeforeGrant, defaultPublicHelper, issueBeforeGrant, readBeforeGrant),
             Owner, Runtime, beforeRuntimeGrants: true);
         Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertFunctions(
-            service, [castingBeforeGrant, defaultPublicHelper with
+            service, WithHeadAdvance(castingBeforeGrant, defaultPublicHelper with
             {
                 Grants = [.. defaultPublicHelper.Grants, new(Owner, Runtime, "EXECUTE", false)],
-            }, issueBeforeGrant, readBeforeGrant], Owner, Runtime, beforeRuntimeGrants: true));
+            }, issueBeforeGrant, readBeforeGrant), Owner, Runtime, beforeRuntimeGrants: true));
         Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertFunctions(
-            service, [castingBeforeGrant with
+            service, WithHeadAdvance(castingBeforeGrant with
             {
                 Grants = [.. castingBeforeGrant.Grants, new(Owner, 0, "EXECUTE", false)],
                 RuntimeCanExecute = true,
-            }, defaultPublicHelper, issueBeforeGrant, readBeforeGrant],
+            }, defaultPublicHelper, issueBeforeGrant, readBeforeGrant),
             Owner, Runtime, beforeRuntimeGrants: true));
         foreach (var wrong in new[]
         {
@@ -418,15 +422,15 @@ public sealed class P1PostgresInitializerTests
             helper with { Grants = [new(Owner, Owner, "EXECUTE", true)] },
         })
             Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertFunctions(
-                service, [casting, wrong, issue, read], Owner, Runtime));
+                service, WithHeadAdvance(casting, wrong, issue, read), Owner, Runtime));
         Assert.Throws<InvalidOperationException>(() =>
-            InitializerChecks.AssertFunctions(service, [helper, issue, read], Owner, Runtime));
-        Assert.Throws<InvalidOperationException>(() =>
-            InitializerChecks.AssertFunctions(service,
-                [helper, casting with { Grants = helper.Grants }, issue, read], Owner, Runtime));
+            InitializerChecks.AssertFunctions(service, WithHeadAdvance(helper, issue, read), Owner, Runtime));
         Assert.Throws<InvalidOperationException>(() =>
             InitializerChecks.AssertFunctions(service,
-                [helper, casting with { RuntimeCanExecute = false }, issue, read], Owner, Runtime));
+                WithHeadAdvance(helper, casting with { Grants = helper.Grants }, issue, read), Owner, Runtime));
+        Assert.Throws<InvalidOperationException>(() =>
+            InitializerChecks.AssertFunctions(service,
+                WithHeadAdvance(helper, casting with { RuntimeCanExecute = false }, issue, read), Owner, Runtime));
         Assert.Throws<InvalidOperationException>(() =>
             InitializerChecks.AssertFunctions(service with { Functions = [new("helper()", true)] },
                 [helper with { RuntimeCanExecute = true }], Owner, Runtime));
@@ -799,8 +803,17 @@ public sealed class P1PostgresInitializerTests
                     new("model_provider_revisions_no_truncate", "reject_immutable_record_mutation()",
                         34, "records in %.% are immutable", "55000"),
                 ]),
+                AppendOnlyTable("native_acs_policy_revisions"),
+                AppendOnlyTable("native_acs_policy_artifact_files"),
+                AppendOnlyTable("native_acs_policy_idempotency"),
+                AppendOnlyTable("native_acs_policy_change_audit"),
+                AppendOnlyTable("native_acs_policy_outbox"),
             ],
-            Functions = [new("reject_immutable_record_mutation()", false)],
+            Functions =
+            [
+                new("reject_immutable_record_mutation()", false),
+                new("require_native_acs_policy_head_advance()", false),
+            ],
         };
         services[3] = services[3] with
         {
@@ -900,6 +913,15 @@ public sealed class P1PostgresInitializerTests
     private static TablePlan LockTable(string table, string column, string trigger, string function,
         int triggerType, string message, string? sqlState) => new(table, ["SELECT", "INSERT"], column, true,
         new(trigger, function, triggerType, message, sqlState));
+
+    private static TablePlan AppendOnlyTable(string table) =>
+        new(table, ["SELECT", "INSERT"], null, true, null,
+        [
+            new($"{table}_immutable", "reject_immutable_record_mutation()",
+                27, "records in %.% are immutable", "55000"),
+            new($"{table}_no_truncate", "reject_immutable_record_mutation()",
+                34, "records in %.% are immutable", "55000"),
+        ]);
 
     private static MutationGuardState[] MutationGuardReadbacks(ServicePlan service, TablePlan table)
     {

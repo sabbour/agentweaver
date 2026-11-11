@@ -34,6 +34,17 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
         Set<ProjectSkillContentRevocationRecord>();
     public DbSet<HostedModelReasoningCatalogRecord> HostedModelReasoningCatalog =>
         Set<HostedModelReasoningCatalogRecord>();
+    public DbSet<NativeAcsPolicyHeadRecord> NativeAcsPolicyHeads => Set<NativeAcsPolicyHeadRecord>();
+    public DbSet<NativeAcsPolicyRevisionRecord> NativeAcsPolicyRevisions =>
+        Set<NativeAcsPolicyRevisionRecord>();
+    public DbSet<NativeAcsPolicyArtifactFileRecord> NativeAcsPolicyArtifactFiles =>
+        Set<NativeAcsPolicyArtifactFileRecord>();
+    public DbSet<NativeAcsPolicyIdempotencyRecord> NativeAcsPolicyIdempotency =>
+        Set<NativeAcsPolicyIdempotencyRecord>();
+    public DbSet<NativeAcsPolicyChangeAuditRecord> NativeAcsPolicyChangeAudit =>
+        Set<NativeAcsPolicyChangeAuditRecord>();
+    public DbSet<NativeAcsPolicyOutboxRecord> NativeAcsPolicyOutbox =>
+        Set<NativeAcsPolicyOutboxRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -724,6 +735,163 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 .WithMany()
                 .HasForeignKey(catalog => catalog.ProjectId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<NativeAcsPolicyHeadRecord>(entity =>
+        {
+            entity.ToTable("native_acs_policy_heads", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_native_acs_policy_heads_scope",
+                    "scope_type IN ('Platform', 'Project') AND (scope_type <> 'Platform' OR scope_id = 'default')");
+                table.HasCheckConstraint("ck_native_acs_policy_heads_revision", "current_revision > 0");
+            });
+            entity.HasKey(head => new { head.ScopeType, head.ScopeId, head.PolicyId });
+            entity.Property(head => head.ScopeType).HasColumnName("scope_type").HasConversion<string>().HasMaxLength(16);
+            entity.Property(head => head.ScopeId).HasColumnName("scope_id").HasMaxLength(256);
+            entity.Property(head => head.PolicyId).HasColumnName("policy_id").HasMaxLength(128);
+            entity.Property(head => head.CurrentRevision).HasColumnName("current_revision").IsConcurrencyToken();
+            entity.Property(head => head.CreatedAt).HasColumnName("created_at");
+            entity.Property(head => head.UpdatedAt).HasColumnName("updated_at");
+        });
+
+        modelBuilder.Entity<NativeAcsPolicyRevisionRecord>(entity =>
+        {
+            entity.ToTable("native_acs_policy_revisions", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_native_acs_policy_revisions_scope",
+                    "scope_type IN ('Platform', 'Project') AND (scope_type <> 'Platform' OR scope_id = 'default')");
+                table.HasCheckConstraint("ck_native_acs_policy_revisions_revision", "revision > 0");
+                table.HasCheckConstraint(
+                    "ck_native_acs_policy_revisions_hash",
+                    "content_sha256 ~ '^[0-9a-f]{64}$'");
+            });
+            entity.HasKey(revision => new
+            {
+                revision.ScopeType,
+                revision.ScopeId,
+                revision.PolicyId,
+                revision.Revision,
+            });
+            entity.Property(revision => revision.ScopeType)
+                .HasColumnName("scope_type").HasConversion<string>().HasMaxLength(16);
+            entity.Property(revision => revision.ScopeId).HasColumnName("scope_id").HasMaxLength(256);
+            entity.Property(revision => revision.PolicyId).HasColumnName("policy_id").HasMaxLength(128);
+            entity.Property(revision => revision.Revision).HasColumnName("revision");
+            entity.Property(revision => revision.ContentSha256).HasColumnName("content_sha256").HasMaxLength(64);
+            entity.Property(revision => revision.ManifestBytes).HasColumnName("manifest_bytes").HasColumnType("bytea");
+            entity.Property(revision => revision.WriteTransactionId)
+                .HasColumnName("write_transaction_id")
+                .HasColumnType("text")
+                .HasDefaultValueSql("pg_current_xact_id()::text")
+                .ValueGeneratedOnAdd();
+            entity.Property(revision => revision.CreatedByIssuer).HasColumnName("created_by_issuer").HasMaxLength(512);
+            entity.Property(revision => revision.CreatedByActorId).HasColumnName("created_by_actor_id").HasMaxLength(256);
+            entity.Property(revision => revision.MembershipId).HasColumnName("membership_id");
+            entity.Property(revision => revision.MembershipRevision).HasColumnName("membership_revision");
+            entity.Property(revision => revision.RoleAssignmentId).HasColumnName("role_assignment_id");
+            entity.Property(revision => revision.RoleAssignmentRevision).HasColumnName("role_assignment_revision");
+            entity.Property(revision => revision.Reason).HasColumnName("reason").HasMaxLength(1024);
+            entity.Property(revision => revision.CorrelationId).HasColumnName("correlation_id").HasMaxLength(128);
+            entity.Property(revision => revision.CreatedAt).HasColumnName("created_at");
+        });
+
+        modelBuilder.Entity<NativeAcsPolicyArtifactFileRecord>(entity =>
+        {
+            entity.ToTable("native_acs_policy_artifact_files", table =>
+                table.HasCheckConstraint(
+                    "ck_native_acs_policy_artifact_files_scope",
+                    "scope_type IN ('Platform', 'Project') AND (scope_type <> 'Platform' OR scope_id = 'default')"));
+            entity.HasKey(file => new
+            {
+                file.ScopeType,
+                file.ScopeId,
+                file.PolicyId,
+                file.Revision,
+                file.RelativePath,
+            });
+            entity.Property(file => file.ScopeType).HasColumnName("scope_type").HasConversion<string>().HasMaxLength(16);
+            entity.Property(file => file.ScopeId).HasColumnName("scope_id").HasMaxLength(256);
+            entity.Property(file => file.PolicyId).HasColumnName("policy_id").HasMaxLength(128);
+            entity.Property(file => file.Revision).HasColumnName("revision");
+            entity.Property(file => file.RelativePath).HasColumnName("relative_path").HasMaxLength(256);
+            entity.Property(file => file.Bytes).HasColumnName("bytes").HasColumnType("bytea");
+            entity.Property(file => file.WriteTransactionId)
+                .HasColumnName("write_transaction_id")
+                .HasColumnType("text")
+                .HasDefaultValueSql("pg_current_xact_id()::text")
+                .ValueGeneratedOnAdd();
+            entity.HasOne<NativeAcsPolicyRevisionRecord>()
+                .WithMany()
+                .HasForeignKey(file => new { file.ScopeType, file.ScopeId, file.PolicyId, file.Revision })
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<NativeAcsPolicyIdempotencyRecord>(entity =>
+        {
+            entity.ToTable("native_acs_policy_idempotency", table =>
+                table.HasCheckConstraint(
+                    "ck_native_acs_policy_idempotency_scope",
+                    "scope_type IN ('Platform', 'Project') AND (scope_type <> 'Platform' OR scope_id = 'default')"));
+            entity.HasKey(item => item.ScopeDigest);
+            entity.Property(item => item.ScopeDigest).HasColumnName("scope_digest").HasMaxLength(64);
+            entity.Property(item => item.ScopeType).HasColumnName("scope_type").HasConversion<string>().HasMaxLength(16);
+            entity.Property(item => item.ScopeId).HasColumnName("scope_id").HasMaxLength(256);
+            entity.Property(item => item.PolicyId).HasColumnName("policy_id").HasMaxLength(128);
+            entity.Property(item => item.ActorIssuer).HasColumnName("actor_issuer").HasMaxLength(512);
+            entity.Property(item => item.ActorId).HasColumnName("actor_id").HasMaxLength(256);
+            entity.Property(item => item.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(128);
+            entity.Property(item => item.RequestDigest).HasColumnName("request_digest").HasMaxLength(64);
+            entity.Property(item => item.ReceiptJson).HasColumnName("receipt").HasColumnType("jsonb");
+            entity.Property(item => item.CreatedAt).HasColumnName("created_at");
+        });
+
+        modelBuilder.Entity<NativeAcsPolicyChangeAuditRecord>(entity =>
+        {
+            entity.ToTable("native_acs_policy_change_audit", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_native_acs_policy_change_audit_scope",
+                    "scope_type IN ('Platform', 'Project') AND (scope_type <> 'Platform' OR scope_id = 'default')");
+                table.HasCheckConstraint(
+                    "ck_native_acs_policy_change_audit_type",
+                    "change_type IN ('created', 'updated')");
+                table.HasCheckConstraint(
+                    "ck_native_acs_policy_change_audit_hash",
+                    "content_sha256 ~ '^[0-9a-f]{64}$' AND (previous_content_sha256 IS NULL OR previous_content_sha256 ~ '^[0-9a-f]{64}$')");
+            });
+            entity.HasKey(audit => audit.AuditId);
+            entity.Property(audit => audit.AuditId).HasColumnName("audit_id");
+            entity.Property(audit => audit.ScopeType).HasColumnName("scope_type").HasConversion<string>().HasMaxLength(16);
+            entity.Property(audit => audit.ScopeId).HasColumnName("scope_id").HasMaxLength(256);
+            entity.Property(audit => audit.PolicyId).HasColumnName("policy_id").HasMaxLength(128);
+            entity.Property(audit => audit.Revision).HasColumnName("revision");
+            entity.Property(audit => audit.PreviousRevision).HasColumnName("previous_revision");
+            entity.Property(audit => audit.ChangeType).HasColumnName("change_type").HasMaxLength(16);
+            entity.Property(audit => audit.ActorIssuer).HasColumnName("actor_issuer").HasMaxLength(512);
+            entity.Property(audit => audit.ActorId).HasColumnName("actor_id").HasMaxLength(256);
+            entity.Property(audit => audit.MembershipId).HasColumnName("membership_id");
+            entity.Property(audit => audit.MembershipRevision).HasColumnName("membership_revision");
+            entity.Property(audit => audit.RoleAssignmentId).HasColumnName("role_assignment_id");
+            entity.Property(audit => audit.RoleAssignmentRevision).HasColumnName("role_assignment_revision");
+            entity.Property(audit => audit.PreviousContentSha256).HasColumnName("previous_content_sha256").HasMaxLength(64);
+            entity.Property(audit => audit.ContentSha256).HasColumnName("content_sha256").HasMaxLength(64);
+            entity.Property(audit => audit.Reason).HasColumnName("reason").HasMaxLength(1024);
+            entity.Property(audit => audit.CorrelationId).HasColumnName("correlation_id").HasMaxLength(128);
+            entity.Property(audit => audit.CreatedAt).HasColumnName("created_at");
+            entity.HasIndex(audit => new { audit.ScopeType, audit.ScopeId, audit.PolicyId, audit.CreatedAt });
+        });
+
+        modelBuilder.Entity<NativeAcsPolicyOutboxRecord>(entity =>
+        {
+            entity.ToTable("native_acs_policy_outbox");
+            entity.HasKey(item => item.OutboxId);
+            entity.Property(item => item.OutboxId).HasColumnName("outbox_id");
+            entity.Property(item => item.EventType).HasColumnName("event_type").HasMaxLength(96);
+            entity.Property(item => item.PayloadJson).HasColumnName("payload").HasColumnType("jsonb");
+            entity.Property(item => item.CreatedAt).HasColumnName("created_at");
+            entity.HasIndex(item => item.CreatedAt);
         });
     }
 }

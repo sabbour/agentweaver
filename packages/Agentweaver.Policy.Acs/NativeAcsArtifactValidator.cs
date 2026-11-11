@@ -1,7 +1,5 @@
-using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Diagnostics;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using AgentControlSpecification;
@@ -262,25 +260,7 @@ public sealed class NativeAcsArtifactValidator
     }
 
     public static string ComputeContentSha256(NativeAcsArtifact artifact)
-    {
-        ArgumentNullException.ThrowIfNull(artifact);
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData("agentweaver-native-acs-artifact-v1\0"u8);
-        AppendField(hash, artifact.ManifestBytes.IsDefault ? [] : artifact.ManifestBytes.AsSpan());
-
-        var files = artifact.Files.IsDefault
-            ? Enumerable.Empty<NativeAcsArtifactFile>()
-            : artifact.Files.OrderBy(file => file?.RelativePath, StringComparer.Ordinal);
-        foreach (var file in files)
-        {
-            if (file is null || string.IsNullOrEmpty(file.RelativePath))
-                throw new ArgumentException("Every ACS artifact file needs a relative path.", nameof(artifact));
-            AppendField(hash, StrictUtf8.GetBytes(file.RelativePath));
-            AppendField(hash, file.Bytes.IsDefault ? [] : file.Bytes.AsSpan());
-        }
-
-        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
-    }
+        => NativeAcsArtifactHash.Compute(artifact);
 
     private void ValidateInputFacts(
         string relativePath,
@@ -824,14 +804,6 @@ public sealed class NativeAcsArtifactValidator
         value is { } number && number <= int.MaxValue
             ? checked((int)number)
             : null;
-
-    private static void AppendField(IncrementalHash hash, ReadOnlySpan<byte> bytes)
-    {
-        Span<byte> length = stackalloc byte[sizeof(int)];
-        BinaryPrimitives.WriteInt32BigEndian(length, bytes.Length);
-        hash.AppendData(length);
-        hash.AppendData(bytes);
-    }
 
     private static void Add(
         ImmutableArray<NativeAcsDiagnostic>.Builder diagnostics,

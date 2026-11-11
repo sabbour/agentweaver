@@ -43,6 +43,62 @@ public sealed partial class ProjectsConfigPostgresTests
                NOT has_table_privilege('agentweaver-id-projects-config', 'projects_config.model_provider_revisions', 'DELETE')),
               ('model provider revisions TRUNCATE denied',
                NOT has_table_privilege('agentweaver-id-projects-config', 'projects_config.model_provider_revisions', 'TRUNCATE')),
+              ('platform runtime heads SELECT and UPDATE',
+               has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.platform_runtime_heads', 'SELECT')
+               AND has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.platform_runtime_heads', 'UPDATE')),
+              ('platform runtime heads INSERT denied',
+               NOT has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.platform_runtime_heads', 'INSERT')),
+              ('native ACS heads SELECT and INSERT',
+               has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_heads', 'SELECT')
+               AND has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_heads', 'INSERT')),
+              ('native ACS heads table UPDATE denied',
+               NOT has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_heads', 'UPDATE')),
+              ('native ACS head pointer UPDATE',
+               has_column_privilege(
+                 'agentweaver-id-projects-config',
+                 'projects_config.native_acs_policy_heads', 'current_revision', 'UPDATE')
+               AND has_column_privilege(
+                 'agentweaver-id-projects-config',
+                 'projects_config.native_acs_policy_heads', 'updated_at', 'UPDATE')),
+              ('native ACS head identity UPDATE denied',
+               NOT has_column_privilege(
+                 'agentweaver-id-projects-config',
+                 'projects_config.native_acs_policy_heads', 'policy_id', 'UPDATE')),
+              ('native ACS revision UPDATE and DELETE denied',
+               NOT has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_revisions', 'UPDATE')
+               AND NOT has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_revisions', 'DELETE')),
+              ('native ACS artifact file UPDATE and DELETE denied',
+               NOT has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_artifact_files', 'UPDATE')
+               AND NOT has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_artifact_files', 'DELETE')),
+              ('native ACS idempotency UPDATE and DELETE denied',
+               NOT has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_idempotency', 'UPDATE')
+               AND NOT has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_idempotency', 'DELETE')),
+              ('native ACS audit UPDATE and DELETE denied',
+               NOT has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_change_audit', 'UPDATE')
+               AND NOT has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_change_audit', 'DELETE')),
+              ('native ACS outbox UPDATE and DELETE denied',
+               NOT has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_outbox', 'UPDATE')
+               AND NOT has_table_privilege(
+                 'agentweaver-id-projects-config', 'projects_config.native_acs_policy_outbox', 'DELETE')),
+              ('native ACS head trigger EXECUTE denied',
+               NOT has_function_privilege(
+                 'agentweaver-id-projects-config',
+                 'projects_config.require_native_acs_policy_head_advance()', 'EXECUTE')),
               ('role assignments INSERT',
                has_table_privilege('agentweaver-id-projects-config', 'projects_config.project_role_assignments', 'INSERT')),
               ('revoked_at UPDATE',
@@ -69,6 +125,11 @@ public sealed partial class ProjectsConfigPostgresTests
                has_function_privilege(
                  'agentweaver-id-projects-config',
                  'projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)', 'EXECUTE')),
+              ('native ACS authority function EXECUTE',
+               has_function_privilege(
+                 'agentweaver-id-projects-config',
+                 'projects_config.lock_native_acs_policy_authority(uuid, text, text, text, bigint, text, text, uuid[], text[], text[], text[], bigint[])',
+                 'EXECUTE')),
               ('issue function PUBLIC EXECUTE denied',
                NOT EXISTS (
                  SELECT 1
@@ -83,6 +144,28 @@ public sealed partial class ProjectsConfigPostgresTests
             """, connection);
         var failures = (string[])(await command.ExecuteScalarAsync())!;
         Assert.True(failures.Length == 0, $"Runtime grant contract failed: {string.Join(", ", failures)}");
+
+        await using var runtimeConnection = await fixture.DataSource.OpenConnectionAsync();
+        await using (var setRole = new NpgsqlCommand(
+            """SET ROLE "agentweaver-id-projects-config" """,
+            runtimeConnection))
+            await setRole.ExecuteNonQueryAsync();
+        try
+        {
+            await using var lockHead = new NpgsqlCommand(
+                "SELECT id FROM projects_config.platform_runtime_heads WHERE id = 'default' FOR SHARE",
+                runtimeConnection);
+            _ = await lockHead.ExecuteScalarAsync();
+            await using var updateHead = new NpgsqlCommand(
+                "UPDATE projects_config.platform_runtime_heads SET current_revision = current_revision WHERE false",
+                runtimeConnection);
+            _ = await updateHead.ExecuteNonQueryAsync();
+        }
+        finally
+        {
+            await using var resetRole = new NpgsqlCommand("RESET ROLE", runtimeConnection);
+            await resetRole.ExecuteNonQueryAsync();
+        }
     }
 
     [Fact]

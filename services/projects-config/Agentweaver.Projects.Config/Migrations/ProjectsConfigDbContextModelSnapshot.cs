@@ -315,6 +315,390 @@ namespace Agentweaver.Projects.Config.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Agentweaver.Projects.Config.NativeAcsPolicyArtifactFileRecord", b =>
+                {
+                    b.Property<string>("ScopeType")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("scope_type");
+
+                    b.Property<string>("ScopeId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("scope_id");
+
+                    b.Property<string>("PolicyId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("policy_id");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("RelativePath")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("relative_path");
+
+                    b.Property<byte[]>("Bytes")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("bytes");
+
+                    b.Property<string>("WriteTransactionId")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValueSql("pg_current_xact_id()::text")
+                        .HasColumnName("write_transaction_id");
+
+                    b.HasKey("ScopeType", "ScopeId", "PolicyId", "Revision", "RelativePath");
+
+                    b.ToTable("native_acs_policy_artifact_files", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_native_acs_policy_artifact_files_scope", "scope_type IN ('Platform', 'Project') AND (scope_type <> 'Platform' OR scope_id = 'default')");
+                        });
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.NativeAcsPolicyChangeAuditRecord", b =>
+                {
+                    b.Property<Guid>("AuditId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("audit_id");
+
+                    b.Property<string>("ActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("actor_id");
+
+                    b.Property<string>("ActorIssuer")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("actor_issuer");
+
+                    b.Property<string>("ChangeType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("change_type");
+
+                    b.Property<string>("ContentSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("content_sha256");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("MembershipId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("membership_id");
+
+                    b.Property<long>("MembershipRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("membership_revision");
+
+                    b.Property<string>("PolicyId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("policy_id");
+
+                    b.Property<string>("PreviousContentSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("previous_content_sha256");
+
+                    b.Property<long?>("PreviousRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("previous_revision");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("reason");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("revision");
+
+                    b.Property<Guid>("RoleAssignmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("role_assignment_id");
+
+                    b.Property<long>("RoleAssignmentRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("role_assignment_revision");
+
+                    b.Property<string>("ScopeId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("scope_id");
+
+                    b.Property<string>("ScopeType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("scope_type");
+
+                    b.HasKey("AuditId");
+
+                    b.HasIndex("ScopeType", "ScopeId", "PolicyId", "CreatedAt");
+
+                    b.ToTable("native_acs_policy_change_audit", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_native_acs_policy_change_audit_hash", "content_sha256 ~ '^[0-9a-f]{64}$' AND (previous_content_sha256 IS NULL OR previous_content_sha256 ~ '^[0-9a-f]{64}$')");
+
+                            t.HasCheckConstraint("ck_native_acs_policy_change_audit_scope", "scope_type IN ('Platform', 'Project') AND (scope_type <> 'Platform' OR scope_id = 'default')");
+
+                            t.HasCheckConstraint("ck_native_acs_policy_change_audit_type", "change_type IN ('created', 'updated')");
+                        });
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.NativeAcsPolicyHeadRecord", b =>
+                {
+                    b.Property<string>("ScopeType")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("scope_type");
+
+                    b.Property<string>("ScopeId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("scope_id");
+
+                    b.Property<string>("PolicyId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("policy_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long>("CurrentRevision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint")
+                        .HasColumnName("current_revision");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("ScopeType", "ScopeId", "PolicyId");
+
+                    b.ToTable("native_acs_policy_heads", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_native_acs_policy_heads_revision", "current_revision > 0");
+
+                            t.HasCheckConstraint("ck_native_acs_policy_heads_scope", "scope_type IN ('Platform', 'Project') AND (scope_type <> 'Platform' OR scope_id = 'default')");
+                        });
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.NativeAcsPolicyIdempotencyRecord", b =>
+                {
+                    b.Property<string>("ScopeDigest")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("scope_digest");
+
+                    b.Property<string>("ActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("actor_id");
+
+                    b.Property<string>("ActorIssuer")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("actor_issuer");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("idempotency_key");
+
+                    b.Property<string>("PolicyId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("policy_id");
+
+                    b.Property<string>("ReceiptJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("receipt");
+
+                    b.Property<string>("RequestDigest")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("request_digest");
+
+                    b.Property<string>("ScopeId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("scope_id");
+
+                    b.Property<string>("ScopeType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("scope_type");
+
+                    b.HasKey("ScopeDigest");
+
+                    b.ToTable("native_acs_policy_idempotency", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_native_acs_policy_idempotency_scope", "scope_type IN ('Platform', 'Project') AND (scope_type <> 'Platform' OR scope_id = 'default')");
+                        });
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.NativeAcsPolicyOutboxRecord", b =>
+                {
+                    b.Property<Guid>("OutboxId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("outbox_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasMaxLength(96)
+                        .HasColumnType("character varying(96)")
+                        .HasColumnName("event_type");
+
+                    b.Property<string>("PayloadJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("payload");
+
+                    b.HasKey("OutboxId");
+
+                    b.HasIndex("CreatedAt");
+
+                    b.ToTable("native_acs_policy_outbox", "projects_config");
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.NativeAcsPolicyRevisionRecord", b =>
+                {
+                    b.Property<string>("ScopeType")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("scope_type");
+
+                    b.Property<string>("ScopeId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("scope_id");
+
+                    b.Property<string>("PolicyId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("policy_id");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("ContentSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("content_sha256");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedByActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("created_by_actor_id");
+
+                    b.Property<string>("CreatedByIssuer")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("created_by_issuer");
+
+                    b.Property<byte[]>("ManifestBytes")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("manifest_bytes");
+
+                    b.Property<string>("WriteTransactionId")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValueSql("pg_current_xact_id()::text")
+                        .HasColumnName("write_transaction_id");
+
+                    b.Property<Guid>("MembershipId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("membership_id");
+
+                    b.Property<long>("MembershipRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("membership_revision");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("reason");
+
+                    b.Property<Guid>("RoleAssignmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("role_assignment_id");
+
+                    b.Property<long>("RoleAssignmentRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("role_assignment_revision");
+
+                    b.HasKey("ScopeType", "ScopeId", "PolicyId", "Revision");
+
+                    b.ToTable("native_acs_policy_revisions", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_native_acs_policy_revisions_hash", "content_sha256 ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_native_acs_policy_revisions_revision", "revision > 0");
+
+                            t.HasCheckConstraint("ck_native_acs_policy_revisions_scope", "scope_type IN ('Platform', 'Project') AND (scope_type <> 'Platform' OR scope_id = 'default')");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Projects.Config.PlatformRuntimeHeadRecord", b =>
                 {
                     b.Property<string>("Id")
@@ -1415,6 +1799,15 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.HasOne("Agentweaver.Projects.Config.ModelProviderDraftHeadRecord", null)
                         .WithMany()
                         .HasForeignKey("ProviderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.NativeAcsPolicyArtifactFileRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.NativeAcsPolicyRevisionRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ScopeType", "ScopeId", "PolicyId", "Revision")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
