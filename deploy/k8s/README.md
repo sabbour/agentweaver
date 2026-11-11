@@ -127,9 +127,11 @@ not own the database, retain database `CREATE`, or access other schemas. The
 deploy command checks the ServiceAccount annotation before creating any
 migration Job and fails closed if it is missing.
 
-The migration Job applies EF migrations, then reconciles the reviewed
-runtime-grant plan transactionally. Runtime privilege errors keep the rollout
-from reporting success.
+The Broker migration Job applies EF migrations and the reviewed runtime grants.
+It then creates the exact migrated CLI registration when missing, adds the
+registered-scope permission to an exact prior registration, or stops on drift.
+The deploy command waits for this Job before it applies the Broker workload.
+Runtime privilege errors keep the rollout from reporting success.
 
 ### Cluster checks and install smoke check
 

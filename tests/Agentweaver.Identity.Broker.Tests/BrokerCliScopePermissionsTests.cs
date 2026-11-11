@@ -67,17 +67,27 @@ public sealed class BrokerCliScopePermissionsTests(PostgresContainerFixture post
     }
 
     [Fact]
-    public async Task MigrationDoesNotCreateAMissingCliApplication()
+    public async Task MigrationCreatesTheExactMigratedCliApplicationWhenMissingAndIsIdempotent()
     {
         var connectionString = await postgres.CreateMigratedDatabaseAsync();
         await using var provider = BrokerCliScopePermissionTestSupport.CreateStoreProvider(connectionString);
         using var scope = provider.CreateScope();
         var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            BrokerCliScopePermissions.MigrateAsync(applications, CancellationToken.None));
+        await BrokerCliScopePermissions.MigrateAsync(applications, CancellationToken.None);
 
-        Assert.Null(await applications.FindByClientIdAsync(BrokerCliScopePermissions.ClientId));
+        var created = await ReadCliApplicationAsync(applications);
+        var expected = BrokerCliScopePermissions.CreateMigratedDescriptor();
+        Assert.Equal(expected.ClientId, created.ClientId);
+        Assert.Equal(expected.ClientType, created.ClientType);
+        Assert.Equal(expected.ConsentType, created.ConsentType);
+        Assert.True(expected.RedirectUris.SetEquals(created.RedirectUris));
+        Assert.True(expected.Permissions.SetEquals(created.Permissions));
+        Assert.True(expected.Requirements.SetEquals(created.Requirements));
+
+        await BrokerCliScopePermissions.MigrateAsync(applications, CancellationToken.None);
+        var createdAgain = await ReadCliApplicationAsync(applications);
+        Assert.True(created.Permissions.SetEquals(createdAgain.Permissions));
     }
 
     private static async Task<OpenIddictApplicationDescriptor> ReadCliApplicationAsync(

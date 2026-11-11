@@ -1609,6 +1609,9 @@ test('deployment creates existing migration Jobs directly before one namespaced 
     const createCalls = calls.filter(call => call.command === 'kubectl' && call.args[0] === 'create');
     const createdJobs = createCalls.map(call => parse(call.options.input)).filter(value => value.kind === 'Job');
     assert.deepEqual(createdJobs.map(value => value.metadata.name.split('-').slice(0, -1).join('-')), jobNames);
+    assert.deepEqual(readYaml('deploy/k8s/migrations/identity-broker/job.yaml')
+      .spec.template.spec.containers[0].command,
+    ['dotnet', 'Agentweaver.Identity.Broker.dll', '--migrate']);
     assert.equal(createdJobs.every(value => value.spec.ttlSecondsAfterFinished === 3600), true);
     assert.equal(createdJobs.every(value => value.spec.template.spec.containers[0].image.startsWith(`${REGISTRY}/`)), true);
     assert.equal(createdJobs[1].spec.template.spec.containers[0].env[0].value, serviceClientId);
@@ -1659,11 +1662,14 @@ test('deployment creates existing migration Jobs directly before one namespaced 
     const render = calls.findIndex(call => call.command === 'kubectl' &&
       call.args[0] === 'kustomize' && call.args[1].endsWith(path.join('deploy', 'k8s')));
     const firstJob = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'create');
+    const brokerJobWait = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'wait' &&
+      call.args.includes(`job/${createdJobs[0].metadata.name}`));
     const apply = calls.findIndex(call => call.command === 'kubectl' && call.args[0] === 'apply');
     const brokerPatch = calls.findIndex(call => call.command === 'kubectl' &&
       call.args[0] === 'patch' && call.args[1] === 'deployment/identity-broker');
     const rollouts = calls.filter(call => call.command === 'kubectl' && call.args[0] === 'rollout');
-    assert.ok(render >= 0 && render < firstJob && firstJob < apply && apply < brokerPatch);
+    assert.ok(render >= 0 && render < firstJob && firstJob < brokerJobWait && brokerJobWait < apply &&
+      apply < brokerPatch);
     assert.deepEqual(JSON.parse(calls[brokerPatch].args[
       calls[brokerPatch].args.indexOf('--patch') + 1]).slice(0, 2), [
       { op: 'test', path: '/metadata/uid', value: 'uid-identity-broker' },
