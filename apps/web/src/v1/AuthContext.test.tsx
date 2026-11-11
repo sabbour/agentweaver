@@ -139,6 +139,12 @@ function Harness() {
       <button type="button" onClick={() => { void auth.authorize({ projectId: 'project-1', runId: 'run-1' }); }}>
         Sign in for run
       </button>
+      <button
+        type="button"
+        onClick={() => { void auth.authorize({ projectId: 'project-1', runId: 'run-1' }, undefined, false); }}
+      >
+        Sign in for run without activating
+      </button>
       {auth.consent && (
         <button type="button" onClick={() => { void auth.decideConsent(true); }}>Approve consent</button>
       )}
@@ -331,6 +337,27 @@ describe('Broker refresh coordination', () => {
     // Unbound calls still use the first token, and only the first sign-in opened a popup.
     await screen.findByText('unbound:access-1');
     expect(window.open).toHaveBeenCalledOnce();
+  });
+
+  it('stores an interactive run session without activating it', async () => {
+    render(<AuthProvider><Harness /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completePopupSignIn();
+    await screen.findByText('access-1');
+
+    mocks.exchangeAuthorizationCode.mockResolvedValueOnce(token('access-run', 'refresh-run'));
+    const fetchCallsBeforeRunSignIn = vi.mocked(fetch).mock.calls.length;
+    const exchangesBeforeRunSignIn = mocks.exchangeAuthorizationCode.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in for run without activating' }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(fetchCallsBeforeRunSignIn + 1));
+    await completePopupSignIn();
+    await waitFor(() => expect(mocks.exchangeAuthorizationCode).toHaveBeenCalledTimes(exchangesBeforeRunSignIn + 1));
+    await act(async () => { await Promise.resolve(); });
+
+    await screen.findByText('access-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Ensure run session' }));
+    await screen.findByText('ensure:ensured');
+    await screen.findByText('access-run');
   });
 
   it('takes the display name from the ID token and keeps it for run sessions and refreshes', async () => {
@@ -609,7 +636,12 @@ describe('Broker refresh coordination', () => {
 
   it('restarts Broker authorization after consent without losing the run binding', async () => {
     window.history.replaceState({}, '', '/projects/project-1/runs/run-1?view=approvals');
-    mocks.exchangeAuthorizationCode.mockResolvedValue(token('access-after-consent'));
+    render(<AuthProvider><Harness /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completePopupSignIn();
+    await screen.findByText('access-1');
+
+    mocks.exchangeAuthorizationCode.mockResolvedValueOnce(token('access-after-consent'));
     mocks.isConsentPrompt.mockReturnValueOnce(true);
     mocks.submitBrokerConsent.mockResolvedValue({
       type: 'opaqueredirect',
@@ -637,15 +669,21 @@ describe('Broker refresh coordination', () => {
         json: async () => null,
       } as Response);
 
-    render(<AuthProvider><Harness /></AuthProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in for run' }));
+    const fetchCallsBeforeRunSignIn = vi.mocked(fetch).mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in for run without activating' }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(fetchCallsBeforeRunSignIn + 1));
     fireEvent.click(await screen.findByRole('button', { name: 'Approve consent' }));
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(fetchCallsBeforeRunSignIn + 2));
     await completePopupSignIn('code-2');
 
+    await waitFor(() => expect(mocks.exchangeAuthorizationCode).toHaveBeenCalledTimes(2));
+    await act(async () => { await Promise.resolve(); });
+    await screen.findByText('access-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Ensure run session' }));
+    await screen.findByText('ensure:ensured');
     await screen.findByText('access-after-consent');
     expect(mocks.submitBrokerConsent).toHaveBeenCalledOnce();
-    expect(mocks.buildAuthorizeUrl).toHaveBeenCalledTimes(2);
+    expect(mocks.buildAuthorizeUrl).toHaveBeenCalledTimes(3);
     expect(mocks.buildAuthorizeUrl).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.objectContaining({

@@ -1047,7 +1047,7 @@ export function BoardPage() {
     setRunOverviewRefreshKey((key) => key + 1);
   }, [reload]);
   const signInForWorkPlanPromotion = useCallback(async (binding: { projectId: string; runId: string }) => {
-    await authorize(binding);
+    await authorize(binding, undefined, false);
     if (!await ensureSession(binding, false)) return;
     setRunSignInBinding(null);
     setActionError(null);
@@ -1114,17 +1114,9 @@ export function BoardPage() {
   }, [isScopeCurrent, workPlanPromotion]);
   const confirmWorkPlanPromotion = useCallback(async () => {
     const current = workPlanPromotion;
-    const graph = board.graph;
-    if (!current || !current.preview || !graph || current.status === 'promoting' || !canWrite
+    if (!current || !current.preview || current.status === 'promoting' || !canWrite
       || !isScopeCurrent(current.scope)) return;
-    const request = current.request ?? {
-      rootSessionId: current.rootSessionId,
-      workPlanId: current.preview.workPlanId,
-      expectedDecisionStateVersion: current.preview.decisionStateVersion,
-      expectedExecutionFence: current.preview.executionFence,
-      expectedGraphRevision: graph.revision,
-      idempotencyKey: current.key,
-    };
+    let request = current.request;
     setWorkPlanPromotion({ ...current, status: 'promoting', request, error: null });
     const binding = { projectId: current.projectId, runId: current.runId };
     try {
@@ -1134,8 +1126,26 @@ export function BoardPage() {
         return;
       }
       setRunSignInBinding(null);
+      if (!request) {
+        const graph = await apiCall(
+          (token, tenant) => gatewayClient.readProjectBacklog(token, current.projectId, tenant),
+          null,
+        );
+        if (!isScopeCurrent(current.scope)) return;
+        request = {
+          rootSessionId: current.rootSessionId,
+          workPlanId: current.preview.workPlanId,
+          expectedDecisionStateVersion: current.preview.decisionStateVersion,
+          expectedExecutionFence: current.preview.executionFence,
+          expectedGraphRevision: graph.revision,
+          idempotencyKey: current.key,
+        };
+      }
+      if (!request) throw new Error('Promotion request could not be prepared.');
+      const promotionRequest = request;
+      setWorkPlanPromotion({ ...current, status: 'promoting', request: promotionRequest, error: null });
       await apiCall((token, tenant) => gatewayClient.promoteBacklogWorkPlan(
-        token, current.projectId, current.runId, request, tenant), binding);
+        token, current.projectId, current.runId, promotionRequest, tenant), binding);
       if (!isScopeCurrent(current.scope)) return;
       setRunSignInBinding(null);
       setWorkPlanPromotion(null);
@@ -1147,12 +1157,9 @@ export function BoardPage() {
     } catch (reason) {
       if (!isScopeCurrent(current.scope)) return;
       if (reason instanceof GatewayError && reason.status === 409) {
-        setWorkPlanPromotion({
-          ...current,
-          status: 'ready',
-          request,
-          error: 'The request returned a conflict and may have completed. Retry this same confirmation to check the result. If it still conflicts, close this dialog, refresh the Board, and preview again.',
-        });
+        setWorkPlanPromotion(null);
+        setRunSignInBinding(null);
+        setActionError('The work plan or backlog changed. Preview work-plan promotion again.');
         refreshBoard();
         return;
       }
@@ -1164,7 +1171,7 @@ export function BoardPage() {
           : `Promotion could not be confirmed. Retry this confirmation to check the result. ${reason instanceof Error ? reason.message : String(reason)}`;
       setWorkPlanPromotion({ ...current, status: 'ready', request, error: message });
     }
-  }, [apiCall, board.graph, canWrite, ensureSession, isScopeCurrent, refreshBoard, setActionError, setNotice, workPlanPromotion]);
+  }, [apiCall, canWrite, ensureSession, isScopeCurrent, refreshBoard, setActionError, setNotice, workPlanPromotion]);
   const activeWorkPlanPromotion = workPlanPromotion?.scope === scope ? workPlanPromotion : null;
   const promotionDialogOpen = activeWorkPlanPromotion !== null;
   const activeWorkPlanPreview = activeWorkPlanPromotion?.preview ?? null;
