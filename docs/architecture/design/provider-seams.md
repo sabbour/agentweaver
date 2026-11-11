@@ -448,6 +448,8 @@ The separate collector seals the full baseline and declared output bytes from th
 Environment retains references, while Source Control persists the existing pending output document and Events acknowledges its package.
 Only a canonical acknowledgment verified through Core permits exact-UID native Pod cleanup and a successful Core terminal receipt.
 Retry retains the same bytes and does not execute another command.
+The BuildTest Pod admission contract, including exact RuntimeClass selectors, is described in
+[Environment Sandbox](../environment-sandbox.md#buildtest-command-and-output-collection).
 Source checks do not prove native Kubernetes execution or full BuildTest acceptance.
 The separate [AgentHost candidate](../agenthost.md) implements authenticated configuration and A2A source routes.
 Environment owns registered endpoint/profile and placement evidence; Orchestrator owns runtime registration and accepted run bindings.

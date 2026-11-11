@@ -14,6 +14,9 @@ namespace Agentweaver.Environment.Tests;
 
 public sealed partial class AgentSandboxProviderTests
 {
+    private const string RuntimeClassPath = "apis/node.k8s.io/v1/runtimeclasses/kata-vm";
+    private const string RuntimeClassSelectorKey = "kubernetes.azure.com/kata-vm-isolation";
+
     [Theory]
     [InlineData(null, null, true)]
     [InlineData("agenthost-runtime-v1", "agenthost-runtime-tls", true)]
@@ -868,13 +871,17 @@ public sealed partial class AgentSandboxProviderTests
         private readonly Dictionary<string, JsonNode> _resources = new(StringComparer.Ordinal);
         private JsonNode? _podList;
         private DateTimeOffset? _imageEventTime;
+        private string? _runtimeClassJsonOverride;
         public Dictionary<string, string> Logs { get; } = new(StringComparer.Ordinal);
 
         public int CreateCount { get; private set; }
+        public int PodCreateCount { get; private set; }
         public int RequestCount { get; private set; }
         public List<bool> DeleteUidPreconditions { get; } = [];
         public string? LastSandboxClaimsNamespace { get; private set; }
         public bool FailNextClaimCreate { get; set; }
+        public string? DryRunBuildTestPodSelectorFault { get; set; }
+        public string? CreateBuildTestPodSelectorFault { get; set; }
 
         public JsonNode GetPod(SandboxBuildTestPodReference pod) =>
             _resources[$"api/v1/namespaces/{pod.KubernetesNamespace}/pods/{pod.Name}"];
@@ -888,9 +895,32 @@ public sealed partial class AgentSandboxProviderTests
             _resources["version"] = JsonNode.Parse("""{"major":"1","minor":"30","gitVersion":"v1.30.0"}""")!;
         }
 
+        public void SetRuntimeClassNodeSelector(IReadOnlyDictionary<string, string> nodeSelector)
+        {
+            _runtimeClassJsonOverride = null;
+            _resources[RuntimeClassPath]["scheduling"] = new JsonObject
+            {
+                ["nodeSelector"] = JsonSerializer.SerializeToNode(nodeSelector)
+            };
+        }
+
+        public void SetRuntimeClassHandler(string handler)
+        {
+            _runtimeClassJsonOverride = null;
+            _resources[RuntimeClassPath]["handler"] = handler;
+        }
+
+        public void SetRuntimeClassResponse(string response) => _runtimeClassJsonOverride = response;
+
+        public void RemoveRuntimeClass()
+        {
+            _runtimeClassJsonOverride = null;
+            _resources.Remove(RuntimeClassPath);
+        }
+
         public FakeKubernetesHandler()
         {
-            _resources["apis/node.k8s.io/v1/runtimeclasses/kata-vm"] = JsonNode.Parse(
+            _resources[RuntimeClassPath] = JsonNode.Parse(
                 """
                 {"apiVersion":"node.k8s.io/v1","kind":"RuntimeClass","metadata":{"name":"kata-vm"},
                  "handler":"kata-qemu"}
@@ -1239,6 +1269,11 @@ public sealed partial class AgentSandboxProviderTests
                         pod["metadata"]![PodReadbackFault] = "changed";
                     return JsonResponse(HttpStatusCode.OK, pod);
                 }
+                if (path == RuntimeClassPath && _runtimeClassJsonOverride is { } runtimeClassJson)
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(runtimeClassJson, Encoding.UTF8, "application/json")
+                    };
                 if (path.EndsWith("/sandboxclaims", StringComparison.Ordinal))
                 {
                     var segments = path.Split('/');
@@ -1282,19 +1317,32 @@ public sealed partial class AgentSandboxProviderTests
                     FailNextClaimCreate = false;
                     return new HttpResponseMessage(HttpStatusCode.InternalServerError);
                 }
-                if (OmitPodFalseDefaults && body["kind"]!.GetValue<string>() == "Pod")
+                var isPod = body["kind"]!.GetValue<string>() == "Pod";
+                var isDryRun = request.RequestUri.Query == "?dryRun=All";
+                var selectorFault = isDryRun
+                    ? DryRunBuildTestPodSelectorFault
+                    : CreateBuildTestPodSelectorFault;
+                if (isPod && body["spec"]?["runtimeClassName"]?.GetValue<string>() == "kata-vm")
+                    ApplyBuildTestPodAdmission(body, selectorFault);
+                if (OmitPodFalseDefaults && isPod)
                     RemoveFalseDefaults(body["spec"]!.AsObject());
-                if (request.RequestUri.Query == "?dryRun=All")
+                if (isDryRun)
                 {
                     body["metadata"]!["uid"] = "dry-run-uid";
                     body["metadata"]!["resourceVersion"] = "1";
-                    return JsonResponse(HttpStatusCode.Created, body);
+                    return JsonResponse(
+                        HttpStatusCode.Created,
+                        BuildTestPodSelectorResponseOverride(body, selectorFault) ?? body.ToJsonString());
                 }
                 body["metadata"]!["uid"] = $"resource-uid-{++CreateCount}";
                 body["metadata"]!["resourceVersion"] = "1";
+                if (isPod)
+                    PodCreateCount++;
                 var name = body["metadata"]!["name"]!.GetValue<string>();
                 _resources[$"{path}/{Uri.EscapeDataString(name)}"] = body.DeepClone();
-                return JsonResponse(HttpStatusCode.Created, body);
+                return JsonResponse(
+                    HttpStatusCode.Created,
+                    BuildTestPodSelectorResponseOverride(body, selectorFault) ?? body.ToJsonString());
             }
 
             if (request.Method == HttpMethod.Patch)
@@ -1342,10 +1390,71 @@ public sealed partial class AgentSandboxProviderTests
             return new HttpResponseMessage(HttpStatusCode.MethodNotAllowed);
         }
 
+        private void ApplyBuildTestPodAdmission(JsonNode pod, string? fault)
+        {
+            var nodeSelector = pod["spec"]!["nodeSelector"]!.AsObject();
+            var runtimeClassSelector =
+                _resources.GetValueOrDefault(RuntimeClassPath)?["scheduling"]?["nodeSelector"]?.AsObject();
+            if (runtimeClassSelector is not null)
+                foreach (var selector in runtimeClassSelector)
+                    nodeSelector[selector.Key] = selector.Value?.DeepClone();
+
+            switch (fault)
+            {
+                case null:
+                    break;
+                case "missing-runtimeclass-selector":
+                    nodeSelector.Remove(RuntimeClassSelectorKey);
+                    break;
+                case "conflicting-runtimeclass-selector":
+                    nodeSelector[RuntimeClassSelectorKey] = "false";
+                    break;
+                case "extra-selector":
+                    nodeSelector["admission.example/unexpected"] = "changed";
+                    break;
+                case "duplicate-selector-entry":
+                case "conflicting-duplicate-selector-entry":
+                case "duplicate-node-selector-property":
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unknown BuildTest Pod selector fault '{fault}'.");
+            }
+        }
+
+        private static string? BuildTestPodSelectorResponseOverride(JsonNode pod, string? fault)
+        {
+            if (fault is not ("duplicate-selector-entry" or
+                "conflicting-duplicate-selector-entry" or
+                "duplicate-node-selector-property"))
+                return null;
+
+            var selector = pod["spec"]!["nodeSelector"]!.AsObject();
+            var selectorJson = selector.ToJsonString();
+            var first = selector.First();
+            var keyJson = JsonSerializer.Serialize(first.Key);
+            var valueJson = first.Value!.ToJsonString();
+            var firstEntry = $"{keyJson}:{valueJson}";
+            var selectorWithDuplicate = selectorJson;
+            if (fault == "conflicting-duplicate-selector-entry")
+                selectorWithDuplicate = selectorWithDuplicate.Replace(
+                    firstEntry, $"{keyJson}:\"changed\"", StringComparison.Ordinal);
+            selectorWithDuplicate = selectorWithDuplicate[..^1] + "," + firstEntry + "}";
+
+            var podJson = pod.ToJsonString();
+            var selectorProperty = $"\"nodeSelector\":{selectorJson}";
+            var replacement = fault == "duplicate-node-selector-property"
+                ? $"{selectorProperty},{selectorProperty}"
+                : $"\"nodeSelector\":{selectorWithDuplicate}";
+            return podJson.Replace(selectorProperty, replacement, StringComparison.Ordinal);
+        }
+
         private static HttpResponseMessage JsonResponse(HttpStatusCode status, JsonNode body) =>
+            JsonResponse(status, body.ToJsonString());
+
+        private static HttpResponseMessage JsonResponse(HttpStatusCode status, string body) =>
             new(status)
             {
-                Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json")
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
             };
     }
 }

@@ -180,9 +180,10 @@ public sealed partial class AgentSandboxProvider
         var podName = BuildTestPodName(request.AcceptedCommand.OperationId, role);
         var pod = await _client.GetAsync(
             string.Empty, "pods", context.Descriptor.Namespace, podName, cancellationToken).ConfigureAwait(false);
-        return pod is null
-            ? null
-            : ValidateBuildTestPod(pod.Value, request, context, role);
+        if (pod is null)
+            return null;
+        context = await VerifyBuildTestRuntimeClassAsync(context, cancellationToken).ConfigureAwait(false);
+        return ValidateBuildTestPod(pod.Value, request, context, role);
     }
 
     /// <summary>Removes the single authorization gate after revalidating the Pod UID and any command prerequisite.</summary>
@@ -392,7 +393,7 @@ public sealed partial class AgentSandboxProvider
     {
         var context = validatedContext ?? ReadBuildTestContext(request);
         await VerifyBuildTestClusterIdentityAsync(context, cancellationToken).ConfigureAwait(false);
-        await VerifyRuntimeClassAsync(context.Options, cancellationToken).ConfigureAwait(false);
+        context = await VerifyBuildTestRuntimeClassAsync(context, cancellationToken).ConfigureAwait(false);
         await VerifyWorkspaceClaimForBuildTestAsync(context, cancellationToken).ConfigureAwait(false);
         var policy = role == SandboxBuildTestLimits.CommandPolicyRole
             ? ToPolicyDescriptor(request.CommandPolicy)
@@ -410,6 +411,84 @@ public sealed partial class AgentSandboxProvider
             cancellationToken)
             .ConfigureAwait(false);
         return context;
+    }
+
+    private async Task<BuildTestContext> VerifyBuildTestRuntimeClassAsync(
+        BuildTestContext context,
+        CancellationToken cancellationToken)
+    {
+        var runtimeClass = await VerifyRuntimeClassAsync(
+            context.Options, cancellationToken).ConfigureAwait(false);
+        return context with
+        {
+            ExpectedNodeSelector = BuildTestExpectedNodeSelector(
+                ReadRuntimeClassNodeSelector(runtimeClass))
+        };
+    }
+
+    private static ImmutableDictionary<string, string> ReadRuntimeClassNodeSelector(JsonElement runtimeClass)
+    {
+        if (runtimeClass.ValueKind != JsonValueKind.Object)
+            throw InvalidRuntimeClassNodeSelector();
+
+        var scheduling = ReadUniqueProperty(runtimeClass, "scheduling");
+        if (scheduling is null || scheduling.Value.ValueKind == JsonValueKind.Null)
+            return ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
+        if (scheduling.Value.ValueKind != JsonValueKind.Object)
+            throw InvalidRuntimeClassNodeSelector();
+
+        var nodeSelector = ReadUniqueProperty(scheduling.Value, "nodeSelector");
+        if (nodeSelector is null || nodeSelector.Value.ValueKind == JsonValueKind.Null)
+            return ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
+        if (nodeSelector.Value.ValueKind != JsonValueKind.Object)
+            throw InvalidRuntimeClassNodeSelector();
+
+        var result = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        foreach (var property in nodeSelector.Value.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.String || result.ContainsKey(property.Name))
+                throw InvalidRuntimeClassNodeSelector();
+            result.Add(property.Name, property.Value.GetString()!);
+        }
+        return result.ToImmutable();
+
+        static JsonElement? ReadUniqueProperty(JsonElement parent, string name)
+        {
+            JsonElement? result = null;
+            foreach (var property in parent.EnumerateObject())
+            {
+                if (!property.NameEquals(name))
+                    continue;
+                if (result is not null)
+                    throw InvalidRuntimeClassNodeSelector();
+                result = property.Value;
+            }
+            return result;
+        }
+    }
+
+    private static SandboxProviderException InvalidRuntimeClassNodeSelector() =>
+        new(
+            "kubernetes_response_invalid",
+            "Kubernetes returned an invalid RuntimeClass scheduling selector.",
+            effectMayHaveApplied: false);
+
+    private static ImmutableDictionary<string, string> BuildTestExpectedNodeSelector(
+        ImmutableDictionary<string, string> runtimeClassNodeSelector)
+    {
+        var expected = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        expected.Add("kubernetes.io/os", "linux");
+        expected.Add("kubernetes.io/arch", "amd64");
+        foreach (var entry in runtimeClassNodeSelector)
+        {
+            if (expected.TryGetValue(entry.Key, out var value) && value != entry.Value)
+                throw new SandboxProviderException(
+                    "runtime_class_unverified",
+                    "The configured Kubernetes RuntimeClass scheduling selector conflicts with the BuildTest node selector.",
+                    effectMayHaveApplied: false);
+            expected[entry.Key] = entry.Value;
+        }
+        return expected.ToImmutable();
     }
 
     /// <summary>Converts the accepted command policy contract to the common internal shape.</summary>
@@ -475,7 +554,11 @@ public sealed partial class AgentSandboxProvider
             descriptor.WorkspaceMountPath,
             false,
             WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim).Validate();
-        return new(options, descriptor, workspace);
+        return new(
+            options,
+            descriptor,
+            workspace,
+            ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal));
     }
 
     /// <summary>Checks the stored cluster pin against the trusted Kubernetes API CA bundle.</summary>
@@ -918,7 +1001,7 @@ public sealed partial class AgentSandboxProvider
             hostIpc ||
             !TryGetBoolean(spec, "shareProcessNamespace", out var shareProcessNamespace) ||
             shareProcessNamespace ||
-            !NodeSelectorMatches(spec) ||
+            !NodeSelectorMatches(spec, context.ExpectedNodeSelector) ||
             !PodSecurityContextMatches(spec))
             throw ProviderResourceMismatch("The BuildTest Pod isolation, resource timeout, or runtime was mutated.");
 
@@ -966,13 +1049,42 @@ public sealed partial class AgentSandboxProvider
             throw ProviderResourceMismatch("The BuildTest scheduling gate was changed unexpectedly.");
     }
 
-    /// <summary>Requires the Pod to target Linux on amd64 and no additional node-selector values.</summary>
-    private static bool NodeSelectorMatches(JsonElement spec)
+    /// <summary>Requires the exact Linux/amd64 and configured RuntimeClass node selector.</summary>
+    private static bool NodeSelectorMatches(
+        JsonElement spec,
+        ImmutableDictionary<string, string> expected)
     {
-        var selector = ReadStringDictionary(spec, "nodeSelector");
-        return selector.Count == 2 &&
-            selector.GetValueOrDefault("kubernetes.io/os") == "linux" &&
-            selector.GetValueOrDefault("kubernetes.io/arch") == "amd64";
+        JsonElement? nodeSelector = null;
+        foreach (var property in spec.EnumerateObject())
+        {
+            if (!property.NameEquals("nodeSelector"))
+                continue;
+            if (nodeSelector is not null)
+                return false;
+            nodeSelector = property.Value;
+        }
+        if (nodeSelector is null || nodeSelector.Value.ValueKind != JsonValueKind.Object)
+            return false;
+        var selectorObject = nodeSelector.Value;
+
+        var selectorBuilder = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        foreach (var property in selectorObject.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.String)
+                throw new SandboxProviderException(
+                    "kubernetes_response_invalid",
+                    "Kubernetes returned a non-string BuildTest node selector value.",
+                    effectMayHaveApplied: false);
+            if (selectorBuilder.ContainsKey(property.Name))
+                return false;
+            selectorBuilder.Add(property.Name, property.Value.GetString()!);
+        }
+
+        var selector = selectorBuilder.ToImmutable();
+        return selector.Count == expected.Count &&
+            expected.All(pair =>
+                selector.TryGetValue(pair.Key, out var value) &&
+                string.Equals(value, pair.Value, StringComparison.Ordinal));
     }
 
     /// <summary>Checks the non-root UID/GID, supplemental group, and runtime-default seccomp settings.</summary>
@@ -1354,6 +1466,7 @@ public sealed partial class AgentSandboxProvider
             string.Empty, "pods", pod.KubernetesNamespace, pod.Name, cancellationToken).ConfigureAwait(false);
         if (resource is not null)
         {
+            context = await VerifyBuildTestRuntimeClassAsync(context, cancellationToken).ConfigureAwait(false);
             var current = ValidateBuildTestPod(resource.Value, request, context, role);
             if (!string.Equals(current.Uid, pod.Uid, StringComparison.Ordinal))
                 throw ProviderResourceMismatch("The BuildTest Pod UID changed before cleanup.");
@@ -1375,9 +1488,10 @@ public sealed partial class AgentSandboxProvider
         long NetworkPolicyGeneration,
         ImmutableDictionary<string, string> SelectorLabels);
 
-    /// <summary>Validated options, Sandbox recovery descriptor, and negotiated workspace for one BuildTest operation.</summary>
+    /// <summary>Validated options, Sandbox recovery descriptor, workspace, and expected Pod selector.</summary>
     private sealed record BuildTestContext(
         AgentSandboxOptions Options,
         AgentSandboxRecoveryDescriptor Descriptor,
-        WorkspaceVolumeAttachmentNegotiation Workspace);
+        WorkspaceVolumeAttachmentNegotiation Workspace,
+        ImmutableDictionary<string, string> ExpectedNodeSelector);
 }

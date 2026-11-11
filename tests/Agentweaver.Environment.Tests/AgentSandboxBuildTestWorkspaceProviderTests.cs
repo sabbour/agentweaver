@@ -12,6 +12,158 @@ namespace Agentweaver.Environment.Tests;
 
 public sealed partial class AgentSandboxProviderTests
 {
+    [Fact]
+    public async Task BuildTestPodsAcceptOnlyTheConfiguredRuntimeClassNodeSelectorUnion()
+    {
+        using var fixture = await CreateBuildTestProviderFixtureAsync(false);
+        fixture.Handler.SetRuntimeClassNodeSelector(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [RuntimeClassSelectorKey] = "true",
+            ["runtime.example/empty"] = ""
+        });
+
+        var pod = await fixture.Provider.CreateGatedAsync(fixture.Request, CancellationToken.None);
+        var selector = fixture.Handler.GetPod(pod)["spec"]!["nodeSelector"]!.AsObject();
+
+        Assert.Equal(4, selector.Count);
+        Assert.Equal("linux", selector["kubernetes.io/os"]!.GetValue<string>());
+        Assert.Equal("amd64", selector["kubernetes.io/arch"]!.GetValue<string>());
+        Assert.Equal("true", selector[RuntimeClassSelectorKey]!.GetValue<string>());
+        Assert.Equal("", selector["runtime.example/empty"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("missing-runtimeclass-selector")]
+    [InlineData("extra-selector")]
+    [InlineData("conflicting-runtimeclass-selector")]
+    [InlineData("duplicate-selector-entry")]
+    [InlineData("conflicting-duplicate-selector-entry")]
+    [InlineData("duplicate-node-selector-property")]
+    public async Task BuildTestRejectsInvalidAdmissionNodeSelectorEntries(string fault)
+    {
+        using var fixture = await CreateBuildTestProviderFixtureAsync(false);
+        fixture.Handler.SetRuntimeClassNodeSelector(new Dictionary<string, string>
+        {
+            [RuntimeClassSelectorKey] = "true"
+        });
+        fixture.Handler.DryRunBuildTestPodSelectorFault = fault;
+
+        var failure = await Assert.ThrowsAsync<SandboxProviderException>(() =>
+            fixture.Provider.CreateGatedAsync(fixture.Request, CancellationToken.None));
+
+        Assert.Equal("provider_resource_mismatch", failure.Code);
+        Assert.False(failure.EffectMayHaveApplied);
+        Assert.Equal(0, fixture.Handler.PodCreateCount);
+        Assert.Empty(fixture.Handler.DeleteUidPreconditions);
+    }
+
+    [Fact]
+    public async Task BuildTestRejectsConflictingRuntimeClassNodeSelectorBeforePodWrite()
+    {
+        using var fixture = await CreateBuildTestProviderFixtureAsync(false);
+        fixture.Handler.SetRuntimeClassNodeSelector(new Dictionary<string, string>
+        {
+            ["kubernetes.io/os"] = "windows"
+        });
+
+        var failure = await Assert.ThrowsAsync<SandboxProviderException>(() =>
+            fixture.Provider.CreateGatedAsync(fixture.Request, CancellationToken.None));
+
+        Assert.Equal("runtime_class_unverified", failure.Code);
+        Assert.False(failure.EffectMayHaveApplied);
+        Assert.Equal(0, fixture.Handler.PodCreateCount);
+    }
+
+    [Theory]
+    [InlineData("""{"apiVersion":"node.k8s.io/v1","kind":"RuntimeClass","metadata":{"name":"kata-vm"},"handler":"kata-qemu","scheduling":"invalid"}""")]
+    [InlineData("""{"apiVersion":"node.k8s.io/v1","kind":"RuntimeClass","metadata":{"name":"kata-vm"},"handler":"kata-qemu","scheduling":{"nodeSelector":"invalid"}}""")]
+    [InlineData("""{"apiVersion":"node.k8s.io/v1","kind":"RuntimeClass","metadata":{"name":"kata-vm"},"handler":"kata-qemu","scheduling":{"nodeSelector":{"runtime.example/zone":true}}}""")]
+    [InlineData("""{"apiVersion":"node.k8s.io/v1","kind":"RuntimeClass","metadata":{"name":"kata-vm"},"handler":"kata-qemu","scheduling":{"nodeSelector":{"runtime.example/zone":"east","runtime.example/zone":"west"}}}""")]
+    public async Task BuildTestRejectsMalformedRuntimeClassNodeSelectorBeforePodWrite(string runtimeClass)
+    {
+        using var fixture = await CreateBuildTestProviderFixtureAsync(false);
+        fixture.Handler.SetRuntimeClassResponse(runtimeClass);
+
+        var failure = await Assert.ThrowsAsync<SandboxProviderException>(() =>
+            fixture.Provider.CreateGatedAsync(fixture.Request, CancellationToken.None));
+
+        Assert.Equal("kubernetes_response_invalid", failure.Code);
+        Assert.False(failure.EffectMayHaveApplied);
+        Assert.Equal(0, fixture.Handler.PodCreateCount);
+    }
+
+    [Fact]
+    public async Task BuildTestRejectsMissingRuntimeClassBeforePodWrite()
+    {
+        using var fixture = await CreateBuildTestProviderFixtureAsync(false);
+        fixture.Handler.RemoveRuntimeClass();
+
+        var failure = await Assert.ThrowsAsync<SandboxProviderException>(() =>
+            fixture.Provider.CreateGatedAsync(fixture.Request, CancellationToken.None));
+
+        Assert.Equal("runtime_class_unverified", failure.Code);
+        Assert.False(failure.EffectMayHaveApplied);
+        Assert.Equal(0, fixture.Handler.PodCreateCount);
+    }
+
+    [Fact]
+    public async Task BuildTestGetReturnsNullForAnAbsentPodWithoutAValidatedRuntimeClass()
+    {
+        using var fixture = await CreateBuildTestProviderFixtureAsync(false);
+        fixture.Handler.RemoveRuntimeClass();
+
+        Assert.Null(await fixture.Provider.GetAsync(fixture.Request, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task BuildTestGetAndDeleteRejectPodsWhenRuntimeClassSelectorChanges()
+    {
+        using var fixture = await CreateBuildTestProviderFixtureAsync(false);
+        fixture.Handler.SetRuntimeClassNodeSelector(new Dictionary<string, string>
+        {
+            [RuntimeClassSelectorKey] = "true"
+        });
+        var pod = await fixture.Provider.CreateGatedAsync(fixture.Request, CancellationToken.None);
+        fixture.Handler.SetRuntimeClassNodeSelector(new Dictionary<string, string>
+        {
+            ["runtime.example/other-selector"] = "true"
+        });
+
+        var readFailure = await Assert.ThrowsAsync<SandboxProviderException>(() =>
+            fixture.Provider.GetAsync(fixture.Request, CancellationToken.None));
+        var deleteFailure = await Assert.ThrowsAsync<SandboxProviderException>(() =>
+            fixture.Provider.DeleteAsync(fixture.Request, pod, CancellationToken.None));
+
+        Assert.Equal("provider_resource_mismatch", readFailure.Code);
+        Assert.Equal("provider_resource_mismatch", deleteFailure.Code);
+        Assert.Equal(1, fixture.Handler.PodCreateCount);
+        Assert.Empty(fixture.Handler.DeleteUidPreconditions);
+    }
+
+    [Theory]
+    [InlineData("extra-selector")]
+    [InlineData("duplicate-selector-entry")]
+    [InlineData("conflicting-duplicate-selector-entry")]
+    [InlineData("duplicate-node-selector-property")]
+    public async Task BuildTestCreateReadbackMismatchKeepsPossibleEffectWithoutCleanup(string fault)
+    {
+        using var fixture = await CreateBuildTestProviderFixtureAsync(false);
+        fixture.Handler.SetRuntimeClassNodeSelector(new Dictionary<string, string>
+        {
+            [RuntimeClassSelectorKey] = "true"
+        });
+        fixture.Handler.CreateBuildTestPodSelectorFault = fault;
+        var previousPodCreates = fixture.Handler.PodCreateCount;
+
+        var failure = await Assert.ThrowsAsync<SandboxProviderException>(() =>
+            fixture.Provider.CreateGatedAsync(fixture.Request, CancellationToken.None));
+
+        Assert.Equal("provider_resource_mismatch", failure.Code);
+        Assert.True(failure.EffectMayHaveApplied);
+        Assert.Equal(previousPodCreates + 1, fixture.Handler.PodCreateCount);
+        Assert.Empty(fixture.Handler.DeleteUidPreconditions);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

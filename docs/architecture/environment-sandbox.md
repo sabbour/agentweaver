@@ -776,6 +776,9 @@ It obtains the original mount request through the validated Sandbox recovery rec
 
 Before each effect, Environment rechecks the owner, accepted command, Sandbox lease, Workspace generation, and Cilium binding.
 The command Pod uses the exact writable Workspace PVC and an operation/role-scoped offline deny-all policy.
+RuntimeClass admission can add its configured scheduling selectors to the Pod.
+The provider accepts only those exact entries plus `kubernetes.io/os=linux` and `kubernetes.io/arch=amd64`.
+Missing, malformed, duplicate, conflicting, or extra entries fail validation.
 Only verified terminal success with exit code zero can start the separate required-output collector.
 The collector uses the pinned image and executable with a read-only Workspace mount.
 AgentHost routes `--build-test-output-collector-v1` before web configuration or native SDK startup.

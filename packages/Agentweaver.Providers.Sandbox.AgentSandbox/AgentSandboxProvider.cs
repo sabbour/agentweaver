@@ -1015,7 +1015,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
 
     /// <summary>Verifies the configured RuntimeClass maps to the expected virtual-machine handler.</summary>
     /// <exception cref="SandboxProviderException">The runtime class is absent or maps to another handler.</exception>
-    private async Task VerifyRuntimeClassAsync(
+    private async Task<JsonElement> VerifyRuntimeClassAsync(
         AgentSandboxOptions options,
         CancellationToken cancellationToken)
     {
@@ -1034,6 +1034,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                 "runtime_class_unverified",
                 "The configured Kubernetes RuntimeClass does not map to the required VM handler.",
                 effectMayHaveApplied: false);
+        return runtimeClass.Value;
     }
 
     /// <summary>Reads the negotiated PVC and returns its validated owner and generation fingerprint.</summary>

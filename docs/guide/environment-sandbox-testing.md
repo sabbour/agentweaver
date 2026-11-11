@@ -149,6 +149,9 @@ provisioning, RuntimeClass and PVC reads, attachment evidence, readiness
 withholding, and foreground deletes with UID preconditions. Manager tests
 check current project authority, the exact versioned placement projection,
 and rejection of expired, stale, non-current, or foreign leases.
+BuildTest provider tests also model RuntimeClass selector admission and reject
+missing, malformed, duplicate, extra, conflicting, or changed selector
+entries. They use the same in-memory handler, not a live Kubernetes cluster.
 
 BuildTest command contracts, checkpoint verification, configuration, and
 migration/model consistency have a separate selection:

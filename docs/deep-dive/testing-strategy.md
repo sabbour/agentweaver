@@ -42,6 +42,7 @@ claiming production credentials or service availability.
 | Contract under test | Representative stimulus and observation | Not established by that test |
 | --- | --- | --- |
 | Pure workflow/provider rules | Invalid graph, cardinality, version or capability returns structured rejection | A database commit or available backend |
+| Kubernetes BuildTest Pod validation | Controlled provider tests model RuntimeClass selectors and reject changed Pod selectors | Live API-server admission or Kata node placement |
 | MAF dispatch | Production catalog binding and child intent/outbox/checkpoint transactions against disposable PostgreSQL; controlled Broker composition holds the independent-review gate until two `RuntimeAgentHost` children join | Native AKS execution, live owner services or paid model calls |
 | Owner transactions | Concurrent claims, stale revisions, lost authority and restart replay against PostgreSQL | Deployed service behavior |
 | Source Control | Real isolated Git workspaces; controlled GitHub HTTP, expected heads and raw-byte HMAC | Live GitHub permission or merge approval |
