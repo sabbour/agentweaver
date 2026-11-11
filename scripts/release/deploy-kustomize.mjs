@@ -277,16 +277,21 @@ function verifyEnvironmentRuntimeAuthorization(exec, context, root) {
     if (!cluster) args.push('--namespace', NAMESPACE);
     args.push('--context', context);
     const result = exec('kubectl', args, { check: false, cwd: root });
-    if (result.status !== 0) {
+    const answer = result.stdout.trim().toLowerCase();
+    const denied = /^no(?:\s|$)/.test(answer);
+    if (result.status !== 0 && !denied) {
       fail(`Could not check effective permission ${verb} ${target}` +
         `${subresource ? ` --subresource=${subresource}` : ''} for ${ENVIRONMENT_SERVICE_ACCOUNT}; ` +
         `the selected identity must be allowed to impersonate that ServiceAccount: ` +
         `${(result.stderr || result.stdout || `exit ${result.status}`).trim()}`);
     }
-    if (result.stdout.trim().toLowerCase() !== 'yes') {
+    if (answer !== 'yes') {
       fail(`${ENVIRONMENT_SERVICE_ACCOUNT} lacks effective permission ${verb} ${target}` +
         `${subresource ? ` --subresource=${subresource}` : ''}` +
-        `${cluster ? ' at cluster scope' : ` in namespace ${NAMESPACE}`}.`);
+        `${cluster ? ' at cluster scope' : ` in namespace ${NAMESPACE}`}. ` +
+        `Ask a Kubernetes administrator to apply ` +
+        `deploy/k8s/proposed/environment-agent-sandbox-rbac.yaml from the selected source commit, ` +
+        `then retry deployment.`);
     }
   }
 }

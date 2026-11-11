@@ -87,6 +87,13 @@ ConfigMap-only installer before this command. The Kustomize helper does not
 create or repair that map. Follow the
 [first-install order](../guide/deploy-to-azure.md#first-install-broker-configmap-order).
 
+The preflight also checks the effective permissions of the Environment
+ServiceAccount. It reports an explicit `no` as a missing permission and names
+the proposed source manifest. The helper does not apply that manifest. For an
+upgrade, follow the
+[Environment RBAC procedure](../guide/deploy-to-azure.md#apply-environment-rbac-before-an-upgrade)
+before you retry deployment.
+
 The preflight also validates and preserves an active Identity Broker GitHub
 provider successor ConfigMap, its environment bindings, the explicit
 `SecretKeyRef`, and its fingerprint. It stops before workload writes if

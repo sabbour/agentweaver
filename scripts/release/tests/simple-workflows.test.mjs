@@ -398,7 +398,9 @@ function fakeExec(calls, {
   brokerConfigMapReadFailure = false, brokerConfigMapReadOutput,
   brokerConfigMapCount = 1, brokerConfigMapReference = brokerRuntimeConfigName,
   liveAgentHostSettings = {}, failApplyCount = 0, remainingPodPolls = 0, podList, state,
-  denyEnvironmentPermission, denyRuntimePermission, missingSecrets = [], secretTypes = {},
+  denyEnvironmentPermission, denyEnvironmentPermissionExitCode = 0,
+  denyEnvironmentPermissionOutput = 'no\n', environmentPermissionCheckError,
+  denyRuntimePermission, missingSecrets = [], secretTypes = {},
   liveStorageClass, kataNodes, clusterNodes,
   amaLogs = { metadata: { generation: 2 }, status: { observedGeneration: 2, desiredNumberScheduled: 3,
     numberReady: 3, numberAvailable: 3, updatedNumberScheduled: 3 } },
@@ -563,12 +565,19 @@ function fakeExec(calls, {
       const isEnvironmentCheck = args.includes('system:serviceaccount:agentweaver:environment');
       const subresource = args.find(arg => arg.startsWith('--subresource='));
       const permission = `${args[2]} ${args[3]}${subresource ? ` ${subresource}` : ''}`;
+      if (isEnvironmentCheck && environmentPermissionCheckError === permission) {
+        return { status: 1, stdout: '', stderr: 'error: cannot impersonate ServiceAccount' };
+      }
       const denied = denyRuntimeConfigDelete && args[2] === 'delete' &&
         args[3] === 'configmap/projects-config-runtime-config' ||
         denyKubeSystemPodList && permission === 'list pods' && args.includes('kube-system') ||
         isEnvironmentCheck && denyEnvironmentPermission === permission ||
         !isEnvironmentCheck && denyRuntimePermission === permission;
-      return { status: 0, stdout: denied ? 'no\n' : 'yes\n', stderr: '' };
+      return {
+        status: denied && isEnvironmentCheck ? denyEnvironmentPermissionExitCode : 0,
+        stdout: denied && isEnvironmentCheck ? denyEnvironmentPermissionOutput : denied ? 'no\n' : 'yes\n',
+        stderr: '',
+      };
     }
     if (args[0] === 'get' && args[1] === 'ciliumnetworkpolicies.cilium.io' &&
         args[2] === 'agenthost-platform-egress') {
@@ -3160,6 +3169,11 @@ test('effective Environment RBAC failures stop before workload effects', async (
       /lacks effective permission create pods --subresource=exec/],
     [{ denyEnvironmentPermission: 'create pods --subresource=attach' },
       /lacks effective permission create pods --subresource=attach/],
+    [{
+      denyEnvironmentPermission: 'patch ciliumnetworkpolicies.cilium.io/agenthost-platform-egress',
+      denyEnvironmentPermissionExitCode: 1,
+      denyEnvironmentPermissionOutput: 'no - Azure does not have opinion for this user\n',
+    }, /lacks effective permission patch ciliumnetworkpolicies.cilium.io\/agenthost-platform-egress.*apply `?deploy\/k8s\/proposed\/environment-agent-sandbox-rbac\.yaml/],
   ];
   try {
     for (const [settings, expected] of failures) {
@@ -3170,6 +3184,23 @@ test('effective Environment RBAC failures stop before workload effects', async (
       assert.equal(calls.some(call => call.command === 'kubectl' &&
         ['annotate', 'create', 'delete', 'apply', 'scale', 'patch'].includes(call.args[0])), false);
     }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Environment RBAC check errors without a denial remain impersonation failures', async () => {
+  const directory = scratch();
+  const calls = [];
+  try {
+    await assert.rejects(deployKustomize({ imageTag: selectedTag }, {
+      root: directory,
+      exec: fakeExec(calls, {
+        environmentPermissionCheckError: 'patch ciliumnetworkpolicies.cilium.io/agenthost-platform-egress',
+      }),
+      log() {},
+    }), /Could not check effective permission patch ciliumnetworkpolicies\.cilium\.io\/agenthost-platform-egress.*allowed to impersonate.*cannot impersonate/);
+    assert.deepEqual(kubernetesWriteCalls(calls), []);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
