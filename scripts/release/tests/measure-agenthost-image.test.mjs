@@ -75,6 +75,9 @@ test('CI image identity compares Docker ID with the measured manifest and record
 test('both exact-image native probes keep private mounts non-executable and verify the image-owned runtime', () => {
   const workflow = readFileSync(new URL('../../../.github/workflows/v1-ci.yml', import.meta.url), 'utf8');
   const dockerfile = readFileSync(new URL('../../../services/agenthost/Agentweaver.AgentHost/Dockerfile', import.meta.url), 'utf8');
+  assert.match(workflow, /https:\/\/openpolicyagent\.org\/downloads\/v0\.70\.0\/opa_linux_amd64_static/);
+  assert.match(workflow, /00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084/);
+  assert.match(workflow, /sha256sum --check/);
   for (const uid of [1654, 1000]) {
     for (const mount of ['/state', '/tmp']) {
       assert.ok(workflow.includes(`--tmpfs ${mount}:rw,noexec,nosuid,nodev,uid=${uid},gid=${uid},mode=700`));

@@ -16,7 +16,6 @@
   <Project Path="services\projects-config\Agentweaver.Projects.Config\Agentweaver.Projects.Config.csproj" />
   <Project Path="tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj" />
   <Project Path="tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj" />
-  <Project Path="tests\Agentweaver.Acs.ImageProbe\Agentweaver.Acs.ImageProbe.csproj" />
   <Project Path="tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj" />
   <Project Path="packages\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
   <Project Path="packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />

@@ -122,6 +122,14 @@ jobs:
           mkdir -p artifacts/images
           docker build --platform linux/amd64 --file services/identity/Agentweaver.Identity.Broker/Dockerfile --tag agentweaver-identity-broker:ci --label org.opencontainers.image.revision="$GITHUB_SHA" .
           docker image inspect agentweaver-identity-broker:ci > artifacts/images/identity-broker.json
+      - name: Download and verify pinned OPA
+        run: |
+          mkdir -p eng/acs
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 \
+            https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static \
+            --output eng/acs/opa_linux_amd64_static
+          echo '00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084  eng/acs/opa_linux_amd64_static' | sha256sum --check -
+          chmod 0755 eng/acs/opa_linux_amd64_static
       - name: Build unpublished AgentHost amd64 image and verify its native SDK runtime
         run: |
           mkdir -p artifacts/images
