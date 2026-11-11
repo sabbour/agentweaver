@@ -54,8 +54,10 @@ dotnet pack policy-engine/sdk/dotnet/src/AgentControlSpecification/AgentControlS
 Replace `/path/to/agentweaver-v1` with the root path of the Agentweaver
 checkout. This package contains only the `linux-x64` native asset. The local
 NuGet feed is selected only for `AgentControlSpecification` by the root
-`NuGet.Config`; other packages restore from nuget.org. The package lock files
-record the package content hash.
+`NuGet.Config`; other packages restore from nuget.org. Linux-x64 restores use
+per-project `packages.linux-x64.lock.json` files. Regular restores keep using
+`packages.lock.json`, so other locked restores do not gain a Linux-only runtime
+requirement. Both lock files record the package content hash.
 
 ## OPA provenance
 
@@ -69,12 +71,13 @@ The build fails if the hash does not match.
 
 The Orchestrator and AgentHost Dockerfiles restore the package for
 `linux-x64`, publish the service, and verify the packaged native library hash.
-Each Dockerfile copies the verified OPA binary to `/app/opa` and sets
-`ACS_OPA_PATH=/app/opa`. The image build runs the same probe inside each final
-image. It removes the probe's own native library, then loads the image's
-library through `LD_LIBRARY_PATH=/app`. The probe checks OPA allow, deny, and
-fail-closed behavior with an invalid OPA path. A failed asset check or probe
-stops that image build.
+Each Dockerfile copies the verified OPA binary to `/app/opa`, sets
+`ACS_OPA_PATH=/app/opa`, and sets `LD_LIBRARY_PATH=/app`. The image build runs
+the same probe inside each final image. It removes the probe's own native
+library, then loads the image's library through that search path. The probe
+checks OPA allow, deny,
+fail-closed behavior with an invalid OPA path, and timeout denial. A failed
+asset check or probe stops that image build.
 
 The build does not download assets at runtime, search `PATH` for OPA, enable a
 permissive mode, activate ACS, or change stored policy data. It proves runtime

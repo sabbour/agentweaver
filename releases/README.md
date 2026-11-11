@@ -75,6 +75,10 @@ on its Ubuntu builder. The builder does not create role assignments. If the
 identity does not have push access, stop and ask an authorized ACR administrator.
 The size check accepts OCI and Docker gzip-layer descriptors and reads their
 sizes without downloading the image layers.
+For a source commit that includes the pinned ACS package, the builder downloads
+OPA and uses the Orchestrator Dockerfile. For an older commit without the
+package, it skips the OPA download and uses .NET container publishing for
+Orchestrator.
 `az acr login` stores Docker credentials in the configured credential store.
 After the ACR work is complete, remove that login with
 `docker logout <acr-login-server>`.

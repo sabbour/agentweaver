@@ -163,7 +163,6 @@
           "OpenTelemetry.Api": "1.15.3"
         }
       }
-    },
-    "net10.0/linux-x64": {}
+    }
   }
 }

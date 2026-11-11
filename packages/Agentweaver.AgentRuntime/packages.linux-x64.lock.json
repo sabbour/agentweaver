@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "GitHub.Copilot.SDK": {
+        "type": "Direct",
+        "requested": "[1.0.18, )",
+        "resolved": "1.0.18",
+        "contentHash": "7Nm7/LTWo0Fat8SL/iKSBdm+UV4tx4q1k+0AiL8xRUaV5UBKk8dTUhK0qA6S2V00yrvGq63n2avmRqi6Kq2zEQ==",
+        "dependencies": {
+          "Microsoft.Extensions.AI.Abstractions": "10.2.0"
+        }
+      },
+      "Microsoft.Extensions.AI.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.2.0",
+        "contentHash": "ONGlIBht0ygEdKc0bCt9XWUiq19/460dAu7fCKzPM34OFJSMQIohEDTJwjCJ8vVp8znNakloc9xFF9+R/eDCYQ=="
+      },
+      "agentweaver.abstractions": {
+        "type": "Project"
+      },
+      "agentweaver.identity": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[1.7.0, )"
+        }
+      }
+    },
+    "net10.0/linux-x64": {}
+  }
+}

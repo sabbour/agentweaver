@@ -12,10 +12,10 @@ COPY packages/Agentweaver.SourceControl/ packages/Agentweaver.SourceControl/
 COPY packages/Agentweaver.Telemetry/ packages/Agentweaver.Telemetry/
 COPY services/agenthost/Agentweaver.AgentHost/ services/agenthost/Agentweaver.AgentHost/
 COPY tests/Agentweaver.Acs.ImageProbe/ tests/Agentweaver.Acs.ImageProbe/
-RUN dotnet restore services/agenthost/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj --runtime linux-x64 --locked-mode && \
+RUN dotnet restore services/agenthost/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj --runtime linux-x64 --locked-mode -p:AgentweaverUseLinuxX64LockFile=true && \
     dotnet publish services/agenthost/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj \
     --configuration Release --runtime linux-x64 --no-restore --no-self-contained -p:UseAppHost=false --output /publish
-RUN dotnet restore tests/Agentweaver.Acs.ImageProbe/Agentweaver.Acs.ImageProbe.csproj --runtime linux-x64 --locked-mode && \
+RUN dotnet restore tests/Agentweaver.Acs.ImageProbe/Agentweaver.Acs.ImageProbe.csproj --runtime linux-x64 --locked-mode -p:AgentweaverUseLinuxX64LockFile=true && \
     dotnet publish tests/Agentweaver.Acs.ImageProbe/Agentweaver.Acs.ImageProbe.csproj \
     --configuration Release --runtime linux-x64 --no-restore --no-self-contained -p:UseAppHost=false --output /acs-probe && \
     test -s /acs-probe/libagent_control_specification.so && \
@@ -62,6 +62,7 @@ ENV ASPNETCORE_URLS=https://+:8443 \
     AgentHost__PrivateStateDirectory=/state \
     AgentHost__WorkingDirectory=/workspace \
     ACS_OPA_PATH=/app/opa \
+    LD_LIBRARY_PATH=/app \
     DOTNET_EnableDiagnostics=0
 USER 1654:1654
 EXPOSE 8443
@@ -70,5 +71,6 @@ RUN --mount=type=bind,from=build,source=/acs-probe,target=/acs-probe,readonly \
     echo '286fe960ca9d25f01839dfc3877c9ae8a088334b23f15cc8632384ad04bd037c  /app/libagent_control_specification.so' | sha256sum --check --status && \
     test -x /app/opa && \
     echo '00d114b94fdb1606a48cccdfc73c9ccdc62c38721150131ae578d5ff3df5c084  /app/opa' | sha256sum --check --status && \
-    TMPDIR=/workspace TEMP=/workspace TMP=/workspace LD_LIBRARY_PATH=/app dotnet /acs-probe/Agentweaver.Acs.ImageProbe.dll
+    ACS_PROBE_TEMP_DIRECTORY=/workspace TMPDIR=/workspace TEMP=/workspace TMP=/workspace \
+    dotnet /acs-probe/Agentweaver.Acs.ImageProbe.dll
 ENTRYPOINT ["dotnet", "Agentweaver.AgentHost.dll"]

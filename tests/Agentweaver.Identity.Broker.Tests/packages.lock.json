@@ -92,6 +92,11 @@
         "resolved": "3.1.4",
         "contentHash": "5mj99LvCqrq3CNi06xYdyIAXOEh+5b33F2nErCzI5zWiDdLHXiPXEWFSUAF8zlIv0ZWqjZNCwHTQeAPYbF3pCg=="
       },
+      "AgentControlSpecification": {
+        "type": "Transitive",
+        "resolved": "0.4.0-beta.0",
+        "contentHash": "vtILlhbuAJ2TSi9BZwZuGcXLxj5YwxudIwO0kRo91rowwmRWBme8RRdaxOc+i2fccRBk1C3nppVAo2P1N5nQ6Q=="
+      },
       "Azure.Core": {
         "type": "Transitive",
         "resolved": "1.50.0",
@@ -1417,6 +1422,7 @@
       "agentweaver.agenthost": {
         "type": "Project",
         "dependencies": {
+          "AgentControlSpecification": "[0.4.0-beta.0, )",
           "Agentweaver.AgentRuntime": "[1.4.0, )",
           "Agentweaver.SourceControl": "[1.3.0, )",
           "Agentweaver.Telemetry": "[1.0.2, )",
@@ -1531,6 +1537,7 @@
       "agentweaver.orchestrator": {
         "type": "Project",
         "dependencies": {
+          "AgentControlSpecification": "[0.4.0-beta.0, )",
           "Agentweaver.Abstractions": "[1.7.0, )",
           "Agentweaver.Identity": "[1.7.0, )",
           "Agentweaver.Orchestrator.Core": "[1.4.1, )",

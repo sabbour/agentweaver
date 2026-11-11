@@ -34,7 +34,11 @@ test('requires a full source SHA and an ACR login server', () => {
   ]) assert.throws(() => parseBuildAcrCandidateArgs(args), /Usage:|registry must be/);
 });
 
-test('builds and verifies all ten images from one detached source worktree', async () => {
+for (const hasAcsRuntime of [true, false]) test(
+  hasAcsRuntime
+    ? 'builds and verifies all ten images with the pinned ACS runtime'
+    : 'builds older source commits without the ACS runtime',
+  async () => {
   const testRoot = path.join(root, `.acr-candidate-test-${randomUUID()}`);
   const worktreePath = path.join(testRoot, 'source');
   mkdirSync(testRoot);
@@ -52,6 +56,11 @@ test('builds and verifies all ten images from one detached source worktree', asy
     if (name === 'git' && args[0] === 'worktree' && args[1] === 'add') {
       mkdirSync(path.join(worktreePath, 'releases'), { recursive: true });
       mkdirSync(path.join(worktreePath, 'apps', 'web'), { recursive: true });
+      if (hasAcsRuntime) {
+        const acsFeed = path.join(worktreePath, 'eng', 'acs', 'nuget');
+        mkdirSync(acsFeed, { recursive: true });
+        writeFileSync(path.join(acsFeed, 'AgentControlSpecification.0.4.0-beta.0.nupkg'), '');
+      }
       writeFileSync(path.join(worktreePath, 'releases', 'foundation.json'), JSON.stringify({
         components: componentIds.map(id => ({ id, version })),
       }));
@@ -98,17 +107,27 @@ test('builds and verifies all ten images from one detached source worktree', asy
     assert.equal(measuredImage, `${registry}/agentweaver-agenthost@${digests['agentweaver-agenthost']}`);
     const dockerBuilds = calls.filter(({ name, args }) =>
       name === 'docker' && args[0] === 'buildx' && args[1] === 'build');
-    assert.equal(dockerBuilds.length, 4);
+    assert.equal(dockerBuilds.length, hasAcsRuntime ? 4 : 3);
     for (const dockerBuild of dockerBuilds) {
       assert.ok(dockerBuild.args.includes('linux/amd64'));
       assert.ok(dockerBuild.args.includes(`org.opencontainers.image.revision=${sourceSha}`));
       assert.ok(dockerBuild.args.includes(`io.agentweaver.source-tree=${sourceTree}`));
     }
-    assert.ok(dockerBuilds.some(({ args }) =>
+    const orchestratorDockerBuild = dockerBuilds.some(({ args }) =>
       args.some(argument => argument.endsWith(
-        path.join('services', 'orchestrator', 'Agentweaver.Orchestrator', 'Dockerfile')))));
+        path.join('services', 'orchestrator', 'Agentweaver.Orchestrator', 'Dockerfile'))));
+    assert.equal(orchestratorDockerBuild, hasAcsRuntime);
+    const orchestratorContainerPublish = calls.some(({ name, args }) =>
+      name === 'dotnet' && args[0] === 'publish' &&
+      args[1].endsWith(path.join('Agentweaver.Orchestrator', 'Agentweaver.Orchestrator.csproj')) &&
+      args.includes('-t:PublishContainer'));
+    assert.equal(orchestratorContainerPublish, !hasAcsRuntime);
     const opaDownload = calls.find(({ name, args }) => name === 'curl' && args.includes('--output'));
-    assert.ok(opaDownload.args.includes('https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static'));
+    if (hasAcsRuntime) {
+      assert.ok(opaDownload.args.includes('https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static'));
+    } else {
+      assert.equal(opaDownload, undefined);
+    }
     const dotnetPublish = calls.find(({ name, args }) =>
       name === 'dotnet' && args[0] === 'publish' && args.includes('-t:PublishContainer'));
     assert.ok(dotnetPublish.args.includes(`-p:ContainerRegistry=${registry}`));
