@@ -426,8 +426,10 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         await using var migrationDb = CreateMigrationDbContext();
         var migrator = migrationDb.GetService<IMigrator>();
         var migrations = db.Database.GetMigrations().ToArray();
+        var effortMigrationIndex = Array.IndexOf(migrations, "20261110220017_AllowNoneMinimalReasoningEfforts");
+        Assert.True(effortMigrationIndex > 0);
         var latestMigration = migrations[^1];
-        await migrator.MigrateAsync(migrations[^2]);
+        await migrator.MigrateAsync(migrations[effortMigrationIndex - 1]);
         try
         {
             await using var verificationDb = CreateDbContext();
