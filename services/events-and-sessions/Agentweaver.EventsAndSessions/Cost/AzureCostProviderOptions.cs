@@ -92,26 +92,34 @@ public sealed record AzureCostProviderOptions(
             !IsToken(RateCard.Id, 128) ||
             !RateCard.Id.StartsWith(
                 $"{RateCardSource}.{PricingModelId(PricingModel)}.", StringComparison.Ordinal) ||
-            !IsToken(RateCard.Version, 64) ||
-            RateCard.MeterSource != AzureCostProvider.MeterSource ||
-            !IsCurrency(RateCard.Unit) ||
-            RateCard.NanoUnitsPerUnit <= 0 ||
-            RateCard.ModelMultipliers is null)
+            !IsToken(RateCard.Version, 64))
             throw new ArgumentException("Azure Cost provider options or rate card are invalid.");
 
-        if (PricingModel == AzureCostPricingModel.ProvisionedThroughput)
+        ValidateRateCardPricing(RateCard, PricingModel);
+    }
+
+    internal static void ValidateRateCardPricing(CostRateCard rateCard, AzureCostPricingModel pricingModel)
+    {
+        ArgumentNullException.ThrowIfNull(rateCard);
+        if (rateCard.MeterSource != AzureCostProvider.MeterSource ||
+            !IsCurrency(rateCard.Unit) ||
+            rateCard.NanoUnitsPerUnit <= 0 ||
+            rateCard.ModelMultipliers is null)
+            throw new ArgumentException("Azure Cost provider options or rate card are invalid.");
+
+        if (pricingModel == AzureCostPricingModel.ProvisionedThroughput)
         {
-            if (RateCard.ModelMultipliers.Count != 0)
+            if (rateCard.ModelMultipliers.Count != 0)
                 throw new ArgumentException(
                     "Provisioned-throughput rates require usage-share evidence and cannot be priced per token.");
             return;
         }
 
-        if (RateCard.NanoUnitsPerUnit != TokensPerRateUnit)
+        if (rateCard.NanoUnitsPerUnit != TokensPerRateUnit)
             throw new ArgumentException("Azure token rates must be denominated per million tokens.");
 
         var modelCategories = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        foreach (var rate in RateCard.ModelMultipliers)
+        foreach (var rate in rateCard.ModelMultipliers)
         {
             if (!TryReadRateKey(rate.Key, out var modelId, out var category) ||
                 rate.Value <= 0)
