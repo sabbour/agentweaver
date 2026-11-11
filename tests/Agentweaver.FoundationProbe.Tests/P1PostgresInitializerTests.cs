@@ -219,7 +219,8 @@ public sealed class P1PostgresInitializerTests
     [Fact]
     public void MutationDenialReadbackRequiresEnabledExactTriggersAndNonExecutableRejectingFunctions()
     {
-        foreach (var service in MutationServices().Skip(3))
+        foreach (var service in MutationServices().Where(service => service.Tables.Any(table =>
+            table.LockColumn is not null || table.MutationDenialRequired || table.MutationDenialGuard is not null)))
         {
             var guards = service.Tables.SelectMany(table => MutationGuardReadbacks(service, table)).ToArray();
             InitializerChecks.AssertMutationDenialGuards(service, guards, Owner, Runtime);
@@ -785,6 +786,22 @@ public sealed class P1PostgresInitializerTests
     private static ServicePlan[] MutationServices()
     {
         var services = Services();
+        services[0] = services[0] with
+        {
+            Service = "projects-config",
+            Schema = "projects_config",
+            Tables =
+            [
+                new("model_provider_revisions", ["SELECT", "INSERT"], null, true, null,
+                [
+                    new("model_provider_revisions_immutable", "reject_immutable_record_mutation()",
+                        27, "records in %.% are immutable", "55000"),
+                    new("model_provider_revisions_no_truncate", "reject_immutable_record_mutation()",
+                        34, "records in %.% are immutable", "55000"),
+                ]),
+            ],
+            Functions = [new("reject_immutable_record_mutation()", false)],
+        };
         services[3] = services[3] with
         {
             Service = "events-and-sessions",
