@@ -604,6 +604,26 @@ The legacy `agenthost-model-egress` policy and its rendered model hosts stay
 unchanged. A failed read or create stops the deployment. If another creator
 wins the create race, the helper leaves that object unchanged.
 
+### Prepare the Broker migration resources
+
+When the Broker image is selected, the helper reads the
+`<resource-group>-id-identity-broker-migration` managed identity from the
+selected Azure subscription. Its client ID and tenant ID must match the
+selected target values. Before any migration Job runs, the helper checks
+`ServiceAccount/identity-broker-migration`,
+`CiliumNetworkPolicy/identity-broker-migration-egress`, and
+`ConfigMap/identity-broker-migration-config`. It creates missing resources and
+leaves matching resources unchanged.
+
+The managed identity, its federated identity credential, and the Broker
+database principal and permissions must already exist. The helper does not
+provision them. If a resource differs, the helper stops and reports the
+resource name and changed fields. Do not overwrite or delete the resource to
+retry. Resolve the difference through the approved operator process, then run
+the same deployment command again. If creation stops partway through, rerun
+the command; matching resources are kept and only missing resources are
+created.
+
 ### First-install Broker ConfigMap order
 
 For a fresh installation, follow this order:

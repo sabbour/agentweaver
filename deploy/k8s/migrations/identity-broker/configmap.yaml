@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: identity-broker-migration-config
+  namespace: agentweaver
+  labels:
+    agentweaver.io/service: identity-broker-migration
+data:
+  ConnectionStrings__IdentityBrokerMigration: Host=agentweaver-pg.postgres.database.azure.com;Database=agentweaver;Username=agentweaver-id-identity-broker-migration;SSL Mode=VerifyFull
+  IdentityBroker__Migration__WorkloadIdentityTenantId: 72f988bf-86f1-41af-91ab-2d7cd011db47
+  IdentityBroker__Migration__WorkloadIdentityClientId: 0cf2e9cd-6b0a-45cd-bbaf-fc674a194781
+  IdentityBroker__Migration__WorkloadIdentityTokenFilePath: /var/run/secrets/azure/tokens/azure-identity-token
