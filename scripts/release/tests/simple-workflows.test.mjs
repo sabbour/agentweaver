@@ -353,6 +353,7 @@ function fakeExec(calls, {
   liveStorageClass, kataNodes, clusterNodes,
   amaLogs = { metadata: { generation: 2 }, status: { observedGeneration: 2, desiredNumberScheduled: 3,
     numberReady: 3, numberAvailable: 3, updatedNumberScheduled: 3 } },
+  amaLogsPods, denyKubeSystemPodList = false,
   smokePod = { status: { phase: 'Succeeded' } }, smokeLogs = 'SMOKE_OK\n', smokeCreateError,
   liveProviderSetup,
   activateProviderDuringMigration,
@@ -468,6 +469,7 @@ function fakeExec(calls, {
       const permission = `${args[2]} ${args[3]}${subresource ? ` ${subresource}` : ''}`;
       const denied = denyRuntimeConfigDelete && args[2] === 'delete' &&
         args[3] === 'configmap/projects-config-runtime-config' ||
+        denyKubeSystemPodList && permission === 'list pods' && args.includes('kube-system') ||
         isEnvironmentCheck && denyEnvironmentPermission === permission ||
         !isEnvironmentCheck && denyRuntimePermission === permission;
       return { status: 0, stdout: denied ? 'no\n' : 'yes\n', stderr: '' };
@@ -515,6 +517,9 @@ function fakeExec(calls, {
           : 'No resources found in agentweaver namespace.\n',
         stderr: '',
       };
+    }
+    if (args[0] === 'get' && args[1] === 'pods' && args.includes('kube-system')) {
+      return { status: 0, stdout: JSON.stringify({ items: amaLogsPods ?? [] }), stderr: '' };
     }
     if (args[0] === 'get' && args[1] === 'pods') {
       const items = podList
@@ -2596,6 +2601,54 @@ test('deploy continues without ama-logs only when every node is in a canary regi
       assert.match(lines.join('\n'), /ama-logs is missing and every node is in a canary \(EUAP\) region.*not collected/);
       assert.ok(calls.some(call => call.args[0] === 'auth' && call.args[2] === 'list' && call.args[3] === 'nodes'));
     }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('deploy skips unready ama-logs pods only on sandbox nodes', async () => {
+  const directory = scratch();
+  const ready = [{ type: 'Ready', status: 'True' }];
+  const node = name => ({ metadata: { name }, spec: {}, status: { conditions: ready } });
+  const pod = (nodeName, isReady, uid = 'ama-uid') => ({ metadata: { ownerReferences: [{ uid }] },
+    spec: { nodeName }, status: { conditions: [{ type: 'Ready', status: isReady ? 'True' : 'False' }] } });
+  const amaLogs = (status = {}) => ({ metadata: { generation: 1, uid: 'ama-uid' },
+    spec: { selector: { matchLabels: { component: 'ama-logs-agent', tier: 'node' } } },
+    status: { observedGeneration: 1, desiredNumberScheduled: 3, numberReady: 2, numberAvailable: 2,
+      updatedNumberScheduled: 3, ...status } });
+  const base = { kataNodes: [node('kata-0')], amaLogs: amaLogs(),
+    amaLogsPods: [pod('system-0', true), pod('user-0', true), pod('kata-0', false)] };
+  try {
+    const calls = [];
+    const lines = [];
+    await deployKustomize({ imageTag: selectedTag }, {
+      root: directory, exec: fakeExec(calls, base), log: line => lines.push(line),
+    });
+    assert.match(lines.join('\n'),
+      /ama-logs is not ready on sandbox node\(s\) kata-0\..*ContainerNetworkLogs, and egress audit data .*not collected/);
+    const podList = calls.find(call => call.args[0] === 'get' && call.args[1] === 'pods' &&
+      call.args.includes('kube-system'));
+    assert.equal(podList.args[podList.args.indexOf('--selector') + 1], 'component=ama-logs-agent,tier=node');
+
+    const failures = [
+      { amaLogsPods: [pod('system-0', false), pod('user-0', true), pod('kata-0', false)] },
+      { amaLogsPods: [pod('system-0', true), pod('kata-0', false)] },
+      { amaLogsPods: [pod('system-0', true), pod('user-0', true, 'other-uid'), pod('kata-0', false)] },
+      { amaLogs: amaLogs({ updatedNumberScheduled: 2 }) },
+      { kataNodes: [{ spec: {}, status: { conditions: ready } }] },
+    ];
+    for (const settings of failures) {
+      const failedCalls = [];
+      await assert.rejects(deployKustomize({ imageTag: selectedTag }, {
+        root: directory, exec: fakeExec(failedCalls, { ...base, ...settings }), log() {},
+      }), /ama-logs is not ready \(2\/3 ready\).*deploy\.mjs --execute/);
+      assert.deepEqual(kubernetesWriteCalls(failedCalls), []);
+    }
+    const deniedCalls = [];
+    await assert.rejects(deployKustomize({ imageTag: selectedTag }, {
+      root: directory, exec: fakeExec(deniedCalls, { ...base, denyKubeSystemPodList: true }), log() {},
+    }), /ama-logs is not ready \(2\/3 ready\)\. The selected identity cannot list pods in namespace kube-system/);
+    assert.deepEqual(kubernetesWriteCalls(deniedCalls), []);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

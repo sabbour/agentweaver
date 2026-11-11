@@ -1153,6 +1153,18 @@ the workspace StorageClass and the sandbox RuntimeClass named in
   is missing or not ready on every scheduled node. A missing `ama-logs` is
   accepted, with a warning, only when the node list is not empty and every
   node has a `topology.kubernetes.io/region` label that ends in `euap`.
+  Unready `ama-logs` pods are accepted, with a warning, only when all of these
+  conditions are true:
+  - the DaemonSet is not in a rollout;
+  - each scheduled node has an `ama-logs` pod; and
+  - each pod that is not Ready runs on a node that matches the sandbox
+    RuntimeClass node selector.
+
+  On AKS Kata VM isolation nodes, the add-on `addon-token-adapter` container
+  can fail with `can't initialize iptables table 'nat'`. You cannot fix this
+  in Agentweaver. The warning names the sandbox nodes. Container Insights,
+  `ContainerNetworkLogs`, and egress audit data from those nodes are not
+  collected. An unready `ama-logs` pod on any other node stops the deployment.
 
 The message for a missing RuntimeClass or node tells you to run the
 infrastructure deployment, which creates the `kata` node pool. The message for
@@ -1161,6 +1173,8 @@ add-on, and to wait until the agent is ready. When the product
 StorageClass is missing, the helper creates it before the migrations. The
 caller needs `list nodes` at cluster scope, `get daemonsets.apps/ama-logs` in
 `kube-system`, and `create storageclasses` only when the class is missing.
+When `ama-logs` is not ready and sandbox nodes exist, the caller also needs
+`list pods` in `kube-system`.
 
 After all rollouts, the helper runs an install smoke check. It creates a
 1 GiB workspace PersistentVolumeClaim and a short-lived pod with the AgentHost

@@ -638,8 +638,9 @@ DaemonSet `ama-logs` in `kube-system` is not ready. A cluster in a canary
 region with a workspace in a production region cannot use the add-on: the
 installer skips it with a warning and `action` set to `unsupported-region`,
 and `deploy:kustomize` accepts the missing agent only when every node is in a
-canary region. For the steps, failures, permissions, cost, and the canary
-limit, see
+canary region. An unready `ama-logs` pod is accepted, with a warning, only on
+Kata sandbox nodes. For the steps, failures, permissions, cost, the canary
+limit, and the sandbox node limit, see
 [Azure Monitor add-on](../../infra/bicep/README.md#azure-monitor-add-on).
 
 ## ACNS security source setting

@@ -165,6 +165,19 @@ is ready on every scheduled node before it writes to the cluster. The
 deployment identity needs `get` on `daemonsets.apps/ama-logs` in
 `kube-system`.
 
+### Kata sandbox nodes
+
+On AKS Kata VM isolation nodes, the add-on `addon-token-adapter` container
+can fail with `iptables ... can't initialize iptables table 'nat'`. This is an
+AKS add-on defect. When `ama-logs` is not ready, `npm run deploy:kustomize`
+lists the `ama-logs` pods. It continues, with a warning that names the nodes,
+only when the DaemonSet is not in a rollout, each scheduled node has a pod,
+and every pod that is not Ready runs on a node that matches the sandbox
+RuntimeClass node selector. For this check, the deployment identity needs
+`list` on `pods` in `kube-system`. Container Insights, `ContainerNetworkLogs`,
+and egress audit data from those sandbox nodes are not collected. An unready
+pod on a system or workload node stops the deployment.
+
 ### Canary-region clusters
 
 A cluster in a canary region (a region name that ends in `euap`, for example
@@ -191,7 +204,8 @@ add-on is already enabled, the installer adopts or stops as usual.
 when it can list the nodes, the list is not empty, and every node has a
 `topology.kubernetes.io/region` label that ends in `euap`. It prints a
 warning and continues. It needs `list nodes` at cluster scope for this check.
-If `ama-logs` exists, it must be ready.
+If `ama-logs` exists, it must be ready, except as described in
+[Kata sandbox nodes](#kata-sandbox-nodes).
 
 In this layout, Container Insights data, `ContainerNetworkLogs`, and the
 egress audit data that depends on them are not collected. To collect them,
