@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
@@ -123,6 +124,55 @@ public sealed class RuntimeModelBindingsResolver
         return model;
     }
 
+    /// <summary>Resolves the provider revision carried by one accepted BYOK run selection.</summary>
+    /// <exception cref="RuntimeAuthorizationException">The selection, credential version, revision, or pin does not match.</exception>
+    public RuntimeModelBinding ResolveAcceptedRuntimeBinding(
+        RuntimeAcceptedModelSelection selection,
+        ModelProviderBindingRevision providerBinding)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        ArgumentNullException.ThrowIfNull(providerBinding);
+        if (selection.SourceMode != ModelSourceMode.Byok ||
+            selection.ModelBindingPin is not { } pin ||
+            selection.CredentialReference is not { } credential ||
+            selection.ConnectionId is not null || selection.ConnectionScope is not null ||
+            selection.Reference != providerBinding.ProviderId ||
+            credential.Version != providerBinding.CredentialVersion)
+            throw new RuntimeAuthorizationException("runtime_model_binding_pin_mismatch");
+
+        ValidatePin(pin);
+        ValidateRuntimeProviderBinding(providerBinding);
+        if (pin.ModelSelectionReference != selection.Reference ||
+            pin.ModelId != providerBinding.Deployment ||
+            pin.SourceMode != ModelSourceMode.Byok ||
+            pin.ProviderType != providerBinding.ProviderType ||
+            pin.ConfigurationRevision != providerBinding.ProviderRevision.ToString(CultureInfo.InvariantCulture) ||
+            pin.ConfigurationHash != providerBinding.ConfigurationHash ||
+            pin.ReasoningEffort != selection.ReasoningEffort ||
+            !providerBinding.ReasoningEfforts.Contains(selection.ReasoningEffort, StringComparer.Ordinal))
+            throw new RuntimeAuthorizationException("runtime_model_binding_pin_mismatch");
+
+        var provider = new RuntimeByokProvider(
+            providerBinding.ProviderType,
+            new Uri(providerBinding.BaseUrl, UriKind.Absolute),
+            providerBinding.WireApi ?? "responses",
+            providerBinding.AzureApiVersion);
+        var model = new RuntimeModelBinding(providerBinding.Deployment, ModelSourceMode.Byok, provider)
+        {
+            PromptCapacityTokens = providerBinding.PromptCapacityTokens,
+            SupportedReasoningEfforts = providerBinding.ReasoningEfforts
+        };
+        try
+        {
+            model.Validate();
+        }
+        catch (ArgumentException)
+        {
+            throw new RuntimeAuthorizationException("runtime_model_binding_revision_invalid");
+        }
+        return model;
+    }
+
     /// <summary>Builds a pin for the exact resolved model and configuration revision.</summary>
     public RuntimeModelBindingPin Pin(
         string reference, ModelSourceMode sourceMode, string reasoningEffort = "high")
@@ -151,6 +201,32 @@ public sealed class RuntimeModelBindingsResolver
         RuntimeContractValidation.ValidateIdentifier(pin.ModelId);
         RuntimeContractValidation.ValidateIdentifier(pin.ConfigurationRevision);
         RuntimeContractValidation.ValidateHash(pin.ConfigurationHash);
+    }
+
+    private static void ValidateRuntimeProviderBinding(ModelProviderBindingRevision binding)
+    {
+        if (binding.ContractVersion != ModelProviderBindingRevision.CurrentContractVersion ||
+            binding.ProviderRevision <= 0 ||
+            !Enum.IsDefined(binding.Scope) ||
+            (binding.Scope == ModelProviderBindingScope.Project) != (binding.ProjectId is not null) ||
+            string.IsNullOrWhiteSpace(binding.DisplayName) || binding.DisplayName.Length > 128 ||
+            string.IsNullOrWhiteSpace(binding.Deployment) || binding.Deployment.Length > 256 ||
+            binding.ReasoningEfforts.IsDefault ||
+            binding.ReasoningEfforts.Length > 6 ||
+            binding.ReasoningEfforts.Distinct(StringComparer.Ordinal).Count() != binding.ReasoningEfforts.Length)
+            throw new RuntimeAuthorizationException("runtime_model_binding_revision_invalid");
+
+        RuntimeContractValidation.ValidateIdentifier(binding.ProviderId);
+        RuntimeContractValidation.ValidateIdentifier(binding.Deployment);
+        if (binding.ProjectId is { } projectId)
+            RuntimeContractValidation.ValidateIdentifier(projectId);
+        RuntimeContractValidation.ValidateHash(binding.ConfigurationHash);
+        if (!Uri.TryCreate(binding.BaseUrl, UriKind.Absolute, out var baseUrl) ||
+            !RuntimeContractValidation.IsHttpsEndpoint(baseUrl) ||
+            binding.ProviderType == "azure" &&
+                (!string.IsNullOrEmpty(baseUrl.PathAndQuery.Trim('/')) ||
+                 !string.IsNullOrEmpty(baseUrl.Fragment)))
+            throw new RuntimeAuthorizationException("runtime_model_binding_revision_invalid");
     }
 
     private static void ValidateReasoningEffort(string reasoningEffort)
