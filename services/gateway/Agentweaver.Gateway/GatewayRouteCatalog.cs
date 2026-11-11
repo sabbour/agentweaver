@@ -695,6 +695,14 @@ public static class GatewayRouteCatalog
             "/api" + run + "/backlog/tasks/{taskId}/claim",
             "claimBacklogTask", "Atomically claim an eligible backlog task for this run", body: true,
             forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Orchestrator, run + "/backlog/promotions/preview",
+            "/api" + run + "/backlog/promotions/preview",
+            "previewBacklogWorkPlanPromotion", "Preview the confirmed work plan promotion", ["rootSessionId"],
+            forwardTenantSelector: true, excludeFromMcp: true);
+        Add("POST", GatewayOwner.Orchestrator, run + "/backlog/promotions",
+            "/api" + run + "/backlog/promotions",
+            "promoteBacklogWorkPlan", "Promote the confirmed work plan to the project backlog", body: true,
+            forwardTenantSelector: true, excludeFromMcp: true);
         Add("GET", GatewayOwner.Events, run + "/events",
             "/internal" + run + "/events",
             "replayRunEvents", "Replay committed run events", ["cursor", "limit"],

@@ -167,6 +167,9 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
                     Assert.Contains(backlogInputSchema.GetProperty("required").EnumerateArray(),
                         item => item.GetString() == field);
         }
+        Assert.DoesNotContain(tools.EnumerateArray(), tool =>
+            tool.GetProperty("name").GetString() is "agentweaver_previewBacklogWorkPlanPromotion"
+                or "agentweaver_promoteBacklogWorkPlan");
 
         var knowledgeTool = Assert.Single(
             tools.EnumerateArray(),

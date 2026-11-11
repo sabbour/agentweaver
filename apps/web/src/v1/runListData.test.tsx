@@ -61,8 +61,11 @@ describe('run display helpers', () => {
   });
 
   it('maps a run summary to a row', () => {
-    expect(toRunListItem('p1', summary('r1', { goal: 'Fix it', state: 'cancelled', createdAt: '2026-02-01T00:00:00Z' }))).toEqual({
-      projectId: 'p1', runId: 'r1', label: 'Fix it', executionState: 'cancelled', time: { label: 'Started', value: '2026-02-01T00:00:00Z' },
+    expect(toRunListItem('p1', summary('r1', {
+      rootSessionId: 'root-1', goal: 'Fix it', state: 'cancelled', createdAt: '2026-02-01T00:00:00Z',
+    }))).toEqual({
+      projectId: 'p1', runId: 'r1', rootSessionId: 'root-1', label: 'Fix it', executionState: 'cancelled',
+      time: { label: 'Started', value: '2026-02-01T00:00:00Z' },
     });
   });
 

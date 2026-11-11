@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator.Core;
 using Microsoft.AspNetCore.Http;
@@ -45,6 +46,7 @@ public static partial class CoordinationEndpoints
             "/tasks/{taskId}/dependencies/{prerequisiteTaskId}",
             RemoveBacklogDependencyAsync);
         backlog.MapPost("/tasks/{taskId}/claim", ClaimBacklogTaskAsync);
+        backlog.MapGet("/promotions/preview", ReadBacklogWorkPlanPromotionPreviewAsync);
         backlog.MapPost("/promotions", PromoteBacklogWorkPlanAsync);
         projectBacklog.MapGet("/promotions", ReadProjectBacklogPromotionsAsync);
         projectBacklog.MapGet("/origins", ReadProjectBacklogTaskOriginsAsync);
@@ -158,6 +160,39 @@ public static partial class CoordinationEndpoints
             }));
 
     /// <summary>
+    /// Reads the current confirmed work plan without changing the backlog.
+    /// </summary>
+    private static Task<IResult> ReadBacklogWorkPlanPromotionPreviewAsync(
+        string projectId,
+        string runId,
+        [FromQuery] string rootSessionId,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinatorDecisionOwnerStore decisions) =>
+        ExecuteBacklogOperationAsync(projectId, runId, context, options, projects,
+            async (actor, selection, _, ct) =>
+            {
+                if (string.IsNullOrWhiteSpace(rootSessionId))
+                    throw new CoordinationException(
+                        "backlog_promotion_invalid", StatusCodes.Status400BadRequest);
+                var decision = await decisions.ReadCurrentAsync(
+                    actor,
+                    new SessionIdentity(projectId, runId, rootSessionId),
+                    selection,
+                    ct).ConfigureAwait(false);
+                if (!decision.State.CanDispatch || decision.State.ConfirmedWorkPlan is not { } confirmedPlan)
+                    throw new CoordinationException("backlog_promotion_stale", StatusCodes.Status409Conflict);
+                return Results.Ok(new BacklogWorkPlanPromotionPreview(
+                    rootSessionId,
+                    confirmedPlan.Plan.Id,
+                    decision.StateVersion,
+                    decision.State.Fence,
+                    [.. confirmedPlan.Plan.Items.Select(item => new BacklogWorkPlanPromotionPreviewItem(
+                        item.Id, item.Title, item.Task, item.DependsOn))]));
+            });
+
+    /// <summary>
     /// Promotes the run's current confirmed work plan into backlog tasks and records each task's origin.
     /// </summary>
     private static Task<IResult> PromoteBacklogWorkPlanAsync(
@@ -177,26 +212,7 @@ public static partial class CoordinationEndpoints
                     string.IsNullOrWhiteSpace(request.WorkPlanId) ||
                     request.ExpectedDecisionStateVersion < 1 || request.ExpectedExecutionFence < 1)
                     throw new CoordinationException("backlog_promotion_invalid", StatusCodes.Status400BadRequest);
-                // Check the request against the current decision before opening the backlog transaction.
-                // The store checks again under its locks.
                 var identity = new SessionIdentity(projectId, runId, request.RootSessionId);
-                var decision = await decisions.ReadCurrentAsync(actor, identity, selection, ct)
-                    .ConfigureAwait(false);
-                if (decision.StateVersion != request.ExpectedDecisionStateVersion ||
-                    decision.State.Fence != request.ExpectedExecutionFence ||
-                    !decision.State.CanDispatch ||
-                    decision.State.ConfirmedWorkPlan is not { } confirmedPlan ||
-                    !string.Equals(confirmedPlan.Plan.Id, request.WorkPlanId, StringComparison.Ordinal))
-                    throw new CoordinationException("backlog_promotion_stale", StatusCodes.Status409Conflict);
-                // Use the selection context stored at confirmation. If none is stored, rebuild it from the
-                // selection snapshot, unless the plan needs a provider binding that only the stored context has.
-                var selectionContext = await runSelectionContexts.ReadAsync(
-                    selection.Selection, decision.State.Fence, ct).ConfigureAwait(false);
-                if (selectionContext is null && RequiresProviderBinding(decision.State, confirmedPlan.Plan))
-                    throw new CoordinationException(
-                        "backlog_promotion_selection_unavailable", StatusCodes.Status409Conflict);
-                selectionContext ??= CoordinatorWorkflowCatalog.CreateRunSelectionContext(
-                    selection.Selection.Snapshot);
                 var result = await backlog.PromoteWorkPlanAsync(
                     actor,
                     selection,
@@ -206,7 +222,26 @@ public static partial class CoordinationEndpoints
                     request.ExpectedExecutionFence,
                     request.ExpectedGraphRevision,
                     request.IdempotencyKey,
-                    selectionContext,
+                    async token =>
+                    {
+                        var decision = await decisions.ReadCurrentAsync(actor, identity, selection, token)
+                            .ConfigureAwait(false);
+                        if (decision.StateVersion != request.ExpectedDecisionStateVersion ||
+                            decision.State.Fence != request.ExpectedExecutionFence ||
+                            !decision.State.CanDispatch ||
+                            decision.State.ConfirmedWorkPlan is not { } confirmedPlan ||
+                            !string.Equals(confirmedPlan.Plan.Id, request.WorkPlanId, StringComparison.Ordinal))
+                            throw new CoordinationException(
+                                "backlog_promotion_stale", StatusCodes.Status409Conflict);
+                        // Use the stored context when the confirmed plan needs a provider binding.
+                        var selectionContext = await runSelectionContexts.ReadAsync(
+                            selection.Selection, decision.State.Fence, token).ConfigureAwait(false);
+                        if (selectionContext is null && RequiresProviderBinding(decision.State, confirmedPlan.Plan))
+                            throw new CoordinationException(
+                                "backlog_promotion_selection_unavailable", StatusCodes.Status409Conflict);
+                        return selectionContext ?? CoordinatorWorkflowCatalog.CreateRunSelectionContext(
+                            selection.Selection.Snapshot);
+                    },
                     decisions,
                     revalidate,
                     ct).ConfigureAwait(false);
@@ -545,6 +580,23 @@ public sealed record BacklogTaskRevisionRequest(
 /// Request body for changing dependency edges at an expected graph revision.
 /// </summary>
 public sealed record BacklogGraphRevisionRequest(long ExpectedGraphRevision);
+
+/// <summary>
+/// Read-only preview of a confirmed work plan that can be promoted to the project backlog.
+/// </summary>
+public sealed record BacklogWorkPlanPromotionPreview(
+    string RootSessionId,
+    string WorkPlanId,
+    long DecisionStateVersion,
+    long ExecutionFence,
+    ImmutableArray<BacklogWorkPlanPromotionPreviewItem> Items);
+
+/// <summary>One work-plan item shown before the user confirms promotion.</summary>
+public sealed record BacklogWorkPlanPromotionPreviewItem(
+    string WorkPlanItemId,
+    string Title,
+    string Task,
+    ImmutableArray<string> DependsOn);
 
 /// <summary>
 /// Request body for promoting a run's confirmed work plan into backlog tasks.

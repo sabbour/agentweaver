@@ -117,7 +117,8 @@ public sealed class BacklogPlanPromotionPostgresTests : IAsyncLifetime
 
         var replay = await restarted.PromoteWorkPlanAsync(
             _actor, _selection, RootSessionId, "plan-1", 2, _fence, 0, "promotion-1",
-            WorkflowTestData.SelectionContext(), _decisions, _ => Task.CompletedTask, CancellationToken.None);
+            _ => throw new InvalidOperationException("A completed replay must not read current decision context."),
+            _decisions, _ => Task.CompletedTask, CancellationToken.None);
         Assert.True(replay.IsSuccess);
         AssertSamePromotion(promotion, replay.Value!);
         Assert.Equal(1, await CountAsync("backlog_plan_promotions"));

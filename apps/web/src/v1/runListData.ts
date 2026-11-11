@@ -17,6 +17,7 @@ export const DEFAULT_RUN_PAGE_SIZE = 25;
 export interface RunListItem {
   projectId: string;
   runId: string;
+  rootSessionId?: string | null;
   /** Text shown for the run: title, then goal, then root session ID, then run ID. */
   label: string;
   executionState: string | null;
@@ -77,6 +78,7 @@ export function toRunListItem(projectId: string, run: ProjectRunSummary): RunLis
   return {
     projectId,
     runId: run.runId,
+    rootSessionId: run.rootSessionId,
     label: runDisplayLabel(run),
     executionState: run.state,
     time: { label: 'Started', value: run.createdAt },

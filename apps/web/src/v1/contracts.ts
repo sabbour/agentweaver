@@ -1293,6 +1293,55 @@ export interface BacklogTaskClaimReceipt {
   decisionStateVersion: number;
 }
 
+/** One confirmed work-plan item shown before the user promotes the plan. */
+export interface BacklogWorkPlanPromotionPreviewItem {
+  workPlanItemId: string;
+  title: string;
+  task: string;
+  dependsOn: string[];
+}
+
+/** Read-only preview of a confirmed work plan that can be promoted to Backlog. */
+export interface BacklogWorkPlanPromotionPreview {
+  rootSessionId: string;
+  workPlanId: string;
+  decisionStateVersion: number;
+  executionFence: number;
+  items: BacklogWorkPlanPromotionPreviewItem[];
+}
+
+/** Request to promote a confirmed work plan at the current backlog graph revision. */
+export interface PromoteBacklogWorkPlanRequest {
+  rootSessionId: string;
+  workPlanId: string;
+  expectedDecisionStateVersion: number;
+  expectedExecutionFence: number;
+  expectedGraphRevision: number;
+  idempotencyKey: string;
+}
+
+/** One work-plan item and its backlog task in a promotion receipt. */
+export interface BacklogPromotedTask {
+  taskId: string;
+  workItemId: string;
+}
+
+/** Durable receipt for a confirmed work-plan promotion. */
+export interface BacklogPlanPromotion {
+  promotionId: string;
+  projectId: string;
+  runId: string;
+  rootSessionId: string;
+  workPlanId: string;
+  workflowId: string;
+  workflowRevision: string;
+  decisionStateVersion: number;
+  executionFence: number;
+  graphRevision: number;
+  promotedAt: string;
+  tasks: BacklogPromotedTask[];
+}
+
 /** One reason a backlog write was rejected. `code` is a camelCase issue name such as `staleGraphRevision`. */
 export interface BacklogIssue {
   code: string;

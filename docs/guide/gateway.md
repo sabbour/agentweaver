@@ -50,6 +50,12 @@ decision.
 4. Check the owning service's response. A Gateway-accepted request does not
    prove that an asynchronous operation completed.
 
+The Board can preview and promote a run's confirmed work plan. The preview
+route reads the current plan without changing the backlog. The Board sends the
+promotion request only after the user confirms. These routes are not MCP
+tools. See [Plan promotion and task origin](../reference/api.md#plan-promotion-and-task-origin)
+for the request, response, and conflict details.
+
 To replace a coordinator root Host, use the Orchestrator coordination routes in
 the [HTTP API reference](../reference/api.md#coordination). Reuse the same
 operation ID and request after an uncertain result. Read the saved operation

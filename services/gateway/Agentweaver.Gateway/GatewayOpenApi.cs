@@ -190,6 +190,8 @@ internal static partial class GatewayOpenApi
             ["addProjectBacklogDependency"] = C("BacklogGraphRevisionRequest", "BacklogGraph", "200"),
             ["removeProjectBacklogDependency"] = C("BacklogGraphRevisionRequest", "BacklogGraph", "200"),
             ["claimBacklogTask"] = C("ClaimBacklogTaskRequest", "BacklogTaskClaimReceipt", "200"),
+            ["previewBacklogWorkPlanPromotion"] = C(null, "BacklogWorkPlanPromotionPreview", "200"),
+            ["promoteBacklogWorkPlan"] = C("PromoteBacklogWorkPlanRequest", "BacklogPlanPromotion", "200"),
         };
 
     /// <summary>Checks operation/schema coverage and returns the versioned API document.</summary>
@@ -395,7 +397,8 @@ internal static partial class GatewayOpenApi
         if (route.OperationId is "captureBacklogTask" or "editBacklogTaskContent" or
             "setAllProjectBacklogTasksReady" or "setProjectBacklogTaskPosition" or
             "setProjectBacklogTaskState" or "archiveProjectBacklogTask" or "deleteProjectBacklogTask" or
-            "addProjectBacklogDependency" or "removeProjectBacklogDependency" or "claimBacklogTask")
+            "addProjectBacklogDependency" or "removeProjectBacklogDependency" or "claimBacklogTask" or
+            "previewBacklogWorkPlanPromotion" or "promoteBacklogWorkPlan")
         {
             responses["400"] = JsonResponse(
                 new { oneOf = new[] { Ref("BacklogIssues"), Ref("Problem") } },
@@ -406,7 +409,8 @@ internal static partial class GatewayOpenApi
             if (route.OperationId is "editBacklogTaskContent" or "setProjectBacklogTaskPosition" or
                 "setProjectBacklogTaskState" or "archiveProjectBacklogTask" or "deleteProjectBacklogTask" or
                 "addProjectBacklogDependency" or
-                "removeProjectBacklogDependency" or "claimBacklogTask")
+                "removeProjectBacklogDependency" or "claimBacklogTask" or "previewBacklogWorkPlanPromotion" or
+                "promoteBacklogWorkPlan")
                 responses["404"] = JsonResponse(
                     new { oneOf = new[] { Ref("BacklogIssues"), Ref("Problem") } },
                     "The project or task does not exist or is not visible to the caller.");
@@ -913,7 +917,8 @@ else if (route.OperationId is
         operationId == "removeChiefOfStaffPriorityLink" && name == "expectedRevision" ||
         operationId == "browseMarketplaceSource" && name == "expectedSourceRevision" ||
         operationId == "readSourceControlOutputCaptureFile" && name == "path" ||
-        (operationId is "readWorkspaceRepositoryTree" or "readWorkspaceRepositoryFile") && name == "ref";
+        (operationId is "readWorkspaceRepositoryTree" or "readWorkspaceRepositoryFile") && name == "ref" ||
+        operationId == "previewBacklogWorkPlanPromotion" && name == "rootSessionId";
 
     private static object QuerySchema(string operationId, string name)
     {
@@ -1177,6 +1182,29 @@ else if (route.OperationId is
             ("selectionHash", Str()),
             ("executionFence", Int()),
             ("decisionStateVersion", Int())),
+        ["BacklogWorkPlanPromotionPreviewItem"] = StrictObj(
+            ["workPlanItemId", "title", "task", "dependsOn"],
+            ("workPlanItemId", Str()), ("title", Str()), ("task", Str()), ("dependsOn", Arr(Str()))),
+        ["BacklogWorkPlanPromotionPreview"] = StrictObj(
+            ["rootSessionId", "workPlanId", "decisionStateVersion", "executionFence", "items"],
+            ("rootSessionId", Str()), ("workPlanId", Str()), ("decisionStateVersion", Int()),
+            ("executionFence", Int()), ("items", Arr(Ref("BacklogWorkPlanPromotionPreviewItem")))),
+        ["PromoteBacklogWorkPlanRequest"] = StrictObj(
+            ["rootSessionId", "workPlanId", "expectedDecisionStateVersion", "expectedExecutionFence",
+                "expectedGraphRevision", "idempotencyKey"],
+            ("rootSessionId", Str()), ("workPlanId", Str()), ("expectedDecisionStateVersion", Int()),
+            ("expectedExecutionFence", Int()), ("expectedGraphRevision", Int()),
+            ("idempotencyKey", new { type = "string", minLength = 1, maxLength = 128 })),
+        ["BacklogPromotedTask"] = StrictObj(
+            ["taskId", "workItemId"], ("taskId", Str()), ("workItemId", Str())),
+        ["BacklogPlanPromotion"] = StrictObj(
+            ["promotionId", "projectId", "runId", "rootSessionId", "workPlanId", "workflowId",
+                "workflowRevision", "decisionStateVersion", "executionFence", "graphRevision", "promotedAt", "tasks"],
+            ("promotionId", Uuid()), ("projectId", Str()), ("runId", Str()), ("rootSessionId", Str()),
+            ("workPlanId", Str()), ("workflowId", Str()), ("workflowRevision", Str()),
+            ("decisionStateVersion", Int()), ("executionFence", Int()), ("graphRevision", Int()),
+            ("promotedAt", new { type = "string", format = "date-time" }),
+            ("tasks", Arr(Ref("BacklogPromotedTask")))),
 
         ["ProjectSummary"] = Obj(["projectId", "name", "state", "revision", "configurationRevision", "createdAt", "updatedAt", "effectiveRoles"],
             ("projectId", Str()), ("name", Str()), ("state", Enum("active", "archived")),

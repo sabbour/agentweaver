@@ -53,6 +53,13 @@ public sealed class BacklogEndpointMetadataTests
             .Single(route => route.RoutePattern.RawText == "/api/projects/{projectId}/runs/{runId}/backlog/promotions");
         Assert.Equal(typeof(PromoteBacklogWorkPlanRequest),
             promotion.Metadata.GetMetadata<IAcceptsMetadata>()!.RequestType);
+        var preview = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(route => route.RoutePattern.RawText ==
+                "/api/projects/{projectId}/runs/{runId}/backlog/promotions/preview");
+        Assert.Equal(["GET"], preview.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods);
+        Assert.Null(preview.Metadata.GetMetadata<IAcceptsMetadata>());
     }
 
     [Fact]

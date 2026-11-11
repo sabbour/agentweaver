@@ -55,6 +55,32 @@ describe('RunList', () => {
     expect(screen.getByTestId('location').textContent).toBe('/projects/p%201/runs/r%2F1');
   });
 
+  it('shows work-plan promotion only when the caller provides an action and the run has a root session', () => {
+    const onPreviewWorkPlanPromotion = vi.fn();
+    const { rerender } = renderList({
+      data: data([{
+        ...item('r1', 'active'),
+        rootSessionId: 'root-1',
+      }]),
+      onPreviewWorkPlanPromotion,
+    });
+    const button = screen.getByRole('button', { name: 'Preview work-plan promotion for Task r1' });
+    fireEvent.click(button);
+    expect(onPreviewWorkPlanPromotion).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r1', rootSessionId: 'root-1' }),
+      button,
+    );
+
+    rerender(
+      <MemoryRouter initialEntries={['/start']}>
+        <Routes>
+          <Route path="*" element={<RunList title="Runs" emptyText="Nothing here yet." data={data([item('r2', 'active')])} onPreviewWorkPlanPromotion={onPreviewWorkPlanPromotion} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole('button', { name: /Preview work-plan promotion/ })).toBeNull();
+  });
+
   it('shows Load more only when the service has another page', () => {
     const loadMore = vi.fn();
     const { unmount } = renderList({ data: data([item('r1', 'idle')]) });

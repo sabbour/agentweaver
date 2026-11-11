@@ -5,7 +5,7 @@
  */
 import { Badge, Button, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { Link } from 'react-router-dom';
-import type { RunListData } from './runListData';
+import type { RunListData, RunListItem } from './runListData';
 import { isRunFinished, runState } from './runState';
 
 const useStyles = makeStyles({
@@ -66,13 +66,14 @@ function formatTime(value: string): string {
  * the list spans projects. `limit` shows only the first rows and hides Load
  * more, for summary cards that link to the full list.
  */
-export function RunList({ title, description, data, emptyText, projectNames, limit }: {
+export function RunList({ title, description, data, emptyText, projectNames, limit, onPreviewWorkPlanPromotion }: {
   title: string;
   description?: string;
   data: RunListData;
   emptyText: string;
   projectNames?: ReadonlyMap<string, string>;
   limit?: number;
+  onPreviewWorkPlanPromotion?: (item: RunListItem, trigger: HTMLButtonElement) => void;
 }) {
   const styles = useStyles();
   const items = limit ? data.items.slice(0, limit) : data.items;
@@ -107,6 +108,16 @@ export function RunList({ title, description, data, emptyText, projectNames, lim
                 </Text>
               </div>
               <div className={styles.actions}>
+                {onPreviewWorkPlanPromotion && item.rootSessionId && (
+                  <Button
+                    appearance="secondary"
+                    size="small"
+                    aria-label={`Preview work-plan promotion for ${item.label}`}
+                    onClick={(event) => onPreviewWorkPlanPromotion(item, event.currentTarget)}
+                  >
+                    Preview work-plan promotion
+                  </Button>
+                )}
                 <Link className="v1-link-button" to={path} aria-label={`Open run ${item.label}`}>Open</Link>
               </div>
             </div>
