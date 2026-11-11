@@ -31,6 +31,7 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed partial class ProjectsConfigBrokerAuthorizationTests
 {
     private async Task VerifyProductionChildStartupAsync(
+        bool expectIndependentReview,
         string projectId,
         string runToken,
         long version,
@@ -56,10 +57,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseTurn = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var readinessFault = new ChildReadinessFault();
+        var lostHostReply = new LostChildHostReply();
         var bootstrapFault = new LostBootstrapReply();
         var endpoint = new Uri($"https://child-{Guid.NewGuid():N}.test:8443/runtime/v1/configure");
         routes[endpoint.Host] = () => readinessFault.CreateHandler(
-            new RuntimeRunStartDeferredHandler(receiverReady.Task));
+            lostHostReply.CreateHandler(new RuntimeRunStartDeferredHandler(receiverReady.Task)));
         RuntimePlacementTestServer? childEnvironment = null;
         RuntimeAgentHost? host = null;
         IHost? receiver = null;
@@ -144,12 +146,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var rootPath = $"/api/projects/{projectId}/runs/{RunId}/coordination/sessions/root";
         var loseNextDispatchReply = 0;
         var lostDispatchReplyCount = 0;
-        async Task<HttpResponseMessage> DispatchAsync(CancellationToken token)
+        async Task<HttpResponseMessage> DispatchAsync(CancellationToken token, long? expectedVersion = null)
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, rootPath + "/actions/dispatch")
             {
                 Content = JsonContent.Create(
-                    new MafExecutionDispatchRequest(version, plan.Id), options: CoordinationJsonOptions)
+                    new MafExecutionDispatchRequest(expectedVersion ?? version, plan.Id),
+                    options: CoordinationJsonOptions)
             };
             AddBearerAndTenant(request, runToken, TenantId);
             var response = await client.SendAsync(request, token);
@@ -349,7 +352,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.False(sdk.TurnReceived.Task.IsCompleted);
 
             using var sendCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            Interlocked.Exchange(ref loseNextDispatchReply, 1);
+            lostHostReply.DropNextReply();
             var send = DispatchAsync(sendCancellation.Token);
             if (await Task.WhenAny(send, sdk.TurnReceived.Task) == send)
             {
@@ -363,13 +366,31 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Single(sdk.Requests, request => request.Method == "session.send");
             Assert.Equal(1, await ChildRegistrationCountAsync());
             releaseTurn.TrySetResult();
-            await Assert.ThrowsAsync<HttpRequestException>(() => send.WaitAsync(cancellationToken));
-            Assert.Equal(1, lostDispatchReplyCount);
-            using var completedDispatch = await DispatchAsync(cancellationToken);
-            await AssertStatusAsync(completedDispatch, HttpStatusCode.OK, string.Join('\n', failures));
-            var dispatchResult = await ReadJsonAsync<MafExecutionDispatchResponse>(completedDispatch);
-            Assert.False(dispatchResult.IsComplete);
+            await lostHostReply.Dropped.Task.WaitAsync(cancellationToken);
+            using (var lostHostResponse = await send.WaitAsync(cancellationToken))
+                await AssertStatusAsync(
+                    lostHostResponse, HttpStatusCode.ServiceUnavailable, string.Join('\n', failures));
+            Assert.Equal(1, lostHostReply.DroppedCount);
+
+            MafExecutionDispatchResponse dispatchResult;
+            do
+            {
+                using var completedDispatch = await DispatchAsync(cancellationToken);
+                await AssertStatusAsync(completedDispatch, HttpStatusCode.OK, string.Join('\n', failures));
+                dispatchResult = await ReadJsonAsync<MafExecutionDispatchResponse>(completedDispatch);
+                if (dispatchResult.CompletionEvidence.IsDefaultOrEmpty &&
+                    dispatchResult.ChildRuntimeStartup.Values.Any(status => status.State == "pending"))
+                    await Task.Delay(100, cancellationToken);
+            }
+            while (dispatchResult.CompletionEvidence.IsDefaultOrEmpty &&
+                dispatchResult.ChildRuntimeStartup.Values.Any(status => status.State == "pending"));
+            Assert.Equal(expectIndependentReview, !dispatchResult.IsComplete);
             var completionEvidence = Assert.Single(dispatchResult.CompletionEvidence);
+            Assert.Equal(1, lostHostReply.RequestCount);
+            if (expectIndependentReview)
+                Assert.Null(dispatchResult.TaskCompletion);
+            else
+                AssertTaskCompletion(dispatchResult.TaskCompletion);
             var checkpointBinding = CoordinationEndpoints.CreateExecutionCheckpointBinding(
                 new(projectId, RunId, "root"),
                 new CoordinationActor(owner.ActorIssuer, owner.ActorId),
@@ -388,7 +409,48 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     Assert.Single(completedCheckpoint.State.ChildTurnReceipts.Values), CoordinationJsonOptions),
                 JsonSerializer.SerializeToElement(completionEvidence, CoordinationJsonOptions)));
             Assert.Single(sdk.Requests, request => request.Method == "session.send");
-            Assert.Single(completedCheckpoint.State.ReviewIntents);
+            if (expectIndependentReview)
+            {
+                Assert.Single(completedCheckpoint.State.ReviewIntents);
+                Interlocked.Exchange(ref loseNextDispatchReply, 1);
+                await Assert.ThrowsAsync<HttpRequestException>(() => DispatchAsync(cancellationToken));
+                Assert.Equal(1, lostDispatchReplyCount);
+                using var callerRetry = await DispatchAsync(cancellationToken);
+                await AssertStatusAsync(callerRetry, HttpStatusCode.OK, string.Join('\n', failures));
+                var callerRetryResult = await ReadJsonAsync<MafExecutionDispatchResponse>(callerRetry);
+                Assert.True(JsonElement.DeepEquals(
+                    JsonSerializer.SerializeToElement(dispatchResult.CompletedResults, CoordinationJsonOptions),
+                    JsonSerializer.SerializeToElement(callerRetryResult.CompletedResults, CoordinationJsonOptions)));
+                Assert.True(JsonElement.DeepEquals(
+                    JsonSerializer.SerializeToElement(dispatchResult.CompletionEvidence, CoordinationJsonOptions),
+                    JsonSerializer.SerializeToElement(callerRetryResult.CompletionEvidence, CoordinationJsonOptions)));
+                Assert.Equal(1, lostHostReply.RequestCount);
+                Assert.Single(sdk.Requests, request => request.Method == "session.send");
+
+                var reviewIntent = Assert.Single(completedCheckpoint.State.ReviewIntents).Value;
+                using var pendingDecisionResponse = await SendAsync(
+                    client, HttpMethod.Get, rootPath + "/decisions", runToken, [TenantId],
+                    cancellationToken: cancellationToken);
+                await AssertStatusAsync(pendingDecisionResponse, HttpStatusCode.OK);
+                var pendingDecision = await ReadJsonAsync<CoordinatorDecisionStateView>(pendingDecisionResponse);
+                Assert.Equal(reviewIntent.ApprovalRequestId, pendingDecision.PendingGate?.RequestId);
+            }
+            else
+            {
+                Assert.Empty(completedCheckpoint.State.ReviewIntents);
+            }
+            Assert.Equal(1, lostHostReply.RequestCount);
+            Assert.Single(sdk.Requests, request => request.Method == "session.send");
+
+            static void AssertTaskCompletion(MafExecutionTaskCompletionEvidence? evidence)
+            {
+                var taskCompletion = Assert.IsType<MafExecutionTaskCompletionEvidence>(evidence);
+                Assert.Equal("completed", taskCompletion.State);
+                Assert.Equal("claimed-task", taskCompletion.TaskId);
+                Assert.True(taskCompletion.TaskRevision > 0);
+            }
+            Assert.Equal(1, lostHostReply.RequestCount);
+            Assert.Single(sdk.Requests, request => request.Method == "session.send");
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
@@ -475,6 +537,42 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     return Task.FromResult(response);
                 }
                 return base.SendAsync(request, cancellationToken);
+            }
+        }
+    }
+
+    private sealed class LostChildHostReply
+    {
+        private int _dropNext;
+        private int _droppedCount;
+        private int _requestCount;
+
+        public TaskCompletionSource Dropped { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int DroppedCount => Volatile.Read(ref _droppedCount);
+        public int RequestCount => Volatile.Read(ref _requestCount);
+        public void DropNextReply() => Interlocked.Exchange(ref _dropNext, 1);
+        public HttpMessageHandler CreateHandler(HttpMessageHandler inner) => new Handler(inner, this);
+
+        private sealed class Handler(HttpMessageHandler inner, LostChildHostReply fault) : DelegatingHandler(inner)
+        {
+            protected override async Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                var response = await base.SendAsync(request, cancellationToken);
+                if (request.RequestUri?.AbsolutePath == "/runtime/v1/a2a/message:send")
+                {
+                    Interlocked.Increment(ref fault._requestCount);
+                    if (response.IsSuccessStatusCode &&
+                        Interlocked.Exchange(ref fault._dropNext, 0) == 1)
+                    {
+                        response.Dispose();
+                        Interlocked.Increment(ref fault._droppedCount);
+                        fault.Dropped.TrySetResult();
+                        throw new HttpRequestException("The child Host reply was lost.");
+                    }
+                }
+                return response;
             }
         }
     }

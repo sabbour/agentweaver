@@ -168,6 +168,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     public async Task PublicNativeChildrenJoinBeforeIndependentReviewGate()
         => await RunPublicConfirmedPlanRevalidatesPrePlanRootRegistrationBeforeEgressAsync("production");
 
+    [Fact]
+    public async Task PublicNativeTaskCompletionRequiresClaimAndNoOutputWitness()
+        => await RunPublicConfirmedPlanRevalidatesPrePlanRootRegistrationBeforeEgressAsync("completion");
+
     private async Task RunPublicConfirmedPlanRevalidatesPrePlanRootRegistrationBeforeEgressAsync(string scenario)
     {
         using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
@@ -190,7 +194,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                  action: allow
                  priority: 100
              """]);
-        var storage = scenario == "production"
+        var storage = scenario is "production" or "completion"
             ? new AzureFilesCsiOptions(
                 AzureFilesCsiOptions.CurrentOptionsSchemaVersion,
                 "runtime-storage-options", "agentweaver", "azure-files", 1, 60, 100)
@@ -254,7 +258,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         // Decision persistence counts the two planned items and their registered children together.
                         MaxModelTurns = 2, MaxToolCalls = 2, MaxChildren = 4, MaxConcurrentChildren = 2,
                         MaxWallTimeSeconds = 3600,
-                        CopilotHardCreditLimit = scenario is "native" or "production" ? 5m : null
+                        CopilotHardCreditLimit = scenario is "native" or "production" or "completion" ? 5m : null
                     }
                 }
             });
@@ -330,7 +334,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ["Identity__Issuer"] = IdentityBrokerWebApplicationFactory.Issuer,
             ["Identity__Audience"] = "https://api.test"
         });
-        using var nativeEnvironment = scenario is "native" or "production"
+        using var nativeEnvironment = scenario is "native" or "production" or "completion"
             ? new TemporaryEnvironment(new Dictionary<string, string?>
             {
                 ["Orchestrator__RuntimeUsage__BrokerOwnerAddress"] = "https://broker.test/",
@@ -371,7 +375,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         if (scenario == "native")
             Assert.True(routes.TryAdd("environment.test",
                 () => new NativeJoinEnvironmentRouter(environments, runtimeEnvironments)));
-        else if (scenario == "production")
+        else if (scenario is "production" or "completion")
             Assert.True(routes.TryAdd("environment.test", () => childStarts.CreateHandler(
                 () => new NativeJoinEnvironmentRouter(environments, runtimeEnvironments),
                 onlyChildStart: true)));
@@ -381,14 +385,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await using var baseEvents = new EventsIntegrationFactory(
             _connectionString, eventsSchema, signingKey, projects.CreateHandler,
             () => new RuntimeServiceRouter(routes, failures),
-            nativeUsageHandler: scenario is "native" or "production"
+            nativeUsageHandler: scenario is "native" or "production" or "completion"
                 ? () => new RuntimeServiceRouter(routes, failures)
                 : null,
-            sessionMaterialObjects: scenario is "native" or "production" ? new RuntimeMaterialObjects() : null,
-            simulateDirectTls: scenario is "native" or "production");
+            sessionMaterialObjects: scenario is "native" or "production" or "completion"
+                ? new RuntimeMaterialObjects() : null,
+            simulateDirectTls: scenario is "native" or "production" or "completion");
         await using var events = baseEvents.WithWebHostBuilder(builder =>
         {
-            if (scenario is "native" or "production")
+            if (scenario is "native" or "production" or "completion")
                 builder.ConfigureTestServices(services => services.RemoveAll<ILoggerProvider>());
         });
         Assert.True(routes.TryAdd("events.test", () => events.Server.CreateHandler()));
@@ -400,11 +405,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             runtimeUsageHandler: () => new RuntimeServiceRouter(routes, failures));
         await using var factory = baseFactory.WithWebHostBuilder(builder =>
         {
-            if (scenario is "native" or "production")
+            if (scenario is "native" or "production" or "completion")
                 builder.ConfigureTestServices(services => services.RemoveAll<ILoggerProvider>());
             builder.ConfigureTestServices(services =>
             {
-                if (scenario == "production")
+                if (scenario is "production" or "completion")
                     services.AddSingleton(childStarts.LoggerProvider);
                 ConfigureTestHttpClient(services, "runtime-suspend-environment",
                     () => new RuntimeServiceRouter(routes, failures));
@@ -515,6 +520,51 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             new RegisterRuntimeRequest("root-environment", "runtime-profile"));
         await AssertStatusAsync(registered, HttpStatusCode.OK, string.Join('\n', failures));
         var registration = await ReadJsonAsync<RuntimeRegistration>(registered);
+        var runBacklogPath = $"/api/projects/{project.ProjectId}/runs/{RunId}/backlog";
+        var projectBacklogPath = $"/api/projects/{project.ProjectId}/backlog";
+        JsonElement? productionBacklog = null;
+        static long ReadBacklogRevision(JsonElement graph) =>
+            graph.GetProperty("revision").GetInt64();
+        static JsonElement FindBacklogTask(JsonElement graph, string taskId) =>
+            graph.GetProperty("tasks").EnumerateArray().Single(task =>
+                task.GetProperty("reference").GetProperty("taskId").GetString() == taskId);
+        async Task<JsonElement> AddReadyTaskAsync(JsonElement graph, string taskId)
+        {
+            using var added = await SendJsonAsync(
+                client, HttpMethod.Post, projectBacklogPath + "/tasks", adminToken,
+                new CaptureBacklogTaskRequest(taskId,
+                    new BacklogTaskContent($"Requirements for {taskId}."), ReadBacklogRevision(graph)));
+            await AssertStatusAsync(added, HttpStatusCode.OK, string.Join('\n', failures));
+            var addedGraph = (await ReadJsonAsync<JsonElement>(added)).Clone();
+            var task = FindBacklogTask(addedGraph, taskId);
+            using var readied = await SendJsonAsync(
+                client, HttpMethod.Put, runBacklogPath + $"/tasks/{taskId}/state", runToken,
+                new SetBacklogTaskStateRequest(
+                    BacklogTaskState.Ready, ReadBacklogRevision(addedGraph),
+                    task.GetProperty("revision").GetInt64()));
+            await AssertStatusAsync(readied, HttpStatusCode.OK, string.Join('\n', failures));
+            return (await ReadJsonAsync<JsonElement>(readied)).Clone();
+        }
+
+        if (scenario is "production" or "completion")
+        {
+            using var backlogResponse = await SendAsync(
+                client, HttpMethod.Get, runBacklogPath, runToken, [TenantId]);
+            await AssertStatusAsync(backlogResponse, HttpStatusCode.OK, string.Join('\n', failures));
+            productionBacklog = (await ReadJsonAsync<JsonElement>(backlogResponse)).Clone();
+            productionBacklog = await AddReadyTaskAsync(productionBacklog.Value, "claimed-task");
+            var task = FindBacklogTask(productionBacklog.Value, "claimed-task");
+            using var claim = await SendJsonAsync(
+                client, HttpMethod.Post, runBacklogPath + "/tasks/claimed-task/claim", runToken,
+                new ClaimBacklogTaskRequest(
+                    ReadBacklogRevision(productionBacklog.Value),
+                    task.GetProperty("revision").GetInt64(), "claim-before-decisions"));
+            await AssertStatusAsync(claim, HttpStatusCode.OK, string.Join('\n', failures));
+            using var claimedBacklogResponse = await SendAsync(
+                client, HttpMethod.Get, runBacklogPath, runToken, [TenantId]);
+            await AssertStatusAsync(claimedBacklogResponse, HttpStatusCode.OK, string.Join('\n', failures));
+            productionBacklog = (await ReadJsonAsync<JsonElement>(claimedBacklogResponse)).Clone();
+        }
         long version = 1;
         async Task DecideAsync(string path, object body)
         {
@@ -531,29 +581,53 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     "Both results are reviewed.", "Use the accepted workflow.", "Keep owner authority.", [])));
         await DecideAsync("/decisions/gates/outcome-gate/answer",
             new AnswerCoordinatorGateRequest(version, "outcome-answer", "approve", null));
-        var workflow = new WorkflowDefinition("native-join", "1.0.0", "native-join-v1",
-            WorkflowDefinitionOrigin.Generated, 2,
-            [
-                new("implement", "Complete the accepted tasks.", WorkflowStepMode.Open, 0,
-                    scenario == "production" ? new(1, 1) : new(2, 2),
-                    [], ["implementer"], ["implementation"], ["isolated-worktree"], [], null, null),
-                new("review", "Review both completed results.", WorkflowStepMode.Platform, 1, new(0, 1),
-                    ["implement"], [], [], [], [], null, WorkflowPlatformGate.IndependentReview)
-            ]);
+        var workflowSteps = ImmutableArray.Create(
+            new WorkflowStepDefinition(
+                "implement", "Complete the accepted tasks.", WorkflowStepMode.Open, 0,
+                scenario is "production" or "completion" ? new(1, 1) : new(2, 2),
+                [], ["implementer"], ["implementation"], ["isolated-worktree"], [], null, null));
+        if (scenario != "completion")
+            workflowSteps = workflowSteps.Add(new WorkflowStepDefinition(
+                "review", "Review both completed results.", WorkflowStepMode.Platform, 1, new(0, 1),
+                ["implement"], [], [], [], [], null, WorkflowPlatformGate.IndependentReview));
+        var workflow = new WorkflowDefinition(
+            "native-join", "1.0.0", "native-join-v1", WorkflowDefinitionOrigin.Generated, 2, workflowSteps);
         await DecideAsync("/actions/select_workflow",
             new SelectCoordinatorWorkflowRequest(version, "workflow", "workflow-gate", workflow.Id, workflow));
         await DecideAsync("/decisions/gates/workflow-gate/answer",
             new AnswerCoordinatorGateRequest(version, "workflow-answer", "approve", null));
         var plan = new WorkPlan("native-plan", workflow.Id, workflow.Revision, workflow.CatalogVersion,
-            (scenario == "production" ? new[] { "first" } : ["first", "second"]).Select(id => new WorkPlanItem(
-                id, "implement", $"Complete {id}.", $"Return the completed {id} result.", "implementer",
-                "test-agent", "implementation", "platform-model", AgentSandboxProviderMetadata.ProviderId,
-                "isolated-worktree", [], [$"results/{id}.txt"])).ToImmutableArray());
+            (scenario is "production" or "completion" ? new[] { "first" } : ["first", "second"])
+                .Select(id => new WorkPlanItem(
+                    id, "implement", $"Complete {id}.", $"Return the completed {id} result.", "implementer",
+                    "test-agent", "implementation", "platform-model", AgentSandboxProviderMetadata.ProviderId,
+                    "isolated-worktree", [],
+                    scenario == "completion" ? ImmutableArray<string>.Empty : [$"results/{id}.txt"]))
+                .ToImmutableArray());
         await DecideAsync("/actions/propose_work_plan",
             new ProposeCoordinatorWorkPlanRequest(version, "plan", "plan-gate", plan));
         if (scenario != "candidate")
             await DecideAsync("/decisions/gates/plan-gate/answer",
                 new AnswerCoordinatorGateRequest(version, "plan-answer", "approve", null));
+        if (scenario == "production")
+        {
+            productionBacklog = await AddReadyTaskAsync(productionBacklog!.Value, "late-claim-task");
+            var lateTask = FindBacklogTask(productionBacklog.Value, "late-claim-task");
+            using var lateClaim = await SendJsonAsync(
+                client, HttpMethod.Post, runBacklogPath + "/tasks/late-claim-task/claim", runToken,
+                new ClaimBacklogTaskRequest(
+                    ReadBacklogRevision(productionBacklog.Value),
+                    lateTask.GetProperty("revision").GetInt64(), "claim-after-plan"));
+            await AssertStatusAsync(
+                lateClaim, HttpStatusCode.Conflict, string.Join('\n', failures));
+            using var afterLateClaim = await SendAsync(
+                client, HttpMethod.Get, runBacklogPath, runToken, [TenantId]);
+            await AssertStatusAsync(afterLateClaim, HttpStatusCode.OK, string.Join('\n', failures));
+            var afterLateClaimGraph = await ReadJsonAsync<JsonElement>(afterLateClaim);
+            Assert.Equal("ready",
+                FindBacklogTask(afterLateClaimGraph, "late-claim-task")
+                    .GetProperty("state").GetString());
+        }
         if (scenario == "pending")
             await DecideAsync("/actions/revise_work_plan",
                 new ReviseCoordinatorWorkPlanRequest(version, "revision", "revision-gate",
@@ -621,10 +695,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var stillVerified = await SendJsonAsync(environmentClient, HttpMethod.Post,
             "/api/network-egress/verify", runToken, egressRequest);
         await AssertStatusAsync(stillVerified, HttpStatusCode.OK);
-        if (scenario == "production")
+        if (scenario is "production" or "completion")
         {
             await VerifyProductionChildStartupAsync(
-                project.ProjectId, runToken, version, plan, snapshot, selectionDocument.RootElement.Clone(),
+                scenario == "production", project.ProjectId, runToken, version, plan, snapshot,
+                selectionDocument.RootElement.Clone(),
                 signingKey, projects, connection, routes, failures, environments, runtimeEnvironments,
                 factory, client, dataSource, ownerSchema, childStarts);
             return;
