@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, stringify } from 'yaml';
+import { run } from '../lib/exec.mjs';
 import {
   activateIdentityBrokerProviderSetup,
   buildIdentityBrokerProviderPlan,
@@ -128,6 +129,12 @@ function createKubectlFixture(options = {}) {
       const name = args[command + 2];
       if (resource === 'configmaps') {
         const map = maps.get(name);
+        if (!map && options.emptyOptionalReadThroughRun && args.includes('--ignore-not-found')) {
+          return run(process.execPath, ['-e', ''], settings);
+        }
+        if (!map && options.emptyRequiredReadThroughRun && !args.includes('--ignore-not-found')) {
+          return run(process.execPath, ['-e', ''], settings);
+        }
         return { status: 0, stdout: map ? JSON.stringify(map) : '', stderr: '' };
       }
       if (resource === 'deployments') {
@@ -307,8 +314,8 @@ test('offline render rejects an omitted provider section when the source has bro
     'identity_broker_provider_source_conflict', 'IdentityBroker.GitHubRepoApp');
 });
 
-test('activation creates the immutable map before a revision-fenced rollout and reads it back', async () => {
-  const fixture = createKubectlFixture();
+test('activation treats empty projected output from an optional read as absent before creating the map', async () => {
+  const fixture = createKubectlFixture({ emptyOptionalReadThroughRun: true });
   const result = await activateIdentityBrokerProviderSetup(input, target, fixture.dependencies);
   assert.equal(result.changed, true);
   assert.equal(result.configMapCreated, true);
@@ -338,7 +345,45 @@ test('activation creates the immutable map before a revision-fenced rollout and 
   ]);
   assert.equal(fixture.apiCalls.every(call =>
     call.args.includes('--namespace') && call.args[call.args.indexOf('--namespace') + 1] === 'agentweaver'), true);
+  const missingMapRead = fixture.apiCalls.find(call =>
+    call.args.includes('--ignore-not-found') && call.args[call.args.indexOf('get') + 1] === 'configmaps');
+  assert.equal(missingMapRead.settings.allowEmptyJson, true);
   assert.equal(fixture.rolloutOptions.timeout, 190_000);
+});
+
+test('required preflight reads remain strict when kubectl returns empty projected output', async () => {
+  const fixture = createKubectlFixture({ emptyRequiredReadThroughRun: true });
+  fixture.maps.delete('identity-broker-runtime-config-v3');
+  await assert.rejects(activateIdentityBrokerProviderSetup(input, target, fixture.dependencies), error => {
+    assert.equal(error.error, 'identity_broker_provider_activation_partial');
+    assert.equal(error.details.phase, 'preflight');
+    assert.match(error.details.cause, /JSON output could not be safely projected/);
+    return true;
+  });
+  assert.deepEqual(fixture.events, []);
+});
+
+test('preflight errors expose a bounded cause and redact secret-shaped values', async () => {
+  const fixture = createKubectlFixture();
+  const secret = ['a'.repeat(12), 'b'.repeat(12), 'c'.repeat(12)].join('.');
+  const execKubectl = (args, settings) => {
+    if (args.includes('get') && args[args.indexOf('get') + 1] === 'configmaps' &&
+        args[args.indexOf('get') + 2] === 'identity-broker-runtime-config-v3') {
+      throw new Error(`Read failed; ${secret}; ${'x'.repeat(300)}`);
+    }
+    return fixture.dependencies.execKubectl(args, settings);
+  };
+  await assert.rejects(activateIdentityBrokerProviderSetup(input, target, {
+    ...fixture.dependencies, execKubectl,
+  }), error => {
+    assert.equal(error.details.phase, 'preflight');
+    assert.ok(error.details.cause.startsWith('Read failed;'));
+    assert.equal(error.details.cause.length, 256);
+    assert.ok(error.details.cause.includes('[redacted]'));
+    assert.ok(!error.details.cause.includes(secret));
+    return true;
+  });
+  assert.deepEqual(fixture.events, []);
 });
 
 test('a separate target renders, activates, and preserves provider setup from its own values', async () => {

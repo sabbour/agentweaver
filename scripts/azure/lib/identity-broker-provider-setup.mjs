@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { guardAzureTarget } from './guardrails.mjs';
-import { run, runAz } from './exec.mjs';
+import { redact, run, runAz } from './exec.mjs';
 import { assertP0KubernetesPermissions, withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 import { brokerObjectHash } from './identity-broker-runtime.mjs';
 import { parseKustomizeResources } from '../../release/kustomize-runtime.mjs';
@@ -705,11 +705,20 @@ function resultFromReadback(deployment, configMap, expectedMapName, expectedEnv,
   return { generation, replicas };
 }
 
-function activationError(phase, names) {
+function activationError(phase, names, cause) {
+  const details = { phase, resources: names };
+  if (cause !== undefined) details.cause = cause;
   return new IdentityBrokerProviderSetupError('identity_broker_provider_activation_partial', {
-    phase,
-    resources: names,
+    ...details,
   });
+}
+
+function safePreflightCause(error) {
+  const message = redact(error instanceof Error ? error.message : String(error ?? ''));
+  const cause = typeof message === 'string'
+    ? message.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 256)
+    : '';
+  return cause || 'Unknown preflight error';
 }
 
 function currentRolloutReadback(deployment, activeMapName, activeMap) {
@@ -739,6 +748,7 @@ function readWithKubectl(execKubectl, base, resource, name, { optional = false }
     ...RESOURCE_OPTIONS,
     projectJson: value => value,
     preserveProjectedJson: true,
+    allowEmptyJson: optional,
   });
   if (optional && result.status === 0 && !String(result.stdout ?? '').trim()) return undefined;
   return parseResource(result, `${resource}/${name}`, { optional });
@@ -956,7 +966,7 @@ function activateInCluster(plan, base, { execKubectl }, config) {
   } catch (error) {
     if (!writeAttempted) {
       if (error instanceof IdentityBrokerProviderSetupError) throw error;
-      throw activationError('preflight', names);
+      throw activationError('preflight', names, safePreflightCause(error));
     }
     let readback = {};
     try {
@@ -1004,7 +1014,8 @@ export async function activateIdentityBrokerProviderSetup(input, config, depende
     });
   } catch (error) {
     if (error instanceof IdentityBrokerProviderSetupError) throw error;
-    throw activationError('preflight', { configMap: BASE_CONFIG_MAP, deployment: 'identity-broker' });
+    throw activationError('preflight',
+      { configMap: BASE_CONFIG_MAP, deployment: 'identity-broker' }, safePreflightCause(error));
   }
 }
 
