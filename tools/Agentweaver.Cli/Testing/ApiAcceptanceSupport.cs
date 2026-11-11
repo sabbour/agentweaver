@@ -75,8 +75,8 @@ internal static partial class ApiAcceptanceSupport
         ["network-policy-datapath"] = "Cilium policy readback does not prove datapath enforcement, and the source adapter reports DatapathEnforcementVerified=false.",
         ["sandbox-owner-lifecycle"] = "The provider-owned Environment lifecycle and exact native absence/reclaim receipts are not exposed by the admitted Gateway clients.",
         ["agenthost-image-readiness"] = "No exact provider-owned Host Pod, readiness-phase receipt, or installed positive phase-budget set is available through the admitted surface clients.",
-        ["numeric-copilot-dispatch-boundaries"] = "A usage read is not an at/beyond-boundary dispatch probe; Gateway has no dispatch route for the admitted harness client, and no live boundary receipt exists.",
-        ["checkpoint-restart-duplicate-fence"] = "The duplicate-fence probe needs a Host replacement with a fresh lease and retained workspace; no verified old/new lease and duplicate-fence receipts exist.",
+        ["numeric-copilot-dispatch-boundaries"] = "No source-owned producer proves every configured numeric boundary, the no-send and admitted-turn outcomes, and the warning and floor-advance checks.",
+        ["checkpoint-restart-duplicate-fence"] = "No source-owned producer proves restart across gate-join checkpoints with old and new leases, native cursors, a dispatch fence, and side-effect receipts.",
     };
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -824,7 +824,7 @@ internal static partial class ApiAcceptanceSupport
         Dictionary<string, JsonObject> native = [];
         foreach (JsonObject probe in suppliedNativeProbes)
         {
-            native[GetString(probe, "id") ?? ""] = CloneObject(probe);
+            native[GetString(probe, "id") ?? ""] = BlockUnprovenNativePass(probe);
         }
         foreach (string name in NativeProbeNames)
         {
@@ -1098,6 +1098,21 @@ internal static partial class ApiAcceptanceSupport
         return (JsonObject)Redact(setup)!;
     }
 
+    private static JsonObject BlockUnprovenNativePass(JsonObject probe)
+    {
+        JsonObject result = CloneObject(probe);
+        string? id = GetString(result, "id");
+        if (GetString(result, "status") != "passed"
+            || id is not ("numeric-copilot-dispatch-boundaries" or "checkpoint-restart-duplicate-fence"))
+        {
+            return result;
+        }
+
+        result["status"] = "blocked";
+        result["reason"] = $"{NativeProbeReasons[id]} An imported pass claim is not accepted.";
+        return result;
+    }
+
     public static JsonObject CreateNativeProbeEnvelope(JsonObject envelope)
     {
         string canonical = CanonicalJson(envelope);
@@ -1124,7 +1139,7 @@ internal static partial class ApiAcceptanceSupport
             foreach (JsonObject probe in probes.Cast<JsonObject>())
             {
                 string name = GetString(probe, "name")!;
-                rows.Add(new JsonObject
+                rows.Add(BlockUnprovenNativePass(new JsonObject
                 {
                     ["id"] = name,
                     ["required"] = true,
@@ -1135,7 +1150,7 @@ internal static partial class ApiAcceptanceSupport
                     ["code"] = GetString(probe, "code"),
                     ["evidence"] = Redact(probe["evidence"]),
                     ["cleanup"] = Redact(probe["cleanup"]),
-                });
+                }));
             }
         }
         return rows;

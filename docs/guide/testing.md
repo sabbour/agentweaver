@@ -429,6 +429,19 @@ do not prove a deployed numeric boundary, restart recovery, or duplicate-send
 prevention. Child pre-dispatch and in-turn tool denials remain explicitly
 partial.
 
+The native CLI runner does not yet produce source-owned proof for every
+configured numeric boundary, the no-send and admitted-turn outcomes, the
+warning and floor-advance checks, or restart across gate-join checkpoints. It
+keeps imported pass claims for these probes blocked. Run the focused CLI
+regression tests with:
+
+```powershell
+dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --filter FullyQualifiedName~ApiAcceptanceNativeProbeTests
+```
+
+These controlled tests check status aggregation and evidence preservation. They
+do not produce live acceptance evidence.
+
 ## Run focused database checks
 
 Run the run-start readiness and authority regressions against disposable

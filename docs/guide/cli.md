@@ -594,9 +594,12 @@ invocation or reuse the cleaned project/run while cleanup is unresolved. After
 successful cleanup or reconciliation, a new attempt uses
 `--interactive`, a new invocation identity, and a new evidence path. Native
 probe evidence is not fabricated or dispatched by this CLI, so the overall
-acceptance can remain blocked even when its API surface passes. The CLI does
-not create or require a second Broker account. Missing independent native
-probes can still keep the overall acceptance blocked.
+acceptance can remain blocked even when its API surface passes. Imported
+`numeric-copilot-dispatch-boundaries` and
+`checkpoint-restart-duplicate-fence` pass claims remain blocked until the
+runner can verify source-owned proof for those probes. The CLI does not create
+or require a second Broker account. Missing independent native probes can also
+keep the overall acceptance blocked.
 
 ### Run the full-flow delivery journey
 
