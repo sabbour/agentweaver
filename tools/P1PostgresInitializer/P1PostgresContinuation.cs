@@ -174,7 +174,9 @@ internal static class P1PostgresContinuation
     internal static async Task MigrateProjectsConfigAsDedicatedOwnerAsync(
         NpgsqlConnection connection,
         ServicePlan service,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? grantConnectDatabase = null,
+        string? operatorName = null)
     {
         if (service.Service != "projects-config")
             throw new InvalidOperationException("Only Projects & Config uses the dedicated migration owner.");
@@ -229,7 +231,84 @@ internal static class P1PostgresContinuation
             if (await membership.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
                 throw new InvalidOperationException("Projects migration-owner membership changed unexpectedly.");
         }
+        if (grantConnectDatabase is not null && operatorName is not null)
+            await GrantProjectsMigrationConnectAsync(
+                connection, transaction, grantConnectDatabase, operatorName, cancellationToken).ConfigureAwait(false);
+        else if (grantConnectDatabase is not null || operatorName is not null)
+            throw new InvalidOperationException("The exact operator and database are required for the Projects CONNECT grant.");
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Grants only database CONNECT to the Projects migration owner after checking its exact target and ACL.</summary>
+    internal static async Task<bool> GrantProjectsMigrationConnectAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string expectedDatabase,
+        string expectedOperator,
+        CancellationToken cancellationToken)
+    {
+        var ownerOid = await ReadRoleOidAsync(
+            connection, ProjectsConfigMigrationOwner, cancellationToken, transaction).ConfigureAwait(false);
+        uint grantorOid;
+        await using (var identity = new NpgsqlCommand("""
+            SELECT CASE WHEN r.rolsuper OR d.datdba = r.oid
+                     THEN d.datdba ELSE r.oid END,
+                   current_user = @operator AND current_database() = @database
+                     AND EXISTS (
+                       SELECT 1 FROM pg_catalog.pg_namespace
+                       WHERE nspname = @schema AND nspowner = @owner_oid)
+                     AND EXISTS (
+                       SELECT 1 FROM pg_catalog.pg_roles
+                       WHERE oid = @owner_oid AND rolcanlogin AND NOT rolsuper
+                         AND NOT rolcreatedb AND NOT rolcreaterole
+                         AND NOT rolreplication AND NOT rolbypassrls)
+                     AND NOT pg_catalog.has_database_privilege(
+                       @owner_oid, current_database(), 'CREATE')
+                     AND NOT EXISTS (
+                       SELECT 1 FROM pg_catalog.pg_auth_members WHERE member = @owner_oid)
+            FROM pg_catalog.pg_roles r
+            JOIN pg_catalog.pg_database d ON d.datname = current_database()
+            WHERE r.rolname = current_user
+            """, connection, transaction))
+        {
+            identity.Parameters.AddWithValue("database", expectedDatabase);
+            identity.Parameters.AddWithValue("operator", expectedOperator);
+            identity.Parameters.AddWithValue("schema", "projects_config");
+            identity.Parameters.AddWithValue("owner_oid", NpgsqlDbType.Oid, ownerOid);
+            await using var reader = await identity.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) || !reader.GetBoolean(1))
+                throw new InvalidOperationException(
+                    "The Projects migration role does not own the Projects schema on the exact target database.");
+            grantorOid = reader.GetFieldValue<uint>(0);
+        }
+
+        var expectedGrant = new AclGrant(grantorOid, ownerOid, "CONNECT", false);
+        var grants = await ReadProjectsMigrationDatabaseGrantsAsync(
+            connection, transaction, ownerOid, cancellationToken).ConfigureAwait(false);
+        var changed = grants.Length == 0;
+        if (changed)
+        {
+            await ExecuteAsync(connection, transaction,
+                $"GRANT CONNECT ON DATABASE {InitializerChecks.Quote(expectedDatabase)} TO {InitializerChecks.Quote(ProjectsConfigMigrationOwner)}",
+                cancellationToken).ConfigureAwait(false);
+        }
+        else if (!grants.SequenceEqual([expectedGrant]))
+        {
+            throw new InvalidOperationException(
+                "The Projects migration role has database privileges other than the exact CONNECT grant. Reconcile them manually.");
+        }
+
+        var readback = await ReadProjectsMigrationDatabaseGrantsAsync(
+            connection, transaction, ownerOid, cancellationToken).ConfigureAwait(false);
+        await using var effective = new NpgsqlCommand(
+            "SELECT pg_catalog.has_database_privilege(@owner, current_database(), 'CONNECT')",
+            connection, transaction);
+        effective.Parameters.AddWithValue("owner", ProjectsConfigMigrationOwner);
+        if (!readback.SequenceEqual([expectedGrant]) ||
+            await effective.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+            throw new InvalidOperationException(
+                "The Projects migration database CONNECT grant did not pass its exact ACL and effective-privilege readback.");
+        return changed;
     }
 
     /// <summary>Creates and verifies only the missing service schemas after rechecking the existing prefix.</summary>
@@ -594,15 +673,40 @@ internal static class P1PostgresContinuation
     private static async Task<uint> ReadRoleOidAsync(
         NpgsqlConnection connection,
         string role,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        NpgsqlTransaction? transaction = null)
     {
         await using var command = new NpgsqlCommand(
-            "SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @role", connection);
+            "SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @role", connection, transaction);
         command.Parameters.AddWithValue("role", role);
         var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return result is uint oid
             ? oid
             : throw new InvalidOperationException($"The dedicated Projects & Config migration owner {role} is missing.");
+    }
+
+    private static async Task<AclGrant[]> ReadProjectsMigrationDatabaseGrantsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        uint ownerOid,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("""
+            SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                'grantor', a.grantor, 'grantee', a.grantee,
+                'privilege', a.privilege_type, 'grantable', a.is_grantable)
+                ORDER BY a.grantor, a.grantee, a.privilege_type, a.is_grantable), '[]'::jsonb)::text
+            FROM pg_catalog.pg_database d
+            CROSS JOIN LATERAL pg_catalog.aclexplode(
+                COALESCE(d.datacl, pg_catalog.acldefault('d', d.datdba))) a
+            WHERE d.datname = pg_catalog.current_database() AND a.grantee = @owner_oid
+            """, connection, transaction);
+        command.Parameters.AddWithValue("owner_oid", NpgsqlDbType.Oid, ownerOid);
+        var json = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string
+            ?? throw new InvalidOperationException("The Projects migration database ACL could not be read.");
+        return JsonSerializer.Deserialize<AclGrant[]>(json,
+                   new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+               ?? throw new InvalidOperationException("The Projects migration database ACL is missing.");
     }
 
     /// <summary>Checks every planned function grant for each runtime role.</summary>

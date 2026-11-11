@@ -173,6 +173,43 @@ test('P1 PostgreSQL pending continuation requires explicit maxima and receipts o
   }
 });
 
+/** CONNECT repair targets an initialized separate target without a Core merge or migration maxima. */
+test('P1 PostgreSQL Projects CONNECT repair is bounded to a separate target', async () => {
+  const principal = 'e'.repeat(8) + '-eeee-4eee-8eee-' + 'e'.repeat(12);
+  let input;
+  const result = await bootstrapP1Postgres({
+    repoRoot, resourceGroup: 'awwus2np01', execute: true, mode: 'repair-projects-config-connect',
+  }, {
+    sourceResolver: () => source,
+    targetGuard: () => ({
+      group: { tags: { 'agentweaver:owner': source.owner, 'agentweaver:cost-center': source.costCenter } },
+      execAz(args) {
+        assert.deepEqual(args.slice(0, 6), ['identity', 'show', '--resource-group', 'awwus2np01',
+          '--name', 'awwus2np01-id-projects-config-migration']);
+        return { status: 0, stdout: `${principal}\n`, stderr: '' };
+      },
+    }),
+    readPostgresValues: () => metadata(),
+    async initializePostgres(value) { input = value; return { database: 'agentweaver' }; },
+  });
+
+  assert.equal(result.mode, 'repair-projects-config-connect');
+  assert.equal(input.verifyOnly, true);
+  assert.deepEqual(Object.fromEntries(Object.entries(input.p1Initializer)
+    .filter(([key]) => key !== 'receiptPath')), {
+    mode: 'repair-projects-config-connect',
+    sourceSha: source.sha,
+    installTarget: 'awwus2np01',
+    projectsConfigMigrationPrincipalObjectId: principal,
+    planSha256: p1PostgresPlanHash(buildP1PostgresPlan('awwus2np01')),
+  });
+  assert.equal(dirname(input.p1Initializer.receiptPath), resolve(repoRoot, 'Temp'));
+  await assert.rejects(bootstrapP1Postgres({
+    repoRoot, execute: true, mode: 'repair-projects-config-connect',
+  }, { sourceResolver() { assert.fail('Default-target repair must fail before source lookup.'); } }),
+  /separate target/);
+});
+
 /** Partial or contradictory mode inputs fail before any source or Azure lookup. */
 test('P1 PostgreSQL modes reject missing maxima, stray maxima, and inspection merge SHAs', async () => {
   const fail = { sourceResolver() { assert.fail('Invalid input must fail first.'); } };
@@ -181,17 +218,27 @@ test('P1 PostgreSQL modes reject missing maxima, stray maxima, and inspection me
   await assert.rejects(bootstrapP1Postgres({ repoRoot, coreMergeSha, maxCoreVersion: 23, maxEventsVersion: 9 }, fail),
     /explicit maximum Core and Events versions/);
   await assert.rejects(bootstrapP1Postgres({ repoRoot, coreMergeSha, mode: 'inspect' }, fail),
-    /inspection takes none/);
+    /inspection and Projects CONNECT repair take none/);
   await assert.rejects(bootstrapP1Postgres({ repoRoot, coreMergeSha, mode: 'reset' }, fail),
     /supported mode/);
+  await assert.rejects(bootstrapP1Postgres({
+    repoRoot, coreMergeSha, mode: 'repair-projects-config-connect',
+  }, fail), /take none/);
   await assert.rejects(bootstrapP1Postgres({ repoRoot, mode: 'projects-config-grants' }, fail),
     /supported mode/);
   assert.equal(p1PostgresMode({ inspect: true }), 'inspect');
   assert.equal(p1PostgresMode({ 'apply-pending-migrations': true, 'dry-run': true }), 'apply-pending-dry-run');
   assert.equal(p1PostgresMode({ 'apply-pending-migrations': true }), 'apply-pending');
+  assert.equal(p1PostgresMode({ 'repair-projects-config-connect': true }), 'repair-projects-config-connect');
   assert.equal(p1PostgresMode({}), 'initialize');
   assert.throws(() => p1PostgresMode({ 'dry-run': true }), /--dry-run applies only/);
   assert.throws(() => p1PostgresMode({ inspect: true, 'apply-pending-migrations': true }), /only one of/);
+  assert.throws(() => p1PostgresMode({
+    inspect: true, 'repair-projects-config-connect': true,
+  }), /only one of/);
+  assert.throws(() => p1PostgresMode({
+    'repair-projects-config-connect': true, 'dry-run': true,
+  }), /does not apply/);
   assert.throws(() => p1PostgresMode({ inspect: true, 'dry-run': true }), /does not apply to --inspect/);
 });
 /** A separate target initializes only, with its own plan and its Projects migration principal. */

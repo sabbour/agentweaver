@@ -36,6 +36,9 @@ var freshMode = args.Length == 9 && args[0] == "--initialize" &&
 // Inspection is read-only and needs no Core merge or receipt.
 var inspectMode = args.Length == 5 && args[0] == "--inspect" &&
     args[1] == "--source-sha" && args[3] == "--plan-sha256";
+// This repair is limited to the separate-target Projects migration role's database CONNECT grant.
+var repairProjectsConnectMode = args.Length == 7 && args[0] == "--repair-projects-config-connect" &&
+    args[1] == "--source-sha" && args[3] == "--plan-sha256" && args[5] == "--receipt";
 // Incremental continuation of an already initialized database: --dry-run writes nothing; --receipt applies.
 var pendingMode = (args.Length == 12 || args.Length == 13) && args[0] == "--apply-pending-migrations" &&
     args[1] == "--source-sha" && args[3] == "--core-merge-sha" && args[5] == "--plan-sha256" &&
@@ -44,20 +47,21 @@ var pendingMode = (args.Length == 12 || args.Length == 13) && args[0] == "--appl
 // Each mode accepts one exact argument shape. Positional checks keep a typo from silently selecting
 // a different mode. The 12-argument pending form ends with --dry-run, so it is read-only too.
 var readOnlyMode = inspectMode || (pendingMode && args.Length == 12);
-if (!freshMode && !continuationMode && !inspectMode && !pendingMode)
+if (!freshMode && !continuationMode && !inspectMode && !repairProjectsConnectMode && !pendingMode)
     throw new ArgumentException(
-        "Use --plan; --inspect --source-sha SHA --plan-sha256 SHA256; --apply-pending-migrations --source-sha SHA --core-merge-sha SHA --plan-sha256 SHA256 --max-core-version N --max-events-version N (--dry-run | --receipt PATH); --initialize --source-sha SHA --core-merge-sha SHA --plan-sha256 SHA256 --receipt PATH; or the reviewed --continue-after-projects-config mode with its prior source, plan, and receipt hashes.");
+        "Use --plan; --inspect --source-sha SHA --plan-sha256 SHA256; --repair-projects-config-connect --source-sha SHA --plan-sha256 SHA256 --receipt PATH; --apply-pending-migrations --source-sha SHA --core-merge-sha SHA --plan-sha256 SHA256 --max-core-version N --max-events-version N (--dry-run | --receipt PATH); --initialize --source-sha SHA --core-merge-sha SHA --plan-sha256 SHA256 --receipt PATH; or the reviewed --continue-after-projects-config mode with its prior source, plan, and receipt hashes.");
 
 // Argument positions differ by mode. Inspection has no Core merge, so its plan hash sits at index 4.
 // Only writing modes get a receipt path; read-only runs leave receiptArgument null.
 var sourceSha = args[2];
-var coreMergeSha = inspectMode ? null : args[4];
-var expectedPlanHash = inspectMode ? args[4] : args[6];
+var coreMergeSha = inspectMode || repairProjectsConnectMode ? null : args[4];
+var expectedPlanHash = inspectMode || repairProjectsConnectMode ? args[4] : args[6];
 var priorSourceSha = continuationMode ? args[8] : null;
 var priorPlanHash = continuationMode ? args[10] : null;
 var priorReceiptArgument = continuationMode ? args[12] : null;
 var priorReceiptHash = continuationMode ? args[14] : null;
-var receiptArgument = continuationMode ? args[16] : freshMode ? args[8] : pendingMode && !readOnlyMode ? args[12] : null;
+var receiptArgument = continuationMode ? args[16] : freshMode ? args[8] :
+    repairProjectsConnectMode ? args[6] : pendingMode && !readOnlyMode ? args[12] : null;
 int? maxCoreVersion = pendingMode ? ParseVersion(args[8]) : null;
 int? maxEventsVersion = pendingMode ? ParseVersion(args[10]) : null;
 if (!Regex.IsMatch(sourceSha, "^[0-9a-f]{40}$") ||
@@ -72,7 +76,7 @@ var worktreeStatus = await RunLocalAsync("git", ["status", "--porcelain", "--unt
 var statusEntries = worktreeStatus.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 // Fresh initialization needs a fully clean checkout. Later modes may also see receipts that earlier
 // runs left under Temp/, so untracked files there are allowed. Any other change is rejected.
-var invalidStatus = continuationMode || inspectMode || pendingMode
+var invalidStatus = continuationMode || inspectMode || repairProjectsConnectMode || pendingMode
     ? statusEntries.Any(line => !line.StartsWith("?? Temp/", StringComparison.Ordinal) &&
         !line.StartsWith("?? Temp\\", StringComparison.Ordinal))
     : statusEntries.Length != 0;
@@ -102,6 +106,20 @@ var plan = JsonSerializer.Deserialize<PostgresPlan>(planJson, new JsonSerializer
 {
     PropertyNameCaseInsensitive = true,
 }) ?? throw new InvalidOperationException("The exact source plan is missing.");
+var installTarget = Environment.GetEnvironmentVariable("AGENTWEAVER_INSTALL_TARGET") ?? "agentweaver";
+if (plan.Target.ResourceGroup != installTarget)
+    throw new InvalidOperationException("The source plan does not match the selected install target.");
+if (repairProjectsConnectMode &&
+    (installTarget == "agentweaver" || plan.Target.Database != "agentweaver" ||
+     !Guid.TryParseExact(Environment.GetEnvironmentVariable(
+         "P1Initializer__ProjectsConfigMigrationPrincipalObjectId"), "D", out _)))
+    throw new InvalidOperationException(
+        "Projects CONNECT repair requires a registered separate target and its exact migration principal object ID.");
+if (freshMode && installTarget != "agentweaver" &&
+    !Guid.TryParseExact(Environment.GetEnvironmentVariable(
+        "P1Initializer__ProjectsConfigMigrationPrincipalObjectId"), "D", out _))
+    throw new InvalidOperationException(
+        "Separate-target initialization requires its exact Projects migration principal object ID.");
 // The plan catalog, not pinned source text, defines the versions; it must equal what the compiled migrators would apply.
 // The migrators always apply every missing version they know. So when a maximum is given, it must
 // be the last catalog version. A source that contains a newer migration then stops here, before any
@@ -242,6 +260,7 @@ try
                 throw new InvalidOperationException("The read-only session setting was not accepted. No reads or writes were attempted.");
         }
     }
+    uint? projectsMigrationRoleOid = null;
     if (freshMode)
     {
         // Only fresh initialization requires an empty target. The other modes expect the roles and
@@ -259,9 +278,14 @@ try
         // A separate install target has no Projects migration role yet; the installer passes its object ID.
         var projectsMigrationObjectId = Environment.GetEnvironmentVariable(
             "P1Initializer__ProjectsConfigMigrationPrincipalObjectId");
-        if (!string.IsNullOrEmpty(projectsMigrationObjectId))
-            await EnsureProjectsMigrationPrincipalAsync(
-                principalConnection, projectsMigrationObjectId, plan.Target.TenantId, cancellationToken);
+        if (installTarget != "agentweaver")
+            projectsMigrationRoleOid = await EnsureProjectsMigrationPrincipalAsync(
+                principalConnection, projectsMigrationObjectId!, plan.Target.TenantId,
+                createIfMissing: true, cancellationToken: cancellationToken);
+        else if (!string.IsNullOrEmpty(projectsMigrationObjectId))
+            _ = await EnsureProjectsMigrationPrincipalAsync(
+                principalConnection, projectsMigrationObjectId, plan.Target.TenantId,
+                createIfMissing: true, cancellationToken: cancellationToken);
         await P1PostgresContinuation.AssertProjectsMigrationOwnerReadyAsync(
             connection, plan.Target.OperatorName, cancellationToken);
     }
@@ -269,6 +293,27 @@ try
     var operatorOid = await ReadJsonAsync<uint>(connection, null,
         "SELECT to_jsonb(oid::bigint)::text FROM pg_catalog.pg_roles WHERE rolname = current_user", cancellationToken);
     RuntimePrincipal[] principals = [];
+
+    if (repairProjectsConnectMode)
+    {
+        projectsMigrationRoleOid = await EnsureProjectsMigrationPrincipalAsync(
+            principalConnection,
+            Environment.GetEnvironmentVariable("P1Initializer__ProjectsConfigMigrationPrincipalObjectId")!,
+            plan.Target.TenantId,
+            createIfMissing: false,
+            cancellationToken: cancellationToken);
+        await RecordAsync("projects_config_connect_repair_begin");
+        await using var grant = await connection.BeginTransactionAsync(cancellationToken);
+        var changed = await P1PostgresContinuation.GrantProjectsMigrationConnectAsync(
+            connection, grant, plan.Target.Database, plan.Target.OperatorName, cancellationToken);
+        var after = await ReadExistingBoundaryAsync(connection, grant, plan, cancellationToken);
+        InitializerChecks.AssertBoundary(existingBoundary, after,
+            changed ? [projectsMigrationRoleOid.Value] : []);
+        await grant.CommitAsync(cancellationToken);
+        await RecordAsync("projects_config_connect_repair_committed");
+        Console.WriteLine("P1_POSTGRES_PROJECTS_CONFIG_CONNECT_REPAIRED database=agentweaver");
+        return 0;
+    }
 
     if (inspectMode)
     {
@@ -670,7 +715,9 @@ try
         if (projectsConfig)
         {
             await P1PostgresContinuation.MigrateProjectsConfigAsDedicatedOwnerAsync(
-                connection, service, cancellationToken);
+                connection, service, cancellationToken,
+                projectsMigrationRoleOid is null ? null : plan.Target.Database,
+                projectsMigrationRoleOid is null ? null : plan.Target.OperatorName);
             await RecordAsync($"{service.Service}:schema_created");
             await RecordAsync($"{service.Service}:migrated");
             await P1PostgresContinuation.AssertOwnedObjectsAsync(
@@ -708,9 +755,12 @@ try
             }
         }
         var runtimeOid = principals.Single(item => item.Role == service.Role).Oid;
+        uint[] allowedDatabaseConnectRoles = projectsMigrationRoleOid is uint projectsOid
+            ? [.. connectedRoles, runtimeOid, projectsOid]
+            : [.. connectedRoles, runtimeOid];
         InitializerChecks.AssertBoundary(existingBoundary,
             await ReadExistingBoundaryAsync(connection, grants, plan, cancellationToken),
-            [.. connectedRoles, runtimeOid]);
+            allowedDatabaseConnectRoles);
         if (!projectsConfig)
         {
             await AssertFunctionGrantsAsync(connection, grants, service, operatorOid, runtimeOid, cancellationToken);
@@ -836,8 +886,8 @@ static JsonNode? ToNode<T>(T? value) where T : class => value is null ? null : J
 
 // Creates the Projects migration Entra role on a fresh separate target when it is missing. Created or not,
 // the role must map to exactly the expected service principal, so a stale mapping is never adopted.
-static async Task EnsureProjectsMigrationPrincipalAsync(NpgsqlConnection connection, string objectId,
-    string tenantId, CancellationToken cancellationToken)
+static async Task<uint> EnsureProjectsMigrationPrincipalAsync(NpgsqlConnection connection, string objectId,
+    string tenantId, bool createIfMissing, CancellationToken cancellationToken)
 {
     if (!Guid.TryParseExact(objectId, "D", out _))
         throw new InvalidOperationException("The Projects migration principal object ID must be a GUID.");
@@ -848,6 +898,9 @@ static async Task EnsureProjectsMigrationPrincipalAsync(NpgsqlConnection connect
         exists.Parameters.AddWithValue("owner", owner);
         if (await exists.ExecuteScalarAsync(cancellationToken) is not true)
         {
+            if (!createIfMissing)
+                throw new InvalidOperationException(
+                    "The existing Projects migration role is missing. Run db:maintenance:setup before repair.");
             await using var create = new NpgsqlCommand(
                 "SELECT pg_catalog.pgaadauth_create_principal_with_oid(@role, @object, 'service', false, false)",
                 connection);
@@ -870,6 +923,12 @@ static async Task EnsureProjectsMigrationPrincipalAsync(NpgsqlConnection connect
     if (await mapping.ExecuteScalarAsync(cancellationToken) is not true)
         throw new InvalidOperationException(
             "The Projects migration role does not map to exactly the expected service principal. Reconcile it manually.");
+    await using var roleOid = new NpgsqlCommand(
+        "SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @owner", connection);
+    roleOid.Parameters.AddWithValue("owner", owner);
+    return await roleOid.ExecuteScalarAsync(cancellationToken) is uint oid
+        ? oid
+        : throw new InvalidOperationException("The Projects migration role is missing.");
 }
 
 // Executes one command in the transaction selected by the caller.
