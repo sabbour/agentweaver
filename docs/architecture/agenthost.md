@@ -270,6 +270,15 @@ server-owned pin for the exact selected reference, source mode, and effort; it k
 distinct from any accepted pin. A supplied accepted pin must agree with the selected effort, and
 BYOK still requires that accepted pin. AgentHost rejects a changed accepted pin before it starts
 the SDK client.
+The resolver also has a per-run path for a trusted `ModelProviderBindingRevision` carried with
+an accepted BYOK selection. It requires the provider revision and configuration hash, provider
+type, deployment/model ID, and reasoning effort to match the run pin. It also requires the
+provider's credential version to match the exact `SecretRef` in the selection. This path builds
+the provider binding from that revision and does not fall back to the deployment map or redeem a
+credential. A mismatch fails closed. The path uses the supplied selection for each call, so it
+does not require a host restart. The active selection writer does not yet supply runtime provider
+revisions; this consumer does not enable runtime provider selection by itself. Existing
+deploy-time bindings remain supported.
 Disabled bindings and source-mode mismatches deny; BYOK cannot become hosted through a fallback.
 Before session creation or resume, the host verifies the selected effort against the exact hosted
 catalog capability and supported-effort list. BYOK requires an explicit supported-effort list in

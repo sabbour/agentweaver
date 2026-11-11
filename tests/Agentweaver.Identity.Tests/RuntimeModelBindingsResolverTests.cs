@@ -121,6 +121,88 @@ public sealed class RuntimeModelBindingsResolverTests
     }
 
     [Fact]
+    public void ResolvesTheExactAcceptedRuntimeProviderRevision()
+    {
+        var binding = RuntimeProviderBinding(new string('a', 64));
+        var selection = RuntimeProviderSelection(binding);
+
+        var resolved = Resolver().ResolveAcceptedRuntimeBinding(selection, binding);
+
+        Assert.Equal("runtime-deployment", resolved.ModelId);
+        Assert.Equal(ModelSourceMode.Byok, resolved.SourceMode);
+        Assert.Equal(new RuntimeByokProvider("azure", new Uri("https://example.openai.azure.com"),
+                "responses", "2025-04-01-preview"), resolved.Provider);
+        Assert.Equal(8000, resolved.PromptCapacityTokens);
+        Assert.Equal(["low", "high"], resolved.SupportedReasoningEfforts.ToArray());
+        Assert.Equal("runtime-key", selection.CredentialReference!.Id);
+        Assert.Equal("fedcba9876543210fedcba9876543210", selection.CredentialReference.Version);
+    }
+
+    [Theory]
+    [InlineData("hash")]
+    [InlineData("revision")]
+    public void RejectsRuntimeProviderPinMismatches(string field)
+    {
+        var binding = RuntimeProviderBinding(new string('a', 64));
+        var selection = RuntimeProviderSelection(binding);
+        var pin = selection.ModelBindingPin!;
+        pin = field switch
+        {
+                "hash" => pin with { ConfigurationHash = new string('b', 64) },
+                _ => pin with { ConfigurationRevision = "4" }
+        };
+        selection = selection with { ModelBindingPin = pin };
+
+        Assert.Equal("runtime_model_binding_pin_mismatch",
+                Assert.Throws<RuntimeAuthorizationException>(() =>
+                    Resolver().ResolveAcceptedRuntimeBinding(selection, binding)).Code);
+    }
+
+    [Fact]
+    public void RejectsRuntimeProviderEffortNotSupportedByThePinnedRevision()
+    {
+        var binding = RuntimeProviderBinding(new string('a', 64));
+        var selection = RuntimeProviderSelection(binding);
+        selection = selection with
+        {
+            ReasoningEffort = "medium",
+            ModelBindingPin = selection.ModelBindingPin! with { ReasoningEffort = "medium" }
+        };
+
+        Assert.Equal("runtime_model_binding_pin_mismatch",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                    Resolver().ResolveAcceptedRuntimeBinding(selection, binding)).Code);
+    }
+
+    [Fact]
+    public void RejectsRuntimeCredentialMismatchWithoutFallingBackToDeploymentBinding()
+    {
+        const string reference = "runtime-provider";
+        var deploymentResolver = new RuntimeModelBindingsResolver("3",
+                new Dictionary<string, RuntimeModelBinding>
+                {
+                    [reference] = new RuntimeModelBinding("runtime-deployment", ModelSourceMode.Byok,
+                        new RuntimeByokProvider("azure", new Uri("https://example.openai.azure.com"),
+                            "responses", "2025-04-01-preview"))
+                    {
+                        PromptCapacityTokens = 8000,
+                        SupportedReasoningEfforts = ["low", "high"]
+                    }
+                });
+        var binding = RuntimeProviderBinding(deploymentResolver.ConfigurationHash);
+        var selection = RuntimeProviderSelection(binding) with
+        {
+                CredentialReference = new SecretRef("runtime-key", "0123456789abcdef0123456789abcdef")
+        };
+
+        Assert.Equal("runtime_model_binding_pin_mismatch",
+                Assert.Throws<RuntimeAuthorizationException>(() =>
+                    deploymentResolver.ResolveAcceptedRuntimeBinding(selection, binding)).Code);
+        Assert.Equal("runtime-deployment", deploymentResolver.Resolve(
+                reference, ModelSourceMode.Byok, selection.ModelBindingPin).ModelId);
+    }
+
+    [Fact]
     public void NewHostedCopilotModelsCanBeEnabledByChangingTheConfiguredBinding()
     {
         // Stable references can target new SDK-listed model IDs without a compiled model catalog.
@@ -442,6 +524,44 @@ public sealed class RuntimeModelBindingsResolverTests
         {
             ["accepted-reference"] = new("concrete-model", ModelSourceMode.HostedCopilot)
         });
+
+    private static ModelProviderBindingRevision RuntimeProviderBinding(string configurationHash) =>
+        new(ModelProviderBindingRevision.CurrentContractVersion,
+            "runtime-provider",
+            ModelProviderBindingScope.Project,
+            "project-1",
+            "Runtime provider",
+            "azure",
+            "https://example.openai.azure.com",
+            "runtime-deployment",
+            "responses",
+            "2025-04-01-preview",
+            ["low", "high"],
+            8000,
+            3,
+            "fedcba9876543210fedcba9876543210",
+            "rate-card-v1",
+            1,
+            configurationHash);
+
+    private static RuntimeAcceptedModelSelection RuntimeProviderSelection(
+        ModelProviderBindingRevision binding) =>
+        new(binding.ProviderId, ModelSourceMode.Byok,
+            new SecretRef("runtime-key", binding.CredentialVersion!), null, null)
+        {
+            ReasoningEffort = "low",
+            ModelBindingPin = new RuntimeModelBindingPin(
+                1,
+                binding.ProviderId,
+                binding.Deployment,
+                ModelSourceMode.Byok,
+                binding.ProviderRevision.ToString(),
+                binding.ConfigurationHash,
+                "low")
+            {
+                ProviderType = binding.ProviderType
+            }
+        };
 
     private static RuntimeByokProvider ByokProvider(KeyValuePair<string, string>[] headers) =>
         new("openai", new Uri("https://byok.test/v1"))
