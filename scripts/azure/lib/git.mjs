@@ -143,6 +143,16 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   if (scope === 'infrastructure-only') {
     nodePoolBounds = assertAutoscalerBounds(values);
     keyVaultName = assertApprovedKeyVaultName(resourceGroup, values?.keyVaultName?.value);
+    const byokKeyVaultName = values?.byokKeyVaultName?.value;
+    if (byokKeyVaultName !== undefined && byokKeyVaultName !== '') {
+      assertApprovedKeyVaultName(resourceGroup, byokKeyVaultName);
+      if (!byokKeyVaultName.startsWith(`${resourceGroup}-`)) {
+        throw new Error('BYOK Key Vault name must use the selected target prefix.');
+      }
+      if (byokKeyVaultName.toLowerCase() === keyVaultName.toLowerCase()) {
+        throw new Error('BYOK Key Vault must be separate from the existing keyVaultName.');
+      }
+    }
     monitorLocation = values?.monitorLocation?.value;
     postgresEntraAdminObjectId = values?.postgresEntraAdminObjectId?.value;
     postgresEntraAdminPrincipalName = values?.postgresEntraAdminPrincipalName?.value;

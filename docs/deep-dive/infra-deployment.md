@@ -112,16 +112,21 @@ dedicated resource group and defines:
   identity, Azure role-based access control (RBAC), and
   Cilium networking.
 - Microsoft Entra-only PostgreSQL Flexible Server.
-- RBAC-based Key Vault and private Blob storage with private
-  `platform-artifacts` and `session-material` containers.
+- RBAC-based core Key Vault and private Blob storage with private
+  `platform-artifacts` and `session-material` containers. The optional BYOK
+  Key Vault is separate and uses a private endpoint.
 - Log Analytics, Application Insights, and Azure Monitor Private Link Scope.
 - Private endpoints, DNS links, workload identities, federation, and scoped
   role assignments.
 
-Key Vault and Blob disable public network access. PostgreSQL uses the delegated
+The core Key Vault and Blob disable public network access. A configured BYOK
+Key Vault also disables public network access. PostgreSQL uses the delegated
 private network. Monitor disables public query access while allowing its
-configured ingestion path. The template does not create a workspace Azure
-Files share or install the Agent Sandbox controller.
+configured ingestion path. The `byokKeyVaultName` input adds a separate BYOK
+vault with purge protection and RBAC authorization. The Identity Broker
+workload identity receives Key Vault Secrets Officer on that vault only. The
+core vault permissions remain unchanged. The template does not create a
+workspace Azure Files share or install the Agent Sandbox controller.
 The Foundation Probe has account-scoped Blob data access for its acceptance
 round trip. The Events & Sessions identity receives Storage Blob Data
 Contributor on `session-material` only. The focused repair template can add

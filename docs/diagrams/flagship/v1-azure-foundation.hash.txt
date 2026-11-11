@@ -2,11 +2,11 @@
   "version": 2,
   "source": {
     "file": "v1-azure-foundation.json",
-    "sha256": "02621c51176f94e0d99e6d7888499d544a914340b59d50767e515f575072b43e"
+    "sha256": "9baeb6cead2c14fdc48ed583a1e2100baaef0b7bc67cffade6a0cc4309b34dee"
   },
   "drawio": {
     "file": "v1-azure-foundation.drawio",
-    "sha256": "c7844bc6efe8ecf5549ab05477789bd4d4bedb66535163738b091eb15c8fd10f"
+    "sha256": "3d53fa258f9afe63aa7a343b26b3a5ad65a7115695816886bb7a4992f06610cf"
   },
   "renderer": {
     "renderer": "draw.io Desktop",
@@ -17,6 +17,6 @@
   },
   "png": {
     "file": "v1-azure-foundation.png",
-    "sha256": "cc23bb4c4f33a5b113f1abeca49860ba3456a4c4b33636c0f2f4f821c2cd9769"
+    "sha256": "6ea084280592cb249a36af3a6f00f0c6c826c47264f0d08e3c05508d92afcbe6"
   }
 }

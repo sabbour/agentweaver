@@ -26,6 +26,10 @@ param namePrefix string
 @description('Key Vault name from the reviewed deployment parameter file.')
 param keyVaultName string
 
+@maxLength(24)
+@description('Optional, target-specific BYOK Key Vault name. Leave empty to omit the BYOK vault.')
+param byokKeyVaultName string = ''
+
 @description('Microsoft Entra tenant ID that owns Key Vault and the PostgreSQL administrator.')
 param tenantId string = subscription().tenantId
 
@@ -333,6 +337,20 @@ module identity 'modules/identity.bicep' = {
     storageAccountId: storage.outputs.storageAccountId
     monitorWorkspaceResourceId: monitor.outputs.workspaceId
     appInsightsResourceId: monitor.outputs.appInsightsId
+  }
+}
+
+module byokKeyVault 'modules/keyvault.bicep' = if (!empty(byokKeyVaultName)) {
+  name: '${namePrefix}-byok-keyvault'
+  params: {
+    location: location
+    namePrefix: '${namePrefix}-byok'
+    keyVaultName: byokKeyVaultName
+    tags: tags
+    tenantId: tenantId
+    privateEndpointsSubnetId: network.outputs.privateEndpointsSubnetId
+    privateDnsZoneId: keyVaultPrivateDnsZone.id
+    officerPrincipalId: identity.outputs.identityBrokerRuntimeIdentity.principalObjectId
   }
 }
 

@@ -241,6 +241,27 @@ Key Vault is the Identity Broker's secrets backend; its name and
 The deployment uses that configured name and returns the vault URI for runtime
 configuration.
 
+### Configure the optional BYOK Key Vault
+
+The full-foundation template accepts `byokKeyVaultName`. It defaults to an empty
+value. When the value is empty or absent, the template does not create the BYOK
+vault or its role assignment.
+
+To create a BYOK vault for a target, set this value in the full-foundation
+parameter file selected for that target by `scripts/azure/lib/targets.mjs`.
+Use a globally unique name with 3-24 letters, digits, or hyphens. Do not use
+two hyphens in a row. The name must start with a letter, end with a letter or
+digit, and start with the target's `namePrefix`. It must differ from
+`keyVaultName`. The local input check rejects invalid names, names with another
+target's prefix, and reuse of the core vault name before it calls Azure. Do not
+copy one target's BYOK vault name to another target.
+
+The template creates a second vault with RBAC authorization, purge protection,
+disabled public access, a private endpoint, and the existing private DNS zone.
+It grants Key Vault Secrets Officer to the Identity Broker workload identity
+on this vault only. It does not change the core vault's existing role
+assignments or write a secret value.
+
 Set `monitorLocation` to a region that supports Log Analytics and Application
 Insights. It can match `location` when the foundation resources are also
 available there. The full-foundation template creates its own workspace; it

@@ -1,9 +1,7 @@
-// Dedicated, private Key Vault for the v1 P0 foundation. RBAC-only
-// authorization (no legacy access policies), soft delete and purge
-// protection, and no public network access. Network reachability comes
-// exclusively from the Private Endpoint below: publicNetworkAccess is
-// Disabled, which makes any networkAcls VNet rule a no-op, so this module
-// does not declare one.
+// Dedicated private Key Vault with RBAC-only authorization, soft delete,
+// purge protection, and no public network access. Network reachability comes
+// exclusively from the Private Endpoint below. An optional Secrets Officer
+// assignment is scoped to this vault.
 @description('Azure region for the vault.')
 param location string
 
@@ -25,6 +23,11 @@ param privateEndpointsSubnetId string
 @description('Resource ID of the privatelink.vaultcore.azure.net private DNS zone, linked to the dedicated VNet by the caller.')
 param privateDnsZoneId string
 
+@description('Optional workload identity principal that receives Key Vault Secrets Officer on this vault.')
+param officerPrincipalId string = ''
+
+var keyVaultSecretsOfficerRoleId = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
+
 resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: keyVaultName
   location: location
@@ -44,6 +47,16 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
       defaultAction: 'Deny'
       bypass: 'AzureServices'
     }
+  }
+}
+
+resource secretsOfficerRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(officerPrincipalId)) {
+  name: guid(vault.id, officerPrincipalId, keyVaultSecretsOfficerRoleId)
+  scope: vault
+  properties: {
+    principalId: officerPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsOfficerRoleId)
   }
 }
 

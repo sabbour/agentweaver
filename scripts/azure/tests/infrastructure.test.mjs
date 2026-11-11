@@ -161,6 +161,8 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.equal(template.parameters.monitorLocation.type, 'string');
   assert.equal(template.parameters.keyVaultName.type, 'string');
   assert.equal(Object.hasOwn(template.parameters.keyVaultName, 'defaultValue'), false);
+  assert.equal(template.parameters.byokKeyVaultName.defaultValue, '');
+  assert.equal(template.parameters.byokKeyVaultName.maxLength, 24);
   assert.deepEqual(template.parameters.postgresEntraAdminPrincipalType.allowedValues, [
     'User', 'Group', 'ServicePrincipal',
   ]);
@@ -183,6 +185,41 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   const keyVaultResource = keyVaultDeployment.properties.template.resources.find(resource =>
     resource.type === 'Microsoft.KeyVault/vaults');
   assert.equal(keyVaultResource.name, "[parameters('keyVaultName')]");
+  assert.equal(Object.hasOwn(keyVaultDeployment.properties.parameters, 'officerPrincipalId'), false);
+
+  const byokVaultDeployment = template.resources.find(resource =>
+    resource.name === "[format('{0}-byok-keyvault', parameters('namePrefix'))]");
+  assert.equal(byokVaultDeployment.condition, "[not(empty(parameters('byokKeyVaultName')))]");
+  assert.equal(byokVaultDeployment.properties.parameters.keyVaultName.value, "[parameters('byokKeyVaultName')]");
+  assert.equal(byokVaultDeployment.properties.parameters.namePrefix.value,
+    "[format('{0}-byok', parameters('namePrefix'))]");
+  const byok = byokVaultDeployment.properties.template;
+  const byokVault = byok.resources.find(resource => resource.type === 'Microsoft.KeyVault/vaults');
+  assert.equal(byokVault.properties.enableRbacAuthorization, true);
+  assert.equal(byokVault.properties.enablePurgeProtection, true);
+  assert.equal(byokVault.properties.publicNetworkAccess, 'Disabled');
+  const byokPrivateEndpoint = byok.resources.find(resource => resource.type === 'Microsoft.Network/privateEndpoints');
+  assert.equal(byokPrivateEndpoint.properties.privateLinkServiceConnections[0].properties.privateLinkServiceId,
+    "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]");
+  assert.deepEqual(byokPrivateEndpoint.properties.privateLinkServiceConnections[0].properties.groupIds, ['vault']);
+  assert.match(byokVaultDeployment.properties.parameters.privateEndpointsSubnetId.value, /outputs.privateEndpointsSubnetId.value/);
+  const byokDnsGroup = byok.resources.find(resource =>
+    resource.type === 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups');
+  assert.equal(byokDnsGroup.properties.privateDnsZoneConfigs[0].properties.privateDnsZoneId,
+    "[parameters('privateDnsZoneId')]");
+  const byokRoles = byok.resources.filter(resource => resource.type === 'Microsoft.Authorization/roleAssignments');
+  assert.equal(byokRoles.length, 1);
+  const byokOfficerRole = byokRoles[0];
+  assert.equal(byokOfficerRole.scope,
+    "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]");
+  assert.equal(byokOfficerRole.properties.principalId, "[parameters('officerPrincipalId')]");
+  assert.equal(byokOfficerRole.properties.roleDefinitionId,
+    "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsOfficerRoleId'))]");
+  assert.equal(byokOfficerRole.properties.principalType, 'ServicePrincipal');
+  assert.equal(byok.variables.keyVaultSecretsOfficerRoleId, 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7');
+  assert.match(byokVaultDeployment.properties.parameters.officerPrincipalId.value,
+    /identityBrokerRuntimeIdentity\.value\.principalObjectId/);
+  assert.doesNotMatch(byokVaultDeployment.properties.parameters.officerPrincipalId.value, /clientId/);
   const postgres = postgresDeployment.properties.template;
   const postgresServer = postgres.resources.find(resource =>
     resource.type === 'Microsoft.DBforPostgreSQL/flexibleServers');
@@ -318,6 +355,14 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   const migrationService = configuredServices.find(service => service.name === 'identity-broker-migration');
   assert.equal(runtimeService.needsKeyVault, true);
   assert.equal(runtimeService.needsBlob, false);
+  const coreVaultRoles = identities.resources.filter(resource =>
+    resource.copy?.name === 'keyVaultRoleAssignments');
+  assert.equal(coreVaultRoles.length, 1);
+  assert.equal(coreVaultRoles[0].properties.roleDefinitionId,
+    "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]");
+  assert.equal(coreVaultRoles[0].scope,
+    "[resourceId('Microsoft.KeyVault/vaults', last(split(parameters('keyVaultId'), '/')))]");
+  assert.equal(identities.variables.keyVaultSecretsUserRoleId, '4633458b-17de-408a-b874-0445c86b69e6');
   assert.equal(runtimeService.needsMonitor, false);
   assert.equal(migrationService.needsKeyVault, false);
   assert.equal(migrationService.needsBlob, false);
