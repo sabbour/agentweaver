@@ -34,8 +34,10 @@ internal sealed class EnvironmentRuntimeRunStartManager(
         if (!actor.Bearer.IsUsable())
             throw new RuntimeAuthorizationException("runtime_start_actor_expired");
         var caller = new CurrentCallerRequest(actor.Bearer.GetValue(), actor.TenantSelector);
-        var lifecycleResult = await lifecycle.RegisterCoordinatorRootAsync(
-            actor, owner, cancellationToken).ConfigureAwait(false);
+        var isChild = request.ContractVersion == 2;
+        var lifecycleResult = await (isChild
+            ? lifecycle.RegisterChildStartAsync(actor, owner, cancellationToken)
+            : lifecycle.RegisterCoordinatorRootAsync(actor, owner, cancellationToken)).ConfigureAwait(false);
         var fence = lifecycleResult.Snapshot.Fence;
         if (fence.Owner.EnvironmentId != EnvironmentLifecycleManager.CreateEnvironmentId(
                 owner.TenantId, owner.ProjectId, owner.RunId, RuntimeRunStartKeys.IdempotencyKey(owner)))
@@ -65,13 +67,13 @@ internal sealed class EnvironmentRuntimeRunStartManager(
         if (storageOptions.MaximumCapacityGiB < FirstStartCapacityGiB)
             throw new RuntimeAuthorizationException("runtime_start_workspace_capacity_unavailable");
 
-        var egressResult = await egress.ApplyCoordinatorFirstStartAndVerifyAsync(
-            caller,
-            owner,
-            new ApplyEnvironmentEgressRequest(
-                fence, 1, 0, RuntimeRunStartKeys.IdempotencyKey(owner) + ":network"),
-            cancellationToken,
-            RequireCurrentAsync).ConfigureAwait(false);
+        var networkRequest = new ApplyEnvironmentEgressRequest(
+            fence, 1, 0, RuntimeRunStartKeys.IdempotencyKey(owner) + ":network");
+        var egressResult = await (isChild
+            ? egress.ApplyChildFirstStartAndVerifyAsync(
+                caller, owner, networkRequest, cancellationToken, RequireCurrentAsync)
+            : egress.ApplyCoordinatorFirstStartAndVerifyAsync(
+                caller, owner, networkRequest, cancellationToken, RequireCurrentAsync)).ConfigureAwait(false);
         if (!egressResult.ReadyForDispatch ||
             egressResult.Binding?.AppliedIntentGeneration != 1)
             throw new RuntimeAuthorizationException(
@@ -160,19 +162,19 @@ internal sealed class EnvironmentRuntimeRunStartManager(
             currentVolume.DataGeneration != 0)
             throw new RuntimeAuthorizationException("runtime_start_workspace_unavailable");
 
-        var sandbox = await sandboxes.ProvisionCoordinatorFirstStartAsync(
-            caller,
-            owner,
-            new SandboxProvisionApiRequest(
+        var sandboxRequest = new SandboxProvisionApiRequest(
                 volumeId,
                 currentVolume.ResourceGeneration,
                 currentVolume.DataGeneration,
                 "/workspace",
                 ReadOnly: false,
                 egressResult.Binding.AppliedIntentGeneration,
-                RuntimeRunStartKeys.SandboxIdempotencyKey(owner, request.BootstrapOperationId)),
-            RequireCurrentAsync,
-            cancellationToken).ConfigureAwait(false);
+                RuntimeRunStartKeys.SandboxIdempotencyKey(owner, request.BootstrapOperationId));
+        var sandbox = await (isChild
+            ? sandboxes.ProvisionChildFirstStartAsync(
+                caller, owner, sandboxRequest, RequireCurrentAsync, cancellationToken)
+            : sandboxes.ProvisionCoordinatorFirstStartAsync(
+                caller, owner, sandboxRequest, RequireCurrentAsync, cancellationToken)).ConfigureAwait(false);
         if (sandbox.Resource is null || sandbox.Resource.Seam != ProviderSeam.Sandbox ||
                 sandbox.State != SandboxLeaseState.Active)
                 throw new RuntimeAuthorizationException("runtime_start_sandbox_unavailable");
@@ -392,7 +394,8 @@ internal sealed class EnvironmentRuntimeRunStartManager(
         if (!actor.Bearer.IsUsable())
             throw new RuntimeAuthorizationException("runtime_start_actor_expired");
         var current = await ownerContexts.ReadCleanupAsync(
-            actor, projection.ProjectId, projection.RunId, projection.RootSessionId, cancellationToken)
+            actor, projection.ProjectId, projection.RunId, projection.RootSessionId, cancellationToken,
+            projection.ContractVersion)
             .ConfigureAwait(false);
         projection.ValidateFor(current);
         if (projection.CleanupDisposition == "cleanup_complete")
@@ -431,7 +434,9 @@ internal sealed class EnvironmentRuntimeRunStartManager(
                 placement is not null &&
                 (cleanupAttempt.SandboxOperationId != placement.SandboxOperationId ||
                  cleanupAttempt.ResourceGeneration != placement.SandboxResource.Generation ||
-                 cleanupAttempt.ProviderFencingGeneration != placement.ProviderFencingGeneration))
+                 cleanupAttempt.ProviderFencingGeneration != placement.ProviderFencingGeneration ||
+                 cleanupAttempt.SandboxResource is not null &&
+                    cleanupAttempt.SandboxResource != placement.SandboxResource))
                 throw new RuntimeAuthorizationException("runtime_start_cleanup_attempt_stale");
         }
 
@@ -441,7 +446,8 @@ internal sealed class EnvironmentRuntimeRunStartManager(
             if (!actor.Bearer.IsUsable())
                 throw new RuntimeAuthorizationException("runtime_start_actor_expired");
             var latest = await ownerContexts.ReadCleanupAsync(
-                actor, projection.ProjectId, projection.RunId, projection.RootSessionId, token)
+                actor, projection.ProjectId, projection.RunId, projection.RootSessionId, token,
+                projection.ContractVersion)
                 .ConfigureAwait(false);
             projection.ValidateFor(latest);
         }
@@ -450,20 +456,23 @@ internal sealed class EnvironmentRuntimeRunStartManager(
             caller, projection, placement, RequireCurrentAsync, cancellationToken).ConfigureAwait(false);
         if (result is null)
             return new RuntimeRunStartCleanupReceipt(
-                1, projection.IntentId, Guid.Empty, 0, 0, null,
+                projection.ContractVersion, projection.IntentId, Guid.Empty, 0, 0, null,
                 "absent", "cleanup_complete").Validate();
         var disposition = result.State == SandboxLeaseState.Released
             ? "cleanup_complete"
             : "cleanup_pending";
         return new RuntimeRunStartCleanupReceipt(
-            1,
+            projection.ContractVersion,
             projection.IntentId,
             result.OperationId,
             result.ResourceGeneration,
             result.ProviderFencingGeneration,
             sandboxIdempotencyKey,
             JsonNamingPolicy.CamelCase.ConvertName(result.State.ToString()),
-            disposition).Validate();
+            disposition)
+        {
+            SandboxResource = projection.ContractVersion == 2 ? result.Resource : null
+        }.Validate();
     }
 
     public async Task<RuntimeRunStartRetirementReceipt> RetireFailedBootstrapAsync(

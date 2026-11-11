@@ -47,7 +47,7 @@ public sealed class EnvironmentEgressManager(
         ApplyEnvironmentEgressRequest request,
         CancellationToken cancellationToken,
         Func<CancellationToken, Task>? requireCurrent = null) =>
-        ApplyAndVerifyCoreAsync(caller, request, cancellationToken, requireCurrent, firstStartOwner: null);
+        ApplyAndVerifyCoreAsync(caller, request, cancellationToken, requireCurrent, firstStartOwner: null, isChild: false);
 
     internal Task<EnvironmentEgressOperationResult> ApplyCoordinatorFirstStartAndVerifyAsync(
         CurrentCallerRequest caller,
@@ -55,14 +55,23 @@ public sealed class EnvironmentEgressManager(
         ApplyEnvironmentEgressRequest request,
         CancellationToken cancellationToken,
         Func<CancellationToken, Task>? requireCurrent = null) =>
-        ApplyAndVerifyCoreAsync(caller, request, cancellationToken, requireCurrent, expectedOwner);
+        ApplyAndVerifyCoreAsync(caller, request, cancellationToken, requireCurrent, expectedOwner, isChild: false);
+
+    internal Task<EnvironmentEgressOperationResult> ApplyChildFirstStartAndVerifyAsync(
+        CurrentCallerRequest caller,
+        RuntimeOwnerContext expectedOwner,
+        ApplyEnvironmentEgressRequest request,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? requireCurrent = null) =>
+        ApplyAndVerifyCoreAsync(caller, request, cancellationToken, requireCurrent, expectedOwner, isChild: true);
 
     private async Task<EnvironmentEgressOperationResult> ApplyAndVerifyCoreAsync(
         CurrentCallerRequest caller,
         ApplyEnvironmentEgressRequest request,
         CancellationToken cancellationToken,
         Func<CancellationToken, Task>? requireCurrent,
-        RuntimeOwnerContext? firstStartOwner)
+        RuntimeOwnerContext? firstStartOwner,
+        bool isChild)
     {
         try
         {
@@ -75,7 +84,7 @@ public sealed class EnvironmentEgressManager(
                 : await GetAuthorizedRunEnvironmentSelectionAsync(
                     caller, request.Fence.Owner, cancellationToken).ConfigureAwait(false);
             if (firstStartOwner is not null)
-                RequireFirstStartOwnerSelection(firstStartOwner, request.Fence.Owner, selection);
+                RequireFirstStartOwnerSelection(firstStartOwner, request.Fence.Owner, selection, isChild);
             var intent = Compile(selection);
             var network = ResolveNetworkProvider(selection, providerOptions, cilium, intent);
             TraceProviderResolution(trace, network.Resolution);
@@ -109,7 +118,7 @@ public sealed class EnvironmentEgressManager(
             {
                 await lifecycleStore.RequireActiveAsync(request.Fence, cancellationToken).ConfigureAwait(false);
                 await EnsureApplyAuthorizationUnchangedAsync(
-                    caller, request.Fence.Owner, selection, firstStartOwner, cancellationToken)
+                    caller, request.Fence.Owner, selection, firstStartOwner, isChild, cancellationToken)
                     .ConfigureAwait(false);
 
                 if (requireCurrent is not null)
@@ -154,7 +163,7 @@ public sealed class EnvironmentEgressManager(
                 {
                     await lifecycleStore.RequireActiveAsync(request.Fence, cancellationToken).ConfigureAwait(false);
                     await EnsureApplyAuthorizationUnchangedAsync(
-                        caller, request.Fence.Owner, selection, firstStartOwner, cancellationToken)
+                        caller, request.Fence.Owner, selection, firstStartOwner, isChild, cancellationToken)
                         .ConfigureAwait(false);
                 }
                 catch (ProjectsConfigApiException exception)
@@ -242,6 +251,7 @@ public sealed class EnvironmentEgressManager(
         EnvironmentOwnerIdentity owner,
         AuthorizedSelection original,
         RuntimeOwnerContext? firstStartOwner,
+        bool isChild,
         CancellationToken cancellationToken)
     {
         if (firstStartOwner is null)
@@ -254,7 +264,7 @@ public sealed class EnvironmentEgressManager(
 
         var current = await GetAuthorizedRunEnvironmentSelectionAsync(
             caller, owner, cancellationToken).ConfigureAwait(false);
-        RequireFirstStartOwnerSelection(firstStartOwner, owner, current);
+        RequireFirstStartOwnerSelection(firstStartOwner, owner, current, isChild);
         if (!SameAuthorizationContext(original.Authorization, current.Authorization))
             throw new ProjectsConfigApiException(
                 "authorization_changed",
@@ -264,13 +274,17 @@ public sealed class EnvironmentEgressManager(
     private static void RequireFirstStartOwnerSelection(
         RuntimeOwnerContext expectedOwner,
         EnvironmentOwnerIdentity environmentOwner,
-        AuthorizedSelection selection)
+        AuthorizedSelection selection,
+        bool isChild)
     {
         var run = selection.RunSelection;
         var authorization = selection.Authorization;
         if (expectedOwner.ContractVersion != 1 ||
-            expectedOwner.AgentId != RuntimeActionContract.CoordinatorRootStepId ||
-            expectedOwner.LogicalTurnOrdinal != 0 ||
+            (isChild
+                ? expectedOwner.AgentId == RuntimeActionContract.CoordinatorRootStepId ||
+                  expectedOwner.LogicalTurnOrdinal < 1 || string.IsNullOrWhiteSpace(expectedOwner.WorkflowStepId)
+                : expectedOwner.AgentId != RuntimeActionContract.CoordinatorRootStepId ||
+                  expectedOwner.LogicalTurnOrdinal != 0) ||
             expectedOwner.ExecutionFence < 1 ||
             RuntimeRunStartKeys.EnvironmentId(expectedOwner) != environmentOwner.EnvironmentId ||
             expectedOwner.TenantId != environmentOwner.TenantId ||

@@ -1874,8 +1874,10 @@ internal sealed partial class CoordinationOwnerStore
         ArgumentNullException.ThrowIfNull(actor);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        // Native admission holds a shared run lock while it revalidates the owner.
         var run = await ReadAcceptedRunAsync(
-            connection, transaction, identity.ProjectId, identity.RunId, forUpdate: true, cancellationToken)
+            connection, transaction, identity.ProjectId, identity.RunId, forUpdate: false, cancellationToken,
+            forShare: true)
             .ConfigureAwait(false);
         var session = await ReadSessionAsync(
             connection, transaction, identity, forUpdate: true, cancellationToken).ConfigureAwait(false);
@@ -3576,7 +3578,9 @@ internal sealed partial class CoordinationOwnerStore
             throw new CoordinationException("execution_failure_stale", StatusCodes.Status409Conflict);
         if (run.ExecutionState is "failed" or "indeterminate" or "completed" or "cancelled" ||
             session.LifecycleState != "active" ||
-            session.TurnState is not ("active" or "presenting"))
+            session.TurnState is not ("active" or "presenting") ||
+            await IsLegacyCompletedRunAsync(
+                connection, transaction, identity.ProjectId, identity.RunId, cancellationToken).ConfigureAwait(false))
             throw new CoordinationException("execution_failure_conflict", StatusCodes.Status409Conflict);
 
         var previousFence = run.Fence;
@@ -3763,6 +3767,10 @@ internal sealed partial class CoordinationOwnerStore
         if (run.ExecutionState is not ("failed" or "indeterminate") ||
             run.ExecutionCauseCode is null || run.ExecutionReference is null)
             throw new CoordinationException("execution_recovery_conflict", StatusCodes.Status409Conflict);
+        if (await CoordinationRuntimeRunStartStore.HasTerminalCleanupMarkerAsync(
+                connection, transaction, _schema, run.TenantId, projectId, runId,
+                run.ExecutionState, run.Fence, cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException("runtime_start_cleanup_recovery_blocked", StatusCodes.Status409Conflict);
 
         var previousFence = run.Fence;
         var expectedSessionCount = await ReadRunSessionCountAtFenceAsync(
@@ -4000,10 +4008,10 @@ internal sealed partial class CoordinationOwnerStore
     }
 
     /// <summary>
-    /// Records the run completion time when the completed session is the run's root session.
+    /// Records the terminal run outcome when the completed session is the run's root session.
     /// </summary>
     /// <remarks>
-    /// The caller holds the run row lock. Only the timestamp changes, so the run state version and fence stay intact.
+    /// The caller holds the run row lock. Completion keeps the current execution fence.
     /// </remarks>
     private async Task MarkRunCompletedWhenRootAsync(
         NpgsqlConnection connection,
@@ -4014,8 +4022,11 @@ internal sealed partial class CoordinationOwnerStore
         await using var command = new NpgsqlCommand($"""
             UPDATE {_runs} AS r
             SET completed_at = clock_timestamp(),
+                execution_state = 'completed',
+                state_version = state_version + 1,
                 updated_at = clock_timestamp()
             WHERE r.project_id = @project AND r.run_id = @run AND r.completed_at IS NULL
+                AND r.execution_state IN ('idle', 'active', 'blocked')
                 AND EXISTS (
                     SELECT 1 FROM {_sessions} AS s
                     WHERE s.project_id = r.project_id AND s.run_id = r.run_id
@@ -4023,7 +4034,10 @@ internal sealed partial class CoordinationOwnerStore
             """, connection, transaction);
         AddRunScope(command, identity.ProjectId, identity.RunId);
         command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1)
+            await CoordinationRuntimeRunStartStore.CaptureCleanupInTransactionAsync(
+                connection, transaction, _schema, identity.ProjectId, identity.RunId, cancellationToken)
+                .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -4499,7 +4513,8 @@ internal sealed partial class CoordinationOwnerStore
         string projectId,
         string runId,
         bool forUpdate,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool forShare = false)
     {
         await using var command = new NpgsqlCommand($"""
             SELECT accepted_selection_hash, accepted_by_issuer, accepted_by_subject,
@@ -4507,7 +4522,7 @@ internal sealed partial class CoordinationOwnerStore
                 execution_cause_code, execution_reference
             FROM {_runs}
             WHERE project_id = @project AND run_id = @run
-            {(forUpdate ? "FOR UPDATE" : string.Empty)}
+            {(forUpdate ? "FOR UPDATE" : forShare ? "FOR SHARE" : string.Empty)}
             """, connection, transaction);
         AddRunScope(command, projectId, runId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);

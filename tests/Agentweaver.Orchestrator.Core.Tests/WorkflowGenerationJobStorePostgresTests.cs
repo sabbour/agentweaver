@@ -215,7 +215,8 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
             INSERT INTO "{_schema}".project_run_cancellations
                 (tenant_id, project_id, run_id, actor_issuer, actor_subject,
                  idempotency_key_hash, request_fingerprint, result)
-            VALUES (@tenant, @project, @run, @issuer, @actor, repeat('b', 64), repeat('c', 64), jsonb_build_object());
+            VALUES (@tenant, @project, @run, @issuer, @actor, repeat('b', 64), repeat('c', 64),
+                    jsonb_build_object('state', 'cancelled', 'alreadyTerminal', false));
             """, connection, transaction))
         {
             cancel.Parameters.AddWithValue("tenant", TenantId);
@@ -327,6 +328,141 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
         Assert.True(await _store.HasPersistedCompletionAsync(completed, completed.Result, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task TerminalReconciliationRequiresCurrentAuthorityAndExactPersistedNativeProof()
+    {
+        var exact = (await _store.CreateOrGetAsync(Create("exact-proof"), CancellationToken.None)).Job;
+        var foreign = (await _store.CreateOrGetAsync(Create("foreign-proof"), CancellationToken.None)).Job;
+        foreach (var job in new[] { exact, foreign })
+        {
+            await _store.TryBeginExecutionAsync(ProjectId, job.JobId, CancellationToken.None);
+            Assert.True(await _store.MarkSendAdmittedAsync(ProjectId, job.JobId, CancellationToken.None));
+            await _store.FailAsync(ProjectId, job.JobId, "primary_failure", "Keep this failure.",
+                quiesced: false, CancellationToken.None);
+        }
+        var authorityChecks = 0;
+        Task Current(CancellationToken _)
+        {
+            authorityChecks++;
+            return Task.CompletedTask;
+        }
+        await _store.ReconcileTerminalQuiescenceAsync(ProjectId, RunId, Current, CancellationToken.None);
+        Assert.Equal(0, authorityChecks);
+        Assert.True(await _store.HasUnresolvedNativeWorkAsync(ProjectId, RunId, CancellationToken.None));
+
+        await InsertRootAdmissionsAsync(exact, foreign);
+        foreach (var job in new[] { exact, foreign })
+        {
+            var source = job == foreign ? job with { RuntimeInstanceId = Guid.NewGuid() } : job;
+            var receipt = RuntimeRootTurnCompletionLedgerReceipt.Create(CreateCompletion(source), DateTimeOffset.UtcNow);
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using var transaction = await connection.BeginTransactionAsync();
+            await new RuntimeExecutionEvidenceLedgerStore(_schema).AppendRootTurnCompletionAsync(
+                connection, transaction, receipt, CancellationToken.None);
+            await transaction.CommitAsync();
+        }
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _store.ReconcileTerminalQuiescenceAsync(ProjectId, RunId,
+                _ => throw new InvalidOperationException("authority revoked"), CancellationToken.None));
+        Assert.Equal("send-admitted", (await _store.ReadAsync(ProjectId, exact.JobId, CancellationToken.None))!.ExecutionPhase);
+        await _store.ReconcileTerminalQuiescenceAsync(ProjectId, RunId, Current, CancellationToken.None);
+        var reconciled = await _store.ReadAsync(ProjectId, exact.JobId, CancellationToken.None);
+        var rejected = await _store.ReadAsync(ProjectId, foreign.JobId, CancellationToken.None);
+        Assert.Equal(1, authorityChecks);
+        Assert.Equal("failed", reconciled!.Status);
+        Assert.Equal("primary_failure", reconciled.FailureCode);
+        Assert.Equal("quiesced", reconciled.ExecutionPhase);
+        Assert.Equal("send-admitted", rejected!.ExecutionPhase);
+        Assert.True(await _store.HasUnresolvedNativeWorkAsync(ProjectId, RunId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task TerminalReconciliationAcceptsExactSealedNoSendProof()
+    {
+        var job = (await _store.CreateOrGetAsync(Create("no-send-proof"), CancellationToken.None)).Job;
+        await _store.TryBeginExecutionAsync(ProjectId, job.JobId, CancellationToken.None);
+        Assert.True(await _store.MarkSendAdmittedAsync(ProjectId, job.JobId, CancellationToken.None));
+        await CancelRunAsync();
+        await InsertRootAdmissionsAsync(job);
+        var hash = new string('b', 64);
+        var proof = RuntimeNumericLimitNativeNoSendReceipt.Seal(new(
+            1, Guid.NewGuid(), ProjectId, RunId, job.SessionId, job.SessionId,
+            job.RuntimeInstanceId, job.RegistrationRevision, job.ExecutionFence,
+            job.NativeRequestId, job.NativeRequestId, hash, Guid.NewGuid(), hash, hash, hash,
+            Guid.NewGuid(), 1, hash, hash, hash, 0, true, DateTimeOffset.UtcNow, string.Empty));
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".maf_runtime_evidence_receipts
+                (project_id, run_id, receipt_id, receipt_kind, attempt_id, payload_hash, receipt_json, created_at)
+            VALUES (@project, @run, @receipt, 'numeric-limit-native-no-send', @request,
+                    @hash, @json::jsonb, @created)
+            """, connection))
+        {
+            insert.Parameters.AddWithValue("project", ProjectId);
+            insert.Parameters.AddWithValue("run", RunId);
+            insert.Parameters.AddWithValue("receipt", proof.ReceiptId);
+            insert.Parameters.AddWithValue("request", job.NativeRequestId);
+            insert.Parameters.AddWithValue("hash", proof.CanonicalPayloadHash);
+            insert.Parameters.AddWithValue("json", JsonSerializer.Serialize(proof, JsonOptions));
+            insert.Parameters.AddWithValue("created", proof.RecordedAt);
+            await insert.ExecuteNonQueryAsync();
+        }
+        await _store.ReconcileTerminalQuiescenceAsync(
+            ProjectId, RunId, _ => Task.CompletedTask, CancellationToken.None);
+        var reconciled = await _store.ReadAsync(ProjectId, job.JobId, CancellationToken.None);
+        Assert.Equal("cancelled", reconciled!.Status);
+        Assert.Equal("quiesced", reconciled.ExecutionPhase);
+        Assert.False(await _store.HasUnresolvedNativeWorkAsync(ProjectId, RunId, CancellationToken.None));
+    }
+
+    private async Task InsertRootAdmissionsAsync(params WorkflowGenerationJob[] jobs)
+    {
+        var decisionId = Guid.NewGuid();
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using (var roots = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordination_sessions
+                (project_id, run_id, session_id, root_session_id, node_kind, writer_issuer, writer_subject, execution_fence)
+            VALUES (@project, @run, 'root', 'root', 'coordinator', @issuer, @actor, 1);
+            INSERT INTO "{_schema}".coordinator_decisions
+                (project_id, run_id, session_id, request_id, decision_id, actor_issuer, actor_subject,
+                 execution_fence, state_version, action_kind, idempotency_key, command_hash, decision_state, decision)
+            VALUES (@project, @run, 'root', 'proof', @decision, @issuer, @actor,
+                    1, 1, 'proof', 'proof', repeat('a', 64), 'accepted', jsonb_build_object())
+            """, connection))
+        {
+            roots.Parameters.AddWithValue("project", ProjectId);
+            roots.Parameters.AddWithValue("run", RunId);
+            roots.Parameters.AddWithValue("issuer", ActorIssuer);
+            roots.Parameters.AddWithValue("actor", ActorId);
+            roots.Parameters.AddWithValue("decision", decisionId);
+            await roots.ExecuteNonQueryAsync();
+        }
+        foreach (var job in jobs)
+        {
+            await using var admission = new NpgsqlCommand($"""
+                INSERT INTO "{_schema}".maf_root_model_turn_admissions
+                    (project_id, run_id, root_session_id, request_id, actor_issuer, actor_id, tenant_id,
+                     accepted_selection_hash, prompt_hash, execution_fence, decision_id, decision_state_version)
+                VALUES (@project, @run, @session, @request, @issuer, @actor, @tenant,
+                        @selection, @prompt, @fence, @decision, @version)
+                """, connection);
+            admission.Parameters.AddWithValue("project", job.ProjectId);
+            admission.Parameters.AddWithValue("run", job.RunId);
+            admission.Parameters.AddWithValue("session", job.SessionId);
+            admission.Parameters.AddWithValue("request", job.NativeRequestId);
+            admission.Parameters.AddWithValue("issuer", job.ActorIssuer);
+            admission.Parameters.AddWithValue("actor", job.ActorId);
+            admission.Parameters.AddWithValue("tenant", job.TenantId);
+            admission.Parameters.AddWithValue("selection", job.AcceptedSelectionHash);
+            admission.Parameters.AddWithValue("prompt", job.PromptSha256);
+            admission.Parameters.AddWithValue("fence", job.ExecutionFence);
+            admission.Parameters.AddWithValue("decision", decisionId);
+            admission.Parameters.AddWithValue("version", job.ExpectedDecisionStateVersion);
+            await admission.ExecuteNonQueryAsync();
+        }
+    }
+
     private WorkflowGenerationJobCreate Create(string idempotencyKey)
     {
         const string prompt = "Create a safe workflow.";
@@ -359,7 +495,8 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
             INSERT INTO "{_schema}".project_run_cancellations
                 (tenant_id, project_id, run_id, actor_issuer, actor_subject,
                  idempotency_key_hash, request_fingerprint, result)
-            VALUES (@tenant, @project, @run, @issuer, @actor, repeat('b', 64), repeat('c', 64), jsonb_build_object())
+            VALUES (@tenant, @project, @run, @issuer, @actor, repeat('b', 64), repeat('c', 64),
+                    jsonb_build_object('state', 'cancelled', 'alreadyTerminal', false))
             """, connection);
         command.Parameters.AddWithValue("tenant", TenantId);
         command.Parameters.AddWithValue("project", ProjectId);

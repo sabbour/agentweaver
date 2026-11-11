@@ -135,10 +135,15 @@ public static class RuntimeOwnerHttpTransport
     /// <summary>Reads the authenticated terminal cleanup projection from the existing runtime-owner route.</summary>
     public static async Task<TResponse> ReadRuntimeRunStartCleanupAsync<TResponse>(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
-        CancellationToken cancellationToken) where TResponse : class =>
-        await SendCoreAsync<TResponse>(client, ownerAddress, path, actor, null,
-            allowNotFound: false, cancellationToken, runtimeRunStartCleanup: true).ConfigureAwait(false)
-        ?? throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
+        CancellationToken cancellationToken, int contractVersion = 1) where TResponse : class
+    {
+        if (contractVersion is not (1 or 2))
+            throw new ArgumentOutOfRangeException(nameof(contractVersion));
+        return await SendCoreAsync<TResponse>(client, ownerAddress, path, actor, null,
+            allowNotFound: false, cancellationToken, runtimeRunStartCleanupVersion: contractVersion)
+            .ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
+    }
 
     /// <summary>
     /// Sends a bounded JSON request, optionally bound to a validated sandbox endpoint, and
@@ -387,15 +392,16 @@ public static class RuntimeOwnerHttpTransport
     private static async Task<TResponse?> SendCoreAsync<TResponse>(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
         object? body, bool allowNotFound, CancellationToken cancellationToken,
-        bool runtimeRunStartCleanup = false,
+        int runtimeRunStartCleanupVersion = 0,
         IReadOnlySet<string>? allowedFailureCodes = null) where TResponse : class
     {
         var endpoint = new Uri(RequireOwnerAddress(ownerAddress), path);
         using var request = new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post, endpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", actor.Bearer.GetValue());
         request.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true, NoCache = true };
-        if (runtimeRunStartCleanup)
-            request.Headers.Add("X-Agentweaver-Runtime-Cleanup", "1");
+        if (runtimeRunStartCleanupVersion != 0)
+            request.Headers.Add("X-Agentweaver-Runtime-Cleanup",
+                runtimeRunStartCleanupVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (actor.TenantSelector is not null)
             request.Headers.Add("X-Agentweaver-Tenant", actor.TenantSelector);
         if (body is not null)

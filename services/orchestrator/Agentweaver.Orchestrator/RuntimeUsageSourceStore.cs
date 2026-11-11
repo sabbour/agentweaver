@@ -367,6 +367,20 @@ internal sealed class RuntimeUsageSourceStore(
         Func<SdkSessionFacts, CancellationToken, Task<RuntimeUsageCostSnapshotReceipt>> readCostSnapshot,
         CancellationToken cancellationToken)
     {
+        await using (var run = new NpgsqlCommand($"""
+            SELECT 1 FROM {_schema}.accepted_runs
+            WHERE project_id = @project AND run_id = @run
+              AND execution_fence = @fence
+              AND execution_state IN ('idle', 'active', 'blocked')
+            FOR SHARE
+            """, connection, transaction))
+        {
+            run.Parameters.AddWithValue("project", registration.Binding.ProjectId);
+            run.Parameters.AddWithValue("run", registration.Binding.RunId);
+            run.Parameters.AddWithValue("fence", registration.Binding.ExecutionFence);
+            if (await run.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
+                throw new RuntimeAuthorizationException("runtime_native_turn_run_terminal");
+        }
         var source = await ReadSourceAsync(connection, transaction, registration.RuntimeInstanceId, cancellationToken)
             .ConfigureAwait(false) ?? throw new RuntimeAuthorizationException("runtime_sdk_source_unknown");
         RequireSource(source, registration, grant);

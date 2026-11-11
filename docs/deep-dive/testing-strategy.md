@@ -94,6 +94,35 @@ routes and known gaps. `CriticalPathCoverageTests` fails pull request CI when
 an operation is added under a watched prefix without a classification, when a
 route arrives for a known gap, or when a covered operation is removed. See [Keep critical-path coverage current](../guide/testing.md#keep-critical-path-coverage-current).
 
+The owner sequence below is separate from the current native CLI journey.
+The CLI journey does not yet dispatch child work or prove task completion.
+Controlled startup tests and live native CLI acceptance are different evidence.
+
+```mermaid
+sequenceDiagram
+    actor Caller as Authorized owner caller
+    participant Core as Orchestrator
+    participant Environment
+    participant Broker as Identity Broker
+    participant Host as Child AgentHost
+    Caller->>Core: Dispatch confirmed work
+    Core->>Core: Commit child and stable startup intent
+    Core->>Environment: Provision the exact child placement
+    Environment-->>Core: Return placement or leave retry pending
+    Core->>Core: Register the current child
+    Core->>Broker: Request bootstrap with the saved operation ID
+    Core->>Environment: Activate and check exact Host readiness
+    Environment->>Host: Configure the registered child
+    Host-->>Environment: Return current readiness evidence
+    Core-->>Caller: Report pending, blocked, or ready
+    Note over Core,Host: Only current readiness permits a task send.
+    Caller->>Core: Request or resume cleanup of a terminal run
+    Core->>Core: Check native work and clean children before root
+    Core->>Environment: Retire each exact owned resource
+    Environment-->>Core: Return release receipt; retain workspace data
+    Core-->>Caller: Report aggregate cleanup state
+```
+
 The retained `/mcp` harness exercises compatibility code only. It preserves
 `isError`, validates discovery pages/cursors, and distinguishes accepted from
 completed results. It is not a supported product or acceptance surface;

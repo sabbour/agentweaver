@@ -244,6 +244,12 @@ public static partial class CoordinationEndpoints
                         context, projectId, runId, status.RootSessionId, selection, cancellationToken)
                         .ConfigureAwait(false)
                 };
+            if (context.RequestServices.GetService<CoordinationRuntimeRunStartStore>() is { } starts)
+                status = status with
+                {
+                    RuntimeCleanup = await starts.ReadCleanupSummaryAsync(
+                        selection.Authorization.TenantId, projectId, runId, cancellationToken).ConfigureAwait(false)
+                };
             if (status.Kind == CoordinationSessionKind.Coordinator &&
                 status.Lifecycle == CoordinationLifecycleState.Active)
             {
@@ -1824,10 +1830,18 @@ public static partial class CoordinationEndpoints
         {
             context.Response.Headers.CacheControl = "no-store";
             var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
-            _ = await projects.ReadAcceptedSelectionAsync(
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
                 context, projectId, runId, cancellationToken).ConfigureAwait(false);
             var result = await store.ReadOwnerRunStatusAsync(
                 actor, projectId, runId, cancellationToken).ConfigureAwait(false);
+            if (context.RequestServices.GetService<CoordinationRuntimeRunStartStore>() is { } starts)
+                result = result with
+                {
+                    RuntimeCleanup = await starts.ReadCleanupSummaryAsync(
+                        selection.Authorization.TenantId, projectId, runId, cancellationToken).ConfigureAwait(false)
+                };
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
             return Results.Ok(result);
         }, cancellationToken);
 

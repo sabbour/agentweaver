@@ -39,7 +39,7 @@ export function dbMaintenanceTarget(name = 'agentweaver') {
     postgresHost: `${name}-pg.postgres.database.azure.com` });
 }
 /** The reviewed plan binds Environment, Events, Core, and Projects & Config runtime grants. */
-export const REVIEWED_PLAN_SHA256 = 'a625290107d6c9f2addb434d2c13c688645c087687514a060ce9509395cff1a9';
+export const REVIEWED_PLAN_SHA256 = '490a51e39211725c0e02ff9e5f01dc06fea9f82709722b9877f9a46d3b17ed6b';
 export const LOCK_NAME = 'p1-db-maintenance-lock';
 export const STATE_NAME = 'p1-db-maintenance-state';
 export const MIGRATION_IDENTITY = 'agentweaver-id-p1-postgres-migration';
@@ -127,8 +127,8 @@ Without --execute the runner only checks preconditions and prints what it would 
   --deploy-apps                 Roll the Environment, Orchestrator, and EventsAndSessions Deployments to the same
                                 digests in this run, before or after the migrations as the schema
                                 support of each image requires, and wait until they are ready.
-  --migrations-only             Run migration Jobs without checking or changing application Deployments.
-                                Use when a later Kustomize apply updates all workloads together.
+  --migrations-only             Run migration Jobs without changing application Deployments.
+                                Core 047 still requires compatible owner pods before the Jobs run.
   --apps-only                   Skip identity, handover, and migration Jobs. Only roll the three
                                 Deployments to the given digests under the lock and wait until they
                                 are ready. Use it when the schema is already migrated and services are
@@ -279,10 +279,26 @@ function checkAppImages(kubectl, options) {
     if (result.status !== 0 && !/NotFound/i.test(result.stderr))
       throw new Error(`Could not read Deployment ${job.key}: ${result.stderr}`);
     const running = result.status === 0 ? result.stdout.trim() || undefined : undefined;
+    if (result.status === 0 && !running)
+      throw new Error(`Could not read Deployment ${job.key} image.`);
     // A missing Deployment has no pods whose readiness a schema move could break.
     const status = running === undefined ? 'absent' : running === expected ? 'match' : 'mismatch';
     return { deployment: job.key, component: job.component, expected, running, status };
   });
+}
+
+/** Rejects an old or unknown owner pod before the terminal cleanup guard is enabled. */
+export function requireGuardAwareOwnerPods(pods, workload, expectedImage) {
+  if (!Array.isArray(pods?.items))
+    throw new Error(`Could not verify ${workload} pods before Core 047.`);
+  for (const pod of pods.items) {
+    if (['Succeeded', 'Failed'].includes(pod.status?.phase)) continue;
+    const containers = pod.spec?.containers?.filter(container => container.name === workload) ?? [];
+    if (containers.length !== 1 || containers[0].image !== expectedImage) {
+      throw new Error(`Drain the older ${workload} pod ${pod.metadata?.name ?? '(unknown)'} ` +
+        'and deploy the reviewed image before Core 047.');
+    }
+  }
 }
 
 /**
@@ -782,6 +798,7 @@ export async function runDbMaintenance(options, overrides = {}) {
         ? ['lock', `migration-identity-${identityState.ready ? 'verified' : 'deploy'}`, 'serviceaccount-and-egress',
           ...(receipt.brokerEgressDrift && options.reconcileBrokerEgress ? ['broker-egress-reconcile'] : []),
           `handover-${handoverNeeded ? 'run' : 'skip'}`, 'connectivity-probes',
+          ...(plan.coreVersions.includes(47) ? ['terminal-cleanup-owners-check'] : []),
           ...(options.brokerDigest ? ['broker-job'] : []), 'environment-job', 'orchestrator-job',
           'events-and-sessions-job', 'cleanup', 'receipt']
         : options.appsOnly
@@ -795,6 +812,7 @@ export async function runDbMaintenance(options, overrides = {}) {
           ...(receipt.brokerEgressDrift && options.reconcileBrokerEgress ? ['broker-egress-reconcile'] : []),
           `handover-${handoverNeeded ? 'run' : 'skip'}`, 'connectivity-probes',
           ...(deployFirst.length ? ['deploy-apps-before-migrations'] : []),
+            ...(plan.coreVersions.includes(47) ? ['terminal-cleanup-owners-check'] : []),
             ...(options.brokerDigest ? ['broker-job'] : []), 'environment-job', 'orchestrator-job', 'events-and-sessions-job',
           ...(deployAfter.length ? ['deploy-apps-after-migrations'] : []), 'readiness', 'cleanup', 'receipt',
         ];
@@ -977,6 +995,28 @@ export async function runDbMaintenance(options, overrides = {}) {
     if (deployFirst.length) {
       deployImages(deployFirst);
       waitReady({ afterMigration: Object.keys(pendingImages).length > 0 });
+    }
+
+    if (plan.coreVersions.includes(47)) {
+      const ownerImages = checkAppImages(kubectl, options)
+        .filter(app => ['orchestrator', 'environment'].includes(app.deployment));
+      for (const app of ownerImages.filter(owner => owner.status === 'mismatch')) {
+        throw new Error(`Update the ${app.deployment} Deployment to the reviewed image before Core 047.`);
+      }
+      for (const workload of ['orchestrator', 'environment']) {
+        const job = P1_JOBS.find(entry => entry.key === workload);
+        const result = must(kubectl([
+          'get', 'pods', '-l', `agentweaver.io/workload=${workload}`, '-o', 'json',
+        ]), `Could not read ${workload} pods before Core 047`);
+        let pods;
+        try {
+          pods = JSON.parse(result.stdout);
+        } catch {
+          throw new Error(`Could not verify ${workload} pods before Core 047.`);
+        }
+        requireGuardAwareOwnerPods(pods, workload, imageReference(job.component, options[job.digestOption]));
+      }
+      step('terminal-cleanup-owners-checked');
     }
 
     // Migration Jobs run one at a time, in prerequisite order: Broker, Environment, Core, Events.

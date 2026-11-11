@@ -72,7 +72,34 @@ public sealed class EnvironmentLifecycleManager(
             !actor.Bearer.IsUsable() ||
             runtimeOwnerContext is null)
             throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
+        return await RegisterRunStartAsync(actor, expectedOwner, cancellationToken).ConfigureAwait(false);
+    }
 
+    internal async Task<EnvironmentLifecycleTransitionResult> RegisterChildStartAsync(
+        RuntimeActorAuthorization actor,
+        RuntimeOwnerContext expectedOwner,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(expectedOwner);
+        if (expectedOwner.ContractVersion != 1 ||
+            expectedOwner.AgentId == RuntimeActionContract.CoordinatorRootStepId ||
+            expectedOwner.LogicalTurnOrdinal < 1 ||
+            string.IsNullOrWhiteSpace(expectedOwner.WorkflowStepId) ||
+            expectedOwner.ExecutionFence <= 0 ||
+            !actor.Bearer.IsUsable() ||
+            runtimeOwnerContext is null)
+            throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
+        return await RegisterRunStartAsync(actor, expectedOwner, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<EnvironmentLifecycleTransitionResult> RegisterRunStartAsync(
+        RuntimeActorAuthorization actor,
+        RuntimeOwnerContext expectedOwner,
+        CancellationToken cancellationToken)
+    {
+        if (runtimeOwnerContext is null)
+            throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
         var caller = new CurrentCallerRequest(actor.Bearer.GetValue(), actor.TenantSelector);
         var auth = await authorization.GetAuthorizedRunEnvironmentPlacementReadContextAsync(
             caller, expectedOwner.ProjectId, expectedOwner.RunId, cancellationToken).ConfigureAwait(false);

@@ -14,20 +14,24 @@ public sealed record RuntimeRunStartPlacementRequest(
 {
     public RuntimeRunStartPlacementRequest Validate()
     {
-        if (ContractVersion != 1 || (Owner is null) == (Cleanup is null))
+        if (ContractVersion is not (1 or 2) || (Owner is null) == (Cleanup is null))
             throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
         if (Owner is { } owner)
         {
             RuntimeContractValidation.ValidateIdentifier(owner.SessionId);
             RuntimeContractValidation.ValidateHash(owner.AcceptedSelectionHash);
             if (owner.ContractVersion != 1 ||
-                owner.AgentId != RuntimeActionContract.CoordinatorRootStepId ||
-                owner.LogicalTurnOrdinal != 0 ||
+                (ContractVersion == 1
+                    ? owner.AgentId != RuntimeActionContract.CoordinatorRootStepId || owner.LogicalTurnOrdinal != 0
+                    : owner.AgentId == RuntimeActionContract.CoordinatorRootStepId ||
+                      owner.LogicalTurnOrdinal < 1 || string.IsNullOrWhiteSpace(owner.WorkflowStepId)) ||
                 owner.ExecutionFence <= 0 ||
                 BootstrapOperationId == Guid.Empty)
                 throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
         }
         else if (BootstrapOperationId != Guid.Empty)
+            throw new RuntimeAuthorizationException("runtime_start_cleanup_request_invalid");
+        if (Cleanup is { } cleanup && cleanup.ContractVersion != ContractVersion)
             throw new RuntimeAuthorizationException("runtime_start_cleanup_request_invalid");
         Cleanup?.Validate();
         return this;
@@ -156,6 +160,12 @@ public sealed record RuntimeRunStartCleanupProjection(
     string CleanupDisposition,
     System.Text.Json.JsonElement ReceiptLinks)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? TerminalFence { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentRootSessionId { get; init; }
+
     public RuntimeRunStartCleanupProjection Validate()
     {
         RuntimeContractValidation.ValidateIdentifier(TenantId);
@@ -165,9 +175,20 @@ public sealed record RuntimeRunStartCleanupProjection(
         RuntimeContractValidation.ValidateHash(AcceptedSelectionHash);
         if (EnvironmentId is not null)
             RuntimeContractValidation.ValidateIdentifier(EnvironmentId);
-        if (ContractVersion != 1 ||
-            RunState != "cancelled" ||
-            CancellationFence <= ExecutionFence ||
+        var terminalFenceValid = ContractVersion switch
+        {
+            1 => RunState == "cancelled" &&
+                 CancellationFence > ExecutionFence && TerminalFence is null &&
+                 ParentRootSessionId is null,
+            2 => CancellationFence == 0 && TerminalFence is { } terminalFence &&
+                 !string.IsNullOrWhiteSpace(ParentRootSessionId) &&
+                 (RunState == "cancelled"
+                     ? terminalFence > ExecutionFence
+                     : RunState is "completed" or "failed" or "indeterminate" &&
+                       terminalFence >= ExecutionFence),
+            _ => false
+        };
+        if (!terminalFenceValid ||
             IntentId == Guid.Empty ||
             IntentVersion < 1 ||
             ExecutionFence < 1 ||
@@ -175,6 +196,8 @@ public sealed record RuntimeRunStartCleanupProjection(
             CleanupDisposition is not ("cleanup_pending" or "cleanup_complete") ||
             ReceiptLinks.ValueKind != System.Text.Json.JsonValueKind.Object)
             throw new RuntimeAuthorizationException("runtime_start_cleanup_projection_invalid");
+        if (ParentRootSessionId is not null)
+            RuntimeContractValidation.ValidateIdentifier(ParentRootSessionId);
         return this with { ReceiptLinks = ReceiptLinks.Clone() };
     }
 
@@ -199,19 +222,26 @@ public sealed record RuntimeRunStartCleanupReceipt(
     string LeaseState,
     string CleanupDisposition)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProviderResourceRef? SandboxResource { get; init; }
+
     public RuntimeRunStartCleanupReceipt Validate()
     {
-        if (ContractVersion != 1 ||
+        if (ContractVersion is not (1 or 2) ||
             IntentId == Guid.Empty ||
             LeaseState is not ("absent" or "active" or "released" or "failed" or "reconciliationRequired" or
                 "releasing" or "provisioning") ||
-            CleanupDisposition is not ("cleanup_pending" or "cleanup_complete"))
+            CleanupDisposition is not ("cleanup_pending" or "cleanup_complete") ||
+            ContractVersion == 1 && SandboxResource is not null ||
+            SandboxResource is { } resource &&
+                (resource.Seam != ProviderSeam.Sandbox || resource.Generation != ResourceGeneration ||
+                 string.IsNullOrWhiteSpace(resource.ProviderId) || string.IsNullOrWhiteSpace(resource.ResourceId)))
             throw new RuntimeAuthorizationException("runtime_start_cleanup_receipt_invalid");
         if (LeaseState == "absent")
         {
             if (SandboxOperationId != Guid.Empty || ResourceGeneration != 0 ||
                 ProviderFencingGeneration != 0 || SandboxIdempotencyKey is not null ||
-                CleanupDisposition != "cleanup_complete")
+                SandboxResource is not null || CleanupDisposition != "cleanup_complete")
                 throw new RuntimeAuthorizationException("runtime_start_cleanup_receipt_invalid");
             return this;
         }
@@ -230,11 +260,17 @@ public sealed record RuntimeRunStartCleanupAttempt(
     long ProviderFencingGeneration,
     string SandboxIdempotencyKey)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProviderResourceRef? SandboxResource { get; init; }
+
     public RuntimeRunStartCleanupAttempt Validate()
     {
         if (SandboxOperationId == Guid.Empty || ResourceGeneration < 1 ||
             ProviderFencingGeneration < 1 || string.IsNullOrWhiteSpace(SandboxIdempotencyKey) ||
-            SandboxIdempotencyKey.Length > 128)
+            SandboxIdempotencyKey.Length > 128 ||
+            SandboxResource is { } resource &&
+                (resource.Seam != ProviderSeam.Sandbox || resource.Generation != ResourceGeneration ||
+                 string.IsNullOrWhiteSpace(resource.ProviderId) || string.IsNullOrWhiteSpace(resource.ResourceId)))
             throw new RuntimeAuthorizationException("runtime_start_cleanup_receipt_invalid");
         return this;
     }
@@ -243,7 +279,8 @@ public sealed record RuntimeRunStartCleanupAttempt(
         SandboxOperationId == other.SandboxOperationId &&
         ResourceGeneration == other.ResourceGeneration &&
         ProviderFencingGeneration == other.ProviderFencingGeneration &&
-        string.Equals(SandboxIdempotencyKey, other.SandboxIdempotencyKey, StringComparison.Ordinal);
+        string.Equals(SandboxIdempotencyKey, other.SandboxIdempotencyKey, StringComparison.Ordinal) &&
+        (SandboxResource is null || SandboxResource == other.SandboxResource);
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

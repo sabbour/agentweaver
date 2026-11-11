@@ -131,6 +131,37 @@ internal sealed class RuntimeRegistrationOwner(
             expectedOwner.ExecutionFence <= 0 ||
             !actor.Bearer.IsUsable())
             throw new RuntimeAuthorizationException("runtime_owner_context_stale");
+        return await RegisterFirstStartCoreAsync(
+            actor, expectedOwner, environmentId, sourceProfileId, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<RuntimeRegistration> RegisterChildStartAsync(
+        RuntimeActorAuthorization actor,
+        RuntimeOwnerContext expectedOwner,
+        string environmentId,
+        string sourceProfileId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(expectedOwner);
+        if (expectedOwner.ContractVersion != 1 ||
+            expectedOwner.AgentId == CoordinationEndpoints.CoordinatorRuntimeAgentId ||
+            expectedOwner.LogicalTurnOrdinal < 1 ||
+            string.IsNullOrWhiteSpace(expectedOwner.WorkflowStepId) ||
+            expectedOwner.ExecutionFence <= 0 ||
+            !actor.Bearer.IsUsable())
+            throw new RuntimeAuthorizationException("runtime_owner_context_stale");
+        return await RegisterFirstStartCoreAsync(
+            actor, expectedOwner, environmentId, sourceProfileId, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<RuntimeRegistration> RegisterFirstStartCoreAsync(
+        RuntimeActorAuthorization actor,
+        RuntimeOwnerContext expectedOwner,
+        string environmentId,
+        string sourceProfileId,
+        CancellationToken cancellationToken)
+    {
         RuntimeContractValidation.ValidateIdentifier(environmentId);
         RuntimeContractValidation.ValidateIdentifier(sourceProfileId);
         var request = new RegisterRuntimeRequest(environmentId,
@@ -174,6 +205,33 @@ internal sealed class RuntimeRegistrationOwner(
         Guid runtimeInstanceId,
         CancellationToken cancellationToken) =>
         registrations.ReadAsync(runtimeInstanceId, cancellationToken);
+
+    internal async Task<IReadOnlyList<RuntimeRegistration>> ReadCleanupCandidatesAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        var candidates = new List<RuntimeRegistration>();
+        Guid? after = null;
+        while (true)
+        {
+            var ids = await registrations.ReadCandidateRuntimeIdsPageAsync(
+                projectId, runId, sessionId, after, RuntimeRegistrationStore.MaximumCandidateIdPageSize,
+                cancellationToken).ConfigureAwait(false);
+            if (candidates.Count + ids.Count > MaximumRegistrationCandidatesPerSession)
+                throw new RuntimeAuthorizationException("runtime_registration_candidate_limit_exceeded");
+            foreach (var id in ids)
+            {
+                var candidate = await registrations.ReadAsync(id, cancellationToken).ConfigureAwait(false);
+                if (candidate is not null)
+                    candidates.Add(candidate);
+            }
+            if (ids.Count < RuntimeRegistrationStore.MaximumCandidateIdPageSize)
+                return candidates;
+            after = ids[^1];
+        }
+    }
 
     /// <summary>
     /// Replaces a released registration after resume, requiring the execution fence to advance exactly once.

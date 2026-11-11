@@ -40,10 +40,41 @@ public static class EnvironmentRuntimeBootstrapEndpoints
             TimeProvider timeProvider,
             CancellationToken token) =>
             await ExecuteAsync(context, timeProvider,
-                async actor => request.Cleanup is null
-                    ? (object)await manager.ProvisionAsync(request, actor, token).ConfigureAwait(false)
-                    : await manager.CleanupAsync(request, actor, token).ConfigureAwait(false),
+                async actor =>
+                {
+                    if (request.ContractVersion != 1)
+                        throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
+                    return request.Cleanup is null
+                        ? (object)await manager.ProvisionAsync(request, actor, token).ConfigureAwait(false)
+                        : await manager.CleanupAsync(request, actor, token).ConfigureAwait(false);
+                },
                 token).ConfigureAwait(false))
+            .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/run-start/terminal-cleanup", async (
+            RuntimeRunStartPlacementRequest request,
+            HttpContext context,
+            [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimeRunStartManager manager,
+            TimeProvider timeProvider,
+            CancellationToken token) =>
+            await ExecuteAsync(context, timeProvider, actor =>
+            {
+                if (request.ContractVersion != 2 || request.Cleanup is null)
+                    throw new RuntimeAuthorizationException("runtime_start_cleanup_request_invalid");
+                return manager.CleanupAsync(request, actor, token);
+            }, token).ConfigureAwait(false))
+            .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/run-start/child-placement", async (
+            RuntimeRunStartPlacementRequest request,
+            HttpContext context,
+            [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimeRunStartManager manager,
+            TimeProvider timeProvider,
+            CancellationToken token) =>
+            await ExecuteAsync(context, timeProvider, actor =>
+            {
+                if (request.ContractVersion != 2 || request.Owner is null || request.Cleanup is not null)
+                    throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
+                return manager.ProvisionAsync(request, actor, token);
+            }, token).ConfigureAwait(false))
             .RequireAuthorization();
         endpoints.MapPost("/internal/runtime/run-start/retire-failed", async (
             RuntimeRunStartRetirementRequest request,

@@ -50,7 +50,14 @@ public sealed record StartProjectRunResponse(string RunId, string RootSessionId,
 
 /// <summary>Optional explanation recorded with a cancellation, not an instruction to a runtime.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record CancelProjectRunRequest(string? Reason = null);
+public sealed record CancelProjectRunRequest(string? Reason = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExpectedTerminalState { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ExpectedTerminalFence { get; init; }
+}
 
 /// <summary>Stable receipt; terminal no-ops do not advance the fence or invent a cancellation timestamp.</summary>
 public sealed record CancelProjectRunResponse(

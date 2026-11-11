@@ -13,6 +13,7 @@ using System.Text.Json.Serialization;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
+using Agentweaver.Providers.Sandbox.AgentSandbox;
 using Agentweaver.Providers.Storage.AzureFiles;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
@@ -34,8 +35,10 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed partial class ProjectsConfigBrokerAuthorizationTests
 {
     /// <summary>Proves fresh interactive selection supports silent binding and first-message start through the Gateway.</summary>
-    [Fact]
-    public async Task CreatedChatSilentlyBindsAndStartsWithProjectsOwnerProof()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CreatedChatSilentlyBindsAndStartsWithProjectsOwnerProof(bool hasLegacyChild)
     {
         var signingKey = new X509SecurityKey(_runBindingSigningCertificate);
         // Owners use TestServer transport; the Broker independently queries the same store over pinned TLS.
@@ -224,6 +227,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 selectionDocument.RootElement.Clone(),
                 () => new RuntimeServiceRouter(runtimeRoutes, runtimeOwnerFailures),
                 leaseClockStart: DateTimeOffset.UtcNow,
+                // This fixture creates the Host after provisioning and checks the owner binding first.
+                startupBudgets: new AgentSandboxStartupBudgets(30, 30, 30, 60, 30, 120),
                 mountPath: "/workspace",
                 volumeId: RuntimeRunStartKeys.WorkspaceVolumeId(startingOwner),
                 firstStartWorkspace: true,
@@ -748,87 +753,90 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             path => path.Contains("/internal/runtime/v1/activate", StringComparison.Ordinal)));
 
         var messageTargetSessionId = $"message-target-{Guid.NewGuid():N}";
-        using (var registerTarget = new HttpRequestMessage(
-            HttpMethod.Post,
-            $"/api/v1/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{pending.RootSessionId}/children")
+        if (hasLegacyChild)
         {
-            Content = JsonContent.Create(new { sessionId = messageTargetSessionId }),
-        })
-        {
-            AddBearerAndTenant(registerTarget, boundToken, TenantId);
-            using var response = await gateway.Client.SendAsync(registerTarget);
-            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        }
-        using var explicitTargetMessage = await SendRunMessageAsync(
-            boundToken, runMessagePath, "user-message-2", "Worker status?", messageTargetSessionId);
-        Assert.Equal(HttpStatusCode.OK, explicitTargetMessage.StatusCode);
-        var explicitTargetReceipt =
-            await explicitTargetMessage.Content.ReadFromJsonAsync<ProjectRunMessageReceipt>(OrchestratorJsonOptions);
-        Assert.NotNull(explicitTargetReceipt);
-        Assert.Equal(pending.RootSessionId, explicitTargetReceipt.RootSessionId);
-        Assert.Equal(messageTargetSessionId, explicitTargetReceipt.RecipientSessionId);
-        Assert.Equal(userReceipt.Sender, explicitTargetReceipt.Sender);
-
-        using (var targetStatusRequest = new HttpRequestMessage(
-            HttpMethod.Get,
-            $"/api/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{messageTargetSessionId}/status"))
-        {
-            AddBearerAndTenant(targetStatusRequest, boundToken, TenantId);
-            using var targetStatusResponse = await orchestrator.SendAsync(targetStatusRequest);
-            Assert.Equal(HttpStatusCode.OK, targetStatusResponse.StatusCode);
-            var targetStatus =
-                await targetStatusResponse.Content.ReadFromJsonAsync<SessionStatusSnapshot>(OrchestratorJsonOptions);
-            Assert.NotNull(targetStatus);
-
-            using var turnBoundaryRequest = new HttpRequestMessage(
+            using (var registerTarget = new HttpRequestMessage(
                 HttpMethod.Post,
-                $"/api/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{messageTargetSessionId}/turn-boundary")
+                $"/api/v1/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{pending.RootSessionId}/children")
             {
-                Content = JsonContent.Create(
-                    new TurnBoundaryRequest(targetStatus.ExecutionFence, targetStatus.StateVersion),
-                    options: OrchestratorJsonOptions),
-            };
-            AddBearerAndTenant(turnBoundaryRequest, boundToken, TenantId);
-            using var turnBoundaryResponse = await orchestrator.SendAsync(turnBoundaryRequest);
-            Assert.Equal(HttpStatusCode.OK, turnBoundaryResponse.StatusCode);
-            var turnBoundary =
-                await turnBoundaryResponse.Content.ReadFromJsonAsync<TurnBoundaryResult>(OrchestratorJsonOptions);
-            Assert.NotNull(turnBoundary);
-            var presentedMessage = Assert.IsType<AddressedMessageEnvelope>(turnBoundary.PresentedMessage);
-            Assert.Equal(explicitTargetReceipt.MessageId, presentedMessage.MessageId);
-            Assert.Equal(AddressedMessageStatus.Delivered, presentedMessage.Status);
-
-            using var replayAfterPresentation = await SendRunMessageAsync(
-                boundToken, runMessagePath, "user-message-2", "Worker status?", messageTargetSessionId);
-            Assert.Equal(HttpStatusCode.OK, replayAfterPresentation.StatusCode);
-            var presentedReplayReceipt =
-                await replayAfterPresentation.Content.ReadFromJsonAsync<ProjectRunMessageReceipt>(
-                    OrchestratorJsonOptions);
-            Assert.Equal(explicitTargetReceipt, presentedReplayReceipt);
-
-            using var acknowledgeRequest = new HttpRequestMessage(
-                HttpMethod.Post,
-                $"/api/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{messageTargetSessionId}/messages/{presentedMessage.MessageId:D}/acknowledge")
+                Content = JsonContent.Create(new { sessionId = messageTargetSessionId }),
+            })
             {
-                Content = JsonContent.Create(
-                    new AddressedMessageClaimFenceRequest(presentedMessage.ClaimFence),
-                    options: OrchestratorJsonOptions),
-            };
-            AddBearerAndTenant(acknowledgeRequest, boundToken, TenantId);
-            using var acknowledgeResponse = await orchestrator.SendAsync(acknowledgeRequest);
-            Assert.Equal(HttpStatusCode.OK, acknowledgeResponse.StatusCode);
-            var acknowledgedMessage =
-                await acknowledgeResponse.Content.ReadFromJsonAsync<AddressedMessageEnvelope>(OrchestratorJsonOptions);
-            Assert.NotNull(acknowledgedMessage);
-            Assert.Equal(AddressedMessageStatus.Acknowledged, acknowledgedMessage.Status);
-
-            using var replayAfterAcknowledgment = await SendRunMessageAsync(
+                AddBearerAndTenant(registerTarget, boundToken, TenantId);
+                using var response = await gateway.Client.SendAsync(registerTarget);
+                Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+            }
+            using var explicitTargetMessage = await SendRunMessageAsync(
                 boundToken, runMessagePath, "user-message-2", "Worker status?", messageTargetSessionId);
-            Assert.Equal(HttpStatusCode.OK, replayAfterAcknowledgment.StatusCode);
-            var acknowledgmentReplayReceipt =
-                await replayAfterAcknowledgment.Content.ReadFromJsonAsync<ProjectRunMessageReceipt>(
-                    OrchestratorJsonOptions);
-            Assert.Equal(explicitTargetReceipt, acknowledgmentReplayReceipt);
+            Assert.Equal(HttpStatusCode.OK, explicitTargetMessage.StatusCode);
+            var explicitTargetReceipt =
+                await explicitTargetMessage.Content.ReadFromJsonAsync<ProjectRunMessageReceipt>(OrchestratorJsonOptions);
+            Assert.NotNull(explicitTargetReceipt);
+            Assert.Equal(pending.RootSessionId, explicitTargetReceipt.RootSessionId);
+            Assert.Equal(messageTargetSessionId, explicitTargetReceipt.RecipientSessionId);
+            Assert.Equal(userReceipt.Sender, explicitTargetReceipt.Sender);
+
+            using (var targetStatusRequest = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"/api/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{messageTargetSessionId}/status"))
+            {
+                AddBearerAndTenant(targetStatusRequest, boundToken, TenantId);
+                using var targetStatusResponse = await orchestrator.SendAsync(targetStatusRequest);
+                Assert.Equal(HttpStatusCode.OK, targetStatusResponse.StatusCode);
+                var targetStatus =
+                    await targetStatusResponse.Content.ReadFromJsonAsync<SessionStatusSnapshot>(OrchestratorJsonOptions);
+                Assert.NotNull(targetStatus);
+
+                using var turnBoundaryRequest = new HttpRequestMessage(
+                    HttpMethod.Post,
+                    $"/api/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{messageTargetSessionId}/turn-boundary")
+                {
+                    Content = JsonContent.Create(
+                        new TurnBoundaryRequest(targetStatus.ExecutionFence, targetStatus.StateVersion),
+                        options: OrchestratorJsonOptions),
+                };
+                AddBearerAndTenant(turnBoundaryRequest, boundToken, TenantId);
+                using var turnBoundaryResponse = await orchestrator.SendAsync(turnBoundaryRequest);
+                Assert.Equal(HttpStatusCode.OK, turnBoundaryResponse.StatusCode);
+                var turnBoundary =
+                    await turnBoundaryResponse.Content.ReadFromJsonAsync<TurnBoundaryResult>(OrchestratorJsonOptions);
+                Assert.NotNull(turnBoundary);
+                var presentedMessage = Assert.IsType<AddressedMessageEnvelope>(turnBoundary.PresentedMessage);
+                Assert.Equal(explicitTargetReceipt.MessageId, presentedMessage.MessageId);
+                Assert.Equal(AddressedMessageStatus.Delivered, presentedMessage.Status);
+
+                using var replayAfterPresentation = await SendRunMessageAsync(
+                    boundToken, runMessagePath, "user-message-2", "Worker status?", messageTargetSessionId);
+                Assert.Equal(HttpStatusCode.OK, replayAfterPresentation.StatusCode);
+                var presentedReplayReceipt =
+                    await replayAfterPresentation.Content.ReadFromJsonAsync<ProjectRunMessageReceipt>(
+                        OrchestratorJsonOptions);
+                Assert.Equal(explicitTargetReceipt, presentedReplayReceipt);
+
+                using var acknowledgeRequest = new HttpRequestMessage(
+                    HttpMethod.Post,
+                    $"/api/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{messageTargetSessionId}/messages/{presentedMessage.MessageId:D}/acknowledge")
+                {
+                    Content = JsonContent.Create(
+                        new AddressedMessageClaimFenceRequest(presentedMessage.ClaimFence),
+                        options: OrchestratorJsonOptions),
+                };
+                AddBearerAndTenant(acknowledgeRequest, boundToken, TenantId);
+                using var acknowledgeResponse = await orchestrator.SendAsync(acknowledgeRequest);
+                Assert.Equal(HttpStatusCode.OK, acknowledgeResponse.StatusCode);
+                var acknowledgedMessage =
+                    await acknowledgeResponse.Content.ReadFromJsonAsync<AddressedMessageEnvelope>(OrchestratorJsonOptions);
+                Assert.NotNull(acknowledgedMessage);
+                Assert.Equal(AddressedMessageStatus.Acknowledged, acknowledgedMessage.Status);
+
+                using var replayAfterAcknowledgment = await SendRunMessageAsync(
+                    boundToken, runMessagePath, "user-message-2", "Worker status?", messageTargetSessionId);
+                Assert.Equal(HttpStatusCode.OK, replayAfterAcknowledgment.StatusCode);
+                var acknowledgmentReplayReceipt =
+                    await replayAfterAcknowledgment.Content.ReadFromJsonAsync<ProjectRunMessageReceipt>(
+                        OrchestratorJsonOptions);
+                Assert.Equal(explicitTargetReceipt, acknowledgmentReplayReceipt);
+            }
         }
 
         // Replay start and check the real Events journal, not a mocked owner receipt.
@@ -864,17 +872,20 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             userMessageJournal.Parameters.AddWithValue("text", "Status?");
             Assert.Equal(1L, await userMessageJournal.ExecuteScalarAsync());
         }
-        await using (var acknowledgedTargetJournal = new NpgsqlCommand($"""
+        if (hasLegacyChild)
+        {
+            await using (var acknowledgedTargetJournal = new NpgsqlCommand($"""
             SELECT count(*) FROM "{eventsSchema}".addressed_messages
             WHERE project_id = @project AND sender_run_id = @run AND idempotency_key = @key
               AND recipient_session_id = @recipient AND status = 'Acknowledged'
             """, connection))
-        {
-            acknowledgedTargetJournal.Parameters.AddWithValue("project", project.ProjectId);
-            acknowledgedTargetJournal.Parameters.AddWithValue("run", pending.RunId);
-            acknowledgedTargetJournal.Parameters.AddWithValue("key", "user-message-2");
-            acknowledgedTargetJournal.Parameters.AddWithValue("recipient", messageTargetSessionId);
-            Assert.Equal(1L, await acknowledgedTargetJournal.ExecuteScalarAsync());
+            {
+                acknowledgedTargetJournal.Parameters.AddWithValue("project", project.ProjectId);
+                acknowledgedTargetJournal.Parameters.AddWithValue("run", pending.RunId);
+                acknowledgedTargetJournal.Parameters.AddWithValue("key", "user-message-2");
+                acknowledgedTargetJournal.Parameters.AddWithValue("recipient", messageTargetSessionId);
+                Assert.Equal(1L, await acknowledgedTargetJournal.ExecuteScalarAsync());
+            }
         }
         await using (var ownerMessage = new NpgsqlCommand($"""
             SELECT count(*) FROM "{ownerSchema}".coordination_messages
@@ -890,23 +901,26 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(1L, await ownerMessage.ExecuteScalarAsync());
         }
 
-        using (var childSteering = new HttpRequestMessage(
-            HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{messageTargetSessionId}/messages")
+        if (hasLegacyChild)
         {
-            Content = JsonContent.Create(new CoordinationMessageRequest(
-                pending.RootSessionId,
-                "child-to-root-steering",
-                AddressedMessageDeliveryMode.Immediate,
-                AddressedMessagePurpose.Steering,
-                AddressedMessageKind.Text,
-                System.Text.Json.JsonSerializer.SerializeToElement(new { text = "Worker status?" })),
-                options: OrchestratorJsonOptions),
-        })
-        {
-            AddBearerAndTenant(childSteering, boundToken, TenantId);
-            using var response = await orchestrator.SendAsync(childSteering);
-            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using (var childSteering = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"/api/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{messageTargetSessionId}/messages")
+            {
+                Content = JsonContent.Create(new CoordinationMessageRequest(
+                    pending.RootSessionId,
+                    "child-to-root-steering",
+                    AddressedMessageDeliveryMode.Immediate,
+                    AddressedMessagePurpose.Steering,
+                    AddressedMessageKind.Text,
+                    System.Text.Json.JsonSerializer.SerializeToElement(new { text = "Worker status?" })),
+                    options: OrchestratorJsonOptions),
+            })
+            {
+                AddBearerAndTenant(childSteering, boundToken, TenantId);
+                using var response = await orchestrator.SendAsync(childSteering);
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            }
         }
 
         var rootStatusPath =
@@ -923,14 +937,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(CoordinationLifecycleState.Active, rootStatusBeforeCancel.Lifecycle);
         Assert.NotNull(rootStatusBeforeCancel.ExecutionRecovery);
 
-        using var childStatusBeforeCancelResponse = await SendAsync(
-            gateway.Client, HttpMethod.Get, childStatusPath, boundToken, [TenantId]);
-        Assert.Equal(HttpStatusCode.OK, childStatusBeforeCancelResponse.StatusCode);
-        var childStatusBeforeCancel = await childStatusBeforeCancelResponse.Content
-            .ReadFromJsonAsync<SessionStatusSnapshot>(OrchestratorJsonOptions);
-        Assert.NotNull(childStatusBeforeCancel);
-        Assert.Equal(CoordinationSessionKind.ChildWork, childStatusBeforeCancel.Kind);
-        Assert.Null(childStatusBeforeCancel.ExecutionRecovery);
+        SessionStatusSnapshot? childStatusBeforeCancel = null;
+        if (hasLegacyChild)
+        {
+            using var childStatusBeforeCancelResponse = await SendAsync(
+                gateway.Client, HttpMethod.Get, childStatusPath, boundToken, [TenantId]);
+            Assert.Equal(HttpStatusCode.OK, childStatusBeforeCancelResponse.StatusCode);
+            childStatusBeforeCancel = await childStatusBeforeCancelResponse.Content
+                .ReadFromJsonAsync<SessionStatusSnapshot>(OrchestratorJsonOptions);
+            Assert.NotNull(childStatusBeforeCancel);
+            Assert.Equal(CoordinationSessionKind.ChildWork, childStatusBeforeCancel.Kind);
+            Assert.Null(childStatusBeforeCancel.ExecutionRecovery);
+        }
 
         var acceptedSelectionPath =
             $"/api/projects/{project.ProjectId}/runs/{pending.RunId}/selection";
@@ -1106,105 +1124,125 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 cleanupIntent.AcceptedSelectionHash,
                 CoordinationOwnerStore.HashSelection(cleanupSelection.Selection),
                 StringComparer.OrdinalIgnoreCase);
-            var cleanupProjection = await startStore.ReadCleanupProjectionAsync(
-                project.ProjectId, pending.RunId, pending.RootSessionId, cleanupSelection,
-                CancellationToken.None);
-            Assert.Equal(cleanupIntent.IntentId, cleanupProjection.IntentId);
-            Assert.True(
-                runtimeRunStartOwners.UniquePlacementCount == 1,
-                $"Observed Environment calls: {string.Join(", ", runtimeRunStartOwners.ObservedPaths)}");
-            var firstCleanup = await runtimeRunStartOwners.WaitForCleanupAsync(1);
-            Assert.Equal(firstCancelToken, firstCleanup.Bearer);
-            Assert.Equal(cleanupIntent.IntentId, firstCleanup.Projection.IntentId);
-            Assert.Equal("cleanup_pending", firstCleanup.Projection.CleanupDisposition);
-            Assert.False(firstCleanup.Projection.ReceiptLinks.TryGetProperty("placement", out _));
-            Assert.Equal(runtimeRunStartOwners.FirstPlacement.SandboxOperationId,
-                firstCleanup.Placement.SandboxOperationId);
-            using (var deniedCleanupReplay = await CancelChatAsync(viewerToken, "viewer-cleanup-replay"))
-                Assert.Equal(HttpStatusCode.Forbidden, deniedCleanupReplay.StatusCode);
-            Assert.Equal(1, runtimeRunStartOwners.CleanupCount);
-            Assert.Equal(
-                "cleanup_pending",
-                (await startStore.FindCleanupIntentAsync(
-                    TenantId, project.ProjectId, pending.RunId, CancellationToken.None))?.State);
-            var lateReady = await Assert.ThrowsAsync<CoordinationException>(() =>
-                startStore.CommitReadyAsync(
-                    cleanupIntent,
-                    firstStartOwner,
-                    cleanupIntent.RowVersion,
-                    new { late = true },
-                    CancellationToken.None));
-            Assert.Equal("runtime_start_run_terminal", lateReady.Code);
+            if (hasLegacyChild)
+            {
+                var legacyFailure = await Assert.ThrowsAsync<CoordinationException>(() =>
+                    startStore.ReadCleanupProjectionAsync(
+                        project.ProjectId, pending.RunId, pending.RootSessionId, cleanupSelection,
+                        CancellationToken.None));
+                Assert.Equal("runtime_start_child_cleanup_pending", legacyFailure.Code);
+                var aggregate = await startStore.ReadCleanupSummaryAsync(
+                    TenantId, project.ProjectId, pending.RunId, CancellationToken.None);
+                Assert.Equal("pending", aggregate!.State);
+                Assert.Equal(0, runtimeRunStartOwners.CleanupCount);
+            }
+            else
+            {
+                var cleanupProjection = await startStore.ReadCleanupProjectionAsync(
+                    project.ProjectId, pending.RunId, pending.RootSessionId, cleanupSelection,
+                    CancellationToken.None);
+                Assert.Equal(cleanupIntent.IntentId, cleanupProjection.IntentId);
+                Assert.True(
+                    runtimeRunStartOwners.UniquePlacementCount == 1,
+                    $"Observed Environment calls: {string.Join(", ", runtimeRunStartOwners.ObservedPaths)}");
+                var firstCleanup = await runtimeRunStartOwners.WaitForCleanupAsync(1);
+                Assert.Equal(firstCancelToken, firstCleanup.Bearer);
+                Assert.Equal(cleanupIntent.IntentId, firstCleanup.Projection.IntentId);
+                Assert.Equal("cleanup_pending", firstCleanup.Projection.CleanupDisposition);
+                Assert.False(firstCleanup.Projection.ReceiptLinks.TryGetProperty("placement", out _));
+                Assert.Equal(runtimeRunStartOwners.FirstPlacement.SandboxOperationId,
+                    firstCleanup.Placement.SandboxOperationId);
+                using (var deniedCleanupReplay = await CancelChatAsync(viewerToken, "viewer-cleanup-replay"))
+                    Assert.Equal(HttpStatusCode.Forbidden, deniedCleanupReplay.StatusCode);
+                Assert.Equal(1, runtimeRunStartOwners.CleanupCount);
+                Assert.Equal(
+                    "cleanup_pending",
+                    (await startStore.FindCleanupIntentAsync(
+                        TenantId, project.ProjectId, pending.RunId, CancellationToken.None))?.State);
+                var lateReady = await Assert.ThrowsAsync<CoordinationException>(() =>
+                    startStore.CommitReadyAsync(
+                        cleanupIntent,
+                        firstStartOwner,
+                        cleanupIntent.RowVersion,
+                        new { late = true },
+                        CancellationToken.None));
+                Assert.Equal("runtime_start_run_terminal", lateReady.Code);
 
-            var cleanupState = await WaitForCleanupStateAsync(
-                startStore, TenantId, project.ProjectId, pending.RunId, "cleanup_pending");
-            Assert.NotNull(cleanupState);
-            var replayOwnerSchema = ownerSchema;
-            await using var replayFactory = new OrchestratorIntegrationFactory(
-                _connectionString,
-                replayOwnerSchema,
-                signingKey,
-                projects.CreateHandler,
-                () => eventsReference!.Server.CreateHandler(),
-                environmentHandler: () => runtimeRunStartOwners.CreateHandler(
-                    () => eventsReference!.Server.CreateHandler()),
-                runtimeUsageHandler: () => eventsReference!.Server.CreateHandler(),
-                loggerProvider: runtimeRunStartOwners.LoggerProvider);
-            using var replayOrchestrator = replayFactory.CreateClient(new WebApplicationFactoryClientOptions
-            {
-                BaseAddress = new Uri("https://orchestrator.test/")
-            });
-            await using var replayGateway = GatewayProductionResourceServer.Start(
-                signingKey,
-                (request, token) => ForwardOwnerRequestAsync(request, projects.Client, token),
-                orchestratorOwner: (request, token) => ForwardOwnerRequestAsync(
-                    request, replayOrchestrator, token),
-                identityAudience: "https://api.test");
-            using var cancelReplayRequest = new HttpRequestMessage(
-                HttpMethod.Post, $"/api/v1/projects/{project.ProjectId}/runs/{pending.RunId}/cancel")
-            {
-                Content = JsonContent.Create(new CancelProjectRunRequest())
-            };
-            var replayCancelToken = await IssueTokenAsync(
-                "projects.orchestrator", [TenantId], "chat-contributor", null, null, []);
-            AddBearerAndTenant(cancelReplayRequest, replayCancelToken, TenantId);
-            cancelReplayRequest.Headers.Add("Idempotency-Key", "contributor-cancel-restart-replay");
-            using var cancelReplay = await replayGateway.Client.SendAsync(cancelReplayRequest);
-            Assert.Equal(HttpStatusCode.OK, cancelReplay.StatusCode);
-            var secondCleanup = await runtimeRunStartOwners.WaitForCleanupAsync(2);
-            Assert.Equal(replayCancelToken, secondCleanup.Bearer);
-            Assert.Equal(firstCleanup.Projection.IntentId, secondCleanup.Projection.IntentId);
-            Assert.Equal(
-                firstCleanup.Placement.SandboxOperationId,
-                secondCleanup.Placement.SandboxOperationId);
-            var savedCleanupAttempt = secondCleanup.Projection.ReceiptLinks
-                .GetProperty("cleanupAttempt").Deserialize<RuntimeRunStartCleanupAttempt>(OrchestratorJsonOptions);
-            Assert.NotNull(savedCleanupAttempt);
-            Assert.Equal(secondCleanup.Placement.SandboxOperationId, savedCleanupAttempt.SandboxOperationId);
-            Assert.Equal(secondCleanup.Placement.SandboxResource.Generation, savedCleanupAttempt.ResourceGeneration);
-            Assert.Equal(secondCleanup.Placement.ProviderFencingGeneration,
-                savedCleanupAttempt.ProviderFencingGeneration);
-            Assert.Equal("cleanup_pending", secondCleanup.Projection.CleanupDisposition);
-            var completedCleanupState = await WaitForCleanupStateAsync(
-                startStore, TenantId, project.ProjectId, pending.RunId, "cleanup_complete");
-            Assert.NotNull(completedCleanupState);
-            var completedCleanupLinks = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
-                completedCleanupState.ReceiptLinks, OrchestratorJsonOptions);
-            Assert.NotNull(completedCleanupLinks);
-            var completedCleanupReceipt = completedCleanupLinks["cleanup"]
-                .Deserialize<RuntimeRunStartCleanupReceipt>(OrchestratorJsonOptions);
-            Assert.NotNull(completedCleanupReceipt);
-            var mismatchedCleanupReceipt = completedCleanupReceipt with
-            {
-                SandboxOperationId = Guid.NewGuid()
-            };
-            var mismatch = await Assert.ThrowsAsync<CoordinationException>(() =>
-                startStore.MarkCleanupCompleteAsync(
-                    completedCleanupState,
-                    completedCleanupState.RowVersion,
-                    mismatchedCleanupReceipt,
-                    CancellationToken.None));
-            Assert.Equal("runtime_start_cleanup_receipt_invalid", mismatch.Code);
+                var cleanupState = await WaitForCleanupStateAsync(
+                    startStore, TenantId, project.ProjectId, pending.RunId, "cleanup_pending");
+                Assert.NotNull(cleanupState);
+                var replayOwnerSchema = ownerSchema;
+                await using var replayFactory = new OrchestratorIntegrationFactory(
+                    _connectionString,
+                    replayOwnerSchema,
+                    signingKey,
+                    projects.CreateHandler,
+                    () => eventsReference!.Server.CreateHandler(),
+                    environmentHandler: () => runtimeRunStartOwners.CreateHandler(
+                        () => eventsReference!.Server.CreateHandler()),
+                    runtimeUsageHandler: () => eventsReference!.Server.CreateHandler(),
+                    loggerProvider: runtimeRunStartOwners.LoggerProvider);
+                using var replayOrchestrator = replayFactory.CreateClient(new WebApplicationFactoryClientOptions
+                {
+                    BaseAddress = new Uri("https://orchestrator.test/")
+                });
+                await using var replayGateway = GatewayProductionResourceServer.Start(
+                    signingKey,
+                    (request, token) => ForwardOwnerRequestAsync(request, projects.Client, token),
+                    orchestratorOwner: (request, token) => ForwardOwnerRequestAsync(
+                        request, replayOrchestrator, token),
+                    identityAudience: "https://api.test");
+                using var cancelReplayRequest = new HttpRequestMessage(
+                    HttpMethod.Post, $"/api/v1/projects/{project.ProjectId}/runs/{pending.RunId}/cancel")
+                {
+                    Content = JsonContent.Create(new CancelProjectRunRequest())
+                };
+                var replayCancelToken = await IssueTokenAsync(
+                    "projects.orchestrator", [TenantId], "chat-contributor", null, null, []);
+                AddBearerAndTenant(cancelReplayRequest, replayCancelToken, TenantId);
+                cancelReplayRequest.Headers.Add("Idempotency-Key", "contributor-cancel-restart-replay");
+                using var cancelReplay = await replayGateway.Client.SendAsync(cancelReplayRequest);
+                Assert.Equal(HttpStatusCode.OK, cancelReplay.StatusCode);
+                var secondCleanup = await runtimeRunStartOwners.WaitForCleanupAsync(2);
+                Assert.Equal(replayCancelToken, secondCleanup.Bearer);
+                Assert.Equal(firstCleanup.Projection.IntentId, secondCleanup.Projection.IntentId);
+                Assert.Equal(
+                    firstCleanup.Placement.SandboxOperationId,
+                    secondCleanup.Placement.SandboxOperationId);
+                var savedCleanupAttempt = secondCleanup.Projection.ReceiptLinks
+                    .GetProperty("cleanupAttempt").Deserialize<RuntimeRunStartCleanupAttempt>(OrchestratorJsonOptions);
+                Assert.NotNull(savedCleanupAttempt);
+                Assert.Equal(secondCleanup.Placement.SandboxOperationId, savedCleanupAttempt.SandboxOperationId);
+                Assert.Equal(secondCleanup.Placement.SandboxResource.Generation, savedCleanupAttempt.ResourceGeneration);
+                Assert.Equal(secondCleanup.Placement.ProviderFencingGeneration,
+                    savedCleanupAttempt.ProviderFencingGeneration);
+                Assert.Equal(secondCleanup.Placement.SandboxResource, savedCleanupAttempt.SandboxResource);
+                Assert.Equal("cleanup_pending", secondCleanup.Projection.CleanupDisposition);
+                var completedCleanupState = await WaitForCleanupStateAsync(
+                    startStore, TenantId, project.ProjectId, pending.RunId, "cleanup_complete");
+                Assert.NotNull(completedCleanupState);
+                var completedCleanupLinks = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                    completedCleanupState.ReceiptLinks, OrchestratorJsonOptions);
+                Assert.NotNull(completedCleanupLinks);
+                var completedCleanupReceipt = completedCleanupLinks["cleanup"]
+                    .Deserialize<RuntimeRunStartCleanupReceipt>(OrchestratorJsonOptions);
+                Assert.NotNull(completedCleanupReceipt);
+                var mismatchedCleanupReceipt = completedCleanupReceipt with
+                {
+                    SandboxOperationId = Guid.NewGuid()
+                };
+                var completedProjection = await startStore.ReadCleanupProjectionAsync(
+                    project.ProjectId, pending.RunId, pending.RootSessionId, cleanupSelection,
+                    CancellationToken.None, contractVersion: 2);
+                var mismatch = await Assert.ThrowsAsync<CoordinationException>(() =>
+                    startStore.MarkCleanupCompleteAsync(
+                        completedCleanupState,
+                        completedCleanupState.RowVersion,
+                        mismatchedCleanupReceipt,
+                        completedProjection,
+                        CancellationToken.None));
+                Assert.Equal("runtime_start_cleanup_receipt_invalid", mismatch.Code);
+            }
         }
         finally
         {
@@ -1260,32 +1298,36 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using (var rootJson = JsonDocument.Parse(rootStatusAfterCancelBody))
             Assert.False(rootJson.RootElement.TryGetProperty("executionRecovery", out _));
 
-        using var childStatusAfterCancelResponse = await SendAsync(
-            gateway.Client, HttpMethod.Get, childStatusPath, boundToken, [TenantId]);
-        Assert.Equal(HttpStatusCode.OK, childStatusAfterCancelResponse.StatusCode);
-        var childStatusAfterCancel = await childStatusAfterCancelResponse.Content
-            .ReadFromJsonAsync<SessionStatusSnapshot>(OrchestratorJsonOptions);
-        Assert.NotNull(childStatusAfterCancel);
-        Assert.Equal(childStatusBeforeCancel.Identity, childStatusAfterCancel.Identity);
-        Assert.Equal(childStatusBeforeCancel.ParentSessionId, childStatusAfterCancel.ParentSessionId);
-        Assert.Equal(childStatusBeforeCancel.RootSessionId, childStatusAfterCancel.RootSessionId);
-        Assert.Equal(childStatusBeforeCancel.Kind, childStatusAfterCancel.Kind);
-        Assert.Equal(childStatusBeforeCancel.Detached, childStatusAfterCancel.Detached);
-        Assert.Equal(CoordinationLifecycleState.Cancelled, childStatusAfterCancel.Lifecycle);
-        Assert.Equal(childStatusBeforeCancel.ExecutionFence + 1, childStatusAfterCancel.ExecutionFence);
-        Assert.Equal(childStatusBeforeCancel.StateVersion + 1, childStatusAfterCancel.StateVersion);
-        Assert.Equal(childStatusBeforeCancel.Activity, childStatusAfterCancel.Activity);
-        Assert.Equal(
-            childStatusBeforeCancel.ActivityUnavailableCode,
-            childStatusAfterCancel.ActivityUnavailableCode);
-        Assert.Equal(childStatusBeforeCancel.RuntimeEffectsState, childStatusAfterCancel.RuntimeEffectsState);
-        Assert.Equal(
-            childStatusBeforeCancel.RuntimeEffectsUnavailableCode,
-            childStatusAfterCancel.RuntimeEffectsUnavailableCode);
-        Assert.Equal(childStatusBeforeCancel.InterruptionIntent, childStatusAfterCancel.InterruptionIntent);
-        Assert.Empty(childStatusAfterCancel.Blockers);
-        Assert.Null(childStatusAfterCancel.ExecutionRecovery);
-        Assert.Equal("cancelled", childStatusAfterCancel.RunExecution.State);
+        if (hasLegacyChild)
+        {
+            Assert.NotNull(childStatusBeforeCancel);
+            using var childStatusAfterCancelResponse = await SendAsync(
+                gateway.Client, HttpMethod.Get, childStatusPath, boundToken, [TenantId]);
+            Assert.Equal(HttpStatusCode.OK, childStatusAfterCancelResponse.StatusCode);
+            var childStatusAfterCancel = await childStatusAfterCancelResponse.Content
+                .ReadFromJsonAsync<SessionStatusSnapshot>(OrchestratorJsonOptions);
+            Assert.NotNull(childStatusAfterCancel);
+            Assert.Equal(childStatusBeforeCancel.Identity, childStatusAfterCancel.Identity);
+            Assert.Equal(childStatusBeforeCancel.ParentSessionId, childStatusAfterCancel.ParentSessionId);
+            Assert.Equal(childStatusBeforeCancel.RootSessionId, childStatusAfterCancel.RootSessionId);
+            Assert.Equal(childStatusBeforeCancel.Kind, childStatusAfterCancel.Kind);
+            Assert.Equal(childStatusBeforeCancel.Detached, childStatusAfterCancel.Detached);
+            Assert.Equal(CoordinationLifecycleState.Cancelled, childStatusAfterCancel.Lifecycle);
+            Assert.Equal(childStatusBeforeCancel.ExecutionFence + 1, childStatusAfterCancel.ExecutionFence);
+            Assert.Equal(childStatusBeforeCancel.StateVersion + 1, childStatusAfterCancel.StateVersion);
+            Assert.Equal(childStatusBeforeCancel.Activity, childStatusAfterCancel.Activity);
+            Assert.Equal(
+                childStatusBeforeCancel.ActivityUnavailableCode,
+                childStatusAfterCancel.ActivityUnavailableCode);
+            Assert.Equal(childStatusBeforeCancel.RuntimeEffectsState, childStatusAfterCancel.RuntimeEffectsState);
+            Assert.Equal(
+                childStatusBeforeCancel.RuntimeEffectsUnavailableCode,
+                childStatusAfterCancel.RuntimeEffectsUnavailableCode);
+            Assert.Equal(childStatusBeforeCancel.InterruptionIntent, childStatusAfterCancel.InterruptionIntent);
+            Assert.Empty(childStatusAfterCancel.Blockers);
+            Assert.Null(childStatusAfterCancel.ExecutionRecovery);
+            Assert.Equal("cancelled", childStatusAfterCancel.RunExecution.State);
+        }
 
         using (var wrongRunStatus = await SendAsync(
             gateway.Client,
@@ -1304,7 +1346,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.True(receipt.AlreadyTerminal);
         }
         Assert.Equal(1, runtimeRunStartOwners.UniquePlacementCount);
-        Assert.Equal(2, runtimeRunStartOwners.CleanupCount);
+        Assert.Equal(hasLegacyChild ? 0 : 2, runtimeRunStartOwners.CleanupCount);
         await RevokeRoleAsync(
             projects.PrivilegedFixtureDataSource,
             orchestratorAssignment.AssignmentId,
@@ -1606,12 +1648,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         private readonly ConcurrentQueue<string> _readinessDiagnostics = new();
         private readonly ConcurrentQueue<string> _provisionerFailures = new();
         private readonly ConcurrentQueue<string> _handlerFailures = new();
+        private readonly ConcurrentQueue<RuntimeRunStartPlacementRequest> _placementAttempts = new();
         private readonly CapturingLoggerProvider _loggerProvider = new();
         private SandboxStartupPhaseObservation[] _activatedStartupPhases = [];
         private readonly TaskCompletionSource<RuntimeRunStartPlacementReceipt> _firstPlacement =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly SemaphoreSlim _cleanupSignal = new(0);
         private int _cleanupCount;
+        private int _dropChildPlacementReply;
+        private bool _replayPlacementToOwner;
 
         public int UniquePlacementCount => _placements.Count;
         public int CleanupCount => Volatile.Read(ref _cleanupCount);
@@ -1620,6 +1665,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         public IEnumerable<string> ReadinessDiagnostics => _readinessDiagnostics;
         public IReadOnlyCollection<string> ProvisionerFailures => _provisionerFailures.ToArray();
         public IReadOnlyCollection<string> HandlerFailures => _handlerFailures.ToArray();
+        public IReadOnlyCollection<RuntimeRunStartPlacementRequest> PlacementAttempts => _placementAttempts.ToArray();
         public IReadOnlyCollection<string> LoggerMessages => _loggerProvider.Messages;
         public Microsoft.Extensions.Logging.ILoggerProvider LoggerProvider => _loggerProvider;
 
@@ -1627,12 +1673,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Task<RuntimeRunStartPlacementReceipt>>? _provisioner;
         private readonly SemaphoreSlim _placementLock = new(1, 1);
 
-        public HttpMessageHandler CreateHandler(Func<HttpMessageHandler> inner) => new Handler(inner(), this);
+        public HttpMessageHandler CreateHandler(Func<HttpMessageHandler> inner, bool onlyChildStart = false) =>
+            new Handler(inner(), this, onlyChildStart);
+
+        public void DropNextChildPlacementReply() => Interlocked.Exchange(ref _dropChildPlacementReply, 1);
 
         public void SetProvisioner(
             Func<RuntimeOwnerContext, RuntimeRunStartPlacementRequest, HttpRequestMessage, CancellationToken,
-                Task<RuntimeRunStartPlacementReceipt>> provisioner) =>
+                Task<RuntimeRunStartPlacementReceipt>> provisioner, bool replayToOwner = false)
+        {
             _provisioner = provisioner;
+            _replayPlacementToOwner = replayToOwner;
+        }
 
         public async Task<RuntimeRunStartPlacementReceipt> WaitForPlacementAsync()
         {
@@ -1676,12 +1728,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         {
             startRequest.ValidateFor(owner);
             var key = $"{owner.ProjectId}:{owner.RunId}:{owner.SessionId}:{startRequest.BootstrapOperationId:N}";
-            if (_placements.TryGetValue(key, out var existing))
+            if (_placements.TryGetValue(key, out var existing) && !_replayPlacementToOwner)
                 return existing;
             await _placementLock.WaitAsync(cancellationToken);
             try
             {
-                if (_placements.TryGetValue(key, out existing))
+                if (_placements.TryGetValue(key, out existing) && !_replayPlacementToOwner)
                     return existing;
                 var provisioner = _provisioner
                     ?? throw new InvalidOperationException("The startup placement owner is not configured.");
@@ -1695,6 +1747,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     _provisionerFailures.Enqueue(exception.ToString());
                     throw;
                 }
+                if (existing is not null)
+                    Assert.Equal(existing, placement);
                 _placements[key] = placement;
                 _firstPlacement.TrySetResult(placement);
                 return placement;
@@ -1755,7 +1809,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             }
         }
 
-        private sealed class Handler(HttpMessageHandler inner, RuntimeRunStartOwnerProbe owner)
+        private sealed class Handler(
+            HttpMessageHandler inner, RuntimeRunStartOwnerProbe owner, bool onlyChildStart)
             : DelegatingHandler(inner)
         {
             protected override async Task<HttpResponseMessage> SendAsync(
@@ -1763,10 +1818,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 CancellationToken cancellationToken)
             {
                 owner._observedPaths.Enqueue($"{request.Method} {request.RequestUri}");
-                if (request.RequestUri?.AbsolutePath != "/internal/runtime/run-start/placement")
+                var path = request.RequestUri?.AbsolutePath;
+                if (path != "/internal/runtime/run-start/child-placement" &&
+                    (onlyChildStart || path is not (
+                        "/internal/runtime/run-start/placement" or
+                        "/internal/runtime/run-start/terminal-cleanup")))
                 {
                     var response = await base.SendAsync(request, cancellationToken);
-                    await owner.ObserveReadinessAsync(request, response, cancellationToken);
+                    if (!onlyChildStart)
+                        await owner.ObserveReadinessAsync(request, response, cancellationToken);
                     return response;
                 }
 
@@ -1777,9 +1837,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     Assert.NotNull(input);
                     input.Validate();
                     if (input.Owner is { } startingOwner)
-                        return JsonResponse(
-                            await owner.GetPlacementAsync(startingOwner, input, request, cancellationToken),
-                            request);
+                    {
+                        owner._placementAttempts.Enqueue(input);
+                        var startedPlacement = await owner.GetPlacementAsync(
+                            startingOwner, input, request, cancellationToken);
+                        if (path == "/internal/runtime/run-start/child-placement" &&
+                            Interlocked.Exchange(ref owner._dropChildPlacementReply, 0) == 1)
+                            throw new HttpRequestException("The child placement reply was lost.");
+                        return JsonResponse(startedPlacement, request);
+                    }
 
                     var projection = Assert.IsType<RuntimeRunStartCleanupProjection>(input.Cleanup);
                     var placement = projection.ReceiptLinks.TryGetProperty("placement", out var savedPlacement)
@@ -1801,14 +1867,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     var attempt = Interlocked.Increment(ref owner._cleanupCount);
                     owner._cleanupSignal.Release();
                     return JsonResponse(new RuntimeRunStartCleanupReceipt(
-                        1,
+                        projection.ContractVersion,
                         projection.IntentId,
                         placement.SandboxOperationId,
                         placement.SandboxResource.Generation,
                         placement.ProviderFencingGeneration,
                         placement.SandboxIdempotencyKey,
                         attempt == 1 ? "releasing" : "released",
-                        attempt == 1 ? "cleanup_pending" : "cleanup_complete"), request);
+                        attempt == 1 ? "cleanup_pending" : "cleanup_complete")
+                    {
+                        SandboxResource = projection.ContractVersion == 2 ? placement.SandboxResource : null
+                    }, request);
                 }
                 catch (Exception exception)
                 {
@@ -1905,7 +1974,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             CancellationToken cancellationToken)
         {
             var inner = await ready.WaitAsync(cancellationToken);
-            using var invoker = new HttpMessageInvoker(inner);
+            using var invoker = new HttpMessageInvoker(inner, disposeHandler: false);
             return await invoker.SendAsync(request, cancellationToken);
         }
     }

@@ -269,6 +269,7 @@ const FUNCTIONS = {
     // Migration 046 uses these owner-only functions to validate inserts and close jobs on cancellation.
     'guard_workflow_generation_job_insert()',
     'close_workflow_generation_jobs_on_cancel()',
+    'guard_terminal_cleanup_recovery()',
   ],
 };
 
@@ -348,7 +349,8 @@ export function buildP1PostgresPlan(targetName = 'agentweaver') {
     // 040 adds P1 request provenance and invocation bindings; 041 adds numeric-limit no-send receipts.
     // 042 adds coordinator run-start intents with exact SELECT,INSERT,UPDATE grants.
     // 043 and 045 add native root-turn evidence kinds; 044 adds replacement operations.
-    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46],
+    // 047 guards recovery while terminal cleanup is admitted.
+    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47],
     // Bind each owner migration catalog into the reviewed plan hash.
     environmentVersions: Array.from({ length: 12 }, (_, index) => index + 1),
     eventsVersions: Array.from({ length: 11 }, (_, index) => index + 1),

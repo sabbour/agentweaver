@@ -2,21 +2,21 @@
   "version": 2,
   "source": {
     "file": "v1-environment-sandbox-lifecycle.json",
-    "sha256": "863c03d354b5cec4e4084116e7d8a65ca32fc4dd20ba564b8aaf9d43519820fb"
+    "sha256": "380d550f91ea3c1e85fff4b48b0387092ec5f20357737a1c66412a05ec551377"
   },
   "drawio": {
     "file": "v1-environment-sandbox-lifecycle.drawio",
-    "sha256": "f29807ef490fa3b6a74d44f0a038de97ca2e8d1f77b8a12dfcc56ba31e1700d9"
+    "sha256": "619099af5f8d455f2d105a0851fd7de325a8f802f2285ea9a2417a272de294d1"
   },
   "renderer": {
     "renderer": "draw.io Desktop",
     "format": "png",
     "border": 16,
     "scale": 2,
-    "rendererVersion": "32.6.1"
+    "rendererVersion": "32.6.10"
   },
   "png": {
     "file": "v1-environment-sandbox-lifecycle.png",
-    "sha256": "77eb9d48b30235dcd21b5c6e04f41a96bf2f14d87624b88b2a06ac9e9d11efef"
+    "sha256": "dbced53047bcf32c40c7f7b23a382c1798925527cf4a8a1c689270a81fd4692a"
   }
 }

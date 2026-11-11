@@ -27,12 +27,13 @@ public static partial class CoordinationEndpoints
         var cleanup = context.Request.Headers["X-Agentweaver-Runtime-Cleanup"];
         if (cleanup.Count != 0)
         {
-            if (cleanup.Count != 1 || cleanup[0] != "1")
+            if (cleanup.Count != 1 || cleanup[0] is not ("1" or "2"))
                 return ExecuteAsync(() => Task.FromResult<IResult>(
                     Results.BadRequest(new { code = "runtime_start_cleanup_request_invalid" })),
                     cancellationToken);
             return ReadRuntimeRunStartCleanupProjectionAsync(
-                projectId, runId, sessionId, context, options, projects, cancellationToken);
+                projectId, runId, sessionId, context, options, projects,
+                cleanup[0] == "2" ? 2 : 1, cancellationToken);
         }
         return ExecuteAsync(async () => Results.Ok(await ReadRuntimeOwnerContextCoreAsync(
             projectId, runId, sessionId, context, options, projects, store, decisions,
@@ -47,6 +48,7 @@ public static partial class CoordinationEndpoints
         HttpContext context,
         OrchestratorOptions options,
         ProjectsRunSelectionClient projects,
+        int contractVersion,
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>
         {
@@ -61,7 +63,7 @@ public static partial class CoordinationEndpoints
                 ?? throw new CoordinationException(
                     "runtime_start_cleanup_unavailable", StatusCodes.Status409Conflict);
             var projection = await starts.ReadCleanupProjectionAsync(
-                projectId, runId, sessionId, selection, cancellationToken).ConfigureAwait(false);
+                projectId, runId, sessionId, selection, cancellationToken, contractVersion).ConfigureAwait(false);
             var refreshed = await projects.ReadSelectionForCancelAsync(
                 context, projectId, runId, cancellationToken).ConfigureAwait(false);
             if (refreshed.Authorization.TenantId != selection.Authorization.TenantId ||

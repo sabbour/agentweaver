@@ -18,6 +18,12 @@ public sealed record RuntimeStartupSummary(
     string? ImagePlatform = null,
     string? PodUid = null);
 
+public sealed record RuntimeCleanupSummary(
+    string State,
+    int Total,
+    int Pending,
+    int Complete);
+
 internal sealed record RuntimeRunStartIntent(
     string TenantId,
     string ProjectId,
@@ -40,6 +46,24 @@ internal sealed record RuntimeRunStartIntent(
 {
     public RuntimeStartupSummary Summary => new(State, CurrentStep, FailureCode);
 }
+
+internal sealed record RuntimeChildStartBinding(
+    string ParentRootSessionId,
+    string ChildSessionId,
+    string WorkPlanId,
+    string AssociationId,
+    string? WorkPlanItemId,
+    string WorkflowStepId,
+    string AgentId,
+    string ModelSelectionReference,
+    string ActorIssuer,
+    string ActorId,
+    string ContextRevision,
+    long DecisionStateVersion,
+    long InitialStateVersion,
+    Guid SpawnCommandId,
+    Guid DispatchMessageId,
+    string PromptHash);
 
 internal sealed record RuntimeReplacementOperation(
     string TenantId,

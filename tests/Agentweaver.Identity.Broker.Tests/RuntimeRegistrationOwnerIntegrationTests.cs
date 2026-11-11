@@ -2057,9 +2057,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
     private sealed class RuntimePlacementTestServer(IHost host, NpgsqlDataSource dataSource,
         HttpClient sandboxHttpClient, SandboxLeaseSnapshot? lease, RuntimePlacementReadTimeProvider readTime,
-        EnvironmentOwnerIdentity owner) : IAsyncDisposable
+        EnvironmentOwnerIdentity owner, RuntimePlacementKubernetesTransport kubernetes) : IAsyncDisposable
     {
         private readonly SandboxLeaseSnapshot? _lease = lease;
+        public int SandboxClaimCreateCount => kubernetes.SandboxClaimCreateCount;
         public SandboxLeaseSnapshot Lease => _lease
             ?? throw new InvalidOperationException("The on-demand first-start Environment has no saved Sandbox lease.");
         public HttpMessageHandler CreateHandler() => host.GetTestServer().CreateHandler();
@@ -2386,7 +2387,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         });
                     });
                 }).StartAsync();
-                return new(host, dataSource, sandboxHttpClient!, lease, readTimeProvider, owner);
+                return new(host, dataSource, sandboxHttpClient!, lease, readTimeProvider, owner, kubernetesTransport);
             }
             catch
             {
@@ -2510,6 +2511,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         private readonly Dictionary<string, JsonNode> _resources = new(StringComparer.Ordinal);
         private JsonNode? _pods;
         private JsonNode? _events;
+        private int _sandboxClaimCreateCount;
+
+        public int SandboxClaimCreateCount => Volatile.Read(ref _sandboxClaimCreateCount);
 
         public RuntimePlacementKubernetesTransport(
             AgentSandboxOptions options, EnvironmentOwnerIdentity owner, SandboxProvisionApiRequest provisionRequest,
@@ -2752,6 +2756,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 var metadata = body["metadata"]!.AsObject();
                 var name = metadata["name"]!.GetValue<string>();
                 var resourceType = path[(path.LastIndexOf('/') + 1)..];
+                if (resourceType == "sandboxclaims")
+                    Interlocked.Increment(ref _sandboxClaimCreateCount);
                 metadata["uid"] = resourceType switch
                 {
                     "sandboxtemplates" => "sandbox-template-uid",

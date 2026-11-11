@@ -26,6 +26,80 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
     : IClassFixture<EnvironmentPostgresFixture>
 {
     [Fact]
+    public async Task ChildFirstStartReusesTheExactPlacementAndRejectsTheRootContract()
+    {
+        using var fixture = CreateFixture(database, 8, child: true);
+        var operation = Guid.NewGuid();
+        var credential = new SecretCredential(
+            "first-start-token", DateTimeOffset.UtcNow.AddMinutes(2), TimeProvider.System);
+        var actor = new RuntimeActorAuthorization(credential, fixture.Owner.TenantId);
+        try
+        {
+            var request = new RuntimeRunStartPlacementRequest(2, fixture.Owner, null, operation);
+            var first = await fixture.Manager.ProvisionAsync(request, actor, CancellationToken.None);
+            var retry = await fixture.Manager.ProvisionAsync(request, actor, CancellationToken.None);
+            Assert.Equal(first, retry);
+            Assert.Equal(1, fixture.Sandbox.ProvisionCalls);
+            Assert.Equal(1, fixture.Storage.ProvisionCalls);
+            await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Manager.ProvisionAsync(new(1, fixture.Owner, null, operation), actor, CancellationToken.None));
+            Assert.Equal(1, fixture.Sandbox.ProvisionCalls);
+        }
+        finally
+        {
+            credential.Invalidate();
+        }
+    }
+
+    [Theory]
+    [InlineData("completed")]
+    [InlineData("failed")]
+    [InlineData("indeterminate")]
+    [InlineData("cancelled")]
+    public async Task TerminalCleanupUsesTheExactCurrentFenceAndRetiresOnlyTheBoundSandbox(string state)
+    {
+        using var fixture = CreateFixture(database, 8);
+        var credential = new SecretCredential(
+            "first-start-token", DateTimeOffset.UtcNow.AddMinutes(2), TimeProvider.System);
+        var actor = new RuntimeActorAuthorization(credential, fixture.Owner.TenantId);
+        try
+        {
+            var receipt = await fixture.Manager.ProvisionAsync(
+                new(1, fixture.Owner, null, Guid.NewGuid()), actor, CancellationToken.None);
+            fixture.Projects.Authorization = Authorization(
+                fixture.Owner, bound: false, ProjectAuthorizationPermission.CancelRun);
+            var projection = Projection(fixture.Owner, receipt, Guid.NewGuid(), "cleanup_pending",
+                JsonSerializer.SerializeToElement(new { placement = receipt }, JsonOptions)) with
+            {
+                ContractVersion = 2,
+                RunState = state,
+                CancellationFence = 0,
+                TerminalFence = fixture.Owner.ExecutionFence + (state == "cancelled" ? 1 : 0),
+                ParentRootSessionId = fixture.Owner.SessionId
+            };
+            fixture.OwnerHandler.CleanupProjection = projection;
+            var stale = projection with { IntentVersion = projection.IntentVersion + 1 };
+            await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Manager.CleanupAsync(new(2, null, stale), actor, CancellationToken.None));
+            Assert.Equal(0, fixture.Sandbox.ReleaseCalls);
+            var cleanup = await fixture.Manager.CleanupAsync(
+                new(2, null, projection), actor, CancellationToken.None);
+            Assert.Equal("cleanup_complete", cleanup.CleanupDisposition);
+            Assert.Equal(receipt.SandboxResource, fixture.Sandbox.LastReleasedResource);
+            Assert.Equal(1, fixture.Sandbox.ReleaseCalls);
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                (projection with { RunState = "active" }).Validate());
+            if (state == "cancelled")
+                Assert.Throws<RuntimeAuthorizationException>(() =>
+                    (projection with { TerminalFence = projection.ExecutionFence }).Validate());
+        }
+        finally
+        {
+            credential.Invalidate();
+        }
+    }
+
+    [Fact]
     public async Task FirstStartPinsTheFixedWorkspaceAndCleanupReleasesOnlyTheSavedSandbox()
     {
         using var fixture = CreateFixture(database, 8);
@@ -313,10 +387,12 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
         }
     }
 
-    [Fact]
-    public async Task FirstStartAuthorityLossAfterProviderReturnRecordsTheExactResourceWithoutReadiness()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FirstStartAuthorityLossAfterProviderReturnRecordsTheExactResourceWithoutReadiness(bool child)
     {
-        using var fixture = CreateFixture(database, 1);
+        using var fixture = CreateFixture(database, 1, child);
         fixture.Sandbox.AfterProvision = () => fixture.OwnerHandler.DenyOwnerContext = true;
         var environmentId = EnvironmentLifecycleManager.CreateEnvironmentId(
             fixture.Owner.TenantId, fixture.Owner.ProjectId, fixture.Owner.RunId,
@@ -335,7 +411,7 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
         try
         {
             await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => fixture.Manager.ProvisionAsync(
-                new(1, fixture.Owner, null, Guid.NewGuid()),
+                new(child ? 2 : 1, fixture.Owner, null, Guid.NewGuid()),
                 new RuntimeActorAuthorization(credential, fixture.Owner.TenantId),
                 CancellationToken.None));
         }
@@ -396,10 +472,12 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
             fence, RuntimeRunStartKeys.WorkspaceVolumeId(fixture.Owner), CancellationToken.None));
     }
 
-    [Fact]
-    public async Task CleanupReconcilesTheExactUncertainProvisionAndNeverReprovisions()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CleanupReconcilesTheExactUncertainProvisionAndNeverReprovisions(bool child)
     {
-        using var fixture = CreateFixture(database, 1);
+        using var fixture = CreateFixture(database, 1, child);
         fixture.Sandbox.LoseNextProvisionResponse = true;
         var bootstrapOperationId = Guid.NewGuid();
         var provisionCredential = new SecretCredential(
@@ -407,7 +485,7 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
         try
         {
             await Assert.ThrowsAsync<SandboxProviderException>(() => fixture.Manager.ProvisionAsync(
-                new(1, fixture.Owner, null, bootstrapOperationId),
+                new(child ? 2 : 1, fixture.Owner, null, bootstrapOperationId),
                 new RuntimeActorAuthorization(provisionCredential, fixture.Owner.TenantId),
                 CancellationToken.None));
         }
@@ -417,21 +495,25 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
         }
 
         var projection = new RuntimeRunStartCleanupProjection(
-            1,
+            child ? 2 : 1,
             fixture.Owner.TenantId,
             fixture.Owner.ProjectId,
             fixture.Owner.RunId,
             fixture.Owner.SessionId,
             fixture.Owner.AcceptedSelectionHash,
             "cancelled",
-            fixture.Owner.ExecutionFence + 1,
+            child ? 0 : fixture.Owner.ExecutionFence + 1,
             Guid.NewGuid(),
             1,
             fixture.Owner.ExecutionFence,
             bootstrapOperationId,
             RuntimeRunStartKeys.EnvironmentId(fixture.Owner),
             "cleanup_pending",
-            JsonSerializer.SerializeToElement(new { }, JsonOptions)).Validate();
+            JsonSerializer.SerializeToElement(new { }, JsonOptions))
+        {
+            TerminalFence = child ? fixture.Owner.ExecutionFence + 1 : null,
+            ParentRootSessionId = child ? "root" : null
+        }.Validate();
         fixture.OwnerHandler.CleanupProjection = projection;
         fixture.Projects.Authorization = Authorization(
             fixture.Owner, bound: false, ProjectAuthorizationPermission.CancelRun);
@@ -442,16 +524,18 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
         {
             var actor = new RuntimeActorAuthorization(cleanupCredential, fixture.Owner.TenantId);
             var cleanup = await fixture.Manager.CleanupAsync(
-                new(1, null, projection), actor, CancellationToken.None);
+                new(child ? 2 : 1, null, projection), actor, CancellationToken.None);
             Assert.Equal("released", cleanup.LeaseState);
             Assert.Equal("cleanup_complete", cleanup.CleanupDisposition);
             Assert.Equal(1, fixture.Sandbox.ListOwnedCalls);
             Assert.Equal(1, fixture.Sandbox.ReleaseCalls);
             Assert.Equal(1, fixture.Sandbox.ProvisionCalls);
             Assert.Equal(0, fixture.Sandbox.ReleasePartialCalls);
+            if (child)
+                Assert.Equal(fixture.Sandbox.ProvisionedResource!.Resource, cleanup.SandboxResource);
 
             var replay = await fixture.Manager.CleanupAsync(
-                new(1, null, projection), actor, CancellationToken.None);
+                new(child ? 2 : 1, null, projection), actor, CancellationToken.None);
             Assert.Equal(cleanup, replay);
             Assert.Equal(1, fixture.Sandbox.ReleaseCalls);
             Assert.Equal(1, fixture.Sandbox.ProvisionCalls);
@@ -667,7 +751,7 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
-    private static Fixture CreateFixture(EnvironmentPostgresFixture database, long maximumCapacityGiB)
+    private static Fixture CreateFixture(EnvironmentPostgresFixture database, long maximumCapacityGiB, bool child = false)
     {
         var id = Guid.NewGuid().ToString("N");
         var selectionBase = EnvironmentEgressManagerTests.Selection();
@@ -717,6 +801,14 @@ public sealed class EnvironmentRuntimeRunStartManagerTests(EnvironmentPostgresFi
             0,
             1,
             1);
+        if (child)
+            owner = owner with
+            {
+                SessionId = "child-session-" + id,
+                AgentId = "implementation-agent",
+                LogicalTurnOrdinal = 1,
+                WorkflowStepId = "implementation"
+            };
         var projects = new ProjectsClient(
             Authorization(owner, true,
                 ProjectAuthorizationPermission.ReadRunSelection,
