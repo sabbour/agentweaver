@@ -1,0 +1,6 @@
+{
+  "cases": [
+    { "actionId": "merge", "outcome": "Allow" },
+    { "actionId": "inspect", "outcome": "Deny" }
+  ]
+}

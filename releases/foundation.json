@@ -10,6 +10,12 @@
       "project": "packages/Agentweaver.Abstractions/Agentweaver.Abstractions.csproj"
     },
     {
+      "id": "Agentweaver.Policy.Acs",
+      "kind": "library",
+      "version": "1.0.0",
+      "project": "packages/Agentweaver.Policy.Acs/Agentweaver.Policy.Acs.csproj"
+    },
+    {
       "id": "Agentweaver.Providers",
       "kind": "library",
       "version": "1.1.0",
@@ -155,6 +161,14 @@
     }
   ],
   "compatibility": [
+    {
+      "consumer": "Agentweaver.Policy.Acs",
+      "dependency": "Agentweaver.Abstractions",
+      "versions": [
+        "1.7.0",
+        "1.8.0"
+      ]
+    },
     {
       "consumer": "Agentweaver.AgentHost",
       "dependency": "Agentweaver.AgentRuntime",

@@ -138,6 +138,7 @@ their external boundaries.
 | Component | Current boundary | Direct project references |
 | --- | --- | --- |
 | `Agentweaver.Abstractions` | Provider, journal, addressed-message, accepted-effect, secret, object-store, environment/network-policy, authorization-context, run-selection, and Memory contracts. | — |
+| `Agentweaver.Policy.Acs` | Shared in-process validation and evaluation of complete, content-pinned native ACS artifacts. This library is not activated by a host. | `Agentweaver.Abstractions`, `AgentControlSpecification` |
 | `Agentweaver.Providers` | In-memory provider catalog and resolver. | `Agentweaver.Abstractions` |
 | `Agentweaver.Providers.Sessions.AgentSessions` | Optional, read-only AgentSessions Sessions provider and record verifier. No service references it. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Google.Protobuf` |
 | `Agentweaver.Orchestrator.Core` | Workflow validation and the platform-singleton AGT YAML Policy adapter. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Microsoft.AgentGovernance` |
@@ -155,6 +156,11 @@ their external boundaries.
 | `Agentweaver.Environment` | Environment-owned egress, workspace volumes, Sandbox leases, registered runtime profiles, and authenticated nonce delivery. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Providers`, `Agentweaver.Providers.Storage.AzureFiles`, `Agentweaver.Providers.Sandbox.AgentSandbox` |
 | `Agentweaver.Orchestrator` | HTTP owner for session trees, forks, recovery, turn boundaries, runtime registration, immutable SDK source receipts, message outbox, and parent notifications. It checks current Projects authority. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Orchestrator.Core`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres` |
 | `Agentweaver.FoundationProbe` | Acceptance-only infrastructure probe executable. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`, `Agentweaver.ObjectStore.AzureBlob`, `Agentweaver.Telemetry.AzureMonitor` |
+
+`Agentweaver.Policy.Acs` stays separate from `Agentweaver.Orchestrator.Core`.
+The deployed v4 Policy path continues to use its existing YAML adapter.
+The native ACS library does not add a host, store, activation path, or runtime
+dependency from Environment to Orchestrator Core.
 
 The Events & Sessions project owns the native PostgreSQL journal and addressed-message
 delivery store. The Orchestrator validates owner outbox messages and session bindings

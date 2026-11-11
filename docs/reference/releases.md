@@ -30,6 +30,10 @@ whose kind is `contract` or `library` and publishes their NuGet packages to
 GitHub Packages. It skips package versions that already exist. It does not
 publish container images.
 
+`Agentweaver.Policy.Acs` is a shared library package, not a workload. Its
+manifest entry does not activate ACS or change the deployed v4 Policy path,
+which continues to use the existing YAML adapter.
+
 The standalone .NET CLI archive workflow is separate. See the
 [CLI packaging guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/cli-dotnet/README.md).
 

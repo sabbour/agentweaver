@@ -18,6 +18,7 @@
   <Project Path="tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj" />
   <Project Path="tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj" />
   <Project Path="packages\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
+  <Project Path="packages\Agentweaver.Policy.Acs\Agentweaver.Policy.Acs.csproj" />
   <Project Path="packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
   <Project Path="packages\Agentweaver.SourceControl\Agentweaver.SourceControl.csproj" />
   <Project Path="packages\Agentweaver.Persistence.Postgres\Agentweaver.Persistence.Postgres.csproj" />
@@ -45,4 +46,5 @@
   <Project Path="tests\Agentweaver.Providers.Storage.AzureFiles.Tests\Agentweaver.Providers.Storage.AzureFiles.Tests.csproj" />
   <Project Path="packages\Agentweaver.Providers.Sessions.AgentSessions\Agentweaver.Providers.Sessions.AgentSessions.csproj" />
   <Project Path="tests\Agentweaver.Providers.Sessions.AgentSessions.Tests\Agentweaver.Providers.Sessions.AgentSessions.Tests.csproj" />
+  <Project Path="tests\Agentweaver.Policy.Acs.Tests\Agentweaver.Policy.Acs.Tests.csproj" />
 </Solution>

@@ -95,6 +95,12 @@ AgentHost uses its mounted service certificate for this direct owner request.
 Gateway-to-AgentHost and AgentHost-from-Gateway traffic is limited to HTTPS
 port 8443 by the corresponding Cilium policies.
 
+## Native ACS policy
+
+The shared `Agentweaver.Policy.Acs` library adds no runtime-configuration key
+and no host activation. The deployed v4 Policy path continues to use its
+existing YAML adapter.
+
 ## Configuration rules
 
 - The runtime ConfigMaps use environment-variable names with `__` between
