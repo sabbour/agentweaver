@@ -1272,28 +1272,42 @@ omits `checkpointRecovery`. That path requires a recorded `failed` or
 recover an `idle`, `active`, `blocked`, `failed`, or `indeterminate` run. It
 pins the source checkpoint, decision version, current root runtime
 registration, and accepted selection.
-The owner accepts this path only when the exact gate is still pending for the
-authorized actor and the checkpoint has no pending child dispatch, child
-association, or platform-effect intent. Other boundaries remain unavailable in
-this recovery slice. Matching fences and versions, current authority, and the
-existing runtime, checkpoint, native-work, and terminal-cleanup checks are
-also required. A recovery request does not establish that the old Host is
-unhealthy.
 
-The owner advances the fence once. It keeps the same gate request and choices;
-it does not answer, cancel, or recreate the gate. The Environment owner retires
-the old placement and creates the replacement. Orchestrator then creates a
-next-fence registration and requires authenticated Host readiness from the
-native cache or journal rebuild path. A fresh Host session is not ready.
+The opt-in path supports two boundaries:
 
-An accepted continuation returns `202` with `checkpointRecovery.phase` set to
-`pending`. Retry the same request with the same idempotency key after a
+- **Pending gate.** The owner accepts this path only when the exact gate is
+  still pending for the authorized actor and the checkpoint has no pending
+  child dispatch, child association, or platform-effect intent. It uses the
+  Host continuation described below.
+- **Saved child join.** A child join is the saved association between a
+  work-plan item and its child session. The owner checks the saved child
+  boundary and records a frozen child manifest. It also advances the fence and
+  writes a checkpoint with recovery lineage. This version does not continue
+  child sessions or import their results. The owner reports
+  `checkpointRecovery.phase` as `pending`, sets `boundaryKind` to `childJoin`,
+  and sets `dispatchHeld` to `true`. A `202` response means that the owner
+  saved the admission. It does not mean that the children were restored.
+
+The owner rejects other boundaries and unsupported platform-effect history.
+Both paths require matching fences and versions, current authority, and the
+existing runtime, checkpoint, native-work, and terminal-cleanup checks. A
+recovery request does not establish that the old Host is unhealthy.
+
+For a pending gate, the owner advances the fence once. It keeps the same gate
+request and choices; it does not answer, cancel, or recreate the gate. The
+Environment owner retires the old placement and creates the replacement.
+Orchestrator then creates a next-fence registration and requires authenticated
+Host readiness from the native cache or journal rebuild path. A fresh Host
+session is not ready.
+
+An accepted gate continuation returns `202` with `checkpointRecovery.phase`
+set to `pending`. Retry the same request with the same idempotency key after a
 transport or timeout failure to continue the saved step. A ready or blocked
 result returns `200`. `ready` means the Host restored the saved boundary. It
-leaves the gate pending and the run incomplete. A later gate answer
-uses the same request ID at the current fence and decision version.
+leaves the gate pending and the run incomplete. A later gate answer uses the
+same request ID at the current fence and decision version.
 
-If activation fails after the Broker saves the bootstrap receipt with
+If Host activation fails after the Broker saves the bootstrap receipt with
 `runtime_delivery_unavailable`, `runtime_receiver_unavailable`,
 `runtime_source_credential_unavailable`, `runtime_configuration_conflict`, or
 `runtime_operation_conflict`, the operation becomes `blocked` with reason
@@ -1303,12 +1317,20 @@ operation with a new idempotency key and the failed runtime ID and registration
 revision. The owner advances the fence once, retires the failed Host, and uses
 new operation IDs. It does not resend the credential or roll back authority.
 
-`readRunStatus` and root `readSessionStatus` expose the current recovery step,
-reason, checkpoint IDs, fences, and old and new runtime identities.
-`replayRunEvents` exposes committed recovery progress through its cursor.
-These reads do not retry the operation. Do not start a second recovery with a
-new key while the first operation is pending. A new key is allowed after the
-first operation is blocked.
+For a saved child join, the current version keeps the recovery pending and the
+dispatch hold active. Guarded owner writes return `409` with
+`checkpoint_recovery_dispatch_held` while the hold is active. The owner does
+not resume children, import child results, or clear the hold. Retry an accepted
+request only with the same idempotency key. A new key does not bypass the hold.
+
+For gate recovery, `readRunStatus` and root `readSessionStatus` expose the
+current recovery step, reason, checkpoint IDs, fences, and old and new runtime
+identities. For child-join admission, the status exposes `boundaryKind`,
+`dispatchHeld`, and `childManifestSha256`. `replayRunEvents` exposes committed
+recovery progress through its cursor. These reads do not retry the operation.
+For gate recovery, do not start a second recovery with a new key while the
+first operation is pending. A new key is allowed after gate recovery is
+blocked. A child-join hold remains pending in this version.
 
 #### Dispatch completion and startup readback
 

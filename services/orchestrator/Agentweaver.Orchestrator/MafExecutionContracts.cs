@@ -509,6 +509,9 @@ internal static class MafExecutionCheckpointContract
     {
         ValidateState(previous);
         ValidateState(next);
+        if (previous.RecoveryLineage != next.RecoveryLineage)
+            throw new ArgumentException(
+                "A normal checkpoint transition cannot change recovery lineage.", nameof(next));
         MafScribeGateContract.ValidateTransition(previous, next);
         foreach (var (associationId, intent) in previous.PendingDispatches)
         {

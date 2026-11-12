@@ -323,7 +323,12 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
             FOR SHARE
             """, connection, transaction);
         BindScope(run, authority);
-        await run.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            var exists = await run.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            if (exists is not null &&
+                await CheckpointRecoveryHold.IsHeldAsync(
+                    connection, transaction, _schema, authority.ProjectId, authority.RunId, cancellationToken)
+                    .ConfigureAwait(false))
+                throw new RuntimeAuthorizationException("checkpoint_recovery_dispatch_held");
     }
 
     private async Task<bool> InsertConsumptionAsync(

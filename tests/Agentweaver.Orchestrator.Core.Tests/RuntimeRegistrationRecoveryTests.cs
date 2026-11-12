@@ -10,6 +10,47 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 
 public sealed class RuntimeRegistrationRecoveryTests
 {
+    [Theory]
+    [InlineData("source")]
+    [InlineData("hash")]
+    [InlineData("fence")]
+    [InlineData("registration")]
+    [InlineData("gate")]
+    [InlineData("checkpoint")]
+    [InlineData("decision")]
+    [InlineData("phase")]
+    public void RecoveryProgressCannotRewriteItsAdmission(string change)
+    {
+        var current = new CheckpointRecoveryStatus(
+            "pending", "source", 1, 1, 2, Guid.NewGuid(), 1)
+        {
+            SourceCheckpointHash = new string('a', 64),
+            RecoveryCheckpointId = "recovery",
+            RecoveryCheckpointRevision = 2,
+            DecisionStateVersion = 2,
+            GateRequestId = "gate",
+            GateAuthorizedActorId = "actor"
+        };
+        var progress = current with { CurrentStep = "bootstrap", RuntimeInstanceId = Guid.NewGuid() };
+        CoordinationOwnerStore.RequireImmutableCheckpointRecoveryAdmission(current, progress);
+        var changed = change switch
+        {
+            "source" => progress with { SourceCheckpointId = "other" },
+            "hash" => progress with { SourceCheckpointHash = new string('b', 64) },
+            "fence" => progress with { ExecutionFence = 3 },
+            "registration" => progress with { PreviousRegistrationRevision = 2 },
+            "gate" => progress with { GateRequestId = "other" },
+            "checkpoint" => progress with { RecoveryCheckpointId = "other" },
+            "decision" => progress with { DecisionStateVersion = 3 },
+            "phase" => progress with { Phase = "unknown" },
+            _ => throw new ArgumentOutOfRangeException(nameof(change))
+        };
+
+        var error = Assert.Throws<CoordinationException>(() =>
+            CoordinationOwnerStore.RequireImmutableCheckpointRecoveryAdmission(current, changed));
+        Assert.Equal("checkpoint_recovery_progress_conflict", error.Code);
+    }
+
     [Fact]
     public void PreviousRuntimeEvidenceIsScopedToItsRecoveryOperation()
     {
@@ -278,5 +319,36 @@ public sealed class RuntimeRegistrationRecoveryTests
                 current with { State = CoordinatorDecisionState.Create(fence) }, recovery, fence, actor)).Code);
         Assert.Equal("checkpoint_recovery_boundary_stale", Assert.Throws<RuntimeAuthorizationException>(() =>
             CoordinationEndpoints.RequireCheckpointRecoveryGate(current, recovery, fence, "other-actor")).Code);
+    }
+
+    [Fact]
+    public void ChildJoinNeverUsesRootOnlyContinuation()
+    {
+        var gateRecovery = new CheckpointRecoveryStatus(
+            "pending", "source-checkpoint", 1, 4, 5, Guid.NewGuid(), 1)
+        {
+            BoundaryKind = "pendingGate"
+        };
+        var childRecovery = gateRecovery with
+        {
+            BoundaryKind = "childJoin",
+            GateRequestId = "preserved-gate",
+            GateAuthorizedActorId = "actor"
+        };
+
+        Assert.True(CoordinationEndpoints.CanContinueRootCheckpointRecovery(gateRecovery));
+        Assert.True(CoordinationEndpoints.CanContinueRootCheckpointRecovery(gateRecovery with
+        {
+            BoundaryKind = null
+        }));
+        Assert.False(CoordinationEndpoints.CanContinueRootCheckpointRecovery(childRecovery));
+        Assert.False(CoordinationEndpoints.CanContinueRootCheckpointRecovery(childRecovery with
+        {
+            Phase = "ready"
+        }));
+        Assert.False(CoordinationEndpoints.CanContinueRootCheckpointRecovery(gateRecovery with
+        {
+            BoundaryKind = "unknown"
+        }));
     }
 }

@@ -886,6 +886,15 @@ public sealed record CheckpointRecoveryStatus(
     public string? RecoveryMaterialMode { get; init; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BoundaryKind { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? DispatchHeld { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ChildManifestSha256 { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? GateRequestId { get; init; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -948,4 +957,8 @@ public sealed class CoordinationException(string code, int statusCode, Exception
     /// Gets the HTTP status associated with this coordination failure.
     /// </summary>
     public int StatusCode { get; } = statusCode;
+
+    internal string? Reason { get; init; }
+    internal string? StepId { get; init; }
+    internal Guid? OperationId { get; init; }
 }

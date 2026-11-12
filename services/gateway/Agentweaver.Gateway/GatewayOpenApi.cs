@@ -2232,6 +2232,8 @@ else if (route.OperationId is
             ("recoveryCheckpointRevision", NullableInt()), ("runtimeInstanceId", NullableUuid()),
             ("registrationRevision", NullableInt()), ("decisionStateVersion", Int()),
             ("recoveryMaterialMode", Nullable(Enum("nativeCache", "journalRebuild"))),
+            ("boundaryKind", Nullable(Enum("childJoin"))),
+            ("dispatchHeld", NullableBool()), ("childManifestSha256", NullableStr()),
             ("gateRequestId", NullableStr()), ("gateAuthorizedActorId", NullableStr())),
         ["SessionExecutionFenceChange"] = Obj(["sessionId", "state", "stateVersion"],
             ("sessionId", Str()), ("state", Str()), ("stateVersion", Int())),

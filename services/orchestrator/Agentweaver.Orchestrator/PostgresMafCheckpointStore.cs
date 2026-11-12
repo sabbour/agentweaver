@@ -133,6 +133,13 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         if (!IsIdentifier(checkpointId))
             throw new ArgumentException("A stable checkpoint identifier is required.", nameof(checkpointId));
 
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, _schema,
+                validatedBinding.Identity.ProjectId, validatedBinding.Identity.RunId, cancellationToken)
+            .ConfigureAwait(false))
+            throw new CoordinationException(
+                "checkpoint_recovery_dispatch_held", StatusCodes.Status409Conflict);
+
         if (validatedBinding.CacheReference is { } cacheReference)
             await RequireCacheObjectAsync(cacheReference, cancellationToken).ConfigureAwait(false);
 

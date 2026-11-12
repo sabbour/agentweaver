@@ -98,6 +98,8 @@ internal sealed partial class CoordinationOwnerStore
         RequireRunOwner(run, actor);
         RequireCurrentAuthorizedSelection(actor, selection, identity, run);
         RequireCurrentActiveSession(session, run);
+        await RequireNoCheckpointRecoveryHoldAsync(
+            connection, transaction, identity.ProjectId, identity.RunId, cancellationToken).ConfigureAwait(false);
         if (run.Fence != binding.ExecutionFence || session.ExecutionFence != binding.ExecutionFence ||
             run.SelectionHash != binding.AcceptedSelectionHash ||
             binding.ActorIssuer != actor.Issuer ||
@@ -212,6 +214,8 @@ internal sealed partial class CoordinationOwnerStore
         RequireRunOwner(run, actor);
         RequireCurrentAuthorizedSelection(actor, selection, identity, run);
         RequireCurrentActiveSession(session, run);
+        await RequireNoCheckpointRecoveryHoldAsync(
+            connection, transaction, identity.ProjectId, identity.RunId, cancellationToken).ConfigureAwait(false);
 
         var registration = request.HostReceipt.Registration;
         var operationId = request.HostReceipt.OperationId;
@@ -376,6 +380,8 @@ internal sealed partial class CoordinationOwnerStore
         RequireRunOwner(run, actor);
         RequireCurrentAuthorizedSelection(actor, selection, identity, run);
         RequireCurrentActiveSession(session, run);
+        await RequireNoCheckpointRecoveryHoldAsync(
+            connection, transaction, identity.ProjectId, identity.RunId, cancellationToken).ConfigureAwait(false);
         if (run.ExecutionState == "completed" ||
             session.TurnState is "completed" or "failed" or "indeterminate" ||
             run.Fence != session.ExecutionFence ||
@@ -511,6 +517,8 @@ internal sealed partial class CoordinationOwnerStore
         RequireRunOwner(run, actor);
         RequireCurrentAuthorizedSelection(actor, selection, identity, run);
         RequireCurrentActiveSession(session, run);
+        await RequireNoCheckpointRecoveryHoldAsync(
+            connection, transaction, identity.ProjectId, identity.RunId, cancellationToken).ConfigureAwait(false);
         if (run.ExecutionState == "completed" ||
             session.TurnState is "completed" or "failed" or "indeterminate" ||
             run.Fence != session.ExecutionFence || run.Fence <= 1 ||
@@ -693,6 +701,8 @@ internal sealed partial class CoordinationOwnerStore
         RequireRunOwner(run, actor);
         RequireCurrentAuthorizedSelection(actor, selection, identity, run);
         RequireCurrentActiveSession(session, run);
+        await RequireNoCheckpointRecoveryHoldAsync(
+            connection, transaction, identity.ProjectId, identity.RunId, cancellationToken).ConfigureAwait(false);
         if (run.ExecutionState == "completed" ||
             session.TurnState is "completed" or "failed" or "indeterminate" ||
             run.Fence <= 0)
@@ -1096,6 +1106,8 @@ internal sealed partial class CoordinationOwnerStore
         RequireRunOwner(run, actor);
         RequireCurrentAuthorizedSelection(actor, selection, identity, run);
         RequireCurrentActiveSession(session, run);
+        await RequireNoCheckpointRecoveryHoldAsync(
+            connection, transaction, identity.ProjectId, identity.RunId, cancellationToken).ConfigureAwait(false);
         if (run.ExecutionState == "completed" ||
             session.TurnState is "completed" or "failed" or "indeterminate")
             throw new CoordinationException(
@@ -1398,6 +1410,8 @@ internal sealed partial class CoordinationOwnerStore
         }
 
         RequireCurrentActiveSession(session, run);
+        await RequireNoCheckpointRecoveryHoldAsync(
+            connection, transaction, identity.ProjectId, identity.RunId, cancellationToken).ConfigureAwait(false);
         if (run.ExecutionState == "completed" ||
             session.TurnState is "completed" or "failed" or "indeterminate")
             throw new CoordinationException(
@@ -1730,6 +1744,8 @@ internal sealed partial class CoordinationOwnerStore
         RequireRunOwner(run, actor);
         RequireCurrentAuthorizedSelection(actor, selection, identity, run);
         RequireCurrentActiveSession(session, run);
+        await RequireNoCheckpointRecoveryHoldAsync(
+            connection, transaction, identity.ProjectId, identity.RunId, cancellationToken).ConfigureAwait(false);
         if (run.ExecutionState == "completed" ||
             session.TurnState is "completed" or "failed" or "indeterminate" ||
             run.Fence != operation.OwnerExecutionFence)

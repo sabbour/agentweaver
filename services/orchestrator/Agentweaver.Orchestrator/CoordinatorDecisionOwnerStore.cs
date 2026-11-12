@@ -24,6 +24,7 @@ internal sealed class CoordinatorDecisionOwnerStore
     };
 
     private readonly NpgsqlDataSource _dataSource;
+    private readonly string _schema;
     private readonly string _runs;
     private readonly string _sessions;
     private readonly string _decisions;
@@ -59,6 +60,7 @@ internal sealed class CoordinatorDecisionOwnerStore
 
         _dataSource = dataSource;
         var quotedSchema = $"\"{schema}\"";
+        _schema = quotedSchema;
         _runs = $"{quotedSchema}.accepted_runs";
         _sessions = $"{quotedSchema}.coordination_sessions";
         _decisions = $"{quotedSchema}.coordinator_decisions";
@@ -469,6 +471,21 @@ internal sealed class CoordinatorDecisionOwnerStore
         return state;
     }
 
+    internal Task<CoordinatorDecisionState> ReadConfirmedWorkPlanForRecoveryInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        AuthorizedRunSelection selection,
+        long expectedStateVersion,
+        long expectedFence,
+        string expectedWorkPlanId,
+        CancellationToken cancellationToken) =>
+        ReadConfirmedWorkPlanStateInTransactionAsync(
+            connection, transaction, actor, identity, selection, null,
+            expectedStateVersion, expectedFence, expectedWorkPlanId,
+            "checkpoint_recovery_checkpoint_stale", cancellationToken, requireDispatchable: false);
+
     // Returns true when the backlog has recorded a promotion of this plan in the run.
     private async Task<bool> IsWorkPlanPromotedAsync(
         NpgsqlConnection connection,
@@ -519,7 +536,8 @@ internal sealed class CoordinatorDecisionOwnerStore
         long expectedFence,
         string expectedWorkPlanId,
         string staleCode,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requireDispatchable = true)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
@@ -548,6 +566,12 @@ internal sealed class CoordinatorDecisionOwnerStore
             throw new CoordinationException(
                 staleCode, StatusCodes.Status409Conflict);
 
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, _schema, identity.ProjectId, identity.RunId, cancellationToken)
+            .ConfigureAwait(false))
+            throw new CoordinationException(
+                "checkpoint_recovery_dispatch_held", StatusCodes.Status409Conflict);
+
         var latest = await ReadLatestDecisionAsync(
             connection, transaction, identity, cancellationToken, forShare: true).ConfigureAwait(false);
         if (latest is null ||
@@ -567,7 +591,7 @@ internal sealed class CoordinatorDecisionOwnerStore
             selectionContext).ConfigureAwait(false);
         if (!restored.IsValid || restored.State is not { } state ||
             state.Fence != expectedFence ||
-            !state.CanDispatch ||
+            requireDispatchable && !state.CanDispatch ||
             state.ConfirmedWorkPlan?.Plan.Id != expectedWorkPlanId)
             throw new CoordinationException(
                 staleCode, StatusCodes.Status409Conflict);
@@ -681,6 +705,12 @@ internal sealed class CoordinatorDecisionOwnerStore
                 existing.Issues,
                 existing.TransitionValue);
         }
+
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, _schema, identity.ProjectId, identity.RunId, cancellationToken)
+            .ConfigureAwait(false))
+            throw new CoordinationException(
+                "checkpoint_recovery_dispatch_held", StatusCodes.Status409Conflict);
 
         var previous = await ReadLatestDecisionAsync(
             connection, transaction, identity, cancellationToken).ConfigureAwait(false);
