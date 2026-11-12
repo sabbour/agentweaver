@@ -1195,8 +1195,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
             reader.GetInt64(0) != registration.Revision || reader.GetInt32(1) != 0 ||
             reader.GetFieldValue<DateTimeOffset>(2) != registration.ExpiresAt ||
             registration.ExpiresAt <= timeProvider.GetUtcNow() ||
-            reader.GetString(3).Trim() != RuntimeContractValidation.Hash(
-                JsonSerializer.SerializeToUtf8Bytes(registration.Binding)))
+            reader.GetString(3).Trim() != RuntimeRegistrationStore.ComputeBindingHash(registration.Binding))
             throw new RuntimeAuthorizationException("runtime_native_tool_rejection_conflict");
     }
 
