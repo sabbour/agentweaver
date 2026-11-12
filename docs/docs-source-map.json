@@ -31,6 +31,7 @@
     "docs/guide/chief-of-staff.md",
     "docs/guide/testing.md",
     "docs/guide/api-acceptance-migration.md",
+    "docs/guide/numeric-runtime-observation-acceptance.md",
     "docs/guide/gateway.md",
     "docs/guide/identity-scopes.md",
     "docs/guide/notifications.md",

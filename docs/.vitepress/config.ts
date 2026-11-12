@@ -71,6 +71,7 @@ export default defineConfig({
           items: [
             { text: 'Testing', link: '/guide/testing' },
             { text: 'Read-only CLI API case', link: '/guide/api-acceptance-migration' },
+            { text: 'Numeric runtime observation case', link: '/guide/numeric-runtime-observation-acceptance' },
             { text: 'Plan issues and releases', link: '/guide/release-planning' },
             { text: 'Environment Sandbox testing', link: '/guide/environment-sandbox-testing' },
             { text: 'Azure acceptance', link: '/guide/azure-acceptance' },

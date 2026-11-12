@@ -710,6 +710,11 @@ The API case scripts exercise normal CLI commands through the exact native appho
 
 Follow [Run a read-only CLI API case](./api-acceptance-migration.md) for the approved target, case input, exact apphost, dry run, and evidence results. Use only an explicitly approved non-production target. The successful dry run validates local inputs only and creates no evidence. A passing case does not prove full API or P1 acceptance.
 
+Use the [numeric runtime observation case](./numeric-runtime-observation-acceptance.md)
+to inspect complete v2 history and a recorded native tool-permission denial
+through normal CLI commands and `rest`. The case reads an existing child
+session. It does not create a run or call a model.
+
 ## Record release acceptance results
 
 For version-level coverage and sign-off, use the single
@@ -748,6 +753,10 @@ The API tests cover the checked-in case scripts and launcher contracts with loca
 
 ## Test runtime observation v2
 
+The [numeric runtime observation case](./numeric-runtime-observation-acceptance.md)
+checks the public CLI and `rest` reads against an existing child session. Its
+dry run is local only; it does not exercise a live target.
+
 Run the focused contract, owner paging, query validation, and Gateway schema
 tests from the repository root:
 
@@ -785,7 +794,11 @@ see the
 [UI harness guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/ui-harness/README.md),
 and [MCP harness guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/mcp-harness/README.md).
 
-Use [Run a read-only CLI API case](./api-acceptance-migration.md) for the current CLI and `rest` acceptance procedure. Keep controlled test results separate from live target evidence.
+Use [Run a read-only CLI API case](./api-acceptance-migration.md) for the
+read-only discovery case. Use the
+[numeric runtime observation case](./numeric-runtime-observation-acceptance.md)
+to inspect existing tool-denial evidence. Keep controlled test results
+separate from live target evidence.
 ## Validate documentation changes
 
 After you edit documentation, run these commands from the repository root:

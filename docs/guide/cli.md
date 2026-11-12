@@ -265,6 +265,8 @@ retain matching evidence; it does not prove that the attempt did not occur.
 The route is a read, not a live acceptance test.
 See [runtime observation contracts](../reference/contracts.md#runtime-observation-v2)
 for the response fields and limits.
+The [numeric runtime observation case](./numeric-runtime-observation-acceptance.md)
+checks a retained child-session denial through both `api invoke` and `rest`.
 
 ## Make a direct Gateway request
 

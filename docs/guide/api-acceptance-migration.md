@@ -119,4 +119,6 @@ guards.
 
 Use the [Testing guide](./testing.md) to choose other checks and understand
 their limits. This case does not prove a live model, deployment, or full P1
-acceptance.
+acceptance. To inspect an existing numeric tool-denial observation through
+normal CLI commands and `rest`, use the
+[numeric runtime observation case](./numeric-runtime-observation-acceptance.md).
