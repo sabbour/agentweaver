@@ -61,7 +61,7 @@ public sealed class EnvironmentWorkspaceVolumeApiTests
                 "/workspace-volumes", StringComparison.Ordinal) == true)
             .ToArray();
 
-        Assert.Equal(12, volumeEndpoints.Length);
+        Assert.Equal(13, volumeEndpoints.Length);
         Assert.All(volumeEndpoints, endpoint =>
         {
             Assert.Contains(endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>(), _ => true);
@@ -77,6 +77,10 @@ public sealed class EnvironmentWorkspaceVolumeApiTests
         Assert.Contains(volumeEndpoints, endpoint =>
             endpoint.RoutePattern.RawText ==
             "/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}/provision");
+        Assert.Contains(volumeEndpoints, endpoint => endpoint.RoutePattern.RawText?.TrimEnd('/') ==
+            "/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes");
+        Assert.Contains(volumeEndpoints, endpoint => endpoint.RoutePattern.RawText ==
+            "/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}");
         var resolver = Assert.Single(((IEndpointRouteBuilder)app).DataSources
             .SelectMany(source => source.Endpoints).OfType<RouteEndpoint>(), endpoint =>
             endpoint.RoutePattern.RawText == "/internal/runtime/suspend/resolve");
@@ -84,6 +88,177 @@ public sealed class EnvironmentWorkspaceVolumeApiTests
         Assert.DoesNotContain(resolver.Metadata, item => item is IAllowAnonymous);
     }
 
+    [Fact]
+    public async Task RecoveryDiscoveryRequiresSeparateRunSelectionAuthority()
+    {
+        var permissions = ImmutableArray.Create(
+            new ProjectAuthorizationPermissionGrant(ProjectAuthorizationPermission.WriteProjects, 1));
+        var authorization = new ProjectAuthorizationContextResponse(
+            ProjectAuthorizationContextContract.CurrentVersion,
+            "https://identity.example",
+            "actor-a",
+            "tenant-a",
+            1,
+            null,
+            null,
+            [new EffectiveProjectAuthorization(
+                ProjectAuthorityResourceType.Project,
+                "project-a",
+                permissions)]);
+        var projects = new EnvironmentEgressManagerTests.FakeProjectsConfigClient(
+            authorization,
+            EnvironmentEgressManagerTests.Selection());
+        var manager = new EnvironmentWorkspaceVolumeManager(projects, null!, null!);
+
+        var exception = await Assert.ThrowsAsync<ProjectsConfigApiException>(() =>
+            manager.ListRunEnvironmentsAsync(
+                new CurrentCallerRequest("validated.jwt.token", "tenant-a"),
+                "project-a", "run-a", null, null, CancellationToken.None));
+
+        Assert.Equal("run_selection_not_authorized", exception.Code);
+        Assert.Equal(0, projects.SelectionReads);
+    }
+
+    [Fact]
+    public async Task RecoveryDiscoveryRejectsAuthorityLossBetweenReads()
+    {
+        ProjectAuthorizationContextResponse Context(bool canReadSelection)
+        {
+            var permissions = ImmutableArray.CreateBuilder<ProjectAuthorizationPermissionGrant>();
+            permissions.Add(new(ProjectAuthorizationPermission.WriteProjects, 1));
+            if (canReadSelection)
+                permissions.Add(new(ProjectAuthorizationPermission.ReadRunSelection, 2));
+            return new(
+                ProjectAuthorizationContextContract.CurrentVersion,
+                "https://identity.example",
+                "actor-a",
+                "tenant-a",
+                1,
+                null,
+                null,
+                [new EffectiveProjectAuthorization(
+                    ProjectAuthorityResourceType.Project, "project-a", permissions.ToImmutable())]);
+        }
+
+        var projects = new EnvironmentEgressManagerTests.FakeProjectsConfigClient(
+            [Context(canReadSelection: true), Context(canReadSelection: false)],
+            EnvironmentEgressManagerTests.Selection());
+        var manager = new EnvironmentWorkspaceVolumeManager(projects, null!, null!);
+
+        var exception = await Assert.ThrowsAsync<ProjectsConfigApiException>(() =>
+            manager.ListRunEnvironmentsAsync(
+                new CurrentCallerRequest("validated.jwt.token", "tenant-a"),
+                "project-a", "run-a", null, null, CancellationToken.None));
+
+        Assert.Equal("authorization_changed", exception.Code);
+        Assert.Equal(1, projects.SelectionReads);
+        Assert.Equal(2, projects.AuthorizationReads);
+    }
+    [Fact]
+    public void RecoveryVolumeProjectionOmitsProviderOptionsAndReleaseDescriptor()
+    {
+        var fence = new EnvironmentGenerationFence(
+            new EnvironmentOwnerIdentity("tenant-a", "project-a", "run-a", "environment-a"), 4);
+        var spec = new WorkspaceVolumeSpec(
+            "volume-a", "project-a", new(WorkspaceVolumeOwnerKind.Run, "run-a"),
+            "environment-a", WorkspaceVolumeBindingMode.Environment,
+            WorkspaceVolumeAccessMode.ReadWriteMany, 8, "azure-files-csi",
+            WorkspaceVolumeConsistency.Strict, WorkspaceVolumeReclaimPolicy.Delete,
+            WorkspaceVolumeOwnerDeletionPolicy.Retain, []);
+        var resource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files-csi", "pvc-uid", 3);
+        var binding = new WorkspaceVolumeProviderBindingSnapshot(
+            "azure-files-csi", "1.0.0", 1, "options-revision",
+            JsonSerializer.SerializeToElement(new { marker = "provider-options-marker" }),
+            JsonSerializer.SerializeToElement(new { marker = "release-descriptor-marker" }));
+        var snapshot = new EnvironmentWorkspaceVolumeSnapshot(
+            fence, "volume-a", 7, 3, 5,
+            EnvironmentWorkspaceVolumeState.Attached, EnvironmentWorkspaceVolumeOperation.Bind,
+            JsonSerializer.SerializeToElement(spec), resource, binding);
+        var pending = new EnvironmentWorkspaceVolumeRetryDescriptor(
+            Guid.NewGuid(), EnvironmentWorkspaceVolumeOperation.Unbind, "exact-retry-key", 7, 3, 5);
+
+        var status = EnvironmentWorkspaceVolumeProjection.FromSnapshot(snapshot, pending);
+        var json = JsonSerializer.Serialize(status, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.Contains("exact-retry-key", json, StringComparison.Ordinal);
+        Assert.Contains("azure-files-csi", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("provider-options-marker", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("release-descriptor-marker", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("specification-marker", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FlushTransitionMappingPreservesTheSuspendEvidenceContract()
+    {
+        var fence = new EnvironmentGenerationFence(
+            new EnvironmentOwnerIdentity("tenant-a", "project-a", "run-a", "environment-a"), 1);
+        var resource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files", "pvc-uid", 1);
+        var empty = JsonSerializer.SerializeToElement(new { });
+        var binding = new WorkspaceVolumeProviderBindingSnapshot(
+            "azure-files", "1.0.0", 1, "options-1", empty, empty);
+        var reservation = new EnvironmentWorkspaceVolumeTransitionReservation(
+            Guid.NewGuid(), fence, "volume-a", 5, 1, 7, resource, binding,
+            6, 1, 8, EnvironmentWorkspaceVolumeState.Attached,
+            EnvironmentWorkspaceVolumeOperation.Flush,
+            EnvironmentWorkspaceVolumeTransitionState.Completed, false);
+        var receipt = new WorkspaceVolumeFlushReceipt(
+            1, fence, new("project-a", "volume-a", 1), resource, 7, 8,
+            "flush-key", new string('a', 64), null);
+        var result = new WorkspaceVolumeLifecycleResult(reservation, null, null)
+        {
+            FlushReceipt = receipt
+        };
+
+        var mapped = EnvironmentEndpoints.ToWorkspaceVolumeTransitionResult(result);
+
+        var value = Assert.IsAssignableFrom<IValueHttpResult>(mapped);
+        Assert.Same(result, value.Value);
+        Assert.Equal(receipt, Assert.IsType<WorkspaceVolumeLifecycleResult>(value.Value).FlushReceipt);
+    }
+
+    [Fact]
+    public void PublicTransitionMapperUsesPersistedTargetForCompletedReplay()
+    {
+        var fence = new EnvironmentGenerationFence(
+            new EnvironmentOwnerIdentity("tenant-a", "project-a", "run-a", "environment-a"), 1);
+        var oldResource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files", "old-pvc", 1);
+        var newResource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files", "new-pvc", 2);
+        var empty = JsonSerializer.SerializeToElement(new { });
+        var reservation = new EnvironmentWorkspaceVolumeTransitionReservation(
+            Guid.NewGuid(), fence, "volume-a", 1, 1, 0, oldResource,
+            new WorkspaceVolumeProviderBindingSnapshot("azure-files", "1.0.0", 1, "options-1", empty, empty),
+            2, 2, 0, EnvironmentWorkspaceVolumeState.Ready,
+            EnvironmentWorkspaceVolumeOperation.Replace,
+            EnvironmentWorkspaceVolumeTransitionState.Completed, true)
+        {
+            TargetResource = newResource
+        };
+        var result = new WorkspaceVolumeLifecycleResult(reservation, null, null);
+        var request = new WorkspaceVolumeApiTransitionRequest(1, 1, 0, "replace-key");
+
+        var mapped = EnvironmentEndpoints.ToWorkspaceVolumeTransitionResult(result, request);
+
+        var response = Assert.IsType<EnvironmentWorkspaceVolumeMutationStatus>(
+            Assert.IsAssignableFrom<IValueHttpResult>(mapped).Value);
+        Assert.Equal(oldResource, response.Reservation.FromResource);
+        Assert.Equal(newResource, response.Reservation.ToResource);
+    }
+
+    [Fact]
+    public void RecoveryCursorCannotBeReusedAcrossOwnerScope()
+    {
+        var cursor = EnvironmentRecoveryCursor.Encode(new(
+            1, "tenant-a", "project-a", "run-a", "environment-a", 4, "volume-a"));
+
+        var decoded = EnvironmentRecoveryCursor.Decode(
+            cursor, "tenant-a", "project-a", "run-a", "environment-a", 4);
+
+        Assert.Equal("volume-a", decoded.AfterId);
+        Assert.Throws<ArgumentException>(() => EnvironmentRecoveryCursor.Decode(
+            cursor, "tenant-a", "project-a", "run-a", "environment-b", 4));
+        Assert.Throws<ArgumentException>(() => EnvironmentRecoveryCursor.Decode(
+            cursor, "tenant-a", "project-a", "run-b", "environment-a", 4));
+    }
     [Fact]
     public void ProductionWorkspaceVolumeRegistrationPinsAzureFilesAdapterAndManager()
     {

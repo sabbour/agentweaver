@@ -466,10 +466,25 @@ public sealed class WorkspaceVolumeService
             .ConfigureAwait(false);
         var reservation = await ReserveAsync(
             environmentFence, request, snapshot, cancellationToken).ConfigureAwait(false);
+        var metadataRetry = reservation.Replayed &&
+            reservation.Operation == ToOperation(operation) &&
+            reservation.TransitionState is EnvironmentWorkspaceVolumeTransitionState.Reserved or
+                EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired;
         if (reservation.Replayed ||
             reservation.TransitionState != EnvironmentWorkspaceVolumeTransitionState.Reserved)
-            return await ReplayedAsync(
-                environmentFence, request.VolumeId, reservation, cancellationToken).ConfigureAwait(false);
+        {
+            if (!metadataRetry)
+                return await ReplayedAsync(
+                    environmentFence, request.VolumeId, reservation, cancellationToken).ConfigureAwait(false);
+
+            if (snapshot.TransitionRevision != reservation.ExpectedTransitionRevision ||
+                snapshot.ResourceGeneration != reservation.ExpectedResourceGeneration ||
+                snapshot.DataGeneration != reservation.ExpectedDataGeneration ||
+                snapshot.Resource != reservation.CurrentResource ||
+                !ProviderBindingsEqual(snapshot.ProviderBinding, reservation.CurrentProviderBinding))
+                throw new InvalidOperationException(
+                    "The pending metadata transition no longer matches the current Environment-owned volume.");
+        }
 
         var resource = RequirePinnedResource(reservation);
         if (operation == WorkspaceVolumeTransitionKind.Bind)
@@ -520,7 +535,8 @@ public sealed class WorkspaceVolumeService
         var releaseReconciliation =
             reservation.Replayed &&
             reservation.Operation == EnvironmentWorkspaceVolumeOperation.Release &&
-            reservation.TransitionState == EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired;
+            reservation.TransitionState is EnvironmentWorkspaceVolumeTransitionState.Reserved or
+                EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired;
         if (reservation.Replayed ||
             reservation.TransitionState != EnvironmentWorkspaceVolumeTransitionState.Reserved)
         {
@@ -1061,6 +1077,14 @@ public sealed class WorkspaceVolumeService
             WorkspaceVolumeTransitionKind.Unbind =>
                 _lifecycleStore.CompleteWorkspaceVolumeUnbindAsync(
                     reservation.OperationId, fence, true, resource, true, cancellationToken),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation))
+        };
+
+    private static EnvironmentWorkspaceVolumeOperation ToOperation(WorkspaceVolumeTransitionKind operation) =>
+        operation switch
+        {
+            WorkspaceVolumeTransitionKind.Bind => EnvironmentWorkspaceVolumeOperation.Bind,
+            WorkspaceVolumeTransitionKind.Unbind => EnvironmentWorkspaceVolumeOperation.Unbind,
             _ => throw new ArgumentOutOfRangeException(nameof(operation))
         };
 

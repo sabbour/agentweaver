@@ -861,6 +861,141 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
         Assert.Equal(0, current.DataGeneration);
     }
 
+    [Fact]
+    public async Task RecoveryReadsAreOwnerScopedAndExposeExactPendingRetryIdentity()
+    {
+        var store = fixture.CreateStore();
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "tenant-" + suffix;
+        var projectId = "project-" + suffix;
+        var runId = "run-" + suffix;
+        var ownerA = new EnvironmentOwnerIdentity(tenantId, projectId, runId, "environment-a");
+        var ownerB = new EnvironmentOwnerIdentity(tenantId, projectId, runId, "environment-b");
+        var ownerC = new EnvironmentOwnerIdentity(tenantId, projectId, runId, "environment-c");
+        var fenceA = (await RegisterAsync(store, ownerA)).Snapshot.Fence;
+        _ = await RegisterAsync(store, ownerB);
+        _ = await RegisterAsync(store, ownerC);
+        var summaries = await store.ListRunEnvironmentsAsync(
+            tenantId, projectId, runId, string.Empty, 2, CancellationToken.None);
+        Assert.Equal(["environment-a", "environment-b"], summaries.Select(item => item.EnvironmentId));
+        Assert.All(summaries, item => Assert.False(item.HasUnresolvedCleanup));
+
+        const string volumeId = "workspace-volume";
+        await store.CreateWorkspaceVolumeAsync(
+            fenceA, volumeId, CreateSpecification(ownerA, volumeId), "create-volume", CancellationToken.None);
+        var resource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files", "pvc-uid", 1);
+        var provision = await store.ReserveWorkspaceVolumeProvisionAsync(
+            fenceA, volumeId, 1, 0, 0, "provision-volume", CancellationToken.None);
+        _ = await store.CompleteWorkspaceVolumeProvisionAsync(
+            provision.OperationId, fenceA, true, resource, Binding(resource), true, CancellationToken.None);
+        var pending = await store.ReserveWorkspaceVolumeBindAsync(
+            fenceA, volumeId, 2, 1, 0, "exact-bind-key", CancellationToken.None);
+
+        var volumes = await store.ListWorkspaceVolumesAsync(
+            fenceA, string.Empty, 2, CancellationToken.None);
+        var status = Assert.Single(volumes);
+        var retry = Assert.IsType<EnvironmentWorkspaceVolumeRetryDescriptor>(status.PendingTransition);
+        var exactPending = await store.GetPendingWorkspaceVolumeTransitionAsync(
+            fenceA, volumeId, CancellationToken.None);
+
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Ready, status.Phase);
+        Assert.Equal(resource, status.Resource);
+        Assert.Equal(pending.OperationId, retry.OperationId);
+        Assert.Equal("exact-bind-key", retry.IdempotencyKey);
+        Assert.Equal(pending.OperationId, exactPending!.OperationId);
+        Assert.Equal(retry, exactPending);
+
+        _ = await store.CompleteWorkspaceVolumeBindAsync(
+            pending.OperationId, fenceA, true, resource, true, CancellationToken.None);
+        var unbind = await store.ReserveWorkspaceVolumeUnbindAsync(
+            fenceA, volumeId, 3, 1, 0, "unbind-volume", CancellationToken.None);
+        _ = await store.CompleteWorkspaceVolumeUnbindAsync(
+            unbind.OperationId, fenceA, true, resource, true, CancellationToken.None);
+        var release = await store.ReserveWorkspaceVolumeReleaseAsync(
+            fenceA, volumeId, 4, 1, 0, "release-volume", CancellationToken.None);
+        _ = await store.CompleteWorkspaceVolumeReleaseAsync(
+            release.OperationId, fenceA, true, true, CancellationToken.None);
+        var releasedOwner = await store.TransitionAsync(
+            new(ownerA, 1, EnvironmentLifecycleState.Released, "release-environment"), CancellationToken.None);
+        var currentFence = releasedOwner.Snapshot.Fence;
+
+        var retained = Assert.Single(await store.ListWorkspaceVolumesAsync(
+            currentFence, string.Empty, 2, CancellationToken.None));
+        var detail = await store.GetWorkspaceVolumeStatusAsync(
+            currentFence, volumeId, CancellationToken.None);
+        Assert.NotNull(detail);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Released, retained.Phase);
+        Assert.Equal(fenceA.LifecycleGeneration, retained.LifecycleGeneration);
+        Assert.Equal(retained, detail);
+        Assert.Null(retained.Resource);
+    }
+    [Fact]
+    public async Task VolumeStatusSurvivesLifecycleGenerationAdvanceAndShowsCurrentPendingOperation()
+    {
+        var store = fixture.CreateStore();
+        var owner = NewOwner();
+        var fence = (await RegisterAsync(store, owner)).Snapshot.Fence;
+        const string volumeId = "workspace-volume";
+        var resource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files", "resource-1", 1);
+        await store.CreateWorkspaceVolumeAsync(
+            fence, volumeId, CreateSpecification(owner, volumeId), "create", CancellationToken.None);
+        var provision = await store.ReserveWorkspaceVolumeProvisionAsync(
+            fence, volumeId, 1, 0, 0, "provision", CancellationToken.None);
+        await store.CompleteWorkspaceVolumeProvisionAsync(
+            provision.OperationId, fence, true, resource, Binding(resource), true, CancellationToken.None);
+
+        var advanced = await store.TransitionAsync(
+            new(owner, fence.LifecycleGeneration, EnvironmentLifecycleState.Active, "advance"),
+            CancellationToken.None);
+        var currentFence = advanced.Snapshot.Fence;
+        var pending = await store.ReserveWorkspaceVolumeBindAsync(
+            currentFence, volumeId, 2, 1, 0, "bind-after-advance", CancellationToken.None);
+
+        var listed = Assert.Single(await store.ListWorkspaceVolumesAsync(
+            currentFence, string.Empty, 2, CancellationToken.None));
+        Assert.NotNull(listed.PendingTransition);
+        Assert.Equal(pending.OperationId, listed.PendingTransition.OperationId);
+        Assert.Equal(resource, listed.Resource);
+        Assert.Equal(fence.LifecycleGeneration, listed.LifecycleGeneration);
+        Assert.Equal(listed, await store.GetWorkspaceVolumeStatusAsync(
+            currentFence, volumeId, CancellationToken.None));
+
+        _ = await store.CompleteWorkspaceVolumeBindAsync(
+            pending.OperationId, currentFence, true, resource, true, CancellationToken.None);
+        var completed = await store.GetWorkspaceVolumeStatusAsync(
+            currentFence, volumeId, CancellationToken.None);
+        Assert.NotNull(completed);
+        Assert.Equal(currentFence.LifecycleGeneration, completed.LifecycleGeneration);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Bound, completed.Phase);
+        Assert.Equal(resource, completed.Resource);
+    }
+
+    [Fact]
+    public async Task RunSummaryReportsPendingWorkspaceVolumeCleanup()
+    {
+        var store = fixture.CreateStore();
+        var owner = NewOwner();
+        var fence = (await RegisterAsync(store, owner)).Snapshot.Fence;
+        const string volumeId = "workspace-volume";
+        var oldResource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files", "old-resource", 1);
+        await store.CreateWorkspaceVolumeAsync(
+            fence, volumeId, CreateSpecification(owner, volumeId), "create", CancellationToken.None);
+        var provision = await store.ReserveWorkspaceVolumeProvisionAsync(
+            fence, volumeId, 1, 0, 0, "provision", CancellationToken.None);
+        await store.CompleteWorkspaceVolumeProvisionAsync(
+            provision.OperationId, fence, true, oldResource, Binding(oldResource), true, CancellationToken.None);
+        var replace = await store.ReserveWorkspaceVolumeReplaceAsync(
+            fence, volumeId, 2, 1, 0, "replace", CancellationToken.None);
+        var newResource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files", "new-resource", 2);
+        _ = await store.CompleteWorkspaceVolumeReplaceAsync(
+            replace.OperationId, fence, true, newResource, Binding(newResource), true, CancellationToken.None);
+
+        var summary = Assert.Single(await store.ListRunEnvironmentsAsync(
+            owner.TenantId, owner.ProjectId, owner.RunId, string.Empty, 2, CancellationToken.None));
+
+        Assert.True(summary.HasUnresolvedCleanup);
+    }
+
     private static EnvironmentOwnerIdentity NewOwner()
     {
         var suffix = Guid.NewGuid().ToString("N");

@@ -38,7 +38,7 @@ public sealed class EnvironmentLifecycleManagerTests
 
         var expectedMethods = new Dictionary<string, string[]>
         {
-            ["/api/projects/{projectId}/runs/{runId}/environments"] = ["POST"],
+            ["/api/projects/{projectId}/runs/{runId}/environments"] = ["GET", "POST"],
             ["/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/release"] = ["POST"],
             ["/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/lifecycle"] = ["GET"],
             ["/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/operations/{operationId:guid}/provider-attempts"] = ["GET"],
@@ -50,11 +50,11 @@ public sealed class EnvironmentLifecycleManagerTests
             .Where(route => expectedMethods.ContainsKey(route.RoutePattern.RawText?.TrimEnd('/') ?? string.Empty))
             .ToArray();
 
-        Assert.Equal(expectedMethods.Count, endpoints.Length);
+        Assert.Equal(expectedMethods.Values.Sum(methods => methods.Length), endpoints.Length);
         foreach (var endpoint in endpoints)
         {
             var route = endpoint.RoutePattern.RawText!.TrimEnd('/');
-            Assert.Equal(expectedMethods[route], endpoint.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods);
+            Assert.Contains(endpoint.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods.Single(), expectedMethods[route]);
             Assert.NotEmpty(endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>());
         }
     }

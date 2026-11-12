@@ -343,6 +343,8 @@ public sealed record EnvironmentWorkspaceVolumeTransitionReservation
     public EnvironmentWorkspaceVolumeOperation Operation { get; }
     public EnvironmentWorkspaceVolumeTransitionState TransitionState { get; }
     public bool Replayed { get; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public ProviderResourceRef? TargetResource { get; init; }
     /// <summary>Verified flush proof attached to this reservation, when the operation is a flush.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public WorkspaceVolumeFlushEvidence? FlushEvidence { get; init; }

@@ -23,7 +23,7 @@ public sealed class EnvironmentLifecycleException(
 /// </summary>
 public sealed class EnvironmentLifecycleStore(
     NpgsqlDataSource dataSource,
-    TimeProvider timeProvider) : IEnvironmentLifecycleStore
+    TimeProvider timeProvider) : IEnvironmentLifecycleStore, IEnvironmentWorkspaceRecoveryStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const string Schema = "\"environment\"";
@@ -43,6 +43,333 @@ public sealed class EnvironmentLifecycleStore(
         ArgumentNullException.ThrowIfNull(owner);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         return await ReadOwnerAsync(connection, null, owner, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<EnvironmentRunSummary>> ListRunEnvironmentsAsync(
+        string tenantId,
+        string projectId,
+        string runId,
+        string afterEnvironmentId,
+        int take,
+        CancellationToken cancellationToken)
+    {
+        ValidateRecoveryPage(tenantId, projectId, runId, afterEnvironmentId, take);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            SELECT owner.environment_id, owner.lifecycle_generation, owner.state,
+                   policy.policy_generation, policy.effect_state,
+                   sandbox.operation_id, sandbox.lease_state,
+                   EXISTS (
+                       SELECT 1 FROM {SandboxLateResourceCleanups} AS cleanup
+                       WHERE cleanup.tenant_id = owner.tenant_id
+                         AND cleanup.project_id = owner.project_id
+                         AND cleanup.run_id = owner.run_id
+                         AND cleanup.environment_id = owner.environment_id
+                         AND cleanup.release_receipt_json IS NULL
+                   ) OR EXISTS (
+                       SELECT 1 FROM {SandboxProviderAttempts} AS attempt
+                       WHERE attempt.tenant_id = owner.tenant_id
+                         AND attempt.project_id = owner.project_id
+                         AND attempt.run_id = owner.run_id
+                         AND attempt.environment_id = owner.environment_id
+                         AND attempt.attempt_state IN ('InProgress', 'ResultRecorded', 'Unknown', 'LegacyUnknown')
+                   ) OR EXISTS (
+                       SELECT 1 FROM {WorkspaceVolumeCleanup} AS cleanup
+                       WHERE cleanup.tenant_id = owner.tenant_id
+                         AND cleanup.project_id = owner.project_id
+                         AND cleanup.run_id = owner.run_id
+                         AND cleanup.environment_id = owner.environment_id
+                         AND cleanup.state <> 'Completed'
+                   )
+            FROM {Owners} AS owner
+            LEFT JOIN LATERAL (
+                SELECT policy_generation, effect_state
+                FROM {OwnerEffects}
+                WHERE tenant_id = owner.tenant_id AND project_id = owner.project_id
+                  AND run_id = owner.run_id AND environment_id = owner.environment_id
+                  AND effect_kind = 'NetworkPolicy'
+                ORDER BY policy_generation DESC
+                LIMIT 1
+            ) AS policy ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT operation_id, lease_state
+                FROM {SandboxLeases}
+                WHERE tenant_id = owner.tenant_id AND project_id = owner.project_id
+                  AND run_id = owner.run_id AND environment_id = owner.environment_id
+                ORDER BY is_current DESC, resource_generation DESC
+                LIMIT 1
+            ) AS sandbox ON TRUE
+            WHERE owner.tenant_id = @tenant_id AND owner.project_id = @project_id
+              AND owner.run_id = @run_id AND owner.environment_id > @after_id
+            ORDER BY owner.environment_id
+            LIMIT @take
+            """, connection);
+        command.Parameters.AddWithValue("tenant_id", NpgsqlDbType.Text, tenantId);
+        command.Parameters.AddWithValue("project_id", NpgsqlDbType.Text, projectId);
+        command.Parameters.AddWithValue("run_id", NpgsqlDbType.Text, runId);
+        command.Parameters.AddWithValue("after_id", NpgsqlDbType.Text, afterEnvironmentId);
+        command.Parameters.AddWithValue("take", NpgsqlDbType.Integer, take);
+        var summaries = new List<EnvironmentRunSummary>(take);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            summaries.Add(new(
+                projectId,
+                runId,
+                reader.GetString(0),
+                reader.GetInt64(1),
+                Enum.Parse<EnvironmentLifecycleState>(reader.GetString(2), ignoreCase: false),
+                reader.IsDBNull(3) ? null : reader.GetInt64(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetGuid(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                reader.GetBoolean(7)));
+        return summaries;
+    }
+
+    public async Task<IReadOnlyList<EnvironmentWorkspaceVolumeStatus>> ListWorkspaceVolumesAsync(
+        EnvironmentGenerationFence fence,
+        string afterVolumeId,
+        int take,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(fence);
+        ValidateRecoveryPage(
+            fence.Owner.TenantId,
+            fence.Owner.ProjectId,
+            fence.Owner.RunId,
+            afterVolumeId,
+            take);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            WITH volume_ids AS (
+                SELECT DISTINCT resource_id AS volume_id
+                FROM {OwnerEffects}
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND run_id = @run_id AND environment_id = @environment_id
+                  AND effect_kind = 'WorkspaceVolume' AND operation = 'Create'
+                  AND effect_state = 'Completed' AND resource_id > @after_id
+            )
+            SELECT ids.volume_id,
+                   current.lifecycle_generation,
+                   current.target_transition_revision, current.target_resource_generation,
+                   current.target_data_generation, current.target_volume_state, current.operation,
+                   current.target_provider_seam, current.target_provider_id,
+                   current.target_provider_resource_id, current.target_provider_binding_json,
+                   created.specification_json,
+                   pending.operation_id, pending.operation, pending.idempotency_key,
+                   pending.expected_transition_revision, pending.expected_resource_generation,
+                   pending.expected_data_generation
+            FROM volume_ids AS ids
+            JOIN LATERAL (
+                SELECT lifecycle_generation, target_transition_revision, target_resource_generation,
+                       target_data_generation, target_volume_state, operation, target_provider_seam,
+                       target_provider_id, target_provider_resource_id, target_provider_binding_json
+                FROM {OwnerEffects}
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND run_id = @run_id AND environment_id = @environment_id
+                  AND effect_kind = 'WorkspaceVolume' AND resource_id = ids.volume_id
+                  AND effect_state = 'Completed'
+                ORDER BY lifecycle_generation DESC, target_transition_revision DESC
+                LIMIT 1
+            ) AS current ON TRUE
+            JOIN LATERAL (
+                SELECT specification_json
+                FROM {OwnerEffects}
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND run_id = @run_id AND environment_id = @environment_id
+                  AND effect_kind = 'WorkspaceVolume' AND resource_id = ids.volume_id
+                  AND operation = 'Create' AND effect_state = 'Completed'
+                ORDER BY lifecycle_generation, target_transition_revision
+                LIMIT 1
+            ) AS created ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT operation_id, operation, idempotency_key,
+                       expected_transition_revision, expected_resource_generation, expected_data_generation
+                FROM {OwnerEffects}
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND run_id = @run_id AND environment_id = @environment_id
+                  AND lifecycle_generation = @lifecycle_generation
+                  AND effect_kind = 'WorkspaceVolume' AND resource_id = ids.volume_id
+                  AND effect_state IN ('Reserved', 'ReconciliationRequired')
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) AS pending ON TRUE
+            JOIN {Owners} AS owner
+              ON owner.tenant_id = @tenant_id AND owner.project_id = @project_id
+             AND owner.run_id = @run_id AND owner.environment_id = @environment_id
+             AND owner.lifecycle_generation = @lifecycle_generation
+            ORDER BY ids.volume_id
+            LIMIT @take
+            """, connection);
+        AddOwnerParameters(command, fence.Owner);
+        command.Parameters.AddWithValue(
+            "lifecycle_generation", NpgsqlDbType.Bigint, fence.LifecycleGeneration);
+        command.Parameters.AddWithValue("after_id", NpgsqlDbType.Text, afterVolumeId);
+        command.Parameters.AddWithValue("take", NpgsqlDbType.Integer, take);
+        var results = new List<EnvironmentWorkspaceVolumeStatus>(take);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var resource = ReadProviderResource(
+                reader, 7, 8, 9, reader.GetInt64(3), "discovered volume");
+            var binding = ReadProviderBinding(reader, 10, resource);
+            var specification = JsonSerializer.Deserialize<WorkspaceVolumeSpec>(
+                reader.GetString(11), JsonOptions)
+                ?? throw new EnvironmentLifecycleException(
+                    "environment_volume_specification_corrupt",
+                    "The immutable workspace-volume specification is invalid.");
+            var pending = reader.IsDBNull(12)
+                ? null
+                : new EnvironmentWorkspaceVolumeRetryDescriptor(
+                    reader.GetGuid(12),
+                    Enum.Parse<EnvironmentWorkspaceVolumeOperation>(reader.GetString(13), ignoreCase: false),
+                    reader.GetString(14),
+                    reader.GetInt64(15),
+                    reader.GetInt64(16),
+                    reader.GetInt64(17));
+            results.Add(EnvironmentWorkspaceVolumeProjection.FromValues(
+                new EnvironmentGenerationFence(fence.Owner, reader.GetInt64(1)),
+                reader.GetString(0),
+                reader.GetInt64(2),
+                reader.GetInt64(3),
+                reader.GetInt64(4),
+                Enum.Parse<EnvironmentWorkspaceVolumeState>(reader.GetString(5), ignoreCase: false),
+                Enum.Parse<EnvironmentWorkspaceVolumeOperation>(reader.GetString(6), ignoreCase: false),
+                specification,
+                resource,
+                binding,
+                pending));
+        }
+        return results;
+    }
+
+    public async Task<EnvironmentWorkspaceVolumeStatus?> GetWorkspaceVolumeStatusAsync(
+        EnvironmentGenerationFence currentFence,
+        string volumeId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(currentFence);
+        ValidateVolumeId(volumeId);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            SELECT current.lifecycle_generation, current.target_transition_revision,
+                   current.target_resource_generation, current.target_data_generation,
+                   current.target_volume_state, current.operation, current.target_provider_seam,
+                   current.target_provider_id, current.target_provider_resource_id,
+                   current.target_provider_binding_json, created.specification_json,
+                   pending.operation_id, pending.operation, pending.idempotency_key,
+                   pending.expected_transition_revision, pending.expected_resource_generation,
+                   pending.expected_data_generation
+            FROM (
+                SELECT lifecycle_generation, target_transition_revision, target_resource_generation,
+                       target_data_generation, target_volume_state, operation, target_provider_seam,
+                       target_provider_id, target_provider_resource_id, target_provider_binding_json
+                FROM {OwnerEffects}
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND run_id = @run_id AND environment_id = @environment_id
+                  AND effect_kind = 'WorkspaceVolume' AND resource_id = @volume_id
+                  AND effect_state = 'Completed'
+                ORDER BY lifecycle_generation DESC, target_transition_revision DESC
+                LIMIT 1
+            ) AS current
+            JOIN LATERAL (
+                SELECT specification_json
+                FROM {OwnerEffects}
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND run_id = @run_id AND environment_id = @environment_id
+                  AND effect_kind = 'WorkspaceVolume' AND resource_id = @volume_id
+                  AND operation = 'Create' AND effect_state = 'Completed'
+                ORDER BY lifecycle_generation, target_transition_revision
+                LIMIT 1
+            ) AS created ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT operation_id, operation, idempotency_key,
+                       expected_transition_revision, expected_resource_generation, expected_data_generation
+                FROM {OwnerEffects}
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND run_id = @run_id AND environment_id = @environment_id
+                  AND lifecycle_generation = @lifecycle_generation
+                  AND effect_kind = 'WorkspaceVolume' AND resource_id = @volume_id
+                  AND effect_state IN ('Reserved', 'ReconciliationRequired')
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) AS pending ON TRUE
+            JOIN {Owners} AS owner
+              ON owner.tenant_id = @tenant_id AND owner.project_id = @project_id
+             AND owner.run_id = @run_id AND owner.environment_id = @environment_id
+             AND owner.lifecycle_generation = @lifecycle_generation
+            """, connection);
+        AddOwnerParameters(command, currentFence.Owner);
+        command.Parameters.AddWithValue(
+            "lifecycle_generation", NpgsqlDbType.Bigint, currentFence.LifecycleGeneration);
+        command.Parameters.AddWithValue("volume_id", NpgsqlDbType.Text, volumeId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return null;
+        var resource = ReadProviderResource(
+            reader, 6, 7, 8, reader.GetInt64(2), "discovered volume");
+        var binding = ReadProviderBinding(reader, 9, resource);
+        var specification = JsonSerializer.Deserialize<WorkspaceVolumeSpec>(
+            reader.GetString(10), JsonOptions)
+            ?? throw new EnvironmentLifecycleException(
+                "environment_volume_specification_corrupt",
+                "The immutable workspace-volume specification is invalid.");
+        var pending = reader.IsDBNull(11)
+            ? null
+            : new EnvironmentWorkspaceVolumeRetryDescriptor(
+                reader.GetGuid(11),
+                Enum.Parse<EnvironmentWorkspaceVolumeOperation>(reader.GetString(12), ignoreCase: false),
+                reader.GetString(13),
+                reader.GetInt64(14),
+                reader.GetInt64(15),
+                reader.GetInt64(16));
+        return EnvironmentWorkspaceVolumeProjection.FromValues(
+            new EnvironmentGenerationFence(currentFence.Owner, reader.GetInt64(0)),
+            volumeId,
+            reader.GetInt64(1),
+            reader.GetInt64(2),
+            reader.GetInt64(3),
+            Enum.Parse<EnvironmentWorkspaceVolumeState>(reader.GetString(4), ignoreCase: false),
+            Enum.Parse<EnvironmentWorkspaceVolumeOperation>(reader.GetString(5), ignoreCase: false),
+            specification,
+            resource,
+            binding,
+            pending);
+    }
+    public async Task<EnvironmentWorkspaceVolumeRetryDescriptor?> GetPendingWorkspaceVolumeTransitionAsync(
+        EnvironmentGenerationFence fence,
+        string volumeId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(fence);
+        ValidateVolumeId(volumeId);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            SELECT operation_id, operation, idempotency_key, expected_transition_revision,
+                   expected_resource_generation, expected_data_generation
+            FROM {OwnerEffects}
+            WHERE tenant_id = @tenant_id AND project_id = @project_id
+              AND run_id = @run_id AND environment_id = @environment_id
+              AND lifecycle_generation = @lifecycle_generation
+              AND effect_kind = 'WorkspaceVolume' AND resource_id = @volume_id
+              AND effect_state IN ('Reserved', 'ReconciliationRequired')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """, connection);
+        AddOwnerParameters(command, fence.Owner);
+        command.Parameters.AddWithValue(
+            "lifecycle_generation", NpgsqlDbType.Bigint, fence.LifecycleGeneration);
+        command.Parameters.AddWithValue("volume_id", NpgsqlDbType.Text, volumeId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? new EnvironmentWorkspaceVolumeRetryDescriptor(
+                reader.GetGuid(0),
+                Enum.Parse<EnvironmentWorkspaceVolumeOperation>(reader.GetString(1), ignoreCase: false),
+                reader.GetString(2),
+                reader.GetInt64(3),
+                reader.GetInt64(4),
+                reader.GetInt64(5))
+            : null;
     }
 
     /// <summary>Requires the exact Environment owner to be active at the supplied lifecycle generation.</summary>
@@ -1873,9 +2200,12 @@ public sealed class EnvironmentLifecycleStore(
         var flushRetry = expectedOperation == EnvironmentWorkspaceVolumeOperation.Flush &&
             flushEvidence is not null && effectVerified &&
             operation.State == EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired;
+        var metadataRetry = (expectedOperation is EnvironmentWorkspaceVolumeOperation.Bind or
+                EnvironmentWorkspaceVolumeOperation.Unbind) &&
+            operation.State == EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired;
         if (beforeCommitCheck is not null)
             await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
-        if (operation.State != EnvironmentWorkspaceVolumeTransitionState.Reserved && !releaseRetry && !flushRetry)
+        if (operation.State != EnvironmentWorkspaceVolumeTransitionState.Reserved && !releaseRetry && !flushRetry && !metadataRetry)
         {
             if (beforeCommitCheck is not null)
                 await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
@@ -2725,7 +3055,8 @@ public sealed class EnvironmentLifecycleStore(
             operation.State,
             replayed)
         {
-            FlushEvidence = operation.FlushEvidence
+            FlushEvidence = operation.FlushEvidence,
+            TargetResource = operation.TargetResource
         };
 
     private static EnvironmentWorkspaceVolumeTransitionResult ToVolumeResult(
@@ -3170,6 +3501,20 @@ public sealed class EnvironmentLifecycleStore(
             throw new ArgumentException(
                 "Workspace volume IDs must be bounded and contain no control characters.",
                 nameof(volumeId));
+    }
+
+    private static void ValidateRecoveryPage(
+        string tenantId,
+        string projectId,
+        string runId,
+        string afterId,
+        int take)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+        _ = new EnvironmentOwnerIdentity(tenantId, projectId, runId, "environment-validation");
+        ArgumentNullException.ThrowIfNull(afterId);
+        if (afterId.Length > 256 || afterId.Any(char.IsControl) || take is < 2 or > 101)
+            throw new ArgumentOutOfRangeException(nameof(take), "Recovery pages must request 2 through 101 records.");
     }
 
     private static bool IsValidStorageResource(ProviderResourceRef? resource, long generation) =>

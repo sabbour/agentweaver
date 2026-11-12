@@ -355,6 +355,218 @@ public sealed class EnvironmentWorkspaceVolumeManager(
         return snapshot;
     }
 
+    public async Task<EnvironmentWorkspaceVolumeStatus?> InspectStatusAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        string environmentId,
+        string volumeId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ValidateRouteIdentity(projectId, runId, environmentId);
+        _ = new WorkspaceVolumeReference(projectId, volumeId, 1).Validate();
+        var authorization = await ReadCurrentAuthorizationContextAsync(
+            caller, projectId, runId, tenantId: null, cancellationToken).ConfigureAwait(false);
+        RequirePermission(
+            authorization, projectId, ProjectAuthorizationPermission.ReadProjects,
+            "project_read_not_authorized",
+            "The current caller lacks fresh ReadProjects authority for this project.");
+        var owner = new EnvironmentOwnerIdentity(
+            authorization.TenantId, projectId, runId, environmentId);
+        var lifecycle = await lifecycleStore.GetAsync(owner, cancellationToken).ConfigureAwait(false);
+        if (lifecycle is null)
+        {
+            await EnsureReadAuthorizationUnchangedAsync(caller, owner, authorization, cancellationToken)
+                .ConfigureAwait(false);
+            return null;
+        }
+        var status = await RecoveryStore.GetWorkspaceVolumeStatusAsync(
+            lifecycle.Fence, volumeId, cancellationToken).ConfigureAwait(false);
+        await EnsureLifecycleUnchangedAsync(owner, lifecycle, cancellationToken).ConfigureAwait(false);
+        await EnsureReadAuthorizationUnchangedAsync(caller, owner, authorization, cancellationToken)
+            .ConfigureAwait(false);
+        return status;
+    }
+    public async Task<EnvironmentRecoveryPage<EnvironmentRunSummary>> ListRunEnvironmentsAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        int? limit,
+        string? cursor,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ValidateRouteIdentity(projectId, runId, "environment-validation");
+        var pageSize = ValidateRecoveryLimit(limit);
+        var (authorization, selection) = await AuthorizeRecoveryDiscoveryAsync(
+            caller, projectId, runId, cancellationToken).ConfigureAwait(false);
+        var afterId = cursor is null
+            ? string.Empty
+            : EnvironmentRecoveryCursor.Decode(
+                cursor, authorization.TenantId, projectId, runId, null, null).AfterId;
+        var rows = await RecoveryStore.ListRunEnvironmentsAsync(
+            authorization.TenantId, projectId, runId, afterId, pageSize + 1, cancellationToken)
+            .ConfigureAwait(false);
+        await EnsureRecoveryDiscoveryUnchangedAsync(
+            caller, projectId, runId, authorization, selection, cancellationToken).ConfigureAwait(false);
+        var hasMore = rows.Count > pageSize;
+        var items = rows.Take(pageSize).ToArray();
+        return new(
+            items,
+            hasMore
+                ? EnvironmentRecoveryCursor.Encode(new(
+                    1, authorization.TenantId, projectId, runId, null, null, items[^1].EnvironmentId))
+                : null,
+            hasMore);
+    }
+
+    public async Task<EnvironmentRecoveryPage<EnvironmentWorkspaceVolumeStatus>?> ListWorkspaceVolumesAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        string environmentId,
+        int? limit,
+        string? cursor,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ValidateRouteIdentity(projectId, runId, environmentId);
+        var pageSize = ValidateRecoveryLimit(limit);
+        var (authorization, selection) = await AuthorizeRecoveryDiscoveryAsync(
+            caller, projectId, runId, cancellationToken).ConfigureAwait(false);
+        var owner = new EnvironmentOwnerIdentity(
+            authorization.TenantId, projectId, runId, environmentId);
+        var lifecycle = await lifecycleStore.GetAsync(owner, cancellationToken).ConfigureAwait(false);
+        if (lifecycle is null)
+        {
+            await EnsureRecoveryDiscoveryUnchangedAsync(
+                caller, projectId, runId, authorization, selection, cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+        var afterId = cursor is null
+            ? string.Empty
+            : EnvironmentRecoveryCursor.Decode(
+                cursor,
+                authorization.TenantId,
+                projectId,
+                runId,
+                environmentId,
+                lifecycle.Fence.LifecycleGeneration).AfterId;
+        var rows = await RecoveryStore.ListWorkspaceVolumesAsync(
+            lifecycle.Fence, afterId, pageSize + 1, cancellationToken).ConfigureAwait(false);
+        await EnsureLifecycleUnchangedAsync(owner, lifecycle, cancellationToken).ConfigureAwait(false);
+        await EnsureRecoveryDiscoveryUnchangedAsync(
+            caller, projectId, runId, authorization, selection, cancellationToken).ConfigureAwait(false);
+        var hasMore = rows.Count > pageSize;
+        var items = rows.Take(pageSize).ToArray();
+        return new(
+            items,
+            hasMore
+                ? EnvironmentRecoveryCursor.Encode(new(
+                    1,
+                    authorization.TenantId,
+                    projectId,
+                    runId,
+                    environmentId,
+                    lifecycle.Fence.LifecycleGeneration,
+                    items[^1].VolumeId))
+                : null,
+            hasMore);
+    }
+
+    private async Task EnsureLifecycleUnchangedAsync(
+        EnvironmentOwnerIdentity owner,
+        EnvironmentLifecycleSnapshot original,
+        CancellationToken cancellationToken)
+    {
+        var current = await lifecycleStore.GetAsync(owner, cancellationToken).ConfigureAwait(false);
+        if (current is null || current.Fence != original.Fence || current.State != original.State)
+            throw new EnvironmentLifecycleException(
+                "environment_changed",
+                "The Environment lifecycle changed during workspace-volume discovery.");
+    }
+    private IEnvironmentWorkspaceRecoveryStore RecoveryStore =>
+        lifecycleStore as IEnvironmentWorkspaceRecoveryStore
+        ?? throw new InvalidOperationException("Environment recovery queries require the Environment lifecycle store.");
+
+    private async Task<(ProjectAuthorizationContextResponse Authorization, EffectiveNetworkPolicySelection Selection)>
+        AuthorizeRecoveryDiscoveryAsync(
+            CurrentCallerRequest caller,
+            string projectId,
+            string runId,
+            CancellationToken cancellationToken)
+    {
+        var authorization = await ReadCurrentAuthorizationContextAsync(
+            caller, projectId, runId, tenantId: null, cancellationToken).ConfigureAwait(false);
+        RequirePermission(
+            authorization, projectId, ProjectAuthorizationPermission.WriteProjects,
+            "project_write_not_authorized",
+            "The current caller lacks fresh WriteProjects authority for this project.");
+        RequirePermission(
+            authorization, projectId, ProjectAuthorizationPermission.ReadRunSelection,
+            "run_selection_not_authorized",
+            "The current caller lacks the separately granted ReadRunSelection permission.");
+        var selection = await projects.GetRunSelectionAsync(
+            caller, projectId, runId, cancellationToken).ConfigureAwait(false);
+        ValidateRecoverySelection(selection, projectId, runId);
+        await EnsureRecoveryDiscoveryUnchangedAsync(
+            caller, projectId, runId, authorization, selection, cancellationToken).ConfigureAwait(false);
+        return (authorization, selection);
+    }
+
+    private async Task EnsureRecoveryDiscoveryUnchangedAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        ProjectAuthorizationContextResponse original,
+        EffectiveNetworkPolicySelection originalSelection,
+        CancellationToken cancellationToken)
+    {
+        var current = await ReadCurrentAuthorizationContextAsync(
+            caller, projectId, runId, original.TenantId, cancellationToken).ConfigureAwait(false);
+        if (!SameAuthorizationContext(original, current) ||
+            !HasPermission(current, projectId, ProjectAuthorizationPermission.WriteProjects) ||
+            !HasPermission(current, projectId, ProjectAuthorizationPermission.ReadRunSelection))
+            throw new ProjectsConfigApiException(
+                "authorization_changed",
+                "The caller's project or run-selection authority changed during Environment discovery.");
+        var currentSelection = await projects.GetRunSelectionAsync(
+            caller, projectId, runId, cancellationToken).ConfigureAwait(false);
+        ValidateRecoverySelection(currentSelection, projectId, runId);
+        if (currentSelection.ProjectRevision != originalSelection.ProjectRevision ||
+            currentSelection.ProjectConfigurationRevision != originalSelection.ProjectConfigurationRevision ||
+            currentSelection.PlatformRuntimeRevision != originalSelection.PlatformRuntimeRevision ||
+            !string.Equals(currentSelection.ContextRevision, originalSelection.ContextRevision, StringComparison.Ordinal))
+            throw new ProjectsConfigApiException(
+                "authorization_changed",
+                "The immutable run selection changed during Environment discovery.");
+    }
+
+    private static void ValidateRecoverySelection(
+        EffectiveNetworkPolicySelection selection,
+        string projectId,
+        string runId)
+    {
+        if (!string.Equals(selection.ProjectId, projectId, StringComparison.Ordinal) ||
+            !string.Equals(selection.RunId, runId, StringComparison.Ordinal) ||
+            selection.ProjectRevision < 1 ||
+            selection.ProjectConfigurationRevision < 1 ||
+            selection.PlatformRuntimeRevision < 1 ||
+            string.IsNullOrWhiteSpace(selection.ContextRevision))
+            throw new ProjectsConfigApiException(
+                "invalid_run_selection",
+                "Projects & Config returned an incomplete or mismatched immutable run selection.");
+    }
+
+    private static int ValidateRecoveryLimit(int? limit)
+    {
+        var pageSize = limit ?? 25;
+        if (pageSize is < 1 or > 100)
+            throw new ArgumentOutOfRangeException(nameof(limit), "The page limit must be from 1 through 100.");
+        return pageSize;
+    }
+
     /// <summary>Dispatches a validated transition to the matching provider-backed workspace-volume operation.</summary>
     private async Task<WorkspaceVolumeLifecycleResult> ApplyAsync(
         CurrentCallerRequest caller,

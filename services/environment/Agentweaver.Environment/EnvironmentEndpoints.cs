@@ -15,6 +15,23 @@ public static class EnvironmentEndpoints
     {
         var environments = endpoints.MapGroup("/api/projects/{projectId}/runs/{runId}/environments")
             .RequireAuthorization();
+        environments.MapGet("", async (
+            string projectId,
+            string runId,
+            HttpContext context,
+            EnvironmentWorkspaceVolumeManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            if (!TryReadRecoveryPageRequest(context.Request, out var limit, out var cursor))
+                return Results.BadRequest(new { code = "invalid_pagination" });
+            return await ExecuteWorkspaceVolumeApiAsync(async () => Results.Ok(
+                await manager.ListRunEnvironmentsAsync(
+                    caller!, projectId, runId, limit, cursor, cancellationToken).ConfigureAwait(false)),
+                cancellationToken).ConfigureAwait(false);
+        });
         environments.MapPost("", async (
             string projectId,
             string runId,
@@ -466,6 +483,27 @@ public static class EnvironmentEndpoints
         var workspaceVolumes = endpoints.MapGroup(
                 "/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes")
             .RequireAuthorization();
+        workspaceVolumes.MapGet("", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            HttpContext context,
+            EnvironmentWorkspaceVolumeManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            if (!TryReadRecoveryPageRequest(context.Request, out var limit, out var cursor))
+                return Results.BadRequest(new { code = "invalid_pagination" });
+            return await ExecuteWorkspaceVolumeApiAsync(async () =>
+            {
+                var page = await manager.ListWorkspaceVolumesAsync(
+                    caller!, projectId, runId, environmentId, limit, cursor, cancellationToken)
+                    .ConfigureAwait(false);
+                return page is null ? Results.NotFound() : Results.Ok(page);
+            }, cancellationToken).ConfigureAwait(false);
+        });
         workspaceVolumes.MapGet("/{volumeId}", async (
             string projectId,
             string runId,
@@ -475,11 +513,12 @@ public static class EnvironmentEndpoints
             EnvironmentWorkspaceVolumeManager manager,
             CancellationToken cancellationToken) =>
         {
+            context.Response.Headers.CacheControl = "no-store";
             if (!TryReadCaller(context, out var caller))
                 return Results.Unauthorized();
             return await ExecuteWorkspaceVolumeApiAsync(async () =>
             {
-                var snapshot = await manager.InspectAsync(
+                var snapshot = await manager.InspectStatusAsync(
                     caller!, projectId, runId, environmentId, volumeId, cancellationToken).ConfigureAwait(false);
                 return snapshot is null ? Results.NotFound() : Results.Ok(snapshot);
             }, cancellationToken).ConfigureAwait(false);
@@ -498,10 +537,14 @@ public static class EnvironmentEndpoints
                 return Results.Unauthorized();
             if (request.P1Binding is not null)
                 return Results.BadRequest(new { code = "p1_internal_route_required" });
+            context.Response.Headers.CacheControl = "no-store";
             return await ExecuteWorkspaceVolumeApiAsync(async () =>
-                Results.Ok(await manager.CreateAsync(
+            {
+                var snapshot = await manager.CreateAsync(
                     caller!, projectId, runId, environmentId, volumeId, request, cancellationToken)
-                    .ConfigureAwait(false)), cancellationToken).ConfigureAwait(false);
+                    .ConfigureAwait(false);
+                return Results.Ok(EnvironmentWorkspaceVolumeProjection.FromSnapshot(snapshot, null));
+            }, cancellationToken).ConfigureAwait(false);
         });
         var p1WorkspaceVolumes = endpoints.MapGroup(
                 "/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes")
@@ -991,6 +1034,7 @@ public static class EnvironmentEndpoints
             EnvironmentWorkspaceVolumeManager manager,
             CancellationToken cancellationToken) =>
         {
+            context.Response.Headers.CacheControl = "no-store";
             if (!TryReadCaller(context, out var caller))
                 return Results.Unauthorized();
             if (request.P1Binding is not null)
@@ -1000,32 +1044,129 @@ public static class EnvironmentEndpoints
                 var result = await execute(
                     manager, caller!, projectId, runId, environmentId, volumeId,
                     request, null, cancellationToken).ConfigureAwait(false);
-                return ToWorkspaceVolumeTransitionResult(result);
+                return ToWorkspaceVolumeTransitionResult(result, request);
             }, cancellationToken).ConfigureAwait(false);
         });
     }
 
     /// <summary>Maps transition lifecycle results to the documented HTTP status and response body.</summary>
-    internal static IResult ToWorkspaceVolumeTransitionResult(WorkspaceVolumeLifecycleResult result)
+    internal static IResult ToWorkspaceVolumeTransitionResult(
+        WorkspaceVolumeLifecycleResult result,
+        WorkspaceVolumeApiTransitionRequest? request = null)
     {
         ArgumentNullException.ThrowIfNull(result);
-        if (result.CleanupPending)
-            return Results.Json(result, statusCode: StatusCodes.Status202Accepted);
-
         var state = result.Completion?.TransitionState ?? result.Reservation.TransitionState;
-        return state switch
+        if (request is null)
         {
-            EnvironmentWorkspaceVolumeTransitionState.Completed => Results.Ok(result),
-            EnvironmentWorkspaceVolumeTransitionState.Failed or
-                EnvironmentWorkspaceVolumeTransitionState.Stale =>
-                Results.Conflict(new
-                {
-                    code = "workspace_volume_transition_not_completed",
-                    message = "Refresh the owner state and retry with a new idempotency key.",
-                    transitionState = state
-                }),
-            _ => Results.Json(result, statusCode: StatusCodes.Status202Accepted)
-        };
+            if (result.CleanupPending)
+                return Results.Json(result, statusCode: StatusCodes.Status202Accepted);
+            return state switch
+            {
+                EnvironmentWorkspaceVolumeTransitionState.Completed => Results.Ok(result),
+                EnvironmentWorkspaceVolumeTransitionState.Failed or
+                    EnvironmentWorkspaceVolumeTransitionState.Stale => Results.Conflict(new
+                    {
+                        code = "workspace_volume_transition_not_completed",
+                        message = "Refresh the owner state and retry with a new idempotency key.",
+                        transitionState = state
+                    }),
+                _ => Results.Json(result, statusCode: StatusCodes.Status202Accepted)
+            };
+        }
+        var retry = request is not null &&
+            state is EnvironmentWorkspaceVolumeTransitionState.Reserved or
+                EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired
+            ? new EnvironmentWorkspaceVolumeRetryDescriptor(
+                result.Reservation.OperationId,
+                result.Reservation.Operation,
+                request.IdempotencyKey,
+                request.ExpectedTransitionRevision,
+                request.ExpectedResourceGeneration,
+                request.ExpectedDataGeneration)
+            : null;
+        var response = new EnvironmentWorkspaceVolumeMutationStatus(
+            SafeTransition(result.Reservation),
+            result.Completion is null ? null : SafeCompletion(result.Completion),
+            result.CurrentVolume is null
+                ? null
+                : EnvironmentWorkspaceVolumeProjection.FromSnapshot(result.CurrentVolume, retry),
+            retry,
+            result.CleanupStatus,
+            result.CleanupPending);
+        var statusCode = result.CleanupPending
+            ? StatusCodes.Status202Accepted
+            : state switch
+            {
+                EnvironmentWorkspaceVolumeTransitionState.Completed => StatusCodes.Status200OK,
+                EnvironmentWorkspaceVolumeTransitionState.Failed or
+                    EnvironmentWorkspaceVolumeTransitionState.Stale => StatusCodes.Status409Conflict,
+                _ => StatusCodes.Status202Accepted
+            };
+        return Results.Json(response, statusCode: statusCode);
+
+        static EnvironmentWorkspaceVolumeTransitionStatus SafeTransition(
+            EnvironmentWorkspaceVolumeTransitionReservation reservation) =>
+            new(
+                reservation.OperationId,
+                reservation.VolumeId,
+                reservation.ExpectedTransitionRevision,
+                reservation.ExpectedResourceGeneration,
+                reservation.ExpectedDataGeneration,
+                reservation.TargetTransitionRevision,
+                reservation.TargetResourceGeneration,
+                reservation.TargetDataGeneration,
+                reservation.TargetPhase,
+                reservation.Operation,
+                reservation.TransitionState,
+                reservation.Replayed,
+                reservation.CurrentResource,
+                reservation.TransitionState == EnvironmentWorkspaceVolumeTransitionState.Completed
+                    ? reservation.TargetResource
+                    : null);
+
+        static EnvironmentWorkspaceVolumeTransitionStatus SafeCompletion(
+            EnvironmentWorkspaceVolumeTransitionResult completion) =>
+            new(
+                completion.OperationId,
+                completion.VolumeId,
+                completion.ExpectedTransitionRevision,
+                completion.ExpectedResourceGeneration,
+                completion.ExpectedDataGeneration,
+                completion.TargetTransitionRevision,
+                completion.TargetResourceGeneration,
+                completion.TargetDataGeneration,
+                completion.TargetPhase,
+                completion.Operation,
+                completion.TransitionState,
+                completion.Replayed,
+                completion.ExpectedResource,
+                completion.TargetResource);
+    }
+
+    private static bool TryReadRecoveryPageRequest(
+        HttpRequest request,
+        out int? limit,
+        out string? cursor)
+    {
+        limit = null;
+        cursor = null;
+        if (request.Query.Keys.Any(key => key is not ("limit" or "cursor")) ||
+            request.Query.Any(pair => pair.Value.Count != 1))
+            return false;
+        if (request.Query.TryGetValue("limit", out var rawLimit))
+        {
+            if (!int.TryParse(rawLimit[0], System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+                return false;
+            limit = parsed;
+        }
+        if (request.Query.TryGetValue("cursor", out var rawCursor))
+        {
+            cursor = rawCursor[0];
+            if (string.IsNullOrEmpty(cursor))
+                return false;
+        }
+        return true;
     }
 
     /// <summary>Runs a workspace-volume endpoint operation and translates expected storage and lifecycle failures.</summary>

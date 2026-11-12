@@ -136,6 +136,18 @@ Cleanup failure leaves durable work for retry; it does not roll back the
 replacement. Release uses the saved provider binding and exact UID
 preconditions to retain or delete the intended resource. An attached or bound
 volume cannot be released as if unused.
+Environment discovery lists only owner records and volume lifecycle state. The
+list routes require `WriteProjects` and the separate `ReadRunSelection`
+permission, then recheck current authority and selection. Volume detail requires
+`ReadProjects`. Cursors bind to their tenant, project, run, Environment, and current lifecycle
+generation. Discovery includes retained or released records from earlier
+lifecycle generations, and each status preserves the generation of its latest
+completed operation. The safe status projection omits raw specifications and
+provider options or release descriptors, but includes the exact key and expected
+generations needed to retry a pending transition. Retry that same durable
+operation; do not infer that a timeout had no effect or create a replacement.
+These routes do not browse live mounted files. Removing access is not data
+restoration.
 
 Replacing a coordinator root Host does not replace its workspace volume. The
 owner retires the saved Sandbox placement, then provisions a new Pod and lease
