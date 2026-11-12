@@ -218,14 +218,17 @@ SDK and owner responses. Neither test proves a native AKS journey.
 Run the recovery boundary and progress tests from the repository root:
 
 ```powershell
-dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --configuration Release --filter "FullyQualifiedName~RuntimeRegistrationRecoveryTests|FullyQualifiedName~CheckpointRecoveryProgressSurvivesRestartAndProjectsAnOutboxEvent"
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --configuration Release --filter "FullyQualifiedName~RuntimeRegistrationRecoveryTests|FullyQualifiedName~CheckpointRecoveryProgressSurvivesRestartAndProjectsAnOutboxEvent|FullyQualifiedName~CoordinationOwnerStorePostgresTests"
 ```
 
 `RuntimeRegistrationRecoveryTests` uses controlled state to check that Host
 recovery accepts only the saved pending gate and decision version. The
 checkpoint progress test uses disposable PostgreSQL to check that a retry of
-the same step keeps the saved status and emits one progress event. It requires
-a Docker-compatible engine.
+the same step keeps the saved status and emits one progress event. The owner-store
+tests exercise recovery from an accepted idle run, including races with a
+gate answer and run cancellation. They use controlled runtime-start evidence
+rather than a running Host. The PostgreSQL tests require a Docker-compatible
+engine.
 
 ## Test Scribe Knowledge output
 

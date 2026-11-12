@@ -1267,12 +1267,18 @@ activity, completed effects, or successful physical cleanup.
 #### Recover a Host at a pending gate
 
 `POST /recovery` keeps its existing owner-state-only behavior when the request
-omits `checkpointRecovery`. The opt-in object pins the source checkpoint,
-decision version, current root runtime registration, and accepted selection.
+omits `checkpointRecovery`. That path requires a recorded `failed` or
+`indeterminate` state and failure cause and reference. The opt-in object can
+recover an `idle`, `active`, `blocked`, `failed`, or `indeterminate` run. It
+pins the source checkpoint, decision version, current root runtime
+registration, and accepted selection.
 The owner accepts this path only when the exact gate is still pending for the
 authorized actor and the checkpoint has no pending child dispatch, child
 association, or platform-effect intent. Other boundaries remain unavailable in
-this recovery slice.
+this recovery slice. Matching fences and versions, current authority, and the
+existing runtime, checkpoint, native-work, and terminal-cleanup checks are
+also required. A recovery request does not establish that the old Host is
+unhealthy.
 
 The owner advances the fence once. It keeps the same gate request and choices;
 it does not answer, cancel, or recreate the gate. The Environment owner retires
