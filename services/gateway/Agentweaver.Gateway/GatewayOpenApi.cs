@@ -671,7 +671,19 @@ else if (route.OperationId is
                     "422" => "The owner rejected an unsupported or invalid provider operation.",
                     _ => "The Environment owner is unavailable or not configured.",
                 };
-                responses[status] = JsonResponse(Ref("EnvironmentApiErrorOrProblem"), errorDescription);
+                var responseSchema = status == "409" &&
+                    route.OperationId is "bindEnvironmentWorkspaceVolume" or
+                        "unbindEnvironmentWorkspaceVolume" or "releaseEnvironmentWorkspaceVolume"
+                    ? new
+                    {
+                        oneOf = new[]
+                        {
+                            Ref("EnvironmentWorkspaceVolumeMutationStatus"),
+                            Ref("EnvironmentApiErrorOrProblem"),
+                        },
+                    }
+                    : Ref("EnvironmentApiErrorOrProblem");
+                responses[status] = JsonResponse(responseSchema, errorDescription);
             }
             responses["403"] = JsonResponse(
                 Ref("EnvironmentApiErrorOrProblem"),
