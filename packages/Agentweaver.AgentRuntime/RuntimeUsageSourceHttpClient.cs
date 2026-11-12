@@ -322,7 +322,10 @@ public sealed class RuntimeUsageSourceHttpClient(
 
     private static RuntimeCredentialHttpRequest Request(RuntimeCredentialProof proof) =>
         new(proof.GrantId, proof.RuntimeInstanceId, proof.Revision, proof.Purpose, proof.Audience,
-            proof.ConfigurationHash, proof.Credential.GetValue(), proof.Credential.ExpiresAt, Guid.Empty);
+            proof.ConfigurationHash, proof.Credential.GetValue(), proof.Credential.ExpiresAt, Guid.Empty)
+        {
+            CheckpointRecoveryOperationId = proof.CheckpointRecoveryOperationId
+        };
 
     private static RuntimeSdkSourceReceipt CurrentSourceReceipt(
         AuthorizedRuntimeSession session, RuntimeCredentialProof proof) =>
@@ -364,7 +367,10 @@ internal sealed class RuntimeUsageCostPreflightHttpClient(
             _address,
             $"/internal/runtime/sources/{registration.RuntimeInstanceId:D}/cost-preflight",
             actor,
-            new RuntimeUsageCostPreflightRequest(),
+            new RuntimeUsageCostPreflightRequest
+            {
+                CheckpointRecoveryOperationId = session.CheckpointRecoveryOperationId
+            },
             cancellationToken).ConfigureAwait(false);
         RuntimeUsageCostPreflightContract.Validate(receipt);
         if (receipt.RuntimeInstanceId != registration.RuntimeInstanceId ||

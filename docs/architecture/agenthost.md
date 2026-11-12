@@ -163,7 +163,9 @@ placement through Environment and registers a replacement at the next
 execution fence. The replacement uses the existing authenticated native-cache
 or journal recovery path. Orchestrator accepts readiness only when the Host
 reports one of those recovery modes; a fresh session does not satisfy recovery.
-The Host does not answer the gate or send a model turn during this continuation.
+The recovery operation ID also scopes the Host's registration, skill, source,
+and configuration calls while the replacement starts. The Host does not answer
+the gate or send a model turn during this continuation.
 
 ```mermaid
 sequenceDiagram

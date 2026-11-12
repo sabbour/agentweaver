@@ -27,13 +27,21 @@ internal sealed class NativeUsageReceiptClient(HttpClient client, CoordinationOw
 
     /// <summary>Reads and cross-validates the current registration and granted SDK source receipt.</summary>
     internal async Task<NativeRuntimeUsageSourceSnapshot> ReadCurrentSourceAsync(
-        Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
+        Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null)
     {
         var address = OwnerAddress;
-        var registration = await new RuntimeRegistrationHttpClient(client, address)
-            .ReadCurrentAsync(runtimeInstanceId, actor, cancellationToken).ConfigureAwait(false);
+        var registrations = new RuntimeRegistrationHttpClient(client, address);
+        var registration = checkpointRecoveryOperationId is { } operationId
+            ? await registrations.ReadCurrentForCheckpointRecoveryAsync(
+                runtimeInstanceId, operationId, actor, cancellationToken).ConfigureAwait(false)
+            : await registrations.ReadCurrentAsync(runtimeInstanceId, actor, cancellationToken)
+                .ConfigureAwait(false);
         var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeSdkSourceReceipt>(
-            client, address, $"/internal/runtime/sources/{runtimeInstanceId:D}",
+            client, address,
+            checkpointRecoveryOperationId is { } sourceOperationId
+                ? $"/internal/runtime/sources/{runtimeInstanceId:D}/checkpoint-recovery/{sourceOperationId:D}"
+                : $"/internal/runtime/sources/{runtimeInstanceId:D}",
             actor, null, cancellationToken).ConfigureAwait(false);
         RuntimeUsageSourceReceiptContract.ValidateSource(registration, receipt.Source);
         if (receipt.RuntimeInstanceId != runtimeInstanceId ||
@@ -121,7 +129,8 @@ internal sealed class NativeUsageApplicationService(
         {
             var actor = new RuntimeActorAuthorization(bearer, first.TenantId);
             var sourceSnapshot = await source.ReadCurrentSourceAsync(
-                runtimeInstanceId, actor, cancellationToken).ConfigureAwait(false);
+                runtimeInstanceId, actor, cancellationToken,
+                request.CheckpointRecoveryOperationId).ConfigureAwait(false);
             var binding = sourceSnapshot.Registration.Binding;
             RequireSourceScope(first, runtimeInstanceId, sourceSnapshot);
 
@@ -137,7 +146,8 @@ internal sealed class NativeUsageApplicationService(
                         !bearer.IsUsable())
                         throw new RuntimeAuthorizationException("runtime_usage_authority_changed");
                     var currentSource = await source.ReadCurrentSourceAsync(
-                        runtimeInstanceId, actor, token).ConfigureAwait(false);
+                        runtimeInstanceId, actor, token,
+                        request.CheckpointRecoveryOperationId).ConfigureAwait(false);
                     if (currentSource != sourceSnapshot)
                         throw new RuntimeAuthorizationException("runtime_cost_preflight_source_changed");
                 }, cancellationToken).ConfigureAwait(false);

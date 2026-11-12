@@ -567,15 +567,28 @@ internal sealed class RuntimeUsageSourceOwner(
     /// </summary>
     /// <exception cref="RuntimeAuthorizationException">Thrown when the source is inconsistent with current registration state.</exception>
     internal async Task<RuntimeSdkSourceReceipt> ReadCurrentSourceAsync(
-        HttpContext context, Guid runtimeInstanceId, CancellationToken cancellationToken)
+        HttpContext context, Guid runtimeInstanceId, CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null)
     {
         var receipt = await store.ExecuteLockedAsync(runtimeInstanceId,
-            (connection, transaction, token) => registrations.ExecuteCurrentAsync(
-                context, runtimeInstanceId, (registration, currentToken) =>
-                    store.ReadCurrentSourceAsync(connection, transaction, registration, currentToken),
-                token), cancellationToken).ConfigureAwait(false);
-        var current = await registrations.ReadCurrentAsync(context, runtimeInstanceId, cancellationToken)
-            .ConfigureAwait(false);
+            async (connection, transaction, token) =>
+            {
+                async Task<RuntimeSdkSourceReceipt> ReadAsync(
+                    RuntimeRegistration registration, CancellationToken currentToken) =>
+                    await store.ReadCurrentSourceAsync(
+                        connection, transaction, registration, currentToken).ConfigureAwait(false);
+
+                return checkpointRecoveryOperationId is { } operationId
+                    ? await registrations.ExecuteCurrentForCheckpointRecoveryAsync(
+                        context, runtimeInstanceId, operationId, ReadAsync, token).ConfigureAwait(false)
+                    : await registrations.ExecuteCurrentAsync(
+                        context, runtimeInstanceId, ReadAsync, token).ConfigureAwait(false);
+            }, cancellationToken).ConfigureAwait(false);
+        var current = checkpointRecoveryOperationId is { } currentOperationId
+            ? await registrations.ReadCurrentForCheckpointRecoveryAsync(
+                context, runtimeInstanceId, currentOperationId, cancellationToken).ConfigureAwait(false)
+            : await registrations.ReadCurrentAsync(context, runtimeInstanceId, cancellationToken)
+                .ConfigureAwait(false);
         if (receipt.CanonicalPayloadHash != RuntimeUsageSourceReceiptContract.HashSource(current, receipt.Source))
             throw new RuntimeAuthorizationException("runtime_sdk_source_conflict");
         return receipt;
@@ -609,31 +622,42 @@ internal sealed class RuntimeUsageSourceOwner(
         try
         {
             var actor = new RuntimeActorAuthorization(bearer, CoordinationIdentity.ReadTenantSelector(context));
+            async Task<T> ExecuteForRegistrationAsync(
+                NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken token)
+            {
+                async Task<T> ExecuteAsync(RuntimeRegistration registration, CancellationToken currentToken)
+                {
+                    if (proof.Audience != registration.Binding.ObservationEndpoint)
+                        throw new RuntimeAuthorizationException("runtime_source_audience_invalid");
+                    RequireLive(registration, bearer, credential);
+                    var grant = await broker.VerifyAsync(actor, proof, currentToken).ConfigureAwait(false);
+                    RequireGrant(grant, registration, proof);
+                    credential.LimitLifetime(grant.ExpiresAt);
+                    RequireLive(registration, bearer, credential);
+                    var result = await action(
+                        connection, transaction, registration, grant, actor, currentToken).ConfigureAwait(false);
+                    var finalGrant = await broker.VerifyAsync(actor, proof, currentToken).ConfigureAwait(false);
+                    RequireGrant(finalGrant, registration, proof);
+                    RequireLive(registration, bearer, credential);
+                    if (observationFacts is not null)
+                        foreach (var fact in observationFacts)
+                            await store.AppendObservationV2Async(
+                                connection, transaction, registration.Binding.ProjectId,
+                                registration.Binding.RunId, fact, currentToken).ConfigureAwait(false);
+                    await transaction.CommitAsync(currentToken).ConfigureAwait(false);
+                    RequireLive(registration, bearer, credential);
+                    return result;
+                }
+
+                return proof.CheckpointRecoveryOperationId is { } operationId
+                    ? await registrations.ExecuteCurrentForCheckpointRecoveryAsync(
+                        context, proof.RuntimeInstanceId, operationId, ExecuteAsync, token).ConfigureAwait(false)
+                    : await registrations.ExecuteCurrentAsync(
+                        context, proof.RuntimeInstanceId, ExecuteAsync, token).ConfigureAwait(false);
+            }
+
             return await store.ExecuteLockedAsync(proof.RuntimeInstanceId,
-                (connection, transaction, token) => registrations.ExecuteCurrentAsync(
-                    context, proof.RuntimeInstanceId, async (registration, currentToken) =>
-                    {
-                        if (proof.Audience != registration.Binding.ObservationEndpoint)
-                            throw new RuntimeAuthorizationException("runtime_source_audience_invalid");
-                        RequireLive(registration, bearer, credential);
-                        var grant = await broker.VerifyAsync(actor, proof, currentToken).ConfigureAwait(false);
-                        RequireGrant(grant, registration, proof);
-                        credential.LimitLifetime(grant.ExpiresAt);
-                        RequireLive(registration, bearer, credential);
-                        var result = await action(
-                            connection, transaction, registration, grant, actor, currentToken).ConfigureAwait(false);
-                        var finalGrant = await broker.VerifyAsync(actor, proof, currentToken).ConfigureAwait(false);
-                        RequireGrant(finalGrant, registration, proof);
-                        RequireLive(registration, bearer, credential);
-                        if (observationFacts is not null)
-                            foreach (var fact in observationFacts)
-                                await store.AppendObservationV2Async(
-                                    connection, transaction, registration.Binding.ProjectId,
-                                    registration.Binding.RunId, fact, currentToken).ConfigureAwait(false);
-                        await transaction.CommitAsync(currentToken).ConfigureAwait(false);
-                        RequireLive(registration, bearer, credential);
-                        return result;
-                    }, token), cancellationToken).ConfigureAwait(false);
+                ExecuteForRegistrationAsync, cancellationToken).ConfigureAwait(false);
         }
         finally
         {

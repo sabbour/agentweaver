@@ -61,7 +61,8 @@ public sealed class EnvironmentLifecycleManager(
     internal async Task<EnvironmentLifecycleTransitionResult> RegisterCoordinatorRootAsync(
         RuntimeActorAuthorization actor,
         RuntimeOwnerContext expectedOwner,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(expectedOwner);
@@ -72,7 +73,8 @@ public sealed class EnvironmentLifecycleManager(
             !actor.Bearer.IsUsable() ||
             runtimeOwnerContext is null)
             throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
-        return await RegisterRunStartAsync(actor, expectedOwner, cancellationToken).ConfigureAwait(false);
+        return await RegisterRunStartAsync(
+            actor, expectedOwner, cancellationToken, checkpointRecoveryOperationId).ConfigureAwait(false);
     }
 
     internal async Task<EnvironmentLifecycleTransitionResult> RegisterChildStartAsync(
@@ -96,7 +98,8 @@ public sealed class EnvironmentLifecycleManager(
     private async Task<EnvironmentLifecycleTransitionResult> RegisterRunStartAsync(
         RuntimeActorAuthorization actor,
         RuntimeOwnerContext expectedOwner,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null)
     {
         if (runtimeOwnerContext is null)
             throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
@@ -117,14 +120,28 @@ public sealed class EnvironmentLifecycleManager(
             caller, owner, cancellationToken).ConfigureAwait(false);
         RequireSameOwnerSelection(expectedOwner, selection.RunSelection);
 
+        async Task<RuntimeOwnerContext> ReadOwnerContextAsync(CancellationToken token) =>
+            checkpointRecoveryOperationId is { } operationId
+                ? await runtimeOwnerContext.ReadCheckpointRecoveryAsync(
+                    actor, expectedOwner.ProjectId, expectedOwner.RunId, expectedOwner.SessionId,
+                    operationId, token).ConfigureAwait(false)
+                : await runtimeOwnerContext.ReadAsync(
+                    actor, expectedOwner.ProjectId, expectedOwner.RunId, expectedOwner.SessionId, token)
+                    .ConfigureAwait(false);
+
         async Task RequireCurrentAsync(CancellationToken token)
         {
             if (!actor.Bearer.IsUsable())
                 throw new RuntimeAuthorizationException("runtime_start_actor_expired");
-            var current = await runtimeOwnerContext.ReadAsync(
-                actor, expectedOwner.ProjectId, expectedOwner.RunId, expectedOwner.SessionId, token)
-                .ConfigureAwait(false);
-            if (current != expectedOwner)
+            var current = await ReadOwnerContextAsync(token).ConfigureAwait(false);
+            var expected = checkpointRecoveryOperationId is null
+                ? expectedOwner
+                : expectedOwner with
+                {
+                    OwnerStateVersion = current.OwnerStateVersion,
+                    DecisionStateVersion = current.DecisionStateVersion
+                };
+            if (current != expected)
                 throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
             var currentSelection = await authorization.GetAuthorizedRunEnvironmentSelectionAsync(
                 caller, owner, token).ConfigureAwait(false);

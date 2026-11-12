@@ -78,6 +78,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
 
     /// <summary>The immutable runtime registration pinned when the session was configured.</summary>
     public RuntimeRegistration Registration { get; }
+    internal Guid? CheckpointRecoveryOperationId => _checkpointRecoveryOperationId;
 
     /// <summary>The latest owner-issued source grant after any successful refresh.</summary>
     public RuntimeGrantReceipt SourceGrant => Volatile.Read(ref _source).Receipt;

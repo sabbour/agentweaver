@@ -21,11 +21,22 @@ internal sealed class SessionMaterialRuntimeClient(HttpClient client, Coordinati
         Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken cancellationToken) =>
         new RuntimeRegistrationHttpClient(client, Address).ReadCurrentAsync(runtimeInstanceId, actor, cancellationToken);
 
+    internal Task<RuntimeRegistration> ReadCurrentForCheckpointRecoveryAsync(
+        Guid runtimeInstanceId, Guid operationId, RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken) =>
+        new RuntimeRegistrationHttpClient(client, Address).ReadCurrentForCheckpointRecoveryAsync(
+            runtimeInstanceId, operationId, actor, cancellationToken);
+
     /// <summary>Reads the source snapshot the owner recorded for the current registration.</summary>
     internal Task<RuntimeSdkSourceReceipt> ReadSourceAsync(
-        Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken cancellationToken) =>
+        Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null) =>
         RuntimeOwnerHttpTransport.SendAsync<RuntimeSdkSourceReceipt>(
-            client, Address, $"/internal/runtime/sources/{runtimeInstanceId:D}", actor, null, cancellationToken);
+            client, Address,
+            checkpointRecoveryOperationId is { } operationId
+                ? $"/internal/runtime/sources/{runtimeInstanceId:D}/checkpoint-recovery/{operationId:D}"
+                : $"/internal/runtime/sources/{runtimeInstanceId:D}",
+            actor, null, cancellationToken);
 
     /// <summary>Requires the owner to confirm the complete resume-bootstrap request is still current.</summary>
     internal async Task RequireResumeBootstrapCurrentAsync(
@@ -74,14 +85,18 @@ internal sealed class SessionMaterialApplicationService(
         try
         {
             var actor = new RuntimeActorAuthorization(bearer, first.TenantId);
-            var registration = await runtime.ReadCurrentAsync(
-                request.RuntimeInstanceId, actor, cancellationToken).ConfigureAwait(false);
+            var registration = request.CheckpointRecoveryOperationId is { } operationId
+                ? await runtime.ReadCurrentForCheckpointRecoveryAsync(
+                    request.RuntimeInstanceId, operationId, actor, cancellationToken).ConfigureAwait(false)
+                : await runtime.ReadCurrentAsync(
+                    request.RuntimeInstanceId, actor, cancellationToken).ConfigureAwait(false);
             RequireScope(first, registration.Binding.TenantId, registration.Binding.ProjectId, registration.Binding.RunId);
             var pinned = await journal.GetProviderBindingAsync(context.User, sessionId, cancellationToken)
                 .ConfigureAwait(false);
             await bindings.VerifyPinnedAsync(context.User, pinned, cancellationToken).ConfigureAwait(false);
-            var source = await runtime.ReadSourceAsync(request.RuntimeInstanceId, actor, cancellationToken)
-                .ConfigureAwait(false);
+            var source = await runtime.ReadSourceAsync(
+                request.RuntimeInstanceId, actor, cancellationToken,
+                request.CheckpointRecoveryOperationId).ConfigureAwait(false);
             if (source.RuntimeInstanceId != registration.RuntimeInstanceId ||
                 source.RegistrationRevision != registration.Revision ||
                 source.CanonicalPayloadHash != RuntimeUsageSourceReceiptContract.HashSource(registration, source.Source))
@@ -94,8 +109,11 @@ internal sealed class SessionMaterialApplicationService(
                     RequireScope(current, registration.Binding.TenantId,
                         registration.Binding.ProjectId, registration.Binding.RunId);
                     await bindings.VerifyPinnedAsync(context.User, pinned, token).ConfigureAwait(false);
-                    var currentRegistration = await runtime.ReadCurrentAsync(
-                        request.RuntimeInstanceId, actor, token).ConfigureAwait(false);
+                    var currentRegistration = request.CheckpointRecoveryOperationId is { } currentOperationId
+                        ? await runtime.ReadCurrentForCheckpointRecoveryAsync(
+                            request.RuntimeInstanceId, currentOperationId, actor, token).ConfigureAwait(false)
+                        : await runtime.ReadCurrentAsync(request.RuntimeInstanceId, actor, token)
+                            .ConfigureAwait(false);
                     if (currentRegistration != registration || !bearer.IsUsable())
                         throw new RuntimeAuthorizationException("runtime_material_authority_changed");
                 }, cancellationToken).ConfigureAwait(false);

@@ -246,7 +246,7 @@ internal sealed class EnvironmentRuntimeRunStartManager(
         var previous = request.PreviousPlacement;
         var caller = new CurrentCallerRequest(actor.Bearer.GetValue(), actor.TenantSelector);
         var lifecycleResult = await lifecycle.RegisterCoordinatorRootAsync(
-            actor, owner, cancellationToken).ConfigureAwait(false);
+            actor, owner, cancellationToken, request.CheckpointRecoveryOperationId).ConfigureAwait(false);
         var fence = lifecycleResult.Snapshot.Fence;
         if (fence.Owner.EnvironmentId != RuntimeRunStartKeys.EnvironmentId(owner))
             throw new RuntimeAuthorizationException("runtime_start_environment_binding_invalid");

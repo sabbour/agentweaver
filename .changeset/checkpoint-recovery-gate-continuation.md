@@ -1,6 +1,8 @@
 ---
 "Agentweaver.Orchestrator": minor
 "Agentweaver.Environment": minor
+"Agentweaver.EventsAndSessions": minor
+"Agentweaver.Abstractions": minor
 "Agentweaver.Identity": minor
 "Agentweaver.Gateway": minor
 "Agentweaver.AgentRuntime": minor

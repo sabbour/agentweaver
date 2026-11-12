@@ -145,6 +145,10 @@ public sealed record SessionMaterialWriteRequest(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RemoteToolResultProof? RemoteToolResultProof { get; init; }
 
+    /// <summary>Recovery operation that authorizes bootstrap material writes.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CheckpointRecoveryOperationId { get; init; }
+
     /// <summary>Redacts material bytes and proof from default diagnostic output.</summary>
     public override string ToString() => nameof(SessionMaterialWriteRequest) + " [REDACTED]";
 }
@@ -203,7 +207,8 @@ public static class SessionMaterialValidation
                 (request.RemoteToolResultProof is null ||
                     request.EventId != RemoteToolResultEventId(request.RemoteToolResultProof)) ||
             request.Kind != SessionMaterialKind.RemoteToolResult && request.RemoteToolResultProof is not null ||
-            request.MaxPromptTokens is < 1 or > 200000)
+            request.MaxPromptTokens is < 1 or > 200000 ||
+            request.CheckpointRecoveryOperationId == Guid.Empty)
             throw new ArgumentException("A bounded typed execution session material request is required.");
         if (request.Kind != SessionMaterialKind.RemoteToolResult)
         {
