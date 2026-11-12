@@ -1832,7 +1832,7 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection).ToLowerInvariant();
         var checkpointBinding = new MafCheckpointBinding(
             _root, _actor, _acceptedRoot.ExecutionFence,
-            MafExecutionCheckpointStore.CurrentSdkVersion, "model-1", null,
+            MafExecutionCheckpointStore.CurrentSdkVersion, "model:provider/alpha", null,
             StoreName: MafExecutionCheckpointContract.StoreName);
         var checkpointStore = new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null)
             .ForRun(checkpointBinding);
