@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator.Core;
@@ -59,7 +61,9 @@ internal sealed class MafExecutionCheckpointStore
         return latest is null
             ? null
             : new MafExecutionCheckpointSnapshot(
-                latest.Value.Info, MafExecutionCheckpointContract.Deserialize(latest.Value.Value))
+                latest.Value.Info,
+                MafExecutionCheckpointContract.Deserialize(latest.Value.Value),
+                HashCheckpointPayload(latest.Value.Value))
             {
                 ParentCheckpointId = latest.Value.ParentCheckpointId,
                 HasParentMetadata = latest.Value.HasParentMetadata
@@ -141,12 +145,70 @@ internal sealed class MafExecutionCheckpointStore
         return latest is null
             ? null
             : new MafExecutionCheckpointSnapshot(
-                latest.Value.Info, MafExecutionCheckpointContract.Deserialize(latest.Value.Value))
+                latest.Value.Info,
+                MafExecutionCheckpointContract.Deserialize(latest.Value.Value),
+                HashCheckpointPayload(latest.Value.Value))
             {
                 ParentCheckpointId = latest.Value.ParentCheckpointId,
                 HasParentMetadata = latest.Value.HasParentMetadata
             };
     }
+
+    internal async Task<MafExecutionCheckpointSnapshot> AppendRecoveryCheckpointInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        MafExecutionCheckpointSnapshot source,
+        Guid operationId,
+        long decisionStateVersion,
+        CancellationToken cancellationToken)
+    {
+        if (operationId == Guid.Empty || source.Info.SessionId != _binding.Identity.SessionId ||
+            source.State.Revision == long.MaxValue || source.PayloadHash.Length != 64 ||
+            !source.PayloadHash.All(Uri.IsHexDigit) || decisionStateVersion <= source.State.DecisionStateVersion)
+            throw new CoordinationException(
+                "checkpoint_recovery_checkpoint_invalid", StatusCodes.Status409Conflict);
+
+        var nextFence = checked(_binding.ExecutionFence + 1);
+        var state = source.State with
+        {
+            Revision = checked(source.State.Revision + 1),
+            DecisionStateVersion = decisionStateVersion,
+            RecoveryLineage = new MafCheckpointRecoveryLineage(
+                source.Info.CheckpointId,
+                source.State.Revision,
+                source.PayloadHash,
+                _binding.ExecutionFence,
+                operationId,
+                nextFence)
+        };
+        var binding = _binding with { ExecutionFence = nextFence };
+        var checkpointId = $"recovery-{operationId:N}";
+        var payload = MafExecutionCheckpointContract.Serialize(state);
+        var stored = await _checkpoints.ForRun(binding).AppendInTransactionAsync(
+            connection,
+            transaction,
+            binding,
+            binding.Identity.SessionId,
+            checkpointId,
+            payload,
+            source.Info,
+            cancellationToken,
+            parentExecutionFence: _binding.ExecutionFence).ConfigureAwait(false);
+        var persisted = await _checkpoints.ReadLatestCheckpointInTransactionAsync(
+            connection, transaction, binding, cancellationToken).ConfigureAwait(false);
+        if (persisted is null || persisted.Value.Info.CheckpointId != checkpointId)
+            throw new CoordinationException(
+                "checkpoint_recovery_checkpoint_stale", StatusCodes.Status409Conflict);
+        return new MafExecutionCheckpointSnapshot(
+            stored.Info, state, HashCheckpointPayload(persisted.Value.Value))
+        {
+            ParentCheckpointId = stored.ParentCheckpointId,
+            HasParentMetadata = stored.HasParentMetadata
+        };
+    }
+
+    private static string HashCheckpointPayload(JsonElement value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.GetRawText())));
 
     /// <summary>
     /// Reports whether the store is bound to the given session and execution fence.

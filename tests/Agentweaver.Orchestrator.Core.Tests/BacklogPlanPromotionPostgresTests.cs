@@ -220,6 +220,210 @@ public sealed class BacklogPlanPromotionPostgresTests : IAsyncLifetime
         Assert.Equal(0, await CountAsync("backlog_tasks"));
     }
 
+    [Fact]
+    public async Task CheckpointRecoveryAdvancesFenceAndRebindsTheSamePendingGate()
+    {
+        var current = await _decisions.ReadCurrentAsync(
+            _actor, Identity, _selection, CancellationToken.None);
+        var requestId = "checkpoint-recovery-question";
+        var question = CoordinatorDecisionFlow.AskQuestion(
+            current.State, requestId, "scope-question", "Which repository should be changed?",
+            _actor.Subject, ["repository-a", "repository-b"], allowsFreeform: false);
+        Assert.True(question.IsSuccess);
+        var pending = await _decisions.PersistTransitionAsync(
+            _actor, Identity, _selection, current.StateVersion, requestId, requestId, "question.ask",
+            CoordinatorDecisionOwnerStore.ComputeCommandHash(question.Value),
+            question.State!, true, question.Issues, null, null, question.Value, CancellationToken.None);
+
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            await _decisions.AdvanceExecutionFenceAsync(
+                connection, transaction, _actor, Identity, _selection, _fence, _fence + 1,
+                Guid.NewGuid(), "execution.checkpoint_recovery", CancellationToken.None,
+                preservePendingGate: true, expectedDecisionStateVersion: pending.StateVersion);
+            await transaction.CommitAsync();
+        }
+
+        var recovered = await ReadLatestDecisionEnvelopeAsync();
+        Assert.Equal(_fence + 1, recovered.Fence);
+        Assert.Equal(requestId, recovered.PendingGate!.RequestId);
+        Assert.Equal(_actor.Subject, recovered.PendingGate.AuthorizedActorId);
+        Assert.Equal(_fence + 1, recovered.PendingGate.Fence);
+
+        await using var verifyConnection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var verify = new NpgsqlCommand($"""
+            SELECT gate_state, execution_fence, state_version, allowed_choices, created_by_subject
+            FROM "{_schema}".coordinator_gates
+            WHERE project_id = @project AND run_id = @run AND request_id = @request
+            """, verifyConnection);
+        verify.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, ProjectId);
+        verify.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, RunId);
+        verify.Parameters.AddWithValue("request", NpgsqlDbType.Varchar, requestId);
+        await using var gate = await verify.ExecuteReaderAsync();
+        Assert.True(await gate.ReadAsync());
+        Assert.Equal("pending", gate.GetString(0));
+        Assert.Equal(_fence + 1, gate.GetInt64(1));
+        Assert.Equal(pending.StateVersion + 1, gate.GetInt64(2));
+        Assert.Equal(
+            new[] { "repository-a", "repository-b" },
+            JsonSerializer.Deserialize<string[]>(gate.GetString(3)));
+        Assert.Equal(_actor.Subject, gate.GetString(4));
+    }
+
+    [Fact]
+    public async Task CheckpointRecoveryRejectsACancelledGateInsteadOfRecreatingIt()
+    {
+        var current = await _decisions.ReadCurrentAsync(
+            _actor, Identity, _selection, CancellationToken.None);
+        const string requestId = "cancelled-recovery-question";
+        var question = CoordinatorDecisionFlow.AskQuestion(
+            current.State, requestId, "scope-question", "Which repository should be changed?",
+            _actor.Subject, ["repository-a", "repository-b"], allowsFreeform: false);
+        var pending = await _decisions.PersistTransitionAsync(
+            _actor, Identity, _selection, current.StateVersion, requestId, requestId, "question.ask",
+            CoordinatorDecisionOwnerStore.ComputeCommandHash(question.Value),
+            question.State!, true, question.Issues, null, null, question.Value, CancellationToken.None);
+        var askedState = question.State!;
+        var clearedState = CoordinatorDecisionState.Restore(
+            askedState.Fence, askedState.OutcomeSpec, askedState.OutcomeConfirmed,
+            askedState.NextClarifyingQuestionIndex, askedState.SelectedWorkflow, askedState.WorkflowConfirmed,
+            askedState.ConfirmedWorkPlan, askedState.CandidateWorkPlan, askedState.LastScopeDiff,
+            pendingGate: null, decisionReceipts: askedState.DecisionReceipts,
+            workPlanRevisionAttempts: askedState.WorkPlanRevisionAttempts);
+        Assert.True(clearedState.IsValid);
+        var cleared = await _decisions.PersistTransitionAsync(
+            _actor, Identity, _selection, pending.StateVersion, "clear-cancelled-gate",
+            requestId, "test.gate.clear", CoordinatorDecisionOwnerStore.ComputeCommandHash("clear"),
+            clearedState.Value!, true, [], null, null, null, CancellationToken.None);
+
+        var error = await Assert.ThrowsAsync<CoordinationException>(async () =>
+        {
+            await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+            await using var transaction = await connection.BeginTransactionAsync();
+            await _decisions.AdvanceExecutionFenceAsync(
+                connection, transaction, _actor, Identity, _selection, _fence, _fence + 1,
+                Guid.NewGuid(), "execution.checkpoint_recovery", CancellationToken.None,
+                preservePendingGate: true, expectedDecisionStateVersion: cleared.StateVersion);
+        });
+        Assert.Equal("checkpoint_recovery_gate_unavailable", error.Code);
+        Assert.Equal(1, await CountAsync("coordinator_gates"));
+        await using var verifyConnection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var verify = new NpgsqlCommand($"""
+            SELECT gate_state FROM "{_schema}".coordinator_gates
+            WHERE project_id = @project AND run_id = @run AND request_id = @request
+            """, verifyConnection);
+        verify.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, ProjectId);
+        verify.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, RunId);
+        verify.Parameters.AddWithValue("request", NpgsqlDbType.Varchar, requestId);
+        Assert.Equal("cancelled", await verify.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task CheckpointRecoveryAdvancesABoundaryThatHasNoGate()
+    {
+        var current = await _decisions.ReadCurrentAsync(
+            _actor, Identity, _selection, CancellationToken.None);
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            await _decisions.AdvanceExecutionFenceAsync(
+                connection, transaction, _actor, Identity, _selection, _fence, _fence + 1,
+                Guid.NewGuid(), "execution.checkpoint_recovery", CancellationToken.None,
+                preservePendingGate: true, expectedDecisionStateVersion: current.StateVersion);
+            await transaction.CommitAsync();
+        }
+
+        var recovered = await ReadLatestDecisionEnvelopeAsync();
+        Assert.Equal(_fence + 1, recovered.Fence);
+        Assert.Null(recovered.PendingGate);
+        Assert.Equal(0, await CountAsync("coordinator_gates"));
+    }
+
+    [Fact]
+    public async Task RecoveryCheckpointUsesTheNextFenceAndLinksItsImmutableSource()
+    {
+        var postgres = new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null);
+        var binding = new MafCheckpointBinding(
+            Identity, _actor, _fence, MafExecutionCheckpointStore.CurrentSdkVersion, "model:selected", null);
+        var sourceStore = new MafExecutionCheckpointStore(postgres, binding);
+        var sourceState = new MafExecutionCheckpoint(
+            1, "plan-1", 2, MafExecutionProgress.Empty);
+        var source = await sourceStore.AppendAsync(
+            "recovery-source", null, sourceState, CancellationToken.None);
+        var sourceSnapshot = await sourceStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(sourceSnapshot);
+        var nextFence = _fence + 1;
+        var operationId = Guid.NewGuid();
+
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            await using (var advanceRun = new NpgsqlCommand($"""
+                UPDATE "{_schema}".accepted_runs
+                SET execution_fence = @fence, execution_state = 'active',
+                    state_version = state_version + 1
+                WHERE project_id = @project AND run_id = @run
+                """, connection, transaction))
+            {
+                advanceRun.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, nextFence);
+                advanceRun.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, ProjectId);
+                advanceRun.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, RunId);
+                Assert.Equal(1, await advanceRun.ExecuteNonQueryAsync());
+            }
+            await using (var advanceSession = new NpgsqlCommand($"""
+                UPDATE "{_schema}".coordination_sessions
+                SET execution_fence = @fence, state_version = state_version + 1
+                WHERE project_id = @project AND run_id = @run AND session_id = @session
+                """, connection, transaction))
+            {
+                advanceSession.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, nextFence);
+                advanceSession.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, ProjectId);
+                advanceSession.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, RunId);
+                advanceSession.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, RootSessionId);
+                Assert.Equal(1, await advanceSession.ExecuteNonQueryAsync());
+            }
+
+            var recovered = await sourceStore.AppendRecoveryCheckpointInTransactionAsync(
+                connection, transaction, sourceSnapshot, operationId, 3, CancellationToken.None);
+            await transaction.CommitAsync();
+            Assert.Equal("recovery-" + operationId.ToString("N"), recovered.Info.CheckpointId);
+            Assert.Equal(source.Info.CheckpointId, recovered.ParentCheckpointId);
+            Assert.Equal(sourceSnapshot.PayloadHash, recovered.State.RecoveryLineage!.SourceCheckpointHash);
+        }
+
+        var nextStore = new MafExecutionCheckpointStore(
+            postgres, binding with { ExecutionFence = nextFence });
+        var current = await nextStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(current);
+        Assert.Equal(2, current.State.Revision);
+        Assert.Equal(3, current.State.DecisionStateVersion);
+        Assert.Equal(sourceSnapshot.Info.CheckpointId, current.State.RecoveryLineage!.SourceCheckpointId);
+        Assert.Equal(sourceSnapshot.PayloadHash, current.State.RecoveryLineage.SourceCheckpointHash);
+        Assert.Equal(_fence, current.State.RecoveryLineage.SourceExecutionFence);
+        Assert.Equal(nextFence, current.State.RecoveryLineage.RecoveryExecutionFence);
+    }
+
+    private async Task<CoordinatorDecisionStateEnvelope> ReadLatestDecisionEnvelopeAsync()
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT decision::text
+            FROM "{_schema}".coordinator_decisions
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+            ORDER BY state_version DESC
+            LIMIT 1
+            """, connection);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, RunId);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, RootSessionId);
+        var payload = (string)(await command.ExecuteScalarAsync() ??
+            throw new InvalidOperationException("The recovery decision was not persisted."));
+        using var document = JsonDocument.Parse(payload);
+        return document.RootElement.GetProperty("envelope").Deserialize<CoordinatorDecisionStateEnvelope>(DecisionJson)
+            ?? throw new InvalidOperationException("The recovery decision envelope was not persisted.");
+    }
+
     private Task<BacklogCoreResult<BacklogPlanPromotion>> PromoteAsync(
         string idempotencyKey, long expectedGraphRevision) =>
         _backlog.PromoteWorkPlanAsync(
@@ -338,6 +542,10 @@ public sealed class BacklogPlanPromotionPostgresTests : IAsyncLifetime
                 "blueprintWorkflowReferences": [],
                 "agentCharters": [],
                 "casting": []
+              },
+              "modelSelection": {
+                "reference": "model:selected",
+                "sourceMode": "hostedCopilot"
               },
               "runLimits": {
                 "maxChildren": 100,
