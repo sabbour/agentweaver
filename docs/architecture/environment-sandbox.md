@@ -253,8 +253,30 @@ The internal run-bound placement read requires fresh `ReadRunSelection` authorit
 and exact non-null project/run token bindings. The Environment JWT middleware
 continues to enforce the configured Environment audience for both routes.
 
+
+Environment discovery uses owner-scoped reads. Listing Environments or
+workspace volumes requires fresh `WriteProjects` authority and the separate
+`ReadRunSelection` permission. Environment reads the exact immutable run
+selection and rechecks both authorities after the store read. Volume detail
+uses fresh `ReadProjects` authority and rechecks it after the read. These routes return bounded pages with cursors tied to the tenant, project, run,
+Environment, and current lifecycle generation. Returned volume statuses keep the
+generation of their latest completed operation, including retained or released
+records from earlier generations. A cursor for another scope is rejected.
+
+The discovery and status routes return lifecycle and resource references,
+provider identity pins, and pending-operation retry fields. They do not return
+the raw volume specification, provider options, or provider release descriptor.
+For a pending operation, retry the same operation with its original
+idempotency key and expected generations. Do not start a replacement operation
+because a response was lost or the status is pending. These Environment routes
+do not browse mounted files, and releasing access does not restore data removed
+by a provider operation.
+
 | Route | Operation |
 | --- | --- |
+| `GET /api/projects/{projectId}/runs/{runId}/environments` | List owner-scoped Environment summaries with bounded, selection-authorized pagination. |
+| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes` | List safe workspace-volume status across the Environment owner history. |
+| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}` | Read safe volume status and its exact pending-operation retry descriptor. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments` | Register the exact Environment owner from trusted Projects context; body contains only `idempotencyKey`. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/release` | Release the exact owner using `expectedLifecycleGeneration` and `idempotencyKey`; provider evidence is read from durable owner state. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/lifecycle` | Read the durable lifecycle snapshot under fresh `ReadProjects` authority. |

@@ -87,6 +87,126 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
         Assert.Empty(setup.Provider.ReleaseRequests);
     }
 
+    [Fact]
+    public async Task ExactBindRetryCompletesAReservationAfterServiceRestart()
+    {
+        var setup = await CreateRequestedVolumeAsync();
+        _ = await setup.Service.ProvisionAsync(
+            setup.Fence,
+            Transition(setup.Specification.VolumeId, WorkspaceVolumeTransitionKind.Provision, 1, 0, "provision-before-bind-retry"));
+        var pending = await setup.Store.ReserveWorkspaceVolumeBindAsync(
+            setup.Fence, setup.Specification.VolumeId, 2, 1, 0, "bind-after-reservation", CancellationToken.None);
+        var restarted = new WorkspaceVolumeService(setup.Store, setup.Provider);
+
+        var result = await restarted.BindAsync(
+            setup.Fence,
+            Transition(setup.Specification.VolumeId, WorkspaceVolumeTransitionKind.Bind, 2, 1, "bind-after-reservation"));
+        var current = await setup.Store.GetWorkspaceVolumeAsync(
+            setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
+
+        Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Reserved, pending.TransitionState);
+        Assert.True(result.Reservation.Replayed);
+        Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Completed, result.Completion!.TransitionState);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Bound, current!.Phase);
+        Assert.Equal(3, current.TransitionRevision);
+        Assert.Empty(setup.Provider.ReleaseRequests);
+    }
+
+    [Fact]
+    public async Task ExactBindRetryCompletesReconciliationRequiredMetadataReservation()
+    {
+        var setup = await CreateRequestedVolumeAsync();
+        var provision = await setup.Service.ProvisionAsync(
+            setup.Fence,
+            Transition(setup.Specification.VolumeId, WorkspaceVolumeTransitionKind.Provision, 1, 0, "provision-before-bind-reconciliation"));
+        var resource = provision.Completion!.TargetResource!;
+        var pending = await setup.Store.ReserveWorkspaceVolumeBindAsync(
+            setup.Fence, setup.Specification.VolumeId, 2, 1, 0, "bind-after-reconciliation", CancellationToken.None);
+        var mismatch = resource with { ResourceId = "different-resource" };
+        var uncertain = await setup.Store.CompleteWorkspaceVolumeBindAsync(
+            pending.OperationId, setup.Fence, true, mismatch, true, CancellationToken.None);
+        var restarted = new WorkspaceVolumeService(setup.Store, setup.Provider);
+
+        var result = await restarted.BindAsync(
+            setup.Fence,
+            Transition(setup.Specification.VolumeId, WorkspaceVolumeTransitionKind.Bind, 2, 1, "bind-after-reconciliation"));
+        var current = await setup.Store.GetWorkspaceVolumeAsync(
+            setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
+
+        Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired, uncertain.TransitionState);
+        Assert.True(result.Reservation.Replayed);
+        Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Completed, result.Completion!.TransitionState);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Bound, current!.Phase);
+        Assert.Equal(resource, current.Resource);
+        Assert.Empty(setup.Provider.ReleaseRequests);
+    }
+    [Fact]
+    public async Task ExactReleaseRetryCompletesAReservationAfterServiceRestart()
+    {
+        var setup = await CreateRequestedVolumeAsync();
+        var provision = await setup.Service.ProvisionAsync(
+            setup.Fence,
+            Transition(setup.Specification.VolumeId, WorkspaceVolumeTransitionKind.Provision, 1, 0, "provision-before-release-retry"));
+        var resource = provision.Completion!.TargetResource!;
+        var pending = await setup.Store.ReserveWorkspaceVolumeReleaseAsync(
+            setup.Fence, setup.Specification.VolumeId, 2, 1, 0, "release-after-reservation", CancellationToken.None);
+        var restarted = new WorkspaceVolumeService(setup.Store, setup.Provider);
+
+        var result = await restarted.ReleaseAsync(
+            setup.Fence,
+            Transition(setup.Specification.VolumeId, WorkspaceVolumeTransitionKind.Release, 2, 1, "release-after-reservation"));
+        var current = await setup.Store.GetWorkspaceVolumeAsync(
+            setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
+
+        Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Reserved, pending.TransitionState);
+        Assert.True(result.Reservation.Replayed);
+        Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Completed, result.Completion!.TransitionState);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Released, current!.Phase);
+        Assert.Null(current.Resource);
+        Assert.Equal(resource, Assert.Single(setup.Provider.ReleaseRequests).Resource);
+    }
+
+    [Fact]
+    public async Task ExactReleaseRetryVerifiesProviderSuccessBeforeOwnerCompletion()
+    {
+        var setup = await CreateRequestedVolumeAsync(WorkspaceVolumeReclaimPolicy.Retain);
+        var provision = await setup.Service.ProvisionAsync(
+            setup.Fence,
+            Transition(setup.Specification.VolumeId, WorkspaceVolumeTransitionKind.Provision, 1, 0, "provision-before-release-effect-retry"));
+        var resource = provision.Completion!.TargetResource!;
+        var request = Transition(
+            setup.Specification.VolumeId,
+            WorkspaceVolumeTransitionKind.Release,
+            2,
+            1,
+            "release-after-provider-effect");
+        var pending = await setup.Store.ReserveWorkspaceVolumeReleaseAsync(
+            setup.Fence, request.VolumeId, request.ExpectedTransitionRevision,
+            request.ExpectedResourceGeneration, request.ExpectedDataGeneration,
+            request.IdempotencyKey, CancellationToken.None);
+        var releaseRequest = new WorkspaceVolumeReleaseRequest(
+            new WorkspaceVolumeReference(
+                setup.Specification.ProjectId, setup.Specification.VolumeId, pending.ExpectedResourceGeneration),
+            resource,
+            setup.Specification.BindingMode,
+            setup.Specification.GetEffectiveReleasePolicy(),
+            setup.Specification.OwnerDeletionPolicy,
+            pending.CurrentProviderBinding!,
+            request.IdempotencyKey).Validate();
+        _ = await setup.Provider.ReleaseAsync(releaseRequest);
+        var restarted = new WorkspaceVolumeService(setup.Store, setup.Provider);
+
+        var result = await restarted.ReleaseAsync(setup.Fence, request);
+        var current = await setup.Store.GetWorkspaceVolumeAsync(
+            setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
+
+        Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Reserved, pending.TransitionState);
+        Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Completed, result.Completion!.TransitionState);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Released, current!.Phase);
+        Assert.Equal(resource, result.Completion.ExpectedResource);
+        Assert.Equal(2, setup.Provider.ReleaseRequests.Count);
+    }
+
     [Theory]
     [InlineData(EnvironmentWorkspaceVolumeState.Bound)]
     [InlineData(EnvironmentWorkspaceVolumeState.Attached)]

@@ -386,7 +386,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             owner.Token,
             new CreateWorkspaceVolumeApiRequest(specification, "create-volume"));
         await AssertStatusAsync(create, HttpStatusCode.OK);
-        var createdVolume = await ReadJsonAsync<EnvironmentWorkspaceVolumeSnapshot>(create);
+        var createdVolume = await ReadJsonAsync<EnvironmentWorkspaceVolumeStatus>(create);
         Assert.Equal(EnvironmentWorkspaceVolumeState.Requested, createdVolume.Phase);
 
         var selectionReadsBeforeWorkspaceProvision = selectionObserver.SelectionReadCount;
@@ -403,7 +403,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var viewerRead = await SendAsync(
             environment.Client, HttpMethod.Get, $"{volumePath}/{volumeId}", viewer.Token, [TenantId]);
         await AssertStatusAsync(viewerRead, HttpStatusCode.OK);
-        var viewerSnapshot = await ReadJsonAsync<EnvironmentWorkspaceVolumeSnapshot>(viewerRead);
+        var viewerSnapshot = await ReadJsonAsync<EnvironmentWorkspaceVolumeStatus>(viewerRead);
         Assert.Equal(EnvironmentWorkspaceVolumeState.Ready, viewerSnapshot.Phase);
 
         var beforeDeniedWrites = await lifecycleStore.GetWorkspaceVolumeAsync(
@@ -458,7 +458,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 "sandbox-bind")))
         {
             await AssertStatusAsync(sandboxBind, HttpStatusCode.OK);
-            var bound = await ReadJsonAsync<WorkspaceVolumeLifecycleResult>(sandboxBind);
+            var bound = await ReadJsonAsync<EnvironmentWorkspaceVolumeMutationStatus>(sandboxBind);
             Assert.Equal(EnvironmentWorkspaceVolumeState.Bound, bound.Completion!.TargetPhase);
         }
 
