@@ -175,7 +175,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
             scope, 100, null, secondDenial.DispatchId, default);
 
         var withNoSendFact = Assert.Single(withNoSend.History.Items,
-            item => item.Kind == RuntimeObservationFactKind.Denied);
+            item => item.Kind == RuntimeObservationFactKind.NativeNoSend);
         var withoutNoSendFact = Assert.Single(withoutNoSend.History.Items,
             item => item.Kind == RuntimeObservationFactKind.Denied);
         Assert.Equal(RuntimeObservationSectionState.Available, withNoSendFact.NativeNoSend.State);
