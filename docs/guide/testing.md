@@ -729,6 +729,11 @@ does not prove that the native API journey passed.
 
 ## Run API acceptance with the native CLI
 
+[Run a read-only CLI API case](./api-acceptance-migration.md) to check
+operation discovery and the signed-in actor's authorization context through
+normal CLI commands. That case is a migration example, not a replacement for
+the journeys below or full API acceptance.
+
 ```powershell
 $cli = (Resolve-Path .\artifacts\cli\win-x64\publish\agentweaver.exe).Path
 & $cli test --input .\artifacts\acceptance-input.json --output .\artifacts\api-evidence.jsonl --interactive

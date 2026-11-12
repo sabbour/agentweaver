@@ -30,6 +30,7 @@
     "docs/guide/build-and-use.md",
     "docs/guide/chief-of-staff.md",
     "docs/guide/testing.md",
+    "docs/guide/api-acceptance-migration.md",
     "docs/guide/gateway.md",
     "docs/guide/identity-scopes.md",
     "docs/guide/notifications.md",
@@ -113,6 +114,16 @@
         "docs/guide/quickstart.md",
         "docs/index.md",
         "docs/guide/index.md"
+      ]
+    },
+    {
+      "name": "Normal-command API acceptance script",
+      "sourcePrefixes": [
+        "scripts/acceptance/api/"
+      ],
+      "required": [
+        "docs/guide/api-acceptance-migration.md",
+        "docs/guide/testing.md"
       ]
     },
     {

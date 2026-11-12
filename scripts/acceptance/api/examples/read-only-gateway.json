@@ -1,0 +1,15 @@
+{
+  "caseId": "read-only-gateway",
+  "sourceCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "targetCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "apphostSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "approvedNonProduction": true,
+  "expectedActorId": "replace-with-approved-actor-id",
+  "target": {
+    "gatewayUrl": "https://gateway.example.invalid",
+    "brokerIssuer": "https://identity.example.invalid/issuer-path",
+    "clientId": "agentweaver-cli",
+    "apiAudience": "replace-with-approved-api-audience",
+    "tenantId": "replace-with-approved-tenant-id"
+  }
+}
