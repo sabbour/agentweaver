@@ -1814,7 +1814,7 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
                  exchange_operation_id, state, current_step, environment_id, runtime_instance_id,
                  receipt_links)
             VALUES (@tenant, @project, @run, @root, @selection, @fence, @intent,
-                    @bootstrap, @consume, @exchange, 'ready', 'ready', @environment, @runtime, '{}'::jsonb)
+                    @bootstrap, @consume, @exchange, 'ready', 'ready', @environment, @runtime, jsonb_build_object())
             """, connection))
         {
             insertIntent.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, intent.TenantId);
