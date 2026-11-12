@@ -67,6 +67,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(46)]
     [InlineData(47)]
     [InlineData(48)]
+    [InlineData(49)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         // A partial history must fail verification until every registered resource is installed.
@@ -145,13 +146,13 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [Fact]
     public async Task RuntimeObservationCursorMigrationIsOptionalButAnAppliedPartialSchemaFailsReadiness()
     {
-        await ApplyMigrationsThroughAsync(47);
+        await ApplyMigrationsThroughAsync(48);
 
         await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         await using (var command = new NpgsqlCommand($"""
             SELECT
-                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 48),
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 49),
                 to_regclass(@table) IS NOT NULL,
                 to_regclass(@attemptIndex) IS NOT NULL
             """, connection))
@@ -611,7 +612,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                       AND created_at = '2026-10-20T00:00:00Z'),
                 -- A pre-033 owner rejects repository identity and later Core migrations.
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations
-                    WHERE version NOT IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,43,44,45,46,47,48)),
+                    WHERE version NOT IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,43,44,45,46,47,48,49)),
                 to_regclass(@obsolete) IS NULL
             """, connection);
         check.Parameters.AddWithValue("obsolete", $"{_schema}.uq_chief_of_staff_priority_links_target");
@@ -1130,7 +1131,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                 to_regclass(@runtimeReplacementOperations) IS NOT NULL,
                 to_regclass(@runtimeReplacementActiveIndex) IS NOT NULL,
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 45),
-                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 48),
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 49),
                 to_regclass(@runtimeObservationCursors) IS NOT NULL,
                 to_regclass(@runtimeObservationCursorExpiry) IS NOT NULL
             """, connection);
@@ -1197,7 +1198,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
         // The default history skips reserved versions 017 and 034.
         Assert.Equal(
-            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48]),
+            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49]),
             reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));

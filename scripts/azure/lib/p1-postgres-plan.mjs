@@ -105,7 +105,7 @@ const GROUPS = {
     // Migration 046 grants only the durable workflow-generation job table; jobs retain no credentials.
     'SELECT,INSERT,UPDATE': 'accepted_runs coordination_sessions coordination_messages coordination_requests parent_notifications coordinator_gates executable_action_grants coordination_tree_commands coordination_idle_subscriptions coordination_execution_operations runtime_registration_heads source_control_merge_intents source_control_output_captures maf_execution_run_guards maf_execution_dispatches outbox_streams outbox_events backlog_projects project_run_requests chief_of_staff_priority_lists chief_of_staff_priorities issue_sync_projects issue_sync_receipts source_control_pull_requests source_control_pull_request_operations spend_budget_reservations spend_budget_accounting_cursors runtime_run_start_intents runtime_replacement_operations workflow_generation_jobs',
     'SELECT,INSERT,UPDATE,DELETE': 'backlog_tasks',
-    'SELECT,INSERT,DELETE': 'backlog_dependencies chief_of_staff_priority_links',
+    'SELECT,INSERT,DELETE': 'backlog_dependencies chief_of_staff_priority_links runtime_observation_v2_cursors',
     'SELECT,INSERT': 'coordinator_decision_outbox policy_evaluation_receipts coordinator_run_selection_contexts coordinator_run_selection_context_versions coordination_idle_notifications runtime_registration_revisions runtime_sdk_sources runtime_usage_observations source_control_repository_pins source_control_webhook_deliveries maf_execution_output_witnesses consumer_inbox_receipts coordinator_decisions maf_workflow_checkpoints session_consistency_manifests reviewed_remote_tool_snapshots project_run_cancellations chief_of_staff_conversations user_notification_dismissals guardrails_evaluations backlog_plan_promotions backlog_task_origins user_notification_promotion_dismissals maf_root_model_turn_admissions maf_child_spawn_authorization_receipts maf_child_spawn_authorization_consumptions maf_runtime_evidence_receipts p1_run_request_provenance p1_invocation_bindings',
   },
 };
@@ -436,7 +436,8 @@ export function buildP1PostgresPlan(targetName = 'agentweaver') {
     // 042 adds coordinator run-start intents with exact SELECT,INSERT,UPDATE grants.
     // 043 and 045 add native root-turn evidence kinds; 044 adds replacement operations.
     // 047 guards recovery while terminal cleanup is admitted; 048 binds PR effect and result identity.
-    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48],
+    // 049 adds the owner-managed runtime-observation cursor table.
+    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49],
     // Bind each owner migration catalog into the reviewed plan hash.
     environmentVersions: Array.from({ length: 12 }, (_, index) => index + 1),
     eventsVersions: Array.from({ length: 11 }, (_, index) => index + 1),
