@@ -292,6 +292,46 @@ public sealed class RuntimeExecutionObservationTests
         Assert.Equal(StatusCodes.Status409Conflict, exception.StatusCode);
     }
 
+    [Theory]
+    [InlineData("?pageSize=1", 1, null, null)]
+    [InlineData("?pageSize=100", 100, null, null)]
+    [InlineData("?attemptId=11111111-1111-1111-1111-111111111111", 100, null,
+        "11111111-1111-1111-1111-111111111111")]
+    public void RuntimeObservationV2QueryAcceptsBoundedPagingOrExactLookup(
+        string query,
+        int expectedPageSize,
+        string? expectedCursor,
+        string? expectedAttemptId)
+    {
+        var request = new DefaultHttpContext().Request;
+        request.QueryString = new QueryString(query);
+
+        var parsed = CoordinationEndpoints.ReadRuntimeObservationV2Query(request);
+
+        Assert.Equal(expectedPageSize, parsed.PageSize);
+        Assert.Equal(expectedCursor, parsed.Cursor);
+        Assert.Equal(expectedAttemptId is null ? null : Guid.Parse(expectedAttemptId), parsed.AttemptId);
+    }
+
+    [Theory]
+    [InlineData("?pageSize=0")]
+    [InlineData("?pageSize=101")]
+    [InlineData("?pageSize=1&pageSize=2")]
+    [InlineData("?cursor=")]
+    [InlineData("?cursor=cursor&attemptId=11111111-1111-1111-1111-111111111111")]
+    [InlineData("?attemptId=not-a-guid")]
+    [InlineData("?attemptId=00000000-0000-0000-0000-000000000000")]
+    public void RuntimeObservationV2QueryRejectsInvalidOrAmbiguousLookup(string query)
+    {
+        var request = new DefaultHttpContext().Request;
+        request.QueryString = new QueryString(query);
+
+        var exception = Assert.Throws<CoordinationException>(() =>
+            CoordinationEndpoints.ReadRuntimeObservationV2Query(request));
+
+        Assert.Equal("runtime_observation_v2_query_invalid", exception.Code);
+    }
+
     private static RuntimeExecutionObservationV2 CreateV2Observation(
         MafExecutionCheckpointSnapshot checkpoint) =>
         RuntimeExecutionObservationContract.CreateV2(

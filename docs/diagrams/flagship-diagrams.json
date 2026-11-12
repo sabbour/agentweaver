@@ -38,6 +38,11 @@
       "docs": ["docs/architecture/events-sessions.md", "docs/guide/testing.md"]
     },
     {
+      "name": "v1-runtime-observation-v2",
+      "concept": "Owner-authorized runtime evidence with stable paging and exact attempt lookup",
+      "docs": ["docs/architecture/agenthost.md"]
+    },
+    {
       "name": "v1-knowledge-memory",
       "concept": "Knowledge authority, Memory provider binding, and bounded context",
       "docs": ["docs/architecture/knowledge-memory.md"]

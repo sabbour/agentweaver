@@ -746,6 +746,41 @@ npm run test:harness:mcp
 
 The API tests cover the checked-in case scripts and launcher contracts with local fixtures. They do not run the case against a live Gateway. The UI tests use controlled browser or page fixtures. The retained MCP adapter tests check compatibility code only; MCP is not a supported product or API acceptance surface.
 
+## Test runtime observation v2
+
+Run the focused contract, owner paging, query validation, and Gateway schema
+tests from the repository root:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Tests\Agentweaver.Identity.Tests.csproj --configuration Release --filter FullyQualifiedName~RuntimeObservation
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --configuration Release --filter FullyQualifiedName~RuntimeObservationV2
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --configuration Release --filter FullyQualifiedName~RuntimeExecutionObservationTests
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~RuntimeObservationV2
+```
+
+These tests check response validation, bounded query parsing, high-water
+cursor paging, exact attempt lookup, and the Gateway operation schema. The
+PostgreSQL test uses a disposable test database. These checks do not prove
+live authorization, a native model send, tool execution, or complete legacy
+history. The response reports missing evidence as unavailable rather than
+inferring it from an empty result or a reservation.
+
+The runtime-observation probe also has a focused local test:
+
+```powershell
+node --test scripts\api-harness\test\runtime-observation.test.mjs scripts\azure\p1-dispatch-recovery-probes\tests\run.test.mjs
+```
+
+This read-only probe requires an already authorized client and real Environment
+creation evidence. Stored rows alone do not prove dispatch, a late provider
+callback, or verified resource release. The full harness runner validates its
+target and plan before it reads credentials or starts a surface client. It
+does not sign in, refresh tokens, or grant authority. For setup requirements,
+see the
+[API harness guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/api-harness/README.md),
+[UI harness guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/ui-harness/README.md),
+and [MCP harness guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/mcp-harness/README.md).
+
 Use [Run a read-only CLI API case](./api-acceptance-migration.md) for the current CLI and `rest` acceptance procedure. Keep controlled test results separate from live target evidence.
 ## Validate documentation changes
 

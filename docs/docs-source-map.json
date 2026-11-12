@@ -41,6 +41,7 @@
     "docs/diagrams/README.md",
     "docs/architecture/overview.md",
     "docs/architecture/events-sessions.md",
+    "docs/architecture/agenthost.md",
     "docs/architecture/knowledge-memory.md",
     "docs/architecture/providers-models.md",
     "docs/architecture/projects-config.md",
@@ -178,12 +179,14 @@
       ],
       "required": [
         "docs/architecture/design/sessions-and-coordination.md",
+        "docs/architecture/agenthost.md",
         "docs/architecture/design/services-and-release.md",
         "docs/architecture/events-sessions.md",
         "docs/reference/contracts.md",
         "docs/guide/testing.md",
         "docs/guide/environment-sandbox-testing.md",
-        "docs/diagrams/src/flagship/v1-sessions-journal.json"
+        "docs/diagrams/src/flagship/v1-sessions-journal.json",
+        "docs/diagrams/src/flagship/v1-runtime-observation-v2.json"
       ]
     },
     {

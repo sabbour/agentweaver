@@ -742,6 +742,45 @@ selection and execution fence are rechecked by the owner CAS. The immutable bind
 is committed with the winning decision, gate, grant, and outbox transaction. The
 caller cannot submit a resource pin or override the durable binding.
 
+<a id="runtime-observation-v2"></a>
+
+### Runtime observation v2
+
+The Gateway exposes the Orchestrator's read-only v2 evidence projection at
+`GET /api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-observation/v2`.
+The response binds the requested session to its run, root, accepted selection,
+and current execution fences. It includes the latest retained runtime instance
+and registration revision for that session and fence when an owner fact records
+them; both values are null when no matching fact exists. The owner re-reads
+current authority before returning the response. It does not require an active
+Host registration or a current checkpoint for a child session, and it does not
+expose credentials, prompt text, or tool output.
+
+The response includes accepted limits, credit-guard state, run totals, and an
+ordered history of owner facts. A root read can include child facts; a child
+read includes facts for that child, while totals remain run-wide. The first
+page captures a high-water mark. Its opaque cursor continues from that same
+mark, so facts and the credit-guard summary committed later do not enter the
+page sequence. Cursors expire after 24 hours and bind to the caller, run,
+session, accepted selection, and page size.
+
+Use `attemptId` to look up all recorded facts for one non-empty GUID attempt.
+An exact lookup cannot be combined with a cursor. If the attempt has more than
+100 retained facts, the response returns at most 100 facts,
+`exactUnavailableReason: "attempt_history_exceeds_bounded_aggregate"`, and a
+history cursor. Use that cursor without `attemptId` to browse the retained
+history. If no exact evidence remains, `exactUnavailableReason` is
+`"attempt_evidence_not_retained"`; an empty result does not prove that the
+attempt did not occur. `complete` is true only when the run has a v2 coverage
+marker. Without one, the response reports
+`legacy_or_uninstrumented_history`; it does not reconstruct missing history.
+Sections use `unknown` when the owner has no source state and `unavailable`
+when the owner cannot establish the requested evidence. Reservations do not
+prove native sends, consumption, tool execution, or native tool rejection.
+Numeric denial facts retain their recorded work-plan and checkpoint
+association when the canonical owner receipt contains one. The contract does
+not include native tool-rejection evidence.
+
 ### Native root-turn completion and Host replacement
 
 The existing casting-generation response can include

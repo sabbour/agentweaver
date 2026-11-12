@@ -112,12 +112,14 @@ internal sealed class RuntimeUsageSourceOwner(
         ArgumentNullException.ThrowIfNull(request.Authorization);
         ArgumentNullException.ThrowIfNull(request.Message);
         ArgumentNullException.ThrowIfNull(request.Source);
+        var observationFacts = new List<RuntimeObservationV2Fact>();
         return ExecuteWriteAsync(context, request.Authorization,
             (connection, transaction, registration, grant, actor, token) =>
                 store.BeginNativeTurnWithinTransactionAsync(
                     connection, transaction, registration, grant, request,
                     (source, currentToken) => broker.ReadCostSnapshotAsync(actor, options.EventsOwnerBaseAddress,
-                        new(1, registration, source), currentToken), token), cancellationToken);
+                        new(1, registration, source), currentToken), token, observationFacts),
+            cancellationToken, observationFacts);
     }
 
     /// <summary>
@@ -376,6 +378,7 @@ internal sealed class RuntimeUsageSourceOwner(
         // Wrap the token so it stops being usable at its expiry and can be invalidated after this call.
         var bearer = new SecretCredential(
             CoordinationIdentity.RequireBearer(context).Parameter!, expiry.Value, timeProvider);
+        var observationFacts = new List<RuntimeObservationV2Fact>();
         RuntimeNativePreparationOutcome outcome;
         try
         {
@@ -401,7 +404,8 @@ internal sealed class RuntimeUsageSourceOwner(
                         spendBudgets,
                         (spendRequest, spendToken) => broker.ReadSpendEvidenceAsync(
                             actor, options.EventsOwnerBaseAddress, registration.Binding.ProjectId,
-                            registration.Binding.RunId, spendRequest, spendToken))
+                            registration.Binding.RunId, spendRequest, spendToken),
+                        observationFacts)
                         .ConfigureAwait(false);
                     // Second owner authority check: ownership can change while Events is being called,
                     // so check it again before commit.
@@ -411,6 +415,10 @@ internal sealed class RuntimeUsageSourceOwner(
                     if (!bearer.IsUsable() ||
                         registration.ExpiresAt <= timeProvider.GetUtcNow())
                         throw new RuntimeAuthorizationException("runtime_actor_expired");
+                    foreach (var fact in observationFacts)
+                        await store.AppendObservationV2Async(
+                            connection, transaction, registration.Binding.ProjectId,
+                            registration.Binding.RunId, fact, currentToken).ConfigureAwait(false);
                     // Commit admitted dispatches and denial evidence alike; a denial is reported below.
                     await transaction.CommitAsync(currentToken).ConfigureAwait(false);
                     return admitted;
@@ -580,7 +588,8 @@ internal sealed class RuntimeUsageSourceOwner(
     private async Task<T> ExecuteWriteAsync<T>(
         HttpContext context, RuntimeCredentialHttpRequest proof,
         Func<NpgsqlConnection, NpgsqlTransaction, RuntimeRegistration, RuntimeGrantReceipt, RuntimeActorAuthorization,
-            CancellationToken, Task<T>> action, CancellationToken cancellationToken)
+            CancellationToken, Task<T>> action, CancellationToken cancellationToken,
+        IReadOnlyList<RuntimeObservationV2Fact>? observationFacts = null)
     {
         if (proof.GrantId == Guid.Empty || proof.Revision < 1 ||
             proof.Purpose != RuntimeCredentialPurpose.Observe || proof.OperationId != Guid.Empty ||
@@ -616,6 +625,11 @@ internal sealed class RuntimeUsageSourceOwner(
                         var finalGrant = await broker.VerifyAsync(actor, proof, currentToken).ConfigureAwait(false);
                         RequireGrant(finalGrant, registration, proof);
                         RequireLive(registration, bearer, credential);
+                        if (observationFacts is not null)
+                            foreach (var fact in observationFacts)
+                                await store.AppendObservationV2Async(
+                                    connection, transaction, registration.Binding.ProjectId,
+                                    registration.Binding.RunId, fact, currentToken).ConfigureAwait(false);
                         await transaction.CommitAsync(currentToken).ConfigureAwait(false);
                         RequireLive(registration, bearer, credential);
                         return result;

@@ -44,6 +44,24 @@ internal sealed class RuntimeUsageSourceStore(
     private readonly PostgresOutbox _outbox = new(dataSource, options.Schema);
     private readonly SpendBudgetExposureStore _spendBudgets = new(dataSource, options, timeProvider);
     private readonly RuntimeExecutionEvidenceLedgerStore _executionEvidence = new(options.Schema);
+    private readonly RuntimeObservationV2Store _runtimeObservationV2 = new(dataSource, options.Schema);
+
+    internal Task<RuntimeObservationV2StoreResult> ReadObservationV2Async(
+        RuntimeObservationV2ReadScope scope,
+        int pageSize,
+        string? cursor,
+        Guid? attemptId,
+        CancellationToken cancellationToken) =>
+        _runtimeObservationV2.ReadAsync(scope, pageSize, cursor, attemptId, cancellationToken);
+
+    internal Task AppendObservationV2Async(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string projectId,
+        string runId,
+        RuntimeObservationV2Fact fact,
+        CancellationToken cancellationToken) =>
+        _runtimeObservationV2.AppendAsync(connection, transaction, projectId, runId, fact, cancellationToken);
 
     /// <summary>
     /// Reads credit-guard, dispatch, and tool-reservation evidence from one repeatable-read snapshot.
@@ -365,8 +383,10 @@ internal sealed class RuntimeUsageSourceStore(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeGrantReceipt grant, RuntimeNativeTurnBeginRequest request,
         Func<SdkSessionFacts, CancellationToken, Task<RuntimeUsageCostSnapshotReceipt>> readCostSnapshot,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ICollection<RuntimeObservationV2Fact>? observationFacts = null)
     {
+        observationFacts ??= new List<RuntimeObservationV2Fact>();
         await using (var run = new NpgsqlCommand($"""
             SELECT 1 FROM {_schema}.accepted_runs
             WHERE project_id = @project AND run_id = @run
@@ -424,12 +444,14 @@ internal sealed class RuntimeUsageSourceStore(
             var creditDecision = await ReconcileNativeCreditLimitsAsync(
                 connection, transaction, registration, source.Receipt.Source, dispatch.RootSessionId,
                 snapshot, cancellationToken).ConfigureAwait(false);
+            observationFacts.Add(creditDecision.ObservationFact);
             if (creditDecision.HardLimitReached)
             {
                 var denial = await RecordNativeCreditDenialAsync(
                     connection, transaction, registration, source.Receipt, message.MessageId,
                     RuntimeCreditLimitDenialStage.NativeTurnBegin, checkpointHash, creditDecision,
                     dispatch.State, dispatch.OwnerRevision, cancellationToken).ConfigureAwait(false);
+                observationFacts.Add(RuntimeObservationV2Store.CreditDenialFact(registration, denial));
                 return new(null, denial);
             }
         }
@@ -607,6 +629,7 @@ internal sealed class RuntimeUsageSourceStore(
             hardExhausted = reader.GetBoolean(12);
         }
         var nextRevision = checked(revision + 1);
+        DateTimeOffset guardUpdatedAt;
         await using (var update = new NpgsqlCommand($"""
             UPDATE {_guards}
             SET copilot_aic_floor = @floor, accounted_through_event_position = @ledgerEventCount,
@@ -614,6 +637,7 @@ internal sealed class RuntimeUsageSourceStore(
                 hard_cap_exhausted = @exhausted, owner_revision = owner_revision + 1,
                 updated_at = clock_timestamp()
             WHERE project_id = @project AND run_id = @run AND owner_revision = @revision
+            RETURNING updated_at
             """, connection, transaction))
         {
             AddNativeScope(update, registration, Guid.Empty);
@@ -624,8 +648,10 @@ internal sealed class RuntimeUsageSourceStore(
             update.Parameters.AddWithValue("warning", NpgsqlDbType.Boolean, warningEmitted || limits.SoftReached);
             update.Parameters.AddWithValue("exhausted", NpgsqlDbType.Boolean, hardExhausted || limits.HardReached);
             update.Parameters.AddWithValue("revision", NpgsqlDbType.Bigint, revision);
-            if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+            await using var reader = await update.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_stale");
+            guardUpdatedAt = reader.GetFieldValue<DateTimeOffset>(0);
         }
         if (!warningEmitted && limits.SoftReached)
         {
@@ -647,7 +673,12 @@ internal sealed class RuntimeUsageSourceStore(
                 }), timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
         }
         return new(observed, snapshot.CopilotTotals.Events, digest, costIdentity,
-            revision, nextRevision, hardExhausted || limits.HardReached);
+            revision, nextRevision, hardExhausted || limits.HardReached,
+            RuntimeObservationV2Store.CreditGuardFact(
+                registration, rootSessionId, observed, nextRevision, snapshot.CopilotTotals.Events, digest,
+                warningEmitted || limits.SoftReached,
+                hardExhausted || limits.HardReached,
+                guardUpdatedAt));
     }
 
     /// <summary>
@@ -763,8 +794,10 @@ internal sealed class RuntimeUsageSourceStore(
         Func<SdkSessionFacts, CancellationToken, Task<RuntimeUsageCostSnapshotReceipt>> readCostSnapshot,
         CancellationToken cancellationToken,
         SpendBudgetAdmissionContext? spendBudgets = null,
-        Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>>? readSpendEvidence = null)
+        Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>>? readSpendEvidence = null,
+        ICollection<RuntimeObservationV2Fact>? observationFacts = null)
     {
+        observationFacts ??= new List<RuntimeObservationV2Fact>();
         // Every check below runs in the caller's transaction. Any throw rolls back the whole preparation,
         // so a failed check leaves no dispatch row and no spend budget reservation behind.
         // Read the SDK source that is current for this registration and make sure the message was
@@ -855,15 +888,20 @@ internal sealed class RuntimeUsageSourceStore(
             var creditDecision = await ReconcileNativeCreditLimitsAsync(
                 connection, transaction, registration, source.Source, root.SessionId, snapshot, cancellationToken)
                 .ConfigureAwait(false);
+            observationFacts.Add(creditDecision.ObservationFact);
             // A reached hard credit limit returns a denial instead of throwing, so the denial receipt
             // is committed. The method returns before spend budget admission and before the dispatch
             // insert, so the denied dispatch holds no reservation and is never sent.
             if (creditDecision.HardLimitReached)
-                return new(await RecordNativeCreditDenialAsync(
+            {
+                var denial = await RecordNativeCreditDenialAsync(
                     connection, transaction, registration, source, intent.MessageId,
                     RuntimeCreditLimitDenialStage.Preparation, checkpointHash, creditDecision,
                     marker?.State ?? "absent", marker?.OwnerRevision ?? 0, cancellationToken)
-                    .ConfigureAwait(false), null);
+                    .ConfigureAwait(false);
+                observationFacts.Add(RuntimeObservationV2Store.CreditDenialFact(registration, denial));
+                return new(denial, null);
+            }
         }
         // Spend budget admission runs after the session, fence, native limit, and credit checks and
         // before the dispatch insert. It compares committed Events spend plus all outstanding
@@ -886,6 +924,7 @@ internal sealed class RuntimeUsageSourceStore(
         }
         // Write the prepared dispatch. ON CONFLICT DO NOTHING keeps an existing row for the same
         // message; the row is read back and verified below in both cases.
+        var dispatchInserted = false;
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_dispatches}
                 (project_id, run_id, dispatch_id, root_session_id, child_session_id, work_plan_id,
@@ -917,7 +956,7 @@ internal sealed class RuntimeUsageSourceStore(
             insert.Parameters.AddWithValue("source", NpgsqlDbType.Char, prepared.SourceHash);
             insert.Parameters.AddWithValue("model_reference", NpgsqlDbType.Varchar, prepared.ModelSelectionReference);
             insert.Parameters.AddWithValue("model", NpgsqlDbType.Varchar, prepared.ModelId);
-            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            dispatchInserted = await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
         }
         // Read the stored row back. It must match the dispatch built above and still be the first
         // prepared revision; anything else means another writer changed it.
@@ -931,6 +970,20 @@ internal sealed class RuntimeUsageSourceStore(
             throw new RuntimeAuthorizationException("runtime_native_turn_conflict");
         if (retained.State != "prepared" || retained.OwnerRevision != 1)
             throw new RuntimeAuthorizationException("runtime_native_turn_indeterminate");
+        if (dispatchInserted)
+        {
+            var prior = await RuntimeModelTurnReservationStore.CountRunWideAsync(
+                connection, transaction, options.Schema,
+                registration.Binding.ProjectId, registration.Binding.RunId,
+                prepared.RootSessionId, intent.MessageId, cancellationToken).ConfigureAwait(false);
+            var ownerPayloadHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
+                $"{prepared.RequestHash}\0{prepared.CheckpointId}\0{prepared.CheckpointRevision}\0" +
+                $"{prepared.DecisionStateVersion}"));
+            observationFacts.Add(RuntimeObservationV2Store.ModelTurnReservedFact(
+                registration, intent.MessageId, intent.MessageId, retained.OwnerRevision,
+                checked(prior + 1), "nativeDispatchPreparation", ownerPayloadHash,
+                timeProvider.GetUtcNow()));
+        }
         // No credit denial and no spend budget denial: the dispatch is admitted.
         return new(null, null);
     }
@@ -1014,8 +1067,12 @@ internal sealed class RuntimeUsageSourceStore(
             checkpoint.State.Revision, checkpointHash, checkpoint.State.DecisionStateVersion,
             checkpoint.State.WorkPlanId, intent.AssociationId, denial.SendStateHash,
             sendStateAfter.Hash, timeProvider.GetUtcNow(), string.Empty));
-        return await _executionEvidence.AppendNumericLimitDenialAsync(
+        var stored = await _executionEvidence.AppendNumericLimitDenialAsync(
             connection, transaction, receipt, cancellationToken).ConfigureAwait(false);
+        await AppendObservationV2Async(
+            connection, transaction, stored.ProjectId, stored.RunId,
+            RuntimeObservationV2Store.DenialFact(stored), cancellationToken).ConfigureAwait(false);
+        return stored;
     }
 
     internal async Task<RuntimeNumericLimitNativeNoSendReceipt> RecordNumericLimitNativeNoSendWithinTransactionAsync(
@@ -1170,8 +1227,12 @@ internal sealed class RuntimeUsageSourceStore(
             original.SendStateBeforeHash != original.SendStateAfterHash)
             throw new RuntimeAuthorizationException("runtime_numeric_limit_native_no_send_conflict");
 
-        return await _executionEvidence.AppendNumericLimitNativeNoSendAsync(
+        var stored = await _executionEvidence.AppendNumericLimitNativeNoSendAsync(
             connection, transaction, evidence, cancellationToken).ConfigureAwait(false);
+        await AppendObservationV2Async(
+            connection, transaction, stored.ProjectId, stored.RunId,
+            RuntimeObservationV2Store.NativeNoSendFact(stored, original), cancellationToken).ConfigureAwait(false);
+        return stored;
     }
 
     /// <summary>
@@ -1363,6 +1424,10 @@ internal sealed class RuntimeUsageSourceStore(
             "orchestrator.native_turn.no_send", 1,
             JsonSerializer.SerializeToElement(request.Evidence, JsonOptions),
             request.Evidence.VerifiedAt), cancellationToken).ConfigureAwait(false);
+        await AppendObservationV2Async(
+            connection, transaction, registration.Binding.ProjectId, registration.Binding.RunId,
+            RuntimeObservationV2Store.CreditNoSendFact(registration, storedDenial, request.Evidence),
+            cancellationToken).ConfigureAwait(false);
         return request.Evidence;
     }
 
@@ -2023,7 +2088,8 @@ internal sealed class RuntimeUsageSourceStore(
     /// </summary>
     private sealed record NativeCreditDecision(
         decimal ObservedCredits, long LedgerEventCount, string LedgerDigest, string CostIdentity,
-        long GuardRevisionBefore, long GuardRevisionAfter, bool HardLimitReached);
+        long GuardRevisionBefore, long GuardRevisionAfter, bool HardLimitReached,
+        RuntimeObservationV2Fact ObservationFact);
 
     /// <summary>
     /// Reads and revalidates the SDK source receipt for an active runtime registration.

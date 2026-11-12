@@ -450,6 +450,17 @@ result text itself. It can observe active, completed, or failed child sessions u
 current execution fence; terminal state does not bypass owner, decision, or selection
 checks. Observation does not retry or schedule runtime work.
 
+The Gateway's `runtime-observation/v2` GET projects owner facts from the
+Orchestrator outbox under the current Coordination authority. The owner binds
+each read to the current accepted selection and root/session fences, then
+rechecks them before returning a no-store response. A root can read facts from
+its children; a child sees only its own facts. Cursor state records a high-water
+mark and caller/session binding, so later writes do not change an active page
+sequence or its credit-guard summary. A new coverage marker distinguishes instrumented history from
+legacy or uninstrumented history. The projection leaves native sends,
+consumption, and tool execution unavailable until their owner evidence exists;
+it does not infer a native action from a reservation.
+
 The version-2 runtime-execution-observation route keeps those checks and wraps the unchanged
 version-1 observation with a `checkpointParent` object. Its required
 `hasParentMetadata` flag and nullable `parentCheckpointId` come from the same selected latest

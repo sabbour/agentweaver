@@ -9,8 +9,8 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests for the plan gates. They need no database: every gate throws before a connection opens.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "311e4cf9b565f63ad0372241b2aaad011a74f5f5858e7c5f3f87cb63b4efe7a5";
-    private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48];
+    private const string ReviewedPlanSha256 = "3a26b5e12dbbd3f1f541ee182b6508a7d7b7d3dda0ef2795e662e0804cbce4fd";
+    private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 11)];
     private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 12)];
 
@@ -43,6 +43,7 @@ public sealed class PlannedRuntimeGrantsTests
         Assert.Contains(46, core.Versions);
         Assert.Contains(47, core.Versions);
         Assert.Contains(48, core.Versions);
+        Assert.Contains(49, core.Versions);
         Assert.DoesNotContain(34, core.Versions);
         Assert.Contains(35, core.Versions);
         Assert.NotEmpty(core.Tables);
@@ -68,6 +69,9 @@ public sealed class PlannedRuntimeGrantsTests
             var evidence = Assert.Single(core.Tables, table => table.Table == tableName);
             Assert.Equal(["SELECT", "INSERT"], evidence.Privileges);
         }
+        var observationCursors = Assert.Single(
+            core.Tables, table => table.Table == "runtime_observation_v2_cursors");
+        Assert.Equal(["SELECT", "INSERT", "DELETE"], observationCursors.Privileges);
         foreach (var (tableName, lockColumn) in new[]
         {
             ("p1_run_request_provenance", "provenance_id"),

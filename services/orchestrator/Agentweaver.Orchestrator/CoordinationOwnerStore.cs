@@ -36,6 +36,7 @@ internal sealed partial class CoordinationOwnerStore
     private readonly string _decisions;
     private readonly string _executionOperations;
     private readonly PostgresOutbox _outbox;
+    private readonly RuntimeObservationV2Store _runtimeObservationV2;
     private readonly TimeProvider _timeProvider;
     private readonly CoordinatorDecisionOwnerStore? _decisionStore;
 
@@ -61,6 +62,7 @@ internal sealed partial class CoordinationOwnerStore
         _decisions = $"{_schema}.coordinator_decisions";
         _executionOperations = $"{_schema}.coordination_execution_operations";
         _outbox = new PostgresOutbox(dataSource, schema);
+        _runtimeObservationV2 = new RuntimeObservationV2Store(dataSource, schema);
         _timeProvider = timeProvider ?? TimeProvider.System;
         _decisionStore = decisionStore;
     }
@@ -177,7 +179,8 @@ internal sealed partial class CoordinationOwnerStore
             forUpdate: true,
             cancellationToken)
             .ConfigureAwait(false);
-        if (root is null)
+        var rootCreated = root is null;
+        if (rootCreated)
         {
             await using var insertSession = new NpgsqlCommand($"""
                 INSERT INTO {_sessions}
@@ -203,6 +206,16 @@ internal sealed partial class CoordinationOwnerStore
         if (root is null || !reuseExistingRoot && root.SessionId != sessionId ||
             root.WriterIssuer != actor.Issuer || root.WriterSubject != actor.Subject)
             throw new CoordinationException("root_session_conflict", StatusCodes.Status409Conflict);
+
+        if (rootCreated)
+        {
+            var coverage = RuntimeObservationV2Store.CoverageStartedFact(
+                effectiveSelection.ProjectId, effectiveSelection.RunId, root.SessionId,
+                acceptedRun.Fence, hash, _timeProvider.GetUtcNow());
+            await _runtimeObservationV2.AppendAsync(
+                connection, transaction, effectiveSelection.ProjectId, effectiveSelection.RunId,
+                coverage, cancellationToken).ConfigureAwait(false);
+        }
 
         return new AcceptedRoot(
             effectiveSelection.ProjectId,
@@ -1837,6 +1850,56 @@ internal sealed partial class CoordinationOwnerStore
         CancellationToken cancellationToken)
         => await ReadRuntimeOwnerStateAsync(actor, identity, allowTerminalChild: true, cancellationToken)
             .ConfigureAwait(false);
+
+    /// <summary>
+    /// Reads retained root or child ownership for an authorized v2 diagnostic read, including terminal and older fences.
+    /// </summary>
+    internal async Task<SessionRuntimeOwnerState> ReadRuntimeOwnerStateForV2ObservationAsync(
+        CoordinationActor actor,
+        SessionIdentity identity,
+        string tenantId,
+        string acceptedSelectionHash,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var run = await ReadAcceptedRunAsync(
+            connection, transaction, identity.ProjectId, identity.RunId, forUpdate: false, cancellationToken,
+            forShare: true).ConfigureAwait(false);
+        if (run.TenantId != tenantId || run.SelectionHash != acceptedSelectionHash)
+            throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
+
+        var session = await ReadSessionAsync(
+            connection, transaction, identity, forUpdate: false, cancellationToken).ConfigureAwait(false);
+        RequireWriter(session, actor);
+        var root = await ReadRootSessionAsync(
+            connection, transaction, identity.ProjectId, identity.RunId, forUpdate: false, cancellationToken)
+            .ConfigureAwait(false);
+        var isCoordinatorRoot = session.NodeKind == "coordinator" &&
+            session.ParentSessionId is null && session.RootSessionId == identity.SessionId &&
+            session.WorkPlanItemId is null;
+        var isChild = session.NodeKind == "child_work" && session.ParentSessionId is not null &&
+            root is not null && session.RootSessionId == root.SessionId;
+        if (root is null || root.NodeKind != "coordinator" || root.SessionId != session.RootSessionId ||
+            session.StateVersion < 1 || session.ExecutionFence < 1 ||
+            (!isCoordinatorRoot && !isChild))
+            throw new CoordinationException(
+                "runtime_owner_context_unavailable", StatusCodes.Status409Conflict);
+
+        var result = new SessionRuntimeOwnerState(
+            session.RootSessionId, session.WorkPlanItemId, run.TenantId, run.SelectionHash, run.Fence,
+            session.LogicalTurnOrdinal, session.StateVersion,
+            isCoordinatorRoot
+                ? CreateCoordinatorRootRuntimeTurnId(identity, run.Fence)
+                : CreateRuntimeTurnId(identity, session.ExecutionFence, session.LogicalTurnOrdinal))
+        {
+            IsCoordinatorRoot = isCoordinatorRoot,
+            SessionExecutionFence = session.ExecutionFence
+        };
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return result;
+    }
 
     /// <summary>
     /// Reads an accepted coordinator root or active child binding for runtime registration.

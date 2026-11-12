@@ -232,6 +232,38 @@ catalog even when they are not admitted to MCP. Identity Connection browser
 BFF routes such as `/api/connections/...` are not in this catalog; this is not
 full browser or BFF parity. See the [HTTP API reference](../reference/api.md#cli-operation-discovery).
 
+## Read runtime limit evidence
+
+The `readRuntimeObservationV2` operation reads the Orchestrator's current,
+owner-authorized evidence for one run and session. The caller needs current
+Coordination authority for that project and run. Discover the operation and
+read the first page with:
+
+```powershell
+agentweaver api describe readRuntimeObservationV2
+agentweaver api invoke readRuntimeObservationV2 --path projectId=PROJECT_ID --path runId=RUN_ID --path sessionId=SESSION_ID --query pageSize=50
+```
+
+Use the returned `nextCursor` value to read the next page. A cursor keeps the
+same snapshot and binds to the caller, run, session, accepted selection, and
+page size. It expires after 24 hours. Do not combine a cursor with `attemptId`.
+To find all recorded facts for one attempt, use an exact lookup:
+
+```powershell
+agentweaver api invoke readRuntimeObservationV2 --path projectId=PROJECT_ID --path runId=RUN_ID --path sessionId=SESSION_ID --query attemptId=ATTEMPT_GUID
+```
+
+The response marks legacy or uninstrumented history as incomplete. Missing
+native-send, tool-execution, or consumption proof stays unavailable; a
+reservation does not prove that native work ran. If the owner retains more
+than 100 facts for one attempt, the exact response includes an unavailable
+reason and a history cursor. Continue with the cursor and omit `attemptId`.
+An empty exact result means the owner did not retain matching evidence; it
+does not prove that the attempt did not occur. Tool-rejection evidence is not
+part of this version. The route is a read, not a live acceptance test.
+See [runtime observation contracts](../reference/contracts.md#runtime-observation-v2)
+for the response fields and limits.
+
 ## Make a direct Gateway request
 
 `rest` sends explicit HTTP methods to root-relative URLs or URLs on the

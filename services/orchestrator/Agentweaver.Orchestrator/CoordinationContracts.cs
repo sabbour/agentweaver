@@ -766,6 +766,7 @@ internal sealed record SessionRuntimeOwnerState(
     string RuntimeTurnId)
 {
     public bool IsCoordinatorRoot { get; init; }
+    public long SessionExecutionFence { get; init; } = ExecutionFence;
 }
 
 /// <summary>

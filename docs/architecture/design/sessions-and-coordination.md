@@ -244,6 +244,31 @@ sequenceDiagram
     H->>H: Keep stored reads separate from race and cleanup acceptance
 ```
 
+The Gateway also exposes the read-only `runtime-observation/v2` operation.
+It reads Orchestrator-owned facts under current Coordination authority. A
+root query includes its workflow children; a child query returns only that
+child's facts, while its totals remain run-wide. Each first page fixes a
+high-water mark. Later pages keep that mark, and exact `attemptId` lookup is
+separate from cursor paging. Missing legacy coverage or native proof remains
+explicitly incomplete or unavailable.
+
+```mermaid
+sequenceDiagram
+    participant C as Authorized caller
+    participant G as Gateway
+    participant O as Orchestrator
+    participant D as Owner PostgreSQL
+    C->>G: GET runtime-observation/v2 (page, cursor, or attemptId)
+    G->>O: Forward exact project, run, session, and caller
+    O->>O: Recheck current authority, selection, owner, and fence
+    O->>D: Read bounded facts through committed high-water H
+    D-->>O: Ordered facts and run-wide totals
+    O->>O: Mark missing legacy or native proof unavailable
+    O-->>G: No-store response and optional next cursor
+    G-->>C: Runtime evidence page or exact attempt facts
+    Note over O,D: A later fact is above H; a new read is required to see it
+```
+
 The authenticated session-scoped runtime-registration `GET` resolves that current child context.
 It pages registration IDs for the exact project, run, and session, with a maximum of 64 candidates.
 Each candidate must match the current owner and Environment placement.

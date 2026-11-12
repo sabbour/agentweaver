@@ -428,6 +428,32 @@ truncated. This is not an owner-side raw-request token counter or a cumulative
 token budget. Native and hosted deployment evidence is still
 required.
 
+### Read runtime limit evidence
+
+The Gateway's `readRuntimeObservationV2` operation reads the Orchestrator's
+durable runtime-limit facts. The owner checks current project/run authority,
+the accepted selection, and the root or child session binding before and
+after the read. A root read can include child facts; a child read filters facts
+to that child, while totals remain run-wide. The read does not require an
+active Host registration.
+
+History pages use a fixed high-water mark, so later facts appear only in a
+new read. A missing coverage marker reports incomplete legacy or
+uninstrumented history. The response keeps native-send, consumption, and tool
+execution proof unavailable unless matching owner evidence exists. A
+reservation does not prove a native action. This route does not expose native
+tool-rejection evidence or change dispatch behavior. See the [runtime
+observation contract](../reference/contracts.md#runtime-observation-v2) for
+the public fields and evidence limits.
+
+<figure class="aw-diagram" tabindex="0">
+  <a :href="'/agentweaver/v1/diagrams/flagship/v1-runtime-observation-v2.png'">
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-runtime-observation-v2.png'" alt="An authorized caller reads Orchestrator-owned runtime facts through the Gateway. The owner rechecks current project and run authority, the accepted selection, the root or child session, and the execution fence. History pages use a repeatable-read snapshot and a committed high-water mark; later pages keep that mark. Exact attempt lookup is separate from paging. Missing legacy coverage and native proof remain explicitly incomplete or unavailable. Responses contain no prompt, tool arguments, tool results, credentials, or raw native cursor. This source does not prove deployment or live runtime activity." />
+  </a>
+  <figcaption>Runtime observation v2 reads retained owner facts. Stable cursors pin the history snapshot, and exact lookup addresses one attempt. Missing legacy or native evidence remains incomplete or unavailable. The figure describes source behavior, not a live deployment.</figcaption>
+</figure>
+<p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-runtime-observation-v2.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-runtime-observation-v2.drawio'">Open editable draw.io source</a></p>
+
 Each built-in tool approval checks current owner authority and Policy again.
 The pre-tool callback checks Policy without reserving a tool slot.
 The native call ID binds invocation and secondary permission checks to the current runtime registration and A2A turn.
