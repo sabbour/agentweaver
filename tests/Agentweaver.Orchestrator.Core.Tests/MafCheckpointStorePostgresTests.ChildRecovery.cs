@@ -283,10 +283,15 @@ public sealed partial class MafCheckpointStorePostgresTests
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         await using var observer = await _fixture.DataSource.OpenConnectionAsync(timeout.Token);
+        // A later row-lock waiter queues behind the first waiter's tuple lock, so PostgreSQL reports
+        // the first waiter as its blocker. Count waiters that the blocker holds directly or through that queue.
         await using var command = new NpgsqlCommand("""
-            SELECT count(*) FROM pg_stat_activity
-            WHERE datname = current_database() AND wait_event_type = 'Lock'
-              AND @blocker = ANY(pg_blocking_pids(pid)) AND query LIKE @pattern
+            SELECT count(*) FROM pg_stat_activity waiter
+            WHERE waiter.datname = current_database() AND waiter.wait_event_type = 'Lock'
+              AND waiter.query LIKE @pattern
+              AND (@blocker = ANY(pg_blocking_pids(waiter.pid)) OR EXISTS (
+                  SELECT 1 FROM unnest(pg_blocking_pids(waiter.pid)) AS ahead(pid)
+                  WHERE @blocker = ANY(pg_blocking_pids(ahead.pid))))
             """, observer);
         command.Parameters.AddWithValue("blocker", blockerPid);
         command.Parameters.AddWithValue("pattern", $"%{_schema}%accepted_runs%");
