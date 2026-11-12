@@ -202,9 +202,11 @@ function errorMessage(value: unknown, status: number): string {
   if (code === 'github_repo_app_not_configured') {
     return 'GitHub access is not set up. Ask your administrator to configure it.';
   }
+  if (status === 404 && code === 'repository_unavailable')
+    return 'Repository access is unavailable. Reload the repository list and select a repository, or check GitHub access before retrying.';
   if (status === 403) return 'You do not have permission to use this GitHub connection.';
   if (status === 404) return 'The GitHub connection could not be found.';
-  return 'The GitHub connection could not be checked. Try again.';
+  return 'The GitHub connection result is unavailable. Refresh connection status before retrying.';
 }
 
 /** Narrows a message to the exact Repo App callback notification shape. */

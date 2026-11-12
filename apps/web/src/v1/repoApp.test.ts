@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { errorMessage } from './errors';
 import {
   IdentityBrokerRepoAppClient,
   RepoAppBrokerError,
@@ -45,6 +46,53 @@ afterEach(() => {
 });
 
 describe('IdentityBrokerRepoAppClient', () => {
+  it('offers a status refresh when a disconnect returns an invalid success response', async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ csrf_token: 'csrf-value' }))
+      .mockResolvedValueOnce(Response.json({ unexpected: true }));
+    const client = new IdentityBrokerRepoAppClient('https://identity.example.test', fetcher);
+
+    const error: unknown = await client.disconnect('connection-1', 2).then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+
+    expect(fetcher.mock.calls[1][1]?.method).toBe('POST');
+    expect(error).toMatchObject({ status: 502, code: 'broker_contract_invalid' });
+    expect(errorMessage(error)).toBe(
+      'The GitHub connection result is unavailable. Refresh connection status before retrying.',
+    );
+  });
+
+  it.each([
+    [403, undefined, 'You do not have permission to use this GitHub connection.'],
+    [404, undefined, 'The GitHub connection could not be found.'],
+    [403, 'repository_unavailable', 'You do not have permission to use this GitHub connection.'],
+  ] as const)('keeps the specific GitHub connection message for HTTP %i', async (statusCode, code, message) => {
+    const client = new IdentityBrokerRepoAppClient(
+      'https://identity.example.test',
+      vi.fn<typeof fetch>().mockResolvedValue(Response.json(code ? { error: code } : {}, { status: statusCode })),
+    );
+
+    await expect(client.getStatus()).rejects.toMatchObject({ status: statusCode, message });
+  });
+
+  it('explains how to recover from an unavailable repository', async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ csrf_token: 'csrf-value' }))
+      .mockResolvedValueOnce(Response.json({ error: 'repository_unavailable' }, { status: 404 }));
+    const client = new IdentityBrokerRepoAppClient('https://identity.example.test', fetcher);
+
+    const error: unknown = await client.createRepositorySelection(101, 202).then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+
+    const message = 'Repository access is unavailable. Reload the repository list and select a repository, or check GitHub access before retrying.';
+    expect(error).toMatchObject({ status: 404, code: 'repository_unavailable', message });
+    expect(errorMessage(error)).toBe(message);
+  });
+
   it('reads exact status and repository contracts with cookie credentials and no bearer token', async () => {
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(Response.json(status))
@@ -166,7 +214,7 @@ describe('IdentityBrokerRepoAppClient', () => {
       name: 'RepoAppBrokerError',
       status: 409,
       code: 'not_connected',
-      message: 'The GitHub connection could not be checked. Try again.',
+      message: 'The GitHub connection result is unavailable. Refresh connection status before retrying.',
     } satisfies Partial<RepoAppBrokerError>);
 
     const notConfigured = new IdentityBrokerRepoAppClient(

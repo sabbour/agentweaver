@@ -178,6 +178,9 @@ describe('Skills and marketplace panel', () => {
     expect(screen.getByText('skill-a')).toBeTruthy();
     openMarketplaces();
     expect(await screen.findByRole('dialog', { name: 'Browse marketplaces' })).toBeTruthy();
+    expect(screen.getByText(
+      'The service checks your project access for each action. Active means the source is saved, regardless of GitHub availability.',
+    )).toBeTruthy();
   });
 
   it('shows paginated owner skill inventory without claiming runtime load state', async () => {

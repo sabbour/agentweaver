@@ -22,7 +22,9 @@ export function errorMessage(error: unknown): string {
   if (error instanceof RepoAppBrokerError) {
     if (error.code === 'github_repo_app_not_configured')
       return 'GitHub access is not set up. Ask your administrator to configure it.';
-    return 'The GitHub connection could not be checked. Try again.';
+    if (error.status === 404 && error.code === 'repository_unavailable')
+      return 'Repository access is unavailable. Reload the repository list and select a repository, or check GitHub access before retrying.';
+    return 'The GitHub connection result is unavailable. Refresh connection status before retrying.';
   }
   return error instanceof Error ? error.message : 'The request failed unexpectedly.';
 }

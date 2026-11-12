@@ -40,6 +40,14 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('Remote MCP settings connection', () => {
+  it('shows readable loading text while the connection directory is pending', async () => {
+    mocks.list.mockReturnValue(new Promise(() => {}));
+    render(<RemoteMcpConnectionPanel projectId="project" configurationRevision={4} />);
+
+    expect(await screen.findByText('Loading saved connections…')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Loading…' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('lists saved connections and loads the one the user selects', async () => {
     const other = '22222222-2222-4222-8222-222222222222';
     mocks.list.mockResolvedValue({
@@ -180,6 +188,23 @@ describe('Remote MCP settings connection', () => {
     await screen.findByText('The sign-in address is invalid or its window was closed. Try again.');
     expect(replace).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalled();
+  });
+
+  it('directs the user to load the connection status after starting sign-in', async () => {
+    const replace = vi.fn();
+    const popup = { closed: false, close: vi.fn(), location: { replace } };
+    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    mocks.prepare.mockResolvedValue({
+      correlationId: id, state: 's'.repeat(43), pkceChallenge: 'p'.repeat(43),
+      authorizationUri: 'https://tool.example/authorize', expiresAt: '2030-01-01T00:00:00Z',
+      connectionRevision: 2, configurationRevision: 4, configurationSha256: 'a'.repeat(64),
+    });
+    await prepareAuthorization();
+    fireEvent.click(screen.getByRole('button', { name: 'Authorize tool service' }));
+
+    expect(await screen.findByText('After sign-in returns, select Load connection to check the result.')).toBeTruthy();
+    expect(replace).toHaveBeenCalledWith('https://tool.example/authorize');
+    expect(mocks.read).toHaveBeenCalledOnce();
   });
 
   it('submits registration metadata without collecting a credential', async () => {

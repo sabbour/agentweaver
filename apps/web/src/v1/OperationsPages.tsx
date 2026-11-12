@@ -352,7 +352,7 @@ export function WorkflowsPage() {
       </PageSection>
       <PageSection
         title="Referenced workflows"
-        description="Other workflow IDs saved for blueprints. References do not confirm that a workflow is available or valid."
+        description="Project configuration lists other workflow IDs for blueprints. Availability and validation status are unavailable."
       >
         {referencedWorkflows.length === 0 ? (
           <EmptyState

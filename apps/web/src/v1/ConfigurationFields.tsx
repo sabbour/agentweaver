@@ -157,10 +157,10 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
             {choices.models.unavailableReason === 'model_capability_catalog_unavailable'
               ? 'Eligible model choices are unavailable: the project service has no runtime model-binding list configured. '
               : 'Eligible model choices are unavailable. '}
-            Model references and reasoning levels entered here are not verified until a run starts.
+            The runtime checks model references and reasoning levels when a run starts.
           </p>
           {choices.models.savedReferences.length > 0 && <>
-            <p className="v1-muted">Saved model references (not verified as eligible)</p>
+            <p className="v1-muted">Saved model references (eligibility data unavailable)</p>
             <ul>
               {choices.models.savedReferences.map((saved) =>
                 <li key={saved.reference}>{saved.reference} ({saved.sources.join(', ')})</li>)}

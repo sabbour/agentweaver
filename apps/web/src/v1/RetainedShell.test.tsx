@@ -210,7 +210,7 @@ describe('RetainedShell', () => {
 
     expect(await screen.findByRole('heading', { name: 'Create a project' })).toBeDefined();
     expect(await screen.findByRole('heading', { name: 'AI access' })).toBeDefined();
-    expect(screen.getByText('This guide does not check your current AI access.')).toBeDefined();
+    expect(screen.getByText('Check your GitHub Copilot connection in project settings.')).toBeDefined();
     expect(screen.getByText('The v1 web app does not provide BYOK setup yet.')).toBeDefined();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open project connections' }));

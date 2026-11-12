@@ -1230,7 +1230,7 @@ describe('v1 web project scoping', () => {
       render(<App />);
 
       expect(await screen.findByText(
-        'The Broker callback was received, but no tracked account window is available. Connection status is unverified; return to account settings and refresh status.',
+        'The Broker callback has no tracked account window. The connection status is unknown. Return to account settings and refresh the status.',
       )).toBeTruthy();
       expect(mocks.authProvider).not.toHaveBeenCalled();
     } finally {
@@ -1867,6 +1867,83 @@ describe('v1 web project scoping', () => {
     openPopup.mockRestore();
   });
 
+  it('reloads repository choices after the selected repository becomes unavailable', async () => {
+    const { RepoAppBrokerError } = await import('./repoApp');
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    const selection = selectionSnapshot('p1', 'r1');
+    selection.projectConfiguration.sourceControl = {
+      authMode: 'githubApp',
+      appConnectionId: 'identity-app-1',
+    };
+    mocks.getRunSelection.mockResolvedValue(selection);
+    mocks.getRepoAppStatus.mockResolvedValue({
+      state: 'connected',
+      localReadiness: 'access_token_available',
+      githubLogin: 'octo',
+      connectionId: 'identity-app-1',
+      connectionRevision: 3,
+      accessTokenExpiresAt: '2026-10-08T18:00:00Z',
+      updatedAt: '2026-10-08T17:00:00Z',
+    });
+    const staleRepository = {
+      installationId: 101,
+      repositoryId: 202,
+      fullName: 'octo/stale',
+      ownerLogin: 'octo',
+      isPrivate: true,
+      defaultBranch: 'main',
+    };
+    const availableRepository = {
+      ...staleRepository,
+      repositoryId: 303,
+      fullName: 'octo/available',
+    };
+    const listing = {
+      connectionId: 'identity-app-1',
+      connectionRevision: 3,
+      githubLogin: 'octo',
+    };
+    mocks.getRepoAppRepositories
+      .mockResolvedValueOnce({ ...listing, repositories: [staleRepository] })
+      .mockResolvedValueOnce({ ...listing, repositories: [availableRepository] });
+    mocks.createRepoAppSelection
+      .mockRejectedValueOnce(new RepoAppBrokerError(404, 'repository_unavailable', 'not found'))
+      .mockResolvedValueOnce({ ...listing, code: 'new-selection-code' });
+    mocks.pinSourceControlRepository.mockResolvedValue({
+      pinId: 'pin-1',
+      repository: 'octo/available',
+      providerId: 'github',
+      resourceId: 'resource-1',
+      resourceGeneration: 1,
+      providerRepositoryId: 303,
+      defaultBranch: 'main',
+      isPrivate: true,
+      pinnedAt: '2026-10-08T00:00:00Z',
+    });
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=changes');
+    render(<App />);
+
+    await screen.findByRole('button', { name: 'Load repositories' });
+    fireEvent.click(screen.getByRole('button', { name: 'Load repositories' }));
+    await screen.findByRole('option', { name: 'octo/stale · private' });
+    fireEvent.click(screen.getByRole('button', { name: 'Pin repository to this run' }));
+    expect(await screen.findByText(
+      'Repository access is unavailable. Reload the repository list and select a repository, or check GitHub access before retrying.',
+    )).toBeTruthy();
+    expect(mocks.createRepoAppSelection).toHaveBeenLastCalledWith(101, 202);
+    expect(mocks.pinSourceControlRepository).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load repositories' }));
+    await screen.findByRole('option', { name: 'octo/available · private' });
+    fireEvent.click(screen.getByRole('button', { name: 'Pin repository to this run' }));
+    await screen.findByText('Pinned repository: octo/available · main');
+    expect(mocks.createRepoAppSelection).toHaveBeenLastCalledWith(101, 303);
+    expect(mocks.pinSourceControlRepository).toHaveBeenCalledWith(
+      'broker-token', 'p1', 'r1', 's1', 'tenant-1', 'new-selection-code',
+    );
+  });
+
   it.each(['unavailable', 'different tenant'])(
     'uses the confirmed tenant selector when run usage is %s',
     async (usageState) => {
@@ -1986,7 +2063,7 @@ describe('v1 web project scoping', () => {
     render(<App />);
 
     expect(await screen.findByText(
-      'We could not check the GitHub connection. Try again.',
+      'GitHub connection status is unavailable. Try again.',
     )).toBeTruthy();
     expect(screen.queryByText('No GitHub App user connection is available for this identity.')).toBeNull();
     expect(screen.queryByRole(

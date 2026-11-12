@@ -189,7 +189,7 @@ export function RemoteMcpConnectionPanel({ projectId, configurationRevision }: {
     <PageSection title="Remote MCP" description="Connect an external tool service. Choose a saved connection to read its current status. Passwords and tokens stay with the sign-in service.">
       {directoryError && <MessageBar intent="error"><MessageBarBody>{directoryError}</MessageBarBody></MessageBar>}
       {directory === null
-        ? directoryLoading && <p className="v1-muted">Loading saved connections�</p>
+        ? directoryLoading && <p className="v1-muted">Loading saved connections…</p>
         : directory.length === 0
           ? <p className="v1-muted">This project has no saved Remote MCP connections.</p>
           : (
@@ -228,7 +228,7 @@ export function RemoteMcpConnectionPanel({ projectId, configurationRevision }: {
         {nextConnectionId && (
           <Button disabled={directoryLoading} onClick={() => void loadDirectory(nextConnectionId)}>Load more connections</Button>
         )}
-        <Button disabled={directoryLoading} onClick={() => void loadDirectory()}>{directoryLoading ? 'Loading�' : 'Refresh list'}</Button>
+        <Button disabled={directoryLoading} onClick={() => void loadDirectory()}>{directoryLoading ? 'Loading…' : 'Refresh list'}</Button>
       </div>
       <Field label="Remote MCP connection ID" hint="Filled in when you select a saved connection. Type an ID only to register a new connection.">
         <Input value={connectionId} disabled={busy} onChange={(_, data) => switchConnection(data.value)} />
@@ -279,7 +279,7 @@ export function RemoteMcpConnectionPanel({ projectId, configurationRevision }: {
             </>}
         </div>
       </details>
-      {signInStarted && <p className="v1-muted">After sign-in returns, select Load connection to check the result. A returned window does not prove a connection succeeded.</p>}
+      {signInStarted && <p className="v1-muted">After sign-in returns, select Load connection to check the result.</p>}
     </PageSection>
   );
 }

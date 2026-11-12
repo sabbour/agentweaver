@@ -44,7 +44,7 @@ function page(captures: SourceControlOutputCaptureSummary[], next: { at: string;
   return { captures, nextBeforeCapturedAt: next?.at ?? null, nextBeforeCaptureId: next?.id ?? null };
 }
 
-function renderPanel(executionState = 'active') {
+function renderPanel(executionState: string | null = 'active') {
   return render(<RunOutputCapturesPanel projectId="p1" runId="r1" sessionId="s1" executionState={executionState} />);
 }
 
@@ -170,6 +170,12 @@ describe('RunOutputCapturesPanel', () => {
     mocks.listRunOutputCaptures.mockRejectedValue(new GatewayError(404, {}, 'Not found'));
     renderPanel('failed');
     expect(await screen.findByText('Files are unavailable because this run failed.')).toBeTruthy();
+  });
+
+  it.each([null, 'new-state'])('describes a missing or unrecognized run state: %s', async (state) => {
+    mocks.listRunOutputCaptures.mockRejectedValue(new GatewayError(404, {}, 'Not found'));
+    renderPanel(state);
+    expect(await screen.findByText('No files are available. The run state is missing or unrecognized.')).toBeTruthy();
   });
 
   it('shows other list errors', async () => {

@@ -211,7 +211,7 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
       if (!cancelled &&
           pendingRef.current === active &&
           isCurrentScope(active.projectId, active.accessToken, active.generation)) {
-        failFlow(active, `The current identity could not be confirmed. ${messageForError(reason)}`);
+        failFlow(active, `The identity check failed. ${messageForError(reason)}`);
       }
     });
     return () => { cancelled = true; };

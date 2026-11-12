@@ -302,6 +302,9 @@ describe('WorkflowsPage', () => {
     const defaultWorkflow = await screen.findByRole('list', { name: 'Active workflow' });
     expect(within(defaultWorkflow).getByText('wf-default')).toBeTruthy();
     expect(within(defaultWorkflow).getByText('Project default')).toBeTruthy();
+    expect(screen.getByText(
+      'Project configuration lists other workflow IDs for blueprints. Availability and validation status are unavailable.',
+    )).toBeTruthy();
     const blueprintWorkflows = screen.getByRole('list', { name: 'Referenced workflows' });
     expect(within(blueprintWorkflows).getByText('wf-review')).toBeTruthy();
     fireEvent.click(within(blueprintWorkflows).getByRole('button', { name: 'View blueprints for wf-review' }));
