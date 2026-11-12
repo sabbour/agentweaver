@@ -75,7 +75,7 @@ public static class CoordinationOwnerMigrator
         // Fail on any version this build doesn't know, or on a version whose prerequisite is missing.
         // Optional owner features remain compatible with their complete pre-migration shapes
         // until the reviewed maintenance plan applies them.
-        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33 or 35 or 36 or 37 or 38 or 39 or 40 or 41 or 42 or 43 or 44 or 45 or 46 or 47 or 48)) ||
+        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33 or 35 or 36 or 37 or 38 or 39 or 40 or 41 or 42 or 43 or 44 or 45 or 46 or 47 or 48 or 49)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -226,7 +226,7 @@ public static class CoordinationOwnerMigrator
         // record, the spend_budget_reservations table, and the spend_budget_accounting_cursors table.
         // Six columns cover version 030: its migration record, its two tables, and its three unique indexes.
         // Two columns cover version 031: its migration record and the promotion dismissal table.
-        // Additive migrations 032, 033, and 035-048 remain optional to readiness.
+        // Additive migrations 032, 033, and 035-049 remain optional to readiness.
         // so the owner can start before maintenance applies the reviewed plan; accept only complete shapes.
         await using var command = new NpgsqlCommand($"""
             SELECT
@@ -246,7 +246,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -775,11 +775,11 @@ public static class CoordinationOwnerMigrator
                 )
                 ,
                 (
-                    ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 48) = 0
+                    ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 49) = 0
                         AND to_regclass(@runtimeObservationCursors) IS NULL
                         AND to_regclass(@runtimeObservationCursorExpiry) IS NULL)
                     OR
-                    ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 48) = 1
+                    ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 49) = 1
                         AND (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 47) = 1
                         AND to_regclass(@runtimeObservationCursors) IS NOT NULL
                         AND to_regclass(@runtimeObservationCursorExpiry) IS NOT NULL
@@ -969,7 +969,7 @@ public static class CoordinationOwnerMigrator
             !reader.GetBoolean(53) || !reader.GetBoolean(54) ||
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
             // Columns 57 onward are boolean checks for complete migration shapes. A partial apply never counts as ready.
-                Enumerable.Range(57, 57).Any(column => !reader.GetBoolean(column)))
+                Enumerable.Range(57, 58).Any(column => !reader.GetBoolean(column)))
                     throw new InvalidOperationException(
                         "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }

@@ -105,15 +105,27 @@ internal sealed class RuntimeObservationV2Store(NpgsqlDataSource dataSource, str
 
     internal static RuntimeObservationV2Fact CreditDenialFact(
         RuntimeRegistration registration,
+        RuntimeNativeCreditDenialReceipt denial) =>
+        CreditDenialFact(
+            registration.Binding.ProjectId,
+            registration.Binding.RunId,
+            registration.Binding.SessionId,
+            registration.Binding.AcceptedSelectionHash,
+            denial);
+
+    internal static RuntimeObservationV2Fact CreditDenialFact(
+        string projectId,
+        string runId,
+        string sessionId,
+        string selectionHash,
         RuntimeNativeCreditDenialReceipt denial)
     {
-        var binding = registration.Binding;
         var factId = CreditDenialFactId(denial);
         return new RuntimeObservationV2Fact(
             factId, null, RuntimeObservationFactKind.Denied,
-            binding.ProjectId, binding.RunId, denial.DispatchId, denial.DispatchId,
-            binding.SessionId, denial.ExecutionFence, denial.RuntimeInstanceId,
-            denial.RegistrationRevision, binding.AcceptedSelectionHash,
+            projectId, runId, denial.DispatchId, denial.DispatchId,
+            sessionId, denial.ExecutionFence, denial.RuntimeInstanceId,
+            denial.RegistrationRevision, selectionHash,
             denial.DispatchRevisionBefore == 0 ? null : denial.DispatchRevisionBefore,
             RuntimeObservationLimitKind.CopilotHardCredits,
             denial.HardCreditLimit, denial.ObservedCredits, "nanoAiu", "copilotRun",
@@ -132,6 +144,21 @@ internal sealed class RuntimeObservationV2Store(NpgsqlDataSource dataSource, str
     internal static RuntimeObservationV2Fact CreditNoSendFact(
         RuntimeRegistration registration,
         RuntimeNativeCreditDenialReceipt denial,
+        RuntimeNativeTurnNoSendReceipt receipt) =>
+        CreditNoSendFact(
+            registration.Binding.ProjectId,
+            registration.Binding.RunId,
+            registration.Binding.SessionId,
+            registration.Binding.AcceptedSelectionHash,
+            denial,
+            receipt);
+
+    internal static RuntimeObservationV2Fact CreditNoSendFact(
+        string projectId,
+        string runId,
+        string sessionId,
+        string selectionHash,
+        RuntimeNativeCreditDenialReceipt denial,
         RuntimeNativeTurnNoSendReceipt receipt)
     {
         RuntimeContractValidation.ValidateHash(receipt.CanonicalPayloadHash);
@@ -139,10 +166,14 @@ internal sealed class RuntimeObservationV2Store(NpgsqlDataSource dataSource, str
             receipt.DenialReceiptHash != denial.CanonicalPayloadHash ||
             receipt.RuntimeInstanceId != denial.RuntimeInstanceId ||
             receipt.RegistrationRevision != denial.RegistrationRevision ||
+            receipt.RegistrationHash != denial.RegistrationHash ||
+            receipt.SourceHash != denial.SourceHash ||
+            RuntimeNativeDenialContract.SealNoSend(receipt).CanonicalPayloadHash != receipt.CanonicalPayloadHash ||
             !receipt.RangeComplete || receipt.ObservedEventCount != 0 ||
-            receipt.BeforeCursorHash != receipt.AfterCursorHash)
+            receipt.BeforeCursorHash != receipt.AfterCursorHash ||
+            denial.Stage != RuntimeCreditLimitDenialStage.NativeTurnBegin)
             throw new RuntimeAuthorizationException("runtime_native_turn_no_send_invalid");
-        var fact = CreditDenialFact(registration, denial);
+        var fact = CreditDenialFact(projectId, runId, sessionId, selectionHash, denial);
         return (fact with
         {
             FactId = CreditNoSendFactId(denial),
@@ -321,12 +352,14 @@ internal sealed class RuntimeObservationV2Store(NpgsqlDataSource dataSource, str
                 RuntimeObservationV2History.MaximumItems, cancellationToken).ConfigureAwait(false);
             if (items.Count > RuntimeObservationV2History.MaximumItems)
             {
+                var canPage = items.All(item => item.Sequence is not null);
                 items = items.Take(RuntimeObservationV2History.MaximumItems).ToList();
-                nextCursor = await StoreCursorAsync(
-                    connection, transaction, state with
-                    {
-                        AfterSequence = items[0].Sequence!.Value - 1
-                    }, cancellationToken).ConfigureAwait(false);
+                if (canPage)
+                    nextCursor = await StoreCursorAsync(
+                        connection, transaction, state with
+                        {
+                            AfterSequence = items[0].Sequence!.Value - 1
+                        }, cancellationToken).ConfigureAwait(false);
                 exactUnavailableReason = "attempt_history_exceeds_bounded_aggregate";
             }
             else if (items.Count == 0)
@@ -430,9 +463,19 @@ internal sealed class RuntimeObservationV2Store(NpgsqlDataSource dataSource, str
         command.Parameters.AddWithValue("session", NpgsqlDbType.Text, scope.SessionId);
         command.Parameters.AddWithValue("limit", NpgsqlDbType.Integer, pageSize + 1);
         var items = await ReadFactsAsync(command, scope, cancellationToken).ConfigureAwait(false);
-        if (items.Count == 0)
-            items = await ReadLegacyNumericDenialAsync(
-                connection, transaction, attemptId, scope, cancellationToken).ConfigureAwait(false);
+        var legacyItems = await ReadLegacyNumericDenialAsync(
+            connection, transaction, attemptId, scope, cancellationToken).ConfigureAwait(false);
+        foreach (var legacy in legacyItems)
+        {
+            var existingIndex = items.FindIndex(item => item.FactId == legacy.FactId);
+            if (existingIndex < 0)
+            {
+                items.Add(legacy);
+                continue;
+            }
+            if (legacy.NativeNoSend.State == RuntimeObservationSectionState.Available)
+                items[existingIndex] = legacy with { Sequence = items[existingIndex].Sequence };
+        }
         return items;
     }
 
@@ -515,48 +558,117 @@ internal sealed class RuntimeObservationV2Store(NpgsqlDataSource dataSource, str
     {
         var items = new List<RuntimeObservationV2Fact>();
         await using var command = new NpgsqlCommand($"""
-            SELECT receipt_id, receipt_json::text
-            FROM {_schema}.maf_runtime_evidence_receipts
-            WHERE project_id = @project AND run_id = @run AND attempt_id = @attempt
-              AND receipt_kind IN ('numeric-limit-denial', 'numeric-limit-native-no-send')
-            ORDER BY created_at, receipt_kind
+            SELECT event.payload::text, dispatch.child_session_id, dispatch.accepted_selection_hash,
+                   dispatch.runtime_instance_id, dispatch.registration_revision, dispatch.execution_fence
+            FROM {_schema}.outbox_events AS event
+            JOIN {_schema}.maf_execution_dispatches AS dispatch
+              ON dispatch.project_id = @project AND dispatch.run_id = @run
+             AND dispatch.dispatch_id = @attempt
+            WHERE event.stream_id = @stream
+              AND event.event_type = 'orchestrator.native_turn.credit_denied'
+              AND event.event_version = 1
+              AND event.payload->>'dispatchId' = @attemptText
+              AND dispatch.root_session_id = @root
+              AND dispatch.accepted_selection_hash = @selection
+              AND dispatch.execution_fence = @fence
+              AND (@rootScope OR dispatch.child_session_id = @session)
+            ORDER BY event.sequence
+            LIMIT @limit
             """, connection, transaction);
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, scope.ProjectId);
         command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, scope.RunId);
         command.Parameters.AddWithValue("attempt", NpgsqlDbType.Uuid, attemptId);
+        command.Parameters.AddWithValue("attemptText", NpgsqlDbType.Text, attemptId.ToString("D"));
+        command.Parameters.AddWithValue("stream", NpgsqlDbType.Text,
+            $"coordination/{scope.ProjectId}/{scope.RunId}/native-credit-denials");
+        command.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, scope.RootSessionId);
+        command.Parameters.AddWithValue("selection", NpgsqlDbType.Char, scope.SelectionHash);
+        command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint,
+            scope.SessionId == scope.RootSessionId ? scope.CurrentFence : scope.SessionFence);
+        command.Parameters.AddWithValue(
+            "rootScope", NpgsqlDbType.Boolean, scope.SessionId == scope.RootSessionId);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, scope.SessionId);
+        command.Parameters.AddWithValue(
+            "limit", NpgsqlDbType.Integer, RuntimeObservationV2History.MaximumItems + 1);
+        var retained = new List<(RuntimeNativeCreditDenialReceipt Denial, string SessionId, string SelectionHash)>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        RuntimeNumericLimitDenialReceipt? denial = null;
-        RuntimeNumericLimitNativeNoSendReceipt? noSend = null;
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            var json = reader.GetString(1);
-            using var document = JsonDocument.Parse(json);
-            if (document.RootElement.TryGetProperty("limitKind", out _))
-                denial = JsonSerializer.Deserialize<RuntimeNumericLimitDenialReceipt>(json, JsonOptions)?.Validate();
-            else
-                noSend = JsonSerializer.Deserialize<RuntimeNumericLimitNativeNoSendReceipt>(json, JsonOptions)?.Validate();
+            var denial = JsonSerializer.Deserialize<RuntimeNativeCreditDenialReceipt>(
+                reader.GetString(0), JsonOptions)
+                ?? throw new RuntimeAuthorizationException("runtime_native_credit_denial_invalid");
+            var sessionId = reader.GetString(1);
+            var selectionHash = reader.GetString(2).Trim();
+            var runtimeInstanceId = reader.GetGuid(3);
+            var registrationRevision = reader.GetInt64(4);
+            var executionFence = reader.GetInt64(5);
+            if (denial.DispatchId != attemptId ||
+                denial.RuntimeInstanceId != runtimeInstanceId ||
+                denial.RegistrationRevision != registrationRevision ||
+                denial.ExecutionFence != executionFence ||
+                RuntimeNativeDenialContract.SealDenial(denial).CanonicalPayloadHash != denial.CanonicalPayloadHash)
+                throw new RuntimeAuthorizationException("runtime_native_credit_denial_invalid");
+            retained.Add((denial, sessionId, selectionHash));
         }
-        if (denial is null || denial.SessionId != scope.SessionId && scope.SessionId != scope.RootSessionId)
-            return items;
-
-        var linkedNative = noSend is not null && noSend.DenialReceiptId == denial.ReceiptId &&
-            noSend.DenialPayloadHash == denial.CanonicalPayloadHash &&
-            noSend.AttemptId == denial.AttemptId &&
-            noSend.SessionId == denial.SessionId &&
-            noSend.ExecutionFence == denial.ExecutionFence
-            ? new RuntimeObservationEvidenceLink(
-                RuntimeObservationSectionState.Available,
-                null,
-                noSend.ReceiptId,
-                noSend.CanonicalPayloadHash,
-                noSend.RangeComplete,
-                noSend.ObservedEventCount).Validate()
-            : RuntimeObservationEvidenceLink.Unavailable(
-                denial.SessionId == denial.RootSessionId ? "native_witness_missing" : "no_native_boundary_witness");
-        var fact = DenialFact(denial);
-        items.Add(fact with { NativeNoSend = linkedNative });
-        _ = items[^1].Validate();
+        await reader.DisposeAsync().ConfigureAwait(false);
+        foreach (var (denial, sessionId, selectionHash) in retained)
+        {
+            var fact = RuntimeObservationV2Store.CreditDenialFact(
+                scope.ProjectId, scope.RunId, sessionId, selectionHash, denial);
+            if (denial.Stage == RuntimeCreditLimitDenialStage.NativeTurnBegin)
+            {
+                var noSend = await ReadLegacyCreditNoSendAsync(
+                    connection, transaction, denial, scope, cancellationToken).ConfigureAwait(false);
+                fact = noSend is null
+                    ? fact with
+                    {
+                        NativeNoSend = RuntimeObservationEvidenceLink.Unavailable("native_witness_missing")
+                    }
+                    : RuntimeObservationV2Store.CreditNoSendFact(
+                        scope.ProjectId, scope.RunId, sessionId, selectionHash, denial, noSend);
+            }
+            items.Add(fact.Validate());
+        }
         return items;
+    }
+
+    private async Task<RuntimeNativeTurnNoSendReceipt?> ReadLegacyCreditNoSendAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RuntimeNativeCreditDenialReceipt denial,
+        RuntimeObservationV2ReadScope scope,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT payload::text
+            FROM {_schema}.outbox_events
+            WHERE stream_id = @stream
+              AND event_type = 'orchestrator.native_turn.no_send'
+              AND event_version = 1
+              AND payload->>'denialReceiptHash' = @denialHash
+            ORDER BY sequence
+            LIMIT 2
+            """, connection, transaction);
+        command.Parameters.AddWithValue("stream", NpgsqlDbType.Text,
+            $"coordination/{scope.ProjectId}/{scope.RunId}/native-no-sends");
+        command.Parameters.AddWithValue("denialHash", NpgsqlDbType.Text, denial.CanonicalPayloadHash);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return null;
+        var noSend = JsonSerializer.Deserialize<RuntimeNativeTurnNoSendReceipt>(
+            reader.GetString(0), JsonOptions)
+            ?? throw new RuntimeAuthorizationException("runtime_native_turn_no_send_invalid");
+        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new RuntimeAuthorizationException("runtime_native_turn_no_send_conflict");
+        if (noSend.DispatchId != denial.DispatchId ||
+            noSend.DenialReceiptHash != denial.CanonicalPayloadHash ||
+            noSend.RuntimeInstanceId != denial.RuntimeInstanceId ||
+            noSend.RegistrationRevision != denial.RegistrationRevision ||
+            noSend.RegistrationHash != denial.RegistrationHash ||
+            noSend.SourceHash != denial.SourceHash ||
+            RuntimeNativeDenialContract.SealNoSend(noSend).CanonicalPayloadHash != noSend.CanonicalPayloadHash)
+            throw new RuntimeAuthorizationException("runtime_native_turn_no_send_invalid");
+        return noSend;
     }
 
     private async Task<RuntimeObservationSection<RuntimeObservationCreditGuard>> ReadCreditGuardAsync(
