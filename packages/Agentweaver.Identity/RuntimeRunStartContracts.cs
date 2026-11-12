@@ -336,9 +336,10 @@ public sealed record RuntimeRunStartRetirementRequest(
 {
     public RuntimeRunStartRetirementRequest Validate()
     {
-        new RuntimeRunStartPlacementRequest(1, Owner, null, BootstrapOperationId).Validate();
+        new RuntimeRunStartPlacementRequest(
+            ContractVersion, Owner, null, BootstrapOperationId).Validate();
         Placement.Validate();
-        if (ContractVersion != 1 ||
+        if (ContractVersion is not (1 or 2) ||
             RuntimeInstanceId == Guid.Empty ||
             RegistrationRevision < 1 ||
             Placement.EnvironmentId != RuntimeRunStartKeys.EnvironmentId(Owner) ||
@@ -362,7 +363,8 @@ public sealed record RuntimeReplacementRetirementRequest(
 
     public RuntimeReplacementRetirementRequest Validate()
     {
-        if (ContractVersion != 1 || OperationId == Guid.Empty || IntentId == Guid.Empty ||
+        if (ContractVersion is not (1 or 2) || OperationId == Guid.Empty || IntentId == Guid.Empty ||
+            Retirement.ContractVersion != ContractVersion ||
             CheckpointRecoveryOperationId == Guid.Empty)
             throw new RuntimeAuthorizationException("runtime_replacement_request_invalid");
         Retirement.Validate();
@@ -386,14 +388,16 @@ public sealed record RuntimeReplacementPlacementRequest(
         ArgumentNullException.ThrowIfNull(Owner);
         ArgumentNullException.ThrowIfNull(PreviousPlacement);
         PreviousPlacement.Validate();
-        if (ContractVersion != 1 || OperationId == Guid.Empty ||
+        if (ContractVersion is not (1 or 2) || OperationId == Guid.Empty ||
             PreviousBootstrapOperationId == Guid.Empty ||
             BootstrapOperationId == Guid.Empty ||
             BootstrapOperationId == PreviousBootstrapOperationId ||
             CheckpointRecoveryOperationId == Guid.Empty ||
             Owner.ContractVersion != 1 ||
-            Owner.AgentId != RuntimeActionContract.CoordinatorRootStepId ||
-            Owner.LogicalTurnOrdinal != 0 ||
+            (ContractVersion == 1
+                ? Owner.AgentId != RuntimeActionContract.CoordinatorRootStepId || Owner.LogicalTurnOrdinal != 0
+                : Owner.AgentId == RuntimeActionContract.CoordinatorRootStepId ||
+                  Owner.LogicalTurnOrdinal < 1 || string.IsNullOrWhiteSpace(Owner.WorkflowStepId)) ||
             Owner.ExecutionFence <= 0 ||
             PreviousPlacement.EnvironmentId != RuntimeRunStartKeys.EnvironmentId(Owner) ||
             PreviousPlacement.WorkspaceVolumeId != RuntimeRunStartKeys.WorkspaceVolumeId(Owner) ||
@@ -417,7 +421,7 @@ public sealed record RuntimeRunStartRetirementReceipt(
     public RuntimeRunStartRetirementReceipt ValidateFor(RuntimeRunStartRetirementRequest request)
     {
         request.Validate();
-        if (ContractVersion != 1 ||
+        if (ContractVersion != request.ContractVersion ||
             BootstrapOperationId != request.BootstrapOperationId ||
             RuntimeInstanceId != request.RuntimeInstanceId ||
             RegistrationRevision != request.RegistrationRevision ||
@@ -442,6 +446,19 @@ public static class RuntimeRunStartKeys
             throw new ArgumentException("A replacement operation purpose is invalid.", nameof(purpose));
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(
             $"agentweaver:runtime-replacement:{replacementOperationId:N}:{purpose}"));
+        return new Guid(hash.AsSpan(0, 16));
+    }
+
+    public static Guid ReplacementOperationId(Guid replacementOperationId, string sessionId, string purpose)
+    {
+        if (replacementOperationId == Guid.Empty)
+            throw new ArgumentException("A replacement operation ID is required.", nameof(replacementOperationId));
+        RuntimeContractValidation.ValidateIdentifier(sessionId);
+        if (string.IsNullOrWhiteSpace(purpose) || purpose.Length > 32 ||
+            purpose.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '-'))
+            throw new ArgumentException("A replacement operation purpose is invalid.", nameof(purpose));
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"agentweaver:runtime-replacement:{replacementOperationId:N}:{sessionId}:{purpose}"));
         return new Guid(hash.AsSpan(0, 16));
     }
 

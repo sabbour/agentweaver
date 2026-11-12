@@ -26,6 +26,11 @@ internal sealed partial class CoordinationOwnerStore
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
     };
+    private static readonly JsonSerializerOptions RuntimeRegistrationJsonOptions = new()
+    {
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        MaxDepth = 16
+    };
 
     private readonly NpgsqlDataSource _dataSource;
     private readonly string _schema;
@@ -1949,10 +1954,11 @@ internal sealed partial class CoordinationOwnerStore
         SessionIdentity identity,
         string tenantId,
         string acceptedSelectionHash,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        CheckpointRecoveryRegistrationAuthorization? checkpointRecoveryRegistration = null) =>
         ReadRuntimeOwnerStateAsync(
             actor, identity, allowTerminalChild: false, allowCoordinatorRoot: true,
-            tenantId, acceptedSelectionHash, cancellationToken);
+            tenantId, acceptedSelectionHash, cancellationToken, checkpointRecoveryRegistration);
 
     /// <summary>
     /// Enforces actor, run-fence, child-work, turn, and version checks before returning runtime owner context.
@@ -1973,7 +1979,8 @@ internal sealed partial class CoordinationOwnerStore
         bool allowCoordinatorRoot,
         string? expectedTenantId,
         string? expectedSelectionHash,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CheckpointRecoveryRegistrationAuthorization? checkpointRecoveryRegistration = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
@@ -2005,9 +2012,15 @@ internal sealed partial class CoordinationOwnerStore
                 allowTerminalChild && session.TurnState is "completed" or "failed" or "indeterminate") &&
             session.LogicalTurnOrdinal >= 1;
         if (isCoordinatorRoot || isCurrentChildWork && !allowTerminalChild)
-            await RequireNoCheckpointRecoveryHoldAsync(
-                connection, transaction, identity.ProjectId, identity.RunId, cancellationToken)
-                .ConfigureAwait(false);
+        {
+            if (checkpointRecoveryRegistration is { } recoveryRegistration)
+                await RequireCheckpointRecoveryRegistrationAsync(
+                    actor, identity, run.Fence, recoveryRegistration, cancellationToken).ConfigureAwait(false);
+            else
+                await RequireNoCheckpointRecoveryHoldAsync(
+                    connection, transaction, identity.ProjectId, identity.RunId, cancellationToken)
+                    .ConfigureAwait(false);
+        }
         if ((!isCoordinatorRoot && !isCurrentChildWork) || session.StateVersion < 1)
             throw new CoordinationException(
                 "runtime_owner_context_unavailable", StatusCodes.Status409Conflict);
@@ -4453,7 +4466,7 @@ internal sealed partial class CoordinationOwnerStore
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using var command = new NpgsqlCommand($"""
-            SELECT result
+            SELECT result::text, progress::text
             FROM {_executionOperations}
             WHERE project_id = @project AND run_id = @run AND session_id = @session
                 AND actor_issuer = @issuer AND actor_subject = @subject
@@ -4465,17 +4478,115 @@ internal sealed partial class CoordinationOwnerStore
         command.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, actor.Issuer);
         command.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, actor.Subject);
         command.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, authorization.OperationId);
-        var storedJson = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
-        var stored = storedJson is null
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var stored = !await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
             ? null
-            : JsonSerializer.Deserialize<RunExecutionTransitionResult>(storedJson, JsonOptions);
+            : JsonSerializer.Deserialize<RunExecutionTransitionResult>(reader.GetString(0), JsonOptions);
+        var progress = stored is null
+            ? default
+            : JsonSerializer.Deserialize<JsonElement>(reader.GetString(1));
         if (stored?.Session != identity ||
             stored.OperationId != authorization.OperationId ||
             stored.ExecutionFence != executionFence ||
-            stored.CheckpointRecovery != authorization.Status)
+            stored.CheckpointRecovery != authorization.Status ||
+            authorization.Member is null && identity.SessionId != stored.Session.SessionId ||
+            authorization.Member is { } memberBinding &&
+                (stored.CheckpointRecovery?.BoundaryKind != "childJoin" ||
+                 ChildCheckpointRecoveryManifestCodec.RequireMember(
+                     ReadCheckpointRecoveryManifest(stored, progress), memberBinding).Session.SessionId !=
+                     memberBinding.SessionId))
             throw new CoordinationException(
                 "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
+        await reader.DisposeAsync().ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<CheckpointRecoveryRegistrationAuthorization>
+        ReadCheckpointRecoveryRegistrationAuthorizationAsync(
+            CoordinationActor actor,
+            string projectId,
+            string runId,
+            string sessionId,
+            Guid operationId,
+            CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand($"""
+            SELECT result::text, progress::text
+            FROM {_executionOperations}
+            WHERE project_id = @project AND run_id = @run AND actor_issuer = @issuer
+                AND actor_subject = @subject AND operation_id = @operation
+                AND operation_kind = 'recovery'
+            """, connection);
+        AddRunScope(command, projectId, runId);
+        command.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, actor.Issuer);
+        command.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, actor.Subject);
+        command.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException(
+                "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
+        var result = JsonSerializer.Deserialize<RunExecutionTransitionResult>(
+            reader.GetString(0), JsonOptions);
+        var progress = JsonSerializer.Deserialize<JsonElement>(reader.GetString(1));
+        if (result?.CheckpointRecovery is not { Phase: "pending" or "ready" } status ||
+            result.Session.ProjectId != projectId || result.Session.RunId != runId ||
+            result.OperationId != operationId)
+            throw new CoordinationException(
+                "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
+        if (result.Session.SessionId == sessionId)
+            return new CheckpointRecoveryRegistrationAuthorization(operationId, status);
+        if (status.BoundaryKind != "childJoin")
+            throw new CoordinationException(
+                "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
+        var manifest = ReadCheckpointRecoveryManifest(result, progress);
+        var matches = manifest.Members.Where(member => member.Session.SessionId == sessionId).ToArray();
+        if (matches.Length != 1)
+            throw new CoordinationException(
+                "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
+        var memberBinding = new CheckpointRecoveryRegistrationMember(
+            matches[0].AssociationId,
+            matches[0].Session.SessionId,
+            matches[0].AssociationHash,
+            manifest.SourceExecutionFence,
+            manifest.SourceDecisionStateVersion,
+            matches[0].Startup.RegistrationId ?? Guid.Empty,
+            matches[0].Startup.RegistrationRevision ?? 0);
+        _ = ChildCheckpointRecoveryManifestCodec.RequireMember(manifest, memberBinding);
+        return new CheckpointRecoveryRegistrationAuthorization(operationId, status, memberBinding);
+    }
+
+    internal async Task<ChildCheckpointRecoveryManifest> ReadCheckpointRecoveryManifestAsync(
+        CoordinationActor actor,
+        SessionIdentity root,
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand($"""
+            SELECT result::text, progress::text
+            FROM {_executionOperations}
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+                AND actor_issuer = @issuer AND actor_subject = @subject
+                AND operation_id = @operation AND operation_kind = 'recovery'
+            """, connection);
+        AddRunScope(command, root.ProjectId, root.RunId);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, root.SessionId);
+        command.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, actor.Issuer);
+        command.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, actor.Subject);
+        command.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException(
+                "checkpoint_recovery_manifest_invalid", StatusCodes.Status409Conflict);
+        var result = JsonSerializer.Deserialize<RunExecutionTransitionResult>(
+            reader.GetString(0), JsonOptions);
+        var progress = JsonSerializer.Deserialize<JsonElement>(reader.GetString(1));
+        if (result?.Session != root || result.OperationId != operationId ||
+            result.CheckpointRecovery is not { Phase: "pending" })
+            throw new CoordinationException(
+                "checkpoint_recovery_manifest_invalid", StatusCodes.Status409Conflict);
+        return ReadCheckpointRecoveryManifest(result, progress);
     }
 
     internal async Task<CheckpointRecoveryStatus> ReadCheckpointRecoveryStatusAsync(
@@ -5155,7 +5266,7 @@ internal sealed partial class CoordinationOwnerStore
                 "checkpoint_recovery_progress_conflict", StatusCodes.Status409Conflict);
         RequireWriter(root, actor);
         await using var read = new NpgsqlCommand($"""
-            SELECT phase_version, result
+            SELECT phase_version, result, progress
             FROM {_executionOperations}
             WHERE project_id = @project AND run_id = @run AND session_id = @session
                 AND operation_id = @operation AND operation_kind = 'recovery'
@@ -5176,6 +5287,7 @@ internal sealed partial class CoordinationOwnerStore
             reader.GetString(1), JsonOptions)
             ?? throw new CoordinationException(
                 "execution_operation_result_unavailable", StatusCodes.Status503ServiceUnavailable);
+        var storedProgress = JsonSerializer.Deserialize<JsonElement>(reader.GetString(2));
         await reader.DisposeAsync().ConfigureAwait(false);
         if (result.Session != identity || result.OperationId != operationId)
             throw new CoordinationException(
@@ -5184,9 +5296,17 @@ internal sealed partial class CoordinationOwnerStore
             return result;
         RequireCurrentCheckpointRecoveryOwner(
             result, current, run.Fence, run.ExecutionState, root.ExecutionFence, root.LifecycleState);
+        ChildCheckpointRecoveryManifest? childManifest = null;
         if (current.BoundaryKind == "childJoin")
-            throw new CoordinationException(
-                "checkpoint_recovery_boundary_unsupported", StatusCodes.Status409Conflict);
+        {
+            childManifest = ReadCheckpointRecoveryManifest(result, storedProgress);
+            if (status.Phase == "ready" &&
+                (readyIntent is null ||
+                 !await AreCheckpointRecoveryMembersReadyAsync(
+                     connection, transaction, childManifest, readyIntent, cancellationToken).ConfigureAwait(false)))
+                throw new CoordinationException(
+                    "checkpoint_recovery_members_not_ready", StatusCodes.Status409Conflict);
+        }
         RequireImmutableCheckpointRecoveryAdmission(current, status);
         if (status.Phase == "ready" && readyIntent is null ||
             readyIntent is not null &&
@@ -5248,7 +5368,11 @@ internal sealed partial class CoordinationOwnerStore
             ["recoveryMaterialMode"] = status.RecoveryMaterialMode
         };
         if (status.BoundaryKind == "childJoin")
+        {
             progress["dispatchHeld"] = status.Phase != "ready";
+            if (status.Phase == "ready")
+                progress["allMembersReady"] = true;
+        }
         var progressJson = JsonSerializer.SerializeToElement(progress, JsonOptions);
         await using (var update = new NpgsqlCommand($"""
             UPDATE {_executionOperations}
@@ -5335,6 +5459,297 @@ internal sealed partial class CoordinationOwnerStore
                 "checkpoint_recovery_progress_conflict", StatusCodes.Status409Conflict);
     }
 
+    private static ChildCheckpointRecoveryManifest ReadCheckpointRecoveryManifest(
+        RunExecutionTransitionResult operation,
+        JsonElement progress)
+    {
+        try
+        {
+            if (!progress.TryGetProperty("childManifest", out var manifest) ||
+                manifest.ValueKind != JsonValueKind.String ||
+                !progress.TryGetProperty("childManifestSha256", out var digest) ||
+                digest.ValueKind != JsonValueKind.String)
+                throw new JsonException();
+            var value = ChildCheckpointRecoveryManifestCodec.Decode(
+                manifest.GetString()!, digest.GetString()!);
+            if (operation.CheckpointRecovery is not { BoundaryKind: "childJoin" } status ||
+                status.ChildManifestSha256 != digest.GetString() ||
+                status.DispatchHeld != true ||
+                value.OperationId != operation.OperationId ||
+                value.Root != operation.Session ||
+                value.HoldFence != operation.ExecutionFence ||
+                value.SourceExecutionFence != operation.PreviousExecutionFence ||
+                value.SourceCheckpointId != status.SourceCheckpointId ||
+                value.SourceCheckpointRevision != status.SourceCheckpointRevision ||
+                value.SourceCheckpointHash != status.SourceCheckpointHash)
+                throw new JsonException();
+            return value;
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException or
+                                           CoordinationException)
+        {
+            throw new CoordinationException(
+                "checkpoint_recovery_manifest_invalid", StatusCodes.Status409Conflict, exception);
+        }
+    }
+
+    private sealed record CheckpointRecoveryReadyRuntimeRow(
+        string SessionId,
+        Guid IntentId,
+        string State,
+        string Step,
+        long Fence,
+        bool Cleanup,
+        string Links,
+        long? RegistrationRevision,
+        string? RegistrationBindingHash,
+        short? RegistrationState,
+        DateTimeOffset? RegistrationExpiresAt,
+        Guid BootstrapId,
+        Guid ConsumeId,
+        Guid ExchangeId,
+        string? EnvironmentId,
+        Guid? RuntimeInstanceId,
+        long RowVersion,
+        string TenantId,
+        string SelectionHash);
+
+    private async Task<bool> AreCheckpointRecoveryMembersReadyAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ChildCheckpointRecoveryManifest manifest,
+        RuntimeRunStartIntent rootIntent,
+        CancellationToken cancellationToken)
+    {
+        if (rootIntent.State != "ready" || rootIntent.CurrentStep != "ready" ||
+            rootIntent.ExecutionFence != manifest.HoldFence || rootIntent.CleanupObligation)
+            return false;
+        var members = manifest.Members;
+        if (members.Any(member => member.Disposition is "completedUnjoined" or "unresolved"))
+            return false;
+        var required = members.Where(member => member.Disposition == "pendingUnsent").ToArray();
+        var bySession = new Dictionary<string, CheckpointRecoveryReadyRuntimeRow>(StringComparer.Ordinal);
+        await using (var command = new NpgsqlCommand($"""
+            SELECT i.root_session_id, i.intent_id, i.state, i.current_step, i.execution_fence,
+                   i.cleanup_obligation, i.receipt_links::text, h.current_revision,
+                   r.binding_hash, r.state, r.expires_at, i.bootstrap_operation_id,
+                   i.consume_operation_id, i.exchange_operation_id, i.environment_id,
+                   i.runtime_instance_id, i.row_version, i.tenant_id, i.accepted_selection_hash
+            FROM {_schema}.runtime_run_start_intents i
+            LEFT JOIN {_schema}.runtime_registration_heads h
+              ON h.runtime_instance_id =
+                 NULLIF(i.receipt_links->'registration'->>'runtimeInstanceId', '')::uuid
+            LEFT JOIN {_schema}.runtime_registration_revisions r
+              ON r.runtime_instance_id = h.runtime_instance_id AND r.revision = h.current_revision
+            WHERE i.project_id = @project AND i.run_id = @run
+              AND i.root_session_id = ANY(@sessions)
+            ORDER BY i.root_session_id
+            """, connection, transaction))
+        {
+            command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, manifest.Root.ProjectId);
+            command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, manifest.Root.RunId);
+            command.Parameters.AddWithValue("sessions", NpgsqlDbType.Array | NpgsqlDbType.Varchar,
+                required.Select(member => member.Session.SessionId)
+                    .Append(manifest.Root.SessionId).ToArray());
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var row = new CheckpointRecoveryReadyRuntimeRow(
+                    reader.GetString(0),
+                    reader.GetGuid(1),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.GetInt64(4),
+                    reader.GetBoolean(5),
+                    reader.GetString(6),
+                    reader.IsDBNull(7) ? null : reader.GetInt64(7),
+                    reader.IsDBNull(8) ? null : reader.GetString(8).Trim(),
+                    reader.IsDBNull(9) ? null : reader.GetInt16(9),
+                    reader.IsDBNull(10) ? null : new DateTimeOffset(reader.GetDateTime(10), TimeSpan.Zero),
+                    reader.GetGuid(11),
+                    reader.GetGuid(12),
+                    reader.GetGuid(13),
+                    reader.IsDBNull(14) ? null : reader.GetString(14),
+                    reader.IsDBNull(15) ? null : reader.GetGuid(15),
+                    reader.GetInt64(16),
+                    reader.GetString(17),
+                    reader.GetString(18).Trim());
+                if (!bySession.TryAdd(row.SessionId, row))
+                    return false;
+            }
+        }
+
+        if (!bySession.TryGetValue(manifest.Root.SessionId, out var root) ||
+            root.IntentId != rootIntent.IntentId ||
+            root.State != rootIntent.State || root.Step != rootIntent.CurrentStep ||
+            root.Fence != rootIntent.ExecutionFence || root.Cleanup != rootIntent.CleanupObligation ||
+            root.RowVersion != rootIntent.RowVersion ||
+            root.BootstrapId != rootIntent.BootstrapOperationId ||
+            root.ConsumeId != rootIntent.ConsumeOperationId ||
+            root.ExchangeId != rootIntent.ExchangeOperationId ||
+            root.EnvironmentId != rootIntent.EnvironmentId ||
+            root.RuntimeInstanceId != rootIntent.RuntimeInstanceId ||
+            root.TenantId != rootIntent.TenantId ||
+            !string.Equals(root.SelectionHash, rootIntent.AcceptedSelectionHash, StringComparison.OrdinalIgnoreCase) ||
+            !SameJson(root.Links, rootIntent.ReceiptLinks) ||
+            !IsCheckpointRecoveryRuntimeReady(
+                manifest, root, manifest.RootStartup.IntentId, manifest.RootStartup.RuntimeInstanceId,
+                manifest.RootStartup.RegistrationRevision, manifest.Root.SessionId,
+                CoordinationEndpoints.CoordinatorRuntimeAgentId, workflowStepId: null,
+                modelSelectionReference: null, logicalTurnOrdinal: 0,
+                manifest.RootStartup.Placement,
+                RuntimeRunStartKeys.ReplacementOperationId(manifest.OperationId, "checkpoint-bootstrap"),
+                RuntimeRunStartKeys.ReplacementOperationId(manifest.OperationId, "checkpoint-consume"),
+                RuntimeRunStartKeys.ReplacementOperationId(manifest.OperationId, "checkpoint-exchange"),
+                member: null))
+            return false;
+
+        foreach (var member in required)
+        {
+            if (!bySession.TryGetValue(member.Session.SessionId, out var intent) ||
+                member.Startup.Placement is not { } previousPlacement ||
+                !IsCheckpointRecoveryRuntimeReady(
+                    manifest, intent, member.Startup.IntentId, member.Startup.RegistrationId,
+                    member.Startup.RegistrationRevision, member.Session.SessionId, member.AgentId,
+                    member.WorkflowStepId, member.ModelSelectionReference, member.Session.LogicalTurnOrdinal,
+                    previousPlacement,
+                    RuntimeRunStartKeys.ReplacementOperationId(
+                        manifest.OperationId, member.Session.SessionId, "checkpoint-bootstrap"),
+                    RuntimeRunStartKeys.ReplacementOperationId(
+                        manifest.OperationId, member.Session.SessionId, "checkpoint-consume"),
+                    RuntimeRunStartKeys.ReplacementOperationId(
+                        manifest.OperationId, member.Session.SessionId, "checkpoint-exchange"),
+                    member))
+                return false;
+        }
+        return true;
+    }
+
+    private bool IsCheckpointRecoveryRuntimeReady(
+        ChildCheckpointRecoveryManifest manifest,
+        CheckpointRecoveryReadyRuntimeRow intent,
+        Guid expectedIntentId,
+        Guid? expectedRuntimeInstanceId,
+        long? sourceRegistrationRevision,
+        string sessionId,
+        string agentId,
+        string? workflowStepId,
+        string? modelSelectionReference,
+        long logicalTurnOrdinal,
+        RuntimeRunStartPlacementReceipt previousPlacement,
+        Guid bootstrapOperationId,
+        Guid consumeOperationId,
+        Guid exchangeOperationId,
+        ChildRecoveryMember? member)
+    {
+        if (intent.IntentId != expectedIntentId ||
+            intent.State != "ready" || intent.Step != "ready" ||
+            intent.Fence != manifest.HoldFence || intent.Cleanup ||
+            intent.BootstrapId != bootstrapOperationId ||
+            intent.ConsumeId != consumeOperationId ||
+            intent.ExchangeId != exchangeOperationId ||
+            intent.TenantId != manifest.TenantId ||
+            !string.Equals(intent.SelectionHash, manifest.SelectionHash, StringComparison.OrdinalIgnoreCase) ||
+            intent.RegistrationRevision is not { } registrationRevision ||
+            intent.RegistrationState != (short)RuntimeRegistrationState.Active ||
+            intent.RegistrationBindingHash is null ||
+            intent.RegistrationExpiresAt is not { } registrationExpiresAt ||
+            registrationExpiresAt <= _timeProvider.GetUtcNow())
+            return false;
+        try
+        {
+            using var links = JsonDocument.Parse(intent.Links);
+            var root = links.RootElement;
+            if (member is not null &&
+                root.GetProperty("childStart").Deserialize<RuntimeChildStartBinding>(JsonOptions) !=
+                    member.Startup.Binding)
+                return false;
+            if (root.GetProperty("registration").Deserialize<RuntimeRegistration>(JsonOptions) is not
+                    { State: RuntimeRegistrationState.Active } registration ||
+                registration.RuntimeInstanceId != expectedRuntimeInstanceId ||
+                sourceRegistrationRevision is null or <= 0 or long.MaxValue ||
+                registration.Revision != sourceRegistrationRevision + 1 ||
+                registration.Revision != registrationRevision ||
+                registration.ExpiresAt != registrationExpiresAt ||
+                registration.ExpiresAt <= _timeProvider.GetUtcNow() ||
+                intent.RuntimeInstanceId != registration.RuntimeInstanceId ||
+                intent.EnvironmentId is null ||
+                registration.Binding.TenantId != manifest.TenantId ||
+                registration.Binding.ActorIssuer != manifest.ActorIssuer ||
+                registration.Binding.ActorId != manifest.ActorId ||
+                registration.Binding.ProjectId != manifest.Root.ProjectId ||
+                registration.Binding.RunId != manifest.Root.RunId ||
+                registration.Binding.SessionId != sessionId ||
+                registration.Binding.AgentId != agentId ||
+                registration.Binding.WorkflowStepId != workflowStepId ||
+                modelSelectionReference is not null &&
+                    registration.Binding.ModelSelectionReference != modelSelectionReference ||
+                registration.Binding.AcceptedSelectionHash != manifest.SelectionHash ||
+                registration.Binding.ExecutionFence != manifest.HoldFence ||
+                registration.Binding.TurnId != (logicalTurnOrdinal == 0
+                    ? CreateCoordinatorRootRuntimeTurnId(manifest.Root, manifest.HoldFence)
+                    : CreateRuntimeTurnId(new SessionIdentity(
+                            manifest.Root.ProjectId, manifest.Root.RunId, sessionId),
+                        manifest.HoldFence, logicalTurnOrdinal)) ||
+                intent.RegistrationBindingHash != RuntimeContractValidation.Hash(
+                    JsonSerializer.SerializeToUtf8Bytes(
+                        registration.Binding, RuntimeRegistrationJsonOptions)))
+                return false;
+            RuntimeContractValidation.Validate(registration);
+            var placement = root.GetProperty("placement")
+                .Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions);
+            var activation = root.GetProperty("activation")
+                .Deserialize<RuntimeHostReadinessReceipt>(JsonOptions);
+            var readiness = root.GetProperty("readiness")
+                .Deserialize<EnvironmentRuntimeReadinessContext>(JsonOptions);
+            if (placement is null || activation is null || readiness?.Placement is null ||
+                readiness.Observation is null || registration.Binding.EnvironmentId != previousPlacement.EnvironmentId ||
+                intent.EnvironmentId != placement.EnvironmentId ||
+                placement.EnvironmentId != previousPlacement.EnvironmentId ||
+                placement.SandboxResource is null ||
+                registration.Binding.EnvironmentId != placement.EnvironmentId ||
+                registration.Binding.PlacementUid != placement.SandboxResource.ResourceId ||
+                registration.Binding.PlacementGeneration != placement.SandboxResource.Generation)
+                return false;
+            previousPlacement.Validate();
+            placement.Validate();
+            var owner = RuntimeRunStartContinuation.CreateOwnerContext(registration.Binding);
+            RuntimeRunStartContinuation.RequireReplacementRegistration(owner, placement, registration);
+            RuntimeRunStartContinuation.RequireReplacementPlacement(
+                previousPlacement, placement, bootstrapOperationId, owner);
+            CoordinationEndpoints.ValidateHostReadiness(activation, registration, _timeProvider);
+            var recovery = activation.Recovery?.ValidateFor(registration);
+            if (recovery?.RecoveryMode is not (RuntimeHostRecoveryMode.NativeCache or
+                RuntimeHostRecoveryMode.JournalRebuild))
+                return false;
+            RuntimeRunStartContinuation.RequirePlacement(placement, registration, readiness.Placement);
+            RuntimeRunStartContinuation.RequireCurrentReadiness(
+                _timeProvider, placement, registration, activation, readiness);
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is JsonException or InvalidOperationException or KeyNotFoundException or
+                RuntimeAuthorizationException or CoordinationException or ArgumentException or NullReferenceException)
+        {
+            return false;
+        }
+    }
+
+    private static bool SameJson(string left, string right)
+    {
+        try
+        {
+            using var leftDocument = JsonDocument.Parse(left);
+            using var rightDocument = JsonDocument.Parse(right);
+            return ChildCheckpointRecoveryManifestCodec.Hash(leftDocument.RootElement) ==
+                ChildCheckpointRecoveryManifestCodec.Hash(rightDocument.RootElement);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     internal async Task<RuntimeRunStartIntent> PersistCheckpointRecoveryCleanupEvidenceAsync(
         RuntimeRunStartIntent intent,
         string receiptLinks,
@@ -5342,13 +5757,22 @@ internal sealed partial class CoordinationOwnerStore
         Guid bootstrapOperationId,
         string? environmentId,
         Guid? runtimeInstanceId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? currentStep = null,
+        bool ready = false,
+        Guid? consumeOperationId = null,
+        Guid? exchangeOperationId = null)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var command = new NpgsqlCommand($"""
             UPDATE {_schema}.runtime_run_start_intents
             SET execution_fence = @current_fence,
                 bootstrap_operation_id = @bootstrap,
+                consume_operation_id = COALESCE(@consume, consume_operation_id),
+                exchange_operation_id = COALESCE(@exchange, exchange_operation_id),
+                state = CASE WHEN @ready THEN 'ready' ELSE state END,
+                current_step = COALESCE(@step, current_step),
+                failure_code = CASE WHEN @ready THEN NULL ELSE failure_code END,
                 environment_id = @environment,
                 runtime_instance_id = @runtime,
                 receipt_links = @receipts,
@@ -5369,6 +5793,12 @@ internal sealed partial class CoordinationOwnerStore
         command.Parameters.AddWithValue("current_fence", NpgsqlDbType.Bigint, executionFence);
         command.Parameters.AddWithValue("version", NpgsqlDbType.Bigint, intent.RowVersion);
         command.Parameters.AddWithValue("bootstrap", NpgsqlDbType.Uuid, bootstrapOperationId);
+        command.Parameters.AddWithValue(
+            "consume", NpgsqlDbType.Uuid, (object?)consumeOperationId ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "exchange", NpgsqlDbType.Uuid, (object?)exchangeOperationId ?? DBNull.Value);
+        command.Parameters.AddWithValue("ready", NpgsqlDbType.Boolean, ready);
+        command.Parameters.AddWithValue("step", NpgsqlDbType.Varchar, (object?)currentStep ?? DBNull.Value);
         command.Parameters.AddWithValue("environment", NpgsqlDbType.Varchar, (object?)environmentId ?? DBNull.Value);
         command.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, (object?)runtimeInstanceId ?? DBNull.Value);
         command.Parameters.AddWithValue("receipts", NpgsqlDbType.Jsonb, receiptLinks);
@@ -5379,6 +5809,11 @@ internal sealed partial class CoordinationOwnerStore
         {
             ExecutionFence = executionFence,
             BootstrapOperationId = bootstrapOperationId,
+            ConsumeOperationId = consumeOperationId ?? intent.ConsumeOperationId,
+            ExchangeOperationId = exchangeOperationId ?? intent.ExchangeOperationId,
+            State = ready ? "ready" : intent.State,
+            CurrentStep = currentStep ?? intent.CurrentStep,
+            FailureCode = ready ? null : intent.FailureCode,
             EnvironmentId = environmentId,
             RuntimeInstanceId = runtimeInstanceId,
             ReceiptLinks = receiptLinks,
@@ -6067,7 +6502,7 @@ internal sealed partial class CoordinationOwnerStore
     /// <summary>
     /// Derives a stable opaque runtime turn identifier from the session, execution fence, and turn ordinal.
     /// </summary>
-    private static string CreateRuntimeTurnId(
+    internal static string CreateRuntimeTurnId(
         SessionIdentity identity,
         long executionFence,
         long logicalTurnOrdinal)

@@ -281,11 +281,32 @@ internal static class ChildCheckpointRecoveryManifestCodec
                 throw new JsonException();
             return manifest;
         }
+
         catch (JsonException exception)
         {
             throw new CoordinationException(
                 "checkpoint_recovery_manifest_invalid", StatusCodes.Status409Conflict, exception);
         }
+    }
+
+    internal static ChildRecoveryMember RequireMember(
+        ChildCheckpointRecoveryManifest manifest,
+        CheckpointRecoveryRegistrationMember binding)
+    {
+        var matches = manifest.Members.Where(member =>
+            member.AssociationId == binding.AssociationId &&
+            member.Session.SessionId == binding.SessionId).ToArray();
+        if (matches.Length != 1 || matches[0].Disposition != "pendingUnsent" ||
+            matches[0].AssociationHash != binding.AssociationSha256 ||
+            manifest.SourceExecutionFence != binding.SourceExecutionFence ||
+            manifest.SourceDecisionStateVersion != binding.SourceDecisionStateVersion ||
+            matches[0].Startup.RegistrationId is null ||
+            matches[0].Startup.RegistrationRevision is not > 0 ||
+            matches[0].Startup.RegistrationId != binding.PreviousRuntimeInstanceId ||
+            matches[0].Startup.RegistrationRevision != binding.PreviousRegistrationRevision)
+            throw new CoordinationException(
+                "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
+        return matches[0];
     }
 
     internal static string Hash<T>(T value) =>

@@ -1,10 +1,13 @@
 using System.Text.Json;
+using Agentweaver.Abstractions;
 using Npgsql;
 
 namespace Agentweaver.Orchestrator;
 
 internal static class CheckpointRecoveryHold
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
     internal static async Task<bool> IsHeldAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -56,7 +59,7 @@ internal static class CheckpointRecoveryHold
                     return true;
             }
             catch (Exception exception) when (exception is JsonException or InvalidOperationException or
-                                               KeyNotFoundException or FormatException)
+                                               KeyNotFoundException or FormatException or CoordinationException)
             {
                 return true;
             }
@@ -90,9 +93,11 @@ internal static class CheckpointRecoveryHold
                 dispatchHeld.ValueKind == JsonValueKind.True && dispatchHeld.GetBoolean();
             var statusHeld = recovery.TryGetProperty("dispatchHeld", out var storedHeld) &&
                 storedHeld.ValueKind == JsonValueKind.True && storedHeld.GetBoolean();
-            var hasManifest = progressRoot.TryGetProperty("childManifest", out var manifest) &&
+            var manifest = default(JsonElement);
+            var digest = default(JsonElement);
+            var hasManifest = progressRoot.TryGetProperty("childManifest", out manifest) &&
                 manifest.ValueKind == JsonValueKind.String &&
-                progressRoot.TryGetProperty("childManifestSha256", out var digest) &&
+                progressRoot.TryGetProperty("childManifestSha256", out digest) &&
                 digest.ValueKind == JsonValueKind.String &&
                 digest.GetString() is { Length: 64 } hash &&
                 hash.All(Uri.IsHexDigit) &&
@@ -101,13 +106,44 @@ internal static class CheckpointRecoveryHold
             if (!IsChildJoinBoundary(recovery, "boundaryKind") ||
                 progressBoundary.ValueKind != JsonValueKind.String ||
                 progressBoundary.GetString() != "childJoin" ||
-                progressFence != fence || !held || !statusHeld || !hasManifest)
+                progressFence != fence || !hasManifest)
                 return true;
-            // This version has no child-join continuation that can release the hold.
-            return true;
+
+            var operation = JsonSerializer.Deserialize<RunExecutionTransitionResult>(
+                resultRoot.GetRawText(), JsonOptions);
+            var childManifest = ChildCheckpointRecoveryManifestCodec.Decode(
+                manifest.GetString()!, digest.GetString()!);
+            if (operation is null ||
+                operation.OperationId != childManifest.OperationId ||
+                operation.Session != childManifest.Root ||
+                operation.ExecutionFence != childManifest.HoldFence ||
+                childManifest.HoldFence != fence ||
+                !string.Equals(
+                    recovery.GetProperty("childManifestSha256").GetString(),
+                    digest.GetString(),
+                    StringComparison.Ordinal))
+                return true;
+
+            var ready = operation.CheckpointRecovery is
+                {
+                    Phase: "ready",
+                    DispatchHeld: false,
+                    CurrentStep: "ready",
+                    ReasonCode: null
+                } &&
+                progressRoot.TryGetProperty("phase", out var progressPhase) &&
+                progressPhase.ValueKind == JsonValueKind.String &&
+                progressPhase.GetString() == "ready" &&
+                progressRoot.TryGetProperty("allMembersReady", out var allMembersReady) &&
+                allMembersReady.ValueKind == JsonValueKind.True &&
+                progressRoot.TryGetProperty("dispatchHeld", out var released) &&
+                released.ValueKind == JsonValueKind.False &&
+                recovery.TryGetProperty("dispatchHeld", out var statusReleased) &&
+                statusReleased.ValueKind == JsonValueKind.False;
+            return !ready || held || statusHeld;
         }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException or
-                                           KeyNotFoundException or FormatException)
+                                           KeyNotFoundException or FormatException or CoordinationException)
         {
             return true;
         }

@@ -1937,13 +1937,10 @@ public static partial class CoordinationEndpoints
                     context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
                 if (result.CheckpointRecovery is { Phase: "pending" })
                 {
-                    if (!CanContinueRootCheckpointRecovery(result.CheckpointRecovery))
-                    {
-                        if (result.CheckpointRecovery.BoundaryKind == "childJoin")
-                            return Results.Accepted(value: result);
+                    if (!CanContinueRootCheckpointRecovery(result.CheckpointRecovery) &&
+                        result.CheckpointRecovery.BoundaryKind != "childJoin")
                         throw new CoordinationException(
                             "checkpoint_recovery_boundary_unsupported", StatusCodes.Status409Conflict);
-                    }
 
                     var continuation = context.RequestServices.GetService<RuntimeRunStartContinuation>()
                         ?? throw new CoordinationException(
@@ -1976,8 +1973,20 @@ public static partial class CoordinationEndpoints
                         {
                             var current = await decisions.ReadCurrentAsync(
                                 actor, result.Session, selection, token).ConfigureAwait(false);
-                            RequireCheckpointRecoveryGate(
-                                current, recoveryStatus, result.ExecutionFence, actor.Subject);
+                            if (recoveryStatus.BoundaryKind == "childJoin")
+                            {
+                                var gate = current.State.PendingGate;
+                                if (current.StateVersion != recoveryStatus.DecisionStateVersion ||
+                                    current.State.Fence != result.ExecutionFence ||
+                                    current.SelectionHash != CoordinationOwnerStore.HashSelection(selection.Selection) ||
+                                    gate?.RequestId != recoveryStatus.GateRequestId ||
+                                    gate?.AuthorizedActorId != recoveryStatus.GateAuthorizedActorId)
+                                    throw new RuntimeAuthorizationException(
+                                        "checkpoint_recovery_boundary_stale");
+                            }
+                            else
+                                RequireCheckpointRecoveryGate(
+                                    current, recoveryStatus, result.ExecutionFence, actor.Subject);
                         }
                         result = await continuation.ContinueCheckpointRecoveryAsync(
                             context,

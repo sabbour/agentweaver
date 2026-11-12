@@ -10,6 +10,138 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 public sealed class ChildCheckpointRecoveryManifestTests
 {
     [Fact]
+    public void ChildRecoveryRegistrationAuthorizationRejectsWrongManifestMember()
+    {
+        var manifest = CreateManifest();
+        var member = Assert.Single(manifest.Members);
+        var binding = new CheckpointRecoveryRegistrationMember(
+            member.AssociationId,
+            member.Session.SessionId,
+            member.AssociationHash,
+            manifest.SourceExecutionFence,
+            manifest.SourceDecisionStateVersion,
+            member.Startup.RegistrationId!.Value,
+            member.Startup.RegistrationRevision!.Value);
+
+        Assert.Equal(member, ChildCheckpointRecoveryManifestCodec.RequireMember(manifest, binding));
+        Assert.Equal("checkpoint_recovery_registration_stale",
+            Assert.Throws<CoordinationException>(() =>
+                ChildCheckpointRecoveryManifestCodec.RequireMember(
+                    manifest, binding with { SessionId = "other-child" })).Code);
+        Assert.Equal("checkpoint_recovery_registration_stale",
+            Assert.Throws<CoordinationException>(() =>
+                ChildCheckpointRecoveryManifestCodec.RequireMember(
+                    manifest, binding with { AssociationSha256 = new string('0', 64) })).Code);
+        Assert.Equal("checkpoint_recovery_registration_stale",
+            Assert.Throws<CoordinationException>(() =>
+                ChildCheckpointRecoveryManifestCodec.RequireMember(
+                    manifest, binding with { PreviousRegistrationRevision = binding.PreviousRegistrationRevision + 1 }))
+                .Code);
+    }
+
+    [Fact]
+    public void ChildRecoveryRegistrationBarrierBlocksRootUntilEveryMemberIsRegistered()
+    {
+        var manifest = CreateManifest();
+        var first = Assert.Single(manifest.Members);
+        var second = first with
+        {
+            AssociationId = "work-2",
+            Session = first.Session with { SessionId = "child-2" }
+        };
+        var terminal = first with
+        {
+            AssociationId = "work-3",
+            Session = first.Session with { SessionId = "child-3" },
+            Disposition = "joined"
+        };
+        manifest = manifest with { Members = [first, second, terminal] };
+
+        Assert.Equal("checkpoint_recovery_registration_barrier",
+            Assert.Throws<CoordinationException>(() =>
+                CheckpointRecoveryMemberBarrier.RequireAllRegistered(
+                    manifest, rootRegistered: true, new HashSet<string>(StringComparer.Ordinal)))
+                .Code);
+        Assert.Equal("checkpoint_recovery_registration_barrier",
+            Assert.Throws<CoordinationException>(() =>
+                CheckpointRecoveryMemberBarrier.RequireAllRegistered(
+                    manifest, rootRegistered: true, new HashSet<string>(["work-1"], StringComparer.Ordinal)))
+                .Code);
+        CheckpointRecoveryMemberBarrier.RequireAllRegistered(
+            manifest, rootRegistered: true,
+            new HashSet<string>(["work-1", "work-2"], StringComparer.Ordinal));
+        Assert.Equal("checkpoint_recovery_registration_barrier",
+            Assert.Throws<CoordinationException>(() =>
+                CheckpointRecoveryMemberBarrier.RequireAllRegistered(
+                    manifest, rootRegistered: false,
+                    new HashSet<string>(["work-1", "work-2"], StringComparer.Ordinal)))
+                .Code);
+    }
+
+    [Fact]
+    public async Task ChildRecoveryContinuationWaitsForEveryRegistrationBeforeAnyBootstrap()
+    {
+        var first = Assert.Single(CreateManifest().Members);
+        var manifest = CreateManifest() with
+        {
+            Members =
+            [
+                first,
+                first with
+                {
+                    AssociationId = "work-2",
+                    Session = first.Session with { SessionId = "child-2" }
+                }
+            ]
+        };
+        var lastRegistrationStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishLastRegistration = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var rootBootstrapRequests = 0;
+        var childBootstrapRequests = 0;
+        var continuation = RuntimeRunStartContinuation.RegisterCheckpointRecoveryMembersBeforeRootBootstrapAsync(
+            manifest,
+            rootRegistered: true,
+            async (member, _) =>
+            {
+                if (member.Session.SessionId == "child-2")
+                {
+                    lastRegistrationStarted.SetResult();
+                    await finishLastRegistration.Task;
+                }
+                return true;
+            },
+            _ =>
+            {
+                rootBootstrapRequests++;
+                childBootstrapRequests += 2;
+                return Task.CompletedTask;
+            },
+            CancellationToken.None);
+
+        await lastRegistrationStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, rootBootstrapRequests);
+        Assert.Equal(0, childBootstrapRequests);
+        finishLastRegistration.SetResult();
+
+        Assert.True(await continuation.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(1, rootBootstrapRequests);
+        Assert.Equal(2, childBootstrapRequests);
+    }
+
+    [Fact]
+    public void ChildRecoveryRegistrationBarrierAllowsTerminalMembersWithoutReplacementRegistrations()
+    {
+        var manifest = CreateManifest();
+        var terminal = Assert.Single(manifest.Members) with { Disposition = "joined" };
+        manifest = manifest with { Members = [terminal] };
+
+        CheckpointRecoveryMemberBarrier.RequireAllRegistered(
+            manifest, rootRegistered: true, new HashSet<string>(StringComparer.Ordinal));
+    }
+
+    [Fact]
     public void ManifestRoundTripsDeterministicallyAndRejectsChangedBytes()
     {
         var manifest = CreateManifest();
@@ -162,7 +294,7 @@ public sealed class ChildCheckpointRecoveryManifestTests
             receipt, native with { TerminalOutcome = "uncertain" }, binding, selection, workItemHash));
     }
 
-    private static ChildCheckpointRecoveryManifest CreateManifest()
+    internal static ChildCheckpointRecoveryManifest CreateManifest()
     {
         var session = new ChildRecoverySession(
             "child-1", "root", "root", false, "issuer", "actor", 1,

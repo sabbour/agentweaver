@@ -302,11 +302,18 @@ internal sealed class RuntimeRegistrationOwner(
         string sessionId,
         CancellationToken cancellationToken)
     {
+        var previousRuntimeInstanceId = authorization.Member?.PreviousRuntimeInstanceId
+            ?? authorization.Status.PreviousRuntimeInstanceId;
+        var previousRegistrationRevision = authorization.Member?.PreviousRegistrationRevision
+            ?? authorization.Status.PreviousRegistrationRevision;
+        if (previousRuntimeInstanceId == Guid.Empty || previousRegistrationRevision < 1 ||
+            authorization.Member is { } member && member.SessionId != sessionId)
+            throw new RuntimeAuthorizationException("checkpoint_recovery_registration_stale");
         var current = await registrations.ReadAsync(
-            authorization.Status.PreviousRuntimeInstanceId, cancellationToken).ConfigureAwait(false)
+            previousRuntimeInstanceId, cancellationToken).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_registration_unknown");
         var released = RestoreReleasedRegistrationForRecovery(
-            current, authorization.Status.PreviousRegistrationRevision);
+            current, previousRegistrationRevision);
         return await ReplaceAfterResumeFenceAsync(
             context,
             released,
@@ -317,6 +324,34 @@ internal sealed class RuntimeRegistrationOwner(
             new(released.Binding.EnvironmentId, released.Binding.ProfileId),
             cancellationToken,
             authorization).ConfigureAwait(false);
+    }
+
+    internal async Task<RuntimeRegistration> ReadSavedRegistrationForCheckpointRecoveryAsync(
+        CoordinationActor actor,
+        string projectId,
+        string runId,
+        string sessionId,
+        Guid operationId,
+        Guid runtimeInstanceId,
+        CancellationToken cancellationToken)
+    {
+        var authorization = await sessions.ReadCheckpointRecoveryRegistrationAuthorizationAsync(
+            actor, projectId, runId, sessionId, operationId, cancellationToken).ConfigureAwait(false);
+        if (authorization.Member is not { } member ||
+            member.SessionId != sessionId ||
+            member.PreviousRuntimeInstanceId != runtimeInstanceId)
+            throw new RuntimeAuthorizationException("checkpoint_recovery_registration_stale");
+        var registration = await registrations.ReadAsync(runtimeInstanceId, cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_registration_unknown");
+        if (registration.State != RuntimeRegistrationState.Active ||
+            registration.Revision != member.PreviousRegistrationRevision ||
+            registration.Binding.ProjectId != projectId ||
+            registration.Binding.RunId != runId ||
+            registration.Binding.SessionId != sessionId ||
+            registration.Binding.ExecutionFence != member.SourceExecutionFence)
+            throw new RuntimeAuthorizationException("checkpoint_recovery_registration_stale");
+        return registration;
     }
 
     internal static RuntimeRegistration RestoreReleasedRegistrationForRecovery(
@@ -408,10 +443,9 @@ internal sealed class RuntimeRegistrationOwner(
             ?? throw new RuntimeAuthorizationException("runtime_registration_unknown");
         var binding = current.Binding;
         var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
-        var identity = new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId);
-        var status = await sessions.ReadCheckpointRecoveryStatusAsync(
-            actor, identity, operationId, cancellationToken).ConfigureAwait(false);
-        var authorization = new CheckpointRecoveryRegistrationAuthorization(operationId, status);
+        var authorization = await sessions.ReadCheckpointRecoveryRegistrationAuthorizationAsync(
+            actor, binding.ProjectId, binding.RunId, binding.SessionId, operationId, cancellationToken)
+            .ConfigureAwait(false);
         return await ExecuteCurrentAsync(
             context, runtimeInstanceId, action, cancellationToken, authorization).ConfigureAwait(false);
     }
