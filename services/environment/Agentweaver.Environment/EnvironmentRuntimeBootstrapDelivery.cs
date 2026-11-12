@@ -43,11 +43,14 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
                 throw new RuntimeAuthorizationException("runtime_resume_configuration_caller_input_denied");
             await RequireCurrentResumeBootstrapAsync(resume, actor, cancellationToken).ConfigureAwait(false);
         }
-        var registration = await ReadCurrentAsync(request.Registration.RuntimeInstanceId, actor, cancellationToken)
+        var registration = await ReadCurrentAsync(
+            request.Registration.RuntimeInstanceId, actor, cancellationToken,
+            request.CheckpointRecoveryOperationId)
             .ConfigureAwait(false);
         if (registration != request.Registration)
             throw new RuntimeAuthorizationException("runtime_registration_stale");
-        var placement = await ReadPlacementAsync(registration, actor, cancellationToken).ConfigureAwait(false);
+        var placement = await ReadPlacementAsync(
+            registration, actor, cancellationToken, request.CheckpointRecoveryOperationId).ConfigureAwait(false);
         if (request.McpServer is { IsValid: false } ||
             request.McpServer is not null && request.McpServer != placement.McpServer)
             throw new RuntimeAuthorizationException("runtime_mcp_server_binding_invalid");
@@ -60,8 +63,10 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
             placement,
             endpoint.AbsolutePath + "/activate", actor,
             request with { McpServer = placement.McpServer }, cancellationToken).ConfigureAwait(false);
-        var currentPlacement = await ReadPlacementAsync(registration, actor, cancellationToken).ConfigureAwait(false);
-        var current = await ReadCurrentAsync(registration.RuntimeInstanceId, actor, cancellationToken)
+        var currentPlacement = await ReadPlacementAsync(
+            registration, actor, cancellationToken, request.CheckpointRecoveryOperationId).ConfigureAwait(false);
+        var current = await ReadCurrentAsync(
+            registration.RuntimeInstanceId, actor, cancellationToken, request.CheckpointRecoveryOperationId)
             .ConfigureAwait(false);
         if (current != registration || placement != currentPlacement ||
             receipt.ContractVersion != 1 || receipt.RuntimeInstanceId != registration.RuntimeInstanceId ||
@@ -97,7 +102,8 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
         RuntimeContractValidation.ValidateHash(request.CredentialValue);
         if (request.OperationId == Guid.Empty || request.GrantId == Guid.Empty)
             throw new RuntimeAuthorizationException("runtime_delivery_invalid");
-        var registration = await ReadCurrentAsync(request.RuntimeInstanceId, actor, cancellationToken)
+        var registration = await ReadCurrentAsync(
+            request.RuntimeInstanceId, actor, cancellationToken, request.CheckpointRecoveryOperationId)
             .ConfigureAwait(false);
         using var lifetime = new CredentialLifetime(
             new SecretCredential(request.CredentialValue, request.CredentialExpiresAt, timeProvider));
@@ -107,18 +113,24 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
         var verifier = new RuntimePendingBootstrapHttpClient(client, options.BrokerOwnerAddress, actor);
         RequireGrant(await verifier.VerifyPendingBootstrapDeliveryAsync(
             proof, request.OperationId, cancellationToken).ConfigureAwait(false), registration);
-        var placement = await ReadPlacementAsync(registration, actor, cancellationToken).ConfigureAwait(false);
-        var before = await ReadCurrentAsync(request.RuntimeInstanceId, actor, cancellationToken).ConfigureAwait(false);
+        var placement = await ReadPlacementAsync(
+            registration, actor, cancellationToken, request.CheckpointRecoveryOperationId).ConfigureAwait(false);
+        var before = await ReadCurrentAsync(
+            request.RuntimeInstanceId, actor, cancellationToken, request.CheckpointRecoveryOperationId)
+            .ConfigureAwait(false);
         if (before != registration)
             throw new RuntimeAuthorizationException("runtime_registration_stale");
         var endpoint = placement.ConfigureEndpoint;
         var receipt = await SendToHostAsync<RuntimeBootstrapDeliveryReceipt>(
             placement,
             endpoint.AbsolutePath, actor, request, cancellationToken).ConfigureAwait(false);
-        var currentPlacement = await ReadPlacementAsync(registration, actor, cancellationToken).ConfigureAwait(false);
+        var currentPlacement = await ReadPlacementAsync(
+            registration, actor, cancellationToken, request.CheckpointRecoveryOperationId).ConfigureAwait(false);
         RequireGrant(await verifier.VerifyPendingBootstrapDeliveryAsync(
             proof, request.OperationId, cancellationToken).ConfigureAwait(false), registration);
-        var after = await ReadCurrentAsync(request.RuntimeInstanceId, actor, cancellationToken).ConfigureAwait(false);
+        var after = await ReadCurrentAsync(
+            request.RuntimeInstanceId, actor, cancellationToken, request.CheckpointRecoveryOperationId)
+            .ConfigureAwait(false);
         if (after != registration || currentPlacement != placement || !lifetime.Credential.IsUsable())
             throw new RuntimeAuthorizationException("runtime_delivery_stale");
         var binding = registration.Binding;
@@ -138,9 +150,13 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
 
     /// <summary>Reads an active, unexpired registration and requires its actor credential to remain usable.</summary>
     private async Task<RuntimeRegistration> ReadCurrentAsync(
-        Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken token)
+        Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken token,
+        Guid? checkpointRecoveryOperationId = null)
     {
-        var registration = await _owner.ReadCurrentAsync(runtimeInstanceId, actor, token).ConfigureAwait(false);
+        var registration = checkpointRecoveryOperationId is { } operationId
+            ? await _owner.ReadCurrentForCheckpointRecoveryAsync(
+                runtimeInstanceId, operationId, actor, token).ConfigureAwait(false)
+            : await _owner.ReadCurrentAsync(runtimeInstanceId, actor, token).ConfigureAwait(false);
         if (registration.State != RuntimeRegistrationState.Active ||
             registration.ExpiresAt <= timeProvider.GetUtcNow() || !actor.Bearer.IsUsable())
             throw new RuntimeAuthorizationException("runtime_registration_unavailable");
@@ -149,12 +165,13 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
 
     /// <summary>Resolves and compares all current placement, lease, profile, image, and endpoint bindings.</summary>
     private async Task<EnvironmentRuntimeBootstrapContext> ReadPlacementAsync(
-        RuntimeRegistration registration, RuntimeActorAuthorization actor, CancellationToken token)
+        RuntimeRegistration registration, RuntimeActorAuthorization actor, CancellationToken token,
+        Guid? checkpointRecoveryOperationId = null)
     {
         var binding = registration.Binding;
         var placement = await placements.GetBootstrapContextAsync(
             actor, binding.ProjectId, binding.RunId, binding.SessionId, binding.EnvironmentId, binding.ProfileId,
-            profiles, token, profileReplacements).ConfigureAwait(false)
+            profiles, token, profileReplacements, checkpointRecoveryOperationId).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_delivery_unavailable");
         if (placement.TenantId != binding.TenantId || placement.ProjectId != binding.ProjectId ||
             placement.RunId != binding.RunId || placement.EnvironmentId != binding.EnvironmentId ||

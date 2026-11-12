@@ -1804,15 +1804,17 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         var intent = new RuntimeRunStartIntent(
             _selection.Authorization.TenantId, _root.ProjectId, _root.RunId, _root.SessionId,
             selectionHash, status.PreviousExecutionFence, Guid.NewGuid(), Guid.NewGuid(),
-            Guid.NewGuid(), Guid.NewGuid(), "pending", "accepted", null, null, null, "{}", false, 1);
+            Guid.NewGuid(), Guid.NewGuid(), "ready", "ready", null, "old-environment",
+            status.PreviousRuntimeInstanceId, "{}", false, 1);
         await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
         await using (var insertIntent = new NpgsqlCommand($"""
             INSERT INTO "{_schema}".runtime_run_start_intents
                 (tenant_id, project_id, run_id, root_session_id, accepted_selection_hash,
                  execution_fence, intent_id, bootstrap_operation_id, consume_operation_id,
-                 exchange_operation_id)
+                 exchange_operation_id, state, current_step, environment_id, runtime_instance_id,
+                 receipt_links)
             VALUES (@tenant, @project, @run, @root, @selection, @fence, @intent,
-                    @bootstrap, @consume, @exchange)
+                    @bootstrap, @consume, @exchange, 'ready', 'ready', @environment, @runtime, '{}'::jsonb)
             """, connection))
         {
             insertIntent.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, intent.TenantId);
@@ -1825,7 +1827,30 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             insertIntent.Parameters.AddWithValue("bootstrap", NpgsqlDbType.Uuid, intent.BootstrapOperationId);
             insertIntent.Parameters.AddWithValue("consume", NpgsqlDbType.Uuid, intent.ConsumeOperationId);
             insertIntent.Parameters.AddWithValue("exchange", NpgsqlDbType.Uuid, intent.ExchangeOperationId);
+            insertIntent.Parameters.AddWithValue("environment", NpgsqlDbType.Varchar, intent.EnvironmentId!);
+            insertIntent.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, intent.RuntimeInstanceId!.Value);
             Assert.Equal(1, await insertIntent.ExecuteNonQueryAsync());
+        }
+
+        var cleanupBootstrapId = Guid.NewGuid();
+        var cleanupLinks = """{"placement":{"environmentId":"replacement-environment"},"checkpointRecoveryPreviousPlacement":{"environmentId":"old-environment"}}""";
+        intent = await _store.PersistCheckpointRecoveryCleanupEvidenceAsync(
+            intent, cleanupLinks, status.ExecutionFence, cleanupBootstrapId,
+            "replacement-environment", null, CancellationToken.None);
+        Assert.Equal(cleanupBootstrapId, intent.BootstrapOperationId);
+        Assert.Equal(status.ExecutionFence, intent.ExecutionFence);
+        Assert.Equal(2, intent.RowVersion);
+        Assert.Contains("checkpointRecoveryPreviousPlacement", intent.ReceiptLinks);
+        var partialCleanupIntent = await new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema)
+            .ReadIntentForStatusAsync(_root.ProjectId, _root.RunId, _root.SessionId, CancellationToken.None);
+        Assert.NotNull(partialCleanupIntent);
+        Assert.Equal(cleanupBootstrapId, partialCleanupIntent.BootstrapOperationId);
+        Assert.Equal(status.ExecutionFence, partialCleanupIntent.ExecutionFence);
+        Assert.Equal("replacement-environment", partialCleanupIntent.EnvironmentId);
+        using (var links = JsonDocument.Parse(partialCleanupIntent.ReceiptLinks))
+        {
+            Assert.True(links.RootElement.TryGetProperty("placement", out _));
+            Assert.True(links.RootElement.TryGetProperty("checkpointRecoveryPreviousPlacement", out _));
         }
 
         var placement = status with { CurrentStep = "placement" };
@@ -1846,8 +1871,13 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         Assert.Equal(placement, runStatus.CheckpointRecovery);
         Assert.Equal(placement, sessionStatus.CheckpointRecovery);
 
+        var bootstrapping = placement with { CurrentStep = "bootstrap" };
+        var progressed = await restarted.UpdateCheckpointRecoveryProgressAsync(
+            _actor, _root, operationId, bootstrapping, CancellationToken.None);
+        Assert.Equal(bootstrapping, progressed.CheckpointRecovery);
+
         var runtimeInstanceId = Guid.NewGuid();
-        var ready = placement with
+        var ready = bootstrapping with
         {
             CurrentStep = "ready",
             Phase = "ready",
@@ -1871,6 +1901,8 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         var completed = await restarted.UpdateCheckpointRecoveryProgressAsync(
             _actor, _root, operationId, ready, CancellationToken.None, readyIntent);
         Assert.Equal(ready, completed.CheckpointRecovery);
+        Assert.Equal(ready, await restarted.ReadCheckpointRecoveryStatusAsync(
+            _actor, _root, operationId, CancellationToken.None));
         var persistedIntent = await new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema)
             .ReadIntentForStatusAsync(_root.ProjectId, _root.RunId, _root.SessionId, CancellationToken.None);
         Assert.NotNull(persistedIntent);
@@ -1888,7 +1920,7 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             """, verifyConnection);
         verify.Parameters.AddWithValue(
             "key", NpgsqlDbType.Text,
-            $"checkpoint-recovery:{operationId}:pending:placement");
+            $"checkpoint-recovery:{operationId:D}:0");
         await using var eventReader = await verify.ExecuteReaderAsync();
         Assert.True(await eventReader.ReadAsync());
         Assert.Equal("orchestrator.run.checkpoint_recovery_progress", eventReader.GetString(0));
@@ -1896,6 +1928,19 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         Assert.Equal("placement", payload.RootElement.GetProperty("status")
             .GetProperty("currentStep").GetString());
         Assert.False(await eventReader.ReadAsync());
+
+        await using var verifyProgressConnection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var verifyProgress = new NpgsqlCommand($"""
+            SELECT COUNT(DISTINCT id), COUNT(DISTINCT idempotency_key)
+            FROM "{_schema}".outbox_events
+            WHERE idempotency_key LIKE @prefix
+            """, verifyProgressConnection);
+        verifyProgress.Parameters.AddWithValue(
+            "prefix", NpgsqlDbType.Text, $"checkpoint-recovery:{operationId:D}:%");
+        await using var progressReader = await verifyProgress.ExecuteReaderAsync();
+        Assert.True(await progressReader.ReadAsync());
+        Assert.Equal(3L, progressReader.GetInt64(0));
+        Assert.Equal(3L, progressReader.GetInt64(1));
     }
 
     [Fact]

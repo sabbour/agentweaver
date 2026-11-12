@@ -17,7 +17,10 @@ public sealed class RuntimePendingBootstrapHttpClient(
         var input = new PendingBootstrapVerificationRequest(
             proof.GrantId, proof.RuntimeInstanceId, proof.Revision, proof.Audience,
             proof.ConfigurationHash, proof.Credential.GetValue(), proof.Credential.ExpiresAt,
-            deliveryOperationId);
+            deliveryOperationId)
+        {
+            CheckpointRecoveryOperationId = proof.CheckpointRecoveryOperationId
+        };
         var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeGrantReceipt>(
             client, _brokerAddress, "/internal/runtime/bootstrap/verify-pending", actor, input,
             cancellationToken).ConfigureAwait(false);

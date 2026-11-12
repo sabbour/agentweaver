@@ -71,7 +71,8 @@ public sealed class RuntimeBrokerCredentialClient(
     /// grant and actor expiry, and verifies the grant before returning the in-memory secret.
     /// </summary>
     public async Task<RuntimeModelCredential> RedeemModelCredentialAsync(
-        RuntimeRegistration registration, Guid operationId, CancellationToken cancellationToken)
+        RuntimeRegistration registration, Guid operationId, CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null)
     {
         ArgumentNullException.ThrowIfNull(registration);
         var binding = registration.Binding;
@@ -88,13 +89,17 @@ public sealed class RuntimeBrokerCredentialClient(
 
         var grant = await RuntimeOwnerHttpTransport.SendAsync<RuntimeModelCredentialGrantReceipt>(
             client, _brokerAddress, "/internal/runtime/model-session/grant", actor,
-            new RuntimeModelCredentialGrantRequest(registration.RuntimeInstanceId, operationId),
+            new RuntimeModelCredentialGrantRequest(registration.RuntimeInstanceId, operationId)
+            {
+                CheckpointRecoveryOperationId = checkpointRecoveryOperationId
+            },
             cancellationToken);
         if (string.IsNullOrWhiteSpace(grant.GrantId) || grant.Revision <= 0 ||
             grant.RuntimeInstanceId != registration.RuntimeInstanceId ||
             grant.RegistrationRevision != registration.Revision ||
             grant.ModelSelectionReference != binding.ModelSelectionReference ||
             grant.SourceMode != binding.ModelSourceMode ||
+            grant.CheckpointRecoveryOperationId != checkpointRecoveryOperationId ||
             grant.CredentialReference is null ||
             binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
                 (grant.ConnectionId != binding.ModelConnectionId || grant.ConnectionRevision is not > 0 ||
@@ -206,8 +211,12 @@ public sealed class RuntimeBrokerCredentialClient(
     }
 
     private static RuntimeCredentialHttpRequest Input(RuntimeCredentialProof proof, Guid operationId) =>
-        new(proof.GrantId, proof.RuntimeInstanceId, proof.Revision, proof.Purpose, proof.Audience,
-            proof.ConfigurationHash, proof.Credential.GetValue(), proof.Credential.ExpiresAt, operationId);
+        new RuntimeCredentialHttpRequest(
+            proof.GrantId, proof.RuntimeInstanceId, proof.Revision, proof.Purpose, proof.Audience,
+            proof.ConfigurationHash, proof.Credential.GetValue(), proof.Credential.ExpiresAt, operationId)
+        {
+            CheckpointRecoveryOperationId = proof.CheckpointRecoveryOperationId
+        };
 
     private static void RequirePurpose(RuntimeCredentialProof proof, RuntimeCredentialPurpose purpose)
     {

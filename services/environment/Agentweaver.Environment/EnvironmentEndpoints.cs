@@ -328,11 +328,18 @@ public static class EnvironmentEndpoints
                 [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimeBootstrapProfileRegistry profiles,
                 [Microsoft.AspNetCore.Mvc.FromServices] IEnvironmentRuntimeBootstrapProfileReplacementStore profileReplacements,
                 [Microsoft.AspNetCore.Mvc.FromServices] TimeProvider timeProvider,
+                Guid? checkpointRecoveryOperationId,
                 CancellationToken cancellationToken) =>
             {
                 context.Response.Headers.CacheControl = "no-store";
                 if (!TryReadCaller(context, out var caller))
                     return Results.Unauthorized();
+                var recoveryQuery = context.Request.Query["checkpointRecoveryOperationId"];
+                if (recoveryQuery.Count > 1 ||
+                    recoveryQuery.Count == 1 &&
+                    (!Guid.TryParse(recoveryQuery[0], out var recoveryId) || recoveryId == Guid.Empty ||
+                     checkpointRecoveryOperationId != recoveryId || suffix is not ("" or "/readiness")))
+                    return Results.BadRequest(new { code = "checkpoint_recovery_registration_stale" });
                 var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
                 if (!authentication.Succeeded || authentication.Properties?.ExpiresUtc is not { } expiresAt ||
                     expiresAt <= timeProvider.GetUtcNow())
@@ -361,13 +368,13 @@ public static class EnvironmentEndpoints
                     {
                         var observed = await reader.GetReadinessContextAsync(
                             actor, projectId, runId, sessionId, environmentId, profileId, profiles, cancellationToken,
-                            profileReplacements)
+                            profileReplacements, checkpointRecoveryOperationId)
                             .ConfigureAwait(false);
                         return observed is null ? Results.NotFound() : Results.Ok(observed);
                     }
                     var bootstrap = await reader.GetBootstrapContextAsync(
                         actor, projectId, runId, sessionId, environmentId, profileId, profiles, cancellationToken,
-                        profileReplacements)
+                        profileReplacements, checkpointRecoveryOperationId)
                         .ConfigureAwait(false);
                     return bootstrap is null ? Results.NotFound() : Results.Ok(bootstrap);
                 }

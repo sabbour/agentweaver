@@ -36,6 +36,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
     private readonly Func<RuntimeRegistration, CancellationToken, Task>? _requireReadiness;
     private readonly Func<CancellationToken, Task>? _requireSkillContent;
     private readonly RuntimeHostReplacementRecovery? _replacementRecovery;
+    private readonly Guid? _checkpointRecoveryOperationId;
     private readonly SemaphoreSlim _executionGate = new(1, 1);
     private readonly SemaphoreSlim _authorityGate = new(1, 1);
     private RuntimeSessionRefreshReceipt? _refreshReplay;
@@ -56,7 +57,8 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         RuntimeActionHttpClient? actions = null,
         Func<RuntimeRegistration, CancellationToken, Task>? requireReadiness = null,
         Func<CancellationToken, Task>? requireSkillContent = null,
-        RuntimeHostReplacementRecovery? replacementRecovery = null)
+        RuntimeHostReplacementRecovery? replacementRecovery = null,
+        Guid? checkpointRecoveryOperationId = null)
     {
         Registration = registration;
         _source = new(sourceGrant, sourceCredential, isReplay: false);
@@ -71,6 +73,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         _requireReadiness = requireReadiness;
         _requireSkillContent = requireSkillContent;
         _replacementRecovery = replacementRecovery?.ValidateFor(registration);
+        _checkpointRecoveryOperationId = checkpointRecoveryOperationId;
     }
 
     /// <summary>The immutable runtime registration pinned when the session was configured.</summary>
@@ -680,8 +683,11 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             throw new RuntimeAuthorizationException("runtime_credential_unavailable");
         if (_requireReadiness is not null)
             await _requireReadiness(Registration, cancellationToken).ConfigureAwait(false);
-        var current = await _owner.ReadCurrentAsync(
-            Registration.RuntimeInstanceId, _actor, cancellationToken).ConfigureAwait(false);
+        var current = _checkpointRecoveryOperationId is { } operationId
+            ? await _owner.ReadCurrentForCheckpointRecoveryAsync(
+                Registration.RuntimeInstanceId, operationId, _actor, cancellationToken).ConfigureAwait(false)
+            : await _owner.ReadCurrentAsync(
+                Registration.RuntimeInstanceId, _actor, cancellationToken).ConfigureAwait(false);
         RuntimeSessionBootstrap.RequireCurrent(current, _actor, _timeProvider);
         if (current != Registration || !Proof().Credential.IsUsable() || !_modelCredential.IsUsable() ||
             Volatile.Read(ref _disposed) != 0)
@@ -794,7 +800,10 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         var source = Volatile.Read(ref _source);
         return new(source.Receipt.GrantId, source.Receipt.RuntimeInstanceId, source.Receipt.Revision,
             RuntimeCredentialPurpose.Observe, source.Receipt.Audience, source.Receipt.ConfigurationHash,
-            source.Credential ?? throw new RuntimeAuthorizationException("runtime_source_credential_unavailable"));
+            source.Credential ?? throw new RuntimeAuthorizationException("runtime_source_credential_unavailable"))
+        {
+            CheckpointRecoveryOperationId = _checkpointRecoveryOperationId
+        };
     }
 
     /// <summary>Captures the SDK filesystem and persists its cache material with authority checks.</summary>

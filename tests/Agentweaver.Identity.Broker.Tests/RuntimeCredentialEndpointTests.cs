@@ -616,7 +616,8 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
 
         public async Task<RuntimeBootstrapDeliveryReceipt> DeliverAsync(
             RuntimeRegistration registration, RuntimeActorAuthorization actor, Guid operationId,
-            Guid grantId, string configurationHash, SecretCredential credential, CancellationToken cancellationToken)
+            Guid grantId, string configurationHash, SecretCredential credential,
+            CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Credential = new SecretCredential(credential.GetValue(), credential.ExpiresAt);

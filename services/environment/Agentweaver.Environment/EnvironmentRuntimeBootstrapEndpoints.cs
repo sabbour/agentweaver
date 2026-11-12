@@ -122,13 +122,20 @@ public static class EnvironmentRuntimeBootstrapEndpoints
                 [Microsoft.AspNetCore.Mvc.FromServices] IEnvironmentRuntimeBootstrapProfileReplacementStore replacements,
                 [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimeEndpointVerifier endpointVerifier,
                 TimeProvider timeProvider,
+                Guid? checkpointRecoveryOperationId,
                 CancellationToken token) =>
                 await ExecuteAsync(context, timeProvider, actor =>
                 {
                     request.Validate();
+                    var recoveryQuery = context.Request.Query["checkpointRecoveryOperationId"];
+                    if (recoveryQuery.Count > 1 ||
+                        recoveryQuery.Count == 1 &&
+                        (!Guid.TryParse(recoveryQuery[0], out var recoveryId) || recoveryId == Guid.Empty ||
+                         checkpointRecoveryOperationId != recoveryId))
+                        throw new RuntimeAuthorizationException("checkpoint_recovery_registration_stale");
                     return placements.ResolveCurrentProfileAsync(
                         actor, projectId, runId, sessionId, environmentId, profileId,
-                        profiles, replacements, endpointVerifier, token);
+                        profiles, replacements, endpointVerifier, token, checkpointRecoveryOperationId);
                 }, token, "runtime_bootstrap_profile_invalid").ConfigureAwait(false))
             .RequireAuthorization();
         endpoints.MapPost("/internal/runtime/bootstrap/deliver", async (

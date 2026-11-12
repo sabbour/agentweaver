@@ -83,6 +83,14 @@ public static class RuntimeRegistrationEndpoints
                 await ExecuteAsync(context, () => owner.ReadCurrentAsync(
                     context, runtimeInstanceId, cancellationToken)).ConfigureAwait(false))
             .RequireAuthorization();
+        endpoints.MapGet(
+            "/internal/runtime/registrations/{runtimeInstanceId:guid}/checkpoint-recovery/{operationId:guid}",
+            async (Guid runtimeInstanceId, Guid operationId, HttpContext context,
+                [Microsoft.AspNetCore.Mvc.FromServices] RuntimeRegistrationOwner owner,
+                CancellationToken cancellationToken) =>
+                await ExecuteAsync(context, () => owner.ReadCurrentForCheckpointRecoveryAsync(
+                    context, runtimeInstanceId, operationId, cancellationToken)).ConfigureAwait(false))
+            .RequireAuthorization();
         endpoints.MapGet("/internal/runtime/registrations/{runtimeInstanceId:guid}/skills",
             async (Guid runtimeInstanceId, HttpContext context,
                 [Microsoft.AspNetCore.Mvc.FromServices] RuntimeSkillContentOwner owner,

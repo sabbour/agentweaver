@@ -83,6 +83,7 @@ public sealed class RuntimeOwnerHttpTransportTests
         var grant = Guid.NewGuid();
         var runtime = Guid.NewGuid();
         var operation = Guid.NewGuid();
+        var recoveryOperation = Guid.NewGuid();
         var nonce = new string('a', 64);
         var actor = new RuntimeActorAuthorization(
             new SecretCredential("protected-actor-token", expires), "tenant");
@@ -101,6 +102,7 @@ public sealed class RuntimeOwnerHttpTransportTests
             Assert.NotNull(body);
             Assert.Equal(nonce, body.CredentialValue);
             Assert.Equal(operation, body.DeliveryOperationId);
+            Assert.Equal(recoveryOperation, body.CheckpointRecoveryOperationId);
             Assert.DoesNotContain(nonce, body.ToString());
             var json = await content.ReadAsStringAsync();
             Assert.DoesNotContain("protected-actor-token", json);
@@ -111,7 +113,10 @@ public sealed class RuntimeOwnerHttpTransportTests
         var verifier = new RuntimePendingBootstrapHttpClient(client, new Uri("https://broker.test/"), actor);
         Assert.Equal(receipt, await verifier.VerifyPendingBootstrapDeliveryAsync(
             new RuntimeCredentialProof(grant, runtime, 1, RuntimeCredentialPurpose.Configure,
-                audience, receipt.ConfigurationHash, new SecretCredential(nonce, expires)),
+                audience, receipt.ConfigurationHash, new SecretCredential(nonce, expires))
+            {
+                CheckpointRecoveryOperationId = recoveryOperation
+            },
             operation, default));
         Assert.Single(handler.Requests);
     }
@@ -271,9 +276,17 @@ public sealed class RuntimeOwnerHttpTransportTests
         });
         using var client = new HttpClient(handler);
         var owner = new RuntimeRegistrationHttpClient(client, new Uri("https://orchestrator.test/"));
+        var actor = new RuntimeActorAuthorization(
+            new SecretCredential("actor", DateTimeOffset.UtcNow.AddMinutes(2)), "tenant");
         Assert.Equal(registration, await owner.ReadCurrentAsync(registration.RuntimeInstanceId,
-            new RuntimeActorAuthorization(new SecretCredential("actor", DateTimeOffset.UtcNow.AddMinutes(2)), "tenant"),
-            default));
+            actor, default));
+        var recoveryOperationId = Guid.NewGuid();
+        Assert.Equal(registration, await owner.ReadCurrentForCheckpointRecoveryAsync(
+            registration.RuntimeInstanceId, recoveryOperationId, actor, default));
+        Assert.Equal(
+            $"https://orchestrator.test/internal/runtime/registrations/{registration.RuntimeInstanceId:D}" +
+            $"/checkpoint-recovery/{recoveryOperationId:D}",
+            handler.Requests[1].AbsoluteUri);
     }
 
     private static HttpResponseMessage Response<T>(HttpRequestMessage request, T body) => new(HttpStatusCode.OK)

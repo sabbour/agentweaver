@@ -58,7 +58,10 @@ public sealed class RuntimeBootstrapReceiver(
                 System.Text.Encoding.UTF8.GetBytes(credential.GetValue()));
             var proof = new RuntimeCredentialProof(
                 request.GrantId, request.RuntimeInstanceId, 1, RuntimeCredentialPurpose.Configure,
-                registration.Binding.ConfigureEndpoint, request.ConfigurationHash, credential);
+                registration.Binding.ConfigureEndpoint, request.ConfigurationHash, credential)
+            {
+                CheckpointRecoveryOperationId = request.CheckpointRecoveryOperationId
+            };
             var verifier = new RuntimePendingBootstrapHttpClient(broker, brokerAddress, actor);
             await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
@@ -67,7 +70,9 @@ public sealed class RuntimeBootstrapReceiver(
                 {
                     if (!MatchesDelivery(replay, request, credentialHash))
                         throw new RuntimeAuthorizationException("runtime_delivery_conflict");
-                    await RequireCurrentAsync(actor, credential, cancellationToken).ConfigureAwait(false);
+                    await RequireCurrentAsync(
+                        actor, credential, cancellationToken, request.CheckpointRecoveryOperationId)
+                        .ConfigureAwait(false);
                     if (State == RuntimeBootstrapReceiverState.Pending && _pending is { } pendingReplay)
                     {
                         if (!pendingReplay.Proof.Credential.IsUsable())
@@ -87,7 +92,9 @@ public sealed class RuntimeBootstrapReceiver(
                     throw new RuntimeAuthorizationException("runtime_receiver_unavailable");
                 RequireGrant(await verifier.VerifyPendingBootstrapDeliveryAsync(
                     proof, request.OperationId, cancellationToken).ConfigureAwait(false));
-                await RequireCurrentAsync(actor, credential, cancellationToken).ConfigureAwait(false);
+                await RequireCurrentAsync(
+                    actor, credential, cancellationToken, request.CheckpointRecoveryOperationId)
+                    .ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
                 if (_pending is { } pending)
                 {
@@ -112,9 +119,10 @@ public sealed class RuntimeBootstrapReceiver(
                     EnvironmentProviderFencingGeneration = binding.EnvironmentProviderFencingGeneration
                 };
                 _pending = new(proof, receipt, RuntimeContractValidation.Hash(
-                    System.Text.Encoding.UTF8.GetBytes(credential.GetValue())));
+                    System.Text.Encoding.UTF8.GetBytes(credential.GetValue())),
+                    request.CheckpointRecoveryOperationId);
                 _deliveryReplay = new(request.OperationId, request.GrantId, request.ConfigurationHash,
-                    request.CredentialExpiresAt, credentialHash, receipt);
+                    request.CredentialExpiresAt, credentialHash, request.CheckpointRecoveryOperationId, receipt);
                 Volatile.Write(ref _state, (int)RuntimeBootstrapReceiverState.Pending);
                 retained = true;
                 return receipt;
@@ -211,10 +219,14 @@ public sealed class RuntimeBootstrapReceiver(
 
     /// <summary>Rereads owner registration state and confirms both registration and credential remain current.</summary>
     private async Task RequireCurrentAsync(
-        RuntimeActorAuthorization actor, SecretCredential credential, CancellationToken cancellationToken)
+        RuntimeActorAuthorization actor, SecretCredential credential, CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null)
     {
-        var current = await owner.ReadCurrentAsync(
-            registration.RuntimeInstanceId, actor, cancellationToken).ConfigureAwait(false);
+        var current = checkpointRecoveryOperationId is { } operationId
+            ? await owner.ReadCurrentForCheckpointRecoveryAsync(
+                registration.RuntimeInstanceId, operationId, actor, cancellationToken).ConfigureAwait(false)
+            : await owner.ReadCurrentAsync(
+                registration.RuntimeInstanceId, actor, cancellationToken).ConfigureAwait(false);
         RuntimeSessionBootstrap.RequireCurrent(current, actor, timeProvider);
         if (current != registration || !credential.IsUsable())
             throw new RuntimeAuthorizationException("runtime_registration_stale");
@@ -229,6 +241,7 @@ public sealed class RuntimeBootstrapReceiver(
         replay.GrantId == request.GrantId &&
         replay.ConfigurationHash == request.ConfigurationHash &&
         replay.CredentialExpiresAt == request.CredentialExpiresAt &&
+        replay.CheckpointRecoveryOperationId == request.CheckpointRecoveryOperationId &&
         replay.CredentialHash == credentialHash;
 
     /// <summary>Requires the grant receipt to match the registration revision and expiry boundary.</summary>
@@ -265,7 +278,8 @@ public sealed class RuntimeBootstrapReceiver(
     }
 
     private sealed record PendingTicket(
-        RuntimeCredentialProof Proof, RuntimeBootstrapDeliveryReceipt Receipt, string CredentialHash);
+        RuntimeCredentialProof Proof, RuntimeBootstrapDeliveryReceipt Receipt, string CredentialHash,
+        Guid? CheckpointRecoveryOperationId);
 
     private sealed record DeliveryReplay(
         Guid OperationId,
@@ -273,6 +287,7 @@ public sealed class RuntimeBootstrapReceiver(
         string ConfigurationHash,
         DateTimeOffset CredentialExpiresAt,
         string CredentialHash,
+        Guid? CheckpointRecoveryOperationId,
         RuntimeBootstrapDeliveryReceipt Receipt);
 
     private sealed record ConfiguredTicket(

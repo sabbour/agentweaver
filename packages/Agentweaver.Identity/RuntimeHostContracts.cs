@@ -69,6 +69,9 @@ public sealed record RuntimeHostConfigureRequest(
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeHostReplacementRecovery? ReplacementRecovery { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CheckpointRecoveryOperationId { get; init; }
 }
 
 /// <summary>Owner-retained lineage that permits exact replay of one completed root request.</summary>

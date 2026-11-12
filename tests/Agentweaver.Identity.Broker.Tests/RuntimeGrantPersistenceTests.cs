@@ -66,6 +66,7 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
         var policy = CreatePolicy();
         var configurationHash = new string('a', 64);
         var deliverOperation = Guid.NewGuid();
+        var recoveryOperationId = Guid.NewGuid();
         RuntimeGrantReceipt sourceReceipt;
         string bootstrapValue;
         string sourceValue;
@@ -74,13 +75,18 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
         {
             var authority = new RuntimeGrantAuthority(db, owner, delivery, policy, actor, TimeProvider.System);
             var delivered = await authority.DeliverBootstrapAsync(
-                owner.Registration.RuntimeInstanceId, configurationHash, deliverOperation);
+                owner.Registration.RuntimeInstanceId, configurationHash, deliverOperation,
+                CancellationToken.None, recoveryOperationId);
             Assert.Equal(delivered, await authority.DeliverBootstrapAsync(
-                owner.Registration.RuntimeInstanceId, configurationHash, deliverOperation));
+                owner.Registration.RuntimeInstanceId, configurationHash, deliverOperation,
+                CancellationToken.None, recoveryOperationId));
             Assert.Equal(1, delivery.Deliveries);
+            Assert.Equal(recoveryOperationId, owner.LastCheckpointRecoveryOperationId);
+            Assert.Equal(recoveryOperationId, delivery.LastCheckpointRecoveryOperationId);
             bootstrapValue = delivery.Credential!.GetValue();
             var bootstrap = Proof(delivered.GrantId, 1, RuntimeCredentialPurpose.Configure,
-                owner.Registration.Binding.ConfigureEndpoint, delivery.Credential, owner, configurationHash);
+                owner.Registration.Binding.ConfigureEndpoint, delivery.Credential, owner, configurationHash,
+                recoveryOperationId);
             await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 authority.VerifySourceAsync(bootstrap));
             var consumeOperation = Guid.NewGuid();
@@ -94,12 +100,13 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
                 authority.ConsumeBootstrapAsync(
                     Proof(delivered.GrantId, 1, RuntimeCredentialPurpose.Configure,
                         owner.Registration.Binding.ConfigureEndpoint, delivery.Credential, owner,
-                        new string('b', 64)),
+                        new string('b', 64), recoveryOperationId),
                     consumeOperation));
 
             var exchangeOperation = Guid.NewGuid();
             var exchangeProof = Proof(delivered.GrantId, 2, RuntimeCredentialPurpose.Configure,
-                owner.Registration.Binding.ConfigureEndpoint, delivery.Credential, owner, configurationHash);
+                owner.Registration.Binding.ConfigureEndpoint, delivery.Credential, owner, configurationHash,
+                recoveryOperationId);
             var exchanged = await authority.ExchangeBootstrapAsync(exchangeProof, exchangeOperation);
             Assert.False(exchanged.IsReplay);
             Assert.NotNull(exchanged.Credential);
@@ -110,7 +117,8 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
             Assert.Null(replayedExchange.Credential);
             Assert.Equal(exchanged.Receipt, replayedExchange.Receipt);
             var source = Proof(exchanged.Receipt.GrantId, 1, RuntimeCredentialPurpose.Observe,
-                owner.Registration.Binding.ObservationEndpoint, exchanged.Credential, owner, configurationHash);
+                owner.Registration.Binding.ObservationEndpoint, exchanged.Credential, owner, configurationHash,
+                recoveryOperationId);
             Assert.Equal(exchanged.Receipt, await authority.VerifySourceAsync(source));
             var rotateOperation = Guid.NewGuid();
             var rotated = await authority.RotateSourceAsync(source, rotateOperation);
@@ -124,7 +132,8 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
             Assert.Null(repeatedRotation.Credential);
             Assert.Equal(rotated.Receipt, repeatedRotation.Receipt);
             var current = Proof(rotated.Receipt.GrantId, 2, RuntimeCredentialPurpose.Observe,
-                owner.Registration.Binding.ObservationEndpoint, rotated.Credential, owner, configurationHash);
+                owner.Registration.Binding.ObservationEndpoint, rotated.Credential, owner, configurationHash,
+                recoveryOperationId);
             sourceReceipt = await authority.VerifySourceAsync(current);
             var revokeOperation = Guid.NewGuid();
             var revoked = await authority.RevokeAsync(current, revokeOperation);
@@ -132,6 +141,7 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
             Assert.Equal(3, revoked.Revision);
             Assert.Equal(revoked, await authority.RevokeAsync(current, revokeOperation));
             await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => authority.VerifySourceAsync(current));
+
         }
 
         await using var restarted = new IdentityBrokerDbContext(options);
@@ -203,8 +213,12 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
         await using var db = new IdentityBrokerDbContext(options);
         var authority = new RuntimeGrantAuthority(
             db, owner, new StorageDelivery(), CreatePolicy(), actor, TimeProvider.System);
+        var checkpointRecoveryOperationId = Guid.NewGuid();
         var first = await authority.IssueModelCredentialGrantAsync(
-            firstRegistration.RuntimeInstanceId, Guid.NewGuid());
+            firstRegistration.RuntimeInstanceId, Guid.NewGuid(), CancellationToken.None,
+            checkpointRecoveryOperationId);
+        Assert.Equal(checkpointRecoveryOperationId, first.CheckpointRecoveryOperationId);
+        Assert.Equal(checkpointRecoveryOperationId, owner.LastCheckpointRecoveryOperationId);
         var second = await authority.IssueModelCredentialGrantAsync(
             secondRegistration.RuntimeInstanceId, Guid.NewGuid());
 
@@ -535,8 +549,13 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
 
     private static RuntimeCredentialProof Proof(
         Guid grantId, long revision, RuntimeCredentialPurpose purpose, Uri audience,
-        SecretCredential credential, StorageOwner owner, string configurationHash) =>
-        new(grantId, owner.Registration.RuntimeInstanceId, revision, purpose, audience, configurationHash, credential);
+        SecretCredential credential, StorageOwner owner, string configurationHash,
+        Guid? checkpointRecoveryOperationId = null) =>
+        new RuntimeCredentialProof(
+            grantId, owner.Registration.RuntimeInstanceId, revision, purpose, audience, configurationHash, credential)
+        {
+            CheckpointRecoveryOperationId = checkpointRecoveryOperationId
+        };
 
     private sealed class StorageOwner : IRuntimeRegistrationOwner
     {
@@ -553,6 +572,7 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
             },
             RuntimeRegistrationState.Active, DateTimeOffset.UtcNow.AddMinutes(5));
         public int Reads { get; private set; }
+        public Guid? LastCheckpointRecoveryOperationId { get; private set; }
         public int? ChangeAfterRead { get; set; }
 
         public Task<RuntimeRegistration> ReadCurrentAsync(
@@ -567,6 +587,14 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
                 throw new RuntimeAuthorizationException("runtime_registration_unknown");
             return Task.FromResult(Registration);
         }
+
+        public Task<RuntimeRegistration> ReadCurrentForCheckpointRecoveryAsync(
+            Guid runtimeInstanceId, Guid operationId, RuntimeActorAuthorization actor,
+            CancellationToken cancellationToken)
+        {
+            LastCheckpointRecoveryOperationId = operationId;
+            return ReadCurrentAsync(runtimeInstanceId, actor, cancellationToken);
+        }
     }
 
     private sealed class MultipleStorageOwner(params RuntimeRegistration[] registrations)
@@ -574,6 +602,7 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
     {
         private readonly Dictionary<Guid, RuntimeRegistration> _registrations =
             registrations.ToDictionary(registration => registration.RuntimeInstanceId);
+        public Guid? LastCheckpointRecoveryOperationId { get; private set; }
 
         public Task<RuntimeRegistration> ReadCurrentAsync(
             Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
@@ -584,12 +613,21 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
                 ? Task.FromResult(registration)
                 : throw new RuntimeAuthorizationException("runtime_registration_unknown");
         }
+
+        public Task<RuntimeRegistration> ReadCurrentForCheckpointRecoveryAsync(
+            Guid runtimeInstanceId, Guid operationId, RuntimeActorAuthorization actor,
+            CancellationToken cancellationToken)
+        {
+            LastCheckpointRecoveryOperationId = operationId;
+            return ReadCurrentAsync(runtimeInstanceId, actor, cancellationToken);
+        }
     }
 
     private sealed class StorageDelivery : IRuntimeBootstrapDelivery
     {
         public SecretCredential? Credential { get; private set; }
         public int Deliveries { get; private set; }
+        public Guid? LastCheckpointRecoveryOperationId { get; private set; }
         public bool WrongPlacement { get; init; }
         public bool FailDelivery { get; init; }
         public TaskCompletionSource? DeliveryStarted { get; init; }
@@ -597,13 +635,22 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
         public TimeProvider Clock { get; init; } = TimeProvider.System;
         public Func<RuntimeRegistration, Guid, Guid, string, SecretCredential, Task>? VerifyPending { get; set; }
 
+        public Task<RuntimeBootstrapDeliveryReceipt> DeliverAsync(
+            RuntimeRegistration registration, RuntimeActorAuthorization actor, Guid operationId,
+            Guid grantId, string configurationHash, SecretCredential credential,
+            CancellationToken cancellationToken) =>
+            DeliverAsync(
+                registration, actor, operationId, grantId, configurationHash, credential, null, cancellationToken);
+
         public async Task<RuntimeBootstrapDeliveryReceipt> DeliverAsync(
             RuntimeRegistration registration, RuntimeActorAuthorization actor, Guid operationId,
-            Guid grantId, string configurationHash, SecretCredential credential, CancellationToken cancellationToken)
+            Guid grantId, string configurationHash, SecretCredential credential,
+            Guid? checkpointRecoveryOperationId, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             _ = actor.Bearer.GetValue();
             Deliveries++;
+            LastCheckpointRecoveryOperationId = checkpointRecoveryOperationId;
             Credential = new SecretCredential(credential.GetValue(), credential.ExpiresAt, Clock);
             DeliveryStarted?.TrySetResult();
             if (ContinueDelivery is not null)

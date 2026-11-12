@@ -39,10 +39,12 @@ public sealed class RuntimeGrantAuthority(
     /// <returns>A receipt bound to the current registration, credential reference and expiry.</returns>
     /// <exception cref="RuntimeAuthorizationException">The registration, model binding, or replay is not authorized.</exception>
     public async Task<RuntimeModelCredentialGrantReceipt> IssueModelCredentialGrantAsync(
-        Guid runtimeInstanceId, Guid operationId, CancellationToken cancellationToken = default)
+        Guid runtimeInstanceId, Guid operationId, CancellationToken cancellationToken = default,
+        Guid? checkpointRecoveryOperationId = null)
     {
         ValidateOperation(operationId);
-        var registration = await RequireCurrentAsync(runtimeInstanceId, cancellationToken);
+        var registration = await RequireCurrentAsync(
+            runtimeInstanceId, cancellationToken, checkpointRecoveryOperationId);
         var binding = registration.Binding;
         var modelReference = binding.ModelSelectionReference;
         var credentialReference = binding.ModelCredentialReference;
@@ -128,7 +130,7 @@ public sealed class RuntimeGrantAuthority(
             throw Denied("runtime_model_grant_operation_conflict");
         }
 
-        await RequireSameCurrentAsync(registration, cancellationToken);
+        await RequireSameCurrentAsync(registration, cancellationToken, checkpointRecoveryOperationId);
         if (connection is not null)
         {
             var currentConnection = await connections!.RequireCurrentAsync(binding, cancellationToken);
@@ -142,7 +144,8 @@ public sealed class RuntimeGrantAuthority(
             ConnectionId = connection?.ConnectionId,
             ConnectionRevision = connection?.Revision,
             CredentialKind = connection is null
-                ? RuntimeModelCredentialKind.ByokKey : RuntimeModelCredentialKind.GitHubUserAccess
+                ? RuntimeModelCredentialKind.ByokKey : RuntimeModelCredentialKind.GitHubUserAccess,
+            CheckpointRecoveryOperationId = checkpointRecoveryOperationId
         };
     }
 
@@ -158,7 +161,8 @@ public sealed class RuntimeGrantAuthority(
         RuntimeModelCredentialGrantReceipt receipt, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(receipt);
-        var registration = await RequireCurrentAsync(receipt.RuntimeInstanceId, cancellationToken);
+        var registration = await RequireCurrentAsync(
+            receipt.RuntimeInstanceId, cancellationToken, receipt.CheckpointRecoveryOperationId);
         var binding = registration.Binding;
         if (receipt.RegistrationRevision != registration.Revision ||
             receipt.ModelSelectionReference != binding.ModelSelectionReference ||
@@ -199,7 +203,8 @@ public sealed class RuntimeGrantAuthority(
             grant.SecretId != receipt.CredentialReference.Id ||
             grant.SecretVersion != receipt.CredentialReference.Version || grant.ExpiresAt != receipt.ExpiresAt)
             throw Denied("runtime_model_grant_stale");
-        await RequireSameCurrentAsync(registration, cancellationToken);
+        await RequireSameCurrentAsync(
+            registration, cancellationToken, receipt.CheckpointRecoveryOperationId);
         if (receipt.ConnectionId is not null)
         {
             var final = await connections!.RequireCurrentAsync(binding, cancellationToken);
@@ -229,7 +234,8 @@ public sealed class RuntimeGrantAuthority(
         CancellationToken cancellationToken)
     {
         await VerifyModelCredentialAsync(receipt, cancellationToken);
-        var registration = await RequireCurrentAsync(receipt.RuntimeInstanceId, cancellationToken);
+        var registration = await RequireCurrentAsync(
+            receipt.RuntimeInstanceId, cancellationToken, receipt.CheckpointRecoveryOperationId);
         var binding = registration.Binding;
         // The verified receipt identifies this runtime's grant when several share one secret.
         var redemption = new AuthorizedSecretRedemption(
@@ -295,17 +301,19 @@ public sealed class RuntimeGrantAuthority(
     /// <exception cref="RuntimeAuthorizationException">The registration, delivery proof or operation is invalid.</exception>
     public async Task<RuntimeBootstrapDeliveryReceipt> DeliverBootstrapAsync(
         Guid runtimeInstanceId, string configurationHash, Guid operationId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Guid? checkpointRecoveryOperationId = null)
     {
         ValidateOperation(operationId);
         RuntimeContractValidation.ValidateHash(configurationHash);
-        var registration = await RequireCurrentAsync(runtimeInstanceId, cancellationToken);
+        var registration = await RequireCurrentAsync(
+            runtimeInstanceId, cancellationToken, checkpointRecoveryOperationId);
         var requestHash = Hash("deliver", registration, configurationHash);
         var prior = await ReadOperationAsync<RuntimeBootstrapDeliveryReceipt>(
             operationId, requestHash, cancellationToken, revokedIsFailure: true);
         if (prior is not null)
         {
-            await RequireSameCurrentAsync(registration, cancellationToken);
+            await RequireSameCurrentAsync(registration, cancellationToken, checkpointRecoveryOperationId);
             return prior;
         }
 
@@ -324,18 +332,19 @@ public sealed class RuntimeGrantAuthority(
                     var completed = await ReadOperationAsync<RuntimeBootstrapDeliveryReceipt>(
                         operationId, requestHash, cancellationToken, revokedIsFailure: true)
                         ?? throw Denied("runtime_delivery_pending");
-                    await RequireSameCurrentAsync(registration, cancellationToken);
+                    await RequireSameCurrentAsync(registration, cancellationToken, checkpointRecoveryOperationId);
                     return completed;
                 }
                 AddGrant(grantId, registration, RuntimeCredentialPurpose.Configure,
                     registration.Binding.ConfigureEndpoint, configurationHash, secret, operationId);
-                await RequireSameCurrentAsync(registration, cancellationToken);
+                await RequireSameCurrentAsync(registration, cancellationToken, checkpointRecoveryOperationId);
                 await db.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
             }
 
             var receipt = await delivery.DeliverAsync(
-                registration, actor, operationId, grantId, configurationHash, secret, cancellationToken);
+                registration, actor, operationId, grantId, configurationHash, secret,
+                checkpointRecoveryOperationId, cancellationToken);
             if (receipt.OperationId != operationId || receipt.GrantId != grantId ||
                 receipt.RuntimeInstanceId != registration.RuntimeInstanceId ||
                 receipt.RegistrationRevision != registration.Revision ||
@@ -356,12 +365,12 @@ public sealed class RuntimeGrantAuthority(
                 RequireLive(current);
                 if (current.State != RuntimeCredentialState.Active)
                     throw Denied("runtime_grant_revoked");
-                await RequireSameCurrentAsync(registration, cancellationToken);
+                await RequireSameCurrentAsync(registration, cancellationToken, checkpointRecoveryOperationId);
                 AddReceipt(operationId, receipt);
                 await db.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
             }
-            await RequireSameCurrentAsync(registration, cancellationToken);
+            await RequireSameCurrentAsync(registration, cancellationToken, checkpointRecoveryOperationId);
             return receipt;
         }
         catch
@@ -397,7 +406,8 @@ public sealed class RuntimeGrantAuthority(
             var prior = await ReadOperationAsync<RuntimeGrantReceipt>(operationId, requestHash, cancellationToken);
             if (prior is not null)
             {
-                await RequireSameCurrentAsync(registration, cancellationToken);
+                await RequireSameCurrentAsync(
+                    registration, cancellationToken, proof.CheckpointRecoveryOperationId);
                 RequireProofUsable(verified);
                 RequireLive(current);
                 await transaction.CommitAsync(cancellationToken);
@@ -410,7 +420,8 @@ public sealed class RuntimeGrantAuthority(
             await InsertNewOperationAsync(operationId, proof.GrantId, requestHash, cancellationToken);
             var receipt = Receipt(consumed);
             AddReceipt(operationId, receipt);
-            await RequireSameCurrentAsync(registration, cancellationToken);
+            await RequireSameCurrentAsync(
+                registration, cancellationToken, proof.CheckpointRecoveryOperationId);
             RequireLive(consumed);
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
@@ -446,10 +457,12 @@ public sealed class RuntimeGrantAuthority(
             await db.RuntimeGrantOperationReceipts.AsNoTracking().AnyAsync(
                 row => row.OperationId == deliveryOperationId, cancellationToken))
             throw Denied("runtime_pending_delivery_invalid");
-        await RequireSameCurrentAsync(registration, cancellationToken);
+        await RequireSameCurrentAsync(
+            registration, cancellationToken, proof.CheckpointRecoveryOperationId);
         RequireLive(current);
         await transaction.CommitAsync(cancellationToken);
-        await RequireSameCurrentAsync(registration, cancellationToken);
+        await RequireSameCurrentAsync(
+            registration, cancellationToken, proof.CheckpointRecoveryOperationId);
         RequireProofUsable(verified);
         RequireLive(current);
         return Receipt(current);
@@ -485,7 +498,8 @@ public sealed class RuntimeGrantAuthority(
         RequireLive(current);
         RequireProofUsable(verified);
         await RequireDeliveryAsync(current, cancellationToken);
-        var registration = await RequireCurrentAsync(proof.RuntimeInstanceId, cancellationToken);
+        var registration = await RequireCurrentAsync(
+            proof.RuntimeInstanceId, cancellationToken, proof.CheckpointRecoveryOperationId);
         if (original.RegistrationRevision != registration.Revision ||
             original.RegistrationHash != RuntimeContractValidation.RegistrationHash(registration))
             throw Denied("runtime_registration_stale");
@@ -517,7 +531,8 @@ public sealed class RuntimeGrantAuthority(
         var prior = await ReadOperationAsync<RuntimeGrantReceipt>(operationId, requestHash, cancellationToken);
         if (prior is not null)
         {
-            await RequireSameCurrentAsync(registration, cancellationToken);
+            await RequireSameCurrentAsync(
+                registration, cancellationToken, proof.CheckpointRecoveryOperationId);
             RequireProofUsable(verified);
             RequireLive(current);
             await transaction.CommitAsync(cancellationToken);
@@ -531,7 +546,8 @@ public sealed class RuntimeGrantAuthority(
         await InsertNewOperationAsync(operationId, proof.GrantId, requestHash, cancellationToken);
         var receipt = Receipt(revoked);
         AddReceipt(operationId, receipt);
-        await RequireSameCurrentAsync(registration, cancellationToken);
+        await RequireSameCurrentAsync(
+            registration, cancellationToken, proof.CheckpointRecoveryOperationId);
         RequireProofUsable(verified);
         RequireLive(current);
         await db.SaveChangesAsync(cancellationToken);
@@ -559,7 +575,8 @@ public sealed class RuntimeGrantAuthority(
                 operationId, requestHash, cancellationToken);
             if (prior is not null)
             {
-                await RequireSameCurrentAsync(registration, cancellationToken);
+                await RequireSameCurrentAsync(
+                    registration, cancellationToken, proof.CheckpointRecoveryOperationId);
                 RequireProofUsable(verified);
                 RequireLive(current);
                 await transaction.CommitAsync(cancellationToken);
@@ -590,12 +607,14 @@ public sealed class RuntimeGrantAuthority(
             var receipt = Receipt(source);
             issuedGrantId = source.GrantId;
             AddReceipt(operationId, receipt);
-            await RequireSameCurrentAsync(registration, cancellationToken);
+            await RequireSameCurrentAsync(
+                registration, cancellationToken, proof.CheckpointRecoveryOperationId);
             RequireLive(source);
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             committed = true;
-            await RequireSameCurrentAsync(registration, cancellationToken);
+            await RequireSameCurrentAsync(
+                registration, cancellationToken, proof.CheckpointRecoveryOperationId);
             RequireProofUsable(verified);
             RequireLive(source);
             issued.LimitLifetime(source.ExpiresAt);
@@ -745,11 +764,13 @@ public sealed class RuntimeGrantAuthority(
         RuntimeRegistration registration;
         try
         {
-            registration = await RequireCurrentAsync(proof.RuntimeInstanceId, cancellationToken);
+            registration = await RequireCurrentAsync(
+                proof.RuntimeInstanceId, cancellationToken, proof.CheckpointRecoveryOperationId);
             if (original.RegistrationRevision != registration.Revision ||
                 original.RegistrationHash != RuntimeContractValidation.RegistrationHash(registration))
                 throw Denied("runtime_registration_stale");
-            await RequireSameCurrentAsync(registration, cancellationToken);
+            await RequireSameCurrentAsync(
+                registration, cancellationToken, proof.CheckpointRecoveryOperationId);
         }
         catch (RuntimeAuthorizationException error) when (IsAuthorityLoss(error.Code))
         {
@@ -773,7 +794,8 @@ public sealed class RuntimeGrantAuthority(
     }
 
     private async Task<RuntimeRegistration> RequireCurrentAsync(
-        Guid runtimeInstanceId, CancellationToken cancellationToken)
+        Guid runtimeInstanceId, CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null)
     {
         if (runtimeInstanceId == Guid.Empty)
             throw Denied("runtime_registration_invalid");
@@ -782,7 +804,10 @@ public sealed class RuntimeGrantAuthority(
         RuntimeRegistration registration;
         try
         {
-            registration = await owner.ReadCurrentAsync(runtimeInstanceId, actor, cancellationToken);
+            registration = checkpointRecoveryOperationId is { } operationId
+                ? await owner.ReadCurrentForCheckpointRecoveryAsync(
+                    runtimeInstanceId, operationId, actor, cancellationToken).ConfigureAwait(false)
+                : await owner.ReadCurrentAsync(runtimeInstanceId, actor, cancellationToken).ConfigureAwait(false);
         }
         catch (InvalidOperationException) when (!actor.Bearer.IsUsable())
         {
@@ -798,9 +823,11 @@ public sealed class RuntimeGrantAuthority(
     }
 
     private async Task RequireSameCurrentAsync(
-        RuntimeRegistration expected, CancellationToken cancellationToken)
+        RuntimeRegistration expected, CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null)
     {
-        var current = await RequireCurrentAsync(expected.RuntimeInstanceId, cancellationToken);
+        var current = await RequireCurrentAsync(
+            expected.RuntimeInstanceId, cancellationToken, checkpointRecoveryOperationId);
         if (current != expected)
             throw Denied("runtime_registration_stale");
     }

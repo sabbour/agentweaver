@@ -23,7 +23,8 @@ public static class RuntimeCredentialEndpoints
         });
         routes.MapPost("/model-session/grant", (HttpContext context, RuntimeModelCredentialGrantRequest input) =>
             ExecuteAsync(context, authority => authority.IssueModelCredentialGrantAsync(
-                input.RuntimeInstanceId, input.OperationId, context.RequestAborted)));
+                input.RuntimeInstanceId, input.OperationId, context.RequestAborted,
+                input.CheckpointRecoveryOperationId)));
         routes.MapPost("/model-session/verify", (HttpContext context, RuntimeModelCredentialProof input) =>
             ExecuteAsync(context, authority => authority.VerifyModelCredentialAsync(
                 input.Receipt, context.RequestAborted)));
@@ -71,13 +72,17 @@ public static class RuntimeCredentialEndpoints
 
     private static Task RequestAsync(HttpContext context, RuntimeBootstrapRequest input) =>
         ExecuteAsync(context, authority => authority.DeliverBootstrapAsync(
-            input.RuntimeInstanceId, input.ConfigurationHash, input.OperationId, context.RequestAborted));
+            input.RuntimeInstanceId, input.ConfigurationHash, input.OperationId, context.RequestAborted,
+            input.CheckpointRecoveryOperationId));
 
     private static Task VerifyPendingAsync(HttpContext context, PendingBootstrapVerificationRequest input) =>
         ApplyProofAsync(context, new RuntimeCredentialHttpRequest(
             input.GrantId, input.RuntimeInstanceId, input.Revision, RuntimeCredentialPurpose.Configure,
             input.Audience, input.ConfigurationHash, input.CredentialValue,
-            input.CredentialExpiresAt, input.DeliveryOperationId), "pending");
+            input.CredentialExpiresAt, input.DeliveryOperationId)
+        {
+            CheckpointRecoveryOperationId = input.CheckpointRecoveryOperationId
+        }, "pending");
 
     private static async Task ApplyProofAsync(
         HttpContext context, RuntimeCredentialHttpRequest input, string operation)
@@ -91,7 +96,10 @@ public static class RuntimeCredentialEndpoints
             credential = new SecretCredential(input.CredentialValue, input.CredentialExpiresAt, time);
             var proof = new RuntimeCredentialProof(
                 input.GrantId, input.RuntimeInstanceId, input.Revision, input.Purpose,
-                input.Audience, input.ConfigurationHash, credential);
+                input.Audience, input.ConfigurationHash, credential)
+            {
+                CheckpointRecoveryOperationId = input.CheckpointRecoveryOperationId
+            };
             await ExecuteAsync<object>(context, async authority =>
             {
                 if (operation is "exchange" or "rotate")
