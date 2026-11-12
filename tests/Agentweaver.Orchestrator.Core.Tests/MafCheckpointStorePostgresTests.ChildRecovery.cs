@@ -348,7 +348,9 @@ public sealed partial class MafCheckpointStorePostgresTests
     private async Task<ChildRecoveryFixture> PrepareChildRecoveryAsync(
         bool includeBuildTest = false, string nativeState = "absent")
     {
-        _reviewSelectionContext = await InitializeReviewSelectionAsync();
+        // Runtime registrations accept only opaque identifiers, so this fixture pins a model reference without '/'.
+        const string modelReference = "model:provider-alpha";
+        _reviewSelectionContext = await InitializeReviewSelectionAsync(modelReference);
         var steps = includeBuildTest
             ? new[]
             {
@@ -361,7 +363,8 @@ public sealed partial class MafCheckpointStorePostgresTests
             : [WorkflowTestData.Open("implement", 0, [])];
         var result = WorkPlanValidator.ValidateAndSnapshot(
             WorkflowTestData.Snapshot(WorkflowTestData.Definition(WorkflowDefinitionOrigin.BuiltIn, steps)),
-            WorkflowTestData.Plan(WorkflowTestData.Item("first", providerId: ReviewSandboxProviderId)),
+            WorkflowTestData.Plan(WorkflowTestData.Item(
+                "first", modelSelection: modelReference, providerId: ReviewSandboxProviderId)),
             _reviewSelectionContext);
         Assert.True(result.IsValid, string.Join("; ", result.Issues.Select(issue => issue.Message)));
         var plan = result.Value!;
@@ -393,7 +396,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
         var rootRuntime = new RuntimeOwnerContext(
             1, _actor.Issuer, _actor.Subject, "tenant-1", _binding.Identity.ProjectId, _binding.Identity.RunId,
-            _binding.Identity.SessionId, CoordinationEndpoints.CoordinatorRuntimeAgentId, "model:provider/alpha",
+            _binding.Identity.SessionId, CoordinationEndpoints.CoordinatorRuntimeAgentId, modelReference,
             "root-turn", 1, 1, 1, _selection.Selection.ContextRevision, selectionHash.ToLowerInvariant(),
             _binding.ExecutionFence, 0, 1, decision.StateVersion);
         var rootIntent = await starts.EnsureIntentAsync(rootRuntime, CancellationToken.None);
@@ -405,7 +408,7 @@ public sealed partial class MafCheckpointStorePostgresTests
             "root-environment", "root-resource", 1, "profile-1",
             new("https://runtime.test/runtime/v1/configure"), new("https://runtime.test/observation"))
         {
-            ModelSelectionReference = "model:provider/alpha",
+            ModelSelectionReference = modelReference,
             ModelSourceMode = ModelSourceMode.HostedCopilot,
             PlacementProviderId = ReviewSandboxProviderId,
             EnvironmentLifecycleGeneration = 1,

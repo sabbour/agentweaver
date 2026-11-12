@@ -40,11 +40,6 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        if (await CheckpointRecoveryHold.IsHeldAsync(
-                connection, transaction, _schema, create.ProjectId, create.RunId, cancellationToken)
-            .ConfigureAwait(false))
-            throw new CoordinationException(
-                "checkpoint_recovery_dispatch_held", StatusCodes.Status409Conflict);
         await using var insert = new NpgsqlCommand($"""
             INSERT INTO {_table}
                 (job_id, native_request_id, project_id, run_id, session_id, tenant_id,
@@ -90,6 +85,12 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
             throw new CoordinationException(
                 "workflow_generation_run_unavailable", StatusCodes.Status409Conflict, exception);
         }
+        // The insert trigger share-locks the run row first; a held run rolls back the uncommitted insert.
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, _schema, create.ProjectId, create.RunId, cancellationToken)
+            .ConfigureAwait(false))
+            throw new CoordinationException(
+                "checkpoint_recovery_dispatch_held", StatusCodes.Status409Conflict);
         var job = await ReadByKeyAsync(
             connection,
             transaction,

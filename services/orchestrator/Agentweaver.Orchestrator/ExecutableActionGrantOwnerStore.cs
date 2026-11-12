@@ -517,8 +517,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         if (await CheckpointRecoveryHold.IsHeldAsync(
-                connection, transaction, _schema, binding.ProjectId, binding.RunId, cancellationToken,
-                forUpdate: isCoordinatorRoot)
+                connection, transaction, _schema, binding.ProjectId, binding.RunId, cancellationToken)
             .ConfigureAwait(false))
             throw new RuntimeAuthorizationException("checkpoint_recovery_dispatch_held");
         var requiresNumericEvidence =
@@ -1494,8 +1493,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
         CancellationToken cancellationToken)
     {
         if (await CheckpointRecoveryHold.IsHeldAsync(
-                connection, transaction, _schema, binding.ProjectId, binding.RunId, cancellationToken,
-                forUpdate: true)
+                connection, transaction, _schema, binding.ProjectId, binding.RunId, cancellationToken)
             .ConfigureAwait(false))
             throw new RuntimeAuthorizationException("checkpoint_recovery_dispatch_held");
         // Cancellation locks the run before changing session rows; keep the same row-lock order here.
@@ -2476,12 +2474,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
         string selectionHash,
         CancellationToken cancellationToken)
     {
-        if (await CheckpointRecoveryHold.IsHeldAsync(
-                connection, transaction, _schema, identity.ProjectId, identity.RunId, cancellationToken)
-            .ConfigureAwait(false))
-            throw new CoordinationException(
-                "checkpoint_recovery_dispatch_held", StatusCodes.Status409Conflict);
-        await using var command = new NpgsqlCommand($"""
+        await using (var command = new NpgsqlCommand($"""
             SELECT s.writer_issuer, s.writer_subject, s.execution_fence, s.lifecycle_state,
                 r.execution_fence, r.execution_state, r.tenant_id, r.accepted_selection_hash
             FROM {_schema}.coordination_sessions s
@@ -2489,21 +2482,30 @@ internal sealed class ExecutableActionGrantOwnerStore(
               ON r.project_id = s.project_id AND r.run_id = s.run_id
             WHERE s.project_id = @project AND s.run_id = @run AND s.session_id = @session
             FOR SHARE OF s, r
-            """, connection, transaction);
-        AddIdentity(command, identity);
-        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
-            reader.GetString(0) != actor.Issuer ||
-            reader.GetString(1) != actor.Subject ||
-            reader.GetInt64(2) != evidence.Fence ||
-            reader.GetString(3) != "active" ||
-            reader.GetInt64(4) != evidence.Fence ||
-            reader.GetString(5) == "completed" ||
-            reader.GetString(6) != evidence.TenantId ||
-            !string.Equals(reader.GetString(7), selectionHash, StringComparison.Ordinal))
+            """, connection, transaction))
+        {
+            AddIdentity(command, identity);
+            command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+                reader.GetString(0) != actor.Issuer ||
+                reader.GetString(1) != actor.Subject ||
+                reader.GetInt64(2) != evidence.Fence ||
+                reader.GetString(3) != "active" ||
+                reader.GetInt64(4) != evidence.Fence ||
+                reader.GetString(5) == "completed" ||
+                reader.GetString(6) != evidence.TenantId ||
+                !string.Equals(reader.GetString(7), selectionHash, StringComparison.Ordinal))
+                throw new CoordinationException(
+                    "policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
+        }
+
+        // The owner query already share-locks the run row, so this check adds no new lock order.
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, _schema, identity.ProjectId, identity.RunId, cancellationToken)
+            .ConfigureAwait(false))
             throw new CoordinationException(
-                "policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
+                "checkpoint_recovery_dispatch_held", StatusCodes.Status409Conflict);
     }
 
     /// <summary>

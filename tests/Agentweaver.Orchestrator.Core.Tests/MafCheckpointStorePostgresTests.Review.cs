@@ -371,12 +371,13 @@ public sealed partial class MafCheckpointStorePostgresTests
             _fixture.DataSource, _schema, CreateReviewSelectionContextStore());
     }
 
-    private async Task<WorkPlanRunSelectionContext> InitializeReviewSelectionAsync()
+    private async Task<WorkPlanRunSelectionContext> InitializeReviewSelectionAsync(
+        string modelReference = "model:provider/alpha")
     {
         // Give this PostgreSQL case a realistic provider snapshot so restart recovery can revalidate the pin.
         var selection = new EffectiveRunSelection(
             "project-1", Guid.NewGuid().ToString("D"), 1, 1, 1, "context-v1",
-            CreateReviewSelectionSnapshot());
+            CreateReviewSelectionSnapshot(modelReference));
         _selection = new AuthorizedRunSelection(
             selection,
             new ProjectsAuthorizationContext(
@@ -389,7 +390,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         var root = await new CoordinationOwnerStore(_fixture.DataSource, _schema)
             .AcceptRootAsync(_actor, _selection, identity.SessionId, CancellationToken.None);
         _binding = new MafCheckpointBinding(
-            identity, _actor, root.ExecutionFence, "maf-test-sdk", "model:provider/alpha", null);
+            identity, _actor, root.ExecutionFence, "maf-test-sdk", modelReference, null);
         var checkpoints = new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null);
         _store = checkpoints.ForRun(_binding);
         _executionStore = new MafExecutionCheckpointStore(checkpoints, _binding);
@@ -407,7 +408,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         return resolution.Context;
     }
 
-    private static JsonElement CreateReviewSelectionSnapshot()
+    private static JsonElement CreateReviewSelectionSnapshot(string modelReference)
     {
         // The accepted snapshot and server catalog must agree exactly for durable binding recovery.
         var capabilities = ReviewSandboxCapabilities();
@@ -436,7 +437,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                 maxConcurrentChildren = 32,
                 maxWallTimeSeconds = 3600
             },
-            modelSelection = new { reference = "model:provider/alpha" },
+            modelSelection = new { reference = modelReference },
             providers = new[]
             {
                 new EffectiveProviderSelection(
