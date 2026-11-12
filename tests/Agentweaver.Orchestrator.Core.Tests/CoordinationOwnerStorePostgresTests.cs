@@ -1796,7 +1796,7 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             admission.Parameters.AddWithValue("actor", _actor.Subject);
             admission.Parameters.AddWithValue("tenant", _selection.Authorization.TenantId);
             admission.Parameters.AddWithValue(
-                "selection", CoordinationOwnerStore.HashSelection(_selection.Selection));
+                "selection", CoordinationOwnerStore.HashSelection(_selection.Selection).ToLowerInvariant());
             admission.Parameters.AddWithValue("prompt", new string('b', 64));
             admission.Parameters.AddWithValue("fence", _acceptedRoot.ExecutionFence);
             admission.Parameters.AddWithValue("decision", decisionId);
@@ -1829,7 +1829,7 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             CoordinatorDecisionOwnerStore.ComputeCommandHash(question.Value),
             question.State!, true, question.Issues, null, null, question.Value, CancellationToken.None);
 
-        var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
+        var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection).ToLowerInvariant();
         var checkpointBinding = new MafCheckpointBinding(
             _root, _actor, _acceptedRoot.ExecutionFence,
             MafExecutionCheckpointStore.CurrentSdkVersion, "model-1", null,
@@ -2574,7 +2574,7 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
     private static AuthorizedRunSelection CreateSelection(CoordinationActor actor)
     {
         using var snapshot = JsonDocument.Parse(
-            """{"source":"projects-config","modelSelection":{"reference":"model:provider/alpha"}}""");
+            """{"source":"projects-config","modelSelection":{"reference":"model:provider/alpha"},"runLimits":{}}""");
         var selection = new EffectiveRunSelection(
                 "project-1",
                 Guid.NewGuid().ToString("D"),

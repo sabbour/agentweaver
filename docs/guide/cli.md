@@ -200,8 +200,8 @@ For run recovery, use `api describe recoverRun` to read the current request
 schema. The optional `checkpointRecovery` field is limited to a Host recovery
 at a pending gate. A `202` response means that the same operation still needs
 continuation. Retry it with the same idempotency key. A `ready` response means
-the Host restored the saved boundary; it does not mean that a person answered
-the gate or that the run completed. Read the
+the Host restored the saved boundary. The gate remains pending, and the run
+remains incomplete. Read the
 [recovery API reference](../reference/api.md#recover-a-host-at-a-pending-gate)
 before you use this field.
 

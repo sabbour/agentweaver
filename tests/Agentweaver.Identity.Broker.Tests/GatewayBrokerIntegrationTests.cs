@@ -219,7 +219,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 "Orchestrator",
                 runRecovery.GetProperty("x-agentweaver-owner").GetString());
             Assert.False(runRecovery.GetProperty("x-agentweaver-accepted-only").GetBoolean());
-            Assert.False(runRecovery.GetProperty("responses").TryGetProperty("202", out _));
+            Assert.True(runRecovery.GetProperty("responses").TryGetProperty("202", out _));
             foreach (var acceptedOnlyPath in new[]
             {
                 "/api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{parentSessionId}/spawn",
