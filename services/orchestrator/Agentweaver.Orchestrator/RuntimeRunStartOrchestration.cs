@@ -1042,20 +1042,35 @@ internal sealed class RuntimeRunStartContinuation(
             return result;
 
         var links = ReadReceiptLinks(intent);
-        if (intent.State != "ready" || intent.ExecutionFence != status.PreviousExecutionFence ||
-            intent.RuntimeInstanceId != status.PreviousRuntimeInstanceId ||
+        var hasPreviousRuntimeEvidence =
+            links.ContainsKey("checkpointRecoveryPreviousRegistration") &&
+            links.ContainsKey("checkpointRecoveryPreviousPlacement");
+        if (intent.State != "ready" ||
+            intent.ExecutionFence != status.PreviousExecutionFence &&
+                !(intent.ExecutionFence == status.ExecutionFence && hasPreviousRuntimeEvidence) ||
             !links.TryGetValue("registration", out var registrationElement) ||
-            !links.TryGetValue("placement", out var placementElement))
+            !links.TryGetValue("placement", out var placementElement) &&
+                !hasPreviousRuntimeEvidence)
             throw new RuntimeAuthorizationException("checkpoint_recovery_runtime_stale");
-        var previousRegistration = registrationElement.Deserialize<RuntimeRegistration>(JsonOptions)
+        var previousRegistration = (links.TryGetValue(
+                "checkpointRecoveryPreviousRegistration", out var previousRegistrationElement)
+                ? previousRegistrationElement : registrationElement).Deserialize<RuntimeRegistration>(JsonOptions)
             ?? throw new RuntimeAuthorizationException("checkpoint_recovery_runtime_stale");
-        var previousPlacement = placementElement.Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions)
+        var previousPlacement = (links.TryGetValue(
+                "checkpointRecoveryPreviousPlacement", out var previousPlacementElement)
+                ? previousPlacementElement : placementElement).Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions)
             ?? throw new RuntimeAuthorizationException("checkpoint_recovery_runtime_stale");
         previousPlacement.Validate();
+        if (previousRegistration.RuntimeInstanceId != status.PreviousRuntimeInstanceId ||
+            previousRegistration.Revision != status.PreviousRegistrationRevision)
+            throw new RuntimeAuthorizationException("checkpoint_recovery_runtime_stale");
         var previousOwner = CreateOwnerContext(previousRegistration.Binding);
         var owner = previousOwner with { ExecutionFence = status.ExecutionFence };
         RequireReplacementRegistration(previousOwner, previousPlacement, previousRegistration);
-        var previousBootstrapId = intent.BootstrapOperationId;
+        var previousBootstrapId = links.TryGetValue(
+            "checkpointRecoveryPreviousBootstrapOperationId", out var previousBootstrapElement)
+            ? previousBootstrapElement.GetGuid()
+            : intent.BootstrapOperationId;
         var bootstrapId = RuntimeRunStartKeys.ReplacementOperationId(result.OperationId, "checkpoint-bootstrap");
         var consumeId = RuntimeRunStartKeys.ReplacementOperationId(result.OperationId, "checkpoint-consume");
         var exchangeId = RuntimeRunStartKeys.ReplacementOperationId(result.OperationId, "checkpoint-exchange");
@@ -1135,6 +1150,23 @@ internal sealed class RuntimeRunStartContinuation(
 
             await RequireBoundaryAsync().ConfigureAwait(false);
             await PersistAsync("placement").ConfigureAwait(false);
+            var cleanupLinks = ReadReceiptLinks(intent);
+            cleanupLinks.TryAdd(
+                "checkpointRecoveryPreviousPlacement", JsonSerializer.SerializeToElement(previousPlacement, JsonOptions));
+            cleanupLinks.TryAdd(
+                "checkpointRecoveryPreviousRegistration", JsonSerializer.SerializeToElement(previousRegistration, JsonOptions));
+            cleanupLinks.TryAdd(
+                "checkpointRecoveryPreviousBootstrapOperationId",
+                JsonSerializer.SerializeToElement(previousBootstrapId, JsonOptions));
+            cleanupLinks.Remove("placement");
+            intent = await recoveryStore.PersistCheckpointRecoveryCleanupEvidenceAsync(
+                intent,
+                JsonSerializer.Serialize(cleanupLinks, JsonOptions),
+                status.ExecutionFence,
+                bootstrapId,
+                RuntimeRunStartKeys.EnvironmentId(owner),
+                null,
+                CancellationToken.None).ConfigureAwait(false);
             var placement = await RuntimeOwnerHttpTransport.SendRuntimeRunStartAsync<
                     RuntimeRunStartPlacementReceipt>(
                 clients.CreateClient("runtime-run-start-environment"),
@@ -1147,6 +1179,16 @@ internal sealed class RuntimeRunStartContinuation(
                     CheckpointRecoveryOperationId = result.OperationId
                 },
                 token).ConfigureAwait(false);
+            placement.Validate();
+            cleanupLinks["placement"] = JsonSerializer.SerializeToElement(placement, JsonOptions);
+            intent = await recoveryStore.PersistCheckpointRecoveryCleanupEvidenceAsync(
+                intent,
+                JsonSerializer.Serialize(cleanupLinks, JsonOptions),
+                status.ExecutionFence,
+                bootstrapId,
+                placement.EnvironmentId,
+                null,
+                CancellationToken.None).ConfigureAwait(false);
             RequireReplacementPlacement(previousPlacement, placement, bootstrapId, owner);
 
             await RequireBoundaryAsync().ConfigureAwait(false);
@@ -1155,6 +1197,15 @@ internal sealed class RuntimeRunStartContinuation(
             var registration = await registrationOwner.ReplaceAfterCheckpointRecoveryFenceAsync(
                 context, authorization, result.Session.ProjectId, result.Session.RunId,
                 result.Session.SessionId, token).ConfigureAwait(false);
+            cleanupLinks["registration"] = JsonSerializer.SerializeToElement(registration, JsonOptions);
+            intent = await recoveryStore.PersistCheckpointRecoveryCleanupEvidenceAsync(
+                intent,
+                JsonSerializer.Serialize(cleanupLinks, JsonOptions),
+                status.ExecutionFence,
+                bootstrapId,
+                placement.EnvironmentId,
+                registration.RuntimeInstanceId,
+                CancellationToken.None).ConfigureAwait(false);
             RequireReplacementRegistration(owner, placement, registration);
             await PersistAsync(
                 "bootstrap", runtimeInstanceId: registration.RuntimeInstanceId,
@@ -1170,8 +1221,20 @@ internal sealed class RuntimeRunStartContinuation(
                 options.BrokerOwnerAddress,
                 "/internal/runtime/bootstrap/request",
                 runtimeActor,
-                new RuntimeBootstrapRequest(registration.RuntimeInstanceId, bootstrapId, configurationHash),
+                new RuntimeBootstrapRequest(registration.RuntimeInstanceId, bootstrapId, configurationHash)
+                {
+                    CheckpointRecoveryOperationId = result.OperationId
+                },
                 token).ConfigureAwait(false);
+            cleanupLinks["bootstrap"] = JsonSerializer.SerializeToElement(BootstrapReceipt(bootstrap), JsonOptions);
+            intent = await recoveryStore.PersistCheckpointRecoveryCleanupEvidenceAsync(
+                intent,
+                JsonSerializer.Serialize(cleanupLinks, JsonOptions),
+                status.ExecutionFence,
+                bootstrapId,
+                placement.EnvironmentId,
+                registration.RuntimeInstanceId,
+                CancellationToken.None).ConfigureAwait(false);
             RequireBootstrapReceipt(
                 intent with { BootstrapOperationId = bootstrapId }, registration, bootstrap, configurationHash);
 
@@ -1179,7 +1242,8 @@ internal sealed class RuntimeRunStartContinuation(
             await PersistAsync("activation").ConfigureAwait(false);
             var environmentContext = await environment.ReadAsync(
                 runtimeActor, owner.ProjectId, owner.RunId, owner.SessionId,
-                placement.EnvironmentId, registration.Binding.ProfileId, token).ConfigureAwait(false);
+                placement.EnvironmentId, registration.Binding.ProfileId, token,
+                result.OperationId).ConfigureAwait(false);
             RequirePlacement(placement, registration, environmentContext);
             var activation = await RuntimeOwnerHttpTransport.SendRuntimeRunStartAsync<
                     RuntimeHostReadinessReceipt>(
@@ -1190,9 +1254,19 @@ internal sealed class RuntimeRunStartContinuation(
                 new RuntimeHostConfigureRequest(
                     1, registration, consumeId, exchangeId, configuration.RootElement.Clone())
                 {
-                    McpServer = environmentContext.McpServer
+                    McpServer = environmentContext.McpServer,
+                    CheckpointRecoveryOperationId = result.OperationId
                 },
                 token).ConfigureAwait(false);
+            cleanupLinks["activation"] = JsonSerializer.SerializeToElement(activation, JsonOptions);
+            intent = await recoveryStore.PersistCheckpointRecoveryCleanupEvidenceAsync(
+                intent,
+                JsonSerializer.Serialize(cleanupLinks, JsonOptions),
+                status.ExecutionFence,
+                bootstrapId,
+                placement.EnvironmentId,
+                registration.RuntimeInstanceId,
+                CancellationToken.None).ConfigureAwait(false);
             CoordinationEndpoints.ValidateHostReadiness(activation, registration, timeProvider);
             var recovery = activation.Recovery?.ValidateFor(registration);
             if (recovery?.RecoveryMode is not (RuntimeHostRecoveryMode.NativeCache or
@@ -1210,8 +1284,18 @@ internal sealed class RuntimeRunStartContinuation(
             await RequireBoundaryAsync().ConfigureAwait(false);
             var readiness = await environment.ReadReadinessAsync(
                 runtimeActor, owner.ProjectId, owner.RunId, owner.SessionId,
-                placement.EnvironmentId, registration.Binding.ProfileId, token).ConfigureAwait(false);
+                placement.EnvironmentId, registration.Binding.ProfileId, token,
+                result.OperationId).ConfigureAwait(false);
             RequireCurrentReadiness(placement, registration, activation, readiness);
+            cleanupLinks["readiness"] = JsonSerializer.SerializeToElement(readiness, JsonOptions);
+            intent = await recoveryStore.PersistCheckpointRecoveryCleanupEvidenceAsync(
+                intent,
+                JsonSerializer.Serialize(cleanupLinks, JsonOptions),
+                status.ExecutionFence,
+                bootstrapId,
+                placement.EnvironmentId,
+                registration.RuntimeInstanceId,
+                CancellationToken.None).ConfigureAwait(false);
             await requireCurrentSelection(token).ConfigureAwait(false);
             await requireCurrentGate(token).ConfigureAwait(false);
             status = status with

@@ -25,7 +25,8 @@ public sealed class RuntimeSessionBootstrap(
     RuntimeMcpServerEndpoint? capturedMcpServer = null,
     RuntimeHostedModelReasoningCatalogHttpClient? hostedReasoningCatalog = null,
     ILogger? logger = null,
-    RuntimeHostReplacementRecovery? replacementRecovery = null)
+    RuntimeHostReplacementRecovery? replacementRecovery = null,
+    Guid? checkpointRecoveryOperationId = null)
 {
     /// <summary>
     /// Creates a session only while owner registration, credentials, model binding, skills,
@@ -57,8 +58,7 @@ public sealed class RuntimeSessionBootstrap(
                 throw new RuntimeAuthorizationException("runtime_resume_bootstrap_request_invalid");
         }
 
-        var registration = await owner.ReadCurrentAsync(
-            bootstrap.RuntimeInstanceId, actor, cancellationToken);
+        var registration = await ReadCurrentAsync(bootstrap.RuntimeInstanceId, cancellationToken);
         RequireCurrent(registration, actor, timeProvider);
         replacementRecovery?.ValidateFor(registration);
         if (resumeBootstrap is not null && resumeBootstrap.Registration != registration)
@@ -95,17 +95,20 @@ public sealed class RuntimeSessionBootstrap(
         {
             var consumedProof = new RuntimeCredentialProof(
                 bootstrap.GrantId, bootstrap.RuntimeInstanceId, consumed.Revision,
-                bootstrap.Purpose, bootstrap.Audience, bootstrap.ConfigurationHash, bootstrap.Credential);
+                bootstrap.Purpose, bootstrap.Audience, bootstrap.ConfigurationHash, bootstrap.Credential)
+            {
+                CheckpointRecoveryOperationId = checkpointRecoveryOperationId
+            };
             source = await broker.ExchangeBootstrapAsync(consumedProof, exchangeOperationId, cancellationToken);
             RequireRegistrationReceipt(source.Receipt, registration);
             if (source.IsReplay || source.Credential is null ||
                 source.Receipt.Audience != registration.Binding.ObservationEndpoint)
                 throw new RuntimeAuthorizationException("runtime_source_credential_unavailable");
             var modelCredential = await broker.RedeemModelCredentialAsync(
-                registration, consumeOperationId, cancellationToken);
+                registration, consumeOperationId, cancellationToken, checkpointRecoveryOperationId);
             sdkCredential = modelCredential.Credential;
             await RequireUnchangedAsync(registration, cancellationToken);
-            var sourceProof = SourceProof(source);
+            var sourceProof = SourceProof(source, checkpointRecoveryOperationId);
             AuthorizedRuntimeSession? authorized = null;
             RuntimeSessionRecovery? recovery = null;
             Func<CancellationToken, Task<RuntimeSessionRecovery>>? journalFallback = null;
@@ -217,7 +220,7 @@ public sealed class RuntimeSessionBootstrap(
             await RequireSourceAuthorityAsync(cancellationToken);
             authorized = new AuthorizedRuntimeSession(registration, source.Receipt, source.Credential,
                 session, modelCredential, owner, broker, actor, timeProvider, actions, requireReadiness,
-                RequireSkillContentCurrentAsync, replacementRecovery);
+                RequireSkillContentCurrentAsync, replacementRecovery, checkpointRecoveryOperationId);
             return authorized;
         }
         catch (Exception failure)
@@ -225,7 +228,8 @@ public sealed class RuntimeSessionBootstrap(
             try
             {
                 if (source?.Credential is { } credential && credential.IsUsable())
-                    await broker.RevokeAsync(SourceProof(source), Guid.NewGuid(), CancellationToken.None);
+                    await broker.RevokeAsync(
+                        SourceProof(source, checkpointRecoveryOperationId), Guid.NewGuid(), CancellationToken.None);
             }
             catch (Exception revocationFailure)
             {
@@ -247,11 +251,18 @@ public sealed class RuntimeSessionBootstrap(
     private async Task RequireUnchangedAsync(
         RuntimeRegistration expected, CancellationToken cancellationToken)
     {
-        var current = await owner.ReadCurrentAsync(expected.RuntimeInstanceId, actor, cancellationToken);
+        var current = await ReadCurrentAsync(expected.RuntimeInstanceId, cancellationToken);
         RequireCurrent(current, actor, timeProvider);
         if (current != expected)
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
+
+    private Task<RuntimeRegistration> ReadCurrentAsync(
+        Guid runtimeInstanceId, CancellationToken cancellationToken) =>
+        checkpointRecoveryOperationId is { } operationId
+            ? owner.ReadCurrentForCheckpointRecoveryAsync(
+                runtimeInstanceId, operationId, actor, cancellationToken)
+            : owner.ReadCurrentAsync(runtimeInstanceId, actor, cancellationToken);
 
     /// <summary>Validates registration shape, active state, expiry, and actor bearer lifetime.</summary>
     internal static void RequireCurrent(
@@ -274,10 +285,14 @@ public sealed class RuntimeSessionBootstrap(
     }
 
     /// <summary>Builds the observe proof from an exchange that contains a live source credential.</summary>
-    private static RuntimeCredentialProof SourceProof(RuntimeCredentialExchange source) =>
+    private static RuntimeCredentialProof SourceProof(
+        RuntimeCredentialExchange source, Guid? checkpointRecoveryOperationId) =>
         new(source.Receipt.GrantId, source.Receipt.RuntimeInstanceId, source.Receipt.Revision,
             RuntimeCredentialPurpose.Observe, source.Receipt.Audience, source.Receipt.ConfigurationHash,
-            source.Credential ?? throw new RuntimeAuthorizationException("runtime_source_credential_unavailable"));
+            source.Credential ?? throw new RuntimeAuthorizationException("runtime_source_credential_unavailable"))
+        {
+            CheckpointRecoveryOperationId = checkpointRecoveryOperationId
+        };
 
     /// <summary>Compares accepted skills by ID, revision, digest, and count.</summary>
     private static bool SameAcceptedSkills(

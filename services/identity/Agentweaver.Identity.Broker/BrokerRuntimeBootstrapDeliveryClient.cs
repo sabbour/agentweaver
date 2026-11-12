@@ -18,9 +18,21 @@ public sealed class BrokerRuntimeBootstrapDeliveryClient(
         RuntimeRegistration registration, RuntimeActorAuthorization actor, Guid operationId,
         Guid grantId, string configurationHash, SecretCredential credential,
         CancellationToken cancellationToken) =>
+        DeliverAsync(
+            registration, actor, operationId, grantId, configurationHash, credential, null, cancellationToken);
+
+    /// <summary>Delivers a bootstrap verifier with optional checkpoint-recovery owner context.</summary>
+    public Task<RuntimeBootstrapDeliveryReceipt> DeliverAsync(
+        RuntimeRegistration registration, RuntimeActorAuthorization actor, Guid operationId,
+        Guid grantId, string configurationHash, SecretCredential credential,
+        Guid? checkpointRecoveryOperationId,
+        CancellationToken cancellationToken) =>
         RuntimeOwnerHttpTransport.SendAsync<RuntimeBootstrapDeliveryReceipt>(
             client, _environmentAddress, "/internal/runtime/bootstrap/deliver", actor,
             new RuntimeBootstrapDeliveryRequest(
                 registration.RuntimeInstanceId, operationId, grantId, configurationHash,
-                credential.GetValue(), credential.ExpiresAt), cancellationToken);
+                credential.GetValue(), credential.ExpiresAt)
+            {
+                CheckpointRecoveryOperationId = checkpointRecoveryOperationId
+            }, cancellationToken);
 }

@@ -66,14 +66,17 @@ public sealed class EnvironmentRuntimePlacementReader(
         RuntimeActorAuthorization actor, string projectId, string runId, string sessionId, string environmentId,
         string profileId, EnvironmentRuntimeBootstrapProfileRegistry profiles,
         CancellationToken cancellationToken,
-        IEnvironmentRuntimeBootstrapProfileReplacementStore? profileReplacements = null)
+        IEnvironmentRuntimeBootstrapProfileReplacementStore? profileReplacements = null,
+        Guid? checkpointRecoveryOperationId = null)
     {
         RuntimeContractValidation.ValidateIdentifier(sessionId);
         return placements.GetCurrentPlacementCoreAsync<EnvironmentRuntimeBootstrapContext?>(
             new(actor.Bearer.GetValue(), actor.TenantSelector), projectId, runId, environmentId,
             runBoundRead: true, (placement, token) => placement is null
                 ? Task.FromResult<EnvironmentRuntimeBootstrapContext?>(null)
-                : ProjectBootstrapAsync(actor, placement, sessionId, profileId, profiles, profileReplacements, token),
+                : ProjectBootstrapAsync(
+                    actor, placement, sessionId, profileId, profiles, profileReplacements, token,
+                    checkpointRecoveryOperationId),
             cancellationToken, requireEndpointWhen: projection =>
                 RequiresReplacementEndpoint(projection, profileId, profiles));
     }
@@ -83,17 +86,20 @@ public sealed class EnvironmentRuntimePlacementReader(
         RuntimeActorAuthorization actor, string projectId, string runId, string sessionId, string environmentId,
         string profileId, EnvironmentRuntimeBootstrapProfileRegistry profiles,
         CancellationToken cancellationToken,
-        IEnvironmentRuntimeBootstrapProfileReplacementStore? profileReplacements = null) =>
+        IEnvironmentRuntimeBootstrapProfileReplacementStore? profileReplacements = null,
+        Guid? checkpointRecoveryOperationId = null) =>
         GetReadinessContextCoreAsync(
             actor, projectId, runId, sessionId, environmentId, profileId, profiles,
-            (context, _) => Task.FromResult(context), cancellationToken, profileReplacements);
+            (context, _) => Task.FromResult(context), cancellationToken, profileReplacements,
+            checkpointRecoveryOperationId);
 
     private Task<TResult> GetReadinessContextCoreAsync<TResult>(
         RuntimeActorAuthorization actor, string projectId, string runId, string sessionId, string environmentId,
         string profileId, EnvironmentRuntimeBootstrapProfileRegistry profiles,
         Func<EnvironmentRuntimeReadinessContext?, CancellationToken, Task<TResult>> project,
         CancellationToken cancellationToken,
-        IEnvironmentRuntimeBootstrapProfileReplacementStore? profileReplacements)
+        IEnvironmentRuntimeBootstrapProfileReplacementStore? profileReplacements,
+        Guid? checkpointRecoveryOperationId = null)
     {
         RuntimeContractValidation.ValidateIdentifier(sessionId);
         return placements.GetCurrentPlacementCoreAsync(
@@ -105,7 +111,8 @@ public sealed class EnvironmentRuntimePlacementReader(
                 var evidence = placement.RuntimeReadiness
                     ?? throw new RuntimeAuthorizationException("runtime_readiness_unavailable");
                 var bootstrap = await ProjectBootstrapAsync(
-                    actor, placement, sessionId, profileId, profiles, profileReplacements, token).ConfigureAwait(false)
+                    actor, placement, sessionId, profileId, profiles, profileReplacements, token,
+                    checkpointRecoveryOperationId).ConfigureAwait(false)
                     ?? throw new RuntimeAuthorizationException("runtime_placement_unavailable");
                 var context = new EnvironmentRuntimeReadinessContext(
                     1, bootstrap, evidence.LeaseCreatedAt, evidence.Observation,
@@ -213,7 +220,8 @@ public sealed class EnvironmentRuntimePlacementReader(
         EnvironmentRuntimeBootstrapProfileRegistry profiles,
         IEnvironmentRuntimeBootstrapProfileReplacementStore replacements,
         EnvironmentRuntimeEndpointVerifier endpointVerifier,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null)
     {
         RuntimeContractValidation.ValidateIdentifier(sessionId);
         RuntimeContractValidation.ValidateIdentifier(sourceProfileId);
@@ -230,7 +238,8 @@ public sealed class EnvironmentRuntimePlacementReader(
                 var owner = new EnvironmentOwnerIdentity(
                     placement.TenantId, placement.ProjectId, placement.RunId, placement.EnvironmentId);
                 var ownerContext = await ReadOwnerContextAsync(
-                    actor, owner, projectId, runId, sessionId, token).ConfigureAwait(false);
+                    actor, owner, projectId, runId, sessionId, token, checkpointRecoveryOperationId)
+                    .ConfigureAwait(false);
                 var runtimeEndpoint = placement.RuntimeReadiness?.Observation.RuntimeEndpoint?.Validate()
                     ?? throw new RuntimeAuthorizationException("runtime_bootstrap_profile_endpoint_unavailable");
                 var configureEndpoint = runtimeEndpoint.ReceiverConfigureEndpoint
@@ -238,7 +247,8 @@ public sealed class EnvironmentRuntimePlacementReader(
                 _ = runtimeEndpoint.ValidateForConfigureEndpoint(configureEndpoint);
                 await endpointVerifier.VerifyLiveAsync(runtimeEndpoint, token).ConfigureAwait(false);
                 await RequireSameOwnerContextAsync(
-                    actor, ownerContext, owner, projectId, runId, sessionId, token).ConfigureAwait(false);
+                    actor, ownerContext, owner, projectId, runId, sessionId, token,
+                    checkpointRecoveryOperationId).ConfigureAwait(false);
 
                 EnvironmentRuntimeBootstrapProfileReplacement? sourceReplacement = null;
                 EnvironmentRuntimeBootstrapProfileRegistration? sourceRegistration;
@@ -332,10 +342,14 @@ public sealed class EnvironmentRuntimePlacementReader(
         RuntimeActorAuthorization actor, EnvironmentSandboxPlacementProjectionV1 placement,
         string sessionId, string profileId, EnvironmentRuntimeBootstrapProfileRegistry profiles,
         IEnvironmentRuntimeBootstrapProfileReplacementStore? profileReplacements,
-        CancellationToken token)
+        CancellationToken token,
+        Guid? checkpointRecoveryOperationId = null)
     {
-        var ownerContext = await runtimeOwner.ReadAsync(
-            actor, placement.ProjectId, placement.RunId, sessionId, token).ConfigureAwait(false);
+        var ownerContext = checkpointRecoveryOperationId is { } operationId
+            ? await runtimeOwner.ReadCheckpointRecoveryAsync(
+                actor, placement.ProjectId, placement.RunId, sessionId, operationId, token).ConfigureAwait(false)
+            : await runtimeOwner.ReadAsync(
+                actor, placement.ProjectId, placement.RunId, sessionId, token).ConfigureAwait(false);
         if (ownerContext.ContractVersion != 1 || ownerContext.TenantId != placement.TenantId ||
             ownerContext.ProjectId != placement.ProjectId || ownerContext.RunId != placement.RunId ||
             ownerContext.SessionId != sessionId || !actor.Bearer.IsUsable() ||
@@ -351,7 +365,8 @@ public sealed class EnvironmentRuntimePlacementReader(
             placement.ProjectId,
             placement.RunId,
             sessionId,
-            token).ConfigureAwait(false);
+            token,
+            checkpointRecoveryOperationId).ConfigureAwait(false);
         return bootstrap with { RuntimeOwnerContext = ownerContext };
     }
 
@@ -361,10 +376,14 @@ public sealed class EnvironmentRuntimePlacementReader(
         string projectId,
         string runId,
         string sessionId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null)
     {
-        var context = await runtimeOwner.ReadAsync(
-            actor, projectId, runId, sessionId, cancellationToken).ConfigureAwait(false);
+        var context = checkpointRecoveryOperationId is { } operationId
+            ? await runtimeOwner.ReadCheckpointRecoveryAsync(
+                actor, projectId, runId, sessionId, operationId, cancellationToken).ConfigureAwait(false)
+            : await runtimeOwner.ReadAsync(
+                actor, projectId, runId, sessionId, cancellationToken).ConfigureAwait(false);
         if (context.ContractVersion != 1 || context.TenantId != owner.TenantId ||
             context.ProjectId != projectId || context.RunId != runId ||
             context.SessionId != sessionId || !actor.Bearer.IsUsable())
@@ -379,9 +398,11 @@ public sealed class EnvironmentRuntimePlacementReader(
         string projectId,
         string runId,
         string sessionId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null)
     {
-        if (await ReadOwnerContextAsync(actor, owner, projectId, runId, sessionId, cancellationToken)
+        if (await ReadOwnerContextAsync(
+                actor, owner, projectId, runId, sessionId, cancellationToken, checkpointRecoveryOperationId)
                 .ConfigureAwait(false) != expected)
             throw new RuntimeAuthorizationException("runtime_owner_context_stale");
     }

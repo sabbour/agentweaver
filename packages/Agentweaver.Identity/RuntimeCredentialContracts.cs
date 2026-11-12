@@ -101,6 +101,13 @@ public interface IRuntimeRegistrationOwner
     /// <summary>Reads the authoritative current registration using authenticated owner credentials.</summary>
     Task<RuntimeRegistration> ReadCurrentAsync(
         Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken cancellationToken);
+
+    /// <summary>Reads the registration while validating one pending checkpoint-recovery operation.</summary>
+    Task<RuntimeRegistration> ReadCurrentForCheckpointRecoveryAsync(
+        Guid runtimeInstanceId, Guid operationId, RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken) =>
+        Task.FromException<RuntimeRegistration>(
+            new RuntimeAuthorizationException("runtime_checkpoint_recovery_unavailable"));
 }
 
 /// <summary>Credential-free evidence that a bootstrap delivery reached the registered placement.</summary>
@@ -133,6 +140,22 @@ public interface IRuntimeBootstrapDelivery
         string configurationHash,
         SecretCredential credential,
         CancellationToken cancellationToken);
+
+    /// <summary>Delivers a bootstrap credential while retaining one checkpoint-recovery owner context.</summary>
+    Task<RuntimeBootstrapDeliveryReceipt> DeliverAsync(
+        RuntimeRegistration registration,
+        RuntimeActorAuthorization actor,
+        Guid operationId,
+        Guid grantId,
+        string configurationHash,
+        SecretCredential credential,
+        Guid? checkpointRecoveryOperationId,
+        CancellationToken cancellationToken) =>
+        checkpointRecoveryOperationId is null
+            ? DeliverAsync(registration, actor, operationId, grantId, configurationHash, credential,
+                cancellationToken)
+            : Task.FromException<RuntimeBootstrapDeliveryReceipt>(
+                new RuntimeAuthorizationException("runtime_checkpoint_recovery_unavailable"));
 }
 
 /// <summary>Owner boundary for verifying that an incoming bootstrap delivery is still pending.</summary>
@@ -187,6 +210,7 @@ public sealed class RuntimeCredentialProof(
     public RuntimeCredentialPurpose Purpose { get; } = purpose;
     public Uri Audience { get; } = audience;
     public string ConfigurationHash { get; } = configurationHash;
+    public Guid? CheckpointRecoveryOperationId { get; init; }
     [JsonIgnore]
     public SecretCredential Credential { get; } = credential;
     /// <summary>Returns a redacted label rather than credential material.</summary>

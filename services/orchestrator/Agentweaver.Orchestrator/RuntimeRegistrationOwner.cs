@@ -32,13 +32,16 @@ internal sealed class RuntimeEnvironmentContextClient(
         string sessionId,
         string environmentId,
         string sourceProfileId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null)
     {
-        var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeBootstrapProfileResolveReceipt>(
-            client, options.EnvironmentOwnerAddress,
-            $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}" +
+        var path = $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}" +
             $"/environments/{Uri.EscapeDataString(environmentId)}/coordination/sessions/{Uri.EscapeDataString(sessionId)}" +
-            $"/runtime-bootstrap/profiles/{Uri.EscapeDataString(sourceProfileId)}/resolve",
+            $"/runtime-bootstrap/profiles/{Uri.EscapeDataString(sourceProfileId)}/resolve";
+        if (checkpointRecoveryOperationId is { } operationId)
+            path += $"?checkpointRecoveryOperationId={operationId:D}";
+        var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeBootstrapProfileResolveReceipt>(
+            client, options.EnvironmentOwnerAddress, path,
             actor, new RuntimeBootstrapProfileResolveRequest(1), cancellationToken).ConfigureAwait(false);
         return receipt.ValidateFor(sourceProfileId).ProfileId;
     }
@@ -48,23 +51,29 @@ internal sealed class RuntimeEnvironmentContextClient(
     /// </summary>
     public Task<EnvironmentRuntimeBootstrapContext> ReadAsync(
         RuntimeActorAuthorization actor, string projectId, string runId, string sessionId,
-        string environmentId, string profileId, CancellationToken cancellationToken) =>
+        string environmentId, string profileId, CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null) =>
         RuntimeOwnerHttpTransport.SendAsync<EnvironmentRuntimeBootstrapContext>(
             client, options.EnvironmentOwnerAddress,
             $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}" +
             $"/environments/{Uri.EscapeDataString(environmentId)}/coordination/sessions/{Uri.EscapeDataString(sessionId)}" +
-            $"/runtime-bootstrap/profiles/{Uri.EscapeDataString(profileId)}",
+            $"/runtime-bootstrap/profiles/{Uri.EscapeDataString(profileId)}" +
+            (checkpointRecoveryOperationId is { } operationId
+                ? $"?checkpointRecoveryOperationId={operationId:D}" : string.Empty),
             actor, null, cancellationToken);
 
     /// <summary>Reads the current owner-locked placement and its observed network generation.</summary>
     public Task<EnvironmentRuntimeReadinessContext> ReadReadinessAsync(
         RuntimeActorAuthorization actor, string projectId, string runId, string sessionId,
-        string environmentId, string profileId, CancellationToken cancellationToken) =>
+        string environmentId, string profileId, CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null) =>
         RuntimeOwnerHttpTransport.SendRuntimeRunStartAsync<EnvironmentRuntimeReadinessContext>(
             client, options.EnvironmentOwnerAddress,
             $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}" +
             $"/environments/{Uri.EscapeDataString(environmentId)}/coordination/sessions/{Uri.EscapeDataString(sessionId)}" +
-            $"/runtime-bootstrap/profiles/{Uri.EscapeDataString(profileId)}/readiness",
+            $"/runtime-bootstrap/profiles/{Uri.EscapeDataString(profileId)}/readiness" +
+            (checkpointRecoveryOperationId is { } operationId
+                ? $"?checkpointRecoveryOperationId={operationId:D}" : string.Empty),
             actor, null, cancellationToken);
 }
 
@@ -262,7 +271,8 @@ internal sealed class RuntimeRegistrationOwner(
         var resolvedRequest = request with
         {
             ProfileId = await ResolveProfileIdAsync(
-                context, projectId, runId, sessionId, request, cancellationToken).ConfigureAwait(false)
+                context, projectId, runId, sessionId, request, cancellationToken,
+                checkpointRecoveryRegistration).ConfigureAwait(false)
         };
         var derived = await DeriveCurrentBindingAsync(
             context, projectId, runId, sessionId, resolvedRequest, cancellationToken,
@@ -379,6 +389,24 @@ internal sealed class RuntimeRegistrationOwner(
         await ExecuteCurrentAsync(context, runtimeInstanceId,
             (current, _) => Task.FromResult(current), cancellationToken).ConfigureAwait(false);
 
+    internal async Task<RuntimeRegistration> ReadCurrentForCheckpointRecoveryAsync(
+        HttpContext context, Guid runtimeInstanceId, Guid operationId, CancellationToken cancellationToken)
+    {
+        if (operationId == Guid.Empty)
+            throw new RuntimeAuthorizationException("checkpoint_recovery_registration_stale");
+        var current = await registrations.ReadAsync(runtimeInstanceId, cancellationToken).ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_registration_unknown");
+        var binding = current.Binding;
+        var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        var identity = new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId);
+        var status = await sessions.ReadCheckpointRecoveryStatusAsync(
+            actor, identity, operationId, cancellationToken).ConfigureAwait(false);
+        var authorization = new CheckpointRecoveryRegistrationAuthorization(operationId, status);
+        return await ExecuteCurrentAsync(
+            context, runtimeInstanceId, (registration, _) => Task.FromResult(registration),
+            cancellationToken, authorization).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Finds the single current registration for a session from bounded candidate pages.
     /// </summary>
@@ -464,7 +492,8 @@ internal sealed class RuntimeRegistrationOwner(
     internal async Task<T> ExecuteCurrentAsync<T>(
         HttpContext context, Guid runtimeInstanceId,
         Func<RuntimeRegistration, CancellationToken, Task<T>> action,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CheckpointRecoveryRegistrationAuthorization? checkpointRecoveryRegistration = null)
     {
         T result = default!;
         var registration = await registrations.ReadAsync(
@@ -475,7 +504,8 @@ internal sealed class RuntimeRegistrationOwner(
                 var request = new RegisterRuntimeRequest(binding.EnvironmentId, binding.ProfileId);
                 var derived = await DeriveCurrentBindingAsync(
                     context, binding.ProjectId, binding.RunId, binding.SessionId, request, token,
-                    requireInitialOwnerSnapshot: false).ConfigureAwait(false);
+                    requireInitialOwnerSnapshot: false,
+                    checkpointRecoveryRegistration: checkpointRecoveryRegistration).ConfigureAwait(false);
                 RequireRegistrationMatches(current, derived);
                 result = await action(current, token).ConfigureAwait(false);
             }).ConfigureAwait(false)
@@ -510,7 +540,8 @@ internal sealed class RuntimeRegistrationOwner(
             var actor = new RuntimeActorAuthorization(
                 credential, CoordinationIdentity.ReadTenantSelector(context));
             var placement = await environment.ReadAsync(
-                actor, projectId, runId, sessionId, request.EnvironmentId, request.ProfileId, cancellationToken)
+                actor, projectId, runId, sessionId, request.EnvironmentId, request.ProfileId, cancellationToken,
+                checkpointRecoveryRegistration?.OperationId)
                 .ConfigureAwait(false);
             var owner = placement.RuntimeOwnerContext
                 ?? throw new RuntimeAuthorizationException("runtime_owner_context_unavailable");
@@ -534,7 +565,8 @@ internal sealed class RuntimeRegistrationOwner(
         RuntimeActorAuthorization actor,
         RuntimeOwnerContext expectedOwner,
         RegisterRuntimeRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CheckpointRecoveryRegistrationAuthorization? checkpointRecoveryRegistration = null)
     {
         if (!actor.Bearer.IsUsable())
             throw new RuntimeAuthorizationException("runtime_actor_expired");
@@ -596,7 +628,8 @@ internal sealed class RuntimeRegistrationOwner(
         string runId,
         string sessionId,
         RegisterRuntimeRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CheckpointRecoveryRegistrationAuthorization? checkpointRecoveryRegistration = null)
     {
         var authenticated = await context.AuthenticateAsync().ConfigureAwait(false);
         var expiresAt = context.User.GetExpirationDate() ?? authenticated.Properties?.ExpiresUtc;
@@ -609,7 +642,8 @@ internal sealed class RuntimeRegistrationOwner(
             var actor = new RuntimeActorAuthorization(
                 credential, CoordinationIdentity.ReadTenantSelector(context));
             return await environment.ResolveProfileIdAsync(
-                actor, projectId, runId, sessionId, request.EnvironmentId, request.ProfileId, cancellationToken)
+                actor, projectId, runId, sessionId, request.EnvironmentId, request.ProfileId, cancellationToken,
+                checkpointRecoveryRegistration?.OperationId)
                 .ConfigureAwait(false);
         }
         finally

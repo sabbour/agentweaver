@@ -33,7 +33,7 @@ public sealed class RuntimeRegistrationRecoveryTests
     }
 
     [Fact]
-    public void RecoveryRegistrationAllowsOnlyItsPinnedPendingGateVersion()
+    public void RecoveryRegistrationAllowsOnlyItsPinnedGateVersionWhilePending()
     {
         const long fence = 4;
         const long decisionVersion = 12;
@@ -64,6 +64,11 @@ public sealed class RuntimeRegistrationRecoveryTests
             });
 
         CoordinationEndpoints.RequireCoordinatorRootDecision(decision, owner, authorization);
+        CoordinationEndpoints.RequireCoordinatorRootDecision(
+            decision, owner, authorization with
+            {
+                Status = authorization.Status with { Phase = "ready" }
+            });
 
         Assert.Equal("runtime_owner_context_unavailable",
             Assert.Throws<CoordinationException>(() =>

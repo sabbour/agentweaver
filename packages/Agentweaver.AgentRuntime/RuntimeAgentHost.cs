@@ -89,6 +89,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     private RuntimeRegistration? _registration;
     private RuntimeActorAuthorization? _actor;
     private AuthorizedRuntimeSession? _session;
+    private Guid? _checkpointRecoveryOperationId;
     private CapturedMcpServer? _capturedMcpServer;
     private RuntimeSessionMaterialHttpClient? _material;
     private RuntimeUsageSourceHttpClient? _usageSource;
@@ -506,7 +507,10 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         try
         {
             RequireAvailable();
-            var current = await _owner.ReadCurrentAsync(request.RuntimeInstanceId, actor, token).ConfigureAwait(false);
+            var current = request.CheckpointRecoveryOperationId is { } operationId
+                ? await _owner.ReadCurrentForCheckpointRecoveryAsync(
+                    request.RuntimeInstanceId, operationId, actor, token).ConfigureAwait(false)
+                : await _owner.ReadCurrentAsync(request.RuntimeInstanceId, actor, token).ConfigureAwait(false);
             RequireRegistration(current, actor);
             if (_registration is not null && current != _registration)
                 throw new RuntimeAuthorizationException("runtime_configuration_conflict");
@@ -554,7 +558,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         try
         {
             RequireAvailable();
-            await RequireCallerAsync(request.Registration, actor, token).ConfigureAwait(false);
+            await RequireCallerAsync(
+                request.Registration, actor, token, request.CheckpointRecoveryOperationId).ConfigureAwait(false);
             RuntimeContractValidation.RequireSupportedNumericRunLimits(request.Registration.Binding);
             var receiver = _receiver ?? throw new RuntimeAuthorizationException("runtime_delivery_unavailable");
             if (_actor is null)
@@ -574,7 +579,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             }
             var skillContent = new RuntimeSkillContentHttpClient(
                 _http, _options.OrchestratorAddress, retained);
-            await ReadPlacementAsync(request.Registration, retained, token).ConfigureAwait(false);
+            await ReadPlacementAsync(
+                request.Registration, retained, token, request.CheckpointRecoveryOperationId).ConfigureAwait(false);
             var capturedMcpServer = Volatile.Read(ref _capturedMcpServer)
                 ?? throw new RuntimeAuthorizationException("runtime_mcp_server_binding_invalid");
             if (request.McpServer is { IsValid: false } ||
@@ -589,7 +595,9 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                     if (resumeBootstrap is not null)
                         await RequireCurrentResumeBootstrapAsync(resumeBootstrap, retained, cancellation)
                             .ConfigureAwait(false);
-                    await ReadPlacementAsync(registration, retained, cancellation).ConfigureAwait(false);
+                    await ReadPlacementAsync(
+                        registration, retained, cancellation, request.CheckpointRecoveryOperationId)
+                        .ConfigureAwait(false);
                     if (resumeBootstrap is not null)
                         await RequireCurrentResumeBootstrapAsync(resumeBootstrap, retained, cancellation)
                             .ConfigureAwait(false);
@@ -597,10 +605,12 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                 hostedReasoningCatalog: new(
                     _hostedCatalogPublicationHttp ?? _http, _options.ProjectsConfigAddress, retained),
                 logger: _logger,
-                replacementRecovery: request.ReplacementRecovery);
+                replacementRecovery: request.ReplacementRecovery,
+                checkpointRecoveryOperationId: request.CheckpointRecoveryOperationId);
             _session = await receiver.ConfigureAsync(
                 bootstrap, configurationBytes, request.ConsumeOperationId, request.ExchangeOperationId,
                 token, resumeBootstrap).ConfigureAwait(false);
+            _checkpointRecoveryOperationId = request.CheckpointRecoveryOperationId;
             var configuredSession = _session
                 ?? throw new RuntimeAuthorizationException("runtime_session_unavailable");
             _resumeCacheReceipt = null;
@@ -1332,12 +1342,17 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
 
     /// <summary>Requires the caller and owner registration to still match this host.</summary>
     private async Task RequireCallerAsync(
-        RuntimeRegistration expected, RuntimeActorAuthorization actor, CancellationToken token)
+        RuntimeRegistration expected, RuntimeActorAuthorization actor, CancellationToken token,
+        Guid? checkpointRecoveryOperationId = null)
     {
         RequireRegistration(expected, actor);
         if (expected != _registration)
             throw new RuntimeAuthorizationException("runtime_configuration_conflict");
-        var current = await _owner.ReadCurrentAsync(expected.RuntimeInstanceId, actor, token).ConfigureAwait(false);
+        checkpointRecoveryOperationId ??= _checkpointRecoveryOperationId;
+        var current = checkpointRecoveryOperationId is { } operationId
+            ? await _owner.ReadCurrentForCheckpointRecoveryAsync(
+                expected.RuntimeInstanceId, operationId, actor, token).ConfigureAwait(false)
+            : await _owner.ReadCurrentAsync(expected.RuntimeInstanceId, actor, token).ConfigureAwait(false);
         RequireRegistration(current, actor);
         if (current != expected)
             throw new RuntimeAuthorizationException("runtime_registration_stale");
@@ -1358,14 +1373,18 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     /// startup time budgets before returning phase observations.
     /// </summary>
     private async Task<ImmutableArray<SandboxStartupPhaseObservation>> ReadPlacementAsync(
-        RuntimeRegistration registration, RuntimeActorAuthorization actor, CancellationToken token)
+        RuntimeRegistration registration, RuntimeActorAuthorization actor, CancellationToken token,
+        Guid? checkpointRecoveryOperationId = null)
     {
+        checkpointRecoveryOperationId ??= _checkpointRecoveryOperationId;
         var binding = registration.Binding;
         var context = await RuntimeOwnerHttpTransport.SendAsync<EnvironmentRuntimeReadinessContext>(
             _http, _options.EnvironmentAddress,
             $"/internal/projects/{Uri.EscapeDataString(binding.ProjectId)}/runs/{Uri.EscapeDataString(binding.RunId)}" +
             $"/environments/{Uri.EscapeDataString(binding.EnvironmentId)}/coordination/sessions/{Uri.EscapeDataString(binding.SessionId)}" +
-            $"/runtime-bootstrap/profiles/{Uri.EscapeDataString(binding.ProfileId)}/readiness",
+            $"/runtime-bootstrap/profiles/{Uri.EscapeDataString(binding.ProfileId)}/readiness" +
+            (checkpointRecoveryOperationId is { } operationId
+                ? $"?checkpointRecoveryOperationId={operationId:D}" : string.Empty),
             actor, null, token).ConfigureAwait(false);
         var placement = context.Placement;
         var observation = context.Observation;

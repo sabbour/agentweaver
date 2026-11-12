@@ -16,6 +16,9 @@ public sealed record PendingBootstrapVerificationRequest(
     DateTimeOffset CredentialExpiresAt,
     Guid DeliveryOperationId)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CheckpointRecoveryOperationId { get; init; }
+
     /// <summary>Returns a redacted label rather than credential values.</summary>
     public override string ToString() => nameof(PendingBootstrapVerificationRequest) + " [REDACTED]";
 }
@@ -30,6 +33,9 @@ public sealed record RuntimeBootstrapDeliveryRequest(
     string CredentialValue,
     DateTimeOffset CredentialExpiresAt)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CheckpointRecoveryOperationId { get; init; }
+
     /// <summary>Returns a redacted label rather than credential values.</summary>
     public override string ToString() => nameof(RuntimeBootstrapDeliveryRequest) + " [REDACTED]";
 }
@@ -39,13 +45,21 @@ public sealed record RuntimeBootstrapDeliveryRequest(
 public sealed record RuntimeBootstrapRequest(
     Guid RuntimeInstanceId,
     Guid OperationId,
-    string ConfigurationHash);
+    string ConfigurationHash)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CheckpointRecoveryOperationId { get; init; }
+}
 
 /// <summary>Request to obtain an owner grant for the accepted model credential.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeModelCredentialGrantRequest(
     Guid RuntimeInstanceId,
-    Guid OperationId);
+    Guid OperationId)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CheckpointRecoveryOperationId { get; init; }
+}
 
 /// <summary>Owner-issued, registration-bound permission to redeem an exact model credential.</summary>
 public sealed record RuntimeModelCredentialGrantReceipt(
@@ -66,6 +80,8 @@ public sealed record RuntimeModelCredentialGrantReceipt(
     public long? ConnectionRevision { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeModelCredentialKind? CredentialKind { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CheckpointRecoveryOperationId { get; init; }
 }
 
 /// <summary>Kind of secret material authorized by a model credential grant.</summary>
@@ -108,6 +124,8 @@ public sealed record RuntimeCredentialHttpRequest(
     DateTimeOffset CredentialExpiresAt,
     Guid OperationId)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CheckpointRecoveryOperationId { get; init; }
     /// <summary>Returns a redacted label rather than the credential value.</summary>
     public override string ToString() => nameof(RuntimeCredentialHttpRequest) + " [REDACTED]";
 }

@@ -4156,7 +4156,7 @@ internal sealed partial class CoordinationOwnerStore
         CancellationToken cancellationToken)
     {
         if (authorization.OperationId == Guid.Empty ||
-            authorization.Status.Phase != "pending" ||
+            authorization.Status.Phase is not ("pending" or "ready") ||
             authorization.Status.PreviousExecutionFence == long.MaxValue ||
             authorization.Status.PreviousExecutionFence + 1 != executionFence ||
             authorization.Status.ExecutionFence != executionFence ||
@@ -4218,7 +4218,7 @@ internal sealed partial class CoordinationOwnerStore
             ? null
             : JsonSerializer.Deserialize<RunExecutionTransitionResult>(storedJson, JsonOptions);
         if (stored?.Session != identity || stored.OperationId != operationId ||
-            stored.CheckpointRecovery is not { Phase: "pending" } status)
+            stored.CheckpointRecovery is not { Phase: "pending" or "ready" } status)
             throw new CoordinationException(
                 "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
         return status;
@@ -4922,16 +4922,69 @@ internal sealed partial class CoordinationOwnerStore
             "failed" => "orchestrator.run.checkpoint_recovery_failed",
             _ => "orchestrator.run.checkpoint_recovery_progress"
         };
+        var progressEventId = new Guid(SHA256.HashData(
+            Encoding.UTF8.GetBytes($"checkpoint-recovery:{operationId:D}:{phaseVersion}"))[..16]);
         await _outbox.EnqueueAsync(connection, transaction, new OutboxEvent(
-            operationId,
+            progressEventId,
             $"coordination/{identity.ProjectId}/{identity.RunId}/execution",
-            $"checkpoint-recovery:{operationId}:{status.Phase}:{status.CurrentStep}",
+            $"checkpoint-recovery:{operationId:D}:{phaseVersion}",
             eventType,
             EventVersion,
             JsonSerializer.SerializeToElement(new { operationId, status }, JsonOptions),
             _timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return updated;
+    }
+
+    internal async Task<RuntimeRunStartIntent> PersistCheckpointRecoveryCleanupEvidenceAsync(
+        RuntimeRunStartIntent intent,
+        string receiptLinks,
+        long executionFence,
+        Guid bootstrapOperationId,
+        string? environmentId,
+        Guid? runtimeInstanceId,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand($"""
+            UPDATE {_schema}.runtime_run_start_intents
+            SET execution_fence = @current_fence,
+                bootstrap_operation_id = @bootstrap,
+                environment_id = @environment,
+                runtime_instance_id = @runtime,
+                receipt_links = @receipts,
+                row_version = row_version + 1,
+                updated_at = clock_timestamp()
+            WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
+                AND root_session_id = @root AND accepted_selection_hash = @selection
+                AND execution_fence = @fence AND row_version = @version
+                AND state = 'ready' AND NOT cleanup_obligation
+            RETURNING row_version
+            """, connection);
+        command.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, intent.TenantId);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, intent.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, intent.RunId);
+        command.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, intent.RootSessionId);
+        command.Parameters.AddWithValue("selection", NpgsqlDbType.Char, intent.AcceptedSelectionHash);
+        command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, intent.ExecutionFence);
+        command.Parameters.AddWithValue("current_fence", NpgsqlDbType.Bigint, executionFence);
+        command.Parameters.AddWithValue("version", NpgsqlDbType.Bigint, intent.RowVersion);
+        command.Parameters.AddWithValue("bootstrap", NpgsqlDbType.Uuid, bootstrapOperationId);
+        command.Parameters.AddWithValue("environment", NpgsqlDbType.Varchar, (object?)environmentId ?? DBNull.Value);
+        command.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, (object?)runtimeInstanceId ?? DBNull.Value);
+        command.Parameters.AddWithValue("receipts", NpgsqlDbType.Jsonb, receiptLinks);
+        var rowVersion = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as long?;
+        if (rowVersion is null)
+            throw new CoordinationException("runtime_start_intent_stale", StatusCodes.Status409Conflict);
+        return intent with
+        {
+            ExecutionFence = executionFence,
+            BootstrapOperationId = bootstrapOperationId,
+            EnvironmentId = environmentId,
+            RuntimeInstanceId = runtimeInstanceId,
+            ReceiptLinks = receiptLinks,
+            RowVersion = rowVersion.Value
+        };
     }
 
     /// <summary>
