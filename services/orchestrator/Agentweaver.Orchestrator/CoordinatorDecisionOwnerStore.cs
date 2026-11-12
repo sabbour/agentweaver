@@ -911,8 +911,8 @@ internal sealed class CoordinatorDecisionOwnerStore
             currentState.ConfirmedWorkPlan,
             currentState.CandidateWorkPlan,
             currentState.LastScopeDiff,
-            pendingGate: preservePendingGate
-                ? currentState.PendingGate! with { Fence = nextFence }
+            pendingGate: preservePendingGate && currentState.PendingGate is { } gateToRebind
+                ? gateToRebind with { Fence = nextFence }
                 : null,
             decisionReceipts: currentState.DecisionReceipts,
             workPlanRevisionAttempts: currentState.WorkPlanRevisionAttempts);

@@ -87,9 +87,13 @@ public static partial class CoordinationEndpoints
         CoordinatorRunSelectionContextStore runSelectionContexts, PostgresMafCheckpointStore checkpoints,
         CancellationToken cancellationToken,
         bool allowTerminalChild = false,
-        bool allowCoordinatorRoot = false)
+        bool allowCoordinatorRoot = false,
+        CheckpointRecoveryRegistrationAuthorization? checkpointRecoveryRegistration = null)
     {
         context.Response.Headers.CacheControl = "no-store";
+        if (checkpointRecoveryRegistration is not null && !allowCoordinatorRoot)
+            throw new CoordinationException(
+                "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
         var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
         var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
             context, projectId, runId, cancellationToken).ConfigureAwait(false);
@@ -103,10 +107,14 @@ public static partial class CoordinationEndpoints
             : await (allowTerminalChild
                 ? store.ReadRuntimeOwnerStateForObservationAsync(actor, identity, cancellationToken)
                 : store.ReadRuntimeOwnerStateAsync(actor, identity, cancellationToken)).ConfigureAwait(false);
+        if (checkpointRecoveryRegistration is not null && !owner.IsCoordinatorRoot)
+            throw new CoordinationException(
+                "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
         if (owner.IsCoordinatorRoot)
             return await ReadCoordinatorRootRuntimeOwnerContextAsync(
                 projectId, runId, sessionId, context, actor, identity, projects, store, decisions,
-                selection, budgetLimits, owner, acceptedSelectionHash, cancellationToken).ConfigureAwait(false);
+                selection, budgetLimits, owner, acceptedSelectionHash, cancellationToken,
+                checkpointRecoveryRegistration).ConfigureAwait(false);
 
         var root = new SessionIdentity(projectId, runId, owner.RootSessionId);
         var selectionContext = await runSelectionContexts.ReadAsync(
@@ -314,7 +322,8 @@ public static partial class CoordinationEndpoints
             decimal? CopilotSoftCreditLimit, decimal? CopilotHardCreditLimit) budgetLimits,
         SessionRuntimeOwnerState owner,
         string acceptedSelectionHash,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CheckpointRecoveryRegistrationAuthorization? checkpointRecoveryRegistration)
     {
         var root = new SessionIdentity(projectId, runId, owner.RootSessionId);
         if (!owner.IsCoordinatorRoot || owner.RootSessionId != sessionId ||
@@ -325,7 +334,11 @@ public static partial class CoordinationEndpoints
 
         var decision = await decisions.ReadCurrentAsync(actor, root, selection, cancellationToken)
             .ConfigureAwait(false);
-        RequireCoordinatorRootDecision(decision, owner);
+        if (checkpointRecoveryRegistration is not null)
+            await store.RequireCheckpointRecoveryRegistrationAsync(
+                actor, root, owner.ExecutionFence, checkpointRecoveryRegistration, cancellationToken)
+                .ConfigureAwait(false);
+        RequireCoordinatorRootDecision(decision, owner, checkpointRecoveryRegistration);
 
         RuntimeAcceptedModelSelection modelSelection;
         try
@@ -352,7 +365,11 @@ public static partial class CoordinationEndpoints
             currentDecision.SelectionHash != decision.SelectionHash)
             throw new CoordinationException(
                 "runtime_owner_context_stale", StatusCodes.Status409Conflict);
-        RequireCoordinatorRootDecision(currentDecision, currentOwner);
+        if (checkpointRecoveryRegistration is not null)
+            await store.RequireCheckpointRecoveryRegistrationAsync(
+                actor, root, currentOwner.ExecutionFence,
+                checkpointRecoveryRegistration, cancellationToken).ConfigureAwait(false);
+        RequireCoordinatorRootDecision(currentDecision, currentOwner, checkpointRecoveryRegistration);
         await RequireUnchangedAuthorizedSelectionAsync(
             context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
 
@@ -385,13 +402,24 @@ public static partial class CoordinationEndpoints
         };
     }
 
-    private static void RequireCoordinatorRootDecision(
+    internal static void RequireCoordinatorRootDecision(
         CoordinatorDecisionCurrentState decision,
-        SessionRuntimeOwnerState owner)
+        SessionRuntimeOwnerState owner,
+        CheckpointRecoveryRegistrationAuthorization? checkpointRecoveryRegistration = null)
     {
         if (decision.State.Fence != owner.ExecutionFence ||
-            decision.SelectionHash != owner.AcceptedSelectionHash ||
-            !(decision.State.CanDispatch ||
+            decision.SelectionHash != owner.AcceptedSelectionHash)
+            throw new CoordinationException(
+                "runtime_owner_context_unavailable", StatusCodes.Status409Conflict);
+        if (checkpointRecoveryRegistration is { } recovery)
+        {
+            if (decision.StateVersion != recovery.Status.DecisionStateVersion ||
+                decision.State.PendingGate is { } gate && gate.Fence != owner.ExecutionFence)
+                throw new CoordinationException(
+                    "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
+            return;
+        }
+        if (!(decision.State.CanDispatch ||
               (decision.State.ConfirmedWorkPlan is null &&
                decision.State.CandidateWorkPlan is null &&
                decision.State.PendingGate is null)))
