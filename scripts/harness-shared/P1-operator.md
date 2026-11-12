@@ -1,29 +1,10 @@
 <span id="run-the-p1-acceptance-harness"></span>
 
-# Run the acceptance harness
+# Use the P1 launcher
 
-Use this guide to run a product journey against an approved target. The
-harness signs in once, runs the selected journey, and records a redacted
-result; it does not require image publication, source-provenance, or archive
-receipts.
+Use this guide for the separate UI sign-in flow and for reconciliation or guarded cleanup of an interrupted invocation. API acceptance uses the read-only CLI case script; it does not create fixtures, request browser sign-in, or use these recovery procedures.
 
-## Before you run
-
-Prepare one manifest for the exact target. It must include:
-
-- The direct Environment URL, issuer, audience, actor, and tenant.
-- The Kubernetes context and namespace.
-- Current provider, runtime, and storage receipts.
-- The current platform selection revision.
-- Independently produced native and recovery evidence for checks that need it.
-
-The journey uses the manifest actor for its API requests. It does not run a
-cross-actor denial probe or require a second Broker account. The manifest
-rejects unknown `fixturePlan` fields, including fields for a second actor.
-
-The launcher does not change registered clients, redirect addresses, scopes,
-tenant settings, roles, or permissions. Any trust change needs separate
-approval for the exact client, redirects, scopes, resources, and consequences.
+For API case input, apphost, dry-run, and evidence requirements, follow [Run a read-only CLI API case](../../docs/guide/api-acceptance-migration.md). Use only an explicitly approved non-production target.
 
 ## Reconcile an interrupted run
 
@@ -112,49 +93,20 @@ including restoring the migration-history state and append-only trigger.
 Resolve it through the reviewed setup and cleanup workflow that owns the
 invocation; do not edit authority-audit or setup-operation rows by hand.
 
-## Check the manifest without contacting the target
+## Validate and run an API case
+
+The API case script validates local input with `--dry-run`, then invokes normal CLI commands through the exact native apphost. It does not open a browser or create project/run fixtures. Follow [Run a read-only CLI API case](../../docs/guide/api-acceptance-migration.md) for the full procedure.
+
+Use the separate UI surface for interactive browser sign-in:
 
 ```powershell
-npm run harness:p1:signin-run -- --surface api --input <manifest.json> --output <evidence.jsonl> --dry-run
-```
-
-The dry run checks the manifest shape and prints the operator steps. It does
-not open a browser, contact the target, write evidence, create a project, or
-create role assignments. It does not verify deployment or runtime readiness.
-
-## Run a journey
-
-Choose one command:
-
-```powershell
-npm run harness:p1:signin-run -- --surface api --input <manifest.json> --output <evidence.jsonl>
 npm run harness:p1:signin-run -- --surface ui --input <manifest.json> --output <evidence.jsonl>
 ```
 
-The Agentweaver 1.x acceptance launcher has no MCP surface; it rejects
-`--surface mcp` rather than falling back to the legacy runner. API acceptance
-uses the native .NET CLI. For UI, complete one interactive sign-in in the
-headed Chrome window with the approved account. Review the requested scopes
-and approve only the registered client request. The API flow does not share
-this browser session or its credentials. Do not use another account or paste
-a token into a prompt.
-Keep the shared browser window open between setup and run-bound token requests.
-The launcher closes each completed authorization page, not the shared browser.
+For UI, complete one interactive sign-in in the headed Chrome window with the approved account. Review the requested scopes and approve only the registered client request. The API case does not share this browser session or its credentials. Do not use another account or paste a token into a prompt.
 
-For the UI flow, the launcher starts the app's silent authorization with the
-same Broker session. It does not ask you to sign in again.
+The UI launcher needs no token file, token environment variable, identity module, or page module. It keeps Broker tokens in memory, does not read or copy an existing browser profile or browser token storage, and removes its temporary Chrome profile when the run finishes, fails, or is cancelled.
 
-The launcher needs no token file, token environment variable, identity module,
-or page module. It keeps Broker tokens in memory. It does not read or copy an
-existing browser profile or read browser token storage. Its temporary Chrome
-profile is removed when the run finishes, fails, or is cancelled.
-
-The runner uses the public Projects API to create an invocation-owned project
-and assign the signed-in actor Owner and then Orchestrator. It runs only the
-selected journey. In-process cleanup revokes Orchestrator, archives the
-project, and then revokes Owner. Guarded recovery cleanup uses the same
-revision-checked sequence for an existing invocation after a fresh evidence
-match. The evidence records the receipts for setup and cleanup.
 
 ## Review the result
 
@@ -163,5 +115,4 @@ failed cleanup is not a successful cleanup. If the output says a mutation may
 have completed without a verified receipt, stop and follow its diagnosis.
 Do not retry the mutation or remove unrelated resources.
 
-A passed surface journey does not prove complete acceptance. Missing native or
-recovery evidence remains blocked. Controlled tests do not prove a live journey.
+A passed UI journey does not prove complete API acceptance. Controlled tests do not prove a live journey.

@@ -372,9 +372,9 @@ needs `SELECT`, `INSERT`, and `UPDATE` on the job table. It has no `DELETE`
 grant. The migration is optional during rollout; readiness rejects an applied
 but incomplete schema.
 
-These are Orchestrator owner routes. Gateway admission and the CLI acceptance
-journey remain pending PR 4. The diagram shows the owner source flow, not a
-deployed or live-model test.
+These are Orchestrator owner routes. The read-only CLI API case does not
+exercise them. The diagram shows the owner source flow, not a deployed or
+live-model test.
 
 ```mermaid
 sequenceDiagram

@@ -91,7 +91,7 @@
   ],
   "rules": [
     {
-      "name": "Standalone .NET CLI and Gateway-derived API acceptance",
+      "name": "Native .NET CLI and Gateway contracts",
       "sourcePrefixes": [
         "tools/Agentweaver.Cli/",
         "tests/Agentweaver.Cli.Tests/",
@@ -117,13 +117,14 @@
       ]
     },
     {
-      "name": "Normal-command API acceptance script",
+      "name": "Normal-command API acceptance case",
       "sourcePrefixes": [
         "scripts/acceptance/api/"
       ],
       "required": [
         "docs/guide/api-acceptance-migration.md",
-        "docs/guide/testing.md"
+        "docs/guide/testing.md",
+        "docs/guide/cli.md"
       ]
     },
     {

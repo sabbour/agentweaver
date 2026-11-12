@@ -115,16 +115,3 @@ public interface IGatewayClientFactory
 {
     IGatewayClient Create(CliIdentity identity);
 }
-
-public sealed record ApiTestOptions(
-    string InputPath,
-    string OutputPath,
-    bool DryRun = false,
-    string? NativeProbeEnvelopePath = null,
-    string? DispatchRecoveryEnvelopePath = null,
-    InteractionPolicy Interaction = InteractionPolicy.Never);
-
-public interface IApiAcceptanceRunner
-{
-    Task<int> RunAsync(ApiTestOptions options, CancellationToken ct);
-}

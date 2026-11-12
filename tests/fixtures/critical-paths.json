@@ -1,139 +1,45 @@
 {
-  "description": "Critical-path coverage for live acceptance journeys. CriticalPathCoverageTests checks this file against the Gateway route catalog in every PR build. Each Gateway operation under a watched prefix must be covered by the journey or listed in outOfPath with a reason. A route whose path contains the text of a gap fails the build until the journey covers it.",
+  "description": "Coverage inventory for checked-in API case scripts. Watched routes must be covered by executable CLI commands or have an explained exclusion.",
   "criticalPaths": [
     {
-      "id": "cp1-full-flow-delivery",
-      "title": "Casting, blueprint, task, and completion with a real BYOK model",
-      "journey": "full-flow-delivery",
+      "id": "cp1-read-only-gateway",
+      "title": "Read caller authorization context",
+      "caseScript": "scripts/acceptance/api/read-only-gateway.mjs",
       "watchRoutePrefixes": [
-        "/projects/{projectId}/casting/proposals",
-        "/projects/{projectId}/backlog",
-        "/projects/{projectId}/runs/{runId}/usage",
-        "/projects/{projectId}/runs/{runId}/backlog",
-        "/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions"
+        "/authorization/context",
+        "/projects/{projectId}/source-control/refs",
+        "/projects/{projectId}/source-control/tree",
+        "/projects/{projectId}/source-control/files"
       ],
       "coveredOperations": [
-        "formulateCastingProposal",
-        "readSessionTurnContent",
-        "readSessionTree",
-        "listProjectCastingRoles",
-        "confirmProjectCastingProposal",
-        "getProjectConfiguration",
-        "captureBacklogTask",
-        "readProjectBacklog",
-        "archiveProjectBacklogTask",
-        "readRunUsage"
+        "getAuthorizationContext"
       ],
       "outOfPath": [
         {
-          "operation": "analyzeCastingProposal",
-          "reason": "Analyze mode is an alternative to Formulate; the journey uses Formulate."
+          "operation": "listWorkspaceRepositoryRefs",
+          "reason": "The current read-only Gateway case does not select a Workspace repository. Track its replacement in issue #2752."
         },
         {
-          "operation": "createProjectCastingProposal",
-          "reason": "Stages a complete casting draft from the caller; it calls no model."
+          "operation": "readWorkspaceRepositoryTree",
+          "reason": "The current read-only Gateway case does not read a Workspace repository tree. Track its replacement in issue #2752."
         },
         {
-          "operation": "createScenarioProjectCastingProposal",
-          "reason": "Scenario casting is an alternative to Formulate and calls no model."
-        },
-        {
-          "operation": "createManualProjectCastingProposal",
-          "reason": "Manual role selection is an alternative to Formulate and calls no model."
-        },
-        {
-          "operation": "listProjectCastingProposals",
-          "reason": "Browse view; the journey reads the exact generated proposal through its confirmation."
-        },
-        {
-          "operation": "getProjectCastingProposal",
-          "reason": "Single-proposal read; the journey checks the confirmed casting in the project configuration."
-        },
-        {
-          "operation": "updateProjectCastingProposal",
-          "reason": "Optional human edit before confirmation."
-        },
-        {
-          "operation": "updateProjectCastingProposalMemberRole",
-          "reason": "Optional human edit before confirmation."
-        },
-        {
-          "operation": "rejectProjectCastingProposal",
-          "reason": "Alternative outcome to confirmation."
-        },
-        {
-          "operation": "setAllProjectBacklogTasksReady",
-          "reason": "Board bulk edit; it is not a delivery step."
-        },
-        {
-          "operation": "editBacklogTaskContent",
-          "reason": "Board edit; the Board acceptance journeys cover it."
-        },
-        {
-          "operation": "setProjectBacklogTaskPosition",
-          "reason": "Board ordering; it is not a delivery step."
-        },
-        {
-          "operation": "setProjectBacklogTaskState",
-          "reason": "Board state change; task execution is the task-model-completion gap."
-        },
-        {
-          "operation": "deleteProjectBacklogTask",
-          "reason": "The journey archives its task for cleanup instead of deleting it."
-        },
-        {
-          "operation": "addProjectBacklogDependency",
-          "reason": "The journey creates one task, so it has no dependency."
-        },
-        {
-          "operation": "removeProjectBacklogDependency",
-          "reason": "The journey creates one task, so it has no dependency."
-        },
-        {
-          "operation": "claimBacklogTask",
-          "reason": "Only reserves a coordinator root for a task; task execution is the task-model-completion gap."
-        },
-        {
-          "operation": "previewBacklogWorkPlanPromotion",
-          "reason": "Board-only preview; the CLI full-flow journey does not include this user-confirmed Board action."
-        },
-        {
-          "operation": "promoteBacklogWorkPlan",
-          "reason": "Board-only promotion; the CLI full-flow journey does not include this user-confirmed Board action."
-        },
-        {
-          "operation": "proposeOutcomeSpec",
-          "reason": "A coordinator blueprint action. The journey does not drive the coordinator through a blueprint until the workflow-generation gap closes."
-        },
-        {
-          "operation": "selectWorkflow",
-          "reason": "A coordinator blueprint action. The journey does not drive the coordinator through a blueprint until the workflow-generation gap closes."
-        },
-        {
-          "operation": "proposeWorkPlan",
-          "reason": "A coordinator blueprint action. The journey does not drive the coordinator through a blueprint until the workflow-generation gap closes."
-        },
-        {
-          "operation": "reviseWorkPlan",
-          "reason": "A coordinator blueprint action. The journey does not drive the coordinator through a blueprint until the workflow-generation gap closes."
-        },
-        {
-          "operation": "requestAssembly",
-          "reason": "A coordinator blueprint action. The journey does not drive the coordinator through a blueprint until the workflow-generation gap closes."
-        }
-      ],
-      "gaps": [
-        {
-          "stage": "workflow-generation",
-          "routePrefix": "/workflows",
-          "reason": "The v1 Gateway has no workflow generation route yet."
-        },
-        {
-          "stage": "task-model-completion",
-          "routePrefix": "/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/dispatch",
-          "reason": "The v1 Gateway has no route that dispatches a backlog task to a model and reports completion yet."
+          "operation": "readWorkspaceRepositoryFile",
+          "reason": "The current read-only Gateway case does not read Workspace repository files. Track its replacement in issue #2752."
         }
       ]
+    }
+  ],
+  "knownGaps": [
+    {
+      "stage": "workflow-generation",
+      "routePrefix": "/workflows",
+      "reason": "The v1 Gateway has no workflow generation route yet."
+    },
+    {
+      "stage": "task-model-completion",
+      "routePrefix": "/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/dispatch",
+      "reason": "The v1 Gateway has no route that dispatches a backlog task to a model and reports completion yet."
     }
   ]
 }

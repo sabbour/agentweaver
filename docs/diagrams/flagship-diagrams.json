@@ -74,7 +74,7 @@
     },
     {
       "name": "v1-native-workspace-acceptance",
-      "concept": "Native Workspace repository-read check",
+      "concept": "Superseded Workspace repository-read flow",
       "docs": ["docs/guide/azure-acceptance.md"]
     }
   ]

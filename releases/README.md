@@ -25,11 +25,12 @@ kind is `contract` or `library` and publishes their NuGet packages to GitHub
 Packages. Duplicate package versions are skipped. The workflow does not build
 or publish container images.
 
-The CLI build, run, and API-acceptance contract is documented in the
-[CLI guide](../docs/guide/cli.md). Native acceptance uses GHCR by default; its
-input manifest can select an approved ACR login server for exact-source image
-checks. This selection does not change the image-publication destination.
-This package-publication workflow does not publish standalone CLI archives.
+The CLI build and command reference is in the
+[CLI guide](../docs/guide/cli.md). The read-only API case and its input and
+evidence requirements are in the
+[API case guide](../docs/guide/api-acceptance-migration.md). That case does not
+publish images, verify registries, or deploy services. This package-publication
+workflow does not publish standalone CLI archives.
 
 ## Container images
 
@@ -113,8 +114,8 @@ Start the tracker with:
 
 Include these checks in the tracker:
 
-- The representative integration project for the release. Use the existing
-  full-flow journey for its implemented scope, and keep known gaps or unrun
+- The representative integration project for the release. Use the checked-in
+  read-only CLI API case for its limited scope, and keep known gaps or unrun
   checks visible.
 - A focused API and/or UI scenario for every new feature, including features
   whose implementation issues are already closed.
@@ -126,7 +127,7 @@ Include these checks in the tracker:
 Use one row per independently verifiable item, with a stable item name. Link
 its original issue, merged pull requests, and relevant component changesets.
 Record the scenario, surface, expected observable result, and owner. Reference
-the approved native manifest and its hash, or the browser procedure. Record
+the approved API case input and its hash, or the browser procedure. Record
 each dated attempt's result and link to retained, team-accessible evidence with
 its hash, tested source/apphost/deployment identity, and cleanup disposition.
 Link a repair issue when one is needed. Keep browser evidence separate from
@@ -141,10 +142,10 @@ dry run as acceptance, a fixture-based UI test as a deployed browser pass, or
 publication or deployment as proof of product acceptance. A justified `Not
 applicable` result needs an explicit scope reason.
 
-Run API scenarios with the native CLI as described in the
-[testing guide](../docs/guide/testing.md#run-api-acceptance-with-the-native-cli).
-Use only an explicitly approved non-production target for live tests. The
-tracker does not grant authorization or model-spend permission.
+Run the read-only API case as described in the
+[API case guide](../docs/guide/api-acceptance-migration.md). Use only an
+explicitly approved non-production target for live tests. The tracker does not
+grant authorization or model-spend permission.
 
 ## Deploy an exact v1 source commit
 

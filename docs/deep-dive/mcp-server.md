@@ -160,8 +160,8 @@ keeps the broader platform proposal distinct from supported surfaces.
 | Catalog exceeds 2 MiB or result exceeds 8 MiB | Reject the bounded read | Compatibility contract tests; no deployed product claim |
 
 The main reader risk is mistaking retained code or ingress resources for a
-supported product. Use the native CLI for canonical API acceptance; retained
-MCP fixture success cannot replace that journey.
+supported product. Use the checked-in normal-command API case for API
+acceptance; retained MCP fixture success cannot replace that case.
 
 **Terms:** inbound adapter translates client tools to Gateway; outbound
 connection lets an agent address a remote server; neither discovery nor a tool

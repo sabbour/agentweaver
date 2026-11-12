@@ -45,14 +45,11 @@ Login, refresh, and logout for the same selected credential identity are
 serialized across processes. An interrupted or uncertain refresh requires a
 fresh sign-in rather than retrying a possibly consumed refresh token.
 
-For API acceptance, interaction is off by default. Only `agentweaver test
---interactive` allows browser authorization, and it obtains exact project/run
-authority only after the runner has set up its owned fixture and selected the
-run. Setup and run authorization must have the same actor and tenant. The
-session-history metric cleanup uses an unbound Orchestrator token to cancel the
-accepted run and a run-bound token to verify its terminal state and sessions
-before project authority is removed. See the [CLI guide](./cli.md) for target
-configuration, acceptance results, and cleanup recovery.
+The read-only API case scripts do not open a browser. Sign in with the normal
+CLI login command before running a case; browser authorization still requires
+explicit authorization. The scripts do not create fixtures or request
+project/run authority. See the [API case guide](./api-acceptance-migration.md)
+for the target and evidence requirements.
 
 ## `openid`
 

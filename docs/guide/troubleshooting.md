@@ -60,10 +60,10 @@ credentials, private keys, or secret values.
 
 ## Diagnose interrupted project setup
 
-The API acceptance harness records an invocation ID and creates a project named
-`p1-<invocation-id>`. If setup or cleanup is interrupted, keep the same
-invocation ID. Do not retry setup or start another journey until you have
-reconciled the existing invocation.
+An earlier P1 journey or a separate UI run can leave an invocation-owned
+project if setup or cleanup is interrupted. The current read-only API case
+does not create projects. For an existing invocation, keep its ID and do not
+retry a mutation or start another journey until you have reconciled it.
 
 Use the read-only [project setup reconciliation guide](./p1-reconciliation.md) with the
 same approved manifest and invocation ID.

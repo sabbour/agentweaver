@@ -650,10 +650,10 @@ on the new registration only when the durable completion and completed
 replacement lineage both validate. The replay does not send another model
 request.
 
-The optional native CLI `native-material-recovery` journey uses these
-operations. It validates source evidence but does not prove a deployed
-replacement. See the [testing guide](../guide/testing.md)
-for its scope and remaining checks.
+The former native CLI `native-material-recovery` journey used these
+operations, but its acceptance runner has been removed. The current read-only
+API case does not exercise Host replacement or session-material recovery.
+See the [testing guide](../guide/testing.md) for the current API case boundary.
 
 ## Workspace, network, and readiness
 

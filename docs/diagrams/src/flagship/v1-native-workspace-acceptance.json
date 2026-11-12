@@ -1,18 +1,18 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Native Workspace repository-read check",
-  "alt": "The native .NET CLI opens an exact Workspace review in the browser. The Broker checks its current cookie and antiforgery token, creates an owner-bound Repo App selection, and returns it only after HTTPS code exchange with an S256 verifier. The CLI then reads refs, a tree and a file through typed Gateway operations with current owner checks. The selection is not part of the callback, OAuth tokens, logs or evidence. This source-only check does not exercise run B task dispatch, child-turn completion receipts, child startup, or terminal cleanup.",
+  "title": "Superseded Workspace repository-read flow",
+  "alt": "Historical flow only. The former native acceptance runner has been removed. The current read-only Gateway case does not select a Workspace repository or read repository files; issue #2752 tracks that separate case.",
   "autonumber": true,
   "participants": [
     {
       "id": "native-cli",
-      "label": "Native .NET CLI",
-      "subLabel": "S256 verifier and exact loopback callback",
+      "label": "Former native CLI",
+      "subLabel": "Retired acceptance entrypoint",
       "icon": "box",
       "fluentIcon": "tool",
       "badge": {
-        "text": "Source check",
+        "text": "Superseded",
         "tone": "lavender"
       }
     },
@@ -59,7 +59,7 @@
         "broker",
         "gateway"
       ],
-      "label": "Source-only check. No project, run, role or fixture. It proves neither run B task success, child startup/cleanup, nor a live deployment or full journey."
+      "label": "Historical flow only. The current read-only Gateway case does not include Workspace repository reads. See issue #2752."
     },
     {
       "type": "message",

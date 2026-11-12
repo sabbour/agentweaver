@@ -830,7 +830,20 @@ test('built-in UI page adapter fails clearly when it cannot start silent authori
   }), /could not start silent authorization/);
 });
 
-test('launcher excludes external modules and delegates API acceptance to the configured CLI', async () => {
+test('API help omits browser and fixture steps that apply only to the UI case', async () => {
+  const output = [];
+  const code = await runP1SigninCli(['--surface', 'api', '--help'], {}, {
+    log: message => output.push(message),
+    error: message => output.push(message),
+  });
+  const text = output.join('\n');
+
+  assert.equal(code, 0);
+  assert.match(text, /API cases run the checked-in CLI scripts/);
+  assert.doesNotMatch(text, /Operator steps:|headed Chrome|creates an invocation-owned project/);
+});
+
+test('launcher routes API cases without browser sign-in or external modules', async () => {
   assert.throws(() => parseP1SigninArguments([
     '--surface', 'api', '--input', 'input.json', '--output', 'evidence.jsonl',
     '--identity-module', 'provider.mjs',
@@ -856,7 +869,7 @@ test('launcher excludes external modules and delegates API acceptance to the con
       log: message => output.push(message),
       error: message => output.push(message),
     }, {
-      runDotnetCli: async options => {
+      runApiScripts: async options => {
         invocation = options;
         return 0;
       },
@@ -1062,7 +1075,7 @@ test('launcher dry-run delegates without browser auth or evidence output', async
     }, {
       loadChromium: async () => { browserLoads += 1; throw new Error('browser must not load'); },
       signIn: async () => { signIns += 1; },
-      async runDotnetCli(options) {
+      async runApiScripts(options) {
         invocation = options;
         return 0;
       },
@@ -1267,36 +1280,7 @@ test('launcher reports missing input before loading the browser', async () => {
 
   assert.equal(code, 2);
   assert.equal(browserLoads, 0);
-  assert.match(errors.join('\n'), /input manifest/i);
-});
-
-test('launcher rejects the removed denied-actor field before sign-in', async () => {
-  const input = validInput();
-  input.fixturePlan.deniedActor = { actorId: 'denied-actor', tenantId: 'denied-tenant' };
-  const manifestPath = path.resolve('scripts/harness-shared/test/p1-signin-second-actor.fixture.json');
-  const { writeFile: writeInput, rm } = await import('node:fs/promises');
-  await writeInput(manifestPath, JSON.stringify(input), 'utf8');
-  let signIns = 0;
-  try {
-    const errors = [];
-    const code = await runP1SigninCli([
-      '--surface', 'api',
-      '--input', manifestPath,
-      '--output', 'evidence.jsonl',
-    ], {}, { log() {}, error: message => errors.push(message) }, {
-      signIn: async () => { signIns += 1; },
-      chromium: {},
-      runDotnetCli: async () => {
-        signIns += 1;
-        return 0;
-      },
-    });
-    assert.equal(code, 2);
-    assert.equal(signIns, 0);
-    assert.match(errors.join('\n'), /P1 sign-in input is invalid/);
-  } finally {
-    await rm(manifestPath, { force: true });
-  }
+  assert.match(errors.join('\n'), /case\.json/);
 });
 
 test('built-in identity provider returns only the selected run token', async () => {
@@ -1456,7 +1440,7 @@ test('MCP selection is explicitly unsupported by the 1.x sign-in launcher', asyn
     const code = await runP1SigninCli([
       '--surface', surface, '--input', 'input.json', '--output', 'evidence.jsonl',
     ], {}, { error: message => errors.push(message) }, {
-      runDotnetCli: () => assert.fail('Unsupported MCP selection must not invoke the API CLI.'),
+      runApiScripts: () => assert.fail('Unsupported MCP selection must not invoke API case scripts.'),
       runP1: () => assert.fail('Unsupported MCP selection must not fall back to the legacy runner.'),
       withBrowserContext: () => assert.fail('Unsupported MCP selection must not open a browser.'),
     });

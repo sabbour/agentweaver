@@ -593,27 +593,6 @@ it must not overwrite a separate UI/surface status.
 
 <span id="full-p1-aggregation"></span>
 
-## Combine acceptance evidence
+## Keep probe evidence separate
 
-The full acceptance CLI accepts the exact output envelopes from this runner and the
-dispatch-recovery runner:
-
-```powershell
-npm run harness:p1 -- --surface api --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs> --native-probe-envelope <native.json> --dispatch-recovery-envelope <recovery.json>
-```
-
-The aggregator maps the four native probe entries by exact `name`, preserves
-their `status`, `evidence`, and `cleanup`, and adds the two dispatch-recovery
-entries. It keeps surface status separate from native probe status. If either
-envelope is missing, every required probe in that envelope remains blocked.
-Malformed, inconsistent, duplicate, or extra envelope fields are rejected;
-they are not ignored.
-A probe cannot claim `passed` with empty evidence. Native passes also require
-completed or not-required cleanup; read-only dispatch-recovery passes must
-report no created resources.
-
-Supply envelopes written by live probe calls. Test fixtures and scripted
-results are not live evidence. The CLI validates the envelope contract but
-checks the checksum to detect changes after the envelope was written. The
-checksum does not authenticate who wrote a file, so a file alone is not proof
-that its producer contacted the live owners.
+These probe scripts produce their own evidence. The read-only CLI API case does not accept or combine probe envelopes. Use [Run a read-only CLI API case](../../../docs/guide/api-acceptance-migration.md) for the current API acceptance procedure. Keep probe, API case, UI, and deployment results separate.

@@ -33,7 +33,7 @@ import package
 
 
 SIDECAR_NAME = "windows-controlled-archive-checks.json"
-HELP_EXPECTED = ("api operations", "auth login|status|logout", "test")
+HELP_EXPECTED = ("api operations", "auth login|status|logout", "rest --method GET|HEAD")
 CREDENTIAL_SERVICE = "Agentweaver.Cli.OAuth.v1"
 CREDENTIAL_TYPE_GENERIC = 1
 CREDENTIAL_PERSIST_LOCAL_MACHINE = 2
@@ -1625,63 +1625,6 @@ def reserve_loopback_port() -> int:
         return int(address[1])
 
 
-def create_valid_manifest(workspace: Path, gateway: str, issuer: str, tenant: str, audience: str) -> bytes:
-    fixtures = workspace / "fixtures"
-    source_sha = "a" * 40
-    source_tree = "b" * 40
-    write_new(fixtures / "foundation.json", b"{}\n")
-    write_new(
-        fixtures / "images.json",
-        json.dumps({"images": {"agentweaver-agenthost": "sha-" + source_sha}}).encode("utf-8") + b"\n",
-    )
-    manifest = {
-        "executionIntent": "execute",
-        "journey": "message",
-        "environment": {
-            "baseUrl": gateway + "/",
-            "issuer": issuer,
-            "audience": audience,
-            "actorId": "archive-fixture-actor",
-            "tenantId": tenant,
-        },
-        "pins": {
-            "context": "archive-check-validation-only",
-            "namespace": "agentweaver",
-            "providerReceipt": {
-                "configMapName": "provider-catalog",
-                "sourceCommit": source_sha,
-                "uid": "provider-fixture",
-                "resourceVersion": "1",
-            },
-            "runtimeReceipt": {"revision": 1},
-            "storageReceipt": {"shareId": "archive-storage-fixture"},
-            "sourceReceipt": {"sourceSha": source_sha, "sourceTree": source_tree},
-        },
-        "deploymentEvidence": {
-            "manifestPath": "foundation.json",
-            "imageManifestPath": "images.json",
-        },
-        "fixturePlan": {
-            "expectedPlatformRuntimeRevision": 1,
-            "selectionContext": {
-                "revision": "selection-v1",
-                "availableModelSelectionReferences": [],
-                "providerRequirements": [],
-                "requiredEgress": [],
-            },
-            "gate": None,
-            "message": {"text": "Controlled archive validation input."},
-        },
-    }
-    return json.dumps(manifest, separators=(",", ":")).encode("utf-8")
-
-
-def create_invalid_manifest(valid: bytes) -> bytes:
-    manifest = json.loads(valid)
-    manifest["journey"] = "unsupported-archive-validation"
-    return json.dumps(manifest, separators=(",", ":")).encode("utf-8")
-
-
 def run_cli(
     context: dict[str, Any],
     arguments: list[str],
@@ -1830,13 +1773,6 @@ def check_response(
         raise CheckError(f"Extracted apphost command {label} returned an unexpected HTTP status.")
 
 
-def write_fixture_files(context: dict[str, Any], gateway: str, issuer: str, tenant: str, audience: str) -> None:
-    fixtures = context["workspace"] / "fixtures"
-    valid = create_valid_manifest(context["workspace"], gateway, issuer, tenant, audience)
-    write_new(fixtures / "valid-manifest.json", valid)
-    write_new(fixtures / "invalid-manifest.json", create_invalid_manifest(valid))
-
-
 def run_controlled_sequence(context: dict[str, Any], gateway: str, issuer: str, tenant: str, audience: str) -> dict[str, Any]:
     state: FIXTURE_STATE = context["fixtureState"]
     target = context["journal"]["credentialTarget"]
@@ -1959,51 +1895,24 @@ def run_controlled_sequence(context: dict[str, Any], gateway: str, issuer: str, 
         raise CheckError("The unauthenticated operation attempted a token refresh.")
     assertions["unauthenticatedInvokeStopsBeforeAuthenticationAndOperation"] = True
 
-    write_fixture_files(context, gateway, issuer, tenant, audience)
     fixture_before = len(state.calls_snapshot())
     lock_before = file_identity(lock_path)
-    valid_input = context["workspace"] / "fixtures" / "valid-manifest.json"
-    valid_output = context["workspace"] / "fixtures" / "dry-run-result.jsonl"
+    removed_test_input = context["workspace"] / "fixtures" / "removed-test-input.json"
+    removed_test_output = context["workspace"] / "fixtures" / "removed-test-evidence.jsonl"
+    if removed_test_input.exists() or removed_test_output.exists():
+        raise CheckError("The removed-test command check paths must be fresh.")
     result = run_cli(
         context,
-        ["test", "--input", str(valid_input), "--output", str(valid_output), "--dry-run", "--interactive"],
-        "valid-dry-run",
+        ["test", "--input", str(removed_test_input), "--output", str(removed_test_output)],
+        "removed-test-command",
     )
-    if result[0] != 0 or "Dry run only" not in result[1] or result[2] or valid_output.exists():
-        raise CheckError("The valid exact-apphost dry-run did not remain a no-evidence validation.")
+    if result[0] != 1 or "Unknown command: test" not in result[2] or removed_test_output.exists():
+        raise CheckError("The extracted apphost still accepts the removed test command.")
     if len(state.calls_snapshot()) != fixture_before or credential_read(target) is not None or marker_path.exists():
-        raise CheckError("The valid dry-run contacted the fixture or changed sign-in state.")
+        raise CheckError("The removed test command contacted the fixture or changed sign-in state.")
     if file_identity(lock_path) != lock_before:
-        raise CheckError("The valid dry-run changed native credential-lock state.")
-    assertions["validDryRunHasNoNetworkAuthBrowserOrEvidence"] = True
-
-    invalid_input = context["workspace"] / "fixtures" / "invalid-manifest.json"
-    invalid_output = context["workspace"] / "fixtures" / "invalid-result.jsonl"
-    if invalid_output.exists():
-        raise CheckError("The invalid dry-run result path was not fresh.")
-    invalid_calls = len(state.calls_snapshot())
-    result = run_cli(
-        context,
-        ["test", "--input", str(invalid_input), "--output", str(invalid_output), "--dry-run"],
-        "invalid-dry-run",
-    )
-    if result[0] != 2 or not invalid_output.is_file():
-        raise CheckError("The invalid dry-run did not return a new blocked validation result.")
-    try:
-        lines = invalid_output.read_text(encoding="utf-8").splitlines()
-        document = json.loads(lines[-1])
-    except (OSError, IndexError, json.JSONDecodeError) as error:
-        raise CheckError("The invalid dry-run output was not valid JSON evidence.") from error
-    if (
-        document.get("kind") != "p1-acceptance-result"
-        or document.get("surfaceStatus") != "blocked"
-        or document.get("fullP1Status") != "blocked"
-        or document.get("exitCode") != 2
-    ):
-        raise CheckError("The invalid input result was not an explicit blocked validation outcome.")
-    if len(state.calls_snapshot()) != invalid_calls or credential_read(target) is not None or marker_path.exists():
-        raise CheckError("The invalid dry-run contacted the fixture or changed sign-in state.")
-    assertions["invalidDryRunIsBlockedValidationNotJourney"] = True
+        raise CheckError("The removed test command changed native credential-lock state.")
+    assertions["testCommandRemovedWithoutSideEffects"] = True
 
     if before_calls >= len(state.calls_snapshot()):
         raise CheckError("The controlled fixture did not observe the authenticated operation checks.")
