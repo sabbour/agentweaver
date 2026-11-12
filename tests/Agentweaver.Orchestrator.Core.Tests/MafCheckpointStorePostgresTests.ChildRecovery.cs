@@ -267,8 +267,9 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.True(await IsChildRecoveryHeldAsync());
 
         var rootReadyIntent = await MarkRecoveryMemberReadyAsync(fixture, recovered, manifest);
+        var currentReadyStatus = WithCurrentRootRegistration(readyStatus, rootReadyIntent);
         _ = await fixture.Owner.UpdateCheckpointRecoveryProgressAsync(
-            _actor, _binding.Identity, recovered.OperationId, readyStatus,
+            _actor, _binding.Identity, recovered.OperationId, currentReadyStatus,
             CancellationToken.None, rootReadyIntent);
         Assert.False(await IsChildRecoveryHeldAsync());
     }
@@ -299,6 +300,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         var manifest = await fixture.Owner.ReadCheckpointRecoveryManifestAsync(
             _actor, _binding.Identity, recovered.OperationId, CancellationToken.None);
         var rootReadyIntent = await MarkRecoveryMemberReadyAsync(fixture, recovered, manifest);
+        status = WithCurrentRootRegistration(status, rootReadyIntent);
         var sessionId = target == "root" ? _binding.Identity.SessionId : fixture.Child.SessionId;
         var starts = new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema);
         var intent = await starts.ReadIntentForStatusAsync(
@@ -443,6 +445,23 @@ public sealed partial class MafCheckpointStorePostgresTests
             consumeOperationId: consumeId,
             exchangeOperationId: exchangeId);
         return rootIntent;
+    }
+
+    private static CheckpointRecoveryStatus WithCurrentRootRegistration(
+        CheckpointRecoveryStatus status,
+        RuntimeRunStartIntent rootIntent)
+    {
+        using var links = JsonDocument.Parse(rootIntent.ReceiptLinks);
+        var registration = links.RootElement.GetProperty("registration")
+            .Deserialize<RuntimeRegistration>(ChildRecoveryJsonOptions)
+            ?? throw new InvalidOperationException("The replacement root registration is missing.");
+        if (registration.RuntimeInstanceId != rootIntent.RuntimeInstanceId)
+            throw new InvalidOperationException("The root intent does not match its replacement registration.");
+        return status with
+        {
+            RuntimeInstanceId = registration.RuntimeInstanceId,
+            RegistrationRevision = registration.Revision
+        };
     }
 
     private async Task<(RuntimeRegistration Registration, RuntimeRunStartPlacementReceipt Placement)>
