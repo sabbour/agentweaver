@@ -25,9 +25,6 @@ internal sealed class RuntimeRegistrationStore
         MaxDepth = 16
     };
 
-    internal static string ComputeBindingHash(RuntimeBinding binding) =>
-        RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(binding, JsonOptions));
-
     private readonly NpgsqlDataSource _dataSource;
     private readonly TimeProvider _timeProvider;
     private readonly string _heads;
@@ -69,7 +66,8 @@ internal sealed class RuntimeRegistrationStore
         RuntimeContractValidation.Validate(candidate);
         RequireAvailable(candidate);
         var bindingJson = JsonSerializer.Serialize(serverDerivedBinding, JsonOptions);
-        var bindingHash = ComputeBindingHash(serverDerivedBinding);
+        var bindingHash = RuntimeContractValidation.Hash(
+            JsonSerializer.SerializeToUtf8Bytes(serverDerivedBinding, JsonOptions));
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         int inserted;
@@ -134,8 +132,10 @@ internal sealed class RuntimeRegistrationStore
         RuntimeContractValidation.Validate(candidate);
         RequireAvailable(candidate);
         var bindingJson = JsonSerializer.Serialize(serverDerivedBinding, JsonOptions);
-        var bindingHash = ComputeBindingHash(serverDerivedBinding);
-        var expectedHash = ComputeBindingHash(expected.Binding);
+        var bindingHash = RuntimeContractValidation.Hash(
+            JsonSerializer.SerializeToUtf8Bytes(serverDerivedBinding, JsonOptions));
+        var expectedHash = RuntimeContractValidation.Hash(
+            JsonSerializer.SerializeToUtf8Bytes(expected.Binding, JsonOptions));
         if (bindingHash == expectedHash)
             throw new RuntimeAuthorizationException("runtime_registration_conflict");
 
