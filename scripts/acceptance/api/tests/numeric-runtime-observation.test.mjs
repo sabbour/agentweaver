@@ -10,6 +10,7 @@ import {
   buildCommands,
   parseArgs,
   resolveCliPath,
+  validateAuthorizationContext,
   validateInput,
   validateObservation,
 } from '../numeric-runtime-observation.mjs';
@@ -96,13 +97,38 @@ test('commands use the normal CLI and REST surfaces without passing run text', (
   assert.ok(commands.every(command => !command.args.some(argument => argument.includes('prompt'))));
   assert.ok(commands[7].args.includes('--query'));
   assert.ok(commands[7].args.includes('pageSize=100'));
-  for (const command of commands.slice(1, 5)) {
+  for (const command of commands.slice(2, 4)) {
     assert.ok(!command.args.includes('--project-id'));
     assert.ok(!command.args.includes('--run-id'));
   }
-  assert.ok(commands[6].args.includes('--project-id'));
-  assert.ok(commands[6].args.includes('--run-id'));
-  assert.ok(commands[6].args.includes('projects.orchestrator'));
+  const boundCommands = [commands[1], commands[4], commands[5], commands[6], commands[7]];
+  for (const command of boundCommands) {
+    assert.ok(command.args.includes('--project-id'));
+    assert.ok(command.args.includes(input.target.projectId));
+    assert.ok(command.args.includes('--run-id'));
+    assert.ok(command.args.includes(input.target.runId));
+    const scopes = command.args.flatMap((argument, index) => (
+      argument === '--scope' ? [command.args[index + 1]] : []
+    ));
+    assert.deepEqual(scopes, ['api.read', 'projects.orchestrator']);
+  }
+});
+
+test('authorization context must identify the same bound actor, tenant, project, and run', () => {
+  const parsed = validateInput(input);
+  const context = {
+    actorId: parsed.expectedActorId,
+    tenantId: parsed.target.tenantId,
+    boundProjectId: parsed.target.projectId,
+    boundRunId: parsed.target.runId,
+  };
+  assert.equal(validateAuthorizationContext(context, parsed), context);
+  for (const key of ['actorId', 'tenantId', 'boundProjectId', 'boundRunId']) {
+    assert.throws(() => validateAuthorizationContext(
+      { ...context, [key]: 'different-value' },
+      parsed,
+    ), /case actor, tenant, and bound run/);
+  }
 });
 
 test('API invocation response bodies require HTTP 200 and unwrap the CLI envelope', () => {
