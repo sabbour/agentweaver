@@ -904,14 +904,27 @@ internal sealed class CoordinationRuntimeRunStartStore
         NpgsqlTransaction? transaction,
         string projectId,
         string runId,
+        CancellationToken cancellationToken) =>
+        await HasUnresolvedNativeWorkAsync(
+            connection, transaction, _schema, projectId, runId, cancellationToken).ConfigureAwait(false);
+
+    internal static async Task<bool> HasUnresolvedNativeWorkAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        string schema,
+        string projectId,
+        string runId,
         CancellationToken cancellationToken)
     {
         // Workflow generation jobs start at migration 046; earlier schemas have no such work.
-        var hasJobs = await TableExistsAsync(
-            connection, transaction, "workflow_generation_jobs", cancellationToken).ConfigureAwait(false);
+        await using var tableExists = new NpgsqlCommand(
+            "SELECT to_regclass(@table) IS NOT NULL", connection, transaction);
+        tableExists.Parameters.AddWithValue(
+            "table", NpgsqlDbType.Text, $"{schema}.workflow_generation_jobs");
+        var hasJobs = (bool)(await tableExists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
         var jobs = hasJobs
             ? $"""
-                SELECT 1 FROM {_schema}.workflow_generation_jobs
+                SELECT 1 FROM {schema}.workflow_generation_jobs
                 WHERE project_id = @project AND run_id = @run
                   AND execution_phase = 'send-admitted'
                   AND status IN ('running', 'cancelled', 'failed')
@@ -921,7 +934,7 @@ internal sealed class CoordinationRuntimeRunStartStore
         var quiescedJob = hasJobs
             ? $"""
                   AND NOT EXISTS (
-                      SELECT 1 FROM {_schema}.workflow_generation_jobs j
+                      SELECT 1 FROM {schema}.workflow_generation_jobs j
                       WHERE j.project_id = a.project_id AND j.run_id = a.run_id
                         AND j.native_request_id = a.request_id AND j.execution_phase = 'quiesced')
                 """
@@ -929,14 +942,14 @@ internal sealed class CoordinationRuntimeRunStartStore
         await using var command = new NpgsqlCommand($"""
             SELECT EXISTS (
                 {jobs}
-                SELECT 1 FROM {_schema}.maf_execution_dispatches
+                SELECT 1 FROM {schema}.maf_execution_dispatches
                 WHERE project_id = @project AND run_id = @run
                   AND dispatch_state IN ('sending', 'terminal_pending_accounting', 'indeterminate')
                 UNION ALL
-                SELECT 1 FROM {_schema}.maf_root_model_turn_admissions a
+                SELECT 1 FROM {schema}.maf_root_model_turn_admissions a
                 WHERE a.project_id = @project AND a.run_id = @run
                   AND NOT EXISTS (
-                      SELECT 1 FROM {_schema}.maf_runtime_evidence_receipts e
+                      SELECT 1 FROM {schema}.maf_runtime_evidence_receipts e
                       WHERE e.project_id = a.project_id AND e.run_id = a.run_id
                         AND e.attempt_id = a.request_id
                         AND e.receipt_kind IN ('native-root-turn-completion', 'numeric-limit-native-no-send'))

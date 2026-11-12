@@ -4,6 +4,8 @@ using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
+using Agentweaver.Orchestrator.Core;
+using Agentweaver.Providers;
 using Npgsql;
 using NpgsqlTypes;
 using Testcontainers.PostgreSql;
@@ -1749,6 +1751,224 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             Assert.False(payload.RootElement.GetProperty("physicalEffectsReplayed").GetBoolean());
         }
         Assert.False(await reader.ReadAsync());
+    }
+
+    [Fact]
+    public async Task CheckpointRecoveryBoundaryRejectsAnUnacknowledgedNativeSend()
+    {
+        var requestId = Guid.NewGuid();
+        var decisionId = Guid.NewGuid();
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using (var decision = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordinator_decisions
+                (project_id, run_id, session_id, request_id, decision_id, actor_issuer, actor_subject,
+                 execution_fence, state_version, action_kind, idempotency_key, command_hash,
+                 decision_state, decision)
+            VALUES (@project, @run, @session, @request, @decision, @issuer, @actor,
+                    @fence, 1, 'question.ask', @key, @hash, 'accepted', jsonb_build_object())
+            """, connection))
+        {
+            decision.Parameters.AddWithValue("project", _root.ProjectId);
+            decision.Parameters.AddWithValue("run", _root.RunId);
+            decision.Parameters.AddWithValue("session", _root.SessionId);
+            decision.Parameters.AddWithValue("request", "unacknowledged-native-send");
+            decision.Parameters.AddWithValue("decision", decisionId);
+            decision.Parameters.AddWithValue("issuer", _actor.Issuer);
+            decision.Parameters.AddWithValue("actor", _actor.Subject);
+            decision.Parameters.AddWithValue("fence", _acceptedRoot.ExecutionFence);
+            decision.Parameters.AddWithValue("key", "unacknowledged-native-send");
+            decision.Parameters.AddWithValue("hash", new string('a', 64));
+            await decision.ExecuteNonQueryAsync();
+        }
+        await using (var admission = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".maf_root_model_turn_admissions
+                (project_id, run_id, root_session_id, request_id, actor_issuer, actor_id, tenant_id,
+                 accepted_selection_hash, prompt_hash, execution_fence, decision_id, decision_state_version)
+            VALUES (@project, @run, @session, @request, @issuer, @actor, @tenant,
+                    @selection, @prompt, @fence, @decision, 1)
+            """, connection))
+        {
+            admission.Parameters.AddWithValue("project", _root.ProjectId);
+            admission.Parameters.AddWithValue("run", _root.RunId);
+            admission.Parameters.AddWithValue("session", _root.SessionId);
+            admission.Parameters.AddWithValue("request", requestId);
+            admission.Parameters.AddWithValue("issuer", _actor.Issuer);
+            admission.Parameters.AddWithValue("actor", _actor.Subject);
+            admission.Parameters.AddWithValue("tenant", _selection.Authorization.TenantId);
+            admission.Parameters.AddWithValue(
+                "selection", CoordinationOwnerStore.HashSelection(_selection.Selection));
+            admission.Parameters.AddWithValue("prompt", new string('b', 64));
+            admission.Parameters.AddWithValue("fence", _acceptedRoot.ExecutionFence);
+            admission.Parameters.AddWithValue("decision", decisionId);
+            await admission.ExecuteNonQueryAsync();
+        }
+
+        Assert.True(await CoordinationRuntimeRunStartStore.HasUnresolvedNativeWorkAsync(
+            connection, null, _schema, _root.ProjectId, _root.RunId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task NewCheckpointRecoveryWaitsForBlockedHostAndAdvancesOneFence()
+    {
+        var catalog = ProviderCatalog.Create([], [], []).Value!;
+        var contexts = new CoordinatorRunSelectionContextStore(
+            _fixture.DataSource, _schema, catalog, new ProviderResolver(catalog), []);
+        var decisions = new CoordinatorDecisionOwnerStore(
+            _fixture.DataSource, _schema, contexts, TimeProvider.System);
+        var store = new CoordinationOwnerStore(_fixture.DataSource, _schema, TimeProvider.System, decisions);
+        var initialized = await decisions.InitializeRootAsync(_actor, _root, _selection, CancellationToken.None);
+        Assert.Equal(1, initialized.StateVersion);
+        var current = await decisions.ReadCurrentAsync(_actor, _root, _selection, CancellationToken.None);
+        const string gateId = "checkpoint-recovery-retry-gate";
+        var question = CoordinatorDecisionFlow.AskQuestion(
+            current.State, gateId, "scope-question", "Which repository should be changed?",
+            _actor.Subject, ["repository-a", "repository-b"], allowsFreeform: false);
+        Assert.True(question.IsSuccess);
+        var pending = await decisions.PersistTransitionAsync(
+            _actor, _root, _selection, current.StateVersion, gateId, gateId, "question.ask",
+            CoordinatorDecisionOwnerStore.ComputeCommandHash(question.Value),
+            question.State!, true, question.Issues, null, null, question.Value, CancellationToken.None);
+
+        var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
+        var checkpointBinding = new MafCheckpointBinding(
+            _root, _actor, _acceptedRoot.ExecutionFence,
+            MafExecutionCheckpointStore.CurrentSdkVersion, "model-1", null,
+            StoreName: MafExecutionCheckpointContract.StoreName);
+        var checkpointStore = new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null)
+            .ForRun(checkpointBinding);
+        var source = await checkpointStore.CreateCheckpointAsync(
+            _root.SessionId,
+            MafExecutionCheckpointContract.Serialize(new MafExecutionCheckpoint(
+                1, "plan-1", pending.StateVersion, MafExecutionProgress.Empty)));
+        var initialRuntimeId = Guid.NewGuid();
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var intent = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".runtime_run_start_intents
+                (tenant_id, project_id, run_id, root_session_id, accepted_selection_hash,
+                 execution_fence, intent_id, bootstrap_operation_id, consume_operation_id,
+                 exchange_operation_id, state, current_step, environment_id, runtime_instance_id, receipt_links)
+            VALUES (@tenant, @project, @run, @root, @selection, @fence, @intent, @bootstrap,
+                    @consume, @exchange, 'ready', 'ready', 'environment-before-recovery',
+                    @runtime, @receipts)
+            """, connection))
+        {
+            intent.Parameters.AddWithValue("tenant", _selection.Authorization.TenantId);
+            intent.Parameters.AddWithValue("project", _root.ProjectId);
+            intent.Parameters.AddWithValue("run", _root.RunId);
+            intent.Parameters.AddWithValue("root", _root.SessionId);
+            intent.Parameters.AddWithValue("selection", selectionHash);
+            intent.Parameters.AddWithValue("fence", _acceptedRoot.ExecutionFence);
+            intent.Parameters.AddWithValue("intent", Guid.NewGuid());
+            intent.Parameters.AddWithValue("bootstrap", Guid.NewGuid());
+            intent.Parameters.AddWithValue("consume", Guid.NewGuid());
+            intent.Parameters.AddWithValue("exchange", Guid.NewGuid());
+            intent.Parameters.AddWithValue("runtime", initialRuntimeId);
+            intent.Parameters.AddWithValue(
+                "receipts", NpgsqlDbType.Jsonb,
+                JsonSerializer.Serialize(new { registration = new { revision = 1 }, placement = new { id = "old" } }));
+            await intent.ExecuteNonQueryAsync();
+        }
+
+        var runStatus = await store.ReadOwnerRunStatusAsync(
+            _actor, _root.ProjectId, _root.RunId, CancellationToken.None);
+        var firstRequest = new RecoverRunExecutionRequest(
+            _acceptedRoot.ExecutionFence, runStatus.StateVersion, "checkpoint-recovery-first",
+            "operator_recovery", "host-activation-failure")
+        {
+            CheckpointRecovery = new CheckpointRecoveryRequest(
+                source.CheckpointId, 1, pending.StateVersion, initialRuntimeId, 1, selectionHash)
+        };
+        var first = await store.RecoverRunExecutionAsync(
+            _actor, _root.ProjectId, _root.RunId, firstRequest, CancellationToken.None,
+            _selection, new MafExecutionCheckpointStore(checkpointStore, checkpointBinding),
+            pending.State.PendingGate);
+        Assert.Equal(_acceptedRoot.ExecutionFence + 1, first.ExecutionFence);
+        var failedRuntimeId = Guid.NewGuid();
+        var runtimeStarts = new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema);
+        var startIntent = await runtimeStarts.ReadIntentForStatusAsync(
+            _root.ProjectId, _root.RunId, _root.SessionId, CancellationToken.None);
+        Assert.NotNull(startIntent);
+        using var priorLinks = JsonDocument.Parse(startIntent.ReceiptLinks);
+        var failedLinks = new Dictionary<string, JsonElement>();
+        foreach (var link in priorLinks.RootElement.EnumerateObject())
+            failedLinks.Add(link.Name, link.Value.Clone());
+        failedLinks["registration"] = JsonSerializer.SerializeToElement(new
+        {
+            runtimeInstanceId = failedRuntimeId,
+            revision = 2
+        });
+        failedLinks["placement"] = JsonSerializer.SerializeToElement(new { id = "failed-host-placement" });
+        startIntent = await store.PersistCheckpointRecoveryCleanupEvidenceAsync(
+            startIntent,
+            JsonSerializer.Serialize(failedLinks),
+            first.ExecutionFence,
+            Guid.NewGuid(),
+            "environment-after-recovery",
+            failedRuntimeId,
+            CancellationToken.None);
+
+        var currentAfterFirst = await decisions.ReadCurrentAsync(
+            _actor, _root, _selection, CancellationToken.None);
+        var checkpointBindingAtNextFence = checkpointBinding with { ExecutionFence = first.ExecutionFence };
+        var nextCheckpointStore = new MafExecutionCheckpointStore(
+            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null), checkpointBindingAtNextFence);
+        var nextSource = await nextCheckpointStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(nextSource);
+        var newRequest = new RecoverRunExecutionRequest(
+            first.ExecutionFence,
+            (await store.ReadOwnerRunStatusAsync(
+                _actor, _root.ProjectId, _root.RunId, CancellationToken.None)).StateVersion,
+            "checkpoint-recovery-after-blocked",
+            "operator_recovery",
+            "retry-host-after-block")
+        {
+            CheckpointRecovery = new CheckpointRecoveryRequest(
+                nextSource.Info.CheckpointId,
+                nextSource.State.Revision,
+                nextSource.State.DecisionStateVersion,
+                failedRuntimeId,
+                2,
+                selectionHash)
+        };
+        var stillPending = await Assert.ThrowsAsync<CoordinationException>(() =>
+            store.RecoverRunExecutionAsync(
+                _actor, _root.ProjectId, _root.RunId, newRequest, CancellationToken.None,
+                _selection, nextCheckpointStore, currentAfterFirst.State.PendingGate));
+        Assert.Equal("checkpoint_recovery_in_progress", stillPending.Code);
+
+        var blocked = first.CheckpointRecovery! with
+        {
+            Phase = "blocked",
+            CurrentStep = "activation",
+            ReasonCode = "checkpoint_recovery_host_bootstrap_spent",
+            RuntimeInstanceId = failedRuntimeId,
+            RegistrationRevision = 2
+        };
+        var blockedResult = await store.UpdateCheckpointRecoveryProgressAsync(
+            _actor, _root, first.OperationId, blocked, CancellationToken.None);
+        Assert.Equal("blocked", blockedResult.CheckpointRecovery!.Phase);
+        var replay = await store.RecoverRunExecutionAsync(
+            _actor, _root.ProjectId, _root.RunId, firstRequest, CancellationToken.None,
+            _selection, nextCheckpointStore, currentAfterFirst.State.PendingGate);
+        Assert.True(replay.IsDuplicate);
+        Assert.Equal(first.OperationId, replay.OperationId);
+        Assert.Equal("blocked", replay.CheckpointRecovery!.Phase);
+
+        var second = await store.RecoverRunExecutionAsync(
+            _actor, _root.ProjectId, _root.RunId, newRequest, CancellationToken.None,
+            _selection, nextCheckpointStore, currentAfterFirst.State.PendingGate);
+        Assert.Equal(first.ExecutionFence + 1, second.ExecutionFence);
+        Assert.NotEqual(first.OperationId, second.OperationId);
+        Assert.Equal(failedRuntimeId, second.CheckpointRecovery!.PreviousRuntimeInstanceId);
+        Assert.Equal(2, second.CheckpointRecovery.PreviousRegistrationRevision);
+        Assert.NotEqual(
+            RuntimeRunStartKeys.ReplacementOperationId(first.OperationId, "checkpoint-bootstrap"),
+            RuntimeRunStartKeys.ReplacementOperationId(second.OperationId, "checkpoint-bootstrap"));
+        var finalDecision = await decisions.ReadCurrentAsync(
+            _actor, _root, _selection, CancellationToken.None);
+        Assert.Equal(second.ExecutionFence, finalDecision.State.Fence);
+        Assert.Equal(gateId, finalDecision.State.PendingGate!.RequestId);
+        Assert.Equal(pending.State.PendingGate!.AllowedChoices, finalDecision.State.PendingGate.AllowedChoices);
     }
 
     [Fact]

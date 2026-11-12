@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Text.Json;
+using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
 using Agentweaver.Orchestrator.Core;
@@ -8,6 +10,144 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 
 public sealed class RuntimeRegistrationRecoveryTests
 {
+    [Fact]
+    public void PreviousRuntimeEvidenceIsScopedToItsRecoveryOperation()
+    {
+        var operationId = Guid.NewGuid();
+        var links = new Dictionary<string, JsonElement>
+        {
+            ["checkpointRecoveryEvidenceOperationId"] = JsonSerializer.SerializeToElement(operationId),
+            ["checkpointRecoveryPreviousRegistration"] = JsonSerializer.SerializeToElement("registration"),
+            ["checkpointRecoveryPreviousPlacement"] = JsonSerializer.SerializeToElement("placement")
+        };
+
+        Assert.True(RuntimeRunStartContinuation.HasPreviousCheckpointRecoveryEvidence(operationId, links));
+        Assert.False(RuntimeRunStartContinuation.HasPreviousCheckpointRecoveryEvidence(Guid.NewGuid(), links));
+    }
+
+    [Fact]
+    public void NewRecoveryReplacesPreviousRuntimeEvidenceFromAnOlderOperation()
+    {
+        var oldOperationId = Guid.NewGuid();
+        var newOperationId = Guid.NewGuid();
+        var links = new Dictionary<string, JsonElement>
+        {
+            ["checkpointRecoveryEvidenceOperationId"] = JsonSerializer.SerializeToElement(oldOperationId),
+            ["checkpointRecoveryPreviousRegistration"] = JsonSerializer.SerializeToElement("older-registration"),
+            ["checkpointRecoveryPreviousPlacement"] = JsonSerializer.SerializeToElement("older-placement"),
+            ["checkpointRecoveryPreviousBootstrapOperationId"] = JsonSerializer.SerializeToElement(Guid.NewGuid()),
+            ["checkpointRecoveryBootstrapEvidenceOperationId"] = JsonSerializer.SerializeToElement(oldOperationId),
+            ["bootstrap"] = JsonSerializer.SerializeToElement("older-bootstrap")
+        };
+        var bootstrapOperationId = Guid.NewGuid();
+        var failedHostRegistration = JsonSerializer.SerializeToElement("failed-host-registration");
+        var failedHostPlacement = JsonSerializer.SerializeToElement("failed-host-placement");
+
+        RuntimeRunStartContinuation.SetPreviousCheckpointRecoveryEvidence(
+            links, newOperationId, failedHostRegistration, failedHostPlacement,
+            JsonSerializer.SerializeToElement(bootstrapOperationId));
+
+        Assert.True(RuntimeRunStartContinuation.HasPreviousCheckpointRecoveryEvidence(newOperationId, links));
+        Assert.Equal("failed-host-registration",
+            links["checkpointRecoveryPreviousRegistration"].GetString());
+        Assert.Equal("failed-host-placement", links["checkpointRecoveryPreviousPlacement"].GetString());
+        Assert.Equal(bootstrapOperationId,
+            links["checkpointRecoveryPreviousBootstrapOperationId"].GetGuid());
+        Assert.False(RuntimeRunStartContinuation.HasCheckpointRecoveryBootstrapEvidence(newOperationId, links));
+        RuntimeRunStartContinuation.SetCheckpointRecoveryBootstrapEvidence(
+            links, newOperationId, JsonSerializer.SerializeToElement("failed-host-bootstrap"));
+        Assert.True(RuntimeRunStartContinuation.HasCheckpointRecoveryBootstrapEvidence(newOperationId, links));
+        Assert.Equal("failed-host-bootstrap", links["bootstrap"].GetString());
+    }
+
+    [Theory]
+    [InlineData("runtime_delivery_unavailable")]
+    [InlineData("runtime_receiver_unavailable")]
+    [InlineData("runtime_source_credential_unavailable")]
+    [InlineData("runtime_configuration_conflict")]
+    [InlineData("runtime_operation_conflict")]
+    public void SpentHostBootstrapErrorsBlockOnlyAfterTheReceiptAndActivationStart(string reason)
+    {
+        Assert.Equal(
+            ("blocked", "checkpoint_recovery_host_bootstrap_spent"),
+            RuntimeRunStartContinuation.ClassifyCheckpointRecoveryFailure(
+                true, reason, transportOrTimeout: false));
+        Assert.Equal(
+            ("blocked", "checkpoint_recovery_host_bootstrap_spent"),
+            RuntimeRunStartContinuation.ClassifyCheckpointRecoveryFailure(
+                true, reason, transportOrTimeout: false));
+        Assert.Equal(
+            ("blocked", reason),
+            RuntimeRunStartContinuation.ClassifyCheckpointRecoveryFailure(
+                false, reason, transportOrTimeout: false));
+    }
+
+    [Fact]
+    public void CheckpointRecoveryRetriesOnlyTransportAndTimeoutFailures()
+    {
+        Assert.Equal(
+            ("pending", "runtime_start_owner_unavailable"),
+            RuntimeRunStartContinuation.ClassifyCheckpointRecoveryFailure(
+                true, "runtime_start_owner_unavailable", transportOrTimeout: true));
+        Assert.Equal(
+            ("pending", "checkpoint_recovery_continuation_timeout"),
+            RuntimeRunStartContinuation.ClassifyCheckpointRecoveryFailure(
+                true, "checkpoint_recovery_continuation_timeout", transportOrTimeout: false));
+        Assert.Equal(
+            ("pending", "runtime_activation_owner_unavailable"),
+            RuntimeRunStartContinuation.ClassifyCheckpointRecoveryFailure(
+                true, "runtime_activation_owner_unavailable", transportOrTimeout: true));
+        Assert.Equal(
+            ("pending", "runtime_owner_unavailable"),
+            RuntimeRunStartContinuation.ClassifyCheckpointRecoveryFailure(
+                true, "runtime_owner_unavailable", transportOrTimeout: true));
+        Assert.Equal(
+            ("pending", "runtime_activation_owner_timeout"),
+            RuntimeRunStartContinuation.ClassifyCheckpointRecoveryFailure(
+                true, "runtime_activation_owner_timeout", transportOrTimeout: true));
+        Assert.Equal(
+            ("blocked", "runtime_other_unavailable"),
+            RuntimeRunStartContinuation.ClassifyCheckpointRecoveryFailure(
+                true, "runtime_other_unavailable", transportOrTimeout: false));
+    }
+
+    [Fact]
+    public async Task BlockedCheckpointRecoveryDoesNotStartAnotherContinuation()
+    {
+        var result = new RunExecutionTransitionResult(
+            Guid.NewGuid(),
+            new SessionIdentity("project", "run", "root"),
+            "active", "active", 4, 5, 0, 1, 2, 1, 2,
+            null, null, null, null, ImmutableArray<SessionExecutionFenceChange>.Empty)
+        {
+            CheckpointRecovery = new CheckpointRecoveryStatus(
+                "blocked", "source", 1, 4, 5, Guid.NewGuid(), 1)
+        };
+        var continuation = new RuntimeRunStartContinuation(
+            null!, null!, null!, null!, null!, null!);
+
+        var replay = await continuation.ContinueCheckpointRecoveryAsync(
+            null!, null!, null!, result, null!, null!, null!, null!, null!, null!, CancellationToken.None);
+
+        Assert.Same(result, replay);
+    }
+
+    [Fact]
+    public void CheckpointRecoveryOwnerUsesTheCurrentFenceTurnIdentity()
+    {
+        var binding = new RuntimeBinding(
+            "issuer", "actor", "tenant", "project", "run", "session", "agent", "old-turn",
+            1, 1, 1, "context", new string('a', 64), 1, "environment", "placement", 1,
+            "profile", new Uri("https://runtime.test/"), new Uri("https://runtime.test/"));
+        var identity = new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId);
+
+        var owner = RuntimeRunStartContinuation.CreateCheckpointRecoveryOwnerContext(binding, 5);
+
+        Assert.Equal(5, owner.ExecutionFence);
+        Assert.Equal(CoordinationOwnerStore.CreateCoordinatorRootRuntimeTurnId(identity, 5), owner.TurnId);
+        Assert.NotEqual(binding.TurnId, owner.TurnId);
+    }
+
     [Fact]
     public void RecoveryReplayRestoresOnlyTheExactRegistrationRevocation()
     {

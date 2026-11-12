@@ -22,6 +22,18 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
     IEnvironmentRuntimeResumeBootstrapStore? resumeBootstraps = null,
     IEnvironmentRuntimeBootstrapProfileReplacementStore? profileReplacements = null)
 {
+    private static readonly IReadOnlySet<string> CheckpointRecoveryActivationFailureCodes =
+        new HashSet<string>(StringComparer.Ordinal)
+        {
+            "runtime_delivery_unavailable",
+            "runtime_receiver_unavailable",
+            "runtime_source_credential_unavailable",
+            "runtime_configuration_conflict",
+            "runtime_operation_conflict",
+            "runtime_owner_unavailable",
+            "runtime_owner_timeout"
+        };
+
     private readonly RuntimeRegistrationHttpClient _owner = new(
         client, options.OrchestratorOwnerAddress);
 
@@ -62,7 +74,11 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
         var receipt = await SendToHostAsync<RuntimeHostReadinessReceipt>(
             placement,
             endpoint.AbsolutePath + "/activate", actor,
-            request with { McpServer = placement.McpServer }, cancellationToken).ConfigureAwait(false);
+            request with { McpServer = placement.McpServer },
+            cancellationToken,
+            request.CheckpointRecoveryOperationId is null
+                ? null
+                : CheckpointRecoveryActivationFailureCodes).ConfigureAwait(false);
         var currentPlacement = await ReadPlacementAsync(
             registration, actor, cancellationToken, request.CheckpointRecoveryOperationId).ConfigureAwait(false);
         var current = await ReadCurrentAsync(

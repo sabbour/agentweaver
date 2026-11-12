@@ -105,25 +105,52 @@ public static class RuntimeOwnerHttpTransport
 
     /// <summary>Sends a JSON request and requires a valid non-null JSON response.</summary>
     /// <exception cref="RuntimeAuthorizationException">The owner response is denied, redirected, cached, or malformed.</exception>
+    public static Task<TResponse> SendAsync<TResponse>(
+        HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
+        object? body, CancellationToken cancellationToken) where TResponse : class =>
+        SendAsync<TResponse>(client, ownerAddress, path, actor, body, cancellationToken, null);
+
     public static async Task<TResponse> SendAsync<TResponse>(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
-        object? body, CancellationToken cancellationToken) where TResponse : class
+        object? body, CancellationToken cancellationToken,
+        IReadOnlySet<string>? allowedFailureCodes) where TResponse : class
         => await SendCoreAsync<TResponse>(client, ownerAddress, path, actor, body,
-            allowNotFound: false, cancellationToken).ConfigureAwait(false)
+            allowNotFound: false, cancellationToken, allowedFailureCodes: allowedFailureCodes)
+            .ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
 
     /// <summary>Sends a run-start owner request and preserves only known startup failure codes.</summary>
-    public static async Task<TResponse> SendRuntimeRunStartAsync<TResponse>(
+    public static Task<TResponse> SendRuntimeRunStartAsync<TResponse>(
         HttpClient client,
         Uri ownerAddress,
         string path,
         RuntimeActorAuthorization actor,
         object? body,
         CancellationToken cancellationToken) where TResponse : class =>
-        await SendCoreAsync<TResponse>(
+        SendRuntimeRunStartAsync<TResponse>(
+            client, ownerAddress, path, actor, body, cancellationToken, null);
+
+    public static async Task<TResponse> SendRuntimeRunStartAsync<TResponse>(
+        HttpClient client,
+        Uri ownerAddress,
+        string path,
+        RuntimeActorAuthorization actor,
+        object? body,
+        CancellationToken cancellationToken,
+        IReadOnlySet<string>? additionalFailureCodes) where TResponse : class
+    {
+        IReadOnlySet<string> allowedFailureCodes = RuntimeRunStartFailureCodes;
+        if (additionalFailureCodes is not null)
+        {
+            var combinedFailureCodes = new HashSet<string>(RuntimeRunStartFailureCodes, StringComparer.Ordinal);
+            combinedFailureCodes.UnionWith(additionalFailureCodes);
+            allowedFailureCodes = combinedFailureCodes;
+        }
+        return await SendCoreAsync<TResponse>(
             client, ownerAddress, path, actor, body, allowNotFound: false, cancellationToken,
-            allowedFailureCodes: RuntimeRunStartFailureCodes).ConfigureAwait(false)
-        ?? throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
+            allowedFailureCodes: allowedFailureCodes).ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
+    }
 
     /// <summary>Reads a JSON response and returns null only when the owner reports not found.</summary>
     public static Task<TResponse?> ReadOptionalAsync<TResponse>(
@@ -149,10 +176,20 @@ public static class RuntimeOwnerHttpTransport
     /// Sends a bounded JSON request, optionally bound to a validated sandbox endpoint, and
     /// enforces response size while streaming rather than trusting Content-Length.
     /// </summary>
-    public static async Task<TResponse?> SendBoundedAsync<TResponse>(
+    public static Task<TResponse?> SendBoundedAsync<TResponse>(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
         object? body, int maximumBytes, bool allowNotFound, CancellationToken cancellationToken,
         SandboxRuntimeHttpsEndpoint? sandboxEndpoint = null)
+        where TResponse : class =>
+        SendBoundedAsync<TResponse>(
+            client, ownerAddress, path, actor, body, maximumBytes, allowNotFound,
+            cancellationToken, sandboxEndpoint, null);
+
+    public static async Task<TResponse?> SendBoundedAsync<TResponse>(
+        HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
+        object? body, int maximumBytes, bool allowNotFound, CancellationToken cancellationToken,
+        SandboxRuntimeHttpsEndpoint? sandboxEndpoint,
+        IReadOnlySet<string>? allowedFailureCodes)
         where TResponse : class
     {
         if (maximumBytes is < 1 or > 4 * SessionMaterialValidation.MaximumBytes)
@@ -212,6 +249,11 @@ public static class RuntimeOwnerHttpTransport
         if (allowNotFound && response.StatusCode == System.Net.HttpStatusCode.NotFound)
             return null;
         if (!response.IsSuccessStatusCode)
+        {
+            if (allowedFailureCodes is not null &&
+                await ReadAllowedFailureCodeAsync(response, allowedFailureCodes, token).ConfigureAwait(false)
+                    is { } failureCode)
+                throw new RuntimeAuthorizationException(failureCode);
             throw new RuntimeAuthorizationException(
                 response.StatusCode switch
                 {
@@ -220,6 +262,7 @@ public static class RuntimeOwnerHttpTransport
                     System.Net.HttpStatusCode.Conflict => "runtime_owner_binding_changed",
                     _ => "runtime_owner_unavailable"
                 });
+        }
         if (response.Content.Headers.ContentType?.MediaType != "application/json" ||
             response.Content.Headers.ContentLength is { } length && (length <= 0 || length > maximumBytes))
             throw new RuntimeAuthorizationException("runtime_owner_response_size_invalid");

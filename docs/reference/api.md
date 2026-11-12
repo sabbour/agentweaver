@@ -1281,17 +1281,28 @@ next-fence registration and requires authenticated Host readiness from the
 native cache or journal rebuild path. A fresh Host session is not ready.
 
 An accepted continuation returns `202` with `checkpointRecovery.phase` set to
-`pending`. Retry the same request with the same idempotency key to continue the
-saved step. A ready or blocked result returns `200`. `ready` means the Host
-restored the saved boundary. It does not mean the gate was answered or the run
-completed. A later gate answer uses the same request ID at the current fence
-and decision version.
+`pending`. Retry the same request with the same idempotency key after a
+transport or timeout failure to continue the saved step. A ready or blocked
+result returns `200`. `ready` means the Host restored the saved boundary. It
+does not mean the gate was answered or the run completed. A later gate answer
+uses the same request ID at the current fence and decision version.
+
+If activation fails after the Broker saves the bootstrap receipt with
+`runtime_delivery_unavailable`, `runtime_receiver_unavailable`,
+`runtime_source_credential_unavailable`, `runtime_configuration_conflict`, or
+`runtime_operation_conflict`, the operation becomes `blocked` with reason
+`checkpoint_recovery_host_bootstrap_spent`. Do not retry that blocked operation:
+the bootstrap credential cannot be replayed. Start a new `POST /recovery`
+operation with a new idempotency key and the failed runtime ID and registration
+revision. The owner advances the fence once, retires the failed Host, and uses
+new operation IDs. It does not resend the credential or roll back authority.
 
 `readRunStatus` and root `readSessionStatus` expose the current recovery step,
 reason, checkpoint IDs, fences, and old and new runtime identities.
 `replayRunEvents` exposes committed recovery progress through its cursor.
 These reads do not retry the operation. Do not start a second recovery with a
-new key while the first operation is pending.
+new key while the first operation is pending. A new key is allowed after the
+first operation is blocked.
 
 #### Dispatch completion and startup readback
 

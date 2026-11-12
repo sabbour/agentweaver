@@ -156,7 +156,6 @@ internal sealed class RuntimeRunStartDispatcher(
     OrchestratorOptions options)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
     public async Task<RuntimeStartupSummary> EnqueueChildAsync(
         HttpContext context,
         SessionIdentity root,
@@ -516,6 +515,23 @@ internal sealed class RuntimeRunStartContinuation(
     TimeProvider timeProvider)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly IReadOnlySet<string> CheckpointRecoverySpentBootstrapFailureCodes =
+        new HashSet<string>(StringComparer.Ordinal)
+        {
+            "runtime_delivery_unavailable",
+            "runtime_receiver_unavailable",
+            "runtime_source_credential_unavailable",
+            "runtime_configuration_conflict",
+            "runtime_operation_conflict"
+        };
+    private static readonly IReadOnlySet<string> CheckpointRecoveryActivationFailureCodes =
+        new HashSet<string>(CheckpointRecoverySpentBootstrapFailureCodes, StringComparer.Ordinal)
+        {
+            "runtime_activation_owner_unavailable",
+            "runtime_activation_owner_timeout",
+            "runtime_owner_unavailable",
+            "runtime_owner_timeout"
+        };
 
     public async Task ContinueAsync(
         RuntimeOwnerContext owner,
@@ -1054,9 +1070,7 @@ internal sealed class RuntimeRunStartContinuation(
             ?? throw new RuntimeAuthorizationException("checkpoint_recovery_runtime_stale");
 
         var links = ReadReceiptLinks(intent);
-        var hasPreviousRuntimeEvidence =
-            links.ContainsKey("checkpointRecoveryPreviousRegistration") &&
-            links.ContainsKey("checkpointRecoveryPreviousPlacement");
+        var hasPreviousRuntimeEvidence = HasPreviousCheckpointRecoveryEvidence(result.OperationId, links);
         if (intent.State != "ready" ||
             intent.ExecutionFence != status.PreviousExecutionFence &&
                 !(intent.ExecutionFence == status.ExecutionFence && hasPreviousRuntimeEvidence) ||
@@ -1064,11 +1078,11 @@ internal sealed class RuntimeRunStartContinuation(
             !links.TryGetValue("placement", out var placementElement) &&
                 !hasPreviousRuntimeEvidence)
             throw new RuntimeAuthorizationException("checkpoint_recovery_runtime_stale");
-        var previousRegistration = (links.TryGetValue(
+        var previousRegistration = (hasPreviousRuntimeEvidence && links.TryGetValue(
                 "checkpointRecoveryPreviousRegistration", out var previousRegistrationElement)
                 ? previousRegistrationElement : registrationElement).Deserialize<RuntimeRegistration>(JsonOptions)
             ?? throw new RuntimeAuthorizationException("checkpoint_recovery_runtime_stale");
-        var previousPlacement = (links.TryGetValue(
+        var previousPlacement = (hasPreviousRuntimeEvidence && links.TryGetValue(
                 "checkpointRecoveryPreviousPlacement", out var previousPlacementElement)
                 ? previousPlacementElement : placementElement).Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions)
             ?? throw new RuntimeAuthorizationException("checkpoint_recovery_runtime_stale");
@@ -1077,9 +1091,10 @@ internal sealed class RuntimeRunStartContinuation(
             previousRegistration.Revision != status.PreviousRegistrationRevision)
             throw new RuntimeAuthorizationException("checkpoint_recovery_runtime_stale");
         var previousOwner = CreateOwnerContext(previousRegistration.Binding);
-        var owner = previousOwner with { ExecutionFence = status.ExecutionFence };
+        var owner = CreateCheckpointRecoveryOwnerContext(
+            previousRegistration.Binding, status.ExecutionFence);
         RequireReplacementRegistration(previousOwner, previousPlacement, previousRegistration);
-        var previousBootstrapId = links.TryGetValue(
+        var previousBootstrapId = hasPreviousRuntimeEvidence && links.TryGetValue(
             "checkpointRecoveryPreviousBootstrapOperationId", out var previousBootstrapElement)
             ? previousBootstrapElement.GetGuid()
             : intent.BootstrapOperationId;
@@ -1163,12 +1178,11 @@ internal sealed class RuntimeRunStartContinuation(
             await RequireBoundaryAsync().ConfigureAwait(false);
             await PersistAsync("placement").ConfigureAwait(false);
             var cleanupLinks = ReadReceiptLinks(intent);
-            cleanupLinks.TryAdd(
-                "checkpointRecoveryPreviousPlacement", JsonSerializer.SerializeToElement(previousPlacement, JsonOptions));
-            cleanupLinks.TryAdd(
-                "checkpointRecoveryPreviousRegistration", JsonSerializer.SerializeToElement(previousRegistration, JsonOptions));
-            cleanupLinks.TryAdd(
-                "checkpointRecoveryPreviousBootstrapOperationId",
+            SetPreviousCheckpointRecoveryEvidence(
+                cleanupLinks,
+                result.OperationId,
+                JsonSerializer.SerializeToElement(previousRegistration, JsonOptions),
+                JsonSerializer.SerializeToElement(previousPlacement, JsonOptions),
                 JsonSerializer.SerializeToElement(previousBootstrapId, JsonOptions));
             cleanupLinks.Remove("placement");
             intent = await recoveryStore.PersistCheckpointRecoveryCleanupEvidenceAsync(
@@ -1237,8 +1251,12 @@ internal sealed class RuntimeRunStartContinuation(
                 {
                     CheckpointRecoveryOperationId = result.OperationId
                 },
-                token).ConfigureAwait(false);
-            cleanupLinks["bootstrap"] = JsonSerializer.SerializeToElement(BootstrapReceipt(bootstrap), JsonOptions);
+                token,
+                CheckpointRecoverySpentBootstrapFailureCodes).ConfigureAwait(false);
+            SetCheckpointRecoveryBootstrapEvidence(
+                cleanupLinks,
+                result.OperationId,
+                JsonSerializer.SerializeToElement(BootstrapReceipt(bootstrap), JsonOptions));
             intent = await recoveryStore.PersistCheckpointRecoveryCleanupEvidenceAsync(
                 intent,
                 JsonSerializer.Serialize(cleanupLinks, JsonOptions),
@@ -1269,7 +1287,8 @@ internal sealed class RuntimeRunStartContinuation(
                     McpServer = environmentContext.McpServer,
                     CheckpointRecoveryOperationId = result.OperationId
                 },
-                token).ConfigureAwait(false);
+                token,
+                CheckpointRecoveryActivationFailureCodes).ConfigureAwait(false);
             cleanupLinks["activation"] = JsonSerializer.SerializeToElement(activation, JsonOptions);
             intent = await recoveryStore.PersistCheckpointRecoveryCleanupEvidenceAsync(
                 intent,
@@ -1352,12 +1371,16 @@ internal sealed class RuntimeRunStartContinuation(
             exception is RuntimeAuthorizationException or CoordinationException or HttpRequestException or JsonException)
         {
             var reason = FailureCode(exception);
-            var pending = exception is HttpRequestException ||
-                exception is CoordinationException { StatusCode: >= StatusCodes.Status500InternalServerError } ||
-                reason is "runtime_start_actor_expired" or "runtime_registration_stale" ||
-                reason.Contains("unavailable", StringComparison.Ordinal) ||
-                reason.Contains("timeout", StringComparison.Ordinal);
-            return await PersistFailureAsync(reason, pending ? "pending" : "blocked").ConfigureAwait(false);
+            var failure = ClassifyCheckpointRecoveryFailure(
+                HasCheckpointRecoveryBootstrapEvidence(result.OperationId, ReadReceiptLinks(intent)),
+                reason,
+                exception is HttpRequestException or OperationCanceledException ||
+                    reason is "runtime_activation_owner_unavailable" or
+                        "runtime_activation_owner_timeout" or
+                        "runtime_owner_unavailable" or
+                        "runtime_owner_timeout" ||
+                    reason.Contains("timeout", StringComparison.Ordinal));
+            return await PersistFailureAsync(failure.ReasonCode, failure.Phase).ConfigureAwait(false);
         }
 
         async Task<RunExecutionTransitionResult> PersistFailureAsync(string reason, string phase = "pending")
@@ -1687,6 +1710,72 @@ internal sealed class RuntimeRunStartContinuation(
             CopilotSoftCreditLimit = binding.CopilotSoftCreditLimit,
             CopilotHardCreditLimit = binding.CopilotHardCreditLimit
         };
+
+    internal static RuntimeOwnerContext CreateCheckpointRecoveryOwnerContext(
+        RuntimeBinding binding, long executionFence) =>
+        CreateOwnerContext(binding) with
+        {
+            TurnId = CoordinationOwnerStore.CreateCoordinatorRootRuntimeTurnId(
+                new(binding.ProjectId, binding.RunId, binding.SessionId), executionFence),
+            ExecutionFence = executionFence
+        };
+
+    internal static bool HasPreviousCheckpointRecoveryEvidence(
+        Guid operationId,
+        IReadOnlyDictionary<string, JsonElement> links) =>
+        links.TryGetValue("checkpointRecoveryEvidenceOperationId", out var evidenceOperationElement) &&
+        evidenceOperationElement.GetGuid() == operationId &&
+        links.ContainsKey("checkpointRecoveryPreviousRegistration") &&
+        links.ContainsKey("checkpointRecoveryPreviousPlacement");
+
+    internal static bool HasCheckpointRecoveryBootstrapEvidence(
+        Guid operationId,
+        IReadOnlyDictionary<string, JsonElement> links) =>
+        links.TryGetValue("checkpointRecoveryBootstrapEvidenceOperationId", out var evidenceOperationElement) &&
+        evidenceOperationElement.GetGuid() == operationId &&
+        links.ContainsKey("bootstrap");
+
+    internal static void SetCheckpointRecoveryBootstrapEvidence(
+        IDictionary<string, JsonElement> links,
+        Guid operationId,
+        JsonElement receipt)
+    {
+        links["bootstrap"] = receipt;
+        links["checkpointRecoveryBootstrapEvidenceOperationId"] =
+            JsonSerializer.SerializeToElement(operationId, JsonOptions);
+    }
+
+    internal static void SetPreviousCheckpointRecoveryEvidence(
+        IDictionary<string, JsonElement> links,
+        Guid operationId,
+        JsonElement registration,
+        JsonElement placement,
+        JsonElement bootstrapOperationId)
+    {
+        links["checkpointRecoveryPreviousRegistration"] = registration;
+        links["checkpointRecoveryPreviousPlacement"] = placement;
+        links["checkpointRecoveryPreviousBootstrapOperationId"] = bootstrapOperationId;
+        links["checkpointRecoveryEvidenceOperationId"] =
+            JsonSerializer.SerializeToElement(operationId, JsonOptions);
+    }
+
+    internal static (string Phase, string ReasonCode) ClassifyCheckpointRecoveryFailure(
+        bool hasBootstrapReceipt,
+        string reason,
+        bool transportOrTimeout)
+    {
+        var bootstrapSpent = hasBootstrapReceipt &&
+            reason is "runtime_delivery_unavailable" or
+                "runtime_receiver_unavailable" or
+                "runtime_source_credential_unavailable" or
+                "runtime_configuration_conflict" or
+                "runtime_operation_conflict";
+        if (bootstrapSpent)
+            return ("blocked", "checkpoint_recovery_host_bootstrap_spent");
+        return (transportOrTimeout || reason.Contains("timeout", StringComparison.OrdinalIgnoreCase)
+            ? "pending"
+            : "blocked", reason);
+    }
 
     private static void RequireRegistration(
         RuntimeOwnerContext owner,

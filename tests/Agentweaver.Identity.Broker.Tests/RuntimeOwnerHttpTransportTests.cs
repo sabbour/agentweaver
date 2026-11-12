@@ -102,6 +102,85 @@ public sealed class RuntimeOwnerHttpTransportTests
         Assert.Single(handler.Requests);
     }
 
+    [Theory]
+    [InlineData("runtime_operation_conflict")]
+    [InlineData("runtime_activation_owner_unavailable")]
+    [InlineData("runtime_owner_unavailable")]
+    [InlineData("runtime_owner_timeout")]
+    public async Task RunStartTransportPreservesExplicitCheckpointActivationFailures(string failureCode)
+    {
+        var handler = new RecordingHandler(request =>
+        {
+            var response = Response(request, new { code = failureCode });
+            response.StatusCode = failureCode.Contains("unavailable", StringComparison.Ordinal) ||
+                failureCode.Contains("timeout", StringComparison.Ordinal)
+                ? HttpStatusCode.ServiceUnavailable
+                : HttpStatusCode.Conflict;
+            return Task.FromResult(response);
+        });
+        using var client = new HttpClient(handler);
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            RuntimeOwnerHttpTransport.SendRuntimeRunStartAsync<RuntimeHostReadinessReceipt>(
+                client,
+                new Uri("https://environment.test/"),
+                "/internal/runtime/v1/activate",
+                new(new SecretCredential("actor", DateTimeOffset.UtcNow.AddMinutes(1)), null),
+                new RuntimeHostConfigureRequest(
+                    1,
+                    new RuntimeRegistration(
+                        Guid.NewGuid(), 1,
+                        new RuntimeBinding(
+                            "issuer", "actor", "tenant", "project", "run", "session", "agent", "turn",
+                            1, 1, 1, "context", new string('a', 64), 1, "environment", "placement", 1,
+                            "profile", new Uri("https://runtime.test/"), new Uri("https://runtime.test/")),
+                        RuntimeRegistrationState.Active, DateTimeOffset.UtcNow.AddMinutes(1)),
+                        Guid.NewGuid(), Guid.NewGuid(), JsonSerializer.SerializeToElement(new { }))
+                {
+                    CheckpointRecoveryOperationId = Guid.NewGuid()
+                },
+                default,
+                new HashSet<string>(StringComparer.Ordinal)
+                {
+                        "runtime_operation_conflict",
+                        "runtime_activation_owner_unavailable",
+                        "runtime_owner_unavailable",
+                        "runtime_owner_timeout"
+                }));
+
+        Assert.Equal(failureCode, failure.Code);
+    }
+
+    [Fact]
+    public async Task BoundedTransportPreservesOnlyExplicitlyAllowedHostFailures()
+    {
+        var handler = new RecordingHandler(request =>
+        {
+            var response = Response(request, new { code = "runtime_configuration_conflict" });
+            response.StatusCode = HttpStatusCode.Forbidden;
+            return Task.FromResult(response);
+        });
+        using var client = new HttpClient(handler);
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            RuntimeOwnerHttpTransport.SendBoundedAsync<RuntimeBootstrapDeliveryReceipt>(
+                client,
+                new Uri("https://runtime.test/"),
+                "/runtime/v1/configure/activate",
+                new(new SecretCredential("actor", DateTimeOffset.UtcNow.AddMinutes(1)), null),
+                new RuntimeBootstrapRequest(Guid.NewGuid(), Guid.NewGuid(), new string('a', 64)),
+                4096,
+                false,
+                default,
+                sandboxEndpoint: null,
+                allowedFailureCodes: new HashSet<string>(StringComparer.Ordinal)
+                {
+                    "runtime_configuration_conflict"
+                }));
+
+        Assert.Equal("runtime_configuration_conflict", failure.Code);
+    }
+
     [Fact]
     public async Task PendingVerifierForwardsOnlyTheProtectedActorAndExactTransientProof()
     {
