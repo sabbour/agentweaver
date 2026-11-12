@@ -42,7 +42,7 @@
     {
       "type": "note",
       "over": ["orchestrator", "postgres"],
-      "label": "Owner transactions append allow-listed facts with their canonical admission, denial, proof, or credit-guard change."
+      "label": "Owner transactions append allow-listed admission, denial, proof, and credit facts. A rejection records a decision, not SDK delivery or tool execution."
     },
     {
       "type": "message",
@@ -126,7 +126,7 @@
       "type": "message",
       "from": "orchestrator",
       "to": "orchestrator",
-      "label": "Keep missing legacy coverage and native proof incomplete or unavailable",
+      "label": "Keep missing legacy coverage, native sends, and tool execution incomplete or unavailable; a rejection decision does not prove SDK delivery",
       "line": "solid",
       "arrow": "filled"
     },

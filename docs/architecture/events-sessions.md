@@ -458,8 +458,12 @@ its children; a child sees only its own facts. Cursor state records a high-water
 mark and caller/session binding, so later writes do not change an active page
 sequence or its credit-guard summary. A new coverage marker distinguishes instrumented history from
 legacy or uninstrumented history. The projection leaves native sends,
-consumption, and tool execution unavailable until their owner evidence exists;
-it does not infer a native action from a reservation.
+consumption, and tool execution unavailable until their owner evidence exists.
+For a numeric tool-call denial, a separate fact can confirm that AgentRuntime
+recorded a rejection decision after Orchestrator confirmed the exact denial and
+active MAF dispatch. It does not confirm that the SDK received the decision or
+that the tool did not run.
+The projection does not infer a native action from a reservation.
 
 The version-2 runtime-execution-observation route keeps those checks and wraps the unchanged
 version-1 observation with a `checkpointParent` object. Its required

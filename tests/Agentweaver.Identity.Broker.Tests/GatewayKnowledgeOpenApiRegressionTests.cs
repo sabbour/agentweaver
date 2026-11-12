@@ -157,6 +157,9 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             history.GetProperty("required").EnumerateArray().Select(property => property.GetString()));
         var fact = schemas.GetProperty("RuntimeObservationV2Fact");
         Assert.False(fact.GetProperty("additionalProperties").GetBoolean());
+        Assert.Contains("ToolPermissionRejected",
+            fact.GetProperty("properties").GetProperty("kind").GetProperty("enum")
+                .EnumerateArray().Select(value => value.GetString()));
         Assert.Contains("checkpointId",
             fact.GetProperty("required").EnumerateArray().Select(property => property.GetString()));
         Assert.Contains("accountedThroughLedgerEventCount",

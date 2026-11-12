@@ -10,6 +10,7 @@ namespace Agentweaver.AgentRuntime;
 public sealed class RuntimeActionHttpClient(HttpClient client, Uri orchestratorAddress, RuntimeActorAuthorization actor)
 {
     private readonly Uri _address = RuntimeOwnerHttpTransport.RequireOwnerAddress(orchestratorAddress);
+    private static readonly TimeSpan ToolRejectionWriteTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>Builds a versioned request bound to registration, execution fence, input hash, and event ID.</summary>
     internal async Task RequireAsync(
@@ -106,6 +107,39 @@ public sealed class RuntimeActionHttpClient(HttpClient client, Uri orchestratorA
         Guid? costTurnId = null, Guid? dispatchId = null) =>
         RequireAsync(registration, actionId, input, requireCurrentAuthority, cancellationToken,
             dispatchId: dispatchId, costTurnId: costTurnId, eventId: eventId);
+
+    internal async Task RecordNativeToolPermissionRejectionAsync(
+        RuntimeNativeToolPermissionRejectionRequest request,
+        Func<CancellationToken, Task> requireCurrentAuthority,
+        CancellationToken cancellationToken)
+    {
+        request.Validate();
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(ToolRejectionWriteTimeout);
+        await requireCurrentAuthority(timeout.Token).ConfigureAwait(false);
+        RuntimeNativeToolPermissionRejectionAcknowledgement acknowledgement;
+        try
+        {
+            acknowledgement = await SendRejectionAsync(request, timeout.Token).ConfigureAwait(false);
+        }
+        catch (HttpRequestException)
+        {
+            await requireCurrentAuthority(timeout.Token).ConfigureAwait(false);
+            acknowledgement = await SendRejectionAsync(request, timeout.Token).ConfigureAwait(false);
+        }
+        _ = acknowledgement.Validate(request);
+    }
+
+    private Task<RuntimeNativeToolPermissionRejectionAcknowledgement> SendRejectionAsync(
+        RuntimeNativeToolPermissionRejectionRequest request,
+        CancellationToken cancellationToken) =>
+        RuntimeOwnerHttpTransport.SendAsync<RuntimeNativeToolPermissionRejectionAcknowledgement>(
+            client,
+            _address,
+            RuntimeNativeToolPermissionRejectionContract.RecordPath,
+            actor,
+            request,
+            cancellationToken);
 
     /// <summary>Retries one transport failure only after confirming the caller's authority remains current.</summary>
     private async Task<RuntimeActionAdmission> SendAdmissionAsync(

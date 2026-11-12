@@ -255,12 +255,14 @@ agentweaver api invoke readRuntimeObservationV2 --path projectId=PROJECT_ID --pa
 
 The response marks legacy or uninstrumented history as incomplete. Missing
 native-send, tool-execution, or consumption proof stays unavailable; a
-reservation does not prove that native work ran. If the owner retains more
-than 100 facts for one attempt, the exact response includes an unavailable
-reason and a history cursor. Continue with the cursor and omit `attemptId`.
-An empty exact result means the owner did not retain matching evidence; it
-does not prove that the attempt did not occur. Tool-rejection evidence is not
-part of this version. The route is a read, not a live acceptance test.
+reservation does not prove that native work ran. For a tool-call limit denial,
+`toolPermission` can show that the runtime recorded a rejection decision.
+It does not prove that the SDK received the decision or that the tool did not
+run. If the owner retains more than 100 facts for one attempt, the exact
+response includes an unavailable reason and a history cursor. Continue with
+the cursor and omit `attemptId`. An empty exact result means the owner did not
+retain matching evidence; it does not prove that the attempt did not occur.
+The route is a read, not a live acceptance test.
 See [runtime observation contracts](../reference/contracts.md#runtime-observation-v2)
 for the response fields and limits.
 

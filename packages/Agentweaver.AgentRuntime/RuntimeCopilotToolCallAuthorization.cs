@@ -17,7 +17,9 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
     string sessionId,
     Func<RuntimeActionRequest, CancellationToken, Task> requireAuthority,
     RuntimeCopilotTurnObserver turns,
-    RuntimeNativeCallSequence nativeCalls)
+    RuntimeNativeCallSequence nativeCalls,
+    Func<RuntimeNativeToolPermissionRejectionRequest, CancellationToken, Task>?
+        recordToolPermissionRejection = null)
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, NativeToolCall> _calls = new(StringComparer.Ordinal);
@@ -95,7 +97,35 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
             }
 
             RequireCall(context, call);
-            await requireAuthority(call.Request, context.Token).ConfigureAwait(false);
+            try
+            {
+                await requireAuthority(call.Request, context.Token).ConfigureAwait(false);
+            }
+            catch (RuntimeAuthorizationException failure) when (
+                request is PermissionRequestHook &&
+                failure.Code == RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode &&
+                recordToolPermissionRejection is not null)
+            {
+                var rejection = PermissionDecision.Reject(failure.Code);
+                var evidence = new RuntimeNativeToolPermissionRejectionRequest(
+                    1,
+                    call.Request.RuntimeInstanceId,
+                    call.Request.RegistrationRevision,
+                    call.Request.ExecutionFence,
+                    call.Request.EventId,
+                    context.MessageId,
+                    RuntimeActionContract.Hash(call.Request),
+                    failure.Code);
+                try
+                {
+                    await recordToolPermissionRejection(evidence, context.Token).ConfigureAwait(false);
+                }
+                catch (Exception writeFailure) when (writeFailure is not OutOfMemoryException)
+                {
+                    // Rejection must not become an approval or a callback error when evidence cannot be saved.
+                }
+                return rejection;
+            }
             RequireCall(context, call);
             if (secondary is not null)
             {

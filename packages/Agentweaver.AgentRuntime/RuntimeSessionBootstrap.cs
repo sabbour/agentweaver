@@ -166,7 +166,10 @@ public sealed class RuntimeSessionBootstrap(
                 actions is null ? null : (request, token) =>
                     actions.RequireAsync(request, RequireSourceAuthorityAsync, token),
                 capturedMcpServer,
-                journalFallback);
+                journalFallback,
+                actions is null ? null : (request, token) =>
+                    actions.RecordNativeToolPermissionRejectionAsync(
+                        request, RequireSourceAuthorityAsync, token));
             if (session.VerifiedHostedReasoningEfforts is { } supportedEfforts &&
                 session.VerifiedHostedReasoningCatalogAt is { } verifiedAt &&
                 registration.Binding.ModelConnectionId is { } connectionId &&

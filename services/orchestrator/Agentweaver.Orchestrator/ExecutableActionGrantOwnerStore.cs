@@ -760,7 +760,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
             var observedCount = (long)(await count.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
             if (binding.MaxToolCalls is { } maxToolCalls && observedCount >= maxToolCalls)
                 throw new RuntimeNumericLimitDeniedException(
-                    "runtime_tool_call_limit_exhausted", RuntimeNumericLimitKind.ToolCalls,
+                    RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode,
+                    RuntimeNumericLimitKind.ToolCalls,
                     maxToolCalls, observedCount, decisionVersion,
                     sendStateBefore?.Hash ?? throw new RuntimeAuthorizationException(
                         "runtime_numeric_limit_send_state_unavailable"),
@@ -1101,6 +1102,93 @@ internal sealed class ExecutableActionGrantOwnerStore(
             new(receipt, noSend), registration, request);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result;
+    }
+
+    internal async Task<RuntimeNativeToolPermissionRejectionAcknowledgement>
+        RecordNativeToolPermissionRejectionAsync(
+            RuntimeRegistration registration,
+            RuntimeNativeToolPermissionRejectionRequest request,
+            CancellationToken cancellationToken)
+    {
+        request.Validate();
+        var binding = registration.Binding;
+        if (request.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            request.RegistrationRevision != registration.Revision ||
+            request.ExecutionFence != binding.ExecutionFence)
+            throw new RuntimeAuthorizationException("runtime_native_tool_rejection_conflict");
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var denial = await _executionEvidence.ReadNumericLimitDenialAsync(
+            connection,
+            transaction,
+            binding.ProjectId,
+            binding.RunId,
+            request.AttemptId,
+            cancellationToken).ConfigureAwait(false);
+        if (denial is null || denial.LimitKind != RuntimeNumericLimitKind.ToolCalls ||
+            denial.SessionId != binding.SessionId ||
+            denial.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            denial.RegistrationRevision != registration.Revision ||
+            denial.ExecutionFence != binding.ExecutionFence ||
+            denial.AcceptedSelectionHash != binding.AcceptedSelectionHash ||
+            denial.RequestHash != request.RequestHash)
+            throw new RuntimeAuthorizationException("runtime_native_tool_rejection_denial_unavailable");
+        if (binding.WorkflowStepId is null ||
+            !await MatchesToolRejectionDispatchAsync(
+                connection, transaction, binding.ProjectId, binding.RunId, request.DispatchId,
+                denial, cancellationToken).ConfigureAwait(false))
+            throw new RuntimeAuthorizationException("runtime_native_tool_rejection_dispatch_unavailable");
+
+        var factId = await _runtimeObservationV2.AppendToolPermissionRejectionAsync(
+            connection, transaction, request, denial, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new RuntimeNativeToolPermissionRejectionAcknowledgement(
+            1, factId, request.RequestHash).Validate(request);
+    }
+
+    private async Task<bool> MatchesToolRejectionDispatchAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string projectId,
+        string runId,
+        Guid dispatchId,
+        RuntimeNumericLimitDenialReceipt denial,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1 FROM {_schema}.maf_execution_dispatches
+                WHERE project_id = @project AND run_id = @run AND dispatch_id = @dispatch
+                  AND root_session_id = @root AND child_session_id = @session
+                  AND execution_fence = @fence
+                  AND accepted_selection_hash = @selection
+                  AND runtime_instance_id = @runtime
+                  AND registration_revision = @registration
+                  AND (@checkpoint IS NULL OR checkpoint_id = @checkpoint)
+                  AND (@checkpointRevision IS NULL OR checkpoint_revision = @checkpointRevision)
+                  AND (@workPlan IS NULL OR work_plan_id = @workPlan)
+                  AND (@association IS NULL OR association_id = @association)
+            )
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlTypes.NpgsqlDbType.Varchar, projectId);
+        command.Parameters.AddWithValue("run", NpgsqlTypes.NpgsqlDbType.Varchar, runId);
+        command.Parameters.AddWithValue("dispatch", NpgsqlTypes.NpgsqlDbType.Uuid, dispatchId);
+        command.Parameters.AddWithValue("root", NpgsqlTypes.NpgsqlDbType.Varchar, denial.RootSessionId);
+        command.Parameters.AddWithValue("session", NpgsqlTypes.NpgsqlDbType.Varchar, denial.SessionId);
+        command.Parameters.AddWithValue("fence", NpgsqlTypes.NpgsqlDbType.Bigint, denial.ExecutionFence);
+        command.Parameters.AddWithValue("selection", NpgsqlTypes.NpgsqlDbType.Char, denial.AcceptedSelectionHash);
+        command.Parameters.AddWithValue("runtime", NpgsqlTypes.NpgsqlDbType.Uuid, denial.RuntimeInstanceId);
+        command.Parameters.AddWithValue("registration", NpgsqlTypes.NpgsqlDbType.Bigint, denial.RegistrationRevision);
+        command.Parameters.AddWithValue("checkpoint", NpgsqlTypes.NpgsqlDbType.Varchar,
+            denial.CheckpointId is null ? DBNull.Value : denial.CheckpointId);
+        command.Parameters.AddWithValue("checkpointRevision", NpgsqlTypes.NpgsqlDbType.Bigint,
+            denial.CheckpointRevision is null ? DBNull.Value : denial.CheckpointRevision.Value);
+        command.Parameters.AddWithValue("workPlan", NpgsqlTypes.NpgsqlDbType.Varchar,
+            denial.WorkPlanId is null ? DBNull.Value : denial.WorkPlanId);
+        command.Parameters.AddWithValue("association", NpgsqlTypes.NpgsqlDbType.Varchar,
+            denial.AssociationId is null ? DBNull.Value : denial.AssociationId);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? false);
     }
 
     internal async Task<RuntimeReplacementComparisonBlocker> ReadReplacementComparisonBlockerAsync(

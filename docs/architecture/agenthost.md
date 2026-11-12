@@ -440,9 +440,11 @@ active Host registration.
 History pages use a fixed high-water mark, so later facts appear only in a
 new read. A missing coverage marker reports incomplete legacy or
 uninstrumented history. The response keeps native-send, consumption, and tool
-execution proof unavailable unless matching owner evidence exists. A
-reservation does not prove a native action. This route does not expose native
-tool-rejection evidence or change dispatch behavior. See the [runtime
+execution proof unavailable unless matching owner evidence exists. For a
+tool-call limit denial, AgentRuntime can record a separate rejection decision
+after Orchestrator confirms the exact denial and active MAF dispatch. This
+record does not confirm that the SDK received the decision or that the tool
+did not run. A reservation does not prove a native action. See the [runtime
 observation contract](../reference/contracts.md#runtime-observation-v2) for
 the public fields and evidence limits.
 
@@ -450,7 +452,7 @@ the public fields and evidence limits.
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-runtime-observation-v2.png'">
     <img :src="'/agentweaver/v1/diagrams/flagship/v1-runtime-observation-v2.png'" alt="An authorized caller reads Orchestrator-owned runtime facts through the Gateway. The owner rechecks current project and run authority, the accepted selection, the root or child session, and the execution fence. History pages use a repeatable-read snapshot and a committed high-water mark; later pages keep that mark. Exact attempt lookup is separate from paging. Missing legacy coverage and native proof remain explicitly incomplete or unavailable. Responses contain no prompt, tool arguments, tool results, credentials, or raw native cursor. This source does not prove deployment or live runtime activity." />
   </a>
-  <figcaption>Runtime observation v2 reads retained owner facts. Stable cursors pin the history snapshot, and exact lookup addresses one attempt. Missing legacy or native evidence remains incomplete or unavailable. The figure describes source behavior, not a live deployment.</figcaption>
+  <figcaption>Runtime observation v2 reads retained owner facts. Stable cursors pin the history snapshot, and exact lookup addresses one attempt. A recorded tool rejection decision does not prove SDK delivery or execution. Missing legacy or native evidence remains incomplete or unavailable. The figure describes source behavior, not a live deployment.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-runtime-observation-v2.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-runtime-observation-v2.drawio'">Open editable draw.io source</a></p>
 

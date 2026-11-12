@@ -250,7 +250,10 @@ root query includes its workflow children; a child query returns only that
 child's facts, while its totals remain run-wide. Each first page fixes a
 high-water mark. Later pages keep that mark, and exact `attemptId` lookup is
 separate from cursor paging. Missing legacy coverage or native proof remains
-explicitly incomplete or unavailable.
+explicitly incomplete or unavailable. For a numeric tool-call denial,
+AgentRuntime records a bounded rejection decision after Orchestrator confirms
+the exact owner denial and active MAF dispatch. The record does not prove that
+the SDK received the decision or that the tool did not run.
 
 ```mermaid
 sequenceDiagram

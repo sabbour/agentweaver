@@ -12,6 +12,60 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 public sealed partial class RuntimeNumericLimitsPostgresTests
 {
     [Fact]
+    public async Task RuntimeObservationV2RecordsToolRejectionIdempotentlyWithoutClaimingExecutionOrNoSend()
+    {
+        Assert.Null(await PrepareAsync(0));
+        var admitted = Action(0, toolInvocation: true);
+        _ = await IssueAsync(0, admitted);
+        await GrantStore().RequireToolInvocationReservationAsync(_registrations[0], admitted, default);
+        var denied = Action(0, toolInvocation: true);
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => IssueAsync(0, denied));
+        Assert.Equal(RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode, failure.Code);
+        var denial = Assert.IsType<RuntimeNumericLimitDenialReceipt>(
+            await ReadNumericLimitDenialAsync(denied.EventId));
+        Assert.Null(denial.DispatchId);
+        Assert.Null(denial.CheckpointId);
+        var request = new RuntimeNativeToolPermissionRejectionRequest(
+            1,
+            _registrations[0].RuntimeInstanceId,
+            _registrations[0].Revision,
+            _registrations[0].Binding.ExecutionFence,
+            denied.EventId,
+            _intents[0].MessageId,
+            RuntimeActionContract.Hash(denied),
+            RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode);
+
+        var first = await GrantStore().RecordNativeToolPermissionRejectionAsync(
+            _registrations[0], request, default);
+        var replay = await GrantStore().RecordNativeToolPermissionRejectionAsync(
+            _registrations[0], request, default);
+        Assert.Equal(first, replay);
+
+        var conflict = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            GrantStore().RecordNativeToolPermissionRejectionAsync(
+                _registrations[0], request with { DispatchId = Guid.NewGuid() }, default));
+        Assert.Equal("runtime_native_tool_rejection_dispatch_unavailable", conflict.Code);
+
+        var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
+        var scope = new RuntimeObservationV2ReadScope(
+            _actor.Issuer, _actor.Subject, _selection.Authorization.TenantId,
+            _root.ProjectId, _root.RunId, _root.SessionId, _root.SessionId,
+            selectionHash, _selection.Selection.ContextRevision, 1, 1, new string('a', 64));
+        var observation = await new RuntimeObservationV2Store(fixture.DataSource, _schema)
+            .ReadAsync(scope, 100, null, denied.EventId, default);
+        var denialFact = Assert.Single(observation.History.Items,
+            item => item.Kind == RuntimeObservationFactKind.Denied);
+        var rejectionFact = Assert.Single(observation.History.Items,
+            item => item.Kind == RuntimeObservationFactKind.ToolPermissionRejected);
+        Assert.Equal(request.DispatchId, rejectionFact.DispatchId);
+        Assert.Equal(denial.ReceiptId, rejectionFact.OwnerDecision.ReceiptId);
+        Assert.Equal(RuntimeObservationSectionState.Available, rejectionFact.ToolPermission.State);
+        Assert.Equal(RuntimeObservationSectionState.Unavailable, rejectionFact.NativeNoSend.State);
+        Assert.Equal(RuntimeObservationSectionState.Unavailable, rejectionFact.ToolExecution.State);
+        Assert.Equal(RuntimeObservationSectionState.Unavailable, denialFact.ToolPermission.State);
+    }
+
+    [Fact]
     public async Task RuntimeObservationV2CursorPinsThePageAndExactLookupFindsAttemptFacts()
     {
         var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
