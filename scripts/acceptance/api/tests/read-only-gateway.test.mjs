@@ -7,6 +7,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   buildCommands,
+  childEnvironment,
   parseArgs,
   resolveCliPath,
   validateAuthStatus,
@@ -54,6 +55,17 @@ test('CLI path must be absolute and name the native apphost', () => {
   assert.throws(() => resolveCliPath('agentweaver.exe'), /absolute path/);
   assert.throws(() => resolveCliPath(path.resolve(directory, 'node.exe')), /native/);
   assert.equal(path.basename(resolveCliPath(path.resolve(directory, expectedName))), expectedName);
+});
+
+test('child environment removes target selectors without regard to key case', () => {
+  const childEnv = childEnvironment({
+    PATH: 'system-path',
+    AGENTWEAVER_GATEWAY_URL: 'https://stale.example',
+    agentweaver_project_id: 'stale-project',
+    AgEnTwEaVeR_RuN_Id: 'stale-run',
+    agentweaver_cli_path: 'stale-apphost',
+  });
+  assert.deepEqual(childEnv, { PATH: 'system-path' });
 });
 
 test('signed-in status may omit its process-cached actor; the live REST context checks the actor', () => {

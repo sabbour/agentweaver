@@ -144,10 +144,12 @@ export function buildCommands(input) {
   ];
 }
 
-function childEnvironment(env) {
+export function childEnvironment(env) {
   const childEnv = { ...env };
-  for (const key of TARGET_ENV) delete childEnv[key];
-  delete childEnv.AGENTWEAVER_CLI_PATH;
+  const excluded = new Set([...TARGET_ENV, 'AGENTWEAVER_CLI_PATH']);
+  for (const key of Object.keys(childEnv)) {
+    if (excluded.has(key.toUpperCase())) delete childEnv[key];
+  }
   return childEnv;
 }
 
