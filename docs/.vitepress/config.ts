@@ -70,6 +70,7 @@ export default defineConfig({
           text: 'Plan and troubleshoot',
           items: [
             { text: 'Testing', link: '/guide/testing' },
+            { text: 'Read-only CLI API case', link: '/guide/api-acceptance-migration' },
             { text: 'Plan issues and releases', link: '/guide/release-planning' },
             { text: 'Environment Sandbox testing', link: '/guide/environment-sandbox-testing' },
             { text: 'Azure acceptance', link: '/guide/azure-acceptance' },
