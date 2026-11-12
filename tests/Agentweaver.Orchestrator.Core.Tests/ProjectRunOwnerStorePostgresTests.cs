@@ -534,7 +534,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
                 CancellationToken.None));
         Assert.Equal("first_message_invalid", rejected.Code);
         Assert.Equal(1L, await CountAsync("coordination_messages"));
-        Assert.Equal(1L, await CountAsync("outbox_events"));
+        Assert.Equal(1L, await CountOutboxEventsAsync("orchestrator.addressed_message"));
         var outbound = await _store.ReadOutboundMessageAsync(delivered.OwnerMessageId, CancellationToken.None);
         var route = await _store.ValidateMessageRouteAsync(
             _actor, identity, new MessageRouteValidationRequest(outbound), CancellationToken.None);
@@ -574,7 +574,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
         Assert.Equal(2, ownerMessageIds.Count);
         Assert.Equal(ownerMessageIds[0], ownerMessageIds[1]);
         Assert.Equal(1L, await CountAsync("coordination_messages"));
-        Assert.Equal(1L, await CountAsync("outbox_events"));
+        Assert.Equal(1L, await CountOutboxEventsAsync("orchestrator.addressed_message"));
     }
 
     [Fact]
@@ -728,7 +728,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
             "shared-key", new(), NoCheck, CancellationToken.None);
         Assert.True(otherCaller.AlreadyTerminal);
         Assert.Equal(2L, await CountAsync("project_run_cancellations"));
-        Assert.Equal(1L, await CountAsync("outbox_events"));
+        Assert.Equal(1L, await CountOutboxEventsAsync("orchestrator.run.cancelled"));
     }
 
     /// <summary>Read-only project access never grants cancellation authority, even to a run creator.</summary>
@@ -792,7 +792,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
             "terminal", new(), NoCheck, CancellationToken.None);
         Assert.Equal(result, replay);
         Assert.Equal(cleanup, await ReadRuntimeStartCleanupAsync(row.RunId));
-        Assert.Equal(0L, await CountAsync("outbox_events"));
+        Assert.Equal(0L, await CountOutboxEventsAsync("orchestrator.run.cancelled"));
     }
 
     /// <summary>Runs completed by older code stay completed; cancel never rewrites a completed outcome.</summary>
@@ -1286,6 +1286,15 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
     {
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"SELECT count(*) FROM \"{_schema}\".{table}", connection);
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private async Task<long> CountOutboxEventsAsync(string eventType)
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            $"SELECT count(*) FROM \"{_schema}\".outbox_events WHERE event_type = @eventType", connection);
+        command.Parameters.AddWithValue("eventType", eventType);
         return (long)(await command.ExecuteScalarAsync())!;
     }
 

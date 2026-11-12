@@ -569,7 +569,7 @@ internal sealed class RuntimeObservationV2Store(NpgsqlDataSource dataSource, str
               AND event.event_version = 1
               AND event.payload->>'dispatchId' = @attemptText
               AND dispatch.root_session_id = @root
-              AND dispatch.accepted_selection_hash = @selection
+              AND lower(dispatch.accepted_selection_hash) = lower(@selection)
               AND dispatch.execution_fence = @fence
               AND (@rootScope OR dispatch.child_session_id = @session)
             ORDER BY event.sequence

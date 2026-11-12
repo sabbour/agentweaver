@@ -1296,7 +1296,8 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         await using var command = new NpgsqlCommand($"""
             SELECT
                 (SELECT count(*) FROM "{_schema}".coordination_messages),
-                (SELECT count(*) FROM "{_schema}".outbox_events),
+                (SELECT count(*) FROM "{_schema}".outbox_events
+                    WHERE event_type = 'orchestrator.addressed_message'),
                 (SELECT status FROM "{_schema}".coordination_messages WHERE message_id = @id)
             """, connection);
         command.Parameters.AddWithValue("id", NpgsqlDbType.Uuid, sent.OwnerMessageId);
