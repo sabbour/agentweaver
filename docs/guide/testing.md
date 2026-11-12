@@ -225,8 +225,7 @@ dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.C
 recovery accepts only the saved pending gate and decision version. The
 checkpoint progress test uses disposable PostgreSQL to check that a retry of
 the same step keeps the saved status and emits one progress event. It requires
-a Docker-compatible engine. These tests do not prove a live Environment owner
-or AKS recovery journey.
+a Docker-compatible engine.
 
 ## Test Scribe Knowledge output
 

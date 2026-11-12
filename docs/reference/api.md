@@ -1284,7 +1284,7 @@ An accepted continuation returns `202` with `checkpointRecovery.phase` set to
 `pending`. Retry the same request with the same idempotency key after a
 transport or timeout failure to continue the saved step. A ready or blocked
 result returns `200`. `ready` means the Host restored the saved boundary. It
-does not mean the gate was answered or the run completed. A later gate answer
+leaves the gate pending and the run incomplete. A later gate answer
 uses the same request ID at the current fence and decision version.
 
 If activation fails after the Broker saves the bootstrap receipt with
