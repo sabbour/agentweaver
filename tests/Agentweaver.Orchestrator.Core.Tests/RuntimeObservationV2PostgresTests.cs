@@ -82,7 +82,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
             .RevokeAsync(_registrations[0].RuntimeInstanceId, _registrations[0].Revision, default);
         var revoked = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
             GrantStore().RecordNativeToolPermissionRejectionAsync(_registrations[0], request, default));
-        Assert.Equal("runtime_native_tool_rejection_conflict", revoked.Code);
+        Assert.Equal("runtime_registration_stale", revoked.Code);
     }
 
     [Fact]
