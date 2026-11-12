@@ -590,6 +590,9 @@ public sealed record SessionStatusSnapshot(
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeCleanupSummary? RuntimeCleanup { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CheckpointRecoveryStatus? CheckpointRecovery { get; init; }
 }
 
 /// <summary>
@@ -785,6 +788,9 @@ public sealed record OwnerRunStatus(
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeCleanupSummary? RuntimeCleanup { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CheckpointRecoveryStatus? CheckpointRecovery { get; init; }
 }
 
 /// <summary>
@@ -871,6 +877,20 @@ public sealed record CheckpointRecoveryStatus(
     Guid PreviousRuntimeInstanceId,
     long PreviousRegistrationRevision)
 {
+    public string CurrentStep { get; init; } = "retirement";
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ReasonCode { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RecoveryMaterialMode { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? GateRequestId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? GateAuthorizedActorId { get; init; }
+
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? SourceCheckpointHash { get; init; }
 

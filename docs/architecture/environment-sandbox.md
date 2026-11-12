@@ -20,6 +20,14 @@ connects the lifecycle, placement and recovery views.
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.drawio'">Open editable draw.io source</a></p>
 
+<figure class="aw-diagram" tabindex="0">
+  <a :href="'/agentweaver/v1/diagrams/flagship/v1-checkpoint-gate-recovery.png'">
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-checkpoint-gate-recovery.png'" alt="Orchestrator checks the saved gate, checkpoint, accepted selection, and root registration. It retires the old Host placement through Environment, creates a replacement with the same workspace, registers the Host at the next fence, and asks Broker to bootstrap it. Environment activates the Host. The Host restores the selected checkpoint boundary from authenticated native cache or journal evidence and returns readiness. The gate stays pending. A retry uses the same recovery operation and stable step IDs. A changed gate or selection stops continuation." />
+  </a>
+  <figcaption>Opt-in Host recovery at a pending gate. The Environment owner retires the exact old placement and creates a replacement with the retained workspace. Orchestrator registers it at the next fence. The Host must prove recovery from authenticated cache or journal evidence. Retries reuse the same operation. The gate remains pending.</figcaption>
+</figure>
+<p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-checkpoint-gate-recovery.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-checkpoint-gate-recovery.drawio'">Open editable draw.io source</a></p>
+
 ## Coordinator first-start
 
 After Orchestrator accepts the root and admits its first message, it stores a
@@ -55,6 +63,16 @@ the saved operation key; a conflicting registration or resource remains
 pending. Cleanup does not create a placement, activate a Host, or delete
 workspace data. The separate Orchestrator runtime-start flow is described in the
 [runtime deep dive](../deep-dive/orchestration.md#start-the-root-agenthost).
+
+Checkpoint recovery uses a separate run operation. For the supported
+pending-gate boundary, Orchestrator advances the execution fence once,
+Environment checks the same pending recovery operation and confirms the current
+owner at the new fence. It then releases the exact old placement and creates a
+new placement over the retained workspace. Orchestrator registers and activates
+the Host at the new fence. It reports `ready` only after authenticated
+native-cache or journal recovery and current placement readiness. It keeps the
+same gate request and choices. Other checkpoint boundaries remain blocked in
+this slice.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-buildtest-command.png'">

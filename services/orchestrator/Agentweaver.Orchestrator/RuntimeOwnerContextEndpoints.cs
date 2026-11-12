@@ -41,6 +41,28 @@ public static partial class CoordinationEndpoints
             .ConfigureAwait(false)), cancellationToken);
     }
 
+    private static Task<IResult> ReadCheckpointRecoveryRuntimeOwnerContextAsync(
+        string projectId, string runId, string sessionId, Guid operationId, HttpContext context,
+        OrchestratorOptions options, ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store, CoordinatorDecisionOwnerStore decisions,
+        CoordinatorRunSelectionContextStore runSelectionContexts, PostgresMafCheckpointStore checkpoints,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            if (operationId == Guid.Empty || context.Request.Query.Count != 0)
+                throw new CoordinationException(
+                    "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            var identity = new SessionIdentity(projectId, runId, sessionId);
+            var status = await store.ReadCheckpointRecoveryStatusAsync(
+                actor, identity, operationId, cancellationToken).ConfigureAwait(false);
+            var authorization = new CheckpointRecoveryRegistrationAuthorization(operationId, status);
+            return Results.Ok(await ReadRuntimeOwnerContextCoreAsync(
+                projectId, runId, sessionId, context, options, projects, store, decisions,
+                runSelectionContexts, checkpoints, cancellationToken, allowCoordinatorRoot: true,
+                checkpointRecoveryRegistration: authorization).ConfigureAwait(false));
+        }, cancellationToken);
+
     private static Task<IResult> ReadRuntimeRunStartCleanupProjectionAsync(
         string projectId,
         string runId,
@@ -413,8 +435,11 @@ public static partial class CoordinationEndpoints
                 "runtime_owner_context_unavailable", StatusCodes.Status409Conflict);
         if (checkpointRecoveryRegistration is { } recovery)
         {
+            var gate = decision.State.PendingGate;
             if (decision.StateVersion != recovery.Status.DecisionStateVersion ||
-                decision.State.PendingGate is { } gate && gate.Fence != owner.ExecutionFence)
+                gate is null || gate.Fence != owner.ExecutionFence ||
+                gate.RequestId != recovery.Status.GateRequestId ||
+                gate.AuthorizedActorId != recovery.Status.GateAuthorizedActorId)
                 throw new CoordinationException(
                     "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
             return;

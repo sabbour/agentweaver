@@ -23,6 +23,20 @@ public sealed class EnvironmentRuntimeOwnerContextClient(
             actor, null, cancellationToken);
     }
 
+    public Task<RuntimeOwnerContext> ReadCheckpointRecoveryAsync(
+        RuntimeActorAuthorization actor, string projectId, string runId, string sessionId,
+        Guid operationId, CancellationToken cancellationToken)
+    {
+        if (options is null || operationId == Guid.Empty)
+            throw new RuntimeAuthorizationException("runtime_owner_context_unavailable");
+        return RuntimeOwnerHttpTransport.SendAsync<RuntimeOwnerContext>(
+            client, options.OrchestratorOwnerAddress,
+            $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}" +
+            $"/coordination/sessions/{Uri.EscapeDataString(sessionId)}/runtime-owner-context" +
+            $"/checkpoint-recovery/{operationId:D}",
+            actor, null, cancellationToken);
+    }
+
     /// <summary>Reads the separate terminal projection with fresh unbound cancellation authority.</summary>
     public async Task<RuntimeRunStartCleanupProjection> ReadCleanupAsync(
         RuntimeActorAuthorization actor, string projectId, string runId, string sessionId,

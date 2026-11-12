@@ -58,7 +58,9 @@ public sealed class RuntimeRegistrationRecoveryTests
             new CheckpointRecoveryStatus(
                 "pending", "source-checkpoint", 1, fence - 1, fence, Guid.NewGuid(), 1)
             {
-                DecisionStateVersion = decisionVersion
+                DecisionStateVersion = decisionVersion,
+                GateRequestId = "recovery-gate",
+                GateAuthorizedActorId = "actor"
             });
 
         CoordinationEndpoints.RequireCoordinatorRootDecision(decision, owner, authorization);
@@ -66,6 +68,10 @@ public sealed class RuntimeRegistrationRecoveryTests
         Assert.Equal("runtime_owner_context_unavailable",
             Assert.Throws<CoordinationException>(() =>
                 CoordinationEndpoints.RequireCoordinatorRootDecision(decision, owner)).Code);
+        Assert.Equal("checkpoint_recovery_registration_stale",
+            Assert.Throws<CoordinationException>(() =>
+                CoordinationEndpoints.RequireCoordinatorRootDecision(
+                    decision with { State = CoordinatorDecisionState.Create(fence) }, owner, authorization)).Code);
         var staleAuthorization = authorization with
         {
             Status = authorization.Status with { DecisionStateVersion = decisionVersion - 1 }
@@ -74,5 +80,50 @@ public sealed class RuntimeRegistrationRecoveryTests
             Assert.Throws<CoordinationException>(() =>
                 CoordinationEndpoints.RequireCoordinatorRootDecision(
                     decision, owner, staleAuthorization)).Code);
+        Assert.Equal("checkpoint_recovery_registration_stale",
+            Assert.Throws<CoordinationException>(() =>
+                CoordinationEndpoints.RequireCoordinatorRootDecision(
+                    decision, owner, authorization with
+                    {
+                        Status = authorization.Status with { GateRequestId = "other-gate" }
+                    })).Code);
+    }
+
+    [Fact]
+    public void HostRecoveryRequiresTheExactPendingGateAndDecisionVersion()
+    {
+        const long fence = 9;
+        const long decisionVersion = 14;
+        const string requestId = "recovery-gate";
+        const string actor = "actor";
+        var asked = CoordinatorDecisionFlow.AskQuestion(
+            CoordinatorDecisionState.Create(fence),
+            requestId,
+            "scope-question",
+            "Choose a repository.",
+            actor,
+            ["repository-a"],
+            allowsFreeform: false);
+        Assert.True(asked.IsSuccess);
+        var current = new CoordinatorDecisionCurrentState(
+            asked.State!, decisionVersion, new string('a', 64));
+        var recovery = new CheckpointRecoveryStatus(
+            "pending", "source-checkpoint", 1, fence - 1, fence, Guid.NewGuid(), 1)
+        {
+            DecisionStateVersion = decisionVersion,
+            GateRequestId = requestId,
+            GateAuthorizedActorId = actor
+        };
+
+        CoordinationEndpoints.RequireCheckpointRecoveryGate(current, recovery, fence, actor);
+
+        Assert.Equal("checkpoint_recovery_boundary_stale", Assert.Throws<RuntimeAuthorizationException>(() =>
+            CoordinationEndpoints.RequireCheckpointRecoveryGate(
+                current with { StateVersion = decisionVersion + 1 }, recovery, fence, actor)).Code);
+        Assert.Equal("checkpoint_recovery_boundary_stale", Assert.Throws<RuntimeAuthorizationException>(() =>
+            CoordinationEndpoints.RequireCheckpointRecoveryGate(
+                current with { State = CoordinatorDecisionState.Create(fence) }, recovery, fence, actor)).Code);
+        Assert.Equal("checkpoint_recovery_boundary_stale", Assert.Throws<RuntimeAuthorizationException>(() =>
+            CoordinationEndpoints.RequireCheckpointRecoveryGate(current, recovery, fence, "other-actor")).Code);
     }
 }

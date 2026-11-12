@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Persistence.Postgres;
+using Agentweaver.Orchestrator.Core;
 using Microsoft.AspNetCore.Http;
 using Npgsql;
 using NpgsqlTypes;
@@ -1746,6 +1747,11 @@ internal sealed partial class CoordinationOwnerStore
         var (activity, activityUnavailableCode) = ToActivity(session.TurnState);
         var interruptionIntent = await ReadInterruptionIntentAsync(
             connection, transaction, identity, session.ExecutionFence, cancellationToken).ConfigureAwait(false);
+        var checkpointRecovery = identity.SessionId == session.RootSessionId
+            ? await ReadLatestCheckpointRecoveryStatusAsync(
+                connection, transaction, identity.ProjectId, identity.RunId, cancellationToken)
+                .ConfigureAwait(false)
+            : null;
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
 
         return new SessionStatusSnapshot(
@@ -1767,7 +1773,10 @@ internal sealed partial class CoordinationOwnerStore
                 run.ExecutionState,
                 run.StateVersion,
                 run.ExecutionCauseCode,
-                run.ExecutionReference));
+                run.ExecutionReference))
+        {
+            CheckpointRecovery = checkpointRecovery
+        };
     }
 
     /// <summary>
@@ -1791,6 +1800,8 @@ internal sealed partial class CoordinationOwnerStore
             .ConfigureAwait(false);
         if (root is null || root.ExecutionFence != run.Fence)
             throw new CoordinationException("run_status_unavailable", StatusCodes.Status503ServiceUnavailable);
+        var checkpointRecovery = await ReadLatestCheckpointRecoveryStatusAsync(
+            connection, transaction, projectId, runId, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new OwnerRunStatus(
             projectId,
@@ -1801,7 +1812,34 @@ internal sealed partial class CoordinationOwnerStore
             run.ExecutionState,
             run.StateVersion,
             run.ExecutionCauseCode,
-            run.ExecutionReference);
+            run.ExecutionReference)
+        {
+            CheckpointRecovery = checkpointRecovery
+        };
+    }
+
+    private async Task<CheckpointRecoveryStatus?> ReadLatestCheckpointRecoveryStatusAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT result -> 'checkpointRecovery'
+            FROM {_executionOperations}
+            WHERE project_id = @project AND run_id = @run
+                AND operation_kind = 'recovery'
+                AND result ? 'checkpointRecovery'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """, connection, transaction);
+        AddRunScope(command, projectId, runId);
+        var json = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return json is null or DBNull
+            ? null
+            : JsonSerializer.Deserialize<CheckpointRecoveryStatus>(
+                json is string value ? value : json.ToString()!, JsonOptions);
     }
 
     /// <summary>
@@ -3790,7 +3828,8 @@ internal sealed partial class CoordinationOwnerStore
         RecoverRunExecutionRequest request,
         CancellationToken cancellationToken,
         AuthorizedRunSelection? selection = null,
-        MafExecutionCheckpointStore? checkpointStore = null)
+        MafExecutionCheckpointStore? checkpointStore = null,
+        CoordinatorGateRequest? pendingGate = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(request);
@@ -3844,6 +3883,10 @@ internal sealed partial class CoordinationOwnerStore
                 !checkpointStore.IsBoundTo(identity, run.Fence))
                 throw new CoordinationException(
                     "checkpoint_recovery_unavailable", StatusCodes.Status409Conflict);
+            if (pendingGate is null || pendingGate.Fence != run.Fence ||
+                pendingGate.AuthorizedActorId != actor.Subject)
+                throw new CoordinationException(
+                    "checkpoint_recovery_gate_unavailable", StatusCodes.Status409Conflict);
 
             await RequireCheckpointRecoveryRuntimeAsync(
                 connection, transaction, run.TenantId, identity, run.Fence,
@@ -3856,6 +3899,7 @@ internal sealed partial class CoordinationOwnerStore
                 sourceCheckpoint.State.DecisionStateVersion != checkpointRecovery.ExpectedDecisionStateVersion)
                 throw new CoordinationException(
                     "checkpoint_recovery_checkpoint_stale", StatusCodes.Status409Conflict);
+            RequireGateCheckpointBoundary(sourceCheckpoint.State);
             await RequireNoPendingCheckpointRecoveryAsync(
                 connection, transaction, projectId, runId, cancellationToken).ConfigureAwait(false);
         }
@@ -3996,7 +4040,9 @@ internal sealed partial class CoordinationOwnerStore
                     SourceCheckpointHash = sourceCheckpoint!.PayloadHash,
                     RecoveryCheckpointId = recoveryCheckpoint!.Info.CheckpointId,
                     RecoveryCheckpointRevision = recoveryCheckpoint.State.Revision,
-                    DecisionStateVersion = recoveryDecisionStateVersion!.Value
+                    DecisionStateVersion = recoveryDecisionStateVersion!.Value,
+                    GateRequestId = pendingGate!.RequestId,
+                    GateAuthorizedActorId = pendingGate.AuthorizedActorId
                 }
         };
         await SaveRunExecutionOperationAsync(
@@ -4028,6 +4074,22 @@ internal sealed partial class CoordinationOwnerStore
             _timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result;
+    }
+
+    private static void RequireGateCheckpointBoundary(MafExecutionCheckpoint checkpoint)
+    {
+        var unresolvedProgress = checkpoint.Progress.WorkItems.Values
+                .Concat(checkpoint.Progress.NonModelSteps.Values)
+                .Concat(checkpoint.Progress.FixedWorkItems.Values)
+                .Any(status => status is MafExecutionTaskStatus.Running or MafExecutionTaskStatus.Failed or
+                    MafExecutionTaskStatus.Indeterminate);
+        if (unresolvedProgress || checkpoint.PendingDispatches.Count > 0 ||
+            checkpoint.FixedWorkAssociations.Count > 0 ||
+            checkpoint.ScribeIntents.Count > 0 || checkpoint.BuildTestIntents.Count > 0 ||
+            checkpoint.OpenPullRequestIntents.Count > 0 || checkpoint.MergeIntents.Count > 0 ||
+            checkpoint.ReviewIntents.Count > 0 || checkpoint.RubberduckIntents.Count > 0)
+            throw new CoordinationException(
+                "checkpoint_recovery_boundary_unsupported", StatusCodes.Status409Conflict);
     }
 
     private async Task<long> ReadDecisionStateVersionAtFenceAsync(
@@ -4130,6 +4192,36 @@ internal sealed partial class CoordinationOwnerStore
             throw new CoordinationException(
                 "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<CheckpointRecoveryStatus> ReadCheckpointRecoveryStatusAsync(
+        CoordinationActor actor,
+        SessionIdentity identity,
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand($"""
+            SELECT result
+            FROM {_executionOperations}
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+                AND actor_issuer = @issuer AND actor_subject = @subject
+                AND operation_id = @operation AND operation_kind = 'recovery'
+            """, connection);
+        AddRunScope(command, identity.ProjectId, identity.RunId);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+        command.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, actor.Issuer);
+        command.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, actor.Subject);
+        command.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+        var storedJson = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+        var stored = storedJson is null
+            ? null
+            : JsonSerializer.Deserialize<RunExecutionTransitionResult>(storedJson, JsonOptions);
+        if (stored?.Session != identity || stored.OperationId != operationId ||
+            stored.CheckpointRecovery is not { Phase: "pending" } status)
+            throw new CoordinationException(
+                "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
+        return status;
     }
 
     private async Task RequireNoPendingCheckpointRecoveryAsync(
@@ -4679,12 +4771,21 @@ internal sealed partial class CoordinationOwnerStore
         CancellationToken cancellationToken)
     {
         var resultJson = JsonSerializer.SerializeToElement(result, JsonOptions);
+        var progressJson = result.CheckpointRecovery is { } recovery
+            ? JsonSerializer.SerializeToElement(new
+            {
+                recovery.Phase,
+                recovery.CurrentStep,
+                recovery.ReasonCode,
+                recovery.RecoveryMaterialMode
+            }, JsonOptions)
+            : JsonSerializer.SerializeToElement(new { }, JsonOptions);
         await using var command = new NpgsqlCommand($"""
             INSERT INTO {_executionOperations}
                 (project_id, run_id, operation_id, session_id, actor_issuer, actor_subject,
-                 operation_kind, idempotency_key, request_hash, result)
+                 operation_kind, idempotency_key, request_hash, result, progress)
             VALUES (@project, @run, @operation, @session, @issuer, @subject,
-                @kind, @key, @hash, @result)
+                @kind, @key, @hash, @result, @progress)
             """, connection, transaction);
         AddRunScope(command, result.Session.ProjectId, result.Session.RunId);
         command.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, result.OperationId);
@@ -4695,7 +4796,142 @@ internal sealed partial class CoordinationOwnerStore
         command.Parameters.AddWithValue("key", NpgsqlDbType.Varchar, idempotencyKey);
         command.Parameters.AddWithValue("hash", NpgsqlDbType.Char, requestHash);
         command.Parameters.AddWithValue("result", NpgsqlDbType.Jsonb, resultJson.GetRawText());
+        command.Parameters.AddWithValue("progress", NpgsqlDbType.Jsonb, progressJson.GetRawText());
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<RunExecutionTransitionResult> UpdateCheckpointRecoveryProgressAsync(
+        CoordinationActor actor,
+        SessionIdentity identity,
+        Guid operationId,
+        CheckpointRecoveryStatus status,
+        CancellationToken cancellationToken,
+        RuntimeRunStartIntent? readyIntent = null)
+    {
+        if (readyIntent is not null &&
+            (status.Phase != "ready" || readyIntent.ProjectId != identity.ProjectId ||
+             readyIntent.RunId != identity.RunId || readyIntent.RootSessionId != identity.SessionId ||
+             readyIntent.ExecutionFence != status.ExecutionFence || readyIntent.State != "ready" ||
+             readyIntent.CurrentStep != "ready" || readyIntent.FailureCode is not null ||
+             readyIntent.RuntimeInstanceId != status.RuntimeInstanceId))
+            throw new ArgumentException("The checkpoint recovery intent update is invalid.", nameof(readyIntent));
+
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var read = new NpgsqlCommand($"""
+            SELECT phase_version, result
+            FROM {_executionOperations}
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+                AND operation_id = @operation AND operation_kind = 'recovery'
+                AND actor_issuer = @issuer AND actor_subject = @subject
+            FOR UPDATE
+            """, connection, transaction);
+        AddRunScope(read, identity.ProjectId, identity.RunId);
+        read.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+        read.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+        read.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, actor.Issuer);
+        read.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, actor.Subject);
+        await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException(
+                "checkpoint_recovery_operation_unavailable", StatusCodes.Status409Conflict);
+        var phaseVersion = reader.GetInt64(0);
+        var result = JsonSerializer.Deserialize<RunExecutionTransitionResult>(
+            reader.GetString(1), JsonOptions)
+            ?? throw new CoordinationException(
+                "execution_operation_result_unavailable", StatusCodes.Status503ServiceUnavailable);
+        await reader.DisposeAsync().ConfigureAwait(false);
+        if (result.CheckpointRecovery is not { Phase: "pending" } current ||
+            result.Session != identity || result.OperationId != operationId)
+            return result;
+        if (current == status)
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return result;
+        }
+
+        if (readyIntent is not null)
+        {
+            await using var updateIntent = new NpgsqlCommand($"""
+                UPDATE {_schema}.runtime_run_start_intents
+                SET execution_fence = @nextFence,
+                    bootstrap_operation_id = @bootstrap,
+                    consume_operation_id = @consume,
+                    exchange_operation_id = @exchange,
+                    state = 'ready', current_step = 'ready', failure_code = NULL,
+                    environment_id = @environment, runtime_instance_id = @runtime,
+                    receipt_links = @receipts, row_version = row_version + 1,
+                    updated_at = clock_timestamp()
+                WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
+                    AND root_session_id = @root AND accepted_selection_hash = @selection
+                    AND execution_fence = @previousFence AND row_version = @intentVersion
+                    AND NOT cleanup_obligation
+                """, connection, transaction);
+            updateIntent.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, readyIntent.TenantId);
+            updateIntent.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, readyIntent.ProjectId);
+            updateIntent.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, readyIntent.RunId);
+            updateIntent.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, readyIntent.RootSessionId);
+            updateIntent.Parameters.AddWithValue("selection", NpgsqlDbType.Char, readyIntent.AcceptedSelectionHash);
+            updateIntent.Parameters.AddWithValue("nextFence", NpgsqlDbType.Bigint, readyIntent.ExecutionFence);
+            updateIntent.Parameters.AddWithValue("previousFence", NpgsqlDbType.Bigint, status.PreviousExecutionFence);
+            updateIntent.Parameters.AddWithValue("intentVersion", NpgsqlDbType.Bigint, readyIntent.RowVersion);
+            updateIntent.Parameters.AddWithValue("bootstrap", NpgsqlDbType.Uuid, readyIntent.BootstrapOperationId);
+            updateIntent.Parameters.AddWithValue("consume", NpgsqlDbType.Uuid, readyIntent.ConsumeOperationId);
+            updateIntent.Parameters.AddWithValue("exchange", NpgsqlDbType.Uuid, readyIntent.ExchangeOperationId);
+            updateIntent.Parameters.AddWithValue(
+                "environment", NpgsqlDbType.Varchar, (object?)readyIntent.EnvironmentId ?? DBNull.Value);
+            updateIntent.Parameters.AddWithValue(
+                "runtime", NpgsqlDbType.Uuid, (object?)readyIntent.RuntimeInstanceId ?? DBNull.Value);
+            updateIntent.Parameters.AddWithValue("receipts", NpgsqlDbType.Jsonb, readyIntent.ReceiptLinks);
+            if (await updateIntent.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                throw new CoordinationException(
+                    "runtime_start_intent_stale", StatusCodes.Status409Conflict);
+        }
+
+        var updated = result with { CheckpointRecovery = status };
+        var resultJson = JsonSerializer.SerializeToElement(updated, JsonOptions);
+        var progressJson = JsonSerializer.SerializeToElement(new
+        {
+            status.Phase,
+            status.CurrentStep,
+            status.ReasonCode,
+            status.RecoveryMaterialMode
+        }, JsonOptions);
+        await using (var update = new NpgsqlCommand($"""
+            UPDATE {_executionOperations}
+            SET result = @result, progress = @progress, phase_version = phase_version + 1
+            WHERE project_id = @project AND run_id = @run AND operation_id = @operation
+                AND phase_version = @phaseVersion
+            """, connection, transaction))
+        {
+            AddRunScope(update, identity.ProjectId, identity.RunId);
+            update.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+            update.Parameters.AddWithValue("phaseVersion", NpgsqlDbType.Bigint, phaseVersion);
+            update.Parameters.AddWithValue("result", NpgsqlDbType.Jsonb, resultJson.GetRawText());
+            update.Parameters.AddWithValue("progress", NpgsqlDbType.Jsonb, progressJson.GetRawText());
+            if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                throw new CoordinationException(
+                    "checkpoint_recovery_progress_conflict", StatusCodes.Status409Conflict);
+        }
+
+        var eventType = status.Phase switch
+        {
+            "ready" => "orchestrator.run.checkpoint_recovery_ready",
+            "blocked" => "orchestrator.run.checkpoint_recovery_blocked",
+            "indeterminate" => "orchestrator.run.checkpoint_recovery_indeterminate",
+            "failed" => "orchestrator.run.checkpoint_recovery_failed",
+            _ => "orchestrator.run.checkpoint_recovery_progress"
+        };
+        await _outbox.EnqueueAsync(connection, transaction, new OutboxEvent(
+            operationId,
+            $"coordination/{identity.ProjectId}/{identity.RunId}/execution",
+            $"checkpoint-recovery:{operationId}:{status.Phase}:{status.CurrentStep}",
+            eventType,
+            EventVersion,
+            JsonSerializer.SerializeToElement(new { operationId, status }, JsonOptions),
+            _timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return updated;
     }
 
     /// <summary>

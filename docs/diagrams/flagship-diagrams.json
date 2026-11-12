@@ -28,6 +28,11 @@
       "docs": ["docs/architecture/environment-sandbox.md"]
     },
     {
+      "name": "v1-checkpoint-gate-recovery",
+      "concept": "Pending-gate Host recovery with a retained workspace and stable retries",
+      "docs": ["docs/architecture/environment-sandbox.md"]
+    },
+    {
       "name": "v1-environment-buildtest-command",
       "concept": "Accepted BuildTest command, gated provider execution, and trusted output collection",
       "docs": ["docs/architecture/environment-sandbox.md"]

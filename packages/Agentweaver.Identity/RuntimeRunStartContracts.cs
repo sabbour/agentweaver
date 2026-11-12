@@ -358,9 +358,12 @@ public sealed record RuntimeReplacementRetirementRequest(
     Guid IntentId,
     RuntimeRunStartRetirementRequest Retirement)
 {
+    public Guid? CheckpointRecoveryOperationId { get; init; }
+
     public RuntimeReplacementRetirementRequest Validate()
     {
-        if (ContractVersion != 1 || OperationId == Guid.Empty || IntentId == Guid.Empty)
+        if (ContractVersion != 1 || OperationId == Guid.Empty || IntentId == Guid.Empty ||
+            CheckpointRecoveryOperationId == Guid.Empty)
             throw new RuntimeAuthorizationException("runtime_replacement_request_invalid");
         Retirement.Validate();
         return this;
@@ -376,6 +379,8 @@ public sealed record RuntimeReplacementPlacementRequest(
     Guid BootstrapOperationId,
     RuntimeRunStartPlacementReceipt PreviousPlacement)
 {
+    public Guid? CheckpointRecoveryOperationId { get; init; }
+
     public RuntimeReplacementPlacementRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(Owner);
@@ -385,6 +390,7 @@ public sealed record RuntimeReplacementPlacementRequest(
             PreviousBootstrapOperationId == Guid.Empty ||
             BootstrapOperationId == Guid.Empty ||
             BootstrapOperationId == PreviousBootstrapOperationId ||
+            CheckpointRecoveryOperationId == Guid.Empty ||
             Owner.ContractVersion != 1 ||
             Owner.AgentId != RuntimeActionContract.CoordinatorRootStepId ||
             Owner.LogicalTurnOrdinal != 0 ||

@@ -413,6 +413,8 @@
         "services/environment/Agentweaver.Environment/EnvironmentLifecycleStore.cs",
         "services/environment/Agentweaver.Environment/EnvironmentSandboxLeaseStore.cs",
         "services/environment/Agentweaver.Environment/EnvironmentSandboxManager.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/CoordinationEndpoints.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/RuntimeRunStartOrchestration.cs",
         "services/gateway/Agentweaver.Gateway/GatewayRouteCatalog.cs",
         "services/gateway/Agentweaver.Gateway/GatewayOpenApi.cs",
         "services/environment/Agentweaver.Environment/Migrations/20261006170000_SandboxLeases.cs",
@@ -433,6 +435,7 @@
         "docs/guide/cli.md",
         "docs/guide/environment-sandbox-testing.md",
         "docs/diagrams/src/flagship/v1-environment-sandbox-lifecycle.json",
+        "docs/diagrams/src/flagship/v1-checkpoint-gate-recovery.json",
         "docs/diagrams/src/flagship/v1-environment-buildtest-command.json"
       ]
     },

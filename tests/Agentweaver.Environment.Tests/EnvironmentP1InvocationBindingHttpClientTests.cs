@@ -102,6 +102,60 @@ public sealed class EnvironmentP1InvocationBindingHttpClientTests
         }
     }
 
+    [Fact]
+    public async Task CheckpointRecoveryOwnerReadUsesTheOperationScopedRoute()
+    {
+        var ownerContext = new RuntimeOwnerContext(
+            1, "https://identity.example", "actor-a", "tenant-a", "project-a", "run-a",
+            "root-session-a", "coordinator", "model:provider/alpha", "turn-a",
+            1, 1, 1, "context-v1", new string('a', 64), 5, 0, 3, 7);
+        var handler = new ResponseHandler(request =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                JsonSerializer.Serialize(ownerContext, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                System.Text.Encoding.UTF8,
+                    "application/json"),
+                RequestMessage = request
+            };
+            response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true };
+            return response;
+        });
+        using var client = new HttpClient(handler);
+        var credential = new SecretCredential(
+            "run-bound.jwt.token",
+            DateTimeOffset.UtcNow.AddMinutes(2),
+            TimeProvider.System);
+        var actor = new RuntimeActorAuthorization(credential, "tenant-a");
+        var owner = new EnvironmentRuntimeOwnerContextClient(
+            client,
+            new EnvironmentRuntimeBootstrapDeliveryOptions(
+                new Uri("https://orchestrator.example/"),
+                new Uri("https://broker.example/")));
+        var operationId = Guid.NewGuid();
+
+        try
+        {
+            var result = await owner.ReadCheckpointRecoveryAsync(
+                actor, "project-a", "run-a", "root-session-a", operationId, CancellationToken.None);
+
+            Assert.Equal(ownerContext, result);
+            Assert.Equal(
+                $"https://orchestrator.example/internal/projects/project-a/runs/run-a/coordination/sessions/root-session-a/runtime-owner-context/checkpoint-recovery/{operationId:D}",
+                handler.Request!.RequestUri!.AbsoluteUri);
+            Assert.Equal("Bearer", handler.Request.Headers.Authorization?.Scheme);
+            Assert.Equal("run-bound.jwt.token", handler.Request.Headers.Authorization?.Parameter);
+            Assert.Equal("tenant-a", Assert.Single(handler.Request.Headers.GetValues("X-Agentweaver-Tenant")));
+            Assert.True(handler.Request.Headers.CacheControl?.NoStore);
+            Assert.True(handler.Request.Headers.CacheControl?.NoCache);
+        }
+        finally
+        {
+            credential.Invalidate();
+        }
+    }
+
     private static P1InvocationBinding Binding() =>
         new(
             1,

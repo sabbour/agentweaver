@@ -1752,6 +1752,153 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task CheckpointRecoveryProgressSurvivesRestartAndProjectsAnOutboxEvent()
+    {
+        var operationId = Guid.NewGuid();
+        var status = new CheckpointRecoveryStatus(
+            "pending", "source-checkpoint", 3, _acceptedRoot.ExecutionFence,
+            _acceptedRoot.ExecutionFence + 1, Guid.NewGuid(), 4)
+        {
+            DecisionStateVersion = 12,
+            GateRequestId = "pending-question",
+            GateAuthorizedActorId = _actor.Subject,
+            SourceCheckpointHash = new string('a', 64),
+            RecoveryCheckpointId = "recovery-checkpoint",
+            RecoveryCheckpointRevision = 1
+        };
+        var result = new RunExecutionTransitionResult(
+            operationId, _root, "active", "active",
+            _acceptedRoot.ExecutionFence, _acceptedRoot.ExecutionFence + 1,
+            0, 1, 2, 1, 2, null, null, null, null, [])
+        {
+            CheckpointRecovery = status
+        };
+        var resultJson = JsonSerializer.Serialize(
+            result, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordination_execution_operations
+                (project_id, run_id, operation_id, session_id, actor_issuer, actor_subject,
+                 operation_kind, idempotency_key, request_hash, result)
+            VALUES (@project, @run, @operation, @session, @issuer, @subject,
+                    'recovery', @key, @hash, @result)
+            """, connection))
+        {
+            insert.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _root.ProjectId);
+            insert.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _root.RunId);
+            insert.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+            insert.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, _root.SessionId);
+            insert.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, _actor.Issuer);
+            insert.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, _actor.Subject);
+            insert.Parameters.AddWithValue("key", NpgsqlDbType.Varchar, "checkpoint-progress");
+            insert.Parameters.AddWithValue("hash", NpgsqlDbType.Char, new string('b', 64));
+            insert.Parameters.AddWithValue("result", NpgsqlDbType.Jsonb, resultJson);
+            Assert.Equal(1, await insert.ExecuteNonQueryAsync());
+        }
+
+        Assert.Equal(status, await _store.ReadCheckpointRecoveryStatusAsync(
+            _actor, _root, operationId, CancellationToken.None));
+
+        var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection).ToLowerInvariant();
+        var intent = new RuntimeRunStartIntent(
+            _selection.Authorization.TenantId, _root.ProjectId, _root.RunId, _root.SessionId,
+            selectionHash, status.PreviousExecutionFence, Guid.NewGuid(), Guid.NewGuid(),
+            Guid.NewGuid(), Guid.NewGuid(), "pending", "accepted", null, null, null, "{}", false, 1);
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var insertIntent = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".runtime_run_start_intents
+                (tenant_id, project_id, run_id, root_session_id, accepted_selection_hash,
+                 execution_fence, intent_id, bootstrap_operation_id, consume_operation_id,
+                 exchange_operation_id)
+            VALUES (@tenant, @project, @run, @root, @selection, @fence, @intent,
+                    @bootstrap, @consume, @exchange)
+            """, connection))
+        {
+            insertIntent.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, intent.TenantId);
+            insertIntent.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, intent.ProjectId);
+            insertIntent.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, intent.RunId);
+            insertIntent.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, intent.RootSessionId);
+            insertIntent.Parameters.AddWithValue("selection", NpgsqlDbType.Char, intent.AcceptedSelectionHash);
+            insertIntent.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, intent.ExecutionFence);
+            insertIntent.Parameters.AddWithValue("intent", NpgsqlDbType.Uuid, intent.IntentId);
+            insertIntent.Parameters.AddWithValue("bootstrap", NpgsqlDbType.Uuid, intent.BootstrapOperationId);
+            insertIntent.Parameters.AddWithValue("consume", NpgsqlDbType.Uuid, intent.ConsumeOperationId);
+            insertIntent.Parameters.AddWithValue("exchange", NpgsqlDbType.Uuid, intent.ExchangeOperationId);
+            Assert.Equal(1, await insertIntent.ExecuteNonQueryAsync());
+        }
+
+        var placement = status with { CurrentStep = "placement" };
+        var updated = await _store.UpdateCheckpointRecoveryProgressAsync(
+            _actor, _root, operationId, placement, CancellationToken.None);
+        Assert.Equal("placement", updated.CheckpointRecovery!.CurrentStep);
+
+        var restarted = new CoordinationOwnerStore(_fixture.DataSource, _schema);
+        var replay = await restarted.UpdateCheckpointRecoveryProgressAsync(
+            _actor, _root, operationId, placement, CancellationToken.None);
+        Assert.Equal(updated.OperationId, replay.OperationId);
+        Assert.Equal(placement, replay.CheckpointRecovery);
+
+        var runStatus = await restarted.ReadOwnerRunStatusAsync(
+            _actor, _root.ProjectId, _root.RunId, CancellationToken.None);
+        var sessionStatus = await restarted.ReadSessionStatusAsync(
+            _actor, _root, CancellationToken.None);
+        Assert.Equal(placement, runStatus.CheckpointRecovery);
+        Assert.Equal(placement, sessionStatus.CheckpointRecovery);
+
+        var runtimeInstanceId = Guid.NewGuid();
+        var ready = placement with
+        {
+            CurrentStep = "ready",
+            Phase = "ready",
+            ReasonCode = null,
+            RecoveryMaterialMode = "nativeCache",
+            RuntimeInstanceId = runtimeInstanceId,
+            RegistrationRevision = 1
+        };
+        var readyIntent = intent with
+        {
+            ExecutionFence = status.ExecutionFence,
+            BootstrapOperationId = Guid.NewGuid(),
+            ConsumeOperationId = Guid.NewGuid(),
+            ExchangeOperationId = Guid.NewGuid(),
+            State = "ready",
+            CurrentStep = "ready",
+            EnvironmentId = "recovered-environment",
+            RuntimeInstanceId = runtimeInstanceId,
+            ReceiptLinks = """{"placement":{"environmentId":"recovered-environment"}}"""
+        };
+        var completed = await restarted.UpdateCheckpointRecoveryProgressAsync(
+            _actor, _root, operationId, ready, CancellationToken.None, readyIntent);
+        Assert.Equal(ready, completed.CheckpointRecovery);
+        var persistedIntent = await new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema)
+            .ReadIntentForStatusAsync(_root.ProjectId, _root.RunId, _root.SessionId, CancellationToken.None);
+        Assert.NotNull(persistedIntent);
+        Assert.Equal(status.ExecutionFence, persistedIntent.ExecutionFence);
+        Assert.Equal(readyIntent.BootstrapOperationId, persistedIntent.BootstrapOperationId);
+        Assert.Equal(readyIntent.EnvironmentId, persistedIntent.EnvironmentId);
+        Assert.Equal(runtimeInstanceId, persistedIntent.RuntimeInstanceId);
+        Assert.Equal("ready", persistedIntent.State);
+
+        await using var verifyConnection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var verify = new NpgsqlCommand($"""
+            SELECT event_type, payload
+            FROM "{_schema}".outbox_events
+            WHERE idempotency_key = @key
+            """, verifyConnection);
+        verify.Parameters.AddWithValue(
+            "key", NpgsqlDbType.Text,
+            $"checkpoint-recovery:{operationId}:pending:placement");
+        await using var eventReader = await verify.ExecuteReaderAsync();
+        Assert.True(await eventReader.ReadAsync());
+        Assert.Equal("orchestrator.run.checkpoint_recovery_progress", eventReader.GetString(0));
+        using var payload = JsonDocument.Parse(eventReader.GetString(1));
+        Assert.Equal("placement", payload.RootElement.GetProperty("status")
+            .GetProperty("currentStep").GetString());
+        Assert.False(await eventReader.ReadAsync());
+    }
+
+    [Fact]
     public async Task FailureReportCannotReplaceALegacyCompletedOutcome()
     {
         var active = await StartActiveTurnAsync(_root, _acceptedRoot.StateVersion);

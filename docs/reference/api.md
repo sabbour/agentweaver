@@ -1264,6 +1264,35 @@ owner state and returns `blockers: []`. It omits `executionRecovery` and does
 not read decisions or checkpoints. A cancelled lifecycle does not imply idle
 activity, completed effects, or successful physical cleanup.
 
+#### Recover a Host at a pending gate
+
+`POST /recovery` keeps its existing owner-state-only behavior when the request
+omits `checkpointRecovery`. The opt-in object pins the source checkpoint,
+decision version, current root runtime registration, and accepted selection.
+The owner accepts this path only when the exact gate is still pending for the
+authorized actor and the checkpoint has no pending child dispatch, child
+association, or platform-effect intent. Other boundaries remain unavailable in
+this recovery slice.
+
+The owner advances the fence once. It keeps the same gate request and choices;
+it does not answer, cancel, or recreate the gate. The Environment owner retires
+the old placement and creates the replacement. Orchestrator then creates a
+next-fence registration and requires authenticated Host readiness from the
+native cache or journal rebuild path. A fresh Host session is not ready.
+
+An accepted continuation returns `202` with `checkpointRecovery.phase` set to
+`pending`. Retry the same request with the same idempotency key to continue the
+saved step. A ready or blocked result returns `200`. `ready` means the Host
+restored the saved boundary. It does not mean the gate was answered or the run
+completed. A later gate answer uses the same request ID at the current fence
+and decision version.
+
+`readRunStatus` and root `readSessionStatus` expose the current recovery step,
+reason, checkpoint IDs, fences, and old and new runtime identities.
+`replayRunEvents` exposes committed recovery progress through its cursor.
+These reads do not retry the operation. Do not start a second recovery with a
+new key while the first operation is pending.
+
 #### Dispatch completion and startup readback
 
 `POST /sessions/{sessionId}/actions/dispatch` returns the current checkpoint

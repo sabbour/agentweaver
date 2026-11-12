@@ -50,6 +50,18 @@ public sealed class GatewayOpenApiParityTests
         Assert.Contains("503", Assert.IsType<JsonObject>(createProject["responses"]).Select(item => item.Key));
         Assert.Contains("role_assignment_unavailable",
             createProject["responses"]?["503"]?["description"]?.GetValue<string>());
+
+        JsonObject recoverRun = FindOperation(discovered, "recoverRun");
+        Assert.Contains("202", Assert.IsType<JsonObject>(recoverRun["responses"]).Select(item => item.Key));
+        Assert.Equal("#/components/schemas/RecoverRunExecutionRequest",
+            recoverRun["requestBody"]?["content"]?["application/json"]?["schema"]?["$ref"]?.GetValue<string>());
+        JsonObject schemas = Assert.IsType<JsonObject>(discovered["components"]?["schemas"]);
+        Assert.Equal("#/components/schemas/CheckpointRecoveryRequest",
+            schemas["RecoverRunExecutionRequest"]?["properties"]?["checkpointRecovery"]?["anyOf"]?[0]?["$ref"]?.GetValue<string>());
+        Assert.NotNull(schemas["CheckpointRecoveryStatus"]?["properties"]?["currentStep"]);
+        Assert.NotNull(schemas["CheckpointRecoveryStatus"]?["properties"]?["recoveryMaterialMode"]);
+        Assert.NotNull(schemas["OwnerRunStatus"]?["properties"]?["checkpointRecovery"]?["anyOf"]?[0]?["$ref"]);
+        Assert.NotNull(schemas["SessionStatusSnapshot"]?["properties"]?["checkpointRecovery"]?["anyOf"]?[0]?["$ref"]);
     }
 
     [Fact]
