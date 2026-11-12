@@ -223,6 +223,7 @@ public sealed class BacklogPlanPromotionPostgresTests : IAsyncLifetime
     [Fact]
     public async Task CheckpointRecoveryAdvancesFenceAndRebindsTheSamePendingGate()
     {
+        await SeedRecoveryPlanAsync();
         var current = await _decisions.ReadCurrentAsync(
             _actor, Identity, _selection, CancellationToken.None);
         var requestId = "checkpoint-recovery-question";
@@ -275,6 +276,7 @@ public sealed class BacklogPlanPromotionPostgresTests : IAsyncLifetime
     [Fact]
     public async Task CheckpointRecoveryRejectsACancelledGateInsteadOfRecreatingIt()
     {
+        await SeedRecoveryPlanAsync();
         var current = await _decisions.ReadCurrentAsync(
             _actor, Identity, _selection, CancellationToken.None);
         const string requestId = "cancelled-recovery-question";
@@ -324,6 +326,7 @@ public sealed class BacklogPlanPromotionPostgresTests : IAsyncLifetime
     [Fact]
     public async Task CheckpointRecoveryAdvancesABoundaryThatHasNoGate()
     {
+        await SeedRecoveryPlanAsync();
         var current = await _decisions.ReadCurrentAsync(
             _actor, Identity, _selection, CancellationToken.None);
         await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
@@ -425,6 +428,64 @@ public sealed class BacklogPlanPromotionPostgresTests : IAsyncLifetime
         using var document = JsonDocument.Parse(payload);
         return document.RootElement.GetProperty("envelope").Deserialize<CoordinatorDecisionStateEnvelope>(DecisionJson)
             ?? throw new InvalidOperationException("The recovery decision envelope was not persisted.");
+    }
+
+    private async Task SeedRecoveryPlanAsync()
+    {
+        var workflow = WorkflowTestData.Definition(
+            steps: [WorkflowTestData.Platform("review", 0, [])]);
+        var catalog = new AuthorizedWorkflowCatalog(workflow, [workflow]);
+        var outcome = CoordinatorDecisionFlow.ProposeOutcomeSpec(
+            CoordinatorDecisionState.Create(_fence),
+            new CoordinatorOutcomeSpecification(
+                "recovery-outcome",
+                "Recover the run.",
+                "The run can continue.",
+                "Preserve the accepted decision state.",
+                "Keep the current workflow.",
+                []),
+            "recovery-outcome-approval",
+            _actor.Subject);
+        var confirmedOutcome = outcome.State!.ApplyGateAnswer(new CoordinatorGateAnswer(
+            outcome.State.PendingGate!.RequestId, _actor.Subject, _fence,
+            CoordinatorGateChoices.Approve, null)).State;
+        var selected = CoordinatorDecisionFlow.SelectWorkflow(
+            confirmedOutcome, catalog, requestedWorkflowId: null, firstUseRequestId: null,
+            authorizedActorId: null);
+        var proposed = CoordinatorDecisionFlow.ProposeWorkPlan(
+            selected.State,
+            WorkflowTestData.Plan(),
+            selectionContext: null,
+            requestId: "recovery-plan-approval",
+            authorizedActorId: _actor.Subject);
+        Assert.True(proposed.IsSuccess, string.Join("; ", proposed.Issues.Select(issue => issue.Message)));
+        var confirmed = proposed.State!.ApplyGateAnswer(new CoordinatorGateAnswer(
+            proposed.State.PendingGate!.RequestId, _actor.Subject, _fence,
+            CoordinatorGateChoices.Approve, null)).State;
+        Assert.NotNull(confirmed);
+
+        var envelope = CoordinatorDecisionStateEnvelope.Capture(
+            confirmed!,
+            CoordinatorDecisionBinding.Create(_actor, Identity, _selection, _fence));
+        var payload = JsonSerializer.Serialize(new
+        {
+            envelope,
+            transitionAccepted = true,
+            issues = Array.Empty<object>(),
+            transitionValue = (object?)null
+        }, DecisionJson);
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var update = new NpgsqlCommand($"""
+            UPDATE "{_schema}".coordinator_decisions
+            SET decision = @payload
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+                AND idempotency_key = 'plan-confirmed'
+            """, connection);
+        update.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, ProjectId);
+        update.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, RunId);
+        update.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, RootSessionId);
+        update.Parameters.AddWithValue("payload", NpgsqlDbType.Jsonb, payload);
+        Assert.Equal(1, await update.ExecuteNonQueryAsync());
     }
 
     private Task<BacklogCoreResult<BacklogPlanPromotion>> PromoteAsync(
