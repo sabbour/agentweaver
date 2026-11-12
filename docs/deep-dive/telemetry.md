@@ -2,10 +2,8 @@
 
 ## 1–4. Goals, constraints, context and strategy
 
-Use this page to understand how Agentweaver describes service execution with
-OpenTelemetry and how those diagnostic signals differ from committed product
-state. A trace can help you find a failure, but it does not prove that an
-operation committed.
+Use traces to locate service-execution failures. Check the owning service's
+durable state to determine whether an operation committed.
 
 Optional export keeps local signal creation independent of a cloud backend.
 It also means hosts, not the shared package, must select instrumentation,
