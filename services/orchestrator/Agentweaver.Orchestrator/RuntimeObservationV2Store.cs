@@ -319,6 +319,101 @@ internal sealed class RuntimeObservationV2Store(NpgsqlDataSource dataSource, str
             fact.RecordedAt), cancellationToken).ConfigureAwait(false);
     }
 
+    internal async Task<Guid> AppendToolPermissionRejectionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RuntimeNativeToolPermissionRejectionRequest request,
+        RuntimeNumericLimitDenialReceipt denial,
+        CancellationToken cancellationToken)
+    {
+        request.Validate();
+        denial.Validate();
+        if (denial.LimitKind != RuntimeNumericLimitKind.ToolCalls ||
+            denial.AttemptId != request.AttemptId ||
+            denial.RuntimeInstanceId != request.RuntimeInstanceId ||
+            denial.RegistrationRevision != request.RegistrationRevision ||
+            denial.ExecutionFence != request.ExecutionFence ||
+            denial.RequestHash != request.RequestHash)
+            throw new RuntimeAuthorizationException("runtime_native_tool_rejection_conflict");
+
+        var factId = StableGuid($"native-tool-permission-rejection\0{denial.ReceiptId:D}");
+        var fact = (DenialFact(denial) with
+        {
+            FactId = factId,
+            Sequence = null,
+            Kind = RuntimeObservationFactKind.ToolPermissionRejected,
+            DispatchId = request.DispatchId,
+            Stage = "toolPermission",
+            ReasonCode = request.ReasonCode,
+            RecordedAt = DateTimeOffset.UtcNow,
+            ToolPermission = new RuntimeObservationEvidenceLink(
+                RuntimeObservationSectionState.Available,
+                null,
+                factId,
+                RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(request)),
+                null,
+                null)
+        }).Validate();
+        var streamId = StreamId(denial.ProjectId, denial.RunId);
+
+        await using (var ensure = new NpgsqlCommand($"""
+            INSERT INTO {_schema}.outbox_streams (stream_id) VALUES (@stream)
+            ON CONFLICT (stream_id) DO NOTHING
+            """, connection, transaction))
+        {
+            ensure.Parameters.AddWithValue("stream", NpgsqlDbType.Text, streamId);
+            await ensure.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        await using (var acquire = new NpgsqlCommand($"""
+            SELECT last_sequence FROM {_schema}.outbox_streams
+            WHERE stream_id = @stream FOR UPDATE
+            """, connection, transaction))
+        {
+            acquire.Parameters.AddWithValue("stream", NpgsqlDbType.Text, streamId);
+            _ = await acquire.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)
+                ?? throw new RuntimeAuthorizationException("runtime_observation_v2_stream_unavailable");
+        }
+
+        await using (var existing = new NpgsqlCommand($"""
+            SELECT payload::text, event_type, event_version, stream_id
+            FROM {_schema}.outbox_events WHERE id = @id
+            """, connection, transaction))
+        {
+            existing.Parameters.AddWithValue("id", NpgsqlDbType.Uuid, factId);
+            await using var reader = await existing.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var stored = JsonSerializer.Deserialize<RuntimeObservationV2Fact>(
+                    reader.GetString(0), JsonOptions)
+                    ?? throw new RuntimeAuthorizationException("runtime_observation_v2_fact_corrupt");
+                if (reader.GetString(1) != EventType || reader.GetInt32(2) != EventVersion ||
+                    reader.GetString(3) != streamId ||
+                    stored.Kind != RuntimeObservationFactKind.ToolPermissionRejected ||
+                    stored.AttemptId != fact.AttemptId || stored.DispatchId != fact.DispatchId ||
+                    stored.RuntimeInstanceId != fact.RuntimeInstanceId ||
+                    stored.RegistrationRevision != fact.RegistrationRevision ||
+                    stored.ExecutionFence != fact.ExecutionFence ||
+                    stored.AcceptedSelectionHash != fact.AcceptedSelectionHash ||
+                    stored.ToolPermission != fact.ToolPermission ||
+                    stored.OwnerDecision != fact.OwnerDecision)
+                    throw new RuntimeAuthorizationException("runtime_native_tool_rejection_conflict");
+                _ = stored.Validate();
+                return factId;
+            }
+        }
+
+        var payload = JsonSerializer.SerializeToElement(fact, JsonOptions);
+        await _outbox.EnqueueAsync(connection, transaction, new OutboxEvent(
+            factId,
+            streamId,
+            $"runtime-observation-fact/{factId:D}",
+            EventType,
+            EventVersion,
+            payload,
+            fact.RecordedAt), cancellationToken).ConfigureAwait(false);
+        return factId;
+    }
+
     internal async Task<RuntimeObservationV2StoreResult> ReadAsync(
         RuntimeObservationV2ReadScope scope,
         int pageSize,

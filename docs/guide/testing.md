@@ -755,13 +755,17 @@ tests from the repository root:
 dotnet test tests\Agentweaver.Identity.Tests\Agentweaver.Identity.Tests.csproj --configuration Release --filter FullyQualifiedName~RuntimeObservation
 dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --configuration Release --filter FullyQualifiedName~RuntimeObservationV2
 dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --configuration Release --filter FullyQualifiedName~RuntimeExecutionObservationTests
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~RuntimeCopilotToolCallAuthorizationTests
 dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~RuntimeObservationV2
 ```
 
 These tests check response validation, bounded query parsing, high-water
 cursor paging, exact attempt lookup, and the Gateway operation schema. The
-PostgreSQL test uses a disposable test database. These checks do not prove
-live authorization, a native model send, tool execution, or complete legacy
+callback tests check that a numeric tool denial stays rejected when evidence
+recording fails and that secondary permission denials do not create invocation
+evidence. The PostgreSQL test uses a disposable test database and checks
+idempotent rejection facts. These checks do not prove live authorization,
+native SDK delivery of the rejection, tool execution, or complete legacy
 history. The response reports missing evidence as unavailable rather than
 inferring it from an empty result or a reservation.
 

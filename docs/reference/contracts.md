@@ -776,10 +776,14 @@ marker. Without one, the response reports
 `legacy_or_uninstrumented_history`; it does not reconstruct missing history.
 Sections use `unknown` when the owner has no source state and `unavailable`
 when the owner cannot establish the requested evidence. Reservations do not
-prove native sends, consumption, tool execution, or native tool rejection.
+prove native sends, consumption, or tool execution. For a tool-call limit
+denial, a separate `ToolPermissionRejected` fact can show that the runtime
+recorded a rejection decision after the owner confirmed the exact denial and
+active MAF dispatch.
+This does not prove that the SDK received the decision or that the tool did
+not run. The same fact keeps `nativeNoSend` and `toolExecution` unavailable.
 Numeric denial facts retain their recorded work-plan and checkpoint
-association when the canonical owner receipt contains one. The contract does
-not include native tool-rejection evidence.
+association when the canonical owner receipt contains one.
 
 ### Native root-turn completion and Host replacement
 

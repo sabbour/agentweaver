@@ -100,6 +100,27 @@ public sealed class RuntimeObservationContractsTests
     }
 
     [Fact]
+    public void NativeToolRejectionContractsRequireTheKnownLimitDecisionAndMatchingAcknowledgement()
+    {
+        var request = new RuntimeNativeToolPermissionRejectionRequest(
+            1, Guid.NewGuid(), 1, 1, Guid.NewGuid(), Guid.NewGuid(), ValidHash,
+            RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode);
+
+        Assert.Same(request, request.Validate());
+        var acknowledgement = new RuntimeNativeToolPermissionRejectionAcknowledgement(
+            1, Guid.NewGuid(), ValidHash);
+        Assert.Same(acknowledgement, acknowledgement.Validate(request));
+
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            (request with { DispatchId = Guid.Empty }).Validate());
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            (request with { ReasonCode = "runtime_action_denied" }).Validate());
+        var changedRequest = request with { RequestHash = new string('b', 64) };
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            acknowledgement.Validate(changedRequest));
+    }
+
+    [Fact]
     public void EvidenceCollectionsRejectOversizedOrDuplicatedRows()
     {
         var timestamp = DateTimeOffset.UtcNow;

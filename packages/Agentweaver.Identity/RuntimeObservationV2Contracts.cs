@@ -10,7 +10,58 @@ public enum RuntimeObservationFactKind
     ToolInvocationReserved,
     Denied,
     CreditGuardChanged,
-    NativeNoSend
+    NativeNoSend,
+    ToolPermissionRejected
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeNativeToolPermissionRejectionRequest(
+    [property: JsonRequired] int ContractVersion,
+    [property: JsonRequired] Guid RuntimeInstanceId,
+    [property: JsonRequired] long RegistrationRevision,
+    [property: JsonRequired] long ExecutionFence,
+    [property: JsonRequired] Guid AttemptId,
+    [property: JsonRequired] Guid DispatchId,
+    [property: JsonRequired] string RequestHash,
+    [property: JsonRequired] string ReasonCode)
+{
+    public RuntimeNativeToolPermissionRejectionRequest Validate()
+    {
+        if (ContractVersion != 1 || RuntimeInstanceId == Guid.Empty ||
+            RegistrationRevision < 1 || ExecutionFence < 1 ||
+            AttemptId == Guid.Empty || DispatchId == Guid.Empty ||
+            ReasonCode != RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode)
+            throw new RuntimeAuthorizationException("runtime_native_tool_rejection_invalid");
+        RuntimeContractValidation.ValidateHash(RequestHash);
+        return this;
+    }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeNativeToolPermissionRejectionAcknowledgement(
+    [property: JsonRequired] int ContractVersion,
+    [property: JsonRequired] Guid FactId,
+    [property: JsonRequired] string RequestHash)
+{
+    public RuntimeNativeToolPermissionRejectionAcknowledgement Validate(
+        RuntimeNativeToolPermissionRejectionRequest request)
+    {
+        if (ContractVersion != 1 || FactId == Guid.Empty || RequestHash != request.RequestHash)
+            throw new RuntimeAuthorizationException("runtime_native_tool_rejection_ack_invalid");
+        return this;
+    }
+}
+
+public static class RuntimeNativeToolPermissionRejectionContract
+{
+    public const string NumericToolLimitReasonCode = "runtime_tool_call_limit_exhausted";
+    public const string RecordPath = "/internal/runtime/actions/tool-permission-rejections";
+
+    public static void Validate(RuntimeNativeToolPermissionRejectionRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        _ = request.Validate();
+    }
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<RuntimeObservationLimitKind>))]
@@ -108,7 +159,9 @@ public sealed record RuntimeObservationV2Fact(
     public RuntimeObservationV2Fact Validate()
     {
         var isCreditGuard = Kind == RuntimeObservationFactKind.CreditGuardChanged;
-        var requiresLimit = Kind is RuntimeObservationFactKind.Denied or RuntimeObservationFactKind.NativeNoSend;
+        var requiresLimit = Kind is RuntimeObservationFactKind.Denied or
+            RuntimeObservationFactKind.NativeNoSend or RuntimeObservationFactKind.ToolPermissionRejected;
+        var hasToolPermissionEvidence = ToolPermission.State == RuntimeObservationSectionState.Available;
         var noDispatchRevision = Kind == RuntimeObservationFactKind.Denied &&
             LimitKind == RuntimeObservationLimitKind.CopilotHardCredits &&
             Stage == "childPreparation" && OwnerRevision is null;
@@ -145,6 +198,20 @@ public sealed record RuntimeObservationV2Fact(
                  ConfiguredValue is not null || ObservedValue is not null ||
                  OwnerDecision.State != RuntimeObservationSectionState.Available) ||
             Kind == RuntimeObservationFactKind.NativeNoSend && NativeNoSend.State != RuntimeObservationSectionState.Available)
+            throw new RuntimeAuthorizationException("runtime_observation_v2_fact_invalid");
+        if (hasToolPermissionEvidence &&
+                Kind is not (RuntimeObservationFactKind.ToolInvocationReserved or
+                    RuntimeObservationFactKind.ToolPermissionRejected) ||
+            Kind == RuntimeObservationFactKind.ToolPermissionRejected &&
+                (AttemptId is null || AttemptId == Guid.Empty ||
+                 DispatchId is null || DispatchId == Guid.Empty ||
+                 LimitKind != RuntimeObservationLimitKind.ToolCalls ||
+                 Stage != "toolPermission" ||
+                 ReasonCode != RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode ||
+                 ToolPermission.State != RuntimeObservationSectionState.Available ||
+                 OwnerDecision.State != RuntimeObservationSectionState.Available ||
+                 NativeNoSend.State != RuntimeObservationSectionState.Unavailable ||
+                 ToolExecution.State != RuntimeObservationSectionState.Unavailable))
             throw new RuntimeAuthorizationException("runtime_observation_v2_fact_invalid");
         RuntimeContractValidation.ValidateIdentifier(SessionId);
         RuntimeContractValidation.ValidateIdentifier(ProjectId);

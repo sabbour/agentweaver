@@ -180,6 +180,100 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
     }
 
     [Fact]
+    public async Task NumericToolDenialRecordsBoundedRejectionBeforeReturningReject()
+    {
+        var registration = RuntimeCopilotSessionTests.Registration();
+        var sessionId = RuntimeContractValidation.NativeSessionId(registration.Binding);
+        var turns = ActiveTurn();
+        var authorized = new List<RuntimeActionRequest>();
+        var rejections = new List<RuntimeNativeToolPermissionRejectionRequest>();
+        var authorization = new RuntimeCopilotToolCallAuthorization(
+            registration,
+            sessionId,
+            (request, _) =>
+            {
+                authorized.Add(request);
+                return request.IsToolInvocation
+                    ? Task.FromException(new RuntimeAuthorizationException(
+                        RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode))
+                    : Task.CompletedTask;
+            },
+            turns,
+            new RuntimeNativeCallSequence(),
+            (request, _) =>
+            {
+                rejections.Add(request);
+                return Task.CompletedTask;
+            });
+        var invocation = PermissionRequest("view", "call-limit-denied");
+
+        var decision = await authorization.OnPermissionRequestAsync(invocation, CurrentInvocation());
+
+        Assert.Equal(PermissionDecision.Reject(
+            RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode).Kind, decision.Kind);
+        var ownerRequest = Assert.Single(authorized);
+        var rejection = Assert.Single(rejections).Validate();
+        Assert.Equal(ownerRequest.EventId, rejection.AttemptId);
+        Assert.Equal(turns.ActiveA2AMessageId, rejection.DispatchId);
+        Assert.Equal(RuntimeActionContract.Hash(ownerRequest), rejection.RequestHash);
+        Assert.Equal(RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode, rejection.ReasonCode);
+        var serialized = JsonSerializer.Serialize(rejection, JsonOptions);
+        Assert.DoesNotContain("toolName", serialized, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("toolArgs", serialized, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("call-limit-denied", serialized, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RejectionEvidenceFailureDoesNotChangeNativeDenial()
+    {
+        var authorization = new RuntimeCopilotToolCallAuthorization(
+            RuntimeCopilotSessionTests.Registration(),
+            SessionId(),
+            (request, _) => request.IsToolInvocation
+                ? Task.FromException(new RuntimeAuthorizationException(
+                    RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode))
+                : Task.CompletedTask,
+            ActiveTurn(),
+            new RuntimeNativeCallSequence(),
+            (_, _) => Task.FromException(new OperationCanceledException()));
+
+        var decision = await authorization.OnPermissionRequestAsync(
+            PermissionRequest("view", "call-evidence-failure"), CurrentInvocation());
+
+        Assert.Equal(PermissionDecision.Reject(
+            RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode).Kind, decision.Kind);
+    }
+
+    [Fact]
+    public async Task SecondaryPermissionDenialDoesNotRecordInvocationRejection()
+    {
+        var rejections = 0;
+        var authorization = new RuntimeCopilotToolCallAuthorization(
+            RuntimeCopilotSessionTests.Registration(),
+            SessionId(),
+            (request, _) => request.IsToolInvocation
+                ? Task.CompletedTask
+                : Task.FromException(new RuntimeAuthorizationException(
+                    RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode)),
+            ActiveTurn(),
+            new RuntimeNativeCallSequence(),
+            (_, _) =>
+            {
+                rejections++;
+                return Task.CompletedTask;
+            });
+        var invocation = PermissionRequest("view", "call-secondary-denied");
+        _ = await authorization.OnPermissionRequestAsync(invocation, CurrentInvocation());
+
+        var decision = await authorization.OnPermissionRequestAsync(
+            SecondaryPermission("view", "call-secondary-denied"), CurrentInvocation());
+
+        Assert.Equal(PermissionDecision.Reject(
+            RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode).Kind, decision.Kind);
+        Assert.Equal(0, rejections);
+    }
+
+    [Fact]
     public async Task ReadOnlyTurnAllowsViewAndRejectsEveryOtherEnabledTool()
     {
         var calls = new List<RuntimeActionRequest>();

@@ -13,6 +13,40 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed class RuntimeActionHttpClientTests
 {
     [Fact]
+    public async Task ToolRejectionWriteRetriesTheSameSafeRequestAfterLostAcknowledgement()
+    {
+        var requests = new List<RuntimeNativeToolPermissionRejectionRequest>();
+        var request = new RuntimeNativeToolPermissionRejectionRequest(
+            1, Guid.NewGuid(), 3, 5, Guid.NewGuid(), Guid.NewGuid(), new string('a', 64),
+            RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode);
+        var acknowledgement = new RuntimeNativeToolPermissionRejectionAcknowledgement(
+            1, Guid.NewGuid(), request.RequestHash);
+        using var http = new HttpClient(new Handler(async message =>
+        {
+            Assert.Equal(RuntimeNativeToolPermissionRejectionContract.RecordPath,
+                message.RequestUri!.AbsolutePath);
+            Assert.Equal("POST", message.Method.Method);
+            var body = await message.Content!.ReadFromJsonAsync<RuntimeNativeToolPermissionRejectionRequest>();
+            Assert.NotNull(body);
+            requests.Add(body);
+            if (requests.Count == 1)
+                throw new HttpRequestException("Lost rejection acknowledgement after owner commit.");
+            return Response(message, acknowledgement);
+        }));
+        var actor = new RuntimeActorAuthorization(
+            new SecretCredential("protected-actor", DateTimeOffset.UtcNow.AddMinutes(1)), "tenant");
+        var actions = new RuntimeActionHttpClient(http, new("https://orchestrator.test/"), actor);
+        var authorityChecks = 0;
+
+        await actions.RecordNativeToolPermissionRejectionAsync(
+            request, _ => { authorityChecks++; return Task.CompletedTask; }, default);
+
+        Assert.Equal(2, requests.Count);
+        Assert.All(requests, item => Assert.Equal(request, item));
+        Assert.Equal(2, authorityChecks);
+    }
+
+    [Fact]
     public async Task NativePermissionAuthorizationIsBoundToTheHookToolCall()
     {
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

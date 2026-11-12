@@ -293,6 +293,36 @@ internal sealed class RuntimeActionOwner(
             registration, request, cancellationToken).ConfigureAwait(false);
     }
 
+    internal async Task<RuntimeNativeToolPermissionRejectionAcknowledgement>
+        RecordNativeToolPermissionRejectionAsync(
+            HttpContext context,
+            RuntimeNativeToolPermissionRejectionRequest request,
+            CancellationToken cancellationToken)
+    {
+        request.Validate();
+        var registration = await registrations.ReadCurrentAsync(
+            context, request.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
+        if (registration.Revision != request.RegistrationRevision ||
+            registration.Binding.ExecutionFence != request.ExecutionFence)
+            throw new RuntimeAuthorizationException("runtime_native_tool_rejection_conflict");
+
+        var denial = await ReadNumericLimitDenialAsync(
+            context,
+            new RuntimeNumericLimitDenialReadRequest(
+                request.RuntimeInstanceId,
+                request.RegistrationRevision,
+                request.ExecutionFence,
+                request.AttemptId),
+            cancellationToken).ConfigureAwait(false);
+        if (denial.Receipt is null)
+            throw new RuntimeAuthorizationException("runtime_native_tool_rejection_denial_unavailable");
+
+        var acknowledgement = await grants.RecordNativeToolPermissionRejectionAsync(
+            registration, request, cancellationToken).ConfigureAwait(false);
+        await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
+        return acknowledgement;
+    }
+
     internal async Task<RuntimeReplacementComparisonBlocker> CompareReplacementAsync(
         HttpContext context,
         RuntimeReplacementComparisonRequest request,
@@ -478,6 +508,12 @@ public static class RuntimeActionEndpoints
             (HttpContext context, RuntimeNumericLimitDenialReadRequest request,
                 [FromServices] RuntimeActionOwner owner, CancellationToken token) =>
                 ExecuteAsync(context, () => owner.ReadNumericLimitDenialAsync(context, request, token)))
+            .RequireAuthorization();
+        endpoints.MapPost(RuntimeNativeToolPermissionRejectionContract.RecordPath,
+            (HttpContext context, RuntimeNativeToolPermissionRejectionRequest request,
+                [FromServices] RuntimeActionOwner owner, CancellationToken token) =>
+                ExecuteAsync(context, () =>
+                    owner.RecordNativeToolPermissionRejectionAsync(context, request, token)))
             .RequireAuthorization();
         endpoints.MapPost("/internal/runtime/execution/replacements/compare",
             (HttpContext context, RuntimeReplacementComparisonRequest request,

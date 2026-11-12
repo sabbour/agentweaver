@@ -2274,7 +2274,7 @@ else if (route.OperationId is
                 "checkpointHash", "checkpointDecisionStateVersion", "workPlanId", "associationId"],
             ("factId", Uuid()), ("sequence", NullableInt()),
             ("kind", Enum("CoverageStarted", "ModelTurnReserved", "ToolInvocationReserved", "Denied",
-                "CreditGuardChanged", "NativeNoSend")),
+                "CreditGuardChanged", "NativeNoSend", "ToolPermissionRejected")),
             ("projectId", Str()), ("runId", Str()), ("attemptId", NullableUuid()),
             ("dispatchId", NullableUuid()), ("sessionId", Str()), ("executionFence", Int()),
             ("runtimeInstanceId", NullableUuid()), ("registrationRevision", NullableInt()),
