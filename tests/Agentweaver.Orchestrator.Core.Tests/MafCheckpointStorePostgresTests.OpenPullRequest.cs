@@ -291,31 +291,120 @@ public sealed partial class MafCheckpointStorePostgresTests
             _fixture.DataSource, _schema, catalog, new ProviderResolver(catalog));
         var fingerprint = MafOpenPullRequestContract.OwnerRequestFingerprint(
             intent.Identity, intent.Request);
+        var effectFingerprint = MafOpenPullRequestContract.EffectRequestFingerprint(
+            intent.Identity, intent.Request);
+        var authorizationFingerprint = MafOpenPullRequestContract.OriginalAuthorizationFingerprint(
+            intent.Identity, source.Pin.AcceptedRun.TenantId, source.Pin.AcceptedRun.Issuer,
+            source.Pin.AcceptedRun.Subject, intent.Request.ExecutionBinding!);
         var first = await owner.BeginOpenPullRequestOperationAsync(
-            source.Pin, intent.Identity, intent.OperationId, fingerprint, CancellationToken.None);
+            source.Pin, intent.Identity, intent.OperationId, fingerprint, effectFingerprint,
+            authorizationFingerprint, CancellationToken.None);
         var pendingReplay = await owner.BeginOpenPullRequestOperationAsync(
-            source.Pin, intent.Identity, intent.OperationId, fingerprint, CancellationToken.None);
-        Assert.Equal(new(true, null), first);
-        Assert.Equal(new(false, null), pendingReplay);
+            source.Pin, intent.Identity, intent.OperationId, fingerprint, effectFingerprint,
+            authorizationFingerprint, CancellationToken.None);
+        Assert.True(first.IsNew);
+        Assert.Null(first.PullRequestNumber);
+        Assert.Equal("pending", first.EffectState);
+        Assert.False(pendingReplay.IsNew);
+        Assert.Null(pendingReplay.PullRequestNumber);
 
+        var resultFingerprint = MafOpenPullRequestContract.EffectResultFingerprint(
+            intent.Identity, intent.Request.ExecutionBinding!, source.Pin.Repository,
+            new SourceControlPullRequest(
+                42,
+                new Uri("https://github.com/octo/repo/pull/42"),
+                "open",
+                intent.Request.HeadBranch,
+                intent.Request.ExpectedHeadSha,
+                intent.Request.BaseBranch,
+                intent.Request.ExpectedBaseSha,
+                false,
+                SourceControlPullRequestDisposition.Created));
         await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
         await using (var transaction = await connection.BeginTransactionAsync())
         {
             await owner.CompleteOpenPullRequestOperationInTransactionAsync(
                 connection, transaction, intent.Identity, intent.OperationId, source.Pin.PinId,
-                fingerprint, 42, CancellationToken.None);
+                fingerprint, resultFingerprint, 42, CancellationToken.None);
             await transaction.CommitAsync();
         }
         var completedReplay = await owner.BeginOpenPullRequestOperationAsync(
-            source.Pin, intent.Identity, intent.OperationId, fingerprint, CancellationToken.None);
-        Assert.Equal(new(false, 42), completedReplay);
+            source.Pin, intent.Identity, intent.OperationId, fingerprint, effectFingerprint,
+            authorizationFingerprint, CancellationToken.None);
+        Assert.False(completedReplay.IsNew);
+        Assert.Equal(42, completedReplay.PullRequestNumber);
+        Assert.Equal("committed", completedReplay.EffectState);
+        Assert.Equal(resultFingerprint, completedReplay.ResultFingerprint);
+
+        var changedResult = await Assert.ThrowsAsync<CoordinationException>(async () =>
+        {
+            await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+            await using var transaction = await connection.BeginTransactionAsync();
+            await owner.CompleteOpenPullRequestOperationInTransactionAsync(
+                connection, transaction, intent.Identity, intent.OperationId, source.Pin.PinId,
+                fingerprint, new string('f', 64), 43, CancellationToken.None);
+            await transaction.CommitAsync();
+        });
+        Assert.Equal("source_control_run_binding_changed", changedResult.Code);
 
         var changedFingerprint = MafOpenPullRequestContract.OwnerRequestFingerprint(
             intent.Identity, intent.Request with { Title = "changed" });
         var changed = await Assert.ThrowsAsync<CoordinationException>(() =>
             owner.BeginOpenPullRequestOperationAsync(
-                source.Pin, intent.Identity, intent.OperationId, changedFingerprint, CancellationToken.None));
+                source.Pin, intent.Identity, intent.OperationId, changedFingerprint, effectFingerprint,
+                authorizationFingerprint, CancellationToken.None));
         Assert.Equal("source_control_run_binding_changed", changed.Code);
+
+        var binding = intent.Request.ExecutionBinding!;
+        var refreshedBinding = binding with
+        {
+            DecisionStateVersion = binding.DecisionStateVersion + 1,
+            ExecutionFence = binding.ExecutionFence + 1
+        };
+        var refreshedRequest = intent.Request with { ExecutionBinding = refreshedBinding };
+        Assert.Equal(effectFingerprint,
+            MafOpenPullRequestContract.EffectRequestFingerprint(intent.Identity, refreshedRequest));
+        var refreshedAuthorizationFingerprint =
+            MafOpenPullRequestContract.OriginalAuthorizationFingerprint(
+                intent.Identity, source.Pin.AcceptedRun.TenantId, source.Pin.AcceptedRun.Issuer,
+                source.Pin.AcceptedRun.Subject, refreshedBinding);
+        var staleAuthorization = await Assert.ThrowsAsync<CoordinationException>(() =>
+            owner.BeginOpenPullRequestOperationAsync(
+                source.Pin,
+                intent.Identity,
+                intent.OperationId,
+                MafOpenPullRequestContract.OwnerRequestFingerprint(intent.Identity, refreshedRequest),
+                effectFingerprint,
+                refreshedAuthorizationFingerprint,
+                CancellationToken.None));
+        Assert.Equal("source_control_run_binding_changed", staleAuthorization.Code);
+    }
+
+    [Fact]
+    public async Task OpenPullRequestEffectIdentityDoesNotChangeWithAuthorizationFence()
+    {
+        var (_, intent, _) = await PersistOpenPullRequestIntentAsync();
+        var binding = intent.Request.ExecutionBinding!;
+        var refreshedRequest = intent.Request with
+        {
+            ExecutionBinding = binding with
+            {
+                DecisionStateVersion = binding.DecisionStateVersion + 1,
+                ExecutionFence = binding.ExecutionFence + 1
+            }
+        };
+
+        Assert.Equal(
+            MafOpenPullRequestContract.EffectRequestFingerprint(intent.Identity, intent.Request),
+            MafOpenPullRequestContract.EffectRequestFingerprint(intent.Identity, refreshedRequest));
+        Assert.NotEqual(
+            MafOpenPullRequestContract.OwnerRequestFingerprint(intent.Identity, intent.Request),
+            MafOpenPullRequestContract.OwnerRequestFingerprint(intent.Identity, refreshedRequest));
+        Assert.NotEqual(
+            MafOpenPullRequestContract.OriginalAuthorizationFingerprint(
+                intent.Identity, "tenant-1", "issuer", "subject", binding),
+            MafOpenPullRequestContract.OriginalAuthorizationFingerprint(
+                intent.Identity, "tenant-1", "issuer", "subject", refreshedRequest.ExecutionBinding!));
     }
 
     private async Task<(MafExecutionCheckpointSnapshot Running,

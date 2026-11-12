@@ -172,6 +172,26 @@ branches, and head and base SHAs. The adapter reuses a pull request only when
 one exact open match exists; a superficially similar pull request is not
 enough.
 
+For a workflow-opened pull request, Orchestrator saves the operation before it
+calls the provider. The operation ID is the stable effect identity. The owner
+stores a request fingerprint that excludes the decision version and execution
+fence, plus a separate fingerprint for the original authorization context.
+The source-control PR path has no executable-action grant ID, so the owner does
+not create or infer one.
+
+On an exact retry, the owner checks the saved operation. If it has a pull
+request number, the owner reads that same pull request and checks its immutable
+result identity. If the owner has no saved number, it calls the adapter with
+creation disabled. The adapter can reconcile only the exact operation marker.
+It does not send another create request. If the exact result is missing,
+ambiguous, or changed, the owner stops. If a create may have completed but no
+result is saved, the owner records an indeterminate outcome. A saved result is
+immutable and is not replaced. This process prevents a retry from authorizing
+a second pull request; it does not claim that a remote write is exactly once.
+This path requires the original decision version and execution fence. It does
+not resume an operation under a new fence; checkpoint recovery is a separate
+capability.
+
 Merge-readiness checks read effective branch rules and classic protection.
 They resolve required checks against check-run and commit-status evidence for
 the exact head. Unknown rules, unsupported merge requirements, and ambiguous

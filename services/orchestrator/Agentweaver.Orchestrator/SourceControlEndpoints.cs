@@ -882,8 +882,13 @@ internal static partial class SourceControlEndpoints
             ?? throw new CoordinationException(
                 "source_control_workspace_unconfigured", StatusCodes.Status503ServiceUnavailable);
         var fingerprint = MafOpenPullRequestContract.OwnerRequestFingerprint(run.Identity, request);
+        var effectFingerprint = MafOpenPullRequestContract.EffectRequestFingerprint(run.Identity, request);
+        var authorizationFingerprint = MafOpenPullRequestContract.OriginalAuthorizationFingerprint(
+            run.Identity, run.Pin.AcceptedRun.TenantId, run.Pin.AcceptedRun.Issuer,
+            run.Pin.AcceptedRun.Subject, binding);
         var operation = await sourceControlOwner.BeginOpenPullRequestOperationAsync(
-            run.Pin, run.Identity, binding.OperationId, fingerprint, cancellationToken).ConfigureAwait(false);
+            run.Pin, run.Identity, binding.OperationId, fingerprint, effectFingerprint,
+            authorizationFingerprint, cancellationToken).ConfigureAwait(false);
 
         var selectionContext = await runSelectionContexts.ReadAsync(
             run.Selection.Selection, binding.ExecutionFence, cancellationToken).ConfigureAwait(false)
@@ -916,73 +921,90 @@ internal static partial class SourceControlEndpoints
         MafOpenPullRequestContract.RequireOwnerWorkspaceRevision(binding, workspaceBefore);
 
         SourceControlPullRequest pullRequest;
-        if (operation.PullRequestNumber is { } retainedNumber)
+        var remoteCreateAttempted = false;
+        try
         {
-            pullRequest = await redemption.WithCredentialAsync(
-                context,
-                run.Pin,
-                run.Pin.ApiCredential,
-                async (credential, token) =>
-                {
-                    await RequireCurrentSourceControlRunAsync(
-                        context, run, projects, decisions, token).ConfigureAwait(false);
-                    var operationContext = new SourceControlOperationContext(
-                        run.Pin.ProviderBinding, run.Pin.Repository, credential);
-                    await adapter.VerifyCurrentBindingAsync(
-                        operationContext, SourceControlCapabilities.PullRequestRead, token)
-                        .ConfigureAwait(false);
-                    var result = await adapter.ReadPullRequestAsync(
-                        operationContext, retainedNumber, token).ConfigureAwait(false);
-                    await RequireCurrentSourceControlRunAsync(
-                        context, run, projects, decisions, token).ConfigureAwait(false);
-                    return result with { Disposition = SourceControlPullRequestDisposition.Reused };
-                },
-                cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            var ownerRequest = request with
+            if (operation.PullRequestNumber is { } retainedNumber)
             {
-                // Retries without a retained result may discover an existing PR, but cannot create another.
-                ExecutionBinding = binding with { OwnerMayCreate = operation.IsNew }
-            };
-            pullRequest = await redemption.WithCredentialAsync(
-                context,
-                run.Pin,
-                run.Pin.ApiCredential,
-                async (credential, token) =>
+                pullRequest = await redemption.WithCredentialAsync(
+                    context,
+                    run.Pin,
+                    run.Pin.ApiCredential,
+                    async (credential, token) =>
+                    {
+                        await RequireCurrentSourceControlRunAsync(
+                            context, run, projects, decisions, token).ConfigureAwait(false);
+                        var operationContext = new SourceControlOperationContext(
+                            run.Pin.ProviderBinding, run.Pin.Repository, credential);
+                        await adapter.VerifyCurrentBindingAsync(
+                            operationContext, SourceControlCapabilities.PullRequestRead, token)
+                            .ConfigureAwait(false);
+                        var result = await adapter.ReadPullRequestAsync(
+                            operationContext, retainedNumber, token).ConfigureAwait(false);
+                        await RequireCurrentSourceControlRunAsync(
+                            context, run, projects, decisions, token).ConfigureAwait(false);
+                        return result with { Disposition = SourceControlPullRequestDisposition.Reused };
+                    },
+                    cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                var ownerRequest = request with
                 {
-                    await RequireCurrentSourceControlRunAsync(
-                        context, run, projects, decisions, token).ConfigureAwait(false);
-                    var operationContext = new SourceControlOperationContext(
-                        run.Pin.ProviderBinding, run.Pin.Repository, credential);
-                    await adapter.VerifyCurrentBindingAsync(
-                        operationContext, SourceControlCapabilities.PullRequestWrite, token)
-                        .ConfigureAwait(false);
-                    await RequireCurrentSourceControlRunAsync(
-                        context, run, projects, decisions, token).ConfigureAwait(false);
-                    var result = await adapter.CreateOrReusePullRequestAsync(
-                        operationContext, ownerRequest, token).ConfigureAwait(false);
-                    await RequireCurrentSourceControlRunAsync(
-                        context, run, projects, decisions, token).ConfigureAwait(false);
-                    return result;
-                },
-                cancellationToken).ConfigureAwait(false);
-        }
+                    // Retries without a retained result may discover an existing PR, but cannot create another.
+                    ExecutionBinding = binding with { OwnerMayCreate = operation.IsNew }
+                };
+                pullRequest = await redemption.WithCredentialAsync(
+                    context,
+                    run.Pin,
+                    run.Pin.ApiCredential,
+                    async (credential, token) =>
+                    {
+                        await RequireCurrentSourceControlRunAsync(
+                            context, run, projects, decisions, token).ConfigureAwait(false);
+                        var operationContext = new SourceControlOperationContext(
+                            run.Pin.ProviderBinding, run.Pin.Repository, credential);
+                        await adapter.VerifyCurrentBindingAsync(
+                            operationContext, SourceControlCapabilities.PullRequestWrite, token)
+                            .ConfigureAwait(false);
+                        await RequireCurrentSourceControlRunAsync(
+                            context, run, projects, decisions, token).ConfigureAwait(false);
+                        remoteCreateAttempted = true;
+                        var result = await adapter.CreateOrReusePullRequestAsync(
+                            operationContext, ownerRequest, token).ConfigureAwait(false);
+                        await RequireCurrentSourceControlRunAsync(
+                            context, run, projects, decisions, token).ConfigureAwait(false);
+                        return result;
+                    },
+                    cancellationToken).ConfigureAwait(false);
+            }
 
-        await RequireCurrentSourceControlRunAsync(
-            context, run, projects, decisions, cancellationToken).ConfigureAwait(false);
-        var workspaceAfter = await ReadOpenPullRequestWorkspaceRevisionAsync(
-            run, binding, request, context, projects, decisions, adapter,
-            redemption, workspaceManager, cancellationToken).ConfigureAwait(false);
-        MafOpenPullRequestContract.RequireOwnerWorkspaceRevision(binding, workspaceAfter);
-        MafOpenPullRequestContract.RequireOwnerPullRequestTarget(binding, run.Pin.Repository, pullRequest);
+            await RequireCurrentSourceControlRunAsync(
+                context, run, projects, decisions, cancellationToken).ConfigureAwait(false);
+            var workspaceAfter = await ReadOpenPullRequestWorkspaceRevisionAsync(
+                run, binding, request, context, projects, decisions, adapter,
+                redemption, workspaceManager, cancellationToken).ConfigureAwait(false);
+            MafOpenPullRequestContract.RequireOwnerWorkspaceRevision(binding, workspaceAfter);
+            MafOpenPullRequestContract.RequireOwnerPullRequestTarget(binding, run.Pin.Repository, pullRequest);
 
-        if (operation.PullRequestNumber is null)
+            var resultFingerprint = MafOpenPullRequestContract.EffectResultFingerprint(
+                run.Identity, binding, run.Pin.Repository, pullRequest);
+            if (operation.ResultFingerprint is not null &&
+                !string.Equals(operation.ResultFingerprint, resultFingerprint, StringComparison.OrdinalIgnoreCase))
+                throw new CoordinationException(
+                    "source_control_run_binding_changed", StatusCodes.Status409Conflict);
             await sourceControlOwner.CompleteOpenPullRequestOperationInTransactionAsync(
                 connection, transaction, run.Identity, binding.OperationId, run.Pin.PinId,
-                fingerprint, pullRequest.Number, cancellationToken).ConfigureAwait(false);
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                fingerprint, resultFingerprint, pullRequest.Number, cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch when (remoteCreateAttempted)
+        {
+            await transaction.DisposeAsync().ConfigureAwait(false);
+            await sourceControlOwner.MarkOpenPullRequestOperationIndeterminateAsync(
+                run.Identity, binding.OperationId, CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
         await sourceControlOwner.RecordPullRequestAsync(run.Pin, pullRequest, cancellationToken)
             .ConfigureAwait(false);
         return pullRequest;
@@ -2008,9 +2030,12 @@ internal static partial class SourceControlEndpoints
                     statusCode: StatusCodes.Status409Conflict);
             if (intent.State != "approved" || intent.GrantReference is null)
                 return Results.Json(
-                    new { error = intent.State == "outcome_uncertain"
+                    new
+                    {
+                        error = intent.State == "outcome_uncertain"
                         ? "source_control_merge_outcome_uncertain"
-                        : "source_control_merge_not_approved" },
+                        : "source_control_merge_not_approved"
+                    },
                     statusCode: intent.State == "outcome_uncertain"
                         ? StatusCodes.Status502BadGateway
                         : StatusCodes.Status409Conflict);
@@ -3246,9 +3271,12 @@ internal static partial class SourceControlEndpoints
         catch (SourceControlProjectConfigurationException exception)
         {
             return Results.Json(
-                new { error = exception.Failure == SourceControlProjectConfigurationFailure.Missing
+                new
+                {
+                    error = exception.Failure == SourceControlProjectConfigurationFailure.Missing
                     ? "source_control_not_configured"
-                    : "source_control_configuration_invalid" },
+                    : "source_control_configuration_invalid"
+                },
                 statusCode: StatusCodes.Status409Conflict);
         }
         catch (SourceControlProviderSelectionException)
