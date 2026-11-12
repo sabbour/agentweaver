@@ -1119,6 +1119,10 @@ internal sealed class ExecutableActionGrantOwnerStore(
 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await RequireCurrentToolRejectionRunAsync(
+            connection, transaction, binding, cancellationToken).ConfigureAwait(false);
+        await RequireCurrentToolRejectionRegistrationAsync(
+            connection, transaction, registration, cancellationToken).ConfigureAwait(false);
         var denial = await _executionEvidence.ReadNumericLimitDenialAsync(
             connection,
             transaction,
@@ -1147,6 +1151,55 @@ internal sealed class ExecutableActionGrantOwnerStore(
             1, factId, request.RequestHash).Validate(request);
     }
 
+    private async Task RequireCurrentToolRejectionRunAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RuntimeBinding binding,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT tenant_id, accepted_selection_hash, execution_fence, execution_state
+            FROM {_schema}.accepted_runs
+            WHERE project_id = @project AND run_id = @run
+            FOR SHARE
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlTypes.NpgsqlDbType.Varchar, binding.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlTypes.NpgsqlDbType.Varchar, binding.RunId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+            reader.GetString(0) != binding.TenantId ||
+            reader.GetString(1).Trim() != binding.AcceptedSelectionHash ||
+            reader.GetInt64(2) != binding.ExecutionFence ||
+            reader.GetString(3) is "completed" or "failed" or "indeterminate" or "cancelled")
+            throw new RuntimeAuthorizationException("runtime_native_tool_rejection_conflict");
+    }
+
+    private async Task RequireCurrentToolRejectionRegistrationAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RuntimeRegistration registration,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT h.current_revision, r.state, r.expires_at, r.binding_hash
+            FROM {_schema}.runtime_registration_heads h
+            JOIN {_schema}.runtime_registration_revisions r
+              ON r.runtime_instance_id = h.runtime_instance_id AND r.revision = h.current_revision
+            WHERE h.runtime_instance_id = @runtime
+            FOR SHARE OF h
+            """, connection, transaction);
+        command.Parameters.AddWithValue(
+            "runtime", NpgsqlTypes.NpgsqlDbType.Uuid, registration.RuntimeInstanceId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+            reader.GetInt64(0) != registration.Revision || reader.GetInt32(1) != 0 ||
+            reader.GetFieldValue<DateTimeOffset>(2) != registration.ExpiresAt ||
+            registration.ExpiresAt <= timeProvider.GetUtcNow() ||
+            reader.GetString(3).Trim() != RuntimeContractValidation.Hash(
+                JsonSerializer.SerializeToUtf8Bytes(registration.Binding)))
+            throw new RuntimeAuthorizationException("runtime_native_tool_rejection_conflict");
+    }
+
     private async Task<bool> MatchesToolRejectionDispatchAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1157,19 +1210,19 @@ internal sealed class ExecutableActionGrantOwnerStore(
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand($"""
-            SELECT EXISTS (
-                SELECT 1 FROM {_schema}.maf_execution_dispatches
-                WHERE project_id = @project AND run_id = @run AND dispatch_id = @dispatch
-                  AND root_session_id = @root AND child_session_id = @session
-                  AND execution_fence = @fence
-                  AND accepted_selection_hash = @selection
-                  AND runtime_instance_id = @runtime
-                  AND registration_revision = @registration
-                  AND (@checkpoint IS NULL OR checkpoint_id = @checkpoint)
-                  AND (@checkpointRevision IS NULL OR checkpoint_revision = @checkpointRevision)
-                  AND (@workPlan IS NULL OR work_plan_id = @workPlan)
-                  AND (@association IS NULL OR association_id = @association)
-            )
+            SELECT 1 FROM {_schema}.maf_execution_dispatches
+            WHERE project_id = @project AND run_id = @run AND dispatch_id = @dispatch
+              AND root_session_id = @root AND child_session_id = @session
+              AND execution_fence = @fence
+              AND accepted_selection_hash = @selection
+              AND runtime_instance_id = @runtime
+              AND registration_revision = @registration
+              AND dispatch_state = 'sending'
+              AND (@checkpoint IS NULL OR checkpoint_id = @checkpoint)
+              AND (@checkpointRevision IS NULL OR checkpoint_revision = @checkpointRevision)
+              AND (@workPlan IS NULL OR work_plan_id = @workPlan)
+              AND (@association IS NULL OR association_id = @association)
+            FOR SHARE
             """, connection, transaction);
         command.Parameters.AddWithValue("project", NpgsqlTypes.NpgsqlDbType.Varchar, projectId);
         command.Parameters.AddWithValue("run", NpgsqlTypes.NpgsqlDbType.Varchar, runId);
@@ -1188,7 +1241,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
             denial.WorkPlanId is null ? DBNull.Value : denial.WorkPlanId);
         command.Parameters.AddWithValue("association", NpgsqlTypes.NpgsqlDbType.Varchar,
             denial.AssociationId is null ? DBNull.Value : denial.AssociationId);
-        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? false);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
     }
 
     internal async Task<RuntimeReplacementComparisonBlocker> ReadReplacementComparisonBlockerAsync(

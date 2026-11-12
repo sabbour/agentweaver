@@ -35,6 +35,12 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
             RuntimeActionContract.Hash(denied),
             RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode);
 
+        var preparedDispatch = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            GrantStore().RecordNativeToolPermissionRejectionAsync(
+                _registrations[0], request, default));
+        Assert.Equal("runtime_native_tool_rejection_dispatch_unavailable", preparedDispatch.Code);
+        _ = await BeginAsync(0);
+
         var first = await GrantStore().RecordNativeToolPermissionRejectionAsync(
             _registrations[0], request, default);
         var replay = await GrantStore().RecordNativeToolPermissionRejectionAsync(
@@ -63,6 +69,12 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
         Assert.Equal(RuntimeObservationSectionState.Unavailable, rejectionFact.NativeNoSend.State);
         Assert.Equal(RuntimeObservationSectionState.Unavailable, rejectionFact.ToolExecution.State);
         Assert.Equal(RuntimeObservationSectionState.Unavailable, denialFact.ToolPermission.State);
+
+        _ = await new RuntimeRegistrationStore(fixture.DataSource, _schema, TimeProvider.System)
+            .RevokeAsync(_registrations[0].RuntimeInstanceId, _registrations[0].Revision, default);
+        var revoked = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            GrantStore().RecordNativeToolPermissionRejectionAsync(_registrations[0], request, default));
+        Assert.Equal("runtime_native_tool_rejection_conflict", revoked.Code);
     }
 
     [Fact]
