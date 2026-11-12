@@ -1,6 +1,10 @@
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
+using Agentweaver.Persistence.Postgres;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Xunit;
 
 namespace Agentweaver.Orchestrator.Core.Tests;
@@ -145,6 +149,104 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
         Assert.Equal(2, root.Totals.ModelSlotsReserved.Value);
         Assert.Equal(2, childRead.Totals.ModelSlotsReserved.Value);
     }
+
+    [Fact]
+    public async Task RuntimeObservationV2ExactLookupReadsLegacyCreditDenialsAndMarksMissingNoSendProofUnavailable()
+    {
+        await RegisterPositiveHardCreditAsync(0);
+        await RegisterPositiveHardCreditAsync(1);
+        Assert.Null(await PrepareAsync(0, PricedSnapshot(0, 0m, 0)));
+        Assert.Null(await PrepareAsync(1, PricedSnapshot(1, 0m, 0)));
+
+        var firstDenial = LegacyCreditDenial(0);
+        var secondDenial = LegacyCreditDenial(1);
+        await AppendLegacyCreditEvidenceAsync(firstDenial, includeNoSend: true);
+        await AppendLegacyCreditEvidenceAsync(secondDenial, includeNoSend: false);
+
+        var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
+        var store = new RuntimeObservationV2Store(fixture.DataSource, _schema);
+        var scope = new RuntimeObservationV2ReadScope(
+            _actor.Issuer, _actor.Subject, _selection.Authorization.TenantId,
+            _root.ProjectId, _root.RunId, _root.SessionId, _root.SessionId,
+            selectionHash, _selection.Selection.ContextRevision, 1, 1, new string('a', 64));
+        var withNoSend = await store.ReadAsync(
+            scope, 100, null, firstDenial.DispatchId, default);
+        var withoutNoSend = await store.ReadAsync(
+            scope, 100, null, secondDenial.DispatchId, default);
+
+        var withNoSendFact = Assert.Single(withNoSend.History.Items,
+            item => item.Kind == RuntimeObservationFactKind.Denied);
+        var withoutNoSendFact = Assert.Single(withoutNoSend.History.Items,
+            item => item.Kind == RuntimeObservationFactKind.Denied);
+        Assert.Equal(RuntimeObservationSectionState.Available, withNoSendFact.NativeNoSend.State);
+        Assert.Equal(RuntimeObservationSectionState.Unavailable, withoutNoSendFact.NativeNoSend.State);
+        Assert.Equal("native_witness_missing",
+            withoutNoSendFact.NativeNoSend.Reason);
+    }
+
+    private RuntimeNativeCreditDenialReceipt LegacyCreditDenial(int index)
+    {
+        var registration = _registrations[index];
+        var dispatchId = _intents[index].MessageId;
+        var registrationHash = RuntimeContractValidation.RegistrationHash(registration);
+        var sourceHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes($"legacy-source-{index}"));
+        var checkpointHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes($"legacy-checkpoint-{index}"));
+        var digest = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes($"legacy-ledger-{index}"));
+        var now = DateTimeOffset.UtcNow;
+        return RuntimeNativeDenialContract.SealDenial(new(
+            1, registration.RuntimeInstanceId, registration.Revision, registration.Binding.ExecutionFence,
+            _grants[index].GrantId, dispatchId, RuntimeCreditLimitDenialStage.NativeTurnBegin,
+            RuntimeCreditLimitDenialCode.HardLimitReached, registrationHash, sourceHash,
+            RuntimeNativeDenialContract.DispatchHash(
+                dispatchId, registrationHash, sourceHash, checkpointHash, "prepared", 1),
+            checkpointHash, 5m, 5m, 1, digest,
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes("AIC")),
+            1, 2, "prepared", 1, "prepared", 1, now, string.Empty));
+    }
+
+    private async Task AppendLegacyCreditEvidenceAsync(
+        RuntimeNativeCreditDenialReceipt denial,
+        bool includeNoSend)
+    {
+        var events = new List<OutboxEvent>();
+        var denialEventId = Guid.NewGuid();
+        events.Add(new OutboxEvent(
+            denialEventId,
+            $"coordination/{_root.ProjectId}/{_root.RunId}/native-credit-denials",
+            $"legacy-credit-denial/{denialEventId:D}",
+            "orchestrator.native_turn.credit_denied", 1,
+            JsonSerializer.SerializeToElement(denial, LegacyEvidenceJson),
+            denial.RecordedAt));
+        if (includeNoSend)
+        {
+            var cursorHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes("legacy-empty-cursor"));
+            var receipt = RuntimeNativeDenialContract.SealNoSend(new(
+                1, denial.RuntimeInstanceId, denial.RegistrationRevision, denial.DispatchId,
+                denial.CanonicalPayloadHash, denial.RegistrationHash, denial.SourceHash,
+                RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes("legacy-native-session")),
+                cursorHash, cursorHash, 0, true, DateTimeOffset.UtcNow, string.Empty));
+            var noSendEventId = Guid.NewGuid();
+            events.Add(new OutboxEvent(
+                noSendEventId,
+                $"coordination/{_root.ProjectId}/{_root.RunId}/native-no-sends",
+                $"legacy-native-no-send/{noSendEventId:D}",
+                "orchestrator.native_turn.no_send", 1,
+                JsonSerializer.SerializeToElement(receipt, LegacyEvidenceJson),
+                receipt.VerifiedAt));
+        }
+
+        var outbox = new PostgresOutbox(fixture.DataSource, _schema);
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        foreach (var item in events)
+            await outbox.EnqueueAsync(connection, transaction, item, default);
+        await transaction.CommitAsync();
+    }
+
+    private static readonly JsonSerializerOptions LegacyEvidenceJson = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+    };
 
     private async Task AppendFactsAsync(
         RuntimeObservationV2Store store,

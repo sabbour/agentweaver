@@ -121,7 +121,6 @@ internal sealed class ExecutableActionGrantOwnerStore(
             connection, transaction, owner.DecisionJson, registration, owner.StateVersion,
             requestId, promptHash, "model.turn", cancellationToken).ConfigureAwait(false);
         // Keep the run, root session, and accepted decision locked through the immutable admission write.
-        var rootAdmissionInserted = false;
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_schema}.{RootModelTurnAdmissionTable}
                 (project_id, run_id, root_session_id, request_id, actor_issuer, actor_id, tenant_id,
@@ -138,7 +137,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
             insert.Parameters.AddWithValue("prompt", NpgsqlDbType.Char, promptHash);
             insert.Parameters.AddWithValue("decision", NpgsqlDbType.Uuid, owner.DecisionId);
             insert.Parameters.AddWithValue("decisionVersion", NpgsqlDbType.Bigint, owner.StateVersion);
-            rootAdmissionInserted = await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
         await using (var exact = new NpgsqlCommand($"""
             SELECT root_session_id, actor_issuer, actor_id, tenant_id, accepted_selection_hash,
@@ -162,20 +161,6 @@ internal sealed class ExecutableActionGrantOwnerStore(
                 reader.GetGuid(7) != owner.DecisionId ||
                 reader.GetInt64(8) != owner.StateVersion)
                 throw new RuntimeAuthorizationException("runtime_model_turn_admission_conflict");
-        }
-        if (rootAdmissionInserted)
-        {
-            var prior = await RuntimeModelTurnReservationStore.CountRunWideAsync(
-                connection, transaction, _schema, binding.ProjectId, binding.RunId,
-                binding.SessionId, requestId, cancellationToken).ConfigureAwait(false);
-            var payloadHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
-                $"{owner.DecisionId:D}\0{owner.StateVersion}\0{promptHash}"));
-            await _runtimeObservationV2.AppendAsync(
-                connection, transaction, binding.ProjectId, binding.RunId,
-                RuntimeObservationV2Store.ModelTurnReservedFact(
-                    registration, requestId, requestId, owner.StateVersion,
-                    checked(prior + 1), "rootModelTurnAdmission", payloadHash,
-                    timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
         }
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -702,6 +687,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
             if (await dispatch.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
                 throw new RuntimeAuthorizationException("runtime_model_turn_admission_required");
         }
+        bool grantInserted;
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_schema}.executable_action_grants
                 (project_id, run_id, grant_id, revision, is_current, grant_state,
@@ -733,7 +719,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
             insert.Parameters.AddWithValue("stateVersion", NpgsqlDbType.Bigint, decisionVersion);
             insert.Parameters.AddWithValue("decision", NpgsqlDbType.Uuid, decisionId);
             insert.Parameters.AddWithValue("requestHash", NpgsqlDbType.Varchar, requestHash);
-            await insert.ExecuteNonQueryAsync(cancellationToken);
+            grantInserted = await insert.ExecuteNonQueryAsync(cancellationToken) == 1;
         }
         await using (var exact = new NpgsqlCommand($"""
             SELECT source_request_id FROM {_schema}.executable_action_grants
@@ -745,6 +731,20 @@ internal sealed class ExecutableActionGrantOwnerStore(
             exact.Parameters.AddWithValue("grant", NpgsqlDbType.Varchar, reference.GrantId);
             if ((string?)await exact.ExecuteScalarAsync(cancellationToken) != requestHash)
                 throw new RuntimeAuthorizationException("runtime_action_conflict");
+        }
+        if (grantInserted && isCoordinatorRoot && request.ActionId == "model.turn")
+        {
+            var prior = await RuntimeModelTurnReservationStore.CountRunWideAsync(
+                connection, transaction, _schema, binding.ProjectId, binding.RunId,
+                binding.SessionId, request.EventId, cancellationToken).ConfigureAwait(false);
+            var ownerPayloadHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
+                $"{reference.GrantId}\0{requestHash}\0{decisionId:D}\0{decisionVersion}"));
+            await _runtimeObservationV2.AppendAsync(
+                connection, transaction, binding.ProjectId, binding.RunId,
+                RuntimeObservationV2Store.ModelTurnReservedFact(
+                    registration, request.EventId, request.EventId, decisionVersion,
+                    checked(prior + 1), "rootModelTurnGrant", ownerPayloadHash,
+                    timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
         }
         if (reserveToolInvocation && !await HasToolInvocationReservationAsync(
             connection, transaction, request, cancellationToken).ConfigureAwait(false))

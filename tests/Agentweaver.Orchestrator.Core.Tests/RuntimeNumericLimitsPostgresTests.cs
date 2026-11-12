@@ -266,6 +266,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         await GrantStore().AdmitCoordinatorRootModelTurnAsync(
             rootRequestContext, _registrations[0], generationEventId, promptHash,
             rootContext.DecisionStateVersion, default);
+        Assert.Equal(0, await CountModelTurnReservationFactsAsync());
         var now = DateTimeOffset.UtcNow;
         var exhaustedProjectBudget = new SpendBudget(
             "current-project-hard-limit", 1, SpendBudgetScopes.Project,
@@ -279,6 +280,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             IssueAsync(0, modelRequest));
         Assert.Equal(SpendBudgetAdmissionMath.EvidenceUnavailable, budgetFailure.Code);
         Assert.Equal(0, await CountRuntimeGrantsAsync());
+        Assert.Equal(0, await CountModelTurnReservationFactsAsync());
         _projectsHandler.ProjectSpendBudgets = null;
         Assert.Equal("runtime_model_turn_admission_required",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
@@ -286,6 +288,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         var modelGrant = await IssueAsync(0, modelRequest);
         Assert.Equal(ExecutableActionGrantLookupStatus.Current,
             (await GrantStore().GetCurrentAsync(modelGrant)).Status);
+        Assert.Equal(1, await CountModelTurnReservationFactsAsync());
         Assert.Equal("runtime_model_turn_limit_exhausted",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => PrepareAsync(1))).Code);
         Assert.Equal(0, await CountAsync("maf_execution_dispatches"));
@@ -303,6 +306,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
                 IssueAsync(0, nextModelRequest))).Code);
         var modelDenial = Assert.IsType<RuntimeNumericLimitDenialReceipt>(
             await ReadNumericLimitDenialAsync(nextModelEventId));
+        Assert.Equal(1, await CountModelTurnReservationFactsAsync());
         Assert.Equal(RuntimeNumericLimitKind.ModelTurns, modelDenial.LimitKind);
         Assert.Equal(1, modelDenial.AcceptedLimit);
         Assert.Equal(1, modelDenial.ObservedCount);
@@ -1913,6 +1917,20 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         await using var command = new NpgsqlCommand(
             $"SELECT count(*) FROM \"{_schema}\".executable_action_grants WHERE purpose = @purpose", connection);
         command.Parameters.AddWithValue("purpose", RuntimeActionContract.Purpose);
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private async Task<long> CountModelTurnReservationFactsAsync()
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT count(*) FROM "{_schema}".outbox_events
+            WHERE stream_id = @stream
+              AND event_type = 'orchestrator.runtime_observation.fact'
+              AND payload->>'kind' = 'modelTurnReserved'
+            """, connection);
+        command.Parameters.AddWithValue("stream",
+            RuntimeObservationV2Store.StreamId(_root.ProjectId, _root.RunId));
         return (long)(await command.ExecuteScalarAsync())!;
     }
 
