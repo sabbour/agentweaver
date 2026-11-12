@@ -271,6 +271,78 @@ internal static class MafOpenPullRequestContract
             request
         }, JsonOptions)));
 
+    internal static string EffectRequestFingerprint(
+        SessionIdentity identity,
+        SourceControlPullRequestRequest request)
+    {
+        var binding = request.ExecutionBinding
+            ?? throw new CoordinationException(
+                "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+        return Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            identity,
+            binding.OperationId,
+            binding.AcceptedSelectionHash,
+            binding.WorkPlanId,
+            binding.WorkflowStepId,
+            binding.SourceControlPinId,
+            binding.WorkspaceId,
+            binding.WorkspaceIncarnationId,
+            binding.WorkspaceBranchName,
+            binding.WorkspaceBaseBranch,
+            binding.WorkspaceBaseSha,
+            binding.WorkspaceHeadSha,
+            request.Title,
+            request.Body,
+            request.HeadBranch,
+            request.ExpectedHeadSha,
+            request.BaseBranch,
+            request.ExpectedBaseSha,
+            request.Draft
+        }, JsonOptions)));
+    }
+
+    internal static string OriginalAuthorizationFingerprint(
+        SessionIdentity identity,
+        string tenantId,
+        string actorIssuer,
+        string actorSubject,
+        SourceControlPullRequestExecutionBinding binding) =>
+        Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            tenantId,
+            actorIssuer,
+            actorSubject,
+            identity,
+            binding.OperationId,
+            binding.DecisionStateVersion,
+            binding.ExecutionFence,
+            binding.AcceptedSelectionHash,
+            binding.WorkPlanId,
+            binding.WorkflowStepId,
+            binding.SourceControlPinId
+        }, JsonOptions)));
+
+    internal static string EffectResultFingerprint(
+        SessionIdentity identity,
+        SourceControlPullRequestExecutionBinding binding,
+        SourceControlRepositoryIdentity repository,
+        SourceControlPullRequest pullRequest) =>
+        Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            identity,
+            binding.OperationId,
+            binding.SourceControlPinId,
+            repository.Owner,
+            repository.Name,
+            pullRequest.Number,
+            HtmlUrl = pullRequest.HtmlUrl.AbsoluteUri,
+            pullRequest.HeadBranch,
+            pullRequest.HeadSha,
+            pullRequest.BaseBranch,
+            pullRequest.BaseSha
+        }, JsonOptions)));
+
     internal static MafOpenPullRequestTerminalReceipt CreateReceipt(
         MafExecutionOpenPullRequestIntent intent,
         SourceControlPullRequest pullRequest)

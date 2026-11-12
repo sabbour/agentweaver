@@ -182,6 +182,32 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     }
 
     [Fact]
+    public async Task PullRequestEffectIdentityMigrationAddsCompleteLedgerShape()
+    {
+        await ApplyMigrationsThroughAsync(47);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 48),
+                (SELECT count(*) FROM pg_attribute
+                    WHERE attrelid = to_regclass(@table)
+                      AND attname IN ('tenant_id', 'effect_fingerprint',
+                          'original_authorization_fingerprint', 'effect_state', 'result_fingerprint')
+                      AND attnum > 0 AND NOT attisdropped)
+            """, connection);
+        command.Parameters.AddWithValue("table", $"{_schema}.source_control_pull_request_operations");
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(1L, reader.GetInt64(0));
+        Assert.Equal(5L, reader.GetInt64(1));
+    }
+
+    [Fact]
     public async Task RuntimeExecutionEvidenceMigrationIsOptionalBeforeItIsApplied()
     {
         await ApplyMigrationsThroughAsync(38);
@@ -555,7 +581,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.Equal(1L, reader.GetInt64(1));
         Assert.Equal(1L, reader.GetInt64(2));
         // Old owner images reject the later versions; deploy them before applying these migrations.
-        Assert.Equal(9L, reader.GetInt64(3));
+        Assert.Equal(10L, reader.GetInt64(3));
         Assert.True(reader.GetBoolean(4));
     }
 
@@ -927,7 +953,9 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (43, "043_runtime_root_turn_completion.sql"),
             (44, "044_runtime_replacement_operations.sql"),
             (45, "045_runtime_root_turn_replay.sql"),
-            (46, "046_workflow_generation_jobs.sql")
+            (46, "046_workflow_generation_jobs.sql"),
+            (47, "047_terminal_cleanup_recovery_guard.sql"),
+            (48, "048_source_control_pull_request_effect_identity.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""
@@ -1121,7 +1149,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
         // The default history skips reserved versions 017 and 034.
         Assert.Equal(
-            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47]),
+            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48]),
             reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));

@@ -13,7 +13,11 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
-internal sealed record SourceControlPullRequestOperationClaim(bool IsNew, long? PullRequestNumber);
+internal sealed record SourceControlPullRequestOperationClaim(
+    bool IsNew,
+    long? PullRequestNumber,
+    string EffectState,
+    string? ResultFingerprint);
 
 /// <summary>
 /// Owns PostgreSQL persistence for immutable repository pins, merge intents, webhook delivery deduplication, and verified output captures.
@@ -136,6 +140,8 @@ internal sealed class SourceControlOwnerStore(
         SessionIdentity identity,
         Guid operationId,
         string requestFingerprint,
+        string effectFingerprint,
+        string authorizationFingerprint,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(pin);
@@ -143,8 +149,9 @@ internal sealed class SourceControlOwnerStore(
             identity.RunId != pin.AcceptedRun.RunId ||
             identity.SessionId != pin.AcceptedRun.RootSessionId ||
             operationId == Guid.Empty ||
-            requestFingerprint is not { Length: 64 } ||
-            requestFingerprint.Any(character => !Uri.IsHexDigit(character)))
+            !IsSha256(requestFingerprint) ||
+            !IsSha256(effectFingerprint) ||
+            !IsSha256(authorizationFingerprint))
             throw new CoordinationException(
                 "source_control_run_binding_changed", StatusCodes.Status409Conflict);
 
@@ -153,26 +160,34 @@ internal sealed class SourceControlOwnerStore(
             .ConfigureAwait(false);
         await using var insert = new NpgsqlCommand($"""
             INSERT INTO {PullRequestOperations} (
-                project_id, run_id, session_id, operation_id, pin_id, request_fingerprint)
-            VALUES (@project, @run, @session, @operation, @pin, @fingerprint)
+                tenant_id, project_id, run_id, session_id, operation_id,
+                pin_id, request_fingerprint, effect_fingerprint, original_authorization_fingerprint, effect_state)
+            VALUES (@tenant, @project, @run, @session, @operation,
+                @pin, @fingerprint, @effectFingerprint, @authorizationFingerprint, 'pending')
             ON CONFLICT (project_id, run_id, session_id, operation_id) DO NOTHING
             RETURNING operation_id
             """, connection, transaction);
         AddScope(insert, identity);
+        insert.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, pin.AcceptedRun.TenantId);
         insert.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
         insert.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
         insert.Parameters.AddWithValue("pin", NpgsqlDbType.Varchar, pin.PinId);
         insert.Parameters.AddWithValue("fingerprint", NpgsqlDbType.Char, requestFingerprint.ToLowerInvariant());
+        insert.Parameters.AddWithValue("effectFingerprint", NpgsqlDbType.Char, effectFingerprint.ToLowerInvariant());
+        insert.Parameters.AddWithValue(
+            "authorizationFingerprint", NpgsqlDbType.Char, authorizationFingerprint.ToLowerInvariant());
         var inserted = await insert.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is Guid;
         if (inserted)
         {
             // Commit the attempt before the remote call so a lost response cannot authorize a fresh create.
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            return new(true, null);
+            return new(true, null, "pending", null);
         }
 
         await using var read = new NpgsqlCommand($"""
-            SELECT pin_id, request_fingerprint, pull_request_number
+            SELECT tenant_id, pin_id, request_fingerprint,
+                   effect_fingerprint, original_authorization_fingerprint,
+                   effect_state, pull_request_number, result_fingerprint
             FROM {PullRequestOperations}
             WHERE project_id = @project AND run_id = @run AND session_id = @session
               AND operation_id = @operation
@@ -182,15 +197,51 @@ internal sealed class SourceControlOwnerStore(
         read.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
         read.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
         await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
-            !string.Equals(reader.GetString(0), pin.PinId, StringComparison.Ordinal) ||
-            !string.Equals(reader.GetString(1).TrimEnd(), requestFingerprint, StringComparison.OrdinalIgnoreCase))
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             throw new CoordinationException(
                 "source_control_run_binding_changed", StatusCodes.Status409Conflict);
-        long? pullRequestNumber = reader.IsDBNull(2) ? null : reader.GetInt64(2);
+        var storedTenant = reader.GetString(0);
+        var storedPin = reader.GetString(1);
+        var storedRequestFingerprint = reader.GetString(2).TrimEnd();
+        var storedEffectFingerprint = reader.GetString(3).TrimEnd();
+        var storedAuthorizationFingerprint = reader.IsDBNull(4) ? null : reader.GetString(4).TrimEnd();
+        var effectState = reader.GetString(5);
+        long? pullRequestNumber = reader.IsDBNull(6) ? null : reader.GetInt64(6);
+        var resultFingerprint = reader.IsDBNull(7) ? null : reader.GetString(7).TrimEnd();
+        if (!string.Equals(storedTenant, pin.AcceptedRun.TenantId, StringComparison.Ordinal) ||
+            !string.Equals(storedPin, pin.PinId, StringComparison.Ordinal) ||
+            !string.Equals(storedRequestFingerprint, requestFingerprint, StringComparison.OrdinalIgnoreCase) ||
+            (!string.Equals(storedEffectFingerprint, effectFingerprint, StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(storedEffectFingerprint, storedRequestFingerprint, StringComparison.OrdinalIgnoreCase)) ||
+            (storedAuthorizationFingerprint is not null &&
+             !string.Equals(storedAuthorizationFingerprint, authorizationFingerprint,
+                 StringComparison.OrdinalIgnoreCase)))
+            throw new CoordinationException(
+                "source_control_run_binding_changed", StatusCodes.Status409Conflict);
         await reader.DisposeAsync().ConfigureAwait(false);
+        if (storedAuthorizationFingerprint is null ||
+            string.Equals(storedEffectFingerprint, storedRequestFingerprint, StringComparison.OrdinalIgnoreCase))
+        {
+            await using var bindLegacy = new NpgsqlCommand($"""
+                UPDATE {PullRequestOperations}
+                SET original_authorization_fingerprint = @authorizationFingerprint,
+                    effect_fingerprint = @effectFingerprint
+                WHERE project_id = @project AND run_id = @run AND session_id = @session
+                  AND operation_id = @operation AND request_fingerprint = @fingerprint
+                  AND (original_authorization_fingerprint IS NULL OR effect_fingerprint = request_fingerprint)
+                """, connection, transaction);
+            AddScope(bindLegacy, identity);
+            bindLegacy.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+            bindLegacy.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+            bindLegacy.Parameters.AddWithValue("fingerprint", NpgsqlDbType.Char, requestFingerprint.ToLowerInvariant());
+            bindLegacy.Parameters.AddWithValue(
+                "authorizationFingerprint", NpgsqlDbType.Char, authorizationFingerprint.ToLowerInvariant());
+            bindLegacy.Parameters.AddWithValue(
+                "effectFingerprint", NpgsqlDbType.Char, effectFingerprint.ToLowerInvariant());
+            await bindLegacy.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return new(false, pullRequestNumber);
+        return new(false, pullRequestNumber, effectState, resultFingerprint);
     }
 
     /// <summary>Completes the durable operation with the provider's original pull request number.</summary>
@@ -201,30 +252,38 @@ internal sealed class SourceControlOwnerStore(
         Guid operationId,
         string pinId,
         string requestFingerprint,
+        string resultFingerprint,
         long pullRequestNumber,
         CancellationToken cancellationToken)
     {
         if (!ReferenceEquals(transaction.Connection, connection) ||
             operationId == Guid.Empty ||
-            pullRequestNumber < 1)
+            pullRequestNumber < 1 ||
+            !IsSha256(resultFingerprint))
             throw new ArgumentException("The pull request operation transaction is invalid.");
         await using var update = new NpgsqlCommand($"""
             UPDATE {PullRequestOperations}
-            SET pull_request_number = @number, completed_at = clock_timestamp()
+            SET pull_request_number = @number,
+                result_fingerprint = @resultFingerprint,
+                effect_state = 'committed',
+                completed_at = COALESCE(completed_at, clock_timestamp())
             WHERE project_id = @project AND run_id = @run AND session_id = @session
               AND operation_id = @operation AND pin_id = @pin
-              AND request_fingerprint = @fingerprint AND pull_request_number IS NULL
+              AND request_fingerprint = @fingerprint
+              AND (pull_request_number IS NULL OR pull_request_number = @number)
+              AND (result_fingerprint IS NULL OR result_fingerprint = @resultFingerprint)
             """, connection, transaction);
         AddScope(update, identity);
         update.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
         update.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
         update.Parameters.AddWithValue("pin", NpgsqlDbType.Varchar, pinId);
         update.Parameters.AddWithValue("fingerprint", NpgsqlDbType.Char, requestFingerprint.ToLowerInvariant());
+        update.Parameters.AddWithValue("resultFingerprint", NpgsqlDbType.Char, resultFingerprint.ToLowerInvariant());
         update.Parameters.AddWithValue("number", NpgsqlDbType.Bigint, pullRequestNumber);
         if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1)
             return;
         await using var read = new NpgsqlCommand($"""
-            SELECT pull_request_number FROM {PullRequestOperations}
+            SELECT pull_request_number, result_fingerprint FROM {PullRequestOperations}
             WHERE project_id = @project AND run_id = @run AND session_id = @session
               AND operation_id = @operation AND pin_id = @pin
               AND request_fingerprint = @fingerprint
@@ -234,11 +293,36 @@ internal sealed class SourceControlOwnerStore(
         read.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
         read.Parameters.AddWithValue("pin", NpgsqlDbType.Varchar, pinId);
         read.Parameters.AddWithValue("fingerprint", NpgsqlDbType.Char, requestFingerprint.ToLowerInvariant());
-        var storedNumber = await read.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        if (storedNumber is not long number || number != pullRequestNumber)
+        await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+            reader.GetInt64(0) != pullRequestNumber ||
+            reader.IsDBNull(1) ||
+            !string.Equals(reader.GetString(1).TrimEnd(), resultFingerprint, StringComparison.OrdinalIgnoreCase))
             throw new CoordinationException(
                 "source_control_run_binding_changed", StatusCodes.Status409Conflict);
     }
+
+    internal async Task MarkOpenPullRequestOperationIndeterminateAsync(
+        SessionIdentity identity,
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            UPDATE {PullRequestOperations}
+            SET effect_state = 'indeterminate'
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+              AND operation_id = @operation
+              AND pull_request_number IS NULL AND effect_state = 'pending'
+            """, connection);
+        AddScope(command, identity);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+        command.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static bool IsSha256(string? value) =>
+        value is { Length: 64 } && value.All(Uri.IsHexDigit);
 
     /// <summary>
     /// Creates a stable bounded merge-intent identifier from project, run, session, and idempotency key without embedding the key.
