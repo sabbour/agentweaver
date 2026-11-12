@@ -179,6 +179,24 @@ internal static partial class GatewayOpenApi
             ["streamRunEvents"] = C(null, "SessionEventPage", "200"),
             ["readRunUsage"] = C(null, "UsageRunTotals", "200"),
             ["listRemoteMcpConnections"] = C(null, "RemoteMcpConnectionDirectoryPage", "200"),
+            ["listRunEnvironments"] = C(null, "EnvironmentRecoveryPageRun", "200"),
+            ["readEnvironmentLifecycle"] = C(null, "EnvironmentLifecycleSnapshot", "200"),
+            ["listEnvironmentWorkspaceVolumes"] = C(null, "EnvironmentRecoveryPageWorkspaceVolume", "200"),
+            ["readEnvironmentWorkspaceVolume"] = C(null, "EnvironmentWorkspaceVolumeStatus", "200"),
+            ["bindEnvironmentWorkspaceVolume"] = C(
+                "EnvironmentWorkspaceVolumeTransitionRequest", "EnvironmentWorkspaceVolumeMutationStatus", "200", "202"),
+            ["unbindEnvironmentWorkspaceVolume"] = C(
+                "EnvironmentWorkspaceVolumeTransitionRequest", "EnvironmentWorkspaceVolumeMutationStatus", "200", "202"),
+            ["releaseEnvironmentWorkspaceVolume"] = C(
+                "EnvironmentWorkspaceVolumeTransitionRequest", "EnvironmentWorkspaceVolumeMutationStatus", "200", "202"),
+            ["provisionEnvironmentSandbox"] = C(
+                "EnvironmentSandboxProvisionRequest", "EnvironmentSandboxResult", "200", "202"),
+            ["readEnvironmentSandbox"] = C(null, "EnvironmentSandboxResult", "200", "202"),
+            ["abandonEnvironmentSandbox"] = C(
+                "EnvironmentSandboxAbandonRequest", "EnvironmentSandboxResult", "200", "202"),
+            ["reconcileEnvironmentSandbox"] = C(null, "EnvironmentSandboxResult", "200", "202"),
+            ["readEnvironmentSandboxProviderAttempts"] = C(null, "SandboxProviderAttemptReadResponse", "200"),
+            ["readEnvironmentSandboxLateResourceCleanups"] = C(null, "SandboxLateResourceCleanupReadResponse", "200"),
             ["readProjectBacklog"] = C(null, "BacklogGraph", "200"),
             ["captureBacklogTask"] = C("CaptureBacklogTaskRequest", "BacklogGraph", "200"),
             ["setAllProjectBacklogTasksReady"] = C("BacklogGraphRevisionRequest", "BacklogGraph", "200"),
@@ -362,6 +380,7 @@ internal static partial class GatewayOpenApi
                         status == "202"
                             ? "Accepted by the owner; this does not mean the requested work is complete."
                             : "Owner response; returned by the owning service.",
+                        (route.Owner == GatewayOwner.Environment && status is "200" or "202") ||
                         (route.OperationId is "readRuntimeObservationV1" or "getProjectConfigurationChoices" or
                         "getHostedModelReasoningCatalog" or "getProjectAgentHistory" or
                         "readProjectSetupAuthorityAudit" or "createP1InvocationSetup" or "readP1InvocationSetup" or
@@ -370,22 +389,24 @@ internal static partial class GatewayOpenApi
                             {
                                 ["Cache-Control"] = new
                                 {
-                                    description = route.OperationId switch
-                                    {
-                                        "getProjectAgentHistory" =>
-                                            "Private project agent history responses are not cacheable.",
-                                        "getProjectConfigurationChoices" =>
-                                            "Project configuration choice responses are not cacheable.",
-                                        "getHostedModelReasoningCatalog" =>
-                                            "Hosted reasoning catalog responses are not cacheable.",
-                                        "readProjectSetupAuthorityAudit" =>
-                                            "Authority audit responses are not cacheable.",
-                                        "createP1InvocationSetup" or "readP1InvocationSetup" =>
-                                            "Privileged setup receipts are not cacheable.",
-                                        "readProjectTeamSync" or "commitProjectTeamSync" =>
-                                            "Private repository team-sync responses are not cacheable.",
-                                        _ => "Runtime evidence responses are not cacheable.",
-                                    },
+                                    description = route.Owner == GatewayOwner.Environment
+                                        ? "Environment recovery responses are not cacheable."
+                                        : route.OperationId switch
+                                        {
+                                            "getProjectAgentHistory" =>
+                                                "Private project agent history responses are not cacheable.",
+                                            "getProjectConfigurationChoices" =>
+                                                "Project configuration choice responses are not cacheable.",
+                                            "getHostedModelReasoningCatalog" =>
+                                                "Hosted reasoning catalog responses are not cacheable.",
+                                            "readProjectSetupAuthorityAudit" =>
+                                                "Authority audit responses are not cacheable.",
+                                            "createP1InvocationSetup" or "readP1InvocationSetup" =>
+                                                "Privileged setup receipts are not cacheable.",
+                                            "readProjectTeamSync" or "commitProjectTeamSync" =>
+                                                "Private repository team-sync responses are not cacheable.",
+                                            _ => "Runtime evidence responses are not cacheable.",
+                                        },
                                     schema = new { type = "string", example = "no-store" },
                                 },
                             }
@@ -617,11 +638,79 @@ else if (route.OperationId is
                 "Project role assignment is not enabled because the runtime database grants are not applied.");
         }
 
+        if (route.Owner == GatewayOwner.Environment)
+        {
+            var errorStatuses = route.OperationId switch
+            {
+                "listRunEnvironments" => new[] { "400", "403", "503" },
+                "readEnvironmentLifecycle" =>
+                    new[] { "403", "404", "503" },
+                "readEnvironmentWorkspaceVolume" =>
+                    new[] { "403", "404", "409", "503" },
+                "listEnvironmentWorkspaceVolumes" =>
+                    new[] { "400", "403", "404", "409", "503" },
+                "readEnvironmentSandboxProviderAttempts" =>
+                    new[] { "400", "403", "404", "409", "503" },
+                "readEnvironmentSandboxLateResourceCleanups" =>
+                    new[] { "403", "404", "409", "503" },
+                "bindEnvironmentWorkspaceVolume" or "unbindEnvironmentWorkspaceVolume" or
+                "releaseEnvironmentWorkspaceVolume" or "provisionEnvironmentSandbox" or
+                "readEnvironmentSandbox" or "abandonEnvironmentSandbox" or
+                "reconcileEnvironmentSandbox" =>
+                    new[] { "400", "403", "404", "409", "422", "503" },
+                _ => new[] { "403", "404", "503" },
+            };
+            foreach (var status in errorStatuses)
+            {
+                var errorDescription = status switch
+                {
+                    "400" => "The request or pagination input is invalid.",
+                    "403" => "Current project authority or the separate run-selection permission is missing.",
+                    "404" => "The authorized owner could not find the requested Environment, volume, or operation.",
+                    "409" => "The owner rejected a stale generation, fence, or lifecycle transition.",
+                    "422" => "The owner rejected an unsupported or invalid provider operation.",
+                    _ => "The Environment owner is unavailable or not configured.",
+                };
+                responses[status] = JsonResponse(Ref("EnvironmentApiErrorOrProblem"), errorDescription);
+            }
+            responses["403"] = JsonResponse(
+                Ref("EnvironmentApiErrorOrProblem"),
+                "The Gateway or Environment owner denied the request.");
+            if (route.MaximumRequestBodyBytes is { } maximumRequestBodyBytes)
+                responses["413"] = ProblemResponse(
+                    $"The request body exceeds the {maximumRequestBodyBytes}-byte route limit.");
+        }
+
         var description =
             $"Owner: {route.Owner}. The Gateway forwards the validated bearer and does not infer identity " +
             "from request bodies or caller-controlled identity headers. Owner authorization and JSON " +
             "contracts remain authoritative.";
-        if (route.OperationId == "listProjectRoleAssignments")
+        if (route.OperationId is "listRunEnvironments" or "listEnvironmentWorkspaceVolumes")
+        {
+            description +=
+                " Discovery requires current Projects WriteProjects authority and the " +
+                "separate ReadRunSelection permission for the target project. The owner rechecks authority " +
+                "for each page. An authorized empty page does not mean access was skipped; the opaque cursor " +
+                (route.OperationId == "listRunEnvironments"
+                    ? "is bound to the tenant, project, and run."
+                    : "is bound to the tenant, project, run, Environment, and current lifecycle generation.");
+        }
+        else if (route.OperationId is "readEnvironmentLifecycle" or "readEnvironmentWorkspaceVolume")
+        {
+            description +=
+                " This metadata read requires current Projects ReadProjects authority for the target project " +
+                "and matching tenant. Any project or run binding in the bearer must match the route. " +
+                "An authorized unknown resource returns 404.";
+        }
+        else if (route.Owner == GatewayOwner.Environment)
+        {
+            description +=
+                " This control operation requires current Projects WriteProjects authority and the separate " +
+                "ReadRunSelection permission, plus the owner's exact resource, generation, and provider-fence " +
+                "checks. The owner rechecks authority around protected work. A 202 response is pending, not " +
+                "completion. Responses are not cacheable.";
+        }
+        if (route.OperationId is "listProjectRoleAssignments")
         {
             description +=
                 " Returns only active assignments. A current tenant admin or a project Owner can read the list.";
@@ -918,10 +1007,20 @@ else if (route.OperationId is
         operationId == "browseMarketplaceSource" && name == "expectedSourceRevision" ||
         operationId == "readSourceControlOutputCaptureFile" && name == "path" ||
         (operationId is "readWorkspaceRepositoryTree" or "readWorkspaceRepositoryFile") && name == "ref" ||
-        operationId == "previewBacklogWorkPlanPromotion" && name == "rootSessionId";
+        operationId == "previewBacklogWorkPlanPromotion" && name == "rootSessionId" ||
+        operationId == "readEnvironmentSandbox" && name == "networkPolicyGeneration";
 
     private static object QuerySchema(string operationId, string name)
     {
+        if (operationId is "listRunEnvironments" or "listEnvironmentWorkspaceVolumes")
+            return name switch
+            {
+                "limit" => new { type = "integer", minimum = 1, maximum = 100, @default = 25 },
+                _ => new { type = "string", minLength = 1, maxLength = 1024 },
+            };
+        if ((operationId is "readEnvironmentSandbox" or "reconcileEnvironmentSandbox") &&
+            name == "networkPolicyGeneration")
+            return new { type = "integer", format = "int64", minimum = 1 };
         if ((operationId is "readWorkspaceRepositoryTree" or "readWorkspaceRepositoryFile") && name == "ref")
             return new { type = "string", pattern = "^[a-fA-F0-9]{40}$" };
         if (operationId == "listWorkspaceRepositoryRefs" && name == "cursor")
@@ -2540,6 +2639,234 @@ else if (route.OperationId is
             ("rowRevision", Int()), ("configurationRevision", Int()), ("configurationSha256", Str()),
             ("identityBound", Bool()), ("registryServerName", NullableStr()), ("registryExactVersion", NullableStr()),
             ("discoveryRevision", NullableInt()), ("catalogSha256", NullableStr()), ("toolCount", Int())),
+        ["EnvironmentApiError"] = StrictObj(["code"],
+            ("code", Str()), ("message", NullableStr()),
+            ("transitionState", Nullable(EnvironmentEnum("Reserved", "Completed", "ReconciliationRequired", "Reconciled", "Failed", "Stale")))),
+        ["EnvironmentApiErrorOrProblem"] = new { oneOf = new[] { Ref("EnvironmentApiError"), Ref("Problem") } },
+        ["EnvironmentRecoveryPageRun"] = StrictObj(["items", "nextCursor", "hasMore"],
+            ("items", Arr(Ref("EnvironmentRunSummary"))), ("nextCursor", NullableStr()), ("hasMore", Bool())),
+        ["EnvironmentRunSummary"] = StrictObj(
+            ["projectId", "runId", "environmentId", "lifecycleGeneration", "lifecycleState",
+                "networkPolicyGeneration", "networkPolicyState", "sandboxOperationId", "sandboxState",
+                "hasUnresolvedCleanup"],
+            ("projectId", Str()), ("runId", Str()), ("environmentId", Str()),
+            ("lifecycleGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("lifecycleState", EnvironmentEnum("Active", "Released")),
+            ("networkPolicyGeneration", Nullable(new { type = "integer", format = "int64", minimum = 1 })),
+            ("networkPolicyState", NullableStr()), ("sandboxOperationId", NullableUuid()),
+            ("sandboxState", NullableStr()), ("hasUnresolvedCleanup", Bool())),
+        ["EnvironmentLifecycleSnapshot"] = StrictObj(["fence", "state"],
+            ("fence", Ref("EnvironmentGenerationFence")), ("state", EnvironmentEnum("Active", "Released"))),
+        ["EnvironmentOwnerIdentity"] = StrictObj(["tenantId", "projectId", "runId", "environmentId"],
+            ("tenantId", Str()), ("projectId", Str()), ("runId", Str()), ("environmentId", Str())),
+        ["EnvironmentGenerationFence"] = StrictObj(["owner", "lifecycleGeneration"],
+            ("owner", Ref("EnvironmentOwnerIdentity")),
+            ("lifecycleGeneration", new { type = "integer", format = "int64", minimum = 1 })),
+        ["EnvironmentRecoveryPageWorkspaceVolume"] = StrictObj(["items", "nextCursor", "hasMore"],
+            ("items", Arr(Ref("EnvironmentWorkspaceVolumeStatus"))), ("nextCursor", NullableStr()), ("hasMore", Bool())),
+        ["EnvironmentWorkspaceVolumeStatus"] = StrictObj(
+            ["projectId", "runId", "environmentId", "volumeId", "lifecycleGeneration", "transitionRevision",
+                "resourceGeneration", "dataGeneration", "phase", "lastOperation", "bindingMode",
+                "effectiveReclaimPolicy", "ownerDeletionPolicy", "resource", "providerPin", "pendingTransition"],
+            ("projectId", Str()), ("runId", Str()), ("environmentId", Str()), ("volumeId", Str()),
+            ("lifecycleGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("transitionRevision", new { type = "integer", format = "int64", minimum = 0 }),
+            ("resourceGeneration", new { type = "integer", format = "int64", minimum = 0 }),
+            ("dataGeneration", new { type = "integer", format = "int64", minimum = 0 }),
+            ("phase", EnvironmentEnum("Requested", "Ready", "Bound", "Attached", "Released")),
+            ("lastOperation", EnvironmentEnum("Create", "Provision", "Replace", "Bind", "Unbind", "Attach", "Detach", "Flush", "Release")),
+            ("bindingMode", EnvironmentEnum("Environment", "Shared")),
+            ("effectiveReclaimPolicy", EnvironmentEnum("Delete", "Retain")),
+            ("ownerDeletionPolicy", EnvironmentEnum("Delete", "Retain", "Unbind")),
+            ("resource", NullableRef("EnvironmentProviderResourceRef")),
+            ("providerPin", NullableRef("EnvironmentWorkspaceVolumeProviderPin")),
+            ("pendingTransition", NullableRef("EnvironmentWorkspaceVolumeRetryDescriptor"))),
+        ["EnvironmentProviderResourceRef"] = StrictObj(["seam", "providerId", "resourceId", "generation"],
+            ("seam", Str()), ("providerId", Str()), ("resourceId", Str()),
+            ("generation", new { type = "integer", format = "int64", minimum = 0 })),
+        ["EnvironmentWorkspaceVolumeProviderPin"] = StrictObj(
+            ["providerId", "adapterVersion", "optionsSchemaVersion", "optionsRevision"],
+            ("providerId", Str()), ("adapterVersion", Str()),
+            ("optionsSchemaVersion", new { type = "integer", minimum = 1 }), ("optionsRevision", Str())),
+        ["EnvironmentWorkspaceVolumeRetryDescriptor"] = StrictObj(
+            ["operationId", "operation", "idempotencyKey", "expectedTransitionRevision",
+                "expectedResourceGeneration", "expectedDataGeneration"],
+            ("operationId", Uuid()),
+            ("operation", EnvironmentEnum("Create", "Provision", "Replace", "Bind", "Unbind", "Attach", "Detach", "Flush", "Release")),
+            ("idempotencyKey", new
+            {
+                type = "string",
+                minLength = 1,
+                maxLength = 128,
+                pattern = @"^(?=.*\S)[^\u0000-\u001F\u007F-\u009F]+$",
+            }),
+            ("expectedTransitionRevision", new { type = "integer", format = "int64", minimum = 0 }),
+            ("expectedResourceGeneration", new { type = "integer", format = "int64", minimum = 0 }),
+            ("expectedDataGeneration", new { type = "integer", format = "int64", minimum = 0 })),
+        ["EnvironmentWorkspaceVolumeTransitionRequest"] = StrictObj(
+            ["expectedTransitionRevision", "expectedResourceGeneration", "expectedDataGeneration", "idempotencyKey"],
+            ("expectedTransitionRevision", new { type = "integer", format = "int64", minimum = 0 }),
+            ("expectedResourceGeneration", new { type = "integer", format = "int64", minimum = 0 }),
+            ("expectedDataGeneration", new { type = "integer", format = "int64", minimum = 0 }),
+            ("idempotencyKey", new
+            {
+                type = "string",
+                minLength = 1,
+                maxLength = 128,
+                pattern = @"^(?=.*\S)[^\u0000-\u001F\u007F-\u009F]+$",
+            })),
+        ["EnvironmentWorkspaceVolumeTransitionStatus"] = StrictObj(
+            ["operationId", "volumeId", "expectedTransitionRevision", "expectedResourceGeneration",
+                "expectedDataGeneration", "targetTransitionRevision", "targetResourceGeneration",
+                "targetDataGeneration", "targetPhase", "operation", "state", "replayed", "fromResource", "toResource"],
+            ("operationId", Uuid()), ("volumeId", Str()),
+            ("expectedTransitionRevision", new { type = "integer", format = "int64", minimum = 0 }),
+            ("expectedResourceGeneration", new { type = "integer", format = "int64", minimum = 0 }),
+            ("expectedDataGeneration", new { type = "integer", format = "int64", minimum = 0 }),
+            ("targetTransitionRevision", new { type = "integer", format = "int64", minimum = 0 }),
+            ("targetResourceGeneration", new { type = "integer", format = "int64", minimum = 0 }),
+            ("targetDataGeneration", new { type = "integer", format = "int64", minimum = 0 }),
+            ("targetPhase", EnvironmentEnum("Requested", "Ready", "Bound", "Attached", "Released")),
+            ("operation", EnvironmentEnum("Create", "Provision", "Replace", "Bind", "Unbind", "Attach", "Detach", "Flush", "Release")),
+            ("state", EnvironmentEnum("Reserved", "Completed", "ReconciliationRequired", "Reconciled", "Failed", "Stale")),
+            ("replayed", Bool()), ("fromResource", NullableRef("EnvironmentProviderResourceRef")),
+            ("toResource", NullableRef("EnvironmentProviderResourceRef"))),
+        ["EnvironmentWorkspaceVolumeCleanupStatus"] = StrictObj(
+            ["workId", "sourceReplaceOperationId", "volumeId", "resourceGeneration", "state",
+                "leaseRevision", "leaseExpiresAt"],
+            ("workId", Uuid()), ("sourceReplaceOperationId", Uuid()), ("volumeId", Str()),
+            ("resourceGeneration", new { type = "integer", format = "int64", minimum = 0 }),
+            ("state", EnvironmentEnum("Pending", "Leased", "Blocked", "Completed")),
+            ("leaseRevision", new { type = "integer", format = "int64", minimum = 0 }),
+            ("leaseExpiresAt", NullableDate())),
+        ["EnvironmentWorkspaceVolumeMutationStatus"] = StrictObj(
+            ["reservation", "completion", "currentVolume", "pendingTransition", "cleanup", "cleanupPending"],
+            ("reservation", Ref("EnvironmentWorkspaceVolumeTransitionStatus")),
+            ("completion", NullableRef("EnvironmentWorkspaceVolumeTransitionStatus")),
+            ("currentVolume", NullableRef("EnvironmentWorkspaceVolumeStatus")),
+            ("pendingTransition", NullableRef("EnvironmentWorkspaceVolumeRetryDescriptor")),
+            ("cleanup", NullableRef("EnvironmentWorkspaceVolumeCleanupStatus")),
+            ("cleanupPending", Bool())),
+        ["EnvironmentSandboxProvisionRequest"] = StrictObj(
+            ["volumeId", "volumeResourceGeneration", "dataGeneration", "mountPath", "readOnly",
+                "networkPolicyGeneration", "idempotencyKey"],
+            ("volumeId", Str()),
+            ("volumeResourceGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("dataGeneration", new { type = "integer", format = "int64", minimum = 0 }),
+            ("mountPath", Str()), ("readOnly", Bool()),
+            ("networkPolicyGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("idempotencyKey", new
+            {
+                type = "string",
+                minLength = 1,
+                maxLength = 128,
+                pattern = @"^(?=.*\S)[^\u0000-\u001F\u007F-\u009F]+$",
+            })),
+        ["EnvironmentSandboxAbandonRequest"] = StrictObj(
+            ["resourceGeneration", "providerFencingGeneration", "idempotencyKey"],
+            ("resourceGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("providerFencingGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("idempotencyKey", new
+            {
+                type = "string",
+                minLength = 1,
+                maxLength = 128,
+                pattern = @"^(?=.*\S)[^\u0000-\u001F\u007F-\u009F]+$",
+            })),
+        ["EnvironmentSandboxResult"] = StrictObj(
+            ["operationId", "state", "resourceGeneration", "providerFencingGeneration",
+                "currentFencingGeneration", "resource", "endpoint", "placement", "startupPhases",
+                "retirementReason", "observation", "readyForDispatch"],
+            ("operationId", Uuid()),
+            ("state", EnvironmentEnum("Provisioning", "Active", "Releasing", "Released", "ReconciliationRequired", "Failed")),
+            ("resourceGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("providerFencingGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("currentFencingGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("resource", NullableRef("EnvironmentProviderResourceRef")),
+            ("endpoint", NullableRef("EnvironmentSandboxEndpointReference")),
+            ("placement", NullableRef("EnvironmentSandboxPlacementReference")),
+            ("startupPhases", Arr(Ref("EnvironmentSandboxStartupPhaseObservation"))),
+            ("retirementReason", NullableStr()), ("observation", NullableRef("EnvironmentSandboxObservationSummary")),
+            ("readyForDispatch", Bool())),
+        ["EnvironmentSandboxEndpointReference"] = StrictObj(["value"], ("value", Uuid())),
+        ["EnvironmentSandboxPlacementReference"] = StrictObj(["value"], ("value", Str())),
+        ["EnvironmentSandboxStartupPhaseObservation"] = StrictObj(
+            ["phase", "contractVersion", "observedAt", "imageDigest", "compressedPullBytes"],
+            ("phase", EnvironmentEnum("Scheduled", "ImageReady", "Started", "Configured", "Ready")),
+            ("contractVersion", new { type = "integer", minimum = 1 }),
+            ("observedAt", Date()), ("imageDigest", NullableStr()),
+            ("compressedPullBytes", Nullable(new { type = "integer", format = "int64", minimum = 1 }))),
+        ["EnvironmentSandboxObservationSummary"] = StrictObj(
+            ["resource", "state", "fencingGeneration", "vmIsolationVerified",
+                "workspaceAttachmentVerified", "verifiedNetworkGeneration", "startupPhases",
+                "terminalEvidence", "startupFailure"],
+            ("resource", Ref("EnvironmentProviderResourceRef")),
+            ("state", EnvironmentEnum("Pending", "Ready", "Failed", "Finished", "Absent")),
+            ("fencingGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("vmIsolationVerified", Bool()), ("workspaceAttachmentVerified", Bool()),
+            ("verifiedNetworkGeneration", Nullable(new { type = "integer", format = "int64", minimum = 1 })),
+            ("startupPhases", Arr(Ref("EnvironmentSandboxStartupPhaseObservation"))),
+            ("terminalEvidence", NullableRef("EnvironmentSandboxTerminalEvidence")),
+            ("startupFailure", NullableRef("EnvironmentSandboxStartupBudgetFailure"))),
+        ["EnvironmentSandboxTerminalEvidence"] = StrictObj(
+            ["contractVersion", "claimUid", "sandboxUid", "fencingGeneration",
+                "sandboxObservedGeneration", "reason", "observedAt"],
+            ("contractVersion", new { type = "integer", minimum = 1 }),
+            ("claimUid", Str()), ("sandboxUid", Str()),
+            ("fencingGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("sandboxObservedGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("reason", EnvironmentEnum("PodSucceeded", "PodFailed")), ("observedAt", Date())),
+        ["EnvironmentSandboxStartupBudgetFailure"] = StrictObj(
+            ["kind", "phase", "budgetSeconds", "deadline", "observedAt"],
+            ("kind", EnvironmentEnum("PhaseExceeded", "TotalExceeded")),
+            ("phase", EnvironmentEnum("Scheduled", "ImageReady", "Started", "Configured", "Ready")),
+            ("budgetSeconds", new { type = "integer", minimum = 1 }),
+            ("deadline", Date()), ("observedAt", Date())),
+        ["SandboxProviderAttemptReadResponse"] = StrictObj(
+            ["contractVersion", "currentFence", "operationId", "attempts"],
+            ("contractVersion", new { type = "integer", minimum = 1 }),
+            ("currentFence", Ref("EnvironmentGenerationFence")), ("operationId", Uuid()),
+            ("attempts", Arr(Ref("SandboxProviderAttemptReceipt")))),
+        ["SandboxProviderAttemptReceipt"] = StrictObj(
+            ["contractVersion", "attemptId", "operationId", "lifecycleGeneration",
+                "resourceGeneration", "providerFencingGeneration", "effectKind", "state",
+                "requestFingerprint", "lateResourceFingerprint", "failureCode", "startedAt",
+                "outcomeRecordedAt", "resolvedAt"],
+            ("contractVersion", new { type = "integer", minimum = 1 }),
+            ("attemptId", Uuid()), ("operationId", Uuid()),
+            ("lifecycleGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("resourceGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("providerFencingGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("effectKind", EnvironmentEnum(
+                "Provision", "Release", "PartialRelease", "LateResourceRelease", "LegacyUnknown")),
+            ("state", EnvironmentEnum("InProgress", "ResultRecorded", "FailedNoEffect", "Unknown", "Completed", "LegacyUnknown")),
+            ("requestFingerprint", Str()), ("lateResourceFingerprint", NullableStr()),
+            ("failureCode", NullableStr()), ("startedAt", Date()),
+            ("outcomeRecordedAt", NullableDate()), ("resolvedAt", NullableDate())),
+        ["SandboxLateResourceCleanupReadResponse"] = StrictObj(
+            ["contractVersion", "currentFence", "items", "hasMore"],
+            ("contractVersion", new { type = "integer", minimum = 1 }),
+            ("currentFence", Ref("EnvironmentGenerationFence")),
+            ("items", Arr(Ref("SandboxLateResourceCleanupReadItem"))), ("hasMore", Bool())),
+        ["SandboxLateResourceCleanupReadItem"] = StrictObj(
+            ["sourceFence", "operationId", "resourceGeneration", "providerFencingGeneration",
+                "currentFencingGeneration", "resourceFingerprint", "resource", "provisionAttempt",
+                "releaseAttempt", "createdAt", "updatedAt", "claimExpiresAt", "releaseReceipt",
+                "providerObservation"],
+            ("sourceFence", Ref("EnvironmentGenerationFence")), ("operationId", Uuid()),
+            ("resourceGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("providerFencingGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("currentFencingGeneration", new { type = "integer", format = "int64", minimum = 1 }),
+            ("resourceFingerprint", Str()), ("resource", Ref("EnvironmentProviderResourceRef")),
+            ("provisionAttempt", NullableRef("SandboxProviderAttemptReceipt")),
+            ("releaseAttempt", NullableRef("SandboxProviderAttemptReceipt")),
+            ("createdAt", Date()), ("updatedAt", Date()), ("claimExpiresAt", NullableDate()),
+            ("releaseReceipt", NullableRef("EnvironmentSandboxReleaseReceipt")),
+            ("providerObservation", NullableRef("EnvironmentSandboxObservationSummary"))),
+        ["EnvironmentSandboxReleaseReceipt"] = StrictObj(
+            ["resource", "idempotencyKey", "disposition"],
+            ("resource", Ref("EnvironmentProviderResourceRef")),
+            ("idempotencyKey", Str()), ("disposition", EnvironmentEnum("Released", "KnownOwnedAbsent"))),
     };
 
     private static object Obj(
@@ -2574,6 +2901,8 @@ else if (route.OperationId is
     private static object Base64Bytes() => new { type = "string", contentEncoding = "base64" };
     private static object Uuid() => new { type = "string", format = "uuid" };
     private static object Date() => new { type = "string", format = "date-time" };
+    private static object EnvironmentEnum(params string[] values) =>
+        Enum(values.Select(JsonNamingPolicy.CamelCase.ConvertName).ToArray());
     private static object Enum(params string[] values) => new { type = "string", @enum = values };
     private static object Const(string value) => new { type = "string", @const = value };
     private static object Arr(object items) => new { type = "array", items };
