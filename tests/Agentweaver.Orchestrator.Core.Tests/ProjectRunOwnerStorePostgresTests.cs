@@ -671,6 +671,48 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task CancelledRunCannotBeResurrectedByCheckpointRecovery()
+    {
+        var row = await Create("cancel-checkpoint-recovery", new CreateProjectRunRequest("Hello", 1));
+        var selection = Selection(row.RunId);
+        await Start(row.RunId, async (pending, token) =>
+        {
+            await _store.AcceptRootAsync(_actor, selection, pending.RootSessionId, token);
+            await _store.SendMessageAsync(_actor,
+                new SessionIdentity(Project, row.RunId, pending.RootSessionId),
+                FirstMessage(pending, row.RunId, pending.FirstMessage, pending.WorkflowId), token);
+        });
+        await _store.CancelProjectRunAsync(_actor, CancellationSelection(row.RunId, _actor),
+            "cancel-checkpoint", new CancelProjectRunRequest("Stopped"), NoCheck, CancellationToken.None);
+        var before = await ReadExecutionAsync(row.RunId);
+        Assert.Equal("cancelled", before.State);
+        var operations = await CountAsync("coordination_execution_operations");
+        var outbox = await CountAsync("outbox_events");
+        var request = new RecoverRunExecutionRequest(before.Fence, before.Version, "recover-cancelled",
+            "operator_recovery", "cancelled")
+        {
+            CheckpointRecovery = new CheckpointRecoveryRequest(
+                "checkpoint", 1, 1, Guid.NewGuid(), 1, new string('a', 64))
+        };
+        var root = new SessionIdentity(Project, row.RunId, row.RootSessionId);
+        var binding = new MafCheckpointBinding(root, _actor, before.Fence,
+            MafExecutionCheckpointStore.CurrentSdkVersion, "model:provider/alpha", null,
+            StoreName: MafExecutionCheckpointContract.StoreName);
+        var checkpoints = new MafExecutionCheckpointStore(
+            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null), binding);
+        var gate = new CoordinatorGateRequest("cancelled-gate", CoordinatorGateKind.Question,
+            "scope", _actor.Subject, before.Fence, ["choice"], false);
+        var failure = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.RecoverRunExecutionAsync(_actor, Project, row.RunId, request, CancellationToken.None,
+                selection, checkpoints, gate));
+        Assert.Equal("checkpoint_recovery_unavailable", failure.Code);
+        Assert.Equal(409, failure.StatusCode);
+        Assert.Equal(before, await ReadExecutionAsync(row.RunId));
+        Assert.Equal(operations, await CountAsync("coordination_execution_operations"));
+        Assert.Equal(outbox, await CountAsync("outbox_events"));
+    }
+
+    [Fact]
     public async Task CancelCapturesStartupCleanupAndExactReplayDoesNotReopenCompletedCleanup()
     {
         var row = await Create("cancel-startup-cleanup", new CreateProjectRunRequest("Hello", 1));

@@ -1756,36 +1756,28 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
     [Fact]
     public async Task CheckpointRecoveryBoundaryRejectsAnUnacknowledgedNativeSend()
     {
+        var (store, _, pending, binding, checkpoints, request) = await CreateIdleGateRecoveryAsync();
+        await InsertUnacknowledgedNativeSendAsync(pending.DecisionId, pending.StateVersion);
+        var before = await RecoveryEvidenceAsync();
+        var failure = await Assert.ThrowsAsync<CoordinationException>(() =>
+            store.RecoverRunExecutionAsync(_actor, _root.ProjectId, _root.RunId, request,
+                CancellationToken.None, _selection, new MafExecutionCheckpointStore(checkpoints, binding),
+                pending.State.PendingGate));
+        Assert.Equal("checkpoint_recovery_boundary_unsupported", failure.Code);
+        Assert.Equal(409, failure.StatusCode);
+        Assert.Equal(before, await RecoveryEvidenceAsync());
+    }
+
+    private async Task InsertUnacknowledgedNativeSendAsync(Guid decisionId, long decisionVersion)
+    {
         var requestId = Guid.NewGuid();
-        var decisionId = Guid.NewGuid();
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
-        await using (var decision = new NpgsqlCommand($"""
-            INSERT INTO "{_schema}".coordinator_decisions
-                (project_id, run_id, session_id, request_id, decision_id, actor_issuer, actor_subject,
-                 execution_fence, state_version, action_kind, idempotency_key, command_hash,
-                 decision_state, decision)
-            VALUES (@project, @run, @session, @request, @decision, @issuer, @actor,
-                    @fence, 1, 'question.ask', @key, @hash, 'accepted', jsonb_build_object())
-            """, connection))
-        {
-            decision.Parameters.AddWithValue("project", _root.ProjectId);
-            decision.Parameters.AddWithValue("run", _root.RunId);
-            decision.Parameters.AddWithValue("session", _root.SessionId);
-            decision.Parameters.AddWithValue("request", "unacknowledged-native-send");
-            decision.Parameters.AddWithValue("decision", decisionId);
-            decision.Parameters.AddWithValue("issuer", _actor.Issuer);
-            decision.Parameters.AddWithValue("actor", _actor.Subject);
-            decision.Parameters.AddWithValue("fence", _acceptedRoot.ExecutionFence);
-            decision.Parameters.AddWithValue("key", "unacknowledged-native-send");
-            decision.Parameters.AddWithValue("hash", new string('a', 64));
-            await decision.ExecuteNonQueryAsync();
-        }
         await using (var admission = new NpgsqlCommand($"""
             INSERT INTO "{_schema}".maf_root_model_turn_admissions
                 (project_id, run_id, root_session_id, request_id, actor_issuer, actor_id, tenant_id,
                  accepted_selection_hash, prompt_hash, execution_fence, decision_id, decision_state_version)
             VALUES (@project, @run, @session, @request, @issuer, @actor, @tenant,
-                    @selection, @prompt, @fence, @decision, 1)
+                    @selection, @prompt, @fence, @decision, @decisionVersion)
             """, connection))
         {
             admission.Parameters.AddWithValue("project", _root.ProjectId);
@@ -1800,6 +1792,7 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             admission.Parameters.AddWithValue("prompt", new string('b', 64));
             admission.Parameters.AddWithValue("fence", _acceptedRoot.ExecutionFence);
             admission.Parameters.AddWithValue("decision", decisionId);
+            admission.Parameters.AddWithValue("decisionVersion", decisionVersion);
             await admission.ExecuteNonQueryAsync();
         }
 
@@ -1807,8 +1800,349 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             connection, null, _schema, _root.ProjectId, _root.RunId, CancellationToken.None));
     }
 
+    private async Task<string> RecoveryEvidenceAsync()
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT jsonb_build_object(
+                'runs', (SELECT jsonb_agg(to_jsonb(r) ORDER BY run_id) FROM "{_schema}".accepted_runs r),
+                'sessions', (SELECT jsonb_agg(to_jsonb(s) ORDER BY session_id) FROM "{_schema}".coordination_sessions s),
+                'gates', (SELECT jsonb_agg(to_jsonb(g) ORDER BY request_id) FROM "{_schema}".coordinator_gates g),
+                'checkpoints', (SELECT jsonb_agg(to_jsonb(c) ORDER BY checkpoint_id) FROM "{_schema}".maf_workflow_checkpoints c),
+                'operations', (SELECT jsonb_agg(to_jsonb(o) ORDER BY operation_id) FROM "{_schema}".coordination_execution_operations o),
+                'outbox', (SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM "{_schema}".outbox_events e))::text
+            """, connection);
+        return (string)(await command.ExecuteScalarAsync())!;
+    }
+
+    [Theory]
+    [InlineData("plain", "execution_recovery_conflict")]
+    [InlineData("fence", "execution_recovery_stale")]
+    [InlineData("version", "execution_recovery_stale")]
+    [InlineData("gate", "checkpoint_recovery_gate_unavailable")]
+    [InlineData("runtime", "checkpoint_recovery_runtime_stale")]
+    [InlineData("registration", "checkpoint_recovery_runtime_stale")]
+    [InlineData("selection", "checkpoint_recovery_runtime_stale")]
+    [InlineData("checkpoint", "checkpoint_recovery_checkpoint_stale")]
+    [InlineData("revision", "checkpoint_recovery_checkpoint_stale")]
+    [InlineData("decision", "checkpoint_recovery_checkpoint_stale")]
+    public async Task IdleCheckpointRecoveryRejectsInvalidEvidenceWithoutWrites(string fault, string code)
+    {
+        var (store, _, pending, binding, checkpoints, original) = await CreateIdleGateRecoveryAsync();
+        var pin = original.CheckpointRecovery!;
+        var request = fault switch
+        {
+            "plain" => original with { CheckpointRecovery = null },
+            "fence" => original with { ExecutionFence = original.ExecutionFence + 1 },
+            "version" => original with { ExpectedRunStateVersion = original.ExpectedRunStateVersion + 1 },
+            "runtime" => original with { CheckpointRecovery = pin with { RuntimeInstanceId = Guid.NewGuid() } },
+            "registration" => original with { CheckpointRecovery = pin with { RegistrationRevision = pin.RegistrationRevision + 1 } },
+            "selection" => original with { CheckpointRecovery = pin with { AcceptedSelectionHash = new string('a', 64) } },
+            "checkpoint" => original with { CheckpointRecovery = pin with { SourceCheckpointId = "other-checkpoint" } },
+            "revision" => original with { CheckpointRecovery = pin with { SourceCheckpointRevision = pin.SourceCheckpointRevision + 1 } },
+            "decision" => original with { CheckpointRecovery = pin with { ExpectedDecisionStateVersion = pin.ExpectedDecisionStateVersion + 1 } },
+            _ => original
+        };
+        var gate = fault == "gate"
+            ? pending.State.PendingGate! with { AuthorizedActorId = Guid.NewGuid().ToString("D") }
+            : pending.State.PendingGate;
+        var before = await RecoveryEvidenceAsync();
+        var failure = await Assert.ThrowsAsync<CoordinationException>(() =>
+            store.RecoverRunExecutionAsync(_actor, _root.ProjectId, _root.RunId, request,
+                CancellationToken.None, _selection, new MafExecutionCheckpointStore(checkpoints, binding), gate));
+        Assert.Equal(code, failure.Code);
+        Assert.Equal(409, failure.StatusCode);
+        Assert.Equal(before, await RecoveryEvidenceAsync());
+    }
+
     [Fact]
-    public async Task NewCheckpointRecoveryWaitsForBlockedHostAndAdvancesOneFence()
+    public async Task CompletedRootCannotBeResurrectedByCheckpointRecovery()
+    {
+        var (store, _, pending, binding, checkpoints, request) = await CreateIdleGateRecoveryAsync();
+        var root = await store.ReadSessionStatusAsync(_actor, _root, CancellationToken.None);
+        var active = await StartActiveTurnAsync(_root, root.StateVersion);
+        await store.FinishTurnAsync(_actor, _root,
+            new FinishTurnRequest(_acceptedRoot.ExecutionFence, active.StateVersion, LogicalTurnCompletion.Completed),
+            CancellationToken.None);
+        var completed = await store.ReadOwnerRunStatusAsync(
+            _actor, _root.ProjectId, _root.RunId, CancellationToken.None);
+        Assert.Equal("completed", completed.ExecutionState);
+        var before = await RecoveryEvidenceAsync();
+        var failure = await Assert.ThrowsAsync<CoordinationException>(() =>
+            store.RecoverRunExecutionAsync(_actor, _root.ProjectId, _root.RunId,
+                request with { ExecutionFence = completed.ExecutionFence, ExpectedRunStateVersion = completed.StateVersion },
+                CancellationToken.None, _selection, new MafExecutionCheckpointStore(checkpoints, binding),
+                pending.State.PendingGate));
+        Assert.Equal("checkpoint_recovery_unavailable", failure.Code);
+        Assert.Equal(409, failure.StatusCode);
+        Assert.Equal(before, await RecoveryEvidenceAsync());
+    }
+
+    [Fact]
+    public async Task ConcurrentIdleCheckpointRecoveriesCommitOnlyOneOperation()
+    {
+        var (store, _, pending, binding, checkpoints, request) = await CreateIdleGateRecoveryAsync();
+        var checkpointStore = new MafExecutionCheckpointStore(checkpoints, binding);
+        async Task<(RunExecutionTransitionResult? Result, CoordinationException? Error)> Attempt(string key)
+        {
+            try
+            {
+                return (await store.RecoverRunExecutionAsync(_actor, _root.ProjectId, _root.RunId,
+                    request with { IdempotencyKey = key }, CancellationToken.None,
+                    _selection, checkpointStore, pending.State.PendingGate), null);
+            }
+            catch (CoordinationException error) { return (null, error); }
+        }
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<(RunExecutionTransitionResult? Result, CoordinationException? Error)> WaitAndAttempt(string key)
+        {
+            await start.Task;
+            return await Attempt(key);
+        }
+        var firstAttempt = WaitAndAttempt("race-first");
+        var secondAttempt = WaitAndAttempt("race-second");
+        start.SetResult();
+        var outcomes = await Task.WhenAll(firstAttempt, secondAttempt);
+        var winner = Assert.Single(outcomes, x => x.Result is not null).Result!;
+        var loser = Assert.Single(outcomes, x => x.Error is not null).Error!;
+        Assert.Equal("execution_recovery_stale", loser.Code);
+        Assert.Equal(request.ExecutionFence + 1, winner.ExecutionFence);
+        Assert.Equal(request.ExpectedRunStateVersion + 1, winner.RunStateVersion);
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var counts = new NpgsqlCommand($"""
+            SELECT (SELECT count(*) FROM "{_schema}".coordination_execution_operations WHERE operation_kind = 'recovery'),
+                   (SELECT count(*) FROM "{_schema}".outbox_events WHERE event_type = 'orchestrator.run.checkpoint_recovery_pending')
+            """, connection);
+        await using var reader = await counts.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(1, reader.GetInt64(0));
+        Assert.Equal(1, reader.GetInt64(1));
+    }
+
+    private async Task RunWithGateContentionAsync(
+        string gateId, Func<CancellationToken, Task> first, Func<CancellationToken, Task> second)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var holder = await _fixture.DataSource.OpenConnectionAsync(deadline.Token);
+        await using var transaction = await holder.BeginTransactionAsync(deadline.Token);
+        await using (var gateLock = new NpgsqlCommand($"""
+            SELECT request_id FROM "{_schema}".coordinator_gates
+            WHERE project_id = @project AND run_id = @run AND request_id = @gate
+            FOR UPDATE
+            """, holder, transaction))
+        {
+            gateLock.Parameters.AddWithValue("project", _root.ProjectId);
+            gateLock.Parameters.AddWithValue("run", _root.RunId);
+            gateLock.Parameters.AddWithValue("gate", gateId);
+            Assert.Equal(gateId, await gateLock.ExecuteScalarAsync(deadline.Token));
+        }
+
+        await using var observer = await _fixture.DataSource.OpenConnectionAsync(deadline.Token);
+        async Task<int> WaitForBlockedBackendAsync(int blocker, Task worker)
+        {
+            while (true)
+            {
+                if (worker.IsCompleted)
+                    throw new InvalidOperationException("The transition ended before lock contention was observed.");
+                await using var query = new NpgsqlCommand("""
+                    SELECT pid FROM pg_stat_activity
+                    WHERE datname = current_database() AND @blocker = ANY(pg_blocking_pids(pid))
+                      AND position(@schema in query) > 0
+                    """, observer);
+                query.Parameters.AddWithValue("blocker", blocker);
+                query.Parameters.AddWithValue("schema", _schema);
+                var result = await query.ExecuteScalarAsync(deadline.Token);
+                if (result is int pid)
+                    return pid;
+                await Task.Delay(50, deadline.Token);
+            }
+        }
+
+        try
+        {
+            var firstTask = first(deadline.Token);
+            var firstPid = await WaitForBlockedBackendAsync(holder.ProcessID, firstTask);
+            var secondTask = second(deadline.Token);
+            var secondPid = await WaitForBlockedBackendAsync(firstPid, secondTask);
+            Assert.NotEqual(firstPid, secondPid);
+            await transaction.CommitAsync(deadline.Token);
+            await Task.WhenAll(firstTask, secondTask).WaitAsync(deadline.Token);
+        }
+        finally
+        {
+            deadline.Cancel();
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task IdleCheckpointRecoveryRacesProductionGateAnswer(bool recoveryFirst)
+    {
+        var (store, decisions, pending, binding, checkpoints, request) = await CreateIdleGateRecoveryAsync();
+        var gate = pending.State.PendingGate!;
+        var rootBefore = await store.ReadSessionStatusAsync(_actor, _root, CancellationToken.None);
+        var childBefore = await store.ReadSessionStatusAsync(_actor, _child.Identity, CancellationToken.None);
+        var answer = pending.State.ApplyGateAnswer(new CoordinatorGateAnswer(
+            gate.RequestId, _actor.Subject, gate.Fence, gate.AllowedChoices[0], null));
+        Assert.True(answer.IsAccepted);
+        async Task<(RunExecutionTransitionResult? Result, CoordinationException? Error)> Recover(CancellationToken token)
+        {
+            try
+            {
+                return (await store.RecoverRunExecutionAsync(_actor, _root.ProjectId, _root.RunId,
+                    request, token, _selection,
+                    new MafExecutionCheckpointStore(checkpoints, binding), gate), null);
+            }
+            catch (CoordinationException error) { return (null, error); }
+        }
+        async Task<(CoordinatorDecisionPersistedResult? Result, CoordinationException? Error)> Answer(CancellationToken token)
+        {
+            try
+            {
+                return (await decisions.PersistTransitionAsync(_actor, _root, _selection, pending.StateVersion,
+                    "gate-answer-race", gate.RequestId, "gate.answer",
+                    CoordinatorDecisionOwnerStore.ComputeCommandHash(answer.Receipt),
+                    answer.State, answer.IsAccepted, answer.Issues, null, null, answer.Receipt,
+                    token), null);
+            }
+            catch (CoordinationException error) { return (null, error); }
+        }
+        Task<(RunExecutionTransitionResult? Result, CoordinationException? Error)>? recoveryTask = null;
+        Task<(CoordinatorDecisionPersistedResult? Result, CoordinationException? Error)>? answerTask = null;
+        Task StartRecovery(CancellationToken token) => recoveryTask = Recover(token);
+        Task StartAnswer(CancellationToken token) => answerTask = Answer(token);
+        await RunWithGateContentionAsync(gate.RequestId,
+            recoveryFirst ? StartRecovery : StartAnswer, recoveryFirst ? StartAnswer : StartRecovery);
+        var recovery = await recoveryTask!;
+        var answered = await answerTask!;
+        Assert.Equal(recoveryFirst, recovery.Result is not null);
+        Assert.Equal(!recoveryFirst, answered.Result is not null);
+        var current = await decisions.ReadCurrentAsync(_actor, _root, _selection, CancellationToken.None);
+        var run = await store.ReadOwnerRunStatusAsync(_actor, _root.ProjectId, _root.RunId, CancellationToken.None);
+        var rootAfter = await store.ReadSessionStatusAsync(_actor, _root, CancellationToken.None);
+        var childAfter = await store.ReadSessionStatusAsync(_actor, _child.Identity, CancellationToken.None);
+        if (recovery.Result is not null)
+        {
+            Assert.NotNull(answered.Error);
+            Assert.Equal(request.ExecutionFence + 1, run.ExecutionFence);
+            Assert.Equal(gate.RequestId, current.State.PendingGate!.RequestId);
+            Assert.Equal(gate.AuthorizedActorId, current.State.PendingGate.AuthorizedActorId);
+            Assert.Equal(gate.AllowedChoices.ToArray(), current.State.PendingGate.AllowedChoices.ToArray());
+            Assert.Equal(run.ExecutionFence, current.State.PendingGate.Fence);
+            Assert.Equal(rootBefore.ExecutionFence + 1, rootAfter.ExecutionFence);
+            Assert.Equal(childBefore.ExecutionFence + 1, childAfter.ExecutionFence);
+        }
+        else
+        {
+            Assert.NotNull(recovery.Error);
+            Assert.True(answered.Result!.TransitionAccepted);
+            Assert.Null(current.State.PendingGate);
+            Assert.Equal(request.ExecutionFence, run.ExecutionFence);
+            Assert.Equal(request.ExpectedRunStateVersion, run.StateVersion);
+            Assert.Equal("idle", run.ExecutionState);
+            Assert.Equal(rootBefore.ExecutionFence, rootAfter.ExecutionFence);
+            Assert.Equal(rootBefore.StateVersion, rootAfter.StateVersion);
+            Assert.Equal(childBefore.ExecutionFence, childAfter.ExecutionFence);
+            Assert.Equal(childBefore.StateVersion, childAfter.StateVersion);
+        }
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var counts = new NpgsqlCommand($"""
+            SELECT (SELECT count(*) FROM "{_schema}".coordination_execution_operations WHERE operation_kind = 'recovery'),
+                   (SELECT count(*) FROM "{_schema}".outbox_events WHERE event_type = 'orchestrator.run.checkpoint_recovery_pending'),
+                   (SELECT count(*) FROM "{_schema}".maf_workflow_checkpoints)
+            """, connection);
+        await using var reader = await counts.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        var expected = recovery.Result is null ? 0L : 1L;
+        Assert.Equal(expected, reader.GetInt64(0));
+        Assert.Equal(expected, reader.GetInt64(1));
+        Assert.Equal(1L + expected, reader.GetInt64(2));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task IdleCheckpointRecoveryRacesProductionRunCancellation(bool recoveryFirst)
+    {
+        var (store, _, pending, binding, checkpoints, request) = await CreateIdleGateRecoveryAsync();
+        var gate = pending.State.PendingGate!;
+        var cancellationSelection = _selection with
+        {
+            Authorization = _selection.Authorization with
+            {
+                BoundProjectId = null,
+                BoundRunId = null,
+                EffectiveAuthority = [new ProjectsAuthority("project", _root.ProjectId,
+                    [new ProjectsPermissionGrant("cancelRun", 1)])]
+            }
+        };
+        async Task<(RunExecutionTransitionResult? Result, CoordinationException? Error)> Recover(CancellationToken token)
+        {
+            try
+            {
+                return (await store.RecoverRunExecutionAsync(_actor, _root.ProjectId, _root.RunId,
+                    request, token, _selection, new MafExecutionCheckpointStore(checkpoints, binding), gate), null);
+            }
+            catch (CoordinationException error) { return (null, error); }
+        }
+        Task<(RunExecutionTransitionResult? Result, CoordinationException? Error)>? recoveryTask = null;
+        Task<CancelProjectRunResponse>? cancellationTask = null;
+        Task StartRecovery(CancellationToken token) => recoveryTask = Recover(token);
+        Task StartCancellation(CancellationToken token) => cancellationTask = store.CancelProjectRunAsync(
+            _actor, cancellationSelection, "cancel-race", new CancelProjectRunRequest("Stopped"),
+            _ => Task.CompletedTask, token);
+        await RunWithGateContentionAsync(gate.RequestId,
+            recoveryFirst ? StartRecovery : StartCancellation,
+            recoveryFirst ? StartCancellation : StartRecovery);
+        var recovery = await recoveryTask!;
+        var cancellation = await cancellationTask!;
+        Assert.Equal("cancelled", cancellation.State);
+        Assert.Equal(recoveryFirst, recovery.Result is not null);
+        if (recoveryFirst)
+        {
+            Assert.Equal(gate.RequestId, recovery.Result!.CheckpointRecovery!.GateRequestId);
+            Assert.Equal(gate.AuthorizedActorId, recovery.Result.CheckpointRecovery.GateAuthorizedActorId);
+            Assert.Equal(request.ExecutionFence + 1, recovery.Result.ExecutionFence);
+        }
+        if (!recoveryFirst)
+        {
+            Assert.NotNull(recovery.Error);
+            Assert.Equal("execution_recovery_stale", recovery.Error.Code);
+        }
+        var expectedRecoveries = recoveryFirst ? 1L : 0L;
+        var status = await store.ReadOwnerRunStatusAsync(
+            _actor, _root.ProjectId, _root.RunId, CancellationToken.None);
+        Assert.Equal("cancelled", status.ExecutionState);
+        Assert.Equal(request.ExecutionFence + 1 + expectedRecoveries, status.ExecutionFence);
+        Assert.Equal(request.ExpectedRunStateVersion + 1 + expectedRecoveries, status.StateVersion);
+        var root = await store.ReadSessionStatusAsync(_actor, _root, CancellationToken.None);
+        var child = await store.ReadSessionStatusAsync(_actor, _child.Identity, CancellationToken.None);
+        Assert.Equal(status.ExecutionFence, root.ExecutionFence);
+        Assert.Equal(status.ExecutionFence, child.ExecutionFence);
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var query = new NpgsqlCommand($"""
+            SELECT gate_state, execution_fence,
+                (SELECT count(*) FROM "{_schema}".coordination_execution_operations WHERE operation_kind = 'recovery'),
+                (SELECT count(*) FROM "{_schema}".outbox_events WHERE event_type = 'orchestrator.run.checkpoint_recovery_pending'),
+                (SELECT count(*) FROM "{_schema}".maf_workflow_checkpoints)
+            FROM "{_schema}".coordinator_gates WHERE project_id = @project AND run_id = @run AND request_id = @gate
+            """, connection);
+        query.Parameters.AddWithValue("project", _root.ProjectId);
+        query.Parameters.AddWithValue("run", _root.RunId);
+        query.Parameters.AddWithValue("gate", gate.RequestId);
+        await using var reader = await query.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("cancelled", reader.GetString(0));
+        Assert.Equal(request.ExecutionFence + expectedRecoveries, reader.GetInt64(1));
+        Assert.Equal(expectedRecoveries, reader.GetInt64(2));
+        Assert.Equal(expectedRecoveries, reader.GetInt64(3));
+        Assert.Equal(1L + expectedRecoveries, reader.GetInt64(4));
+    }
+
+    private async Task<(CoordinationOwnerStore Store, CoordinatorDecisionOwnerStore Decisions,
+        CoordinatorDecisionPersistedResult Pending, MafCheckpointBinding Binding,
+        PostgresMafCheckpointStore Checkpoints, RecoverRunExecutionRequest Request)> CreateIdleGateRecoveryAsync()
     {
         var catalog = ProviderCatalog.Create([], [], []).Value!;
         var contexts = new CoordinatorRunSelectionContextStore(
@@ -1840,6 +2174,7 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             _root.SessionId,
             MafExecutionCheckpointContract.Serialize(new MafExecutionCheckpoint(
                 1, "plan-1", pending.StateVersion, MafExecutionProgress.Empty)));
+        // Controlled runtime evidence; this test does not start a Host.
         var initialRuntimeId = Guid.NewGuid();
         await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
         await using (var intent = new NpgsqlCommand($"""
@@ -1869,20 +2204,9 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             await intent.ExecuteNonQueryAsync();
         }
 
-        await using (var activeConnection = await _fixture.DataSource.OpenConnectionAsync())
-        await using (var activateRun = new NpgsqlCommand($"""
-            UPDATE "{_schema}".accepted_runs
-            SET execution_state = 'active', state_version = state_version + 1
-            WHERE project_id = @project AND run_id = @run AND execution_state = 'idle'
-            """, activeConnection))
-        {
-            activateRun.Parameters.AddWithValue("project", _root.ProjectId);
-            activateRun.Parameters.AddWithValue("run", _root.RunId);
-            Assert.Equal(1, await activateRun.ExecuteNonQueryAsync());
-        }
-
         var runStatus = await store.ReadOwnerRunStatusAsync(
             _actor, _root.ProjectId, _root.RunId, CancellationToken.None);
+        Assert.Equal("idle", runStatus.ExecutionState);
         var firstRequest = new RecoverRunExecutionRequest(
             _acceptedRoot.ExecutionFence, runStatus.StateVersion, "checkpoint-recovery-first",
             "operator_recovery", "host-activation-failure")
@@ -1890,11 +2214,36 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             CheckpointRecovery = new CheckpointRecoveryRequest(
                 source.CheckpointId, 1, pending.StateVersion, initialRuntimeId, 1, selectionHash)
         };
+        return (store, decisions, pending, checkpointBinding, checkpointStore, firstRequest);
+    }
+
+    [Fact]
+    public async Task NewCheckpointRecoveryWaitsForBlockedHostAndAdvancesOneFence()
+    {
+        var (store, decisions, pending, checkpointBinding, checkpointStore, firstRequest) =
+            await CreateIdleGateRecoveryAsync();
+        const string gateId = "checkpoint-recovery-retry-gate";
+        var selectionHash = firstRequest.CheckpointRecovery!.AcceptedSelectionHash;
+        var runStatus = await store.ReadOwnerRunStatusAsync(
+            _actor, _root.ProjectId, _root.RunId, CancellationToken.None);
+        var rootBefore = await store.ReadSessionStatusAsync(_actor, _root, CancellationToken.None);
+        var childBefore = await store.ReadSessionStatusAsync(_actor, _child.Identity, CancellationToken.None);
         var first = await store.RecoverRunExecutionAsync(
             _actor, _root.ProjectId, _root.RunId, firstRequest, CancellationToken.None,
             _selection, new MafExecutionCheckpointStore(checkpointStore, checkpointBinding),
             pending.State.PendingGate);
+        Assert.Equal("idle", first.PreviousState);
+        Assert.Equal("active", first.State);
+        Assert.Equal(runStatus.StateVersion, first.PreviousRunStateVersion);
+        Assert.Equal(runStatus.StateVersion + 1, first.RunStateVersion);
+        Assert.Equal(rootBefore.StateVersion, first.PreviousSessionStateVersion);
+        Assert.Equal(rootBefore.StateVersion + 1, first.SessionStateVersion);
         Assert.Equal(_acceptedRoot.ExecutionFence + 1, first.ExecutionFence);
+        var rootAfter = await store.ReadSessionStatusAsync(_actor, _root, CancellationToken.None);
+        var childAfter = await store.ReadSessionStatusAsync(_actor, _child.Identity, CancellationToken.None);
+        Assert.Equal(rootBefore.ExecutionFence + 1, rootAfter.ExecutionFence);
+        Assert.Equal(childBefore.ExecutionFence + 1, childAfter.ExecutionFence);
+        Assert.Equal(childBefore.StateVersion + 1, childAfter.StateVersion);
         var failedRuntimeId = Guid.NewGuid();
         var runtimeStarts = new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema);
         var startIntent = await runtimeStarts.ReadIntentForStatusAsync(
@@ -1926,6 +2275,12 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null), checkpointBindingAtNextFence);
         var nextSource = await nextCheckpointStore.ReadLatestAsync(CancellationToken.None);
         Assert.NotNull(nextSource);
+        Assert.Equal(first.CheckpointRecovery!.RecoveryCheckpointId, nextSource.Info.CheckpointId);
+        Assert.Equal(first.CheckpointRecovery.RecoveryCheckpointRevision, nextSource.State.Revision);
+        Assert.Equal(gateId, currentAfterFirst.State.PendingGate!.RequestId);
+        Assert.Equal(_actor.Subject, currentAfterFirst.State.PendingGate.AuthorizedActorId);
+        Assert.Equal(pending.State.PendingGate!.AllowedChoices.ToArray(),
+            currentAfterFirst.State.PendingGate.AllowedChoices.ToArray());
         var newRequest = new RecoverRunExecutionRequest(
             first.ExecutionFence,
             (await store.ReadOwnerRunStatusAsync(
@@ -1942,11 +2297,13 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
                 2,
                 selectionHash)
         };
+        var beforePendingRetry = await RecoveryEvidenceAsync();
         var stillPending = await Assert.ThrowsAsync<CoordinationException>(() =>
             store.RecoverRunExecutionAsync(
                 _actor, _root.ProjectId, _root.RunId, newRequest, CancellationToken.None,
                 _selection, nextCheckpointStore, currentAfterFirst.State.PendingGate));
         Assert.Equal("checkpoint_recovery_in_progress", stillPending.Code);
+        Assert.Equal(beforePendingRetry, await RecoveryEvidenceAsync());
 
         var blocked = first.CheckpointRecovery! with
         {
@@ -1959,12 +2316,16 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         var blockedResult = await store.UpdateCheckpointRecoveryProgressAsync(
             _actor, _root, first.OperationId, blocked, CancellationToken.None);
         Assert.Equal("blocked", blockedResult.CheckpointRecovery!.Phase);
+        var beforeReplay = await RecoveryEvidenceAsync();
         var replay = await store.RecoverRunExecutionAsync(
             _actor, _root.ProjectId, _root.RunId, firstRequest, CancellationToken.None,
             _selection, nextCheckpointStore, currentAfterFirst.State.PendingGate);
         Assert.True(replay.IsDuplicate);
         Assert.Equal(first.OperationId, replay.OperationId);
         Assert.Equal("blocked", replay.CheckpointRecovery!.Phase);
+        Assert.Equal(first.ExecutionFence, (await store.ReadOwnerRunStatusAsync(
+            _actor, _root.ProjectId, _root.RunId, CancellationToken.None)).ExecutionFence);
+        Assert.Equal(beforeReplay, await RecoveryEvidenceAsync());
 
         var second = await store.RecoverRunExecutionAsync(
             _actor, _root.ProjectId, _root.RunId, newRequest, CancellationToken.None,

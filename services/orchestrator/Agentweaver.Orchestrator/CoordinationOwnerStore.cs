@@ -3878,7 +3878,7 @@ internal sealed partial class CoordinationOwnerStore
         }
         else
         {
-            if (run.ExecutionState is not ("active" or "blocked" or "failed" or "indeterminate") ||
+            if (run.ExecutionState is not ("idle" or "active" or "blocked" or "failed" or "indeterminate") ||
                 selection is null || checkpointStore is null ||
                 !checkpointStore.IsBoundTo(identity, run.Fence))
                 throw new CoordinationException(
@@ -3968,7 +3968,7 @@ internal sealed partial class CoordinationOwnerStore
             WHERE project_id = @project AND run_id = @run
                 AND execution_fence = @previousFence AND state_version = @runVersion
                 AND (
-                    (@checkpointRecovery AND execution_state IN ('active', 'blocked', 'failed', 'indeterminate')) OR
+                    (@checkpointRecovery AND execution_state IN ('idle', 'active', 'blocked', 'failed', 'indeterminate')) OR
                     (NOT @checkpointRecovery AND execution_state IN ('failed', 'indeterminate'))
                 )
             RETURNING state_version
