@@ -42,23 +42,16 @@ or recreate a dynamic issue-to-merge workflow.
 Release and deployment work are separate. Follow the [release runbook](../releases/README.md)
 when the user requests those operations.
 
-For Agentweaver 1.x API acceptance, exercise the native .NET CLI apphost with
-`agentweaver test --input <manifest> --output <new-evidence-file>`. Use the
-self-contained apphost published from source, or the exact extracted apphost
-when validating a distribution candidate. Do not substitute targeted `rest`
-requests, unit or controlled tests, or the Node runner for API journey
-acceptance. The Node `harness:p1 -- --surface api` entrypoint is compatibility
-delegation only: if used, set `AGENTWEAVER_CLI_PATH` to the exact apphost; it
-does not fall back to a Node API runner. `test` takes its target from the
-manifest, not target flags or environment variables. `--interactive` explicitly
-permits browser authorization and should be used only when authorized; a live
-test creates and cleans up API fixtures, so run it only against an explicitly
-approved non-production target.
-A successful `--dry-run` validates input without network, authentication, or
-browser launch and writes no evidence, even with `--interactive`; validation
-failure may write a blocked result to the requested output. See the [testing
-guide](../docs/guide/testing.md) and [CLI guide](../docs/guide/cli.md) for
-commands and target requirements.
+For Agentweaver 1.x API acceptance, use the checked-in case scripts. The
+current read-only Gateway case runs `auth status`, `api operations`,
+`api describe`, and `rest` through the exact native CLI apphost. Set
+`AGENTWEAVER_CLI_PATH` to the approved apphost, sign in with the normal
+`agentweaver auth login` command when authorized, and use only an explicitly
+approved non-production target. The script does not open a browser, accept
+tokens, mutate resources, or send model requests. Its successful `--dry-run`
+checks local inputs only and creates no evidence. Do not present this case as
+full API or P1 acceptance. See the [API case guide](../docs/guide/api-acceptance-migration.md),
+[testing guide](../docs/guide/testing.md), and [CLI guide](../docs/guide/cli.md).
 
 ## Release and deployment
 

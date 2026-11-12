@@ -22,6 +22,7 @@ public sealed class CliApplicationTests
         Assert.Equal(0, versionCode);
         Assert.Contains("agentweaver api operations", output.ToString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("agentweaver rest --method GET|HEAD", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("agentweaver test", output.ToString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Agentweaver 1.x CLI 1.0.0 (source unbound, tree unbound)", output.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("1.0.0+", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("source unbound", output.ToString(), StringComparison.Ordinal);
@@ -30,49 +31,15 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
-    public async Task TestCommandPassesExplicitInteractivePolicyAndPreservesRunnerExitCode()
+    public async Task TestCommandIsUnknown()
     {
-        var runner = new RecordingRunner(2);
-        var output = new StringWriter();
-        var result = await CliApplication.RunAsync(
-            ["test", "--input", "manifest.json", "--output", "evidence.jsonl", "--dry-run", "--interactive"],
-            new CliRuntimeOptions(AcceptanceRunner: runner, Output: output));
-
-        Assert.Equal(2, result);
-        Assert.NotNull(runner.Options);
-        Assert.True(runner.Options!.DryRun);
-        Assert.Equal(InteractionPolicy.Allow, runner.Options.Interaction);
-        Assert.Equal("manifest.json", runner.Options.InputPath);
-        Assert.Equal("evidence.jsonl", runner.Options.OutputPath);
-    }
-
-    [Fact]
-    public async Task TestCommandDefaultsToNoninteractiveAuthentication()
-    {
-        var runner = new RecordingRunner(0);
-        var result = await CliApplication.RunAsync(
-            ["test", "--input", "manifest.json", "--output", "evidence.jsonl"],
-            new CliRuntimeOptions(AcceptanceRunner: runner));
-
-        Assert.Equal(0, result);
-        Assert.Equal(InteractionPolicy.Never, runner.Options?.Interaction);
-    }
-
-    [Fact]
-    public async Task TestCommandRejectsOutputThatWouldOverwriteManifestOrProof()
-    {
-        var runner = new RecordingRunner(0);
-        var output = new StringWriter();
         var error = new StringWriter();
-        var path = Path.GetFullPath("same.json");
-
         var result = await CliApplication.RunAsync(
-            ["test", "--input", path, "--output", path],
-            new CliRuntimeOptions(AcceptanceRunner: runner, Output: output, Error: error));
+            ["test", "--input", "manifest.json", "--output", "evidence.json"],
+            new CliRuntimeOptions(Error: error));
 
         Assert.Equal(1, result);
-        Assert.Null(runner.Options);
-        Assert.Contains("cannot overwrite", error.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Unknown command: test", error.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -150,17 +117,6 @@ public sealed class CliApplicationTests
         Assert.Equal(1, duplicate);
         Assert.Contains("only once", error.ToString(), StringComparison.Ordinal);
         Assert.Null(authentication.Identity);
-    }
-
-    private sealed class RecordingRunner(int exitCode) : IApiAcceptanceRunner
-    {
-        public ApiTestOptions? Options { get; private set; }
-
-        public Task<int> RunAsync(ApiTestOptions options, CancellationToken ct)
-        {
-            Options = options;
-            return Task.FromResult(exitCode);
-        }
     }
 
     private sealed class RecordingAuthentication : ICliAuthentication

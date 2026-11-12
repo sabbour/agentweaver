@@ -1,13 +1,11 @@
 # Run a read-only CLI API case
 
-Use this guide to try the first normal-command API case and prepare for the
-acceptance-script migration. The case checks Gateway discovery and the signed-in
-actor's authorization context through the native CLI.
+Use this guide to check Gateway discovery and the signed-in actor's
+authorization context through normal native CLI commands.
 
-This case does not replace the full API journeys. The existing `agentweaver
-test` command remains in place until a later change switches the launchers and
-removes that module. Do not treat this read-only case as full API or P1
-acceptance.
+This read-only case does not test mutations, model execution, or full P1
+acceptance. The API launchers run this checked-in script; they do not provide a
+separate API runner.
 
 ## Before you begin
 
@@ -120,5 +118,5 @@ guards.
 ## Next step
 
 Use the [Testing guide](./testing.md) to choose other checks and understand
-their limits. This case does not replace the existing `agentweaver test`
-journeys or prove a live model, deployment, or full P1 acceptance.
+their limits. This case does not prove a live model, deployment, or full P1
+acceptance.

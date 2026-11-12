@@ -212,7 +212,7 @@ class PackageTests(unittest.TestCase):
                 return CompletedProcess(command, 0, "packageSmoke\n", "")
             if command[-1] == "--version":
                 return CompletedProcess(command, 0, "Agentweaver 1.x 1.0.0 source " + "a" * 12 + " tree " + "b" * 12, "")
-            return CompletedProcess(command, 0, "api operations\nauth login\ntest", "")
+            return CompletedProcess(command, 0, "api operations\nauth login\nrest --method GET|HEAD", "")
 
         root = Path(__file__).resolve().parents[3]
         with tempfile.TemporaryDirectory(prefix="agentweaver-cli-test-") as directory:

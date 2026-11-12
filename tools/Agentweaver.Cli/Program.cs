@@ -15,7 +15,6 @@ public static class Program
         var authentication = CliAuthService.CreateDefault(brokerClient);
         using var authenticationLifetime = authentication as IDisposable;
         var gatewayClients = new GatewayClientFactory(gatewayClient, authentication);
-        var acceptanceRunner = new ApiAcceptanceRunner(gatewayClient, gatewayClients, authentication);
         using var cancellation = new CancellationTokenSource();
         Console.CancelKeyPress += (_, eventArgs) =>
         {
@@ -28,8 +27,7 @@ public static class Program
             new CliRuntimeOptions(
                 HttpClient: gatewayClient,
                 GatewayClientFactory: gatewayClients,
-                Authentication: authentication,
-                AcceptanceRunner: acceptanceRunner),
+                Authentication: authentication),
             cancellation.Token).ConfigureAwait(false);
     }
 }

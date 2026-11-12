@@ -27,7 +27,8 @@ claiming production credentials or service availability.
 | `scripts/ui-harness/` | Injected-page observation and owner receipt contracts |
 | `scripts/mcp-harness/` | Retained compatibility transport, discovery and result tests |
 | `scripts/harness-shared/` | Target/auth guards, redaction, journeys and result contracts |
-| `tools/Agentweaver.Cli/` | Native .NET CLI API acceptance entrypoint |
+| `scripts/acceptance/api/` | Normal-command CLI API acceptance cases |
+| `tools/Agentweaver.Cli/` | Native .NET CLI |
 | `apps/web/e2e/` | Playwright journeys against built Web with controlled Broker/Gateway |
 | `scripts/coverage/` | Coverage execution, report validation and receipt guards |
 | `.github/workflows/v1-ci.yml` | Source validation aggregate and selected suites |
@@ -74,33 +75,15 @@ They also verify that project-wide search requires `AccessPrivateKnowledge`
 but not `ReadRunSelection`. That access binding is not `sourceRunId` provenance
 or deployed discovery.
 
-### Separate canonical acceptance from compatibility tests
+### Run normal-command API cases
 
-Canonical API acceptance runs the native .NET apphost with
-`agentweaver test --input <manifest> --output <new-evidence-file>`. Use the
-source-published apphost or exact extracted distribution executable for the
-question being tested. The Node `harness:p1 -- --surface api` path delegates
-to it through `AGENTWEAVER_CLI_PATH`; it does not fall back to a Node API runner.
+The checked-in API case scripts call the native CLI through public commands. The current read-only Gateway case checks `auth status`, `api operations`, `api describe`, and `rest` against one approved target. It does not create fixtures, mutate resources, send model requests, or open a browser. The `harness:p1 -- --surface api` launchers delegate to that script; they do not provide a second API client or a `test` command.
 
-The manifest selects the target. `--interactive` explicitly permits browser
-authorization; a live journey creates and cleans up fixtures and requires a
-separately approved non-production target. Successful `--dry-run` performs no
-network/authentication/browser work and writes no evidence, even when
-`--interactive` is present. Validation failure may write a blocked result.
-See the [CLI guide](../guide/cli.md) and [testing guide](../guide/testing.md)
-for the full input, target and execution contract.
+Use the [API case guide](../guide/api-acceptance-migration.md) for the exact apphost, input, and evidence contract. A dry run validates local input only. A passing case does not prove a live model, full API journey, or P1 acceptance.
 
-The `full-flow-delivery` journey is the critical-path acceptance journey. It
-uses a real BYOK model and checks outcomes, not exact model text. The file
-`tests/fixtures/critical-paths.json` maps the journey to its watched Gateway
-routes and known gaps. `CriticalPathCoverageTests` fails pull request CI when
-an operation is added under a watched prefix without a classification, when a
-route arrives for a known gap, or when a covered operation is removed. See [Keep critical-path coverage current](../guide/testing.md#keep-critical-path-coverage-current).
+#### Child startup and cleanup sequence
 
-The owner sequence below is separate from the current native CLI journey.
-The CLI journey does not yet dispatch child work or prove task completion.
-Controlled startup tests and live native CLI acceptance are different evidence.
-
+The owner sequence below describes child startup and cleanup. The current read-only API case does not exercise that sequence. Controlled startup tests and live API case evidence are different evidence.
 ```mermaid
 sequenceDiagram
     actor Caller as Authorized owner caller
@@ -164,11 +147,11 @@ creation, actual Pod/mount observations and Host evidence. Registration
 readback, readiness receipt, usage read or locator-only no-send result cannot
 replace complete turn, cursor, effect and dispatch/recovery evidence.
 
-The `native-material-recovery` journey joins the current root registration,
-turn-completion and material receipts, ordinary Host replacement, exact replay,
-and cleanup. It can pass the session-material row only when these bound
-receipts validate; it does not pass full-P1 acceptance or prove deployed
-provider behavior.
+The former `native-material-recovery` journey joined the current root
+registration, turn-completion and material receipts, ordinary Host
+replacement, exact replay, and cleanup. That acceptance runner has been
+removed. The current read-only API case does not exercise session-material
+recovery; source and controlled tests remain separate evidence.
 
 Native and dispatch-recovery envelopes preserve supplied receipts and reject
 malformed, inconsistent, duplicate or extra fields. `receiptSha256` detects

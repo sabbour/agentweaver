@@ -15,7 +15,7 @@ import { createP1SetupApi } from './p1-runtime-adapters.mjs';
 import { persistP1ReconcileEvidence, reconcileP1Run, reserveP1EvidenceOutput } from './p1-reconcile.mjs';
 import { isValidP1RecoveryEvidence, recoverP1RunCleanup } from './p1-recovery-cleanup.mjs';
 import { redact } from './redaction.mjs';
-import { runP1DotnetCli } from './p1-dotnet-cli.mjs';
+import { runP1AcceptanceScripts } from './acceptance-scripts.mjs';
 import { runP1Cli } from './run-p1.mjs';
 
 const OPTION_NAMES = new Set([
@@ -53,7 +53,7 @@ export function parseP1SigninArguments(argv) {
     if (!OPTION_NAMES.has(option)
       || typeof argv[index + 1] !== 'string'
       || argv[index + 1].startsWith('--')) {
-      throw new Error('Use --surface api|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>] [--interactive], --reconcile <invocation-id> --input <manifest.json> --output <reconciliation.json>, or --recover-cleanup <invocation-id> --input <manifest.json> --reconcile-evidence <reconciliation.json> --output <cleanup.json>.');
+      throw new Error('Use --surface api --input <case.json> --output <new-evidence-directory> [--dry-run], --surface ui --input <manifest.json> --output <evidence.jsonl>, --reconcile <invocation-id> --input <manifest.json> --output <reconciliation.json>, or --recover-cleanup <invocation-id> --input <manifest.json> --reconcile-evidence <reconciliation.json> --output <cleanup.json>.');
     }
     const key = option.slice(2).replaceAll('-', '');
     if (result[key] !== undefined) throw new Error(`The ${option} option can only be used once.`);
@@ -157,7 +157,7 @@ export function createP1SigninIdentityProvider({
 /** Delegate API acceptance to the CLI and retain the separate one-account UI flow. */
 export async function runP1SigninCli(argv = process.argv.slice(2), env = process.env, io = console, {
   runP1 = runP1Cli,
-  runDotnetCli = runP1DotnetCli,
+  runApiScripts = runP1AcceptanceScripts,
   readInput = readP1SignInInput,
   signIn = authorizeP1InBrowser,
   createSetupApi = createP1SetupApi,
@@ -179,18 +179,19 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
     return 2;
   }
   if (options.help) {
-    io.log?.('Usage: npm run harness:p1:signin-run -- --surface api|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>] [--dry-run] [--interactive]');
+    io.log?.('Usage: npm run harness:p1:signin-run -- --surface api --input <case.json> --output <new-evidence-directory> [--dry-run]');
+    io.log?.('Usage: npm run harness:p1:signin-run -- --surface ui --input <manifest.json> --output <evidence.jsonl>');
     io.log?.('Usage: npm run harness:p1:signin-run -- --reconcile <invocation-id> --input <manifest.json> --output <reconciliation.json> [--dry-run]');
     io.log?.('Usage: npm run harness:p1:signin-run -- --recover-cleanup <invocation-id> --input <manifest.json> --reconcile-evidence <reconciliation.json> --output <cleanup.json> [--dry-run]');
-    io.log?.('The .NET API apphost is selected only through AGENTWEAVER_CLI_PATH; it uses non-interactive auth unless --interactive is explicit.');
+    io.log?.('API cases run the checked-in CLI scripts against the exact AGENTWEAVER_CLI_PATH apphost. Sign in with `agentweaver auth login` before you run a case.');
     io.log?.('The Agentweaver 1.x acceptance surface is .NET CLI API; MCP is not a supported surface.');
     io.log?.('The UI remains a separate browser surface using the registered agentweaver-web client; Broker tokens stay in memory.');
-    printP1OperatorSteps(io);
+    if (options.surface !== 'api') printP1OperatorSteps(io);
     return 0;
   }
   const surfaces = options.surface?.split(',') ?? [];
   if (surfaces.includes('mcp')) {
-    io.error?.('The Agentweaver 1.x P1 launcher does not support an MCP surface; use --surface api for .NET CLI acceptance.');
+    io.error?.('The Agentweaver 1.x P1 launcher does not support an MCP surface; use --surface api for the CLI API case scripts.');
     return 2;
   }
   if (options.reconcile !== undefined) {
@@ -360,28 +361,26 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
     || (surfaces.includes('ui') && surfaces.length > 1)
     || !options.input || !options.output || options.reconcile
     || options.recovercleanup || Object.hasOwn(options, 'reconcileevidence')) {
-    io.error?.('Select api or ui and supply an input manifest and evidence output path.');
+    const message = surfaces.length === 1 && surfaces[0] === 'api'
+      ? 'API cases need --input <case.json> and --output <new-evidence-directory>.'
+      : surfaces.length === 1 && surfaces[0] === 'ui'
+        ? 'The UI surface needs --input <manifest.json> and --output <evidence.jsonl>.'
+        : 'Select --surface api or ui and provide the required input and output paths.';
+    io.error?.(message);
     return 2;
   }
   if (surfaces[0] === 'api') {
-    let validated;
-    try {
-      validated = await readInput(argv);
-    } catch (error) {
-      io.error?.(error.message);
-      return 2;
-    }
-    return runDotnetCli({
+    return runApiScripts({
       input: options.input,
       output: options.output,
-      nativeProbeEnvelope: options.nativeprobeenvelope,
-      dispatchRecoveryEnvelope: options.dispatchrecoveryenvelope,
       dryRun: options.dryRun,
       interactive: options.interactive === true,
+      nativeProbeEnvelope: options.nativeprobeenvelope,
+      dispatchRecoveryEnvelope: options.dispatchrecoveryenvelope,
     }, env, io);
   }
   if (options.interactive) {
-    io.error?.('--interactive is supported only by the .NET API acceptance runner.');
+    io.error?.('The API case scripts do not open a browser; sign in with `agentweaver auth login` before running a case.');
     return 2;
   }
   let setupToken;

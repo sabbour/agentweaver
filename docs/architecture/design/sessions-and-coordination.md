@@ -409,11 +409,10 @@ return the original proposal and completion on the new registration only when
 the durable completion and replacement lineage both validate. The replay path
 does not send the request to the model again.
 
-The optional native CLI `native-material-recovery` journey uses these owner
-routes and validates their live receipts. It is not a generic proof mechanism,
-does not add a permanent run latch, and does not make ordinary CLI use or
-all-OS archive verification depend on this journey. A source build or
-controlled test is not deployed acceptance.
+The former native CLI `native-material-recovery` journey used these owner
+routes, but its acceptance runner has been removed. The current read-only API
+case does not validate these live receipts. This design does not add a generic
+proof mechanism or permanent run latch.
 
 ### Playback, resume, and fork
 
@@ -923,7 +922,7 @@ than replaying model or tool effects to reconstruct history.
 | --- | --- | --- |
 | Journal order and replay remain stable across sessions and reconnects | Native journal PostgreSQL and cursor tests | Disposable database tests are not deployed replay |
 | Message claim, presentation, acknowledgment, and gate transitions retain their different meanings | Events and Orchestrator owner tests with stale authority and binding cases | Delivery alone does not establish workflow completion |
-| Runtime recovery consumes verified owner material without effect replay | [Session-material acceptance](session-material-acceptance.md), the native `native-material-recovery` journey, and controlled owner/runtime cases | The selected live row needs real owner receipts; source tests do not establish deployment, full-P1 status, or #2449 archive/OS acceptance |
+| Runtime recovery consumes verified owner material without effect replay | [Session-material acceptance](session-material-acceptance.md) and controlled owner/runtime cases | The retired native journey no longer provides live evidence; source tests do not establish deployment or #2449 archive/OS acceptance |
 
 ## Alternatives considered
 

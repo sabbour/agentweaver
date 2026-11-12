@@ -53,7 +53,6 @@ test('CLI archive validation follows only the CLI project and consumed SDK input
     assert.equal(classify([path]).cli, true, path);
   }
   assert.equal(classify(['tests/Agentweaver.Cli.Tests/Agentweaver.Cli.Tests.csproj']).cli, false);
-  assert.equal(classify(['tests/Agentweaver.Cli.Acceptance.Tests/AcceptanceTests.cs']).cli, false);
 });
 
 test('matrix includes every suite and exactly four unique Broker shards', () => {
@@ -180,9 +179,6 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   assert.doesNotMatch(harnessCommands, /--experimental-test-coverage|--coverage|run coverage/);
   assert.equal(jobs.foundation.if, '${{ always() }}');
   assert.equal(jobs.dotnet.strategy['fail-fast'], false);
-  const cliApphost = jobs.dotnet.steps.find((step) => step.name === 'Select the built CLI apphost for process acceptance');
-  assert.equal(cliApphost.if, "matrix.name == 'cli-acceptance'");
-  assert.match(cliApphost.run, /AGENTWEAVER_CLI_PATH/);
   const nativeOpa = jobs.dotnet.steps.find((step) => step.name === 'Download and verify pinned OPA for native ACS tests');
   assert.equal(nativeOpa.if, "matrix.name == 'native-acs'");
   assert.match(nativeOpa.run, /opa_linux_amd64_static/);

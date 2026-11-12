@@ -416,7 +416,7 @@ def run_smoke(executable: Path, rid: str, version: str, commit: str, tree: str, 
         environment = smoke_environment(gateway_url)
         try:
             for arguments, expected in (
-                (["--help"], ("api operations", "auth login", "test")),
+                (["--help"], ("api operations", "auth login", "rest --method GET|HEAD")),
                 (["--version"], ("Agentweaver 1.x", version, commit[:12], tree[:12])),
                 (["api", "operations"], ("packageSmoke",)),
             ):

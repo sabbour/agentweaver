@@ -23,7 +23,7 @@ import {
 import { sanitizeP1Failure } from './p1-surface-common.mjs';
 import { redact } from './redaction.mjs';
 import { appendRedactedJsonLine, serializeRedactedJsonLine } from './safe-jsonl.mjs';
-import { runP1DotnetCli } from './p1-dotnet-cli.mjs';
+import { runP1AcceptanceScripts } from './acceptance-scripts.mjs';
 
 /** CLI orchestration for P1 setup, surface journeys, cleanup, and JSONL results. */
 /** Serialize an object with recursively sorted keys for a stable execution-plan fingerprint. */
@@ -79,7 +79,7 @@ function parseArguments(argv) {
     }
     if (!optionKeys.has(name)
       || typeof argv[index + 1] !== 'string' || argv[index + 1].startsWith('--')) {
-      throw new Error('Use --surface api|mcp|ui --input <manifest.json> --output <evidence.jsonl> --identity-module <module.mjs> [--page-module <module.mjs>] [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>].');
+      throw new Error('Use --surface api --input <case.json> --output <new-evidence-directory> [--dry-run], or --surface ui --input <manifest.json> --output <evidence.jsonl>.');
     }
 
     const key = optionKeys.get(name);
@@ -90,7 +90,7 @@ function parseArguments(argv) {
 }
 
 export async function runP1CliEntrypoint(argv = process.argv.slice(2), env = process.env, io = console, {
-  runDotnetCli = runP1DotnetCli,
+  runApiScripts = runP1AcceptanceScripts,
   runLegacy = runP1Cli,
 } = {}) {
   const requestsApi = argv.some((argument, index) =>
@@ -98,7 +98,7 @@ export async function runP1CliEntrypoint(argv = process.argv.slice(2), env = pro
   const requestsMcp = argv.some((argument, index) =>
     argument === '--surface' && argv[index + 1]?.split(',').includes('mcp'));
   if (requestsMcp) {
-    io.error?.('The Agentweaver 1.x P1 harness does not support an MCP surface; use --surface api for .NET CLI acceptance.');
+    io.error?.('The Agentweaver 1.x P1 harness does not support an MCP surface; use --surface api for the CLI API case scripts.');
     return 2;
   }
   let options;
@@ -113,24 +113,24 @@ export async function runP1CliEntrypoint(argv = process.argv.slice(2), env = pro
   }
   if (options.surface !== 'api') {
     if (options.surface !== 'ui') {
-      io.error?.('Specify --surface api or ui; the API runner requires its configured .NET apphost.');
+      io.error?.('Specify --surface api or ui; API cases use the configured native apphost.');
       return 2;
     }
     if (options.dryRun || options.interactive) {
-      io.error?.('--dry-run and --interactive are supported only by the .NET API acceptance runner.');
+      io.error?.('--dry-run is supported only by API case scripts; browser sign-in is a separate CLI command.');
       return 2;
     }
     return runLegacy(argv, env, io);
   }
   if (!options.input || !options.output) {
-    io.error?.('The API surface requires --input <manifest.json> and --output <evidence.jsonl>.');
+    io.error?.('The API surface requires --input <case.json> and --output <new-evidence-directory>.');
     return 2;
   }
   if (options.identityModule || options.pageModule) {
-    io.error?.('The .NET API runner owns authentication and does not accept Node identity or page modules.');
+    io.error?.('The API case scripts use native CLI authentication and do not accept Node identity or page modules.');
     return 2;
   }
-  return runDotnetCli(options, env, io);
+  return runApiScripts(options, env, io);
 }
 
 /** Read and validate one exact output envelope without accepting a partial or scripted shape. */
@@ -269,11 +269,11 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
   let result;
   const nativeProbeResults = [];
   if (argv.includes('--help')) {
-    io.log('Usage: npm run harness:p1 -- --surface api --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>] [--dry-run] [--interactive]');
-    io.log('Legacy direct-runner usage: node scripts/harness-shared/run-p1.mjs --surface mcp|ui --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs> [--page-module <authorized-page-provider.mjs>] [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>]');
-    io.log('The API surface delegates to the exact AGENTWEAVER_CLI_PATH apphost; authentication is non-interactive unless --interactive is explicit.');
-    io.log('The legacy direct runner is not a supported Agentweaver 1.x acceptance surface; use the .NET CLI API surface for 1.x acceptance.');
-    io.log('Only exact output envelopes from the P1 probe runners are aggregated; missing probe envelopes remain blocked.');
+    io.log('Usage: npm run harness:p1 -- --surface api --input <case.json> --output <new-evidence-directory> [--dry-run]');
+    io.log('UI usage: npm run harness:p1 -- --surface ui --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs> [--page-module <authorized-page-provider.mjs>]');
+    io.log('API cases run the checked-in script against the exact AGENTWEAVER_CLI_PATH apphost; sign in with `agentweaver auth login` first.');
+    io.log('API cases are read-only and do not accept browser interaction, identity modules, or proof envelopes.');
+    io.log('The UI surface is separate and retains its own browser and provider requirements.');
     return 0;
   }
 

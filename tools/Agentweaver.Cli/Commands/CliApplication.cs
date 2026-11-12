@@ -50,8 +50,6 @@ public static class CliApplication
                     ct).ConfigureAwait(false);
             if (args[0] == "auth")
                 return await RunAuthAsync(args[1..], runtime ?? new CliRuntimeOptions(), output, ct).ConfigureAwait(false);
-            if (args[0] == "test")
-                return await RunTestAsync(args[1..], runtime ?? new CliRuntimeOptions(), output, ct).ConfigureAwait(false);
             if (args[0] == "models")
                 return await ByokModelCommands.RunAsync(
                     args[1..], runtime ?? new CliRuntimeOptions(), output, ct).ConfigureAwait(false);
@@ -321,42 +319,6 @@ public static class CliApplication
         }
     }
 
-    private static async Task<int> RunTestAsync(
-        string[] args,
-        CliRuntimeOptions runtime,
-        TextWriter output,
-        CancellationToken ct)
-    {
-        var parsed = CliOptions.Parse(
-            args,
-            new HashSet<string>(["dry-run", "interactive"], StringComparer.Ordinal));
-        parsed.RequireOnly("input", "output", "dry-run", "interactive", "native-probe-envelope", "dispatch-recovery-envelope");
-        var input = parsed.Single("input") ?? throw new CliUsageException("`agentweaver test` requires --input <manifest>.");
-        var evidence = parsed.Single("output") ?? throw new CliUsageException("`agentweaver test` requires --output <evidence.jsonl>.");
-        if (runtime.AcceptanceRunner is null)
-            throw new InvalidOperationException("The native API acceptance runner is not composed in this build.");
-        var fullInput = Path.GetFullPath(input);
-        var fullOutput = Path.GetFullPath(evidence);
-        var proofPaths = new[]
-        {
-            parsed.Single("native-probe-envelope"),
-            parsed.Single("dispatch-recovery-envelope"),
-        }.OfType<string>().Select(path => Path.GetFullPath(path));
-        if (PathsEqual(fullInput, fullOutput) ||
-            proofPaths.Any(path => PathsEqual(path, fullOutput)))
-        {
-            throw new CliUsageException("The evidence output path cannot overwrite the manifest or a supplied proof artifact.");
-        }
-        var options = new ApiTestOptions(
-            input,
-            evidence,
-            parsed.HasFlag("dry-run"),
-            parsed.Single("native-probe-envelope"),
-            parsed.Single("dispatch-recovery-envelope"),
-            parsed.HasFlag("interactive") ? InteractionPolicy.Allow : InteractionPolicy.Never);
-        return await runtime.AcceptanceRunner.RunAsync(options, ct).ConfigureAwait(false);
-    }
-
     private static async Task WriteAuthStatusAsync(TextWriter writer, CliAuthStatus status)
     {
         var identity = status.Identity;
@@ -529,9 +491,6 @@ public static class CliApplication
               [target options] [--scope <scope>] [--body <JSON|@file>] [--header name=value]... [--output <new-file>]
           target options: --gateway-url <url> --broker-issuer <url> --client-id <id>
               --api-audience <audience> --tenant-id <id> --project-id <id> --run-id <id>
-          agentweaver test --input <manifest> --output <evidence.jsonl>
-              [--native-probe-envelope <file>] [--dispatch-recovery-envelope <file>]
-              [--dry-run] [--interactive]
           agentweaver models byok prices --region <azure-region> --search <meter-text>
           agentweaver models byok plan --input <byok.json> --source <deploy/k8s> --output <new-plan.json>
               [--overlay-output <new-model-bindings.json>]

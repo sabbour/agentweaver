@@ -439,19 +439,6 @@ do not prove a deployed numeric boundary, restart recovery, or duplicate-send
 prevention. Child pre-dispatch and in-turn tool denials remain explicitly
 partial.
 
-The native CLI runner does not yet produce source-owned proof for every
-configured numeric boundary, the no-send and admitted-turn outcomes, the
-warning and floor-advance checks, or restart across gate-join checkpoints. It
-keeps imported pass claims for these probes blocked. Run the focused CLI
-regression tests with:
-
-```powershell
-dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --filter FullyQualifiedName~ApiAcceptanceNativeProbeTests
-```
-
-These controlled tests check status aggregation and evidence preservation. They
-do not produce live acceptance evidence.
-
 ## Run focused database checks
 
 Run the run-start readiness and authority regressions against disposable
@@ -646,26 +633,16 @@ or current adapter support. The Canvas research did not run interoperability, re
 The adapter is not implemented yet. Do not
 report the planned cases as product behavior or passing test evidence.
 
-## Test the native CLI candidate
+## Test the CLI
 
-Set `AGENTWEAVER_CLI_PATH` to the exact built apphost, then run the CLI
-acceptance project:
+Run the CLI unit tests after changing command behavior. Run the harness tests after changing API case launchers or scripts:
 
 ```powershell
-$env:AGENTWEAVER_CLI_PATH = (Resolve-Path .\artifacts\cli\win-x64\publish\agentweaver.exe).Path
-dotnet test tests\Agentweaver.Cli.Acceptance.Tests\Agentweaver.Cli.Acceptance.Tests.csproj --no-restore
+dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release
+npm run test:harness:api
 ```
 
-The project launches the exact apphost for `--version`, `api operations`
-discovery against locally emitted Gateway OpenAPI, and a valid
-`test --dry-run` manifest with `--interactive`. The dry-run reaches the
-production `Program` composition but must not authenticate, contact the
-manifest's loopback Gateway, or create evidence. Journey tests also call
-`CliApplication.RunAsync` in process. A supplemental spawned
-`Agentweaver.Cli.Acceptance.TestHost` exercises `CliApplication` with
-controlled providers and local HTTP; that test host is not the shipped apphost
-and is not production-authentication evidence. These checks do not exercise an
-authenticated mutation journey through the production apphost.
+The CLI tests check command behavior. The harness tests check script inputs, process arguments, and evidence handling with local fixtures. Neither runs a live API case or proves a deployed target.
 
 ## Windows archive checks
 
@@ -727,183 +704,11 @@ This sidecar is local controlled-test evidence only.
 `nativeJourneyProof` remains `not-run`. The sidecar is not release evidence and
 does not prove that the native API journey passed.
 
-## Run API acceptance with the native CLI
+## Run the read-only Gateway API case
 
-[Run a read-only CLI API case](./api-acceptance-migration.md) to check
-operation discovery and the signed-in actor's authorization context through
-normal CLI commands. That case is a migration example, not a replacement for
-the journeys below or full API acceptance.
+The API case scripts exercise normal CLI commands through the exact native apphost. The current case checks sign-in status, Gateway operation discovery, operation details, and the authorization context through `rest`. It does not create fixtures, mutate resources, send model requests, or open a browser.
 
-```powershell
-$cli = (Resolve-Path .\artifacts\cli\win-x64\publish\agentweaver.exe).Path
-& $cli test --input .\artifacts\acceptance-input.json --output .\artifacts\api-evidence.jsonl --interactive
-```
-
-Publish the self-contained apphost as described in the
-[CLI guide](./cli.md#build-and-run-from-source), or invoke the exact apphost
-extracted from a distribution candidate. The `test` target comes from the
-manifest, not target flags or environment variables; relative local paths in
-the manifest are resolved from its directory. `--interactive` explicitly
-allows browser authorization; use a fresh evidence path for each run. A live
-run creates and cleans up API fixtures, so use only an explicitly approved
-non-production target.
-
-Evidence reports `cleanup.state: "cleaned"` and omits the provisional failure
-reason only after every cleanup receipt and readback passes. An indeterminate
-result keeps its reason; reconcile that invocation before you retry.
-
-For input-only validation, add `--dry-run`. A successful dry run performs no
-network request, authentication, or browser launch and writes no evidence,
-even when `--interactive` is also present; validation failure may persist a
-blocked result to the requested output. The Node `harness:p1 -- --surface api`
-entrypoint is compatibility delegation only. If used, set
-`AGENTWEAVER_CLI_PATH` to this exact apphost; the wrapper delegates to
-`agentweaver test` and does not run a Node API journey or fall back to another
-runner. The CLI `rest` command makes individual Gateway requests and is not a
-substitute for this acceptance journey.
-
-The API journeys use the manifest actor. They do not run a cross-actor denial
-probe or require a second Broker account. The manifest rejects unknown
-`fixturePlan` fields, including fields for a second actor.
-
-An accepted root and first message can queue AgentHost startup. The start
-response may report `runtimeStartup.state` as `pending`; check the run's
-session status for the current startup state. `pending` does not mean that
-AgentHost is ready. This lifecycle check does not send a model turn. Do not
-count a controlled test, an HTTP request to an owner route, or a successful
-dry run as native API acceptance or proof of a running AgentHost.
-
-The `native-material-recovery` journey uses the Projects P1 setup receipt and
-the server-owned run selection. It sends one read-only casting request to the
-approved Bring Your Own Key (BYOK) model. The runner reads the stored user and
-assistant turn text and checks each text hash against its completion receipt.
-It then uses the ordinary Host replacement operation and checks that the new
-Host restores the same saved SDK cache. The replacement receipt must show no
-native send or tool effect. The runner sends the same casting request again
-and checks the Orchestrator replay receipt.
-
-The runner sends the setup receipt locator when it creates the pending run.
-Orchestrator checks the receipt with the exact run-bound token at start, before
-it accepts a root or delivers the first message. If first-start verification
-fails, the run stays pending and that attempt creates no root or first message.
-If a later delivery retry fails, the runner uses the existing cleanup path.
-
-This journey does not test authority revocation, stale-binding denial,
-changed-payload retry, optional-cache absence or expiry, or missing or expired
-required turn material. A passed session-material row does not imply that
-these separate checks or full API acceptance passed.
-
-This journey performs one model request and replaces the Host. Use it only on
-an approved non-production target, with an approved model and spend limit and
-explicit approval for Host replacement. The runner reports session-material
-acceptance only when the bound turn, material readback, replacement, replay,
-and project/run cleanup receipts all validate. This result does not replace the
-separate archive and operating-system checks, or other required P1 probes.
-
-## Run the full-flow delivery journey
-
-The `full-flow-delivery` journey is the end-to-end acceptance test for the
-main delivery path. It uses a real Bring Your Own Key (BYOK) model. It checks
-outcomes, not exact model text. Use it after you change casting, the project
-backlog, run usage, or the run setup that these steps use.
-
-> [!WARNING]
-> This journey sends real model requests, which cost money. It also creates
-> and then removes a project, a run, and role assignments on the target. Run it
-> only on an approved non-production target, and only with an approved BYOK
-> model and spend limit.
-
-Before you run the journey, make sure that:
-
-- The target has the approved BYOK model binding. See
-  [Configure an Azure OpenAI BYOK model](./configure-byok-azure-openai.md).
-- The platform runtime defaults select that BYOK model as `modelSelection`.
-  The journey project starts with an empty configuration, so the run uses the
-  platform defaults. See
-  [Bootstrap the first PlatformAdmin and configure runtime defaults](./deploy-to-azure.md#bootstrap-the-first-platformadmin-and-configure-runtime-defaults).
-- The platform `runLimits.spendBudgets` contains a hard budget with
-  `scope: "run"`, `meterSource: "byok.tokens"`, and `unit: "USD"`. Its
-  `hardLimit` must be more than 0 and not more than the manifest `maxRunUsd`.
-
-Use the same manifest as the other API journeys, with
-`journey: "full-flow-delivery"`. Omit `selectionContext`. Set `gate` and
-`message` to `null`. The [CLI guide](./cli.md#run-the-full-flow-delivery-journey)
-gives the required `fullFlow` fields.
-
-1. Validate the manifest offline:
-
-   ```powershell
-   $cli = (Resolve-Path .\artifacts\cli\win-x64\publish\agentweaver.exe).Path
-   & $cli test --input .\artifacts\full-flow-input.json --output .\artifacts\full-flow-evidence.jsonl --dry-run
-   ```
-
-   A successful dry run makes no network request, sign-in, or model call, and
-   writes no evidence.
-
-2. Run the journey. Use a new evidence path for each run:
-
-   ```powershell
-   & $cli test --input .\artifacts\full-flow-input.json --output .\artifacts\full-flow-evidence.jsonl --interactive
-   ```
-
-The journey does these steps in order:
-
-1. **Run setup.** It creates a project with Owner and Orchestrator
-   assignments, and a run from the platform defaults. Before it starts the
-   run, it reads the run
-   selection. If the selection does not use the approved BYOK model, or has no
-   hard run budget on `byok.tokens` in USD at or below `maxRunUsd`, the result
-   is `blocked` and no run is started.
-2. **Casting.** It sends one casting request to the model. It checks the
-   completion receipt, reads back the stored user and assistant text, and
-   compares their hashes with the receipt. The draft must have exactly two
-   agents with different roles from the role catalog, and no reserved role.
-3. **Casting confirmation.** It confirms the draft and reads the project
-   configuration. The configuration revision and casting must match the
-   confirmation.
-4. **Backlog task.** It captures one task, reads it back, archives it, and
-   reads it back again.
-5. **Usage.** It reads the run usage until the BYOK usage is priced. The total
-   must not be more than `maxRunUsd`.
-6. **Cleanup.** It cancels the run and waits for Host cleanup. It then removes
-   the Orchestrator assignment, archives the project, and removes the Owner
-   assignment last. It reads back each result.
-
-The time limit starts when fixture setup starts, after sign-in. Setup and
-journey work stop five minutes before `maxDurationMinutes`. Cleanup then runs.
-Cleanup has its own bounded wait for runtime cleanup, so the command can run
-a few minutes longer than `maxDurationMinutes`. The hard run budget, not the
-time limit, limits model spend. The result has the kind
-`full-flow-acceptance-result`, and the exit codes are `0` for passed, `1` for
-failed, and `2` for blocked. The evidence contains hashes, IDs, and amounts.
-It does not contain the prompt, the model output, or a credential.
-
-The journey does not yet cover workflow generation, or a model that completes
-a backlog task. The Gateway has no routes for these steps. The evidence lists
-them as gaps in `observations.fullFlow.criticalPathCoverage`, so a passed
-result is not proof of the complete delivery path.
-
-### Keep critical-path coverage current
-
-The file `tests/fixtures/critical-paths.json` lists each critical path, the
-journey that tests it, and the Gateway route prefixes that it watches. The
-`CriticalPathCoverageTests` tests run in the CLI acceptance project in pull
-request CI. They fail when:
-
-- A watched prefix matches no Gateway route.
-- A Gateway route under a watched prefix is not covered by the journey and is
-  not listed in `outOfPath` with a reason.
-- A covered operation is not in the Gateway route catalog or in the journey's
-  list of required operations.
-- An `outOfPath` entry has no reason or is not a watched route.
-- A Gateway route path contains the text of a gap. When this happens, extend the
-  journey to cover the new route, then move the prefix from `gaps` to
-  `watchRoutePrefixes`.
-
-The check finds new and removed operations. It does not find a change to the
-behavior or body of a route that keeps its operation ID. When you add or change
-a feature on a critical path, update the journey and this file in the same pull
-request.
+Follow [Run a read-only CLI API case](./api-acceptance-migration.md) for the approved target, case input, exact apphost, dry run, and evidence results. Use only an explicitly approved non-production target. The successful dry run validates local inputs only and creates no evidence. A passing case does not prove full API or P1 acceptance.
 
 ## Record release acceptance results
 
@@ -913,9 +718,9 @@ the [release acceptance checklist](https://github.com/sabbour/agentweaver/blob/v
 Do not keep a completed implementation issue open only to hold a live-test
 task; move that task to the tracker after source delivery is complete.
 
-For a native API item, link the approved input manifest and its hash, then link
+For a native API item, link the approved case input and its hash, then link
 the unmodified evidence output and hash for each attempt. Record the tested
-apphost and source or deployment identity, plus the cleanup result. For a
+apphost and source or deployment identity, plus the result. For a
 browser item, link the browser procedure and its separate retained evidence.
 Keep API and browser results separate. Preserve failed or blocked attempts; add
 a new attempt when you test corrected source.
@@ -930,7 +735,7 @@ procedures above.
 
 ## Test API, UI, and retained MCP compatibility code
 
-Run the controlled local adapter tests with:
+Run the local harness tests after changing an API case, launcher, UI journey, or retained MCP compatibility code:
 
 ```powershell
 npm run test:harness
@@ -939,159 +744,9 @@ npm run test:harness:ui
 npm run test:harness:mcp
 ```
 
-`npm run test:harness:api` is a Node contract-test suite that mocks the
-wrapper/process contract; it does not launch the runtime acceptance apphost or
-retain a second Node API client. Use the native apphost command above for API
-acceptance. The retained MCP adapter tests use a pinned SDK and loopback
-JSON-RPC server; they are legacy
-compatibility tests, not a supported Agentweaver MCP product or acceptance
-surface. The UI tests use injected page doubles, not a browser. These tests
-check fixture creation, selected surface calls, cleanup outcomes, and refusal
-of unverified ownership claims. They do not prove live owner behavior, native
-model execution, or deployment.
+The API tests cover the checked-in case scripts and launcher contracts with local fixtures. They do not run the case against a live Gateway. The UI tests use controlled browser or page fixtures. The retained MCP adapter tests check compatibility code only; MCP is not a supported product or API acceptance surface.
 
-The retained controlled journal regression starts with an empty in-memory event
-journal. It checks both explicit raw-context selection and the pending-run
-selection path. The pending path uses `createProjectRun`, the returned run and
-root-session IDs, an independent selection readback, and normal run-bound
-authorization. Fixture setup then invokes the Gateway
-`sendProjectRunMessage` operation with an invocation-scoped `Idempotency-Key`
-and checks the exact accepted receipt before the API surface runner replays the
-event and validates its identity, cursor, and position. The owner-addressed
-event does not dispatch native work. Cleanup cancels the owned run and checks
-the terminal run, root, and tree before it removes authority. It then archives
-the project and independently checks the archived project and empty assignment
-list. Missing execution intent or an invalid owner contract is refused, and an
-ambiguous write or cleanup result remains indeterminate rather than causing a
-retry.
-This controlled regression does not prove distributable apphost acceptance or
-verify the production evidence providers.
-
-The .NET CLI acceptance transport test also starts with an empty in-memory
-journal. Its controlled Gateway handler adds an event only when it accepts
-`sendProjectRunMessage`, then returns that same event from `replayRunEvents`.
-The test checks the accepted message ID, event identity, and request order. It
-does not prove a database commit or authenticated apphost execution.
-
-The first native `board-delete` API journey also has controlled Gateway
-transport regressions. They check distinct Gateway and Broker origins,
-32-character project IDs through partial-setup cleanup, exclusive reservation
-against interrupted and concurrent retries, exact compacted-task revision
-increments, the fixed stale-graph/stale-task/dependent-delete/owner-permission
-outcomes, persisted deletion readbacks, project archival, owner-grant
-revocation, cleanup failure precedence, and refusal to retry an ambiguous
-delete. An owner-denial response must be HTTP `403` with JSON
-`error` equal to `backlog_project_permission_denied`; the result preserves
-that exact value as `ownerIssueCode`. A generic Gateway problem with
-`code: "forbidden"` or a bodyless `403` does not pass the owner-denial check.
-The runner also requires the authoritative graph to remain unchanged after
-the rejected delete. Its fake Gateway and evidence provider do not prove live
-authorization, deployed source provenance, or apphost acceptance. Run the
-focused tests with:
-
-```powershell
-dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~ApiAcceptanceManifestTests
-dotnet test tests\Agentweaver.Cli.Acceptance.Tests\Agentweaver.Cli.Acceptance.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~BoardDelete
-```
-
-The message, journal, gate, and `session-history-metric` regressions exercise
-accepted-root cleanup through the real CLI runner. They check cancellation
-with an unbound Orchestrator client, advanced-fence run/root/tree readbacks,
-and the runtime cleanup wait before role removal. A delayed cleanup check
-reports `cleanup_pending` before `cleanup_complete`. A timeout check confirms
-that the CLI records failure and does not remove roles or archive the project.
-Metric tests also retain the archived and detached child checks and metric
-counts. Lost create or seed responses, invalid selection revisions,
-unavailable run-bound reads, and failed cancellation or terminal readbacks
-must remain indeterminate and must not remove project authority. Run the
-focused tests with:
-
-```powershell
-dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~ApiAcceptanceManifestTests
-dotnet test tests\Agentweaver.Cli.Acceptance.Tests\Agentweaver.Cli.Acceptance.Tests.csproj --configuration Release --no-restore --filter "FullyQualifiedName~ApiAcceptanceRunnerTests|FullyQualifiedName~ApiAcceptanceFeatureJourneyTests"
-```
-
-These regressions use a controlled Gateway and do not prove live authorization,
-deployed source provenance, or production apphost mutation behavior.
-
-Deployment-evidence provider tests verify registry and Kubernetes checks with
-controlled responses. They cover the GHCR default, approved ACR references,
-ACR pull-token exchange, redirects that do not forward bearer tokens,
-rejection of unapproved registries, exact source labels, immutable image
-digests, and AgentHost platform and compressed-byte checks. These tests do
-not contact ACR or prove a live rollout. They also verify that an omitted
-image keeps its current approved registry when selected images use another
-registry.
-
-Board deployment-provider tests separately verify the mixed source receipts:
-Gateway, Orchestrator, and authority owners keep their own source identity,
-while the selected immutable Orchestrator image digest must match its OCI
-source labels and the running Pod image ID. They use controlled GitHub,
-registry, and Kubernetes responses; they do not prove a live rollout.
-
-Run the focused registry tests with:
-
-```powershell
-dotnet test tests\Agentweaver.Cli.Acceptance.Tests\Agentweaver.Cli.Acceptance.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~AcceptanceDeploymentEvidenceProviderTests
-dotnet test tests\Agentweaver.Cli.Tests\Agentweaver.Cli.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~ApiAcceptanceManifestTests
-```
-
-The one-account API acceptance sign-in launcher also has a real browser regression that
-uses loopback redirects only. Install the Playwright test browser and run it:
-
-```powershell
-npx playwright install chromium
-npm run test:harness:signin-browser
-```
-
-The regression starts Chrome with a fresh empty profile under the ignored
-`scripts/ui-harness/.auth/` directory and deletes it in `finally`. It checks
-that a callback reached through server-side redirects is blocked before the
-Portal document or script loads. The launcher waits for Chrome to abort each
-intercepted callback before it validates the state or exchanges a code.
-Invalid callbacks must also produce zero Portal requests. Closing the page
-is not a substitute for aborting the request. The interception session stays
-attached until the page closes, including when sign-in fails or is cancelled.
-The shared contract tests delay the abort acknowledgement to check this
-ordering without depending on browser timing.
-It renders Broker consent when that response arrives through a redirect.
-The harness entrypoints reject `--surface mcp` and `--surface api,mcp`
-explicitly and never route those selections to the legacy runner. Use
-`--surface api` for API acceptance. Retained MCP adapter and UI browser
-tests remain local compatibility checks; they do not sign in to Entra, use an
-existing profile or credential cache, or prove live SSO. Each token request closes
-only its authorization page, keeping the shared browser alive until the
-launcher finishes.
-CI runs both the harness contract suite and this browser regression.
-
-API acceptance does not require publication receipts, source claims,
-image measurements, or local OCI archives. The harness still requires the
-selected environment, current provider/runtime/storage inputs, owned fixtures,
-and independently produced native/recovery evidence. See
-`scripts/harness-shared/P1-operator.md` for the operator steps.
-
-To check timing-sensitive changes, run the browser suite repeatedly, both
-normally and with `NODE_V8_COVERAGE` set to a local output directory. Keep
-the zero-request assertions unchanged and record the pass and failure counts
-for each mode. Coverage instrumentation can expose cleanup races that do
-not appear in a single run. These local runs do not prove live sign-in.
-
-The runtime-observation probe also has a focused local test:
-
-```powershell
-node --test scripts\api-harness\test\runtime-observation.test.mjs scripts\azure\p1-dispatch-recovery-probes\tests\run.test.mjs
-```
-
-This read-only probe requires an already authorized client and real Environment
-creation evidence. Stored rows alone do not prove dispatch, a late provider
-callback, or verified resource release. The full harness runner validates its
-target and plan before it reads credentials or starts a surface client. It
-does not sign in, refresh tokens, or grant authority. For setup requirements,
-see the
-[API harness guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/api-harness/README.md),
-[UI harness guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/ui-harness/README.md),
-and [MCP harness guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/mcp-harness/README.md).
-
+Use [Run a read-only CLI API case](./api-acceptance-migration.md) for the current CLI and `rest` acceptance procedure. Keep controlled test results separate from live target evidence.
 ## Validate documentation changes
 
 After you edit documentation, run these commands from the repository root:

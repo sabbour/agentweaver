@@ -1,6 +1,6 @@
-using System.Text.Json.Nodes;
 using System.Diagnostics;
 using System.Net;
+using System.Text.Json.Nodes;
 using Agentweaver.Cli;
 using Agentweaver.Cli.Api;
 using Agentweaver.Gateway;
@@ -11,14 +11,13 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Xunit;
 
-namespace Agentweaver.Cli.Acceptance.Tests;
+namespace Agentweaver.Cli.Tests;
 
 public sealed class GatewayOpenApiParityTests
 {
     [Fact]
-    public async Task CliDiscoveryParsesEmittedGatewayDocumentAndJournalGateRejectsContractMutation()
+    public async Task CliDiscoveryParsesTheEmittedGatewayDocument()
     {
         await using var app = await StartGatewayAsync();
         string address = app.Services.GetRequiredService<IServer>()
@@ -26,7 +25,7 @@ public sealed class GatewayOpenApiParityTests
         using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
         using HttpResponseMessage response = await http.GetAsync(new Uri(new Uri(address), "/openapi/v1.json"));
         string artifact = await response.Content.ReadAsStringAsync();
-        Assert.True(response.StatusCode == HttpStatusCode.OK, $"Gateway OpenAPI returned {(int)response.StatusCode}: {artifact}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
         JsonObject emitted = JsonNode.Parse(artifact)!.AsObject();
         Assert.Equal("3.1.0", emitted["openapi"]?.GetValue<string>());
@@ -36,49 +35,29 @@ public sealed class GatewayOpenApiParityTests
         Assert.Equal("http", bearer["type"]?.GetValue<string>());
         Assert.Equal("bearer", bearer["scheme"]?.GetValue<string>());
         Assert.NotNull(emitted["security"]);
+
         var target = new CliTarget(
             new Uri(address),
             new Uri("https://issuer.example/"),
-            "acceptance-tests",
+            "cli-tests",
             "agentweaver",
             "tenant-test");
         var api = new GatewayClient(http, new CliIdentity(target, ["openid", "api.read", "offline_access"]));
-
         JsonObject discovered = await api.DiscoverAsync(CancellationToken.None);
+
         Assert.True(JsonNode.DeepEquals(emitted, discovered));
         JsonObject createProject = FindOperation(discovered, "createProject");
         Assert.Contains("503", Assert.IsType<JsonObject>(createProject["responses"]).Select(item => item.Key));
         Assert.Contains("role_assignment_unavailable",
             createProject["responses"]?["503"]?["description"]?.GetValue<string>());
-        ApiAcceptanceFixtureSetup.ValidateJournalMessageOperation(discovered);
-
-        JsonObject mutatedBody = (JsonObject)discovered.DeepClone();
-        JsonObject message = FindOperation(mutatedBody, "sendProjectRunMessage");
-        message["requestBody"]!["required"] = false;
-        AcceptanceBlockedException bodyFailure = Assert.Throws<AcceptanceBlockedException>(
-            () => ApiAcceptanceFixtureSetup.ValidateJournalMessageOperation(mutatedBody));
-        Assert.Contains("required owner contract", bodyFailure.Message, StringComparison.Ordinal);
-
-        JsonObject mutatedHeader = (JsonObject)discovered.DeepClone();
-        message = FindOperation(mutatedHeader, "sendProjectRunMessage");
-        JsonArray parameters = message["parameters"] as JsonArray ?? [];
-        JsonObject idempotencyKey = Assert.Single(parameters.OfType<JsonObject>(), parameter =>
-            parameter["in"]?.GetValue<string>() == "header" &&
-            parameter["name"]?.GetValue<string>() == "Idempotency-Key");
-        idempotencyKey["required"] = false;
-        AcceptanceBlockedException headerFailure = Assert.Throws<AcceptanceBlockedException>(
-            () => ApiAcceptanceFixtureSetup.ValidateJournalMessageOperation(mutatedHeader));
-        Assert.Contains("required owner contract", headerFailure.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task ConfiguredApphostDiscoversEmittedGatewayArtifactOverControlledHttp()
+    public async Task BuiltApphostDiscoversTheEmittedGatewayArtifactOverControlledHttp()
     {
-        string? configuredPath = Environment.GetEnvironmentVariable("AGENTWEAVER_CLI_PATH");
-        Assert.False(string.IsNullOrWhiteSpace(configuredPath),
-            "Set AGENTWEAVER_CLI_PATH to the exact built agentweaver apphost for process integration tests.");
-        string executable = Path.GetFullPath(configuredPath!);
-        Assert.True(File.Exists(executable), $"AGENTWEAVER_CLI_PATH does not exist: {executable}");
+        string executable = ResolveCliApphost();
+        Assert.True(File.Exists(executable), $"The built apphost does not exist: {executable}");
+
         await using var app = await StartGatewayAsync();
         string address = app.Services.GetRequiredService<IServer>()
             .Features.Get<IServerAddressesFeature>()!.Addresses.Single();
@@ -96,7 +75,7 @@ public sealed class GatewayOpenApiParityTests
             "api", "operations",
             "--gateway-url", address,
             "--broker-issuer", "https://issuer.example/",
-            "--client-id", "acceptance-tests",
+            "--client-id", "cli-tests",
             "--api-audience", "agentweaver",
             "--tenant-id", "tenant-test",
         })
@@ -120,6 +99,18 @@ public sealed class GatewayOpenApiParityTests
         Assert.Contains("sendMessage", operationIds);
     }
 
+    private static string ResolveCliApphost()
+    {
+        DirectoryInfo? root = new(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Agentweaver.slnx")))
+            root = root.Parent;
+        Assert.NotNull(root);
+
+        string configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name ?? "Release";
+        string apphost = OperatingSystem.IsWindows() ? "agentweaver.exe" : "agentweaver";
+        return Path.Combine(root!.FullName, "tools", "Agentweaver.Cli", "bin", configuration, "net10.0", apphost);
+    }
+
     private static JsonObject FindOperation(JsonObject document, string operationId)
     {
         JsonObject paths = Assert.IsType<JsonObject>(document["paths"]);
@@ -132,7 +123,7 @@ public sealed class GatewayOpenApiParityTests
         throw new Xunit.Sdk.XunitException($"The emitted Gateway artifact has no {operationId} operation.");
     }
 
-    internal static async Task<WebApplication> StartGatewayAsync()
+    private static async Task<WebApplication> StartGatewayAsync()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {

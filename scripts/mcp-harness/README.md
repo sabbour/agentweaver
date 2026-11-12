@@ -86,22 +86,10 @@ revokes the Orchestrator assignment, archives the project, and then revokes
 the Owner assignment. A failure after a mutating request is sent is
 indeterminate and is not retried. The runner does not invoke an Orchestrator dispatch method.
 
-Supply the same `executionIntent: "execute"` manifest and four
-`deploymentEvidence` paths documented by the API harness. `fixturePlan`
-requires a positive `expectedPlatformRuntimeRevision`, the exact selection
-context, and the selected gate or message content. The API journeys do not run
-a cross-actor denial probe or require a second
-Broker account. The manifest rejects unknown `fixturePlan` fields, including
-fields for a second actor. Do not change any role or access grant. The runner
-sends that expected revision through the existing run-selection
-request and verifies the accepted and observed owner selection revisions.
-This plan value is not authority or an ownership receipt; the owner
-compare-and-swap checks it against current state. The fixture retains its
-project-configuration read and does not call the PlatformAdmin-only global
-runtime-default endpoint.
-
-See the [operator guide](../harness-shared/P1-operator.md) for the
-prerequisites, dry run, one-account sign-in, and cleanup instructions.
+This harness is retained compatibility tooling. It does not provide API
+acceptance. Use the checked-in [read-only CLI API case](../../docs/guide/api-acceptance-migration.md)
+for the supported API procedure; that case uses public CLI commands and
+`rest`, not this MCP adapter.
 
 Do not invoke this retained MCP journey through the Agentweaver 1.x CLI:
 `--surface mcp` and `--surface api,mcp` are unsupported there and fail
