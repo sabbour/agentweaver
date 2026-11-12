@@ -391,6 +391,16 @@ internal sealed class RuntimeRegistrationOwner(
 
     internal async Task<RuntimeRegistration> ReadCurrentForCheckpointRecoveryAsync(
         HttpContext context, Guid runtimeInstanceId, Guid operationId, CancellationToken cancellationToken)
+        => await ExecuteCurrentForCheckpointRecoveryAsync(
+            context, runtimeInstanceId, operationId,
+            (registration, _) => Task.FromResult(registration), cancellationToken).ConfigureAwait(false);
+
+    internal async Task<T> ExecuteCurrentForCheckpointRecoveryAsync<T>(
+        HttpContext context,
+        Guid runtimeInstanceId,
+        Guid operationId,
+        Func<RuntimeRegistration, CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken)
     {
         if (operationId == Guid.Empty)
             throw new RuntimeAuthorizationException("checkpoint_recovery_registration_stale");
@@ -403,8 +413,7 @@ internal sealed class RuntimeRegistrationOwner(
             actor, identity, operationId, cancellationToken).ConfigureAwait(false);
         var authorization = new CheckpointRecoveryRegistrationAuthorization(operationId, status);
         return await ExecuteCurrentAsync(
-            context, runtimeInstanceId, (registration, _) => Task.FromResult(registration),
-            cancellationToken, authorization).ConfigureAwait(false);
+            context, runtimeInstanceId, action, cancellationToken, authorization).ConfigureAwait(false);
     }
 
     /// <summary>

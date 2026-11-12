@@ -68,7 +68,8 @@ public sealed class RuntimeSessionMaterialHttpClient(
             registration.Revision, registration.Binding.ExecutionFence, kind,
             bytes, role, session.Facts.SdkVersion, session.Facts.ModelId)
         {
-            MaxPromptTokens = session.Facts.MaxPromptTokens
+            MaxPromptTokens = session.Facts.MaxPromptTokens,
+            CheckpointRecoveryOperationId = session.CheckpointRecoveryOperationId
         };
         SessionMaterialValidation.Validate(request);
         if (kind == SessionMaterialKind.RuntimeConfiguration)

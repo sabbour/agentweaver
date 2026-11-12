@@ -109,7 +109,10 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
             new SecretCredential(request.CredentialValue, request.CredentialExpiresAt, timeProvider));
         var proof = new RuntimeCredentialProof(
             request.GrantId, request.RuntimeInstanceId, 1, RuntimeCredentialPurpose.Configure,
-            registration.Binding.ConfigureEndpoint, request.ConfigurationHash, lifetime.Credential);
+            registration.Binding.ConfigureEndpoint, request.ConfigurationHash, lifetime.Credential)
+        {
+            CheckpointRecoveryOperationId = request.CheckpointRecoveryOperationId
+        };
         var verifier = new RuntimePendingBootstrapHttpClient(client, options.BrokerOwnerAddress, actor);
         RequireGrant(await verifier.VerifyPendingBootstrapDeliveryAsync(
             proof, request.OperationId, cancellationToken).ConfigureAwait(false), registration);

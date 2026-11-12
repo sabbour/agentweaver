@@ -436,10 +436,15 @@ public static partial class CoordinationEndpoints
         if (checkpointRecoveryRegistration is { } recovery)
         {
             var gate = decision.State.PendingGate;
-            if (decision.StateVersion != recovery.Status.DecisionStateVersion ||
-                gate is null || gate.Fence != owner.ExecutionFence ||
-                gate.RequestId != recovery.Status.GateRequestId ||
-                gate.AuthorizedActorId != recovery.Status.GateAuthorizedActorId)
+            var savedGateIsCurrent =
+                decision.StateVersion == recovery.Status.DecisionStateVersion &&
+                gate is { } pendingGate &&
+                pendingGate.Fence == owner.ExecutionFence &&
+                pendingGate.RequestId == recovery.Status.GateRequestId &&
+                pendingGate.AuthorizedActorId == recovery.Status.GateAuthorizedActorId;
+            if (recovery.Status.Phase == "pending" && !savedGateIsCurrent ||
+                recovery.Status.Phase == "ready" &&
+                    decision.StateVersion < recovery.Status.DecisionStateVersion)
                 throw new CoordinationException(
                     "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
             return;

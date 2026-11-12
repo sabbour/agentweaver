@@ -32,7 +32,11 @@ public sealed record RuntimeSdkSourceReceipt(
 
 /// <summary>Request for a current runtime usage cost preflight.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record RuntimeUsageCostPreflightRequest(int ContractVersion = 1);
+public sealed record RuntimeUsageCostPreflightRequest(int ContractVersion = 1)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CheckpointRecoveryOperationId { get; init; }
+}
 
 /// <summary>Current provider, meter, and pricing readiness for a runtime usage source.</summary>
 public sealed record RuntimeUsageCostPreflightReceipt(

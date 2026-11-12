@@ -4864,7 +4864,7 @@ internal sealed partial class CoordinationOwnerStore
                     updated_at = clock_timestamp()
                 WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
                     AND root_session_id = @root AND accepted_selection_hash = @selection
-                    AND execution_fence = @previousFence AND row_version = @intentVersion
+                    AND execution_fence = @currentFence AND row_version = @intentVersion
                     AND NOT cleanup_obligation
                 """, connection, transaction);
             updateIntent.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, readyIntent.TenantId);
@@ -4873,7 +4873,7 @@ internal sealed partial class CoordinationOwnerStore
             updateIntent.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, readyIntent.RootSessionId);
             updateIntent.Parameters.AddWithValue("selection", NpgsqlDbType.Char, readyIntent.AcceptedSelectionHash);
             updateIntent.Parameters.AddWithValue("nextFence", NpgsqlDbType.Bigint, readyIntent.ExecutionFence);
-            updateIntent.Parameters.AddWithValue("previousFence", NpgsqlDbType.Bigint, status.PreviousExecutionFence);
+            updateIntent.Parameters.AddWithValue("currentFence", NpgsqlDbType.Bigint, status.ExecutionFence);
             updateIntent.Parameters.AddWithValue("intentVersion", NpgsqlDbType.Bigint, readyIntent.RowVersion);
             updateIntent.Parameters.AddWithValue("bootstrap", NpgsqlDbType.Uuid, readyIntent.BootstrapOperationId);
             updateIntent.Parameters.AddWithValue("consume", NpgsqlDbType.Uuid, readyIntent.ConsumeOperationId);

@@ -80,7 +80,8 @@ public sealed class RuntimeSessionBootstrap(
             throw new RuntimeAuthorizationException("runtime_model_source_mode_unavailable");
         if (bootstrap.Audience != registration.Binding.ConfigureEndpoint)
             throw new RuntimeAuthorizationException("runtime_configuration_audience_invalid");
-        var acceptedSkills = await skillContent.ReadAsync(registration, cancellationToken)
+        var acceptedSkills = await skillContent.ReadAsync(
+            registration, cancellationToken, checkpointRecoveryOperationId)
             .ConfigureAwait(false);
         await RequireUnchangedAsync(registration, cancellationToken).ConfigureAwait(false);
 
@@ -114,7 +115,8 @@ public sealed class RuntimeSessionBootstrap(
             Func<CancellationToken, Task<RuntimeSessionRecovery>>? journalFallback = null;
             async Task RequireSkillContentCurrentAsync(CancellationToken token)
             {
-                var current = await skillContent.ReadAsync(registration, token).ConfigureAwait(false);
+                var current = await skillContent.ReadAsync(
+                    registration, token, checkpointRecoveryOperationId).ConfigureAwait(false);
                 if (!SameAcceptedSkills(acceptedSkills, current))
                     throw new RuntimeAuthorizationException("runtime_skill_content_stale");
             }

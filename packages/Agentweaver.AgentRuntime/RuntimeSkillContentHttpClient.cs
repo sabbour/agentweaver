@@ -18,7 +18,8 @@ public sealed class RuntimeSkillContentHttpClient(
     /// <exception cref="RuntimeAuthorizationException">The returned content does not match the registration.</exception>
     internal async Task<SkillRuntimeContentProjectionV1> ReadAsync(
         RuntimeRegistration registration,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null)
     {
         ArgumentNullException.ThrowIfNull(registration);
         RuntimeContractValidation.Validate(registration);
@@ -26,7 +27,9 @@ public sealed class RuntimeSkillContentHttpClient(
         var projection = await RuntimeOwnerHttpTransport.SendAsync<SkillRuntimeContentProjectionV1>(
             client,
             _address,
-            $"/internal/runtime/registrations/{registration.RuntimeInstanceId:D}/skills",
+            checkpointRecoveryOperationId is { } operationId
+                ? $"/internal/runtime/registrations/{registration.RuntimeInstanceId:D}/checkpoint-recovery/{operationId:D}/skills"
+                : $"/internal/runtime/registrations/{registration.RuntimeInstanceId:D}/skills",
             actor,
             null,
             cancellationToken).ConfigureAwait(false);

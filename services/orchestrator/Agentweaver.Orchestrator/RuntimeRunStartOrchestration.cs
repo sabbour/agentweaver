@@ -1041,6 +1041,18 @@ internal sealed class RuntimeRunStartContinuation(
         if (status.Phase != "pending")
             return result;
 
+        await using var continuationLease = await store.TryAcquireAsync(intent, cancellationToken)
+            .ConfigureAwait(false);
+        if (continuationLease is null)
+            return result;
+        status = await recoveryStore.ReadCheckpointRecoveryStatusAsync(
+            actor, result.Session, result.OperationId, cancellationToken).ConfigureAwait(false);
+        result = result with { CheckpointRecovery = status };
+        if (status.Phase != "pending")
+            return result;
+        intent = await store.ReadAsync(intent, cancellationToken).ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("checkpoint_recovery_runtime_stale");
+
         var links = ReadReceiptLinks(intent);
         var hasPreviousRuntimeEvidence =
             links.ContainsKey("checkpointRecoveryPreviousRegistration") &&

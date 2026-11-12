@@ -1853,6 +1853,16 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             Assert.True(links.RootElement.TryGetProperty("checkpointRecoveryPreviousPlacement", out _));
         }
 
+        var runStartStore = new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema);
+        var firstLease = await runStartStore.TryAcquireAsync(intent, CancellationToken.None);
+        Assert.NotNull(firstLease);
+        Assert.Null(await runStartStore.TryAcquireAsync(intent, CancellationToken.None));
+        await firstLease.DisposeAsync();
+        await using (await runStartStore.TryAcquireAsync(intent, CancellationToken.None)
+            ?? throw new InvalidOperationException("The released run-start lease could not be retried."))
+        {
+        }
+
         var placement = status with { CurrentStep = "placement" };
         var updated = await _store.UpdateCheckpointRecoveryProgressAsync(
             _actor, _root, operationId, placement, CancellationToken.None);

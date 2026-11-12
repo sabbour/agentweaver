@@ -69,6 +69,14 @@ public sealed class RuntimeRegistrationRecoveryTests
             {
                 Status = authorization.Status with { Phase = "ready" }
             });
+        var answered = asked.State!.ApplyGateAnswer(new CoordinatorGateAnswer(
+            "recovery-gate", "actor", fence, "repository-a", null));
+        Assert.True(answered.IsAccepted);
+        CoordinationEndpoints.RequireCoordinatorRootDecision(
+            new CoordinatorDecisionCurrentState(
+                answered.State, decisionVersion + 1, selectionHash),
+            owner,
+            authorization with { Status = authorization.Status with { Phase = "ready" } });
 
         Assert.Equal("runtime_owner_context_unavailable",
             Assert.Throws<CoordinationException>(() =>

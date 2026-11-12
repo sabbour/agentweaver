@@ -22,37 +22,43 @@ internal sealed class RuntimeSkillContentOwner(
     public Task<SkillRuntimeContentProjectionV1> ReadCurrentAsync(
         HttpContext context,
         Guid runtimeInstanceId,
-        CancellationToken cancellationToken) =>
-        registrations.ExecuteCurrentAsync(
-            context,
-            runtimeInstanceId,
-            async (registration, token) =>
+        CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null)
+    {
+        async Task<SkillRuntimeContentProjectionV1> ReadAsync(
+            RuntimeRegistration registration, CancellationToken token)
+        {
+            var binding = registration.Binding;
+            var skills = await projects.ReadAcceptedRunSkillsAsync(context, registration, token)
+                .ConfigureAwait(false);
+            var projection = new SkillRuntimeContentProjectionV1(
+                SkillRuntimeContentContract.CurrentVersion,
+                registration.RuntimeInstanceId,
+                registration.Revision,
+                binding.ProjectConfigurationRevision,
+                binding.ExecutionFence,
+                binding.TenantId,
+                binding.ProjectId,
+                binding.RunId,
+                binding.SessionId,
+                binding.AgentId,
+                binding.AcceptedSelectionHash,
+                skills);
+            try
             {
-                var binding = registration.Binding;
-                var skills = await projects.ReadAcceptedRunSkillsAsync(context, registration, token)
-                    .ConfigureAwait(false);
-                var projection = new SkillRuntimeContentProjectionV1(
-                    SkillRuntimeContentContract.CurrentVersion,
-                    registration.RuntimeInstanceId,
-                    registration.Revision,
-                    binding.ProjectConfigurationRevision,
-                    binding.ExecutionFence,
-                    binding.TenantId,
-                    binding.ProjectId,
-                    binding.RunId,
-                    binding.SessionId,
-                    binding.AgentId,
-                    binding.AcceptedSelectionHash,
-                    skills);
-                try
-                {
-                    SkillRuntimeContentContract.ValidateProjection(projection);
-                }
-                catch (ArgumentException)
-                {
-                    throw new RuntimeAuthorizationException("runtime_skill_content_invalid");
-                }
-                return projection;
-            },
-            cancellationToken);
+                SkillRuntimeContentContract.ValidateProjection(projection);
+            }
+            catch (ArgumentException)
+            {
+                throw new RuntimeAuthorizationException("runtime_skill_content_invalid");
+            }
+            return projection;
+        }
+
+        return checkpointRecoveryOperationId is { } operationId
+            ? registrations.ExecuteCurrentForCheckpointRecoveryAsync(
+                context, runtimeInstanceId, operationId, ReadAsync, cancellationToken)
+            : registrations.ExecuteCurrentAsync(
+                context, runtimeInstanceId, ReadAsync, cancellationToken);
+    }
 }

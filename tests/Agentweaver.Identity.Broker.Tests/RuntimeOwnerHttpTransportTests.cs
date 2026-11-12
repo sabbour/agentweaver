@@ -12,6 +12,32 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed class RuntimeOwnerHttpTransportTests
 {
     [Fact]
+    public void CheckpointRecoveryOperationSurvivesBootstrapRequestSerialization()
+    {
+        var operationId = Guid.NewGuid();
+        var material = new SessionMaterialWriteRequest(
+            1, Guid.NewGuid(), Guid.NewGuid(), 1, 2, SessionMaterialKind.RuntimeConfiguration,
+            "{}"u8.ToArray(), SdkVersion: "1.0.0", ModelId: "model")
+        {
+            CheckpointRecoveryOperationId = operationId
+        };
+        var preflight = new RuntimeUsageCostPreflightRequest
+        {
+            CheckpointRecoveryOperationId = operationId
+        };
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        SessionMaterialValidation.Validate(material);
+
+        Assert.Equal(operationId, JsonSerializer.SerializeToElement(material, options)
+            .GetProperty("checkpointRecoveryOperationId").GetGuid());
+        Assert.Equal(operationId, JsonSerializer.SerializeToElement(preflight, options)
+            .GetProperty("checkpointRecoveryOperationId").GetGuid());
+        Assert.Throws<ArgumentException>(() => SessionMaterialValidation.Validate(
+            material with { CheckpointRecoveryOperationId = Guid.Empty }));
+    }
+
+    [Fact]
     public async Task StrictProjectsOwnerSummaryProofAcceptsEffectiveRoleScopes()
     {
         var payload = new

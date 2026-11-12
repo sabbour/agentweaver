@@ -80,6 +80,26 @@ public sealed class RuntimeSkillContentTests
     }
 
     [Fact]
+    public async Task RuntimeClientUsesRecoveryScopedSkillsRouteWhenAuthorized()
+    {
+        var registration = RuntimeCopilotSessionTests.Registration();
+        var projection = Projection(registration);
+        var handler = new OwnerHandler(projection);
+        using var http = new HttpClient(handler);
+        var bearer = new SecretCredential("runtime-actor-token", DateTimeOffset.UtcNow.AddMinutes(2));
+        var actor = new RuntimeActorAuthorization(bearer, registration.Binding.TenantId);
+        var client = new RuntimeSkillContentHttpClient(http, new Uri("https://orchestrator.test/"), actor);
+        var operationId = Guid.NewGuid();
+
+        var result = await client.ReadAsync(registration, CancellationToken.None, operationId);
+
+        Assert.Equal(projection.RuntimeInstanceId, result.RuntimeInstanceId);
+        Assert.Equal(
+            $"/internal/runtime/registrations/{registration.RuntimeInstanceId:D}/checkpoint-recovery/{operationId:D}/skills",
+            handler.Path);
+    }
+
+    [Fact]
     public async Task RuntimeClientAcceptsAnExplicitEmptyAcceptedSkillSet()
     {
         var registration = RuntimeCopilotSessionTests.Registration();
