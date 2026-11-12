@@ -132,6 +132,49 @@ clients cannot use it to grant membership or change identity.
 
 ## Gateway
 
+### Environment discovery and recovery
+
+The Gateway forwards these routes to the configured Environment owner. All
+routes require a Broker bearer and a matching tenant. Any project or run
+binding in the token must match the route. Environment checks current authority
+and generation fences; Gateway
+authentication alone does not grant access. The routes are not MCP tools.
+
+| Method | Gateway path | Operation ID | Owner authority |
+| --- | --- | --- | --- |
+| GET | `/api/v1/projects/{projectId}/runs/{runId}/environments` | `listRunEnvironments` | `WriteProjects` and `ReadRunSelection` |
+| GET | `/api/v1/projects/{projectId}/runs/{runId}/environments/{environmentId}/lifecycle` | `readEnvironmentLifecycle` | `ReadProjects` |
+| GET | `/api/v1/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes` | `listEnvironmentWorkspaceVolumes` | `WriteProjects` and `ReadRunSelection` |
+| GET | `/api/v1/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}` | `readEnvironmentWorkspaceVolume` | `ReadProjects` |
+| POST | `/api/v1/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}/bind` | `bindEnvironmentWorkspaceVolume` | `WriteProjects` and `ReadRunSelection` |
+| POST | `/api/v1/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}/unbind` | `unbindEnvironmentWorkspaceVolume` | `WriteProjects` and `ReadRunSelection` |
+| POST | `/api/v1/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}/release` | `releaseEnvironmentWorkspaceVolume` | `WriteProjects` and `ReadRunSelection` |
+| POST | `/api/v1/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/provision` | `provisionEnvironmentSandbox` | `WriteProjects` and `ReadRunSelection` |
+| GET | `/api/v1/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox` | `readEnvironmentSandbox` | `WriteProjects` and `ReadRunSelection` |
+| POST | `/api/v1/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/abandon` | `abandonEnvironmentSandbox` | `WriteProjects` and `ReadRunSelection` |
+| POST | `/api/v1/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/reconcile` | `reconcileEnvironmentSandbox` | `WriteProjects` and `ReadRunSelection` |
+| GET | `/api/v1/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/operations/{operationId}/provider-attempts` | `readEnvironmentSandboxProviderAttempts` | `WriteProjects` and `ReadRunSelection` |
+| GET | `/api/v1/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/late-resource-cleanups` | `readEnvironmentSandboxLateResourceCleanups` | `WriteProjects` and `ReadRunSelection` |
+
+The two list operations accept `limit` (default `25`, range `1` through
+`100`) and an opaque `cursor`. Environment-list cursors are bound to the tenant,
+project, and run. Workspace-volume cursors are also bound to the Environment
+and its current lifecycle generation. A cursor for another scope is rejected.
+Sandbox inspection requires the
+`networkPolicyGeneration` query value. Reconciliation accepts the same value
+as optional input. The bind, unbind, release, provision, and abandon requests
+are limited to 16 KiB. A larger request returns `413 Payload Too Large` before
+the Gateway forwards it. Environment applies the same limit at its owner
+routes. Reconcile has no request body.
+
+Recovery writes use the expected resource, data, transition, or provider
+generations in the request. Repeat an uncertain operation with the same
+idempotency key and generation values. Do not start a replacement operation
+while the saved operation is pending or unresolved. A `202 Accepted` response
+means the owner recorded work; it does not mean that provider work completed.
+The [Environment Sandbox architecture](../architecture/environment-sandbox.md#authorization-and-api)
+describes the durable fences and recovery behavior.
+
 ### Project backlog content
 
 The Orchestrator owns project backlog tasks independently of runs. The Gateway

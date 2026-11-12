@@ -70,6 +70,18 @@ Memory selections through the private Knowledge-selection route. This search
 does not require `ReadRunSelection`. Run-scoped create and update operations
 continue to use the run-and-agent routes.
 
+## Discover Environment recovery operations
+
+The Gateway exposes Environment discovery and recovery through the versioned
+API. These routes always use the configured Environment owner. The Gateway
+forwards the validated bearer token and, when allowed, the tenant selector.
+Environment checks current authority and generation fences for each request.
+Callers cannot choose an owner URL or provide owner identity headers.
+
+Use the [HTTP API reference](../reference/api.md#environment-discovery-and-recovery)
+for the route table, required authority, pagination limits, and recovery request
+contracts. The Gateway does not expose these routes as MCP tools.
+
 ## Configure the Gateway
 
 Set the following configuration before you start the host:

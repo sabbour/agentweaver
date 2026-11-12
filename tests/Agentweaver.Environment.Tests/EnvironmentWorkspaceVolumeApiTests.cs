@@ -7,6 +7,7 @@ using Agentweaver.Providers.Storage.AzureFiles;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -86,6 +87,37 @@ public sealed class EnvironmentWorkspaceVolumeApiTests
             endpoint.RoutePattern.RawText == "/internal/runtime/suspend/resolve");
         Assert.NotEmpty(resolver.Metadata.GetOrderedMetadata<IAuthorizeData>());
         Assert.DoesNotContain(resolver.Metadata, item => item is IAllowAnonymous);
+    }
+
+    [Fact]
+    public void RecoveryWriteRoutesEnforceTheSixteenKiBBodyLimit()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddAuthorization();
+        builder.Services.AddScoped<EnvironmentLifecycleManager>(_ => throw new NotSupportedException());
+        builder.Services.AddScoped<EnvironmentEgressManager>();
+        builder.Services.AddScoped<EnvironmentSandboxManager>();
+        builder.Services.AddScoped<EnvironmentWorkspaceVolumeManager>();
+        using var app = builder.Build();
+        app.MapEnvironmentEndpoints();
+
+        var expectedRoutes = new[]
+        {
+            "/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}/bind",
+            "/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}/unbind",
+            "/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}/release",
+            "/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/provision",
+            "/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/abandon",
+        };
+        var endpoints = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Where(endpoint => expectedRoutes.Contains(endpoint.RoutePattern.RawText, StringComparer.Ordinal))
+            .ToArray();
+
+        Assert.Equal(expectedRoutes.Length, endpoints.Length);
+        Assert.All(endpoints, endpoint =>
+            Assert.Equal(16 * 1024, endpoint.Metadata.GetMetadata<IRequestSizeLimitMetadata>()?.MaxRequestBodySize));
     }
 
     [Fact]

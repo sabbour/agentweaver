@@ -14,9 +14,9 @@ connects the lifecycle, placement and recovery views.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'" alt="Orchestrator records the root start or committed child spawn before Environment provisions a retained workspace and Sandbox. It registers the runtime, requests Broker bootstrap, and activates the Host through Environment. Child dispatch waits for exact readiness. Terminal cleanup checks native work, processes children before the root, and releases only the owned resource. Workspace data remains retained." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'" alt="The native .NET CLI discovers Environment operations from Gateway OpenAPI. The Gateway routes authorized requests to the fixed Environment owner, which checks current authority and generation fences. Orchestrator records the root start or committed child spawn before Environment provisions a retained workspace and Sandbox. It activates the Host through Environment. Child dispatch waits for exact readiness. Terminal cleanup checks native work, processes children before the root, and releases only the owned resource. Workspace data remains retained." />
   </a>
-  <figcaption>Root and child startup, Environment placement, AgentHost activation, and terminal Sandbox cleanup. A ready lease requires exact Workspace and network observations. Retirement releases Sandbox placement, not the Environment or its Workspace data. Every provider call has a durable attempt. Cleanup uses the current owner fence for authorization and retains the saved provider fence for resource identity.</figcaption>
+  <figcaption>Environment discovery, fenced recovery, root and child startup, AgentHost activation, and terminal Sandbox cleanup. The Gateway forwards to the fixed Environment owner. A ready lease requires exact Workspace and network observations. Retirement releases Sandbox placement, not the Environment or its Workspace data. Cleanup uses the current owner fence for authorization and retains the saved provider fence for resource identity.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.drawio'">Open editable draw.io source</a></p>
 
@@ -258,8 +258,10 @@ Environment discovery uses owner-scoped reads. Listing Environments or
 workspace volumes requires fresh `WriteProjects` authority and the separate
 `ReadRunSelection` permission. Environment reads the exact immutable run
 selection and rechecks both authorities after the store read. Volume detail
-uses fresh `ReadProjects` authority and rechecks it after the read. These routes return bounded pages with cursors tied to the tenant, project, run,
-Environment, and current lifecycle generation. Returned volume statuses keep the
+uses fresh `ReadProjects` authority and rechecks it after the read. These routes
+return bounded pages. Environment-list cursors are tied to the tenant, project,
+and run. Workspace-volume cursors are also tied to the Environment and current
+lifecycle generation. Returned volume statuses keep the
 generation of their latest completed operation, including retained or released
 records from earlier generations. A cursor for another scope is rejected.
 
@@ -272,11 +274,21 @@ because a response was lost or the status is pending. These Environment routes
 do not browse mounted files, and releasing access does not restore data removed
 by a provider operation.
 
+The Gateway exposes the recovery routes listed in the
+[HTTP API reference](../reference/api.md#environment-discovery-and-recovery)
+under `/api/v1`; it does not expose every native route below. It forwards the
+validated bearer and optional tenant selector to the fixed Environment owner.
+Environment remains responsible for current authority and fence checks. These
+Gateway routes are not MCP tools.
+
 | Route | Operation |
 | --- | --- |
 | `GET /api/projects/{projectId}/runs/{runId}/environments` | List owner-scoped Environment summaries with bounded, selection-authorized pagination. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes` | List safe workspace-volume status across the Environment owner history. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}` | Read safe volume status and its exact pending-operation retry descriptor. |
+| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}/bind` | Bind an existing volume generation under its exact resource and data fences. |
+| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}/unbind` | Unbind an eligible volume generation under its exact resource and data fences. |
+| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}/release` | Release an eligible volume generation using the saved provider policy. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments` | Register the exact Environment owner from trusted Projects context; body contains only `idempotencyKey`. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/release` | Release the exact owner using `expectedLifecycleGeneration` and `idempotencyKey`; provider evidence is read from durable owner state. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/lifecycle` | Read the durable lifecycle snapshot under fresh `ReadProjects` authority. |

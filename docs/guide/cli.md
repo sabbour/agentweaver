@@ -184,6 +184,18 @@ agentweaver api describe getProject
 agentweaver api invoke getProject --path projectId=PROJECT_ID
 ```
 
+Environment discovery and recovery use the same commands; the CLI adds no
+Environment-specific command set:
+
+```powershell
+agentweaver api describe listRunEnvironments
+agentweaver api describe reconcileEnvironmentSandbox
+```
+
+The descriptions come from the Gateway's current OpenAPI document. Check the
+[Environment API reference](../reference/api.md#environment-discovery-and-recovery)
+for owner permissions and recovery limits before you invoke a write operation.
+
 Invocation accepts only parameters described by that operation:
 
 ```text

@@ -10,6 +10,8 @@ namespace Agentweaver.Environment;
 /// <summary>Maps the Environment lifecycle, Sandbox, egress, and workspace-volume HTTP API.</summary>
 public static class EnvironmentEndpoints
 {
+    private const long RecoveryWriteMaximumRequestBodyBytes = 16 * 1024;
+
     /// <summary>Registers the authenticated Environment API routes and their service dependencies.</summary>
     public static IEndpointRouteBuilder MapEnvironmentEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -731,6 +733,7 @@ public static class EnvironmentEndpoints
             EnvironmentSandboxManager manager,
             CancellationToken cancellationToken) =>
         {
+            context.Response.Headers.CacheControl = "no-store";
             if (!TryReadCaller(context, out var caller))
                 return Results.Unauthorized();
             if (request.P1Binding is not null)
@@ -741,7 +744,7 @@ public static class EnvironmentEndpoints
                     caller!, projectId, runId, environmentId, request, cancellationToken).ConfigureAwait(false);
                 return ToSandboxResult(result);
             }, cancellationToken).ConfigureAwait(false);
-        });
+        }).WithMetadata(new RequestSizeLimitAttribute(RecoveryWriteMaximumRequestBodyBytes));
         var p1Sandboxes = endpoints.MapGroup(
                 "/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox")
             .RequireAuthorization();
@@ -788,6 +791,7 @@ public static class EnvironmentEndpoints
             EnvironmentSandboxManager manager,
             CancellationToken cancellationToken) =>
         {
+            context.Response.Headers.CacheControl = "no-store";
             if (!TryReadCaller(context, out var caller))
                 return Results.Unauthorized();
             return await ExecuteSandboxApiAsync(async () =>
@@ -990,13 +994,14 @@ public static class EnvironmentEndpoints
             EnvironmentSandboxManager manager,
             CancellationToken cancellationToken) =>
         {
+            context.Response.Headers.CacheControl = "no-store";
             if (!TryReadCaller(context, out var caller))
                 return Results.Unauthorized();
             return await ExecuteSandboxApiAsync(async () =>
                 ToSandboxResult(await manager.AbandonAsync(
                     caller!, projectId, runId, environmentId, request, cancellationToken)
                     .ConfigureAwait(false)), cancellationToken).ConfigureAwait(false);
-        });
+        }).WithMetadata(new RequestSizeLimitAttribute(RecoveryWriteMaximumRequestBodyBytes));
         sandboxes.MapPost("/reconcile", async (
             string projectId,
             string runId,
@@ -1006,6 +1011,7 @@ public static class EnvironmentEndpoints
             EnvironmentSandboxManager manager,
             CancellationToken cancellationToken) =>
         {
+            context.Response.Headers.CacheControl = "no-store";
             if (!TryReadCaller(context, out var caller))
                 return Results.Unauthorized();
             return await ExecuteSandboxApiAsync(async () =>
@@ -1046,7 +1052,7 @@ public static class EnvironmentEndpoints
                     request, null, cancellationToken).ConfigureAwait(false);
                 return ToWorkspaceVolumeTransitionResult(result, request);
             }, cancellationToken).ConfigureAwait(false);
-        });
+        }).WithMetadata(new RequestSizeLimitAttribute(RecoveryWriteMaximumRequestBodyBytes));
     }
 
     /// <summary>Maps transition lifecycle results to the documented HTTP status and response body.</summary>

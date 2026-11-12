@@ -730,6 +730,61 @@ public static class GatewayRouteCatalog
             ["pageSize", "after"],
             forwardTenantSelector: true);
 
+        const long environmentRecoveryRequestLimit = 16 * 1024;
+        var environments = "/projects/{projectId}/runs/{runId}/environments";
+        var environment = environments + "/{environmentId}";
+        var workspaceVolumes = environment + "/workspace-volumes";
+        var volume = workspaceVolumes + "/{volumeId}";
+        var sandbox = environment + "/sandbox";
+
+        Add("GET", GatewayOwner.Environment, environments, "/api" + environments,
+            "listRunEnvironments", "List Environment recovery state for a run", ["limit", "cursor"],
+            forwardTenantSelector: true, excludeFromMcp: true);
+        Add("GET", GatewayOwner.Environment, environment + "/lifecycle", "/api" + environment + "/lifecycle",
+            "readEnvironmentLifecycle", "Read the Environment lifecycle fence",
+            forwardTenantSelector: true, excludeFromMcp: true);
+        Add("GET", GatewayOwner.Environment, workspaceVolumes, "/api" + workspaceVolumes,
+            "listEnvironmentWorkspaceVolumes", "List retained and released workspace-volume state",
+            ["limit", "cursor"], forwardTenantSelector: true, excludeFromMcp: true);
+        Add("GET", GatewayOwner.Environment, volume, "/api" + volume,
+            "readEnvironmentWorkspaceVolume", "Read safe workspace-volume state",
+            forwardTenantSelector: true, excludeFromMcp: true);
+        Add("POST", GatewayOwner.Environment, volume + "/bind", "/api" + volume + "/bind",
+            "bindEnvironmentWorkspaceVolume", "Bind an existing workspace-volume generation",
+            body: true, acceptsOnly: true, maximumRequestBodyBytes: environmentRecoveryRequestLimit,
+            forwardTenantSelector: true, excludeFromMcp: true);
+        Add("POST", GatewayOwner.Environment, volume + "/unbind", "/api" + volume + "/unbind",
+            "unbindEnvironmentWorkspaceVolume", "Unbind an eligible workspace-volume generation",
+            body: true, acceptsOnly: true, maximumRequestBodyBytes: environmentRecoveryRequestLimit,
+            forwardTenantSelector: true, excludeFromMcp: true);
+        Add("POST", GatewayOwner.Environment, volume + "/release", "/api" + volume + "/release",
+            "releaseEnvironmentWorkspaceVolume", "Release a workspace volume under its saved policy",
+            body: true, acceptsOnly: true, maximumRequestBodyBytes: environmentRecoveryRequestLimit,
+            forwardTenantSelector: true, excludeFromMcp: true);
+        Add("POST", GatewayOwner.Environment, sandbox + "/provision", "/api" + sandbox + "/provision",
+            "provisionEnvironmentSandbox", "Provision a Sandbox against exact volume and policy generations",
+            body: true, acceptsOnly: true, maximumRequestBodyBytes: environmentRecoveryRequestLimit,
+            forwardTenantSelector: true, excludeFromMcp: true);
+        Add("GET", GatewayOwner.Environment, sandbox, "/api" + sandbox + "/",
+            "readEnvironmentSandbox", "Read Sandbox state against a network-policy generation",
+            ["networkPolicyGeneration"], forwardTenantSelector: true, excludeFromMcp: true);
+        Add("POST", GatewayOwner.Environment, sandbox + "/abandon", "/api" + sandbox + "/abandon",
+            "abandonEnvironmentSandbox", "Retire a Sandbox placement at its saved provider fence",
+            body: true, acceptsOnly: true, maximumRequestBodyBytes: environmentRecoveryRequestLimit,
+            forwardTenantSelector: true, excludeFromMcp: true);
+        Add("POST", GatewayOwner.Environment, sandbox + "/reconcile", "/api" + sandbox + "/reconcile",
+            "reconcileEnvironmentSandbox", "Reconcile saved Sandbox work and bounded late cleanup",
+            ["networkPolicyGeneration"], acceptsOnly: true, forwardTenantSelector: true, excludeFromMcp: true);
+        Add("GET", GatewayOwner.Environment,
+            sandbox + "/v1/operations/{operationId:guid}/provider-attempts",
+            "/api" + sandbox + "/v1/operations/{operationId:guid}/provider-attempts",
+            "readEnvironmentSandboxProviderAttempts", "Read saved Sandbox provider attempts",
+            forwardTenantSelector: true, excludeFromMcp: true);
+        Add("GET", GatewayOwner.Environment, sandbox + "/v1/late-resource-cleanups",
+            "/api" + sandbox + "/v1/late-resource-cleanups",
+            "readEnvironmentSandboxLateResourceCleanups", "Read bounded late Sandbox cleanup state",
+            forwardTenantSelector: true, excludeFromMcp: true);
+
         return routes.ToImmutable();
     }
 }

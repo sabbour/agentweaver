@@ -309,6 +309,42 @@ public sealed class GatewayClientTests
     }
 
     [Fact]
+    public async Task EnvironmentOperationsAppearInApiOperationsAndDescribe()
+    {
+        var handler = new TestGatewayHandler();
+        using var http = new HttpClient(handler);
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var operations = await CliApplication.RunAsync(
+            [
+                "api", "operations",
+                "--gateway-url", "https://gateway.example/",
+                "--broker-issuer", "not a URL",
+                "--client-id", "",
+                "--api-audience", "",
+                "--tenant-id", "",
+            ],
+            new CliRuntimeOptions(HttpClient: http, Output: output, Error: error));
+
+        Assert.Equal(0, operations);
+        Assert.Contains("listRunEnvironments", output.ToString(), StringComparison.Ordinal);
+        Assert.Empty(error.ToString());
+
+        var descriptionOutput = new StringWriter();
+        var description = await CliApplication.RunAsync(
+            ["api", "describe", "listRunEnvironments", "--gateway-url", "https://gateway.example/"],
+            new CliRuntimeOptions(HttpClient: http, Output: descriptionOutput, Error: error));
+
+        Assert.Equal(0, description);
+        Assert.Contains("listRunEnvironments", descriptionOutput.ToString(), StringComparison.Ordinal);
+        Assert.Contains("/api/v1/projects/{projectId}/runs/{runId}/environments",
+            descriptionOutput.ToString(), StringComparison.Ordinal);
+        Assert.Contains("cursor", descriptionOutput.ToString(), StringComparison.Ordinal);
+        Assert.Equal(2, handler.Requests.Count(request => request.Path == "/openapi/v1.json"));
+    }
+
+    [Fact]
     public async Task UnadvertisedParametersAreRejectedBeforeAnyProtectedRequest()
     {
         var handler = new TestGatewayHandler();
@@ -955,6 +991,22 @@ public sealed class GatewayClientTests
                   {"name":"Idempotency-Key","in":"header","required":true,"schema":{"type":"string","minLength":1,"maxLength":128}}
                 ],
                 "requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object"}}}},
+                "responses":{"200":{"content":{"application/json":{"schema":{"type":"object"}}}}}
+              }
+            },
+            "/api/v1/projects/{projectId}/runs/{runId}/environments":{
+              "get":{
+                "operationId":"listRunEnvironments",
+                "summary":"List Environment recovery state for a run",
+                "description":"Requires current ReadProjects and WriteProjects authority and separate ReadRunSelection permission.",
+                "security":[{"Bearer":[]}],
+                "parameters":[
+                  {"name":"projectId","in":"path","required":true,"schema":{"type":"string"}},
+                  {"name":"runId","in":"path","required":true,"schema":{"type":"string"}},
+                  {"name":"limit","in":"query","required":false,"schema":{"type":"integer","minimum":1,"maximum":100,"default":25}},
+                  {"name":"cursor","in":"query","required":false,"schema":{"type":"string","maxLength":1024}},
+                  {"name":"X-Agentweaver-Tenant","in":"header","required":false,"schema":{"type":"string"}}
+                ],
                 "responses":{"200":{"content":{"application/json":{"schema":{"type":"object"}}}}}
               }
             }
