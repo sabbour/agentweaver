@@ -73,7 +73,9 @@ Use [Agentweaver CLI](./cli.md) for source publishing, target configuration,
 sign-in, and API requests. Use [Testing](./testing.md) to choose a test
 command and understand its limits. Use the
 [read-only CLI API case](./api-acceptance-migration.md) to check API discovery
-and authorization context through normal CLI commands.
+and authorization context through normal CLI commands. Use the
+[numeric runtime observation case](./numeric-runtime-observation-acceptance.md)
+to inspect existing numeric denial evidence.
 
 <a id="find-reference-information"></a>
 
