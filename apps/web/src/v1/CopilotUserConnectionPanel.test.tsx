@@ -315,6 +315,32 @@ describe('Copilot user connection panel', () => {
     }
   });
 
+  it('reports an identity-check error without claiming an identity change', async () => {
+    const popup = createPopup();
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    const originalApiCall = mocks.apiCall;
+    try {
+      const view = render(<CopilotUserConnectionPanel projectId="project-1" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub Copilot' }));
+      await waitFor(() => expect(popup.location.replace).toHaveBeenCalledOnce());
+
+      mocks.getAuthorizationContext.mockRejectedValueOnce(new Error('Identity service unavailable.'));
+      mocks.apiCall = vi.fn().mockImplementation(
+        (operation: (token: string, tenantSelector: string) => Promise<unknown>) =>
+          operation('broker-token', 'tenant-1'),
+      );
+      view.rerender(<CopilotUserConnectionPanel projectId="project-1" />);
+
+      expect((await screen.findByRole('alert')).textContent)
+        .toBe('The identity check failed. Identity service unavailable.');
+      expect(mocks.completeCopilotConnection).not.toHaveBeenCalled();
+      expect(popup.close).toHaveBeenCalledOnce();
+    } finally {
+      mocks.apiCall = originalApiCall;
+      open.mockRestore();
+    }
+  });
+
   it('discards and closes a pending Begin when the selected project changes', async () => {
     const pendingBegin = deferred<{
       connection: typeof receipt;

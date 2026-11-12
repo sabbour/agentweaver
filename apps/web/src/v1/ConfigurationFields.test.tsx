@@ -253,8 +253,8 @@ describe('readable project configuration', () => {
     ];
     render(<ConfigurationFields configuration={configuration} onChange={vi.fn()} choices={unavailable} part="models" />);
     expect(screen.getByText(/project service has no runtime model-binding list configured/)).toBeTruthy();
-    expect(screen.getByText(/not verified until a run starts/)).toBeTruthy();
-    expect(screen.getByText('Saved model references (not verified as eligible)')).toBeTruthy();
+    expect(screen.getByText(/The runtime checks model references and reasoning levels when a run starts\./)).toBeTruthy();
+    expect(screen.getByText('Saved model references (eligibility data unavailable)')).toBeTruthy();
     expect(screen.getByText('model-default (projectSaved)')).toBeTruthy();
     expect(screen.getByText('platform-model (platformDefault)')).toBeTruthy();
     // Saved references never become selectable choices.

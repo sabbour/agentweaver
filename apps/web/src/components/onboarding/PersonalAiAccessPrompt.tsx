@@ -45,7 +45,7 @@ export function PersonalAiAccessPrompt({
       onDismiss={dismiss}
       model={{
         title: 'AI access',
-        description: 'This guide does not check your current AI access.',
+        description: 'Check your GitHub Copilot connection in project settings.',
         items: [
           {
             id: 'github-copilot',

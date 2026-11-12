@@ -311,6 +311,48 @@ describe('BoardPage', () => {
     expect(mocks.promoteBacklogWorkPlan).toHaveBeenCalledOnce();
   });
 
+  it('keeps the same promotion request when its result is unavailable', async () => {
+    mocks.previewBacklogWorkPlanPromotion.mockResolvedValue({
+      rootSessionId: 'root-1',
+      workPlanId: 'plan-1',
+      decisionStateVersion: 4,
+      executionFence: 2,
+      items: [{ workPlanItemId: 'item-1', title: 'Build', task: 'Build the feature.', dependsOn: [] }],
+    });
+    let firstRequest: unknown;
+    mocks.promoteBacklogWorkPlan
+      .mockImplementationOnce((...args: unknown[]) => {
+        firstRequest = structuredClone(args[3]);
+        return Promise.reject(new Error('Network request ended.'));
+      })
+      .mockResolvedValueOnce({ promotionId: 'promotion-1' });
+    mocks.readProjectBacklog.mockResolvedValue(graph([], 8));
+    mocks.useProjectRunList.mockImplementation((_projectId: string, options?: { states?: string[] }) =>
+      options?.states?.[0] === 'active'
+        ? runList([{
+          projectId: 'p1', runId: 'run-1', rootSessionId: 'root-1', label: 'Implement feature',
+          executionState: 'active', time: { label: 'Started', value: '2026-01-03T00:00:00Z' },
+        }])
+        : runList());
+    renderBoard();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview work-plan promotion for Implement feature' }));
+    await screen.findByText('Build the feature.');
+    fireEvent.click(screen.getByRole('button', { name: 'Promote work plan' }));
+    expect(await screen.findByText(
+      'The promotion result is unavailable. Retry this same confirmation to check the result. Network request ended.',
+    )).toBeTruthy();
+    expect(screen.getByText(
+      "Preview the confirmed work plan without changing the backlog. Confirm promotion to add the plan's tasks to Backlog.",
+    )).toBeTruthy();
+    expect(firstRequest).toMatchObject({ idempotencyKey: expect.any(String) });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry promotion' }));
+    await waitFor(() => expect(mocks.promoteBacklogWorkPlan).toHaveBeenCalledTimes(2));
+    expect(mocks.promoteBacklogWorkPlan.mock.calls[1][3]).toEqual(firstRequest);
+    expect(await screen.findByText('Work plan promoted to Backlog.')).toBeTruthy();
+  });
+
   it('offers run sign-in when the preview needs a run-bound session', async () => {
     mocks.ensureSession.mockResolvedValueOnce(false).mockResolvedValue(true);
     mocks.previewBacklogWorkPlanPromotion.mockResolvedValue({

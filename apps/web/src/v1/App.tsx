@@ -548,7 +548,7 @@ function ProjectRepoAppConnectionPanel() {
         Connect your GitHub account for repository access. Connection status and repository details appear here. Your sign-in details stay with the service that manages this connection.
       </p>
       {statusLoading ? <Loading label="Checking GitHub Repo App connection…" /> : statusUnavailable ? (
-        <p className="v1-muted">We could not check the GitHub connection. Try again.</p>
+        <p className="v1-muted">GitHub connection status is unavailable. Try again.</p>
       ) : connected ? (
         <p>
           Connected as <strong>{connection.githubLogin ?? 'GitHub user'}</strong>
@@ -2661,7 +2661,7 @@ function SelectionView({ selection }: { selection: EffectiveRunSelection | null 
   if (!selection) return <p className="v1-muted">The service returned no settings for this run.</p>;
   return (
     <div className="v1-stack">
-      <p className="v1-muted">These are the settings this run started with. Changing project settings does not change them.</p>
+      <p className="v1-muted">This run keeps the settings it started with, even when project settings change.</p>
       <dl className="v1-detail-list">
         <div><dt>Model</dt><dd><code>{selection.modelSelection.reference}</code></dd></div>
         <div><dt>Project configuration revision</dt><dd>{selection.projectConfigurationRevision}</dd></div>
@@ -2888,7 +2888,7 @@ function RunGitHubAppPanel({
         Choose a repository below to use it for this run.
       </p>
       {statusLoading ? <Loading label="Checking GitHub App connection…" /> : statusUnavailable ? (
-        <p className="v1-muted">We could not check the GitHub connection. Try again.</p>
+        <p className="v1-muted">GitHub connection status is unavailable. Try again.</p>
       ) : connection?.state === 'connected' ? (
         <p>
           Connected as <strong>{connection.githubLogin ?? 'GitHub user'}</strong>
@@ -3913,7 +3913,7 @@ function RepoAppPopupCallbackPage() {
     const opener = window.opener;
     return window.__AGENTWEAVER_REPO_APP_CALLBACK__ === true && opener && opener !== window
       ? 'The callback is notifying its opener. The original window confirms the connection.'
-      : 'The Broker callback was received, but no tracked account window is available. Connection status is unverified; return to account settings and refresh status.';
+      : 'The Broker callback has no tracked account window. The connection status is unknown. Return to account settings and refresh the status.';
   });
 
   useEffect(() => {

@@ -108,7 +108,7 @@ describe('OutputCaptureBrowser', () => {
     render(<OutputCaptureBrowser projectId="p1" runId="r-1" />);
     await selectCapture();
     await openFile();
-    await screen.findAllByText('The saved file could not be verified. Choose the capture again.');
+    await screen.findAllByText('The saved file does not match the capture. Choose the capture again.');
     expect(screen.queryByRole('heading', { name: 'Release notes' })).toBeNull();
   });
 

@@ -1168,7 +1168,7 @@ export function BoardPage() {
         ? "You don't have permission to promote a work plan in this project."
         : reason instanceof GatewayError && reason.status === 401
           ? 'Sign in to this run, then retry this same confirmation.'
-          : `Promotion could not be confirmed. Retry this confirmation to check the result. ${reason instanceof Error ? reason.message : String(reason)}`;
+          : `The promotion result is unavailable. Retry this same confirmation to check the result. ${reason instanceof Error ? reason.message : String(reason)}`;
       setWorkPlanPromotion({ ...current, status: 'ready', request, error: message });
     }
   }, [apiCall, canWrite, ensureSession, isScopeCurrent, refreshBoard, setActionError, setNotice, workPlanPromotion]);
@@ -1668,7 +1668,7 @@ export function BoardPage() {
             <DialogTitle>Promote work plan to Backlog?</DialogTitle>
             <DialogContent>
               <Text as="p" id="board-work-plan-promotion-description">
-                Review the confirmed work plan. This preview does not change the backlog.
+                Preview the confirmed work plan without changing the backlog. Confirm promotion to add the plan's tasks to Backlog.
               </Text>
               {activeWorkPlanPromotion?.status === 'loading' && <Loading label="Loading confirmed work plan" />}
               {activeWorkPlanPreview && (

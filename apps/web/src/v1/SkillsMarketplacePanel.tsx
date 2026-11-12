@@ -1606,7 +1606,7 @@ export function SkillsMarketplacePanel({
               <section className="v1-stack" aria-labelledby="marketplace-sources-heading">
                 <h3 id="marketplace-sources-heading">Marketplace sources</h3>
                 <p className="v1-muted">
-                  The service checks your project access for each action. An active source is saved; it does not confirm that GitHub is available.
+                  The service checks your project access for each action. Active means the source is saved, regardless of GitHub availability.
                 </p>
                 {sourceError && <MessageBar intent="error" role="alert"><MessageBarBody>{sourceError}</MessageBarBody></MessageBar>}
                 {sourceNotice && <MessageBar intent="success"><MessageBarBody>{sourceNotice}</MessageBarBody></MessageBar>}

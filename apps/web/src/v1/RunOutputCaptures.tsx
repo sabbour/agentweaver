@@ -35,7 +35,7 @@ function outputCaptureErrorMessage(error: unknown, executionState: string | null
       case 'indeterminate': return 'Files are unavailable because this run outcome is unknown.';
       case 'completed': return 'No files are available for this completed run.';
       case 'cancelled': return 'No files are available for this cancelled run.';
-      default: return 'No files are available. The run state could not be confirmed.';
+      default: return 'No files are available. The run state is missing or unrecognized.';
     }
   }
   return errorMessage(error);

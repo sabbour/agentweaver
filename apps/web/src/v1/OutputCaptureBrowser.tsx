@@ -214,7 +214,7 @@ function CaptureDetail({ projectId, runId, sessionId, captureId, onSelect, busy 
     // Hex-encode the digest to compare with the manifest's lowercase hex hash.
     const hash = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');
     if (bytes.byteLength !== file.byteLength || hash !== file.sha256)
-      throw new Error('The saved file could not be verified. Choose the capture again.');
+      throw new Error('The saved file does not match the capture. Choose the capture again.');
     // Strict UTF-8 decode: invalid bytes throw, and the file is treated as binary.
     let content: string | null = null;
     try { content = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { /* Non-UTF-8 files use the binary state. */ }
