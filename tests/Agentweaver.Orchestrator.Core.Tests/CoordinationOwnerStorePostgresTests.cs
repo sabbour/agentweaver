@@ -1869,6 +1869,18 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             await intent.ExecuteNonQueryAsync();
         }
 
+        await using (var activeConnection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var activateRun = new NpgsqlCommand($"""
+            UPDATE "{_schema}".accepted_runs
+            SET execution_state = 'active', state_version = state_version + 1
+            WHERE project_id = @project AND run_id = @run AND execution_state = 'idle'
+            """, activeConnection))
+        {
+            activateRun.Parameters.AddWithValue("project", _root.ProjectId);
+            activateRun.Parameters.AddWithValue("run", _root.RunId);
+            Assert.Equal(1, await activateRun.ExecuteNonQueryAsync());
+        }
+
         var runStatus = await store.ReadOwnerRunStatusAsync(
             _actor, _root.ProjectId, _root.RunId, CancellationToken.None);
         var firstRequest = new RecoverRunExecutionRequest(
