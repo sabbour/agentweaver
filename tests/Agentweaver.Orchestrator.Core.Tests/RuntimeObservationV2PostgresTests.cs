@@ -35,6 +35,14 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
             RuntimeActionContract.Hash(denied),
             RuntimeNativeToolPermissionRejectionContract.NumericToolLimitReasonCode);
 
+        var mismatchedBinding = _registrations[0] with
+        {
+            Binding = _registrations[0].Binding with { ModelSelectionReference = "model:other" }
+        };
+        var staleRegistration = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            GrantStore().RecordNativeToolPermissionRejectionAsync(mismatchedBinding, request, default));
+        Assert.Equal("runtime_registration_stale", staleRegistration.Code);
+
         var preparedDispatch = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
             GrantStore().RecordNativeToolPermissionRejectionAsync(
                 _registrations[0], request, default));

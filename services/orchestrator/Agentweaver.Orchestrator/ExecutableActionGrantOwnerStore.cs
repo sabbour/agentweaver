@@ -1181,8 +1181,9 @@ internal sealed class ExecutableActionGrantOwnerStore(
         RuntimeRegistration registration,
         CancellationToken cancellationToken)
     {
+        var binding = registration.Binding;
         await using var command = new NpgsqlCommand($"""
-            SELECT h.current_revision, r.state, r.expires_at
+            SELECT h.current_revision, r.state, r.expires_at, r.binding_hash
             FROM {_schema}.runtime_registration_heads h
             JOIN {_schema}.runtime_registration_revisions r
               ON r.runtime_instance_id = h.runtime_instance_id AND r.revision = h.current_revision
@@ -1195,8 +1196,10 @@ internal sealed class ExecutableActionGrantOwnerStore(
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
             reader.GetInt64(0) != registration.Revision || reader.GetInt32(1) != 0 ||
             reader.GetFieldValue<DateTimeOffset>(2) != registration.ExpiresAt ||
-            reader.GetFieldValue<DateTimeOffset>(2) <= timeProvider.GetUtcNow())
-            throw new RuntimeAuthorizationException("runtime_native_tool_rejection_conflict");
+            reader.GetFieldValue<DateTimeOffset>(2) <= timeProvider.GetUtcNow() ||
+            reader.GetString(3).Trim() != RuntimeContractValidation.Hash(
+                JsonSerializer.SerializeToUtf8Bytes(binding)))
+            throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 
     private async Task<bool> MatchesToolRejectionDispatchAsync(
