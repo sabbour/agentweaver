@@ -1980,7 +1980,8 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             _actor, _root, _selection, CancellationToken.None);
         Assert.Equal(second.ExecutionFence, finalDecision.State.Fence);
         Assert.Equal(gateId, finalDecision.State.PendingGate!.RequestId);
-        Assert.Equal(pending.State.PendingGate!.AllowedChoices, finalDecision.State.PendingGate.AllowedChoices);
+        Assert.Equal(pending.State.PendingGate!.AllowedChoices.ToArray(),
+            finalDecision.State.PendingGate.AllowedChoices.ToArray());
     }
 
     [Fact]
