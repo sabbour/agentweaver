@@ -1,0 +1,169 @@
+{
+  "$schema": "../sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Recover a Host at a pending gate",
+  "alt": "Orchestrator checks the saved gate, checkpoint, accepted selection, and root registration. It retires the old Host placement through Environment, creates a replacement with the same workspace, registers the Host at the next fence, and asks Broker to bootstrap it. Environment activates the Host. The Host restores the selected checkpoint boundary from authenticated native cache or journal evidence and returns readiness. The gate stays pending. A retry uses the same recovery operation and stable step IDs. A changed gate or selection stops continuation.",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "orchestrator",
+      "label": "Orchestrator",
+      "subLabel": "Gate checks, fence, and stable recovery operation",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": { "text": "Coordinator", "tone": "neutral" }
+    },
+    {
+      "id": "environment",
+      "label": "Environment owner",
+      "subLabel": "Placement retirement, replacement, and activation",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": { "text": "Owner", "tone": "neutral" }
+    },
+    {
+      "id": "broker",
+      "label": "Identity Broker",
+      "subLabel": "Bootstrap grant and delivery receipt",
+      "icon": "key",
+      "fluentIcon": "identity",
+      "badge": { "text": "Credential owner", "tone": "lavender" }
+    },
+    {
+      "id": "agenthost",
+      "label": "AgentHost",
+      "subLabel": "Restores the selected saved boundary",
+      "icon": "bot",
+      "fluentIcon": "window",
+      "badge": { "text": "Runtime", "tone": "teal" }
+    }
+  ],
+  "steps": [
+    {
+      "type": "note",
+      "over": ["orchestrator", "environment"],
+      "label": "Recovery is opt-in. Check the same pending gate, checkpoint revision, accepted selection, and root registration before advancing the fence."
+    },
+    {
+      "type": "message",
+      "from": "orchestrator",
+      "to": "orchestrator",
+      "label": "Advance the fence once and preserve the gate request and choices",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "orchestrator",
+      "to": "environment",
+      "label": "Retire the exact old Host placement",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "orchestrator",
+      "label": "Return the retirement receipt",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "orchestrator",
+      "to": "environment",
+      "label": "Create a replacement placement with the retained workspace and stable operation ID",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "orchestrator",
+      "to": "orchestrator",
+      "label": "Register the Host at the next fence",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "orchestrator",
+      "to": "broker",
+      "label": "Request bootstrap with the stable recovery operation ID",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "broker",
+      "to": "orchestrator",
+      "label": "Return the validated bootstrap receipt",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "orchestrator",
+      "to": "environment",
+      "label": "Activate the exact next-fence registration",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "agenthost",
+      "label": "Configure the Host for the selected recovery checkpoint",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "agenthost",
+      "to": "environment",
+      "label": "Restore from authenticated native cache or journal evidence and return readiness",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "orchestrator",
+      "label": "Return validated readiness and recovery material mode",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "Retry or stop",
+      "sections": [
+        {
+          "label": "A step fails",
+          "steps": [
+            {
+              "type": "message",
+              "from": "orchestrator",
+              "to": "environment",
+              "label": "Retry the same operation and stable step IDs",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        },
+        {
+          "label": "Gate or selection changes",
+          "steps": [
+            {
+              "type": "message",
+              "from": "orchestrator",
+              "to": "orchestrator",
+              "label": "Stop as blocked; do not answer or recreate the gate",
+              "line": "solid",
+              "arrow": "cross"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

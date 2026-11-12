@@ -213,6 +213,21 @@ execution fence is stale. The separate
 dispatch route with two production `RuntimeAgentHost` instances and controlled
 SDK and owner responses. Neither test proves a native AKS journey.
 
+## Test pending-gate recovery
+
+Run the recovery boundary and progress tests from the repository root:
+
+```powershell
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --configuration Release --filter "FullyQualifiedName~RuntimeRegistrationRecoveryTests|FullyQualifiedName~CheckpointRecoveryProgressSurvivesRestartAndProjectsAnOutboxEvent"
+```
+
+`RuntimeRegistrationRecoveryTests` uses controlled state to check that Host
+recovery accepts only the saved pending gate and decision version. The
+checkpoint progress test uses disposable PostgreSQL to check that a retry of
+the same step keeps the saved status and emits one progress event. It requires
+a Docker-compatible engine. These tests do not prove a live Environment owner
+or AKS recovery journey.
+
 ## Test Scribe Knowledge output
 
 Run the producer, immutable-intent, and exact serialized-size tests, followed by

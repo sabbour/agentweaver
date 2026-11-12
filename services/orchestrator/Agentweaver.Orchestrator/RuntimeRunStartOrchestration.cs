@@ -1022,6 +1022,255 @@ internal sealed class RuntimeRunStartContinuation(
         return CreateReplacementSummary(operation, previousRegistration, previousPlacement);
     }
 
+    internal async Task<RunExecutionTransitionResult> ContinueCheckpointRecoveryAsync(
+        HttpContext context,
+        CoordinationActor actor,
+        RuntimeActorAuthorization runtimeActor,
+        RunExecutionTransitionResult result,
+        RuntimeRunStartIntent intent,
+        RuntimeRegistrationOwner registrationOwner,
+        MafExecutionCheckpointStore checkpointStore,
+        CoordinationOwnerStore recoveryStore,
+        Func<CancellationToken, Task> requireCurrentSelection,
+        Func<CancellationToken, Task> requireCurrentGate,
+        CancellationToken cancellationToken)
+    {
+        var status = result.CheckpointRecovery
+            ?? throw new CoordinationException(
+                "checkpoint_recovery_operation_unavailable", StatusCodes.Status409Conflict);
+        if (status.Phase != "pending")
+            return result;
+
+        var links = ReadReceiptLinks(intent);
+        if (intent.State != "ready" || intent.ExecutionFence != status.PreviousExecutionFence ||
+            intent.RuntimeInstanceId != status.PreviousRuntimeInstanceId ||
+            !links.TryGetValue("registration", out var registrationElement) ||
+            !links.TryGetValue("placement", out var placementElement))
+            throw new RuntimeAuthorizationException("checkpoint_recovery_runtime_stale");
+        var previousRegistration = registrationElement.Deserialize<RuntimeRegistration>(JsonOptions)
+            ?? throw new RuntimeAuthorizationException("checkpoint_recovery_runtime_stale");
+        var previousPlacement = placementElement.Deserialize<RuntimeRunStartPlacementReceipt>(JsonOptions)
+            ?? throw new RuntimeAuthorizationException("checkpoint_recovery_runtime_stale");
+        previousPlacement.Validate();
+        var previousOwner = CreateOwnerContext(previousRegistration.Binding);
+        var owner = previousOwner with { ExecutionFence = status.ExecutionFence };
+        RequireReplacementRegistration(previousOwner, previousPlacement, previousRegistration);
+        var previousBootstrapId = intent.BootstrapOperationId;
+        var bootstrapId = RuntimeRunStartKeys.ReplacementOperationId(result.OperationId, "checkpoint-bootstrap");
+        var consumeId = RuntimeRunStartKeys.ReplacementOperationId(result.OperationId, "checkpoint-consume");
+        var exchangeId = RuntimeRunStartKeys.ReplacementOperationId(result.OperationId, "checkpoint-exchange");
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(75));
+        var token = deadline.Token;
+
+        async Task PersistAsync(
+            string step,
+            string? reason = null,
+            string? materialMode = null,
+            string? phase = null,
+            Guid? runtimeInstanceId = null,
+            long? registrationRevision = null)
+        {
+            status = status with
+            {
+                CurrentStep = step,
+                ReasonCode = reason,
+                RecoveryMaterialMode = materialMode ?? status.RecoveryMaterialMode,
+                Phase = phase ?? status.Phase,
+                RuntimeInstanceId = runtimeInstanceId ?? status.RuntimeInstanceId,
+                RegistrationRevision = registrationRevision ?? status.RegistrationRevision
+            };
+            result = await recoveryStore.UpdateCheckpointRecoveryProgressAsync(
+                actor, result.Session, result.OperationId, status, cancellationToken).ConfigureAwait(false);
+            status = result.CheckpointRecovery!;
+        }
+
+        async Task RequireBoundaryAsync()
+        {
+            await requireCurrentSelection(token).ConfigureAwait(false);
+            await requireCurrentGate(token).ConfigureAwait(false);
+            var latest = await checkpointStore.ReadLatestAsync(token).ConfigureAwait(false);
+            var lineage = latest?.State.RecoveryLineage;
+            if (latest is null || latest.Info.CheckpointId != status.RecoveryCheckpointId ||
+                latest.State.Revision != status.RecoveryCheckpointRevision ||
+                latest.State.DecisionStateVersion != status.DecisionStateVersion ||
+                lineage is null || lineage.SourceCheckpointId != status.SourceCheckpointId ||
+                lineage.SourceCheckpointRevision != status.SourceCheckpointRevision ||
+                lineage.SourceCheckpointHash != status.SourceCheckpointHash ||
+                lineage.RecoveryOperationId != result.OperationId ||
+                lineage.RecoveryExecutionFence != status.ExecutionFence)
+                throw new RuntimeAuthorizationException("checkpoint_recovery_boundary_stale");
+        }
+
+        try
+        {
+            await RequireBoundaryAsync().ConfigureAwait(false);
+            await PersistAsync("retirement").ConfigureAwait(false);
+            var retirementRequest = new RuntimeRunStartRetirementRequest(
+                1,
+                owner,
+                previousBootstrapId,
+                previousRegistration.RuntimeInstanceId,
+                previousRegistration.Revision,
+                previousPlacement).Validate();
+            var retirement = await RuntimeOwnerHttpTransport.SendRuntimeRunStartAsync<
+                    RuntimeRunStartRetirementReceipt>(
+                clients.CreateClient("runtime-run-start-environment"),
+                options.EnvironmentOwnerAddress,
+                "/internal/runtime/run-start/replacement-retire",
+                runtimeActor,
+                new RuntimeReplacementRetirementRequest(
+                    1, result.OperationId, intent.IntentId, retirementRequest)
+                {
+                    CheckpointRecoveryOperationId = result.OperationId
+                },
+                token).ConfigureAwait(false);
+            retirement.ValidateFor(retirementRequest);
+            if (retirement.State != "released")
+            {
+                await PersistAsync("retirement", "runtime_replacement_retirement_pending").ConfigureAwait(false);
+                return result;
+            }
+
+            await RequireBoundaryAsync().ConfigureAwait(false);
+            await PersistAsync("placement").ConfigureAwait(false);
+            var placement = await RuntimeOwnerHttpTransport.SendRuntimeRunStartAsync<
+                    RuntimeRunStartPlacementReceipt>(
+                clients.CreateClient("runtime-run-start-environment"),
+                options.EnvironmentOwnerAddress,
+                "/internal/runtime/run-start/replacement-placement",
+                runtimeActor,
+                new RuntimeReplacementPlacementRequest(
+                    1, result.OperationId, owner, previousBootstrapId, bootstrapId, previousPlacement)
+                {
+                    CheckpointRecoveryOperationId = result.OperationId
+                },
+                token).ConfigureAwait(false);
+            RequireReplacementPlacement(previousPlacement, placement, bootstrapId, owner);
+
+            await RequireBoundaryAsync().ConfigureAwait(false);
+            await PersistAsync("registration").ConfigureAwait(false);
+            var authorization = new CheckpointRecoveryRegistrationAuthorization(result.OperationId, status);
+            var registration = await registrationOwner.ReplaceAfterCheckpointRecoveryFenceAsync(
+                context, authorization, result.Session.ProjectId, result.Session.RunId,
+                result.Session.SessionId, token).ConfigureAwait(false);
+            RequireReplacementRegistration(owner, placement, registration);
+            await PersistAsync(
+                "bootstrap", runtimeInstanceId: registration.RuntimeInstanceId,
+                registrationRevision: registration.Revision).ConfigureAwait(false);
+
+            await RequireBoundaryAsync().ConfigureAwait(false);
+            using var configuration = JsonDocument.Parse("{}");
+            var configurationHash = RuntimeContractValidation.Hash(
+                Encoding.UTF8.GetBytes(configuration.RootElement.GetRawText()));
+            var bootstrap = await RuntimeOwnerHttpTransport.SendRuntimeRunStartAsync<
+                    RuntimeBootstrapDeliveryReceipt>(
+                clients.CreateClient("runtime-run-start-broker"),
+                options.BrokerOwnerAddress,
+                "/internal/runtime/bootstrap/request",
+                runtimeActor,
+                new RuntimeBootstrapRequest(registration.RuntimeInstanceId, bootstrapId, configurationHash),
+                token).ConfigureAwait(false);
+            RequireBootstrapReceipt(
+                intent with { BootstrapOperationId = bootstrapId }, registration, bootstrap, configurationHash);
+
+            await RequireBoundaryAsync().ConfigureAwait(false);
+            await PersistAsync("activation").ConfigureAwait(false);
+            var environmentContext = await environment.ReadAsync(
+                runtimeActor, owner.ProjectId, owner.RunId, owner.SessionId,
+                placement.EnvironmentId, registration.Binding.ProfileId, token).ConfigureAwait(false);
+            RequirePlacement(placement, registration, environmentContext);
+            var activation = await RuntimeOwnerHttpTransport.SendRuntimeRunStartAsync<
+                    RuntimeHostReadinessReceipt>(
+                clients.CreateClient("runtime-run-start-environment"),
+                options.EnvironmentOwnerAddress,
+                "/internal/runtime/v1/activate",
+                runtimeActor,
+                new RuntimeHostConfigureRequest(
+                    1, registration, consumeId, exchangeId, configuration.RootElement.Clone())
+                {
+                    McpServer = environmentContext.McpServer
+                },
+                token).ConfigureAwait(false);
+            CoordinationEndpoints.ValidateHostReadiness(activation, registration, timeProvider);
+            var recovery = activation.Recovery?.ValidateFor(registration);
+            if (recovery?.RecoveryMode is not (RuntimeHostRecoveryMode.NativeCache or
+                RuntimeHostRecoveryMode.JournalRebuild))
+                throw new RuntimeAuthorizationException("checkpoint_recovery_material_unavailable");
+            var materialMode = recovery.RecoveryMode == RuntimeHostRecoveryMode.NativeCache
+                ? "nativeCache"
+                : "journalRebuild";
+            await PersistAsync(
+                "readiness",
+                materialMode: materialMode,
+                runtimeInstanceId: registration.RuntimeInstanceId,
+                registrationRevision: registration.Revision).ConfigureAwait(false);
+
+            await RequireBoundaryAsync().ConfigureAwait(false);
+            var readiness = await environment.ReadReadinessAsync(
+                runtimeActor, owner.ProjectId, owner.RunId, owner.SessionId,
+                placement.EnvironmentId, registration.Binding.ProfileId, token).ConfigureAwait(false);
+            RequireCurrentReadiness(placement, registration, activation, readiness);
+            await requireCurrentSelection(token).ConfigureAwait(false);
+            await requireCurrentGate(token).ConfigureAwait(false);
+            status = status with
+            {
+                CurrentStep = "ready",
+                ReasonCode = null,
+                RecoveryMaterialMode = materialMode,
+                Phase = "ready",
+                RuntimeInstanceId = registration.RuntimeInstanceId,
+                RegistrationRevision = registration.Revision
+            };
+            var readyLinks = ReadReceiptLinks(intent);
+            readyLinks["placement"] = JsonSerializer.SerializeToElement(placement, JsonOptions);
+            readyLinks["registration"] = JsonSerializer.SerializeToElement(registration, JsonOptions);
+            readyLinks["bootstrap"] = JsonSerializer.SerializeToElement(BootstrapReceipt(bootstrap), JsonOptions);
+            readyLinks["activation"] = JsonSerializer.SerializeToElement(activation, JsonOptions);
+            readyLinks["readiness"] = JsonSerializer.SerializeToElement(readiness, JsonOptions);
+            var readyIntent = intent with
+            {
+                ExecutionFence = owner.ExecutionFence,
+                BootstrapOperationId = bootstrapId,
+                ConsumeOperationId = consumeId,
+                ExchangeOperationId = exchangeId,
+                State = "ready",
+                CurrentStep = "ready",
+                FailureCode = null,
+                EnvironmentId = placement.EnvironmentId,
+                RuntimeInstanceId = registration.RuntimeInstanceId,
+                ReceiptLinks = JsonSerializer.Serialize(readyLinks, JsonOptions)
+            };
+            result = await recoveryStore.UpdateCheckpointRecoveryProgressAsync(
+                actor, result.Session, result.OperationId, status, cancellationToken, readyIntent)
+                .ConfigureAwait(false);
+            status = result.CheckpointRecovery!;
+            return result;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return await PersistFailureAsync("checkpoint_recovery_continuation_timeout").ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is RuntimeAuthorizationException or CoordinationException or HttpRequestException or JsonException)
+        {
+            var reason = FailureCode(exception);
+            var pending = exception is HttpRequestException ||
+                exception is CoordinationException { StatusCode: >= StatusCodes.Status500InternalServerError } ||
+                reason is "runtime_start_actor_expired" or "runtime_registration_stale" ||
+                reason.Contains("unavailable", StringComparison.Ordinal) ||
+                reason.Contains("timeout", StringComparison.Ordinal);
+            return await PersistFailureAsync(reason, pending ? "pending" : "blocked").ConfigureAwait(false);
+        }
+
+        async Task<RunExecutionTransitionResult> PersistFailureAsync(string reason, string phase = "pending")
+        {
+            await PersistAsync(status.CurrentStep, reason, phase: phase).ConfigureAwait(false);
+            return result;
+        }
+    }
+
     internal static void RequireReplacementPlacement(
         RuntimeRunStartPlacementReceipt previous,
         RuntimeRunStartPlacementReceipt current,

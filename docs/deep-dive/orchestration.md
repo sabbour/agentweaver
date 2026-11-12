@@ -666,6 +666,21 @@ registration record alone does not authorize a turn.
 A workflow checkpoint and native SDK cache are different recovery inputs.
 Restoring conversation context does not replay external effects.
 
+The opt-in checkpoint-recovery path currently accepts a pinned checkpoint only
+at an exact pending gate with no unresolved child dispatch, child association,
+or platform-effect intent. It advances the fence once, keeps the same gate
+request, and replaces the Host through Environment. The replacement must load
+authenticated native-cache or journal material before Orchestrator reports
+`ready`. A pending step can be retried with the same recovery request and
+idempotency key. A changed gate version, unavailable prerequisite, or
+unsupported boundary does not cause the owner to answer the gate or start a
+fresh execution.
+
+The legacy owner-state recovery path and ordinary completed-turn Host
+replacement remain separate. `readRunStatus` and `readSessionStatus` show the
+recovery step and result; `replayRunEvents` reports committed progress. Reads
+do not continue a pending recovery.
+
 ### Understand readiness evaluation
 
 The Core backlog evaluator checks exact graph and task revisions against

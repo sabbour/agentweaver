@@ -158,6 +158,13 @@ sequenceDiagram
 | `GET /health/live` | Process liveness only. |
 | `GET /health/ready` | Current registration, source authority, lease, isolation, workspace, egress, configuration, and startup budgets. A lost prerequisite returns `503`. |
 
+For opt-in checkpoint recovery at a pending gate, Orchestrator retires the old
+placement through Environment and registers a replacement at the next
+execution fence. The replacement uses the existing authenticated native-cache
+or journal recovery path. Orchestrator accepts readiness only when the Host
+reports one of those recovery modes; a fresh session does not satisfy recovery.
+The Host does not answer the gate or send a model turn during this continuation.
+
 ```mermaid
 sequenceDiagram
     participant C as Authenticated caller

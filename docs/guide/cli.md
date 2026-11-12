@@ -196,6 +196,15 @@ The descriptions come from the Gateway's current OpenAPI document. Check the
 [Environment API reference](../reference/api.md#environment-discovery-and-recovery)
 for owner permissions and recovery limits before you invoke a write operation.
 
+For run recovery, use `api describe recoverRun` to read the current request
+schema. The optional `checkpointRecovery` field is limited to a Host recovery
+at a pending gate. A `202` response means that the same operation still needs
+continuation. Retry it with the same idempotency key. A `ready` response means
+the Host restored the saved boundary; it does not mean that a person answered
+the gate or that the run completed. Read the
+[recovery API reference](../reference/api.md#recover-a-host-at-a-pending-gate)
+before you use this field.
+
 Invocation accepts only parameters described by that operation:
 
 ```text

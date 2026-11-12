@@ -255,9 +255,20 @@ internal sealed class EnvironmentRuntimeRunStartManager(
         {
             if (!actor.Bearer.IsUsable())
                 throw new RuntimeAuthorizationException("runtime_start_actor_expired");
-            var current = await ownerContexts.ReadAsync(
-                actor, owner.ProjectId, owner.RunId, owner.SessionId, token).ConfigureAwait(false);
-            if (current != owner)
+            var current = request.CheckpointRecoveryOperationId is { } recoveryOperationId
+                ? await ownerContexts.ReadCheckpointRecoveryAsync(
+                    actor, owner.ProjectId, owner.RunId, owner.SessionId, recoveryOperationId, token)
+                    .ConfigureAwait(false)
+                : await ownerContexts.ReadAsync(
+                    actor, owner.ProjectId, owner.RunId, owner.SessionId, token).ConfigureAwait(false);
+            var expected = request.CheckpointRecoveryOperationId is null
+                ? owner
+                : owner with
+                {
+                    OwnerStateVersion = current.OwnerStateVersion,
+                    DecisionStateVersion = current.DecisionStateVersion
+                };
+            if (current != expected)
                 throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
             var selection = await egress.GetAuthorizedRunEnvironmentSelectionAsync(
                 caller, fence.Owner, token).ConfigureAwait(false);
@@ -535,10 +546,21 @@ internal sealed class EnvironmentRuntimeRunStartManager(
         {
             if (!actor.Bearer.IsUsable())
                 throw new RuntimeAuthorizationException("runtime_start_actor_expired");
-            var current = await ownerContexts.ReadAsync(
-                actor, retirement.Owner.ProjectId, retirement.Owner.RunId,
-                retirement.Owner.SessionId, token).ConfigureAwait(false);
-            if (current != retirement.Owner)
+            var current = request.CheckpointRecoveryOperationId is { } recoveryOperationId
+                ? await ownerContexts.ReadCheckpointRecoveryAsync(
+                    actor, retirement.Owner.ProjectId, retirement.Owner.RunId,
+                    retirement.Owner.SessionId, recoveryOperationId, token).ConfigureAwait(false)
+                : await ownerContexts.ReadAsync(
+                    actor, retirement.Owner.ProjectId, retirement.Owner.RunId,
+                    retirement.Owner.SessionId, token).ConfigureAwait(false);
+            var expected = request.CheckpointRecoveryOperationId is null
+                ? retirement.Owner
+                : retirement.Owner with
+                {
+                    OwnerStateVersion = current.OwnerStateVersion,
+                    DecisionStateVersion = current.DecisionStateVersion
+                };
+            if (current != expected)
                 throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
         }
 

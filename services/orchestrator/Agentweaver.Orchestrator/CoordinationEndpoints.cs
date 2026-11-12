@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Collections.Immutable;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
 using Microsoft.AspNetCore.Http;
 
@@ -134,6 +135,9 @@ public static partial class CoordinationEndpoints
         app.MapGet(
             "/internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context",
             ReadRuntimeOwnerContextAsync).RequireAuthorization();
+        app.MapGet(
+            "/internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context/checkpoint-recovery/{operationId:guid}",
+            ReadCheckpointRecoveryRuntimeOwnerContextAsync).RequireAuthorization();
         app.MapGet(
             "/internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-execution-observation",
             ReadRuntimeExecutionObservationAsync).RequireAuthorization();
@@ -1914,36 +1918,137 @@ public static partial class CoordinationEndpoints
                 checkpointStore = new MafExecutionCheckpointStore(checkpoints, binding);
             }
             var result = await store.RecoverRunExecutionAsync(
-                actor, projectId, runId, request, cancellationToken, selection, checkpointStore)
+                actor,
+                projectId,
+                runId,
+                request,
+                cancellationToken,
+                selection,
+                checkpointStore,
+                request.CheckpointRecovery is null
+                    ? null
+                    : await ReadRecoverablePendingGateAsync(
+                        context, actor, projectId, runId, request, selection, cancellationToken)
+                        .ConfigureAwait(false))
                 .ConfigureAwait(false);
             if (request.CheckpointRecovery is not null)
             {
                 await RequireUnchangedAuthorizedSelectionAsync(
                     context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
-                var recoveryStatus = result.CheckpointRecovery
-                    ?? throw new CoordinationException(
-                        "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
-                var recoveryAuthorization = new CheckpointRecoveryRegistrationAuthorization(
-                    result.OperationId, recoveryStatus);
-                var registration = await registrations!.ReplaceAfterCheckpointRecoveryFenceAsync(
-                    context,
-                    recoveryAuthorization,
-                    projectId,
-                    runId,
-                    result.Session.SessionId,
-                    cancellationToken).ConfigureAwait(false);
-                result = result with
+                if (result.CheckpointRecovery is { Phase: "pending" })
                 {
-                    CheckpointRecovery = result.CheckpointRecovery! with
+                    var continuation = context.RequestServices.GetService<RuntimeRunStartContinuation>()
+                        ?? throw new CoordinationException(
+                            "runtime_run_start_continuation_unavailable",
+                            StatusCodes.Status503ServiceUnavailable);
+                    var startStore = context.RequestServices.GetService<CoordinationRuntimeRunStartStore>()
+                        ?? throw new CoordinationException(
+                            "runtime_run_start_store_unavailable", StatusCodes.Status503ServiceUnavailable);
+                    var intent = await startStore.ReadIntentForStatusAsync(
+                        projectId, runId, result.Session.SessionId, cancellationToken).ConfigureAwait(false)
+                        ?? throw new CoordinationException(
+                            "checkpoint_recovery_runtime_unavailable", StatusCodes.Status503ServiceUnavailable);
+                    var recoveryStatus = result.CheckpointRecovery;
+                    var recoveryCheckpointStore = new MafExecutionCheckpointStore(
+                        checkpoints,
+                        CreateExecutionCheckpointBinding(
+                            result.Session,
+                            actor,
+                            result.ExecutionFence,
+                            MafExecutionCheckpointStore.CurrentSdkVersion,
+                            PostgresMafCheckpointStore.ReadSelectedModelReference(
+                                selection.Selection.Snapshot)));
+                    var runtimeActor = await RuntimeRunStartDispatcher.CreateActorAsync(
+                        context,
+                        context.RequestServices.GetRequiredService<TimeProvider>()).ConfigureAwait(false);
+                    try
                     {
-                        RuntimeInstanceId = registration.RuntimeInstanceId,
-                        RegistrationRevision = registration.Revision
+                        var decisions = context.RequestServices.GetRequiredService<CoordinatorDecisionOwnerStore>();
+                        async Task RequireCurrentGate(CancellationToken token)
+                        {
+                            var current = await decisions.ReadCurrentAsync(
+                                actor, result.Session, selection, token).ConfigureAwait(false);
+                            RequireCheckpointRecoveryGate(
+                                current, recoveryStatus, result.ExecutionFence, actor.Subject);
+                        }
+                        result = await continuation.ContinueCheckpointRecoveryAsync(
+                            context,
+                            actor,
+                            runtimeActor,
+                            result,
+                            intent,
+                            registrations!,
+                            recoveryCheckpointStore,
+                            store,
+                            token => RequireUnchangedAuthorizedSelectionAsync(
+                                context, projectId, runId, selection, projects, token),
+                            RequireCurrentGate,
+                            cancellationToken).ConfigureAwait(false);
                     }
-                };
-                return Results.Accepted(value: result);
+                    finally
+                    {
+                        runtimeActor.Bearer.Invalidate();
+                    }
+                }
+                return result.CheckpointRecovery?.Phase == "pending"
+                    ? Results.Accepted(value: result)
+                    : Results.Ok(result);
             }
             return Results.Ok(result);
         }, cancellationToken);
+
+    internal static void RequireCheckpointRecoveryGate(
+        CoordinatorDecisionCurrentState current,
+        CheckpointRecoveryStatus recovery,
+        long executionFence,
+        string actorSubject)
+    {
+        var gate = current.State.PendingGate;
+        if (current.StateVersion != recovery.DecisionStateVersion ||
+            gate is null || gate.Fence != executionFence ||
+            gate.RequestId != recovery.GateRequestId ||
+            gate.AuthorizedActorId != recovery.GateAuthorizedActorId ||
+            gate.AuthorizedActorId != actorSubject)
+            throw new RuntimeAuthorizationException("checkpoint_recovery_boundary_stale");
+    }
+
+    private static async Task<CoordinatorGateRequest?> ReadRecoverablePendingGateAsync(
+        HttpContext context,
+        CoordinationActor actor,
+        string projectId,
+        string runId,
+        RecoverRunExecutionRequest request,
+        AuthorizedRunSelection selection,
+        CancellationToken cancellationToken)
+    {
+        var decisions = context.RequestServices.GetRequiredService<CoordinatorDecisionOwnerStore>();
+        var current = await decisions.ReadCurrentAsync(
+            actor,
+            new SessionIdentity(projectId, runId, await ReadRootSessionIdAsync(
+                context, actor, projectId, runId, cancellationToken).ConfigureAwait(false)),
+            selection,
+            cancellationToken).ConfigureAwait(false);
+        var gate = current.State.PendingGate;
+        if (gate is null || gate.Fence != request.ExecutionFence)
+            return null;
+        if (gate.AuthorizedActorId != actor.Subject)
+            throw new CoordinationException(
+                "checkpoint_recovery_gate_unauthorized", StatusCodes.Status403Forbidden);
+        return gate;
+    }
+
+    private static async Task<string> ReadRootSessionIdAsync(
+        HttpContext context,
+        CoordinationActor actor,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        var store = context.RequestServices.GetRequiredService<CoordinationOwnerStore>();
+        var status = await store.ReadOwnerRunStatusAsync(actor, projectId, runId, cancellationToken)
+            .ConfigureAwait(false);
+        return status.RootSessionId;
+    }
 
     /// <summary>
     /// Reads notifications addressed to the authenticated session.
