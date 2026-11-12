@@ -2574,7 +2574,7 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
     private static AuthorizedRunSelection CreateSelection(CoordinationActor actor)
     {
         using var snapshot = JsonDocument.Parse(
-            """{"source":"projects-config","modelSelection":{"reference":"model:provider/alpha"},"runLimits":{}}""");
+            """{"source":"projects-config","modelSelection":{"reference":"model:provider/alpha"},"runLimits":{"maxChildren":100,"maxConcurrentChildren":32,"maxWallTimeSeconds":3600}}""");
         var selection = new EffectiveRunSelection(
                 "project-1",
                 Guid.NewGuid().ToString("D"),
