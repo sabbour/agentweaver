@@ -475,17 +475,25 @@ public sealed class BacklogPlanPromotionPostgresTests : IAsyncLifetime
             transitionValue = (object?)null
         }, DecisionJson);
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
-        await using var update = new NpgsqlCommand($"""
-            UPDATE "{_schema}".coordinator_decisions
-            SET decision = @payload
-            WHERE project_id = @project AND run_id = @run AND session_id = @session
-                AND idempotency_key = 'plan-confirmed'
+        await using var insert = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordinator_decisions
+                (project_id, run_id, session_id, request_id, decision_id,
+                 actor_issuer, actor_subject, execution_fence, state_version,
+                 action_kind, idempotency_key, command_hash, decision_state, decision)
+            VALUES (@project, @run, @session, 'recovery-plan-confirmed', @decision,
+                    @issuer, @subject, @fence, 3, 'test.recovery_seed', 'recovery-plan-confirmed',
+                    @hash, 'accepted', @payload)
             """, connection);
-        update.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, ProjectId);
-        update.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, RunId);
-        update.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, RootSessionId);
-        update.Parameters.AddWithValue("payload", NpgsqlDbType.Jsonb, payload);
-        Assert.Equal(1, await update.ExecuteNonQueryAsync());
+        insert.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, ProjectId);
+        insert.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, RunId);
+        insert.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, RootSessionId);
+        insert.Parameters.AddWithValue("decision", NpgsqlDbType.Uuid, Guid.NewGuid());
+        insert.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, _actor.Issuer);
+        insert.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, _actor.Subject);
+        insert.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, _fence);
+        insert.Parameters.AddWithValue("hash", NpgsqlDbType.Char, new string('b', 64));
+        insert.Parameters.AddWithValue("payload", NpgsqlDbType.Jsonb, payload);
+        await insert.ExecuteNonQueryAsync();
     }
 
     private Task<BacklogCoreResult<BacklogPlanPromotion>> PromoteAsync(
