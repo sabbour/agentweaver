@@ -1917,11 +1917,14 @@ public static partial class CoordinationEndpoints
             {
                 await RequireUnchangedAuthorizedSelectionAsync(
                     context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+                var recoveryStatus = result.CheckpointRecovery
+                    ?? throw new CoordinationException(
+                        "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
+                var recoveryAuthorization = new CheckpointRecoveryRegistrationAuthorization(
+                    result.OperationId, recoveryStatus);
                 var registration = await registrations!.ReplaceAfterCheckpointRecoveryFenceAsync(
                     context,
-                    request.CheckpointRecovery.RuntimeInstanceId,
-                    request.CheckpointRecovery.RegistrationRevision,
-                    result.OperationId,
+                    recoveryAuthorization,
                     projectId,
                     runId,
                     result.Session.SessionId,

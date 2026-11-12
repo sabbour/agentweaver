@@ -241,7 +241,8 @@ public sealed class BacklogPlanPromotionPostgresTests : IAsyncLifetime
             await _decisions.AdvanceExecutionFenceAsync(
                 connection, transaction, _actor, Identity, _selection, _fence, _fence + 1,
                 Guid.NewGuid(), "execution.checkpoint_recovery", CancellationToken.None,
-                preservePendingGate: true, expectedDecisionStateVersion: pending.StateVersion);
+                preservePendingGate: true, expectedDecisionStateVersion: pending.StateVersion,
+                expectedCheckpointWorkPlanId: "plan-1");
             await transaction.CommitAsync();
         }
 
@@ -304,7 +305,8 @@ public sealed class BacklogPlanPromotionPostgresTests : IAsyncLifetime
             await _decisions.AdvanceExecutionFenceAsync(
                 connection, transaction, _actor, Identity, _selection, _fence, _fence + 1,
                 Guid.NewGuid(), "execution.checkpoint_recovery", CancellationToken.None,
-                preservePendingGate: true, expectedDecisionStateVersion: cleared.StateVersion);
+                preservePendingGate: true, expectedDecisionStateVersion: cleared.StateVersion,
+                expectedCheckpointWorkPlanId: "plan-1");
         });
         Assert.Equal("checkpoint_recovery_gate_unavailable", error.Code);
         Assert.Equal(1, await CountAsync("coordinator_gates"));
@@ -330,7 +332,8 @@ public sealed class BacklogPlanPromotionPostgresTests : IAsyncLifetime
             await _decisions.AdvanceExecutionFenceAsync(
                 connection, transaction, _actor, Identity, _selection, _fence, _fence + 1,
                 Guid.NewGuid(), "execution.checkpoint_recovery", CancellationToken.None,
-                preservePendingGate: true, expectedDecisionStateVersion: current.StateVersion);
+                preservePendingGate: true, expectedDecisionStateVersion: current.StateVersion,
+                expectedCheckpointWorkPlanId: "plan-1");
             await transaction.CommitAsync();
         }
 

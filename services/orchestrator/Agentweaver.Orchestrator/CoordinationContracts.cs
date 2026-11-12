@@ -884,7 +884,13 @@ public sealed record CheckpointRecoveryStatus(
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? RegistrationRevision { get; init; }
+
+    public long DecisionStateVersion { get; init; }
 }
+
+internal sealed record CheckpointRecoveryRegistrationAuthorization(
+    Guid OperationId,
+    CheckpointRecoveryStatus Status);
 
 /// <summary>
 /// Reports one session whose execution fence changed during a run transition.

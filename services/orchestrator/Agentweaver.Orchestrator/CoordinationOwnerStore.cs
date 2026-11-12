@@ -3890,12 +3890,14 @@ internal sealed partial class CoordinationOwnerStore
             sourceCheckpoint?.State.WorkPlanId).ConfigureAwait(false);
 
         MafExecutionCheckpointSnapshot? recoveryCheckpoint = null;
+        long? recoveryDecisionStateVersion = null;
         if (checkpointRecovery is not null)
         {
-            var decisionStateVersion = await ReadDecisionStateVersionAtFenceAsync(
+            recoveryDecisionStateVersion = await ReadDecisionStateVersionAtFenceAsync(
                 connection, transaction, identity, nextFence, cancellationToken).ConfigureAwait(false);
             recoveryCheckpoint = await checkpointStore!.AppendRecoveryCheckpointInTransactionAsync(
-                connection, transaction, sourceCheckpoint!, operationId, decisionStateVersion, cancellationToken)
+                connection, transaction, sourceCheckpoint!, operationId,
+                recoveryDecisionStateVersion.Value, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -3930,7 +3932,8 @@ internal sealed partial class CoordinationOwnerStore
                 {
                     SourceCheckpointHash = sourceCheckpoint!.PayloadHash,
                     RecoveryCheckpointId = recoveryCheckpoint!.Info.CheckpointId,
-                    RecoveryCheckpointRevision = recoveryCheckpoint.State.Revision
+                    RecoveryCheckpointRevision = recoveryCheckpoint.State.Revision,
+                    DecisionStateVersion = recoveryDecisionStateVersion!.Value
                 }
         };
         await SaveRunExecutionOperationAsync(
@@ -4018,6 +4021,52 @@ internal sealed partial class CoordinationOwnerStore
             reader.IsDBNull(4) || reader.GetInt64(4) != request.RegistrationRevision)
             throw new CoordinationException(
                 "checkpoint_recovery_runtime_stale", StatusCodes.Status409Conflict);
+    }
+
+    internal async Task RequireCheckpointRecoveryRegistrationAsync(
+        CoordinationActor actor,
+        SessionIdentity identity,
+        long executionFence,
+        CheckpointRecoveryRegistrationAuthorization authorization,
+        CancellationToken cancellationToken)
+    {
+        if (authorization.OperationId == Guid.Empty ||
+            authorization.Status.Phase != "pending" ||
+            authorization.Status.PreviousExecutionFence == long.MaxValue ||
+            authorization.Status.PreviousExecutionFence + 1 != executionFence ||
+            authorization.Status.ExecutionFence != executionFence ||
+            authorization.Status.PreviousRuntimeInstanceId == Guid.Empty ||
+            authorization.Status.PreviousRegistrationRevision < 1 ||
+            authorization.Status.DecisionStateVersion < 1)
+            throw new CoordinationException(
+                "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
+
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand($"""
+            SELECT result
+            FROM {_executionOperations}
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+                AND actor_issuer = @issuer AND actor_subject = @subject
+                AND operation_id = @operation AND operation_kind = 'recovery'
+            FOR SHARE
+            """, connection, transaction);
+        AddRunScope(command, identity.ProjectId, identity.RunId);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+        command.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, actor.Issuer);
+        command.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, actor.Subject);
+        command.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, authorization.OperationId);
+        var storedJson = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+        var stored = storedJson is null
+            ? null
+            : JsonSerializer.Deserialize<RunExecutionTransitionResult>(storedJson, JsonOptions);
+        if (stored?.Session != identity ||
+            stored.OperationId != authorization.OperationId ||
+            stored.ExecutionFence != executionFence ||
+            stored.CheckpointRecovery != authorization.Status)
+            throw new CoordinationException(
+                "checkpoint_recovery_registration_stale", StatusCodes.Status409Conflict);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RequireNoPendingCheckpointRecoveryAsync(

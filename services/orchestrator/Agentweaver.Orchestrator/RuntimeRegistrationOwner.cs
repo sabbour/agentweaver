@@ -245,7 +245,8 @@ internal sealed class RuntimeRegistrationOwner(
         string runId,
         string sessionId,
         RegisterRuntimeRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CheckpointRecoveryRegistrationAuthorization? checkpointRecoveryRegistration = null)
     {
         RuntimeContractValidation.Validate(releasedRegistration);
         if (operationId == Guid.Empty ||
@@ -264,45 +265,48 @@ internal sealed class RuntimeRegistrationOwner(
                 context, projectId, runId, sessionId, request, cancellationToken).ConfigureAwait(false)
         };
         var derived = await DeriveCurrentBindingAsync(
-            context, projectId, runId, sessionId, resolvedRequest, cancellationToken).ConfigureAwait(false);
+            context, projectId, runId, sessionId, resolvedRequest, cancellationToken,
+            checkpointRecoveryRegistration: checkpointRecoveryRegistration).ConfigureAwait(false);
         RequireNextFenceReplacement(releasedRegistration, derived.Binding, expectedExecutionFence);
         var replacement = await registrations.ReplaceAsync(
             releasedRegistration, operationId, derived.Binding, derived.ExpiresAt, cancellationToken,
             async token =>
             {
                 var current = await DeriveCurrentBindingAsync(
-                    context, projectId, runId, sessionId, resolvedRequest, token).ConfigureAwait(false);
+                    context, projectId, runId, sessionId, resolvedRequest, token,
+                    checkpointRecoveryRegistration: checkpointRecoveryRegistration).ConfigureAwait(false);
                 RequireSame(derived, current);
             }).ConfigureAwait(false);
         var final = await DeriveCurrentBindingAsync(
-            context, projectId, runId, sessionId, resolvedRequest, cancellationToken).ConfigureAwait(false);
+            context, projectId, runId, sessionId, resolvedRequest, cancellationToken,
+            checkpointRecoveryRegistration: checkpointRecoveryRegistration).ConfigureAwait(false);
         RequireSame(derived, final);
         return replacement;
     }
 
     internal async Task<RuntimeRegistration> ReplaceAfterCheckpointRecoveryFenceAsync(
         HttpContext context,
-        Guid previousRuntimeInstanceId,
-        long previousRegistrationRevision,
-        Guid operationId,
+        CheckpointRecoveryRegistrationAuthorization authorization,
         string projectId,
         string runId,
         string sessionId,
         CancellationToken cancellationToken)
     {
         var current = await registrations.ReadAsync(
-            previousRuntimeInstanceId, cancellationToken).ConfigureAwait(false)
+            authorization.Status.PreviousRuntimeInstanceId, cancellationToken).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_registration_unknown");
-        var released = RestoreReleasedRegistrationForRecovery(current, previousRegistrationRevision);
+        var released = RestoreReleasedRegistrationForRecovery(
+            current, authorization.Status.PreviousRegistrationRevision);
         return await ReplaceAfterResumeFenceAsync(
             context,
             released,
-            operationId,
+            authorization.OperationId,
             projectId,
             runId,
             sessionId,
             new(released.Binding.EnvironmentId, released.Binding.ProfileId),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            authorization).ConfigureAwait(false);
     }
 
     internal static RuntimeRegistration RestoreReleasedRegistrationForRecovery(
@@ -487,10 +491,13 @@ internal sealed class RuntimeRegistrationOwner(
     private async Task<DerivedBinding> DeriveCurrentBindingAsync(
         HttpContext context, string projectId, string runId, string sessionId,
         RegisterRuntimeRequest request, CancellationToken cancellationToken,
-        bool requireInitialOwnerSnapshot = true)
+        bool requireInitialOwnerSnapshot = true,
+        CheckpointRecoveryRegistrationAuthorization? checkpointRecoveryRegistration = null)
     {
         var firstOwner = requireInitialOwnerSnapshot
-            ? await ReadOwnerAsync(context, projectId, runId, sessionId, cancellationToken).ConfigureAwait(false)
+            ? await ReadOwnerAsync(
+                context, projectId, runId, sessionId, cancellationToken, checkpointRecoveryRegistration)
+                .ConfigureAwait(false)
             : null;
         var authenticated = await context.AuthenticateAsync().ConfigureAwait(false);
         var expiresAt = context.User.GetExpirationDate() ?? authenticated.Properties?.ExpiresUtc;
@@ -615,10 +622,16 @@ internal sealed class RuntimeRegistrationOwner(
     /// Reads the current orchestrator owner context for a session.
     /// </summary>
     private Task<RuntimeOwnerContext> ReadOwnerAsync(
-        HttpContext context, string projectId, string runId, string sessionId, CancellationToken cancellationToken) =>
+        HttpContext context,
+        string projectId,
+        string runId,
+        string sessionId,
+        CancellationToken cancellationToken,
+        CheckpointRecoveryRegistrationAuthorization? checkpointRecoveryRegistration = null) =>
         CoordinationEndpoints.ReadRuntimeOwnerContextCoreAsync(
             projectId, runId, sessionId, context, options, projects, sessions, decisions,
-            selectionContexts, checkpoints, cancellationToken, allowCoordinatorRoot: true);
+            selectionContexts, checkpoints, cancellationToken, allowCoordinatorRoot: true,
+            checkpointRecoveryRegistration: checkpointRecoveryRegistration);
 
     /// <summary>
     /// Validates the environment owner's bootstrap response and placement against the requested owner context.
