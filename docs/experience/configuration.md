@@ -64,13 +64,14 @@ against the live model catalog when a run starts. The v1 vocabulary includes
 `none`, `minimal`, `low`, `medium`, `high`, and `xhigh`; each model offers only
 the levels in its support list.
 
-When the project service has no model list, **Models** says so explicitly,
-lists the saved model references as **not verified as eligible**, and keeps
-model references editable. Reasoning effort options are shown only when the
-binding or live hosted catalog provides them. In both cases, the form does not
-silently replace a saved model or reasoning effort. Current platform choices
-do not make an upstream model available, provision credentials, or guarantee
-that a run can start.
+When the project service has no model list, **Models** states that the service
+has no runtime model-binding list configured. The form keeps model references
+editable. If saved references exist, it lists them under **Saved model
+references (not verified as eligible)**. Reasoning effort options appear only
+when the binding or live hosted catalog provides them. The form does not
+replace a saved model or reasoning effort. Current platform choices do not
+make an upstream model available, provision credentials, or guarantee that a
+run can start.
 
 Only model configuration can be overridden at project level. Provider
 selections for other platform components come from platform configuration and
@@ -125,7 +126,7 @@ changes before you assign a skill.
 | --- | --- |
 | Loading | The form waits for the owner revision. |
 | Model choices available | Model fields are selects of enabled models. Saved references outside the list stay visible and are labeled not currently eligible. Hosted reasoning levels use recent AgentHost publications in the Project choices response; if no recent publication exists, no generic list is shown. |
-| Model choices unavailable | The form states that the project service has no runtime model-binding list configured, lists saved references as not verified, and keeps model reference entry editable; it does not substitute another choice. |
+| Model choices unavailable | The form states that the project service has no runtime model-binding list configured, keeps model reference entry editable, and lists saved references under **Saved model references (not verified as eligible)** when any exist; it does not substitute another choice. |
 | Hosted reasoning unavailable | The form says recent hosted levels are unavailable and offers no unverified options. AgentHost checks each selected effort when a run starts. |
 | Invalid JSON or a nonobject value in **Advanced** | The app displays an error and does not send a write. |
 | Stale `expectedRevision` | The owner returns a conflict. Reload, review your changes against the current document, and save again. |

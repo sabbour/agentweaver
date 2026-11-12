@@ -79,8 +79,11 @@ The Orchestrator and Events and Sessions migrations run as Jobs from the
 `npm run deploy:kustomize` command prepares migration Jobs for the selected
 service images and waits for them to succeed before applying the root
 workload overlay. Separately, the database maintenance runner's
-`--migrations-only` mode leaves application Deployments unchanged and skips
-the image-order gate. The normal standalone `npm run db:maintenance` mode retains its
+`--migrations-only` mode skips the general image and schema-order checks and
+does not change application Deployments. If the plan includes Core 047, the
+runner reads the Orchestrator and Environment Deployment images and pods and
+validates the owner images and guard-aware pods before it runs the migration
+Jobs. The normal standalone `npm run db:maintenance` mode retains its
 schema-ordering and readiness checks.
 `npm run db:maintenance:setup` prepares the identities, role assignments, and
 GitHub environment for the separate database-maintenance workflow. It also

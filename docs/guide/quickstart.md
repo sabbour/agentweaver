@@ -10,7 +10,9 @@ packages or images, or start a product platform.
 
 Install:
 
-- .NET 10 SDK, as selected by `global.json`.
+- .NET SDK `10.0.400`, as requested by `global.json`. Its `latestFeature`
+  setting allows roll-forward within the 10.0 feature bands. Prerelease SDKs
+  are disabled.
 - Node.js 24 and npm.
 - Git with this repository checked out.
 
