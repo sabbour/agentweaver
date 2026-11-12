@@ -44,6 +44,24 @@ public sealed class RuntimeOwnerContextTests
             Checkpoint(plan), current with { State = pending.State! }));
     }
 
+    [Fact]
+    public void ChildRecoveryValidatesAssociationAtItsPinnedSourceDecisionVersion()
+    {
+        var (plan, context, parent, association) = CreateFixedAssociation();
+        var checkpoint = Checkpoint(plan);
+        var recoveredDecision = CurrentDecision() with { StateVersion = 5 };
+
+        Assert.False(CoordinationEndpoints.MatchesFixedRuntimeAssociation(
+            association, plan, context, parent, association.ChildSessionId, SelectionHash, 3,
+            checkpoint, recoveredDecision));
+        Assert.True(CoordinationEndpoints.MatchesFixedRuntimeAssociation(
+            association, plan, context, parent, association.ChildSessionId, SelectionHash, 3,
+            checkpoint, recoveredDecision, association.DecisionStateVersion));
+        Assert.False(CoordinationEndpoints.MatchesFixedRuntimeAssociation(
+            association, plan, context, parent, association.ChildSessionId, SelectionHash, 3,
+            checkpoint, recoveredDecision, association.DecisionStateVersion + 1));
+    }
+
     [Theory]
     [InlineData("selection")]
     [InlineData("fence")]

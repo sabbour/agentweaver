@@ -187,6 +187,10 @@ public sealed class RuntimeRegistrationRecoveryTests
         Assert.Equal(5, owner.ExecutionFence);
         Assert.Equal(CoordinationOwnerStore.CreateCoordinatorRootRuntimeTurnId(identity, 5), owner.TurnId);
         Assert.NotEqual(binding.TurnId, owner.TurnId);
+
+        var childOwner = RuntimeRunStartContinuation.CreateCheckpointRecoveryOwnerContext(binding, 5, 3);
+        Assert.Equal(3, childOwner.LogicalTurnOrdinal);
+        Assert.Equal(CoordinationOwnerStore.CreateRuntimeTurnId(identity, 5, 3), childOwner.TurnId);
     }
 
     [Fact]
@@ -280,6 +284,43 @@ public sealed class RuntimeRegistrationRecoveryTests
                     decision, owner, authorization with
                     {
                         Status = authorization.Status with { GateRequestId = "other-gate" }
+                    })).Code);
+    }
+
+    [Fact]
+    public void ChildJoinRecoveryAllowsItsExactDecisionWithoutAPendingGate()
+    {
+        const long fence = 4;
+        const long decisionVersion = 12;
+        const string selectionHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var decision = new CoordinatorDecisionCurrentState(
+            CoordinatorDecisionState.Create(fence), decisionVersion, selectionHash);
+        var owner = new SessionRuntimeOwnerState(
+            "root", null, "tenant", selectionHash, fence, 0, 1, "runtime-turn")
+        {
+            IsCoordinatorRoot = true
+        };
+        var authorization = new CheckpointRecoveryRegistrationAuthorization(
+            Guid.NewGuid(),
+            new CheckpointRecoveryStatus(
+                "pending", "source-checkpoint", 1, fence - 1, fence, Guid.NewGuid(), 1)
+            {
+                BoundaryKind = "childJoin",
+                DecisionStateVersion = decisionVersion,
+                DispatchHeld = true
+            });
+
+        CoordinationEndpoints.RequireCoordinatorRootDecision(decision, owner, authorization);
+        Assert.Equal("checkpoint_recovery_registration_stale",
+            Assert.Throws<CoordinationException>(() =>
+                CoordinationEndpoints.RequireCoordinatorRootDecision(
+                    decision with { StateVersion = decisionVersion + 1 }, owner, authorization)).Code);
+        Assert.Equal("checkpoint_recovery_registration_stale",
+            Assert.Throws<CoordinationException>(() =>
+                CoordinationEndpoints.RequireCoordinatorRootDecision(
+                    decision, owner, authorization with
+                    {
+                        Status = authorization.Status with { GateRequestId = "unexpected-gate" }
                     })).Code);
     }
 

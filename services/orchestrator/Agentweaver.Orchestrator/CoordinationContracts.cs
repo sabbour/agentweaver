@@ -918,9 +918,19 @@ public sealed record CheckpointRecoveryStatus(
     public long DecisionStateVersion { get; init; }
 }
 
+internal sealed record CheckpointRecoveryRegistrationMember(
+    string AssociationId,
+    string SessionId,
+    string AssociationSha256,
+    long SourceExecutionFence,
+    long SourceDecisionStateVersion,
+    Guid PreviousRuntimeInstanceId,
+    long PreviousRegistrationRevision);
+
 internal sealed record CheckpointRecoveryRegistrationAuthorization(
     Guid OperationId,
-    CheckpointRecoveryStatus Status);
+    CheckpointRecoveryStatus Status,
+    CheckpointRecoveryRegistrationMember? Member = null);
 
 /// <summary>
 /// Reports one session whose execution fence changed during a run transition.

@@ -80,7 +80,8 @@ public sealed class EnvironmentLifecycleManager(
     internal async Task<EnvironmentLifecycleTransitionResult> RegisterChildStartAsync(
         RuntimeActorAuthorization actor,
         RuntimeOwnerContext expectedOwner,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? checkpointRecoveryOperationId = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(expectedOwner);
@@ -92,7 +93,8 @@ public sealed class EnvironmentLifecycleManager(
             !actor.Bearer.IsUsable() ||
             runtimeOwnerContext is null)
             throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
-        return await RegisterRunStartAsync(actor, expectedOwner, cancellationToken).ConfigureAwait(false);
+        return await RegisterRunStartAsync(
+            actor, expectedOwner, cancellationToken, checkpointRecoveryOperationId).ConfigureAwait(false);
     }
 
     private async Task<EnvironmentLifecycleTransitionResult> RegisterRunStartAsync(

@@ -1282,11 +1282,14 @@ The opt-in path supports two boundaries:
 - **Saved child join.** A child join is the saved association between a
   work-plan item and its child session. The owner checks the saved child
   boundary and records a frozen child manifest. It also advances the fence and
-  writes a checkpoint with recovery lineage. This version does not continue
-  child sessions or import their results. The owner reports
-  `checkpointRecovery.phase` as `pending`, sets `boundaryKind` to `childJoin`,
-  and sets `dispatchHeld` to `true`. A `202` response means that the owner
-  saved the admission. It does not mean that the children were restored.
+  writes a checkpoint with recovery lineage. The owner continues each saved,
+  nonterminal child that has no unresolved native send. It keeps each child
+  session, association, startup intent, and saved dispatch message. The root
+  and every required child must have a current registration before any Host
+  bootstrap starts. The owner keeps `dispatchHeld` set until the root and all
+  required children pass readiness checks. A `202` response means that the
+  owner saved the admission or has more continuation work. It does not mean
+  that the child task has completed.
 
 The owner rejects other boundaries and unsupported platform-effect history.
 Both paths require matching fences and versions, current authority, and the
@@ -1317,11 +1320,13 @@ operation with a new idempotency key and the failed runtime ID and registration
 revision. The owner advances the fence once, retires the failed Host, and uses
 new operation IDs. It does not resend the credential or roll back authority.
 
-For a saved child join, the current version keeps the recovery pending and the
-dispatch hold active. Guarded owner writes return `409` with
-`checkpoint_recovery_dispatch_held` while the hold is active. The owner does
-not resume children, import child results, or clear the hold. Retry an accepted
-request only with the same idempotency key. A new key does not bypass the hold.
+For a saved child join, guarded owner writes return `409` with
+`checkpoint_recovery_dispatch_held` while the hold is active. The continuation
+does not send a child task message or import a child result. After recovery is
+ready, ordinary dispatch can send the saved message. A malformed or mismatched
+manifest keeps the hold active. Retry an accepted request only with the same
+idempotency key. A new key does not bypass the hold. Unsupported or unresolved
+child history stays held for review.
 
 For gate recovery, `readRunStatus` and root `readSessionStatus` expose the
 current recovery step, reason, checkpoint IDs, fences, and old and new runtime
@@ -1330,7 +1335,8 @@ identities. For child-join admission, the status exposes `boundaryKind`,
 recovery progress through its cursor. These reads do not retry the operation.
 For gate recovery, do not start a second recovery with a new key while the
 first operation is pending. A new key is allowed after gate recovery is
-blocked. A child-join hold remains pending in this version.
+blocked. A child-join hold remains active until all required registrations
+and readiness checks are complete.
 
 #### Dispatch completion and startup readback
 

@@ -245,8 +245,11 @@ internal sealed class EnvironmentRuntimeRunStartManager(
         var owner = request.Owner;
         var previous = request.PreviousPlacement;
         var caller = new CurrentCallerRequest(actor.Bearer.GetValue(), actor.TenantSelector);
-        var lifecycleResult = await lifecycle.RegisterCoordinatorRootAsync(
-            actor, owner, cancellationToken, request.CheckpointRecoveryOperationId).ConfigureAwait(false);
+        var lifecycleResult = request.ContractVersion == 2
+            ? await lifecycle.RegisterChildStartAsync(
+                actor, owner, cancellationToken, request.CheckpointRecoveryOperationId).ConfigureAwait(false)
+            : await lifecycle.RegisterCoordinatorRootAsync(
+                actor, owner, cancellationToken, request.CheckpointRecoveryOperationId).ConfigureAwait(false);
         var fence = lifecycleResult.Snapshot.Fence;
         if (fence.Owner.EnvironmentId != RuntimeRunStartKeys.EnvironmentId(owner))
             throw new RuntimeAuthorizationException("runtime_start_environment_binding_invalid");
@@ -283,13 +286,13 @@ internal sealed class EnvironmentRuntimeRunStartManager(
             await lifecycleStore.RequireActiveAsync(fence, token).ConfigureAwait(false);
         }
 
-        var egressResult = await egress.ApplyCoordinatorFirstStartAndVerifyAsync(
-            caller,
-            owner,
-            new ApplyEnvironmentEgressRequest(
-                fence, 1, 0, RuntimeRunStartKeys.IdempotencyKey(owner) + ":network"),
-            cancellationToken,
-            RequireCurrentAsync).ConfigureAwait(false);
+        var networkRequest = new ApplyEnvironmentEgressRequest(
+            fence, 1, 0, RuntimeRunStartKeys.IdempotencyKey(owner) + ":network");
+        var egressResult = await (request.ContractVersion == 2
+            ? egress.ApplyChildFirstStartAndVerifyAsync(
+                caller, owner, networkRequest, cancellationToken, RequireCurrentAsync)
+            : egress.ApplyCoordinatorFirstStartAndVerifyAsync(
+                caller, owner, networkRequest, cancellationToken, RequireCurrentAsync)).ConfigureAwait(false);
         if (!egressResult.ReadyForDispatch ||
             egressResult.Binding?.AppliedIntentGeneration != previous.NetworkPolicyGeneration)
             throw new RuntimeAuthorizationException("runtime_start_network_unavailable");
@@ -520,7 +523,7 @@ internal sealed class EnvironmentRuntimeRunStartManager(
             result.Resource != placement.SandboxResource)
             throw new RuntimeAuthorizationException("runtime_start_retirement_receipt_invalid");
         return new RuntimeRunStartRetirementReceipt(
-            1,
+            request.ContractVersion,
             request.BootstrapOperationId,
             request.RuntimeInstanceId,
             request.RegistrationRevision,
@@ -573,7 +576,7 @@ internal sealed class EnvironmentRuntimeRunStartManager(
             result.Resource != retirement.Placement.SandboxResource)
             throw new RuntimeAuthorizationException("runtime_start_retirement_receipt_invalid");
         return new RuntimeRunStartRetirementReceipt(
-            1,
+            request.ContractVersion,
             retirement.BootstrapOperationId,
             retirement.RuntimeInstanceId,
             retirement.RegistrationRevision,
