@@ -319,6 +319,29 @@ public sealed class GatewayEnvironmentRecoveryTests
                     candidate.TryGetProperty("operationId", out var id) && id.GetString() == operationId);
             Assert.True(operation.GetProperty("responses").TryGetProperty("409", out _));
         }
+        foreach (var operationId in new[]
+        {
+            "bindEnvironmentWorkspaceVolume",
+            "unbindEnvironmentWorkspaceVolume",
+            "releaseEnvironmentWorkspaceVolume",
+        })
+        {
+            var conflict = root.GetProperty("paths").EnumerateObject()
+                .SelectMany(path => path.Value.EnumerateObject())
+                .Select(candidate => candidate.Value)
+                .Single(candidate => candidate.ValueKind == JsonValueKind.Object &&
+                    candidate.TryGetProperty("operationId", out var id) && id.GetString() == operationId)
+                .GetProperty("responses").GetProperty("409")
+                .GetProperty("content").GetProperty("application/json").GetProperty("schema");
+            Assert.Equal(
+                new[]
+                {
+                    "#/components/schemas/EnvironmentWorkspaceVolumeMutationStatus",
+                    "#/components/schemas/EnvironmentApiErrorOrProblem",
+                },
+                conflict.GetProperty("oneOf").EnumerateArray()
+                    .Select(schema => schema.GetProperty("$ref").GetString()!).ToArray());
+        }
         var attemptsRead = root.GetProperty("paths").EnumerateObject()
             .SelectMany(path => path.Value.EnumerateObject())
             .Select(candidate => candidate.Value)
