@@ -126,7 +126,7 @@ changes before you assign a skill.
 | --- | --- |
 | Loading | The form waits for the owner revision. |
 | Model choices available | Model fields are selects of enabled models. Saved references outside the list stay visible and are labeled not currently eligible. Hosted reasoning levels use recent AgentHost publications in the Project choices response; if no recent publication exists, no generic list is shown. |
-| Model choices unavailable | The form states that the project service has no runtime model-binding list configured, keeps model reference entry editable, and lists saved references under **Saved model references (not verified as eligible)** when any exist; it does not substitute another choice. |
+| Model choices unavailable | The form states that the project service has no runtime model-binding list configured, keeps model reference entry editable, and lists saved references under **Saved model references (eligibility data unavailable)** when any exist; it does not substitute another choice. |
 | Hosted reasoning unavailable | The form says recent hosted levels are unavailable and offers no unverified options. AgentHost checks each selected effort when a run starts. |
 | Invalid JSON or a nonobject value in **Advanced** | The app displays an error and does not send a write. |
 | Stale `expectedRevision` | The owner returns a conflict. Reload, review your changes against the current document, and save again. |
