@@ -12,13 +12,15 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
         string path,
         RuntimeActorAuthorization actor,
         object request,
-        CancellationToken cancellationToken) where TResponse : class
+        CancellationToken cancellationToken,
+        IReadOnlySet<string>? allowedFailureCodes = null) where TResponse : class
     {
         if (placement.RuntimeEndpoint is not { } endpoint)
         {
             var legacyOwner = new Uri(placement.ConfigureEndpoint.GetLeftPart(UriPartial.Authority) + "/");
             return await RuntimeOwnerHttpTransport.SendAsync<TResponse>(
-                client, legacyOwner, path, actor, request, cancellationToken).ConfigureAwait(false);
+                client, legacyOwner, path, actor, request, cancellationToken, allowedFailureCodes)
+                .ConfigureAwait(false);
         }
         var configureEndpoint = endpoint.ReceiverConfigureEndpoint
             ?? throw new RuntimeAuthorizationException("runtime_sandbox_endpoint_invalid");
@@ -35,7 +37,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
         var receiverOwner = new Uri(configureEndpoint.GetLeftPart(UriPartial.Authority) + "/");
         return await RuntimeOwnerHttpTransport.SendBoundedAsync<TResponse>(
             client, receiverOwner, path, actor, request, SessionMaterialValidation.MaximumBytes,
-            false, cancellationToken, endpoint).ConfigureAwait(false)
+            false, cancellationToken, endpoint, allowedFailureCodes).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_host_unavailable");
     }
 

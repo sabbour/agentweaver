@@ -3900,6 +3900,11 @@ internal sealed partial class CoordinationOwnerStore
                 throw new CoordinationException(
                     "checkpoint_recovery_checkpoint_stale", StatusCodes.Status409Conflict);
             RequireGateCheckpointBoundary(sourceCheckpoint.State);
+            if (await CoordinationRuntimeRunStartStore.HasUnresolvedNativeWorkAsync(
+                    connection, transaction, _schema, projectId, runId, cancellationToken)
+                .ConfigureAwait(false))
+                throw new CoordinationException(
+                    "checkpoint_recovery_boundary_unsupported", StatusCodes.Status409Conflict);
             await RequireNoPendingCheckpointRecoveryAsync(
                 connection, transaction, projectId, runId, cancellationToken).ConfigureAwait(false);
         }
@@ -5687,7 +5692,7 @@ internal sealed partial class CoordinationOwnerStore
         return $"turn-{Convert.ToHexStringLower(SHA256.HashData(bytes))}";
     }
 
-    private static string CreateCoordinatorRootRuntimeTurnId(
+    internal static string CreateCoordinatorRootRuntimeTurnId(
         SessionIdentity identity,
         long executionFence)
     {

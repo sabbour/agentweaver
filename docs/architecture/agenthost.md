@@ -167,6 +167,17 @@ The recovery operation ID also scopes the Host's registration, skill, source,
 and configuration calls while the replacement starts. The Host does not answer
 the gate or send a model turn during this continuation.
 
+The Broker saves the bootstrap receipt before Environment activates the Host.
+After a transport or timeout failure, the same recovery operation can continue;
+an exact Broker replay returns the existing session. If activation instead
+returns `runtime_delivery_unavailable`, `runtime_receiver_unavailable`,
+`runtime_source_credential_unavailable`, `runtime_configuration_conflict`, or
+`runtime_operation_conflict`, Orchestrator marks the operation blocked with
+`checkpoint_recovery_host_bootstrap_spent`. The credential is not replayed.
+A new recovery operation pins the failed runtime ID and registration revision,
+advances the fence once, retires the failed placement, and uses new operation
+IDs. Authority does not roll back.
+
 ```mermaid
 sequenceDiagram
     participant C as Authenticated caller
