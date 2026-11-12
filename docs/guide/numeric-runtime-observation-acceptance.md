@@ -22,8 +22,11 @@ tool-call denial. The tool must be read-only. The case checks the existing
 child session; it does not create this workflow or attempt.
 
 The CLI identity must have current authority to read the selected project and
-run. Sign in through the supported CLI flow before you run the case. The case
-does not launch a browser or accept a bearer token.
+run. Use the `api.read` and `projects.orchestrator` scopes with that
+project/run binding. The case uses this same bound identity for its
+authorization-context, status, usage, and observation reads. Sign in through
+the supported CLI flow before you run the case. The case does not launch a
+browser or accept a bearer token.
 
 ## Prepare the case input
 
@@ -101,7 +104,8 @@ command or an internal route.
 
 The script writes `commands.jsonl` and `result.json` to the new evidence
 directory. A `passed` result means the actor and tenant match the input; the
-child session is bound to the selected run and current execution fence; the
+CLI authorization context matches the selected actor, tenant, project, and run;
+the child session is bound to the selected run and current execution fence; the
 accepted tool-call limit and reservation count match the input; and the
 complete history contains an admitted tool reservation and a numeric
 `ToolPermissionRejected` fact. The normal CLI and `rest` exact lookups must

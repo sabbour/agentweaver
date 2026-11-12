@@ -174,7 +174,12 @@ export function buildCommands(input) {
   const bound = targetArgs(target);
   return [
     { id: 'version', args: ['--version'] },
-    { id: 'auth-status', args: ['auth', 'status', '--scope', 'projects.orchestrator', ...unbound] },
+    {
+      id: 'auth-status',
+      args: [
+        'auth', 'status', '--scope', 'api.read', '--scope', 'projects.orchestrator', ...bound,
+      ],
+    },
     { id: 'api-operations', args: ['api', 'operations', ...unbound] },
     {
       id: 'api-describe-runtime-observation',
@@ -184,7 +189,7 @@ export function buildCommands(input) {
       id: 'rest-authorization-context',
       args: [
         'rest', '--method', 'GET', '--url', '/api/v1/authorization/context',
-        '--scope', 'api.read', ...unbound,
+        '--scope', 'api.read', '--scope', 'projects.orchestrator', ...bound,
       ],
     },
     {
@@ -204,6 +209,16 @@ export function buildCommands(input) {
     },
     { id: 'observation-page-1', args: observationArgs(input, { pageSize: PAGE_SIZE }) },
   ];
+}
+
+export function validateAuthorizationContext(context, input) {
+  if (context?.actorId !== input.expectedActorId
+    || context?.tenantId !== input.target.tenantId
+    || context?.boundProjectId !== input.target.projectId
+    || context?.boundRunId !== input.target.runId) {
+    throw new Error('The Gateway authorization context does not match the case actor, tenant, and bound run.');
+  }
+  return context;
 }
 
 export function childEnvironment(env) {
@@ -457,10 +472,10 @@ async function runCase(options, env = process.env) {
     await execute('api-operations', commands[2].args);
     await execute('api-describe-runtime-observation', commands[3].args);
     const contextRecord = await execute('rest-authorization-context', commands[4].args, 'text');
-    const context = restBody(contextRecord, 'rest-authorization-context');
-    if (context.actorId !== input.expectedActorId || context.tenantId !== input.target.tenantId) {
-      throw new Error('The Gateway authorization context does not match the case actor and tenant.');
-    }
+    const context = validateAuthorizationContext(
+      restBody(contextRecord, 'rest-authorization-context'),
+      input,
+    );
     const runStatus = apiResponseBody(await execute('run-status', commands[5].args), 'run-status');
     const usage = apiResponseBody(await execute('project-usage', commands[6].args), 'project-usage');
 
