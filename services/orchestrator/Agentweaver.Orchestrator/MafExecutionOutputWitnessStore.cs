@@ -38,6 +38,7 @@ internal sealed partial class MafExecutionOutputWitnessStore
     private const string CheckpointStoreName = MafExecutionCheckpointContract.StoreName;
     private static readonly Regex SchemaPattern = new(
         "^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
+    private readonly string _schema;
     private readonly string _witnesses;
 
     /// <summary>
@@ -50,7 +51,8 @@ internal sealed partial class MafExecutionOutputWitnessStore
             schema is "public" or "pg_catalog" or "information_schema" ||
             schema.StartsWith("pg_", StringComparison.Ordinal))
             throw new ArgumentException("A non-reserved lowercase schema identifier is required.", nameof(schema));
-        _witnesses = $"\"{schema}\".maf_execution_output_witnesses";
+        _schema = $"\"{schema}\"";
+        _witnesses = $"{_schema}.maf_execution_output_witnesses";
     }
 
     /// <summary>
@@ -79,6 +81,11 @@ internal sealed partial class MafExecutionOutputWitnessStore
         ArgumentNullException.ThrowIfNull(checkpointBinding);
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(checkpoint);
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, _schema, root.ProjectId, root.RunId, cancellationToken)
+            .ConfigureAwait(false))
+            throw new CoordinationException(
+                "checkpoint_recovery_dispatch_held", StatusCodes.Status409Conflict);
         ValidateBinding(root, executionFence, checkpoint, decisionStateVersion, acceptedSelectionHash, outputSet);
         ValidateCompletedPlan(
             root, executionFence, plan, checkpoint, decisionStateVersion, acceptedSelectionHash, outputSet,

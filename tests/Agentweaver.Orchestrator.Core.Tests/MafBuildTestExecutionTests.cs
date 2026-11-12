@@ -10,6 +10,7 @@ using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
 using Agentweaver.Orchestrator.Core;
+using Microsoft.AspNetCore.Http;
 using Xunit;
 
 namespace Agentweaver.Orchestrator.Core.Tests;
@@ -100,6 +101,70 @@ public sealed class MafBuildTestExecutionTests
         var summary = CoordinationEndpoints.BuildTestResultSummary(recovered.BuildTestReceipts["build-test"]);
         Assert.Contains(recovered.BuildTestReceipts["build-test"].CollectorManifestSha256!, summary);
         Assert.True(summary.Length < AddressedMessageValidation.MaximumTextLength);
+    }
+
+    [Theory]
+    [InlineData(SandboxBuildTestOperationStatus.Completed)]
+    [InlineData(SandboxBuildTestOperationStatus.Failed)]
+    [InlineData(SandboxBuildTestOperationStatus.Stale)]
+    public void ChildJoinRecoveryRejectsRetainedBuildTestHistory(
+        SandboxBuildTestOperationStatus status)
+    {
+        var intent = MafBuildTestCheckpointTests.SeedIntent();
+        var initial = new MafExecutionCheckpointSnapshot(new("root", "initial"),
+            new(1, "plan-1", 3, MafExecutionProgress.Empty));
+        var running = CoordinationEndpoints.PrepareBuildTestCheckpoint(initial, intent)!;
+        var operation = Operation(intent) with { Status = status };
+        if (status == SandboxBuildTestOperationStatus.Failed)
+            operation = operation with
+            {
+                Terminal = operation.Terminal! with { ExitCode = 1 }, FailureCode = "command_failed"
+            };
+        if (status != SandboxBuildTestOperationStatus.Completed)
+            operation = operation with { WorkspaceCaptureAcknowledgment = null };
+        var completed = CoordinationEndpoints.PrepareBuildTestCompletionCheckpoint(
+            new(new("root", intent.CheckpointId), running), intent, operation)!;
+        var child = new MafExecutionDispatchIntent("child", "session", Guid.NewGuid(), new string('a', 64));
+        var boundary = completed with { PendingDispatches = completed.PendingDispatches.Add(child.AssociationId, child) };
+
+        var error = Assert.Throws<CoordinationException>(() =>
+            CoordinationOwnerStore.RequireNoChildJoinPlatformHistory(boundary));
+
+        Assert.Equal("checkpoint_recovery_boundary_unsupported", error.Code);
+        Assert.Equal(409, error.StatusCode);
+        Assert.Equal("build_test_history_requires_effect_recovery", error.Reason);
+        Assert.Equal(intent.StepId, error.StepId);
+        Assert.Equal(intent.OperationId, error.OperationId);
+        CoordinationOwnerStore.RequireNoChildJoinPlatformHistory(completed);
+        var registeredChildError = Assert.Throws<CoordinationException>(() =>
+            CoordinationOwnerStore.RequireNoChildJoinPlatformHistory(completed, hasRegisteredChild: true));
+        Assert.Equal("build_test_history_requires_effect_recovery", registeredChildError.Reason);
+        Assert.Equal(intent.StepId, registeredChildError.StepId);
+        Assert.Equal(intent.OperationId, registeredChildError.OperationId);
+    }
+
+    [Fact]
+    public async Task ChildJoinBuildTestRejectionProjectsTheSavedOperation()
+    {
+        var intent = MafBuildTestCheckpointTests.Intent();
+        var initial = new MafExecutionCheckpointSnapshot(new("root", "initial"),
+            new(1, "plan-1", 3, MafExecutionProgress.Empty));
+        var running = CoordinationEndpoints.PrepareBuildTestCheckpoint(initial, intent)!;
+        var child = new MafExecutionDispatchIntent("child", "session", Guid.NewGuid(), new string('a', 64));
+        var boundary = running with { PendingDispatches = running.PendingDispatches.Add(child.AssociationId, child) };
+
+        var result = await CoordinationEndpoints.ExecuteAsync(() =>
+        {
+            CoordinationOwnerStore.RequireNoChildJoinPlatformHistory(boundary);
+            return Task.FromResult<IResult>(Results.Ok());
+        }, CancellationToken.None);
+
+        Assert.Equal(409, Assert.IsAssignableFrom<IStatusCodeHttpResult>(result).StatusCode);
+        var body = JsonSerializer.SerializeToElement(Assert.IsAssignableFrom<IValueHttpResult>(result).Value);
+        Assert.Equal("checkpoint_recovery_boundary_unsupported", body.GetProperty("error").GetString());
+        Assert.Equal("build_test_history_requires_effect_recovery", body.GetProperty("reason").GetString());
+        Assert.Equal(intent.StepId, body.GetProperty("stepId").GetString());
+        Assert.Equal(intent.OperationId, body.GetProperty("operationId").GetGuid());
     }
 
     [Theory]

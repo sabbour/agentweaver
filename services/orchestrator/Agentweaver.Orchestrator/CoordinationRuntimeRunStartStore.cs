@@ -84,6 +84,11 @@ internal sealed class CoordinationRuntimeRunStartStore
         RuntimeChildStartBinding binding,
         CancellationToken cancellationToken)
     {
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, $"\"{_schema}\"", projectId, runId, cancellationToken)
+            .ConfigureAwait(false))
+            throw new CoordinationException(
+                "checkpoint_recovery_dispatch_held", StatusCodes.Status409Conflict);
         await RequireChildStartSchemaAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         var proposed = new RuntimeRunStartIntent(
             tenantId, projectId, runId, binding.ChildSessionId, selectionHash.ToLowerInvariant(),
@@ -162,6 +167,12 @@ internal sealed class CoordinationRuntimeRunStartStore
         CancellationToken cancellationToken)
     {
         var binding = ReadChildBinding(intent);
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, $"\"{_schema}\"", owner.ProjectId, owner.RunId, cancellationToken,
+                forUpdate: true)
+            .ConfigureAwait(false))
+            throw new CoordinationException(
+                "checkpoint_recovery_dispatch_held", StatusCodes.Status409Conflict);
         if (intent.CleanupObligation || owner.TenantId != intent.TenantId ||
             owner.ProjectId != intent.ProjectId || owner.RunId != intent.RunId ||
             owner.SessionId != intent.RootSessionId || binding.ChildSessionId != owner.SessionId ||
@@ -1394,6 +1405,7 @@ internal sealed class CoordinationRuntimeRunStartStore
 
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await RequireWritableStartAsync(connection, transaction, intent, cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand($"""
             UPDATE {_schema}.runtime_run_start_intents
             SET state = @state, current_step = @step, failure_code = @failure,
@@ -1499,6 +1511,8 @@ internal sealed class CoordinationRuntimeRunStartStore
         var nextExchangeOperationId = Guid.NewGuid();
 
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await RequireWritableStartAsync(connection, transaction, intent, cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand($"""
             UPDATE {_schema}.runtime_run_start_intents
             SET bootstrap_operation_id = @bootstrap,
@@ -1514,7 +1528,7 @@ internal sealed class CoordinationRuntimeRunStartStore
               AND state = 'pending' AND current_step = 'retirement'
               AND NOT cleanup_obligation
             RETURNING row_version
-            """, connection);
+            """, connection, transaction);
         AddKey(command, intent);
         command.Parameters.AddWithValue("bootstrap", nextBootstrapOperationId);
         command.Parameters.AddWithValue("consume", nextConsumeOperationId);
@@ -1524,6 +1538,7 @@ internal sealed class CoordinationRuntimeRunStartStore
         var nextVersion = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         if (nextVersion is not long version)
             throw new CoordinationException("runtime_start_intent_stale", StatusCodes.Status409Conflict);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return intent with
         {
             BootstrapOperationId = nextBootstrapOperationId,
@@ -1537,6 +1552,28 @@ internal sealed class CoordinationRuntimeRunStartStore
             ReceiptLinks = receiptJson,
             RowVersion = version
         };
+    }
+
+    private async Task RequireWritableStartAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RuntimeRunStartIntent intent,
+        CancellationToken cancellationToken)
+    {
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, $"\"{_schema}\"", intent.ProjectId, intent.RunId,
+                cancellationToken, forUpdate: true).ConfigureAwait(false))
+            throw new CoordinationException(
+                "checkpoint_recovery_dispatch_held", StatusCodes.Status409Conflict);
+        await using var command = new NpgsqlCommand($"""
+            SELECT execution_fence FROM {_schema}.accepted_runs
+            WHERE project_id = @project AND run_id = @run
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", intent.ProjectId);
+        command.Parameters.AddWithValue("run", intent.RunId);
+        if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not long fence ||
+            fence != intent.ExecutionFence)
+            throw new CoordinationException("runtime_start_intent_stale", StatusCodes.Status409Conflict);
     }
 
     public async Task<RuntimeRunStartIntent> CommitReadyAsync(
@@ -1719,6 +1756,11 @@ internal sealed class CoordinationRuntimeRunStartStore
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeOwnerContext owner,
         CancellationToken cancellationToken)
     {
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, $"\"{_schema}\"", owner.ProjectId, owner.RunId, cancellationToken,
+                forUpdate: true).ConfigureAwait(false))
+            throw new CoordinationException(
+                "checkpoint_recovery_dispatch_held", StatusCodes.Status409Conflict);
         await using var command = new NpgsqlCommand($"""
             SELECT r.accepted_selection_hash, r.execution_fence, r.execution_state,
                    r.accepted_by_issuer, r.accepted_by_subject,

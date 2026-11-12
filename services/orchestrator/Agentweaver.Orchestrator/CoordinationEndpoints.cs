@@ -1937,6 +1937,14 @@ public static partial class CoordinationEndpoints
                     context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
                 if (result.CheckpointRecovery is { Phase: "pending" })
                 {
+                    if (!CanContinueRootCheckpointRecovery(result.CheckpointRecovery))
+                    {
+                        if (result.CheckpointRecovery.BoundaryKind == "childJoin")
+                            return Results.Accepted(value: result);
+                        throw new CoordinationException(
+                            "checkpoint_recovery_boundary_unsupported", StatusCodes.Status409Conflict);
+                    }
+
                     var continuation = context.RequestServices.GetService<RuntimeRunStartContinuation>()
                         ?? throw new CoordinationException(
                             "runtime_run_start_continuation_unavailable",
@@ -2011,6 +2019,9 @@ public static partial class CoordinationEndpoints
             gate.AuthorizedActorId != actorSubject)
             throw new RuntimeAuthorizationException("checkpoint_recovery_boundary_stale");
     }
+
+    internal static bool CanContinueRootCheckpointRecovery(CheckpointRecoveryStatus recovery) =>
+        recovery.BoundaryKind is null or "pendingGate";
 
     private static async Task<CoordinatorGateRequest?> ReadRecoverablePendingGateAsync(
         HttpContext context,
@@ -2168,6 +2179,14 @@ public static partial class CoordinationEndpoints
         }
         catch (CoordinationException exception)
         {
+            if (exception.Reason is not null)
+                return Results.Json(new
+                {
+                    error = exception.Code,
+                    reason = exception.Reason,
+                    stepId = exception.StepId,
+                    operationId = exception.OperationId
+                }, statusCode: exception.StatusCode);
             // Chat admission is an Orchestrator assignment, not implicit Owner or Contributor authority.
             if (exception.Code == "project_orchestrator_role_required_acceptRunSelection")
                 return Results.Json(new

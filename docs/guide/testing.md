@@ -230,6 +230,12 @@ gate answer and run cancellation. They use controlled runtime-start evidence
 rather than a running Host. The PostgreSQL tests require a Docker-compatible
 engine.
 
+The child-join admission cases in `MafCheckpointStorePostgresTests` check the
+frozen manifest, exact replay, dispatch hold, lock order, registration conflict,
+late-message rejection, and rejection of unsupported BuildTest history. They
+require PostgreSQL and run on hosted GitHub CI. They do not prove child
+continuation. The current version keeps child-join recovery pending and held.
+
 ## Test Scribe Knowledge output
 
 Run the producer, immutable-intent, and exact serialized-size tests, followed by

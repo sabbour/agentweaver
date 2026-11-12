@@ -401,6 +401,11 @@ internal sealed class RuntimeUsageSourceStore(
             if (await run.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
                 throw new RuntimeAuthorizationException("runtime_native_turn_run_terminal");
         }
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, _schema, registration.Binding.ProjectId,
+                registration.Binding.RunId, cancellationToken).ConfigureAwait(false))
+            throw new RuntimeAuthorizationException("checkpoint_recovery_dispatch_held");
+
         var source = await ReadSourceAsync(connection, transaction, registration.RuntimeInstanceId, cancellationToken)
             .ConfigureAwait(false) ?? throw new RuntimeAuthorizationException("runtime_sdk_source_unknown");
         RequireSource(source, registration, grant);
@@ -798,6 +803,11 @@ internal sealed class RuntimeUsageSourceStore(
         ICollection<RuntimeObservationV2Fact>? observationFacts = null)
     {
         observationFacts ??= new List<RuntimeObservationV2Fact>();
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, _schema, root.ProjectId, root.RunId, cancellationToken)
+            .ConfigureAwait(false))
+            throw new RuntimeAuthorizationException("checkpoint_recovery_dispatch_held");
+
         // Every check below runs in the caller's transaction. Any throw rolls back the whole preparation,
         // so a failed check leaves no dispatch row and no spend budget reservation behind.
         // Read the SDK source that is current for this registration and make sure the message was

@@ -197,11 +197,13 @@ The descriptions come from the Gateway's current OpenAPI document. Check the
 for owner permissions and recovery limits before you invoke a write operation.
 
 For run recovery, use `api describe recoverRun` to read the current request
-schema. The optional `checkpointRecovery` field is limited to a Host recovery
-at a pending gate. A `202` response means that the same operation still needs
-continuation. Retry it with the same idempotency key. A `ready` response means
-the Host restored the saved boundary. The gate remains pending, and the run
-remains incomplete. Read the
+schema. The optional `checkpointRecovery` field supports Host recovery at a
+pending gate and admission of a saved child join. A `202` response means the
+operation is still pending. Retry it with the same idempotency key. For a
+pending gate, a `ready` response means the Host restored the saved boundary.
+The gate remains pending, and the run remains incomplete. For a child join,
+this version keeps `dispatchHeld` set. It does not resume children or clear the
+hold. Read the
 [recovery API reference](../reference/api.md#recover-a-host-at-a-pending-gate)
 before you use this field.
 

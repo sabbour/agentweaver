@@ -666,15 +666,21 @@ registration record alone does not authorize a turn.
 A workflow checkpoint and native SDK cache are different recovery inputs.
 Restoring conversation context does not replay external effects.
 
-The opt-in checkpoint-recovery path currently accepts a pinned checkpoint only
-at an exact pending gate with no unresolved child dispatch, child association,
+The opt-in checkpoint-recovery path accepts two boundaries. For a pending gate,
+it requires the exact gate and no unresolved child dispatch, child association,
 or platform-effect intent. It advances the fence once, keeps the same gate
 request, and replaces the Host through Environment. The replacement must load
 authenticated native-cache or journal material before Orchestrator reports
-`ready`. A pending step can be retried with the same recovery request and
-idempotency key. A changed gate version, unavailable prerequisite, or
-unsupported boundary does not cause the owner to answer the gate or start a
-fresh execution.
+`ready`.
+
+For a saved child join, Orchestrator checks the saved child boundary, records a
+frozen manifest, advances the fence, and writes a checkpoint with recovery
+lineage. This version does not continue child sessions or import their
+results. It reports the recovery as `pending` and keeps `dispatchHeld` true.
+Guarded owner writes fail while the hold is active. The owner rejects
+unsupported platform-effect history instead of replaying it. Retry a pending
+operation with the same recovery request and idempotency key. Neither boundary
+causes the owner to answer the gate or start a fresh execution.
 
 The legacy owner-state recovery path and ordinary completed-turn Host
 replacement remain separate. `readRunStatus` and `readSessionStatus` show the

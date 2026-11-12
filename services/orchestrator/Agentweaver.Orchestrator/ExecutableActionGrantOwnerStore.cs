@@ -516,6 +516,11 @@ internal sealed class ExecutableActionGrantOwnerStore(
         var requestHash = RuntimeActionContract.Hash(request);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, _schema, binding.ProjectId, binding.RunId, cancellationToken,
+                forUpdate: isCoordinatorRoot)
+            .ConfigureAwait(false))
+            throw new RuntimeAuthorizationException("checkpoint_recovery_dispatch_held");
         var requiresNumericEvidence =
             isCoordinatorRoot && request.ActionId == "model.turn" && binding.MaxModelTurns is not null ||
             reserveToolInvocation && request.IsToolInvocation && binding.MaxToolCalls is not null;
@@ -1488,6 +1493,11 @@ internal sealed class ExecutableActionGrantOwnerStore(
         RuntimeBinding binding,
         CancellationToken cancellationToken)
     {
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, _schema, binding.ProjectId, binding.RunId, cancellationToken,
+                forUpdate: true)
+            .ConfigureAwait(false))
+            throw new RuntimeAuthorizationException("checkpoint_recovery_dispatch_held");
         // Cancellation locks the run before changing session rows; keep the same row-lock order here.
         await using (var run = new NpgsqlCommand($"""
             SELECT tenant_id, accepted_selection_hash, execution_fence, execution_state
@@ -1819,6 +1829,18 @@ internal sealed class ExecutableActionGrantOwnerStore(
         CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            if (await CheckpointRecoveryHold.IsHeldAsync(
+                    connection, transaction, _schema, scope.ProjectId, scope.RunId, cancellationToken)
+                .ConfigureAwait(false))
+                return null;
+        }
+        catch (CoordinationException exception) when (exception.Code == "run_root_unavailable")
+        {
+            return null;
+        }
         await using var command = new NpgsqlCommand($"""
             SELECT g.revision, g.is_current, g.grant_state, g.issuer, g.actor_id, g.tenant_id,
                    g.project_id, g.run_id, g.session_id, g.step_id, g.action_ids, g.purpose,
@@ -1888,7 +1910,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
             WHERE g.project_id = @project AND g.run_id = @run AND g.grant_id = @grant
             ORDER BY g.is_current DESC, g.created_at DESC
             LIMIT 1
-            """, connection);
+            """, connection, transaction);
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, scope.ProjectId);
         command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, scope.RunId);
         command.Parameters.AddWithValue("grant", NpgsqlDbType.Varchar, grantId);
@@ -2454,6 +2476,11 @@ internal sealed class ExecutableActionGrantOwnerStore(
         string selectionHash,
         CancellationToken cancellationToken)
     {
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, _schema, identity.ProjectId, identity.RunId, cancellationToken)
+            .ConfigureAwait(false))
+            throw new CoordinationException(
+                "checkpoint_recovery_dispatch_held", StatusCodes.Status409Conflict);
         await using var command = new NpgsqlCommand($"""
             SELECT s.writer_issuer, s.writer_subject, s.execution_fence, s.lifecycle_state,
                 r.execution_fence, r.execution_state, r.tenant_id, r.accepted_selection_hash

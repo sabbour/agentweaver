@@ -308,7 +308,7 @@ internal sealed class MafExecutionCheckpointStore
 
         if (expectedParent is null)
         {
-            if (latest is not null || state.Revision != 1)
+            if (latest is not null || state.Revision != 1 || state.RecoveryLineage is not null)
                 throw new CoordinationException("maf_execution_checkpoint_stale", StatusCodes.Status409Conflict);
         }
         else
@@ -378,6 +378,14 @@ internal sealed class MafExecutionCheckpointStore
     internal async Task AcquireExecutionLockInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
+        CancellationToken cancellationToken) =>
+        await AcquireExecutionLockInTransactionAsync(
+            connection, transaction, _binding.Identity, cancellationToken).ConfigureAwait(false);
+
+    internal static async Task AcquireExecutionLockInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity identity,
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(
@@ -386,7 +394,7 @@ internal sealed class MafExecutionCheckpointStore
         command.Parameters.AddWithValue("scope", NpgsqlDbType.Text,
             JsonSerializer.Serialize(new[]
             {
-                _binding.Identity.ProjectId, _binding.Identity.RunId, _binding.Identity.SessionId
+                identity.ProjectId, identity.RunId, identity.SessionId
             }));
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }

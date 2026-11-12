@@ -60,6 +60,12 @@ public sealed class GatewayOpenApiParityTests
             schemas["RecoverRunExecutionRequest"]?["properties"]?["checkpointRecovery"]?["anyOf"]?[0]?["$ref"]?.GetValue<string>());
         Assert.NotNull(schemas["CheckpointRecoveryStatus"]?["properties"]?["currentStep"]);
         Assert.NotNull(schemas["CheckpointRecoveryStatus"]?["properties"]?["recoveryMaterialMode"]);
+        Assert.Equal("childJoin", schemas["CheckpointRecoveryStatus"]?["properties"]?["boundaryKind"]?
+            ["anyOf"]?[0]?["enum"]?[0]?.GetValue<string>());
+        Assert.Equal("boolean", schemas["CheckpointRecoveryStatus"]?["properties"]?["dispatchHeld"]?
+            ["anyOf"]?[0]?["type"]?.GetValue<string>());
+        Assert.Equal("string", schemas["CheckpointRecoveryStatus"]?["properties"]?["childManifestSha256"]?
+            ["anyOf"]?[0]?["type"]?.GetValue<string>());
         Assert.NotNull(schemas["OwnerRunStatus"]?["properties"]?["checkpointRecovery"]?["anyOf"]?[0]?["$ref"]);
         Assert.NotNull(schemas["SessionStatusSnapshot"]?["properties"]?["checkpointRecovery"]?["anyOf"]?[0]?["$ref"]);
     }

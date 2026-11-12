@@ -40,6 +40,11 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, _schema, create.ProjectId, create.RunId, cancellationToken)
+            .ConfigureAwait(false))
+            throw new CoordinationException(
+                "checkpoint_recovery_dispatch_held", StatusCodes.Status409Conflict);
         await using var insert = new NpgsqlCommand($"""
             INSERT INTO {_table}
                 (job_id, native_request_id, project_id, run_id, session_id, tenant_id,
@@ -203,20 +208,47 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
         CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        string? runId;
+        await using (var readRun = new NpgsqlCommand($"""
+            SELECT run_id FROM {_table} WHERE project_id = @project AND job_id = @job
+            """, connection))
+        {
+            readRun.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
+            readRun.Parameters.AddWithValue("job", NpgsqlDbType.Uuid, jobId);
+            runId = (string?)await readRun.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        }
+        if (runId is null)
+            return false;
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        if (await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, _schema, projectId, runId, cancellationToken).ConfigureAwait(false))
+            return false;
         await using (var update = new NpgsqlCommand($"""
             UPDATE {_table}
             SET execution_phase = 'send-admitted', updated_at = clock_timestamp()
-            WHERE project_id = @project AND job_id = @job AND status = 'running'
+            WHERE project_id = @project AND run_id = @run AND job_id = @job AND status = 'running'
               AND execution_phase = 'pre-send'
-            """, connection))
+            """, connection, transaction))
         {
             update.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
+            update.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, runId);
             update.Parameters.AddWithValue("job", NpgsqlDbType.Uuid, jobId);
             if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1)
+            {
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
                 return true;
+            }
         }
 
-        var current = await ReadAsync(projectId, jobId, cancellationToken).ConfigureAwait(false);
+        await using var read = CreateReadCommand(
+            connection, transaction, "project_id = @project AND run_id = @run AND job_id = @job");
+        read.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
+        read.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, runId);
+        read.Parameters.AddWithValue("job", NpgsqlDbType.Uuid, jobId);
+        await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var current = await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadJob(reader) : null;
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return current is { Status: "running" or "failed", ExecutionPhase: "send-admitted" };
     }
 
