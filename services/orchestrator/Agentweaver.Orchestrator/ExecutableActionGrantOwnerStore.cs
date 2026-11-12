@@ -39,6 +39,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
     private readonly string _schema = $"\"{options.Schema}\"";
     private readonly PostgresOutbox _outbox = new(dataSource, options.Schema);
     private readonly RuntimeExecutionEvidenceLedgerStore _executionEvidence = new(options.Schema);
+    private readonly RuntimeObservationV2Store _runtimeObservationV2 = new(dataSource, options.Schema);
     private readonly CoordinationRuntimeRunStartStore _runStarts = new(dataSource, options.Schema);
     private readonly RuntimeUsageSourceStore _runtimeSources = new(dataSource, options, timeProvider);
     private readonly SpendBudgetExposureStore _spendBudgets = new(dataSource, options, timeProvider);
@@ -120,6 +121,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
             connection, transaction, owner.DecisionJson, registration, owner.StateVersion,
             requestId, promptHash, "model.turn", cancellationToken).ConfigureAwait(false);
         // Keep the run, root session, and accepted decision locked through the immutable admission write.
+        var rootAdmissionInserted = false;
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_schema}.{RootModelTurnAdmissionTable}
                 (project_id, run_id, root_session_id, request_id, actor_issuer, actor_id, tenant_id,
@@ -136,7 +138,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
             insert.Parameters.AddWithValue("prompt", NpgsqlDbType.Char, promptHash);
             insert.Parameters.AddWithValue("decision", NpgsqlDbType.Uuid, owner.DecisionId);
             insert.Parameters.AddWithValue("decisionVersion", NpgsqlDbType.Bigint, owner.StateVersion);
-            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            rootAdmissionInserted = await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
         }
         await using (var exact = new NpgsqlCommand($"""
             SELECT root_session_id, actor_issuer, actor_id, tenant_id, accepted_selection_hash,
@@ -160,6 +162,20 @@ internal sealed class ExecutableActionGrantOwnerStore(
                 reader.GetGuid(7) != owner.DecisionId ||
                 reader.GetInt64(8) != owner.StateVersion)
                 throw new RuntimeAuthorizationException("runtime_model_turn_admission_conflict");
+        }
+        if (rootAdmissionInserted)
+        {
+            var prior = await RuntimeModelTurnReservationStore.CountRunWideAsync(
+                connection, transaction, _schema, binding.ProjectId, binding.RunId,
+                binding.SessionId, requestId, cancellationToken).ConfigureAwait(false);
+            var payloadHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
+                $"{owner.DecisionId:D}\0{owner.StateVersion}\0{promptHash}"));
+            await _runtimeObservationV2.AppendAsync(
+                connection, transaction, binding.ProjectId, binding.RunId,
+                RuntimeObservationV2Store.ModelTurnReservedFact(
+                    registration, requestId, requestId, owner.StateVersion,
+                    checked(prior + 1), "rootModelTurnAdmission", payloadHash,
+                    timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
         }
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -733,25 +749,22 @@ internal sealed class ExecutableActionGrantOwnerStore(
         if (reserveToolInvocation && !await HasToolInvocationReservationAsync(
             connection, transaction, request, cancellationToken).ConfigureAwait(false))
         {
-            if (binding.MaxToolCalls is { } maxToolCalls)
-            {
-                await using var count = new NpgsqlCommand($"""
-                    SELECT count(*) FROM {_schema}.outbox_events
-                    WHERE event_type = @type
-                        AND payload->>'projectId' = @project AND payload->>'runId' = @run
-                    """, connection, transaction);
-                count.Parameters.AddWithValue("type", ToolInvocationEventType);
-                count.Parameters.AddWithValue("project", binding.ProjectId);
-                count.Parameters.AddWithValue("run", binding.RunId);
-                var observedCount = (long)(await count.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
-                if (observedCount >= maxToolCalls)
-                    throw new RuntimeNumericLimitDeniedException(
-                        "runtime_tool_call_limit_exhausted", RuntimeNumericLimitKind.ToolCalls,
-                        maxToolCalls, observedCount, decisionVersion,
-                        sendStateBefore?.Hash ?? throw new RuntimeAuthorizationException(
-                            "runtime_numeric_limit_send_state_unavailable"),
-                        sendStateBefore?.IsEmpty ?? false);
-            }
+            await using var count = new NpgsqlCommand($"""
+                SELECT count(*) FROM {_schema}.outbox_events
+                WHERE event_type = @type
+                    AND payload->>'projectId' = @project AND payload->>'runId' = @run
+                """, connection, transaction);
+            count.Parameters.AddWithValue("type", ToolInvocationEventType);
+            count.Parameters.AddWithValue("project", binding.ProjectId);
+            count.Parameters.AddWithValue("run", binding.RunId);
+            var observedCount = (long)(await count.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+            if (binding.MaxToolCalls is { } maxToolCalls && observedCount >= maxToolCalls)
+                throw new RuntimeNumericLimitDeniedException(
+                    "runtime_tool_call_limit_exhausted", RuntimeNumericLimitKind.ToolCalls,
+                    maxToolCalls, observedCount, decisionVersion,
+                    sendStateBefore?.Hash ?? throw new RuntimeAuthorizationException(
+                        "runtime_numeric_limit_send_state_unavailable"),
+                    sendStateBefore?.IsEmpty ?? false);
             await _outbox.EnqueueAsync(connection, transaction, new OutboxEvent(
                 request.EventId, $"coordination/{binding.ProjectId}/{binding.RunId}/runtime-tool-invocations",
                 $"runtime-tool-invocation/{request.EventId:N}", ToolInvocationEventType, 1,
@@ -764,6 +777,17 @@ internal sealed class ExecutableActionGrantOwnerStore(
                     binding.MaxToolCalls,
                     requestHash
                 }), timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
+            var reservationDispatchId = request.DispatchId ?? request.EventId;
+            var ownerPayloadHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
+                $"{request.EventId:D}\0{requestHash}\0{decisionId:D}\0{decisionVersion}"));
+            var permissionPayloadHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
+                $"{reference.GrantId}\0{requestHash}\0{binding.ExecutionFence}"));
+            await _runtimeObservationV2.AppendAsync(
+                connection, transaction, binding.ProjectId, binding.RunId,
+                RuntimeObservationV2Store.ToolInvocationReservedFact(
+                    registration, request.EventId, reservationDispatchId, decisionVersion,
+                    checked(observedCount + 1), ownerPayloadHash, permissionPayloadHash,
+                    timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
         }
         await transaction.CommitAsync(cancellationToken);
         return reference;
@@ -1016,6 +1040,9 @@ internal sealed class ExecutableActionGrantOwnerStore(
             string.Empty));
         var stored = await _executionEvidence.AppendNumericLimitDenialAsync(
             connection, transaction, receipt, cancellationToken).ConfigureAwait(false);
+        await _runtimeObservationV2.AppendAsync(
+            connection, transaction, stored.ProjectId, stored.RunId,
+            RuntimeObservationV2Store.DenialFact(stored), cancellationToken).ConfigureAwait(false);
         if (registration.ExpiresAt <= timeProvider.GetUtcNow())
             throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_incomplete");
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);

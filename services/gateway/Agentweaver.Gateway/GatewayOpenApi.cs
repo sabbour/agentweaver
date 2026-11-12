@@ -137,6 +137,7 @@ internal static partial class GatewayOpenApi
             ["readSessionTree"] = C(null, "SessionTreeSnapshot", "200"),
             ["readSessionStatus"] = C(null, "SessionStatusSnapshot", "200"),
             ["readRuntimeObservationV1"] = C(null, "RuntimeObservationV1", "200", "409", "503"),
+            ["readRuntimeObservationV2"] = C(null, "RuntimeObservationV2", "200", "400", "409", "503"),
             ["reportTurnFailure"] = C("ReportRunFailureRequest", "RunExecutionTransitionResult", "200"),
             ["answerGate"] = C("AnswerCoordinatorGateRequest", "CoordinatorDecisionOperationResponse", "200"),
             ["askQuestion"] = C("AskCoordinatorQuestionRequest", "CoordinatorDecisionOperationResponse", "200"),
@@ -381,7 +382,8 @@ internal static partial class GatewayOpenApi
                             ? "Accepted by the owner; this does not mean the requested work is complete."
                             : "Owner response; returned by the owning service.",
                         (route.Owner == GatewayOwner.Environment && status is "200" or "202") ||
-                        (route.OperationId is "readRuntimeObservationV1" or "getProjectConfigurationChoices" or
+                        (route.OperationId is "readRuntimeObservationV1" or "readRuntimeObservationV2" or
+                         "getProjectConfigurationChoices" or
                         "getHostedModelReasoningCatalog" or "getProjectAgentHistory" or
                         "readProjectSetupAuthorityAudit" or "createP1InvocationSetup" or "readP1InvocationSetup" or
                         "readProjectTeamSync" or "commitProjectTeamSync") && status == "200"
@@ -1033,6 +1035,16 @@ else if (route.OperationId is
         if ((operationId is "readEnvironmentSandbox" or "reconcileEnvironmentSandbox") &&
             name == "networkPolicyGeneration")
             return new { type = "integer", format = "int64", minimum = 1 };
+        if (operationId == "readRuntimeObservationV2")
+        {
+            return name switch
+            {
+                "pageSize" => new { type = "integer", minimum = 1, maximum = 100, @default = 100 },
+                "cursor" => new { type = "string", maxLength = 4096 },
+                "attemptId" => new { type = "string", format = "uuid" },
+                _ => new { type = "string" },
+            };
+        }
         if ((operationId is "readWorkspaceRepositoryTree" or "readWorkspaceRepositoryFile") && name == "ref")
             return new { type = "string", pattern = "^[a-fA-F0-9]{40}$" };
         if (operationId == "listWorkspaceRepositoryRefs" && name == "cursor")
@@ -2211,6 +2223,81 @@ else if (route.OperationId is
             ("creditGuard", Ref("RuntimeObservationCreditGuardSection")),
             ("dispatches", Ref("RuntimeObservationDispatchesSection")),
             ("toolReservations", Ref("RuntimeObservationToolReservationsSection"))),
+        ["RuntimeObservationV2"] = StrictObj(
+            ["contractVersion", "binding", "acceptedLimits", "totals", "creditGuard", "history"],
+            ("contractVersion", Int()), ("binding", Ref("RuntimeObservationV2Binding")),
+            ("acceptedLimits", Ref("RuntimeObservationV2Limits")),
+            ("totals", Ref("RuntimeObservationV2Totals")),
+            ("creditGuard", Ref("RuntimeObservationCreditGuardSection")),
+            ("history", Ref("RuntimeObservationV2History"))),
+        ["RuntimeObservationV2Binding"] = StrictObj(
+            ["projectId", "runId", "rootSessionId", "sessionId", "isRoot", "acceptedSelectionHash",
+                "currentExecutionFence", "sessionExecutionFence", "runtimeInstanceId",
+                "registrationRevision", "observedAt"],
+            ("projectId", Str()), ("runId", Str()), ("rootSessionId", Str()), ("sessionId", Str()),
+            ("isRoot", Bool()), ("acceptedSelectionHash", Str()), ("currentExecutionFence", Int()),
+            ("sessionExecutionFence", Int()), ("runtimeInstanceId", NullableUuid()),
+            ("registrationRevision", NullableInt()), ("observedAt", Date())),
+        ["RuntimeObservationV2Limits"] = StrictObj(
+            ["maxModelTurns", "maxToolCalls", "maxPromptTokens", "copilotSoftCreditLimit",
+                "copilotHardCreditLimit", "creditUnit", "creditScope"],
+            ("maxModelTurns", NullableInt()), ("maxToolCalls", NullableInt()),
+            ("maxPromptTokens", NullableInt()), ("copilotSoftCreditLimit", NullableNumber()),
+            ("copilotHardCreditLimit", NullableNumber()), ("creditUnit", Str()), ("creditScope", Str())),
+        ["RuntimeObservationV2Totals"] = StrictObj(
+            ["modelSlotsReserved", "modelSlotsConsumed", "nativeSendsKnown", "nativeSendsUncertain",
+                "toolSlotsReserved", "toolSlotsConsumed"],
+            ("modelSlotsReserved", Ref("RuntimeObservationCount")),
+            ("modelSlotsConsumed", Ref("RuntimeObservationCount")),
+            ("nativeSendsKnown", Ref("RuntimeObservationCount")),
+            ("nativeSendsUncertain", Ref("RuntimeObservationCount")),
+            ("toolSlotsReserved", Ref("RuntimeObservationCount")),
+            ("toolSlotsConsumed", Ref("RuntimeObservationCount"))),
+        ["RuntimeObservationCount"] = StrictObj(
+            ["state", "value", "reason"],
+            ("state", Enum("Available", "Unknown", "Unavailable")),
+            ("value", NullableInt()), ("reason", NullableStr())),
+        ["RuntimeObservationV2History"] = StrictObj(
+            ["snapshotId", "highWatermark", "complete", "coverageStart", "incompleteReason",
+                "exactAttempt", "items", "nextCursor", "exactUnavailableReason"],
+            ("snapshotId", Uuid()), ("highWatermark", Int()), ("complete", Bool()),
+            ("coverageStart", NullableDate()), ("incompleteReason", NullableStr()),
+            ("exactAttempt", Bool()), ("items", BoundedArray(Ref("RuntimeObservationV2Fact"), 0, 100)),
+            ("nextCursor", NullableStr()), ("exactUnavailableReason", NullableStr())),
+        ["RuntimeObservationV2Fact"] = StrictObj(
+            ["factId", "sequence", "kind", "projectId", "runId", "attemptId", "dispatchId", "sessionId",
+                "executionFence", "runtimeInstanceId", "registrationRevision", "acceptedSelectionHash",
+                "ownerRevision", "limitKind", "configuredValue", "observedValue", "unit", "scope",
+                "stage", "reasonCode", "consumedCount", "reservedCount", "recordedAt", "ownerDecision",
+                "nativeNoSend", "toolPermission", "toolExecution", "accountedThroughLedgerEventCount",
+                "softWarningEmitted", "hardCapExhausted", "checkpointId", "checkpointRevision",
+                "checkpointHash", "checkpointDecisionStateVersion", "workPlanId", "associationId"],
+            ("factId", Uuid()), ("sequence", NullableInt()),
+            ("kind", Enum("CoverageStarted", "ModelTurnReserved", "ToolInvocationReserved", "Denied",
+                "CreditGuardChanged", "NativeNoSend")),
+            ("projectId", Str()), ("runId", Str()), ("attemptId", NullableUuid()),
+            ("dispatchId", NullableUuid()), ("sessionId", Str()), ("executionFence", Int()),
+            ("runtimeInstanceId", NullableUuid()), ("registrationRevision", NullableInt()),
+            ("acceptedSelectionHash", Str()), ("ownerRevision", NullableInt()),
+            ("limitKind", EnumOrNull("ModelTurns", "ToolCalls", "CopilotHardCredits")),
+            ("configuredValue", NullableNumber()), ("observedValue", NullableNumber()),
+            ("unit", NullableStr()), ("scope", NullableStr()), ("stage", NullableStr()),
+            ("reasonCode", NullableStr()), ("consumedCount", NullableInt()),
+            ("reservedCount", NullableInt()), ("recordedAt", Date()),
+            ("ownerDecision", Ref("RuntimeObservationEvidenceLink")),
+            ("nativeNoSend", Ref("RuntimeObservationEvidenceLink")),
+            ("toolPermission", Ref("RuntimeObservationEvidenceLink")),
+            ("toolExecution", Ref("RuntimeObservationEvidenceLink")),
+            ("accountedThroughLedgerEventCount", NullableInt()),
+            ("softWarningEmitted", NullableBool()), ("hardCapExhausted", NullableBool()),
+            ("checkpointId", NullableStr()), ("checkpointRevision", NullableInt()),
+            ("checkpointHash", NullableStr()), ("checkpointDecisionStateVersion", NullableInt()),
+            ("workPlanId", NullableStr()), ("associationId", NullableStr())),
+        ["RuntimeObservationEvidenceLink"] = StrictObj(
+            ["state", "reason", "receiptId", "payloadHash", "rangeComplete", "eventCount"],
+            ("state", Enum("Available", "Unknown", "Unavailable")), ("reason", NullableStr()),
+            ("receiptId", NullableUuid()), ("payloadHash", NullableStr()),
+            ("rangeComplete", NullableBool()), ("eventCount", NullableInt())),
         ["RuntimeObservationRegistrationSection"] = StrictObj(["state", "value"],
             ("state", Enum("Available", "Unknown", "Unavailable")),
             ("value", NullableRef("RuntimeObservationRegistration"))),
@@ -2937,8 +3024,10 @@ else if (route.OperationId is
     private static object NullableStr() => Nullable(Str());
     private static object NullableInt() => Nullable(Int());
     private static object NullableNumber() => Nullable(Number());
+    private static object NullableBool() => Nullable(Bool());
     private static object NullableDate() => Nullable(Date());
     private static object NullableUuid() => Nullable(Uuid());
+    private static object EnumOrNull(params string[] values) => Nullable(Enum(values));
     private static object ProviderSeamSchema() =>
         Enum("sessions", "snapshots", "sandbox", "storage", "memory", "policy", "guardrails",
             "networkPolicy", "cost", "applicationHosting", "secrets", "sourceControl", "telemetry",

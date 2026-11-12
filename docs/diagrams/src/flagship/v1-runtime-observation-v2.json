@@ -1,0 +1,155 @@
+{
+  "$schema": "../sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Owner-authorized runtime observation v2",
+  "alt": "An authorized caller reads Orchestrator-owned runtime facts through the Gateway. The owner rechecks current project and run authority, the accepted selection, the root or child session, and the execution fence. History pages use a repeatable-read snapshot and a committed high-water mark; later pages keep that mark. Exact attempt lookup is separate from paging. Missing legacy coverage and native proof remain explicitly incomplete or unavailable. Responses contain no prompt, tool arguments, tool results, credentials, or raw native cursor. This source does not prove deployment or live runtime activity.",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "caller",
+      "label": "Authorized caller",
+      "subLabel": "Current project/run authority",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": { "text": "Caller", "tone": "neutral" }
+    },
+    {
+      "id": "gateway",
+      "label": "Gateway",
+      "subLabel": "Public v1 operation",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": { "text": "Service", "tone": "teal" }
+    },
+    {
+      "id": "orchestrator",
+      "label": "Orchestrator",
+      "subLabel": "Coordination owner",
+      "icon": "server",
+      "fluentIcon": "workflow",
+      "badge": { "text": "Owner", "tone": "green" }
+    },
+    {
+      "id": "postgres",
+      "label": "Orchestrator PostgreSQL",
+      "subLabel": "Retained owner facts and cursor state",
+      "icon": "database",
+      "fluentIcon": "state",
+      "badge": { "text": "Durable", "tone": "green" }
+    }
+  ],
+  "steps": [
+    {
+      "type": "note",
+      "over": ["orchestrator", "postgres"],
+      "label": "Owner transactions append allow-listed facts with their canonical admission, denial, proof, or credit-guard change."
+    },
+    {
+      "type": "message",
+      "from": "caller",
+      "to": "gateway",
+      "label": "GET v2: first page, cursor page, or exact attemptId",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "gateway",
+      "to": "orchestrator",
+      "label": "Forward exact project, run, session, and caller",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "orchestrator",
+      "to": "orchestrator",
+      "label": "Recheck authority, accepted selection, owner, and fence",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "Read mode",
+      "sections": [
+        {
+          "label": "history page",
+          "steps": [
+            {
+              "type": "message",
+              "from": "orchestrator",
+              "to": "postgres",
+              "label": "Capture committed high-water H and read at most pageSize + 1 facts",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "postgres",
+              "to": "orchestrator",
+              "label": "Ordered facts, run totals, and coverage state",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "note",
+              "over": ["orchestrator", "postgres"],
+              "label": "A cursor binds caller, tenant, project, run, root/session, selection, page size, H, and last sequence."
+            }
+          ]
+        },
+        {
+          "label": "exact attempt lookup",
+          "steps": [
+            {
+              "type": "message",
+              "from": "orchestrator",
+              "to": "postgres",
+              "label": "Read bounded indexed facts for the exact attempt through H",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "postgres",
+              "to": "orchestrator",
+              "label": "Matching retained facts or explicit absence",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "orchestrator",
+      "to": "orchestrator",
+      "label": "Keep missing legacy coverage and native proof incomplete or unavailable",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "orchestrator",
+      "to": "gateway",
+      "label": "No-store page or exact attempt facts; no sensitive content",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "gateway",
+      "to": "caller",
+      "label": "Evidence and optional next cursor",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "note",
+      "over": ["caller", "orchestrator"],
+      "label": "Facts above H require a new read. No active Host or native call is started for this diagnostic read."
+    }
+  ]
+}

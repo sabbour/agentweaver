@@ -65,6 +65,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(44)]
     [InlineData(45)]
     [InlineData(46)]
+    [InlineData(47)]
+    [InlineData(48)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         // A partial history must fail verification until every registered resource is installed.
@@ -136,6 +138,44 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             await command.ExecuteNonQueryAsync();
 
         Assert.False(await jobs.IsAvailableAsync(CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+    }
+
+    [Fact]
+    public async Task RuntimeObservationCursorMigrationIsOptionalButAnAppliedPartialSchemaFailsReadiness()
+    {
+        await ApplyMigrationsThroughAsync(47);
+
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 48),
+                to_regclass(@table) IS NOT NULL,
+                to_regclass(@attemptIndex) IS NOT NULL
+            """, connection))
+        {
+            command.Parameters.AddWithValue("table", $"{_schema}.runtime_observation_v2_cursors");
+            command.Parameters.AddWithValue("attemptIndex", $"{_schema}.ix_runtime_observation_v2_attempt");
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(0L, reader.GetInt64(0));
+            Assert.False(reader.GetBoolean(1));
+            Assert.False(reader.GetBoolean(2));
+        }
+
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand(
+            $"DROP TABLE \"{_schema}\".runtime_observation_v2_cursors CASCADE", connection))
+            await command.ExecuteNonQueryAsync();
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand(
+            $"DROP INDEX \"{_schema}\".ix_runtime_observation_v2_attempt", connection))
+            await command.ExecuteNonQueryAsync();
+
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
     }
@@ -571,7 +611,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                       AND created_at = '2026-10-20T00:00:00Z'),
                 -- A pre-033 owner rejects repository identity and later Core migrations.
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations
-                    WHERE version NOT IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,43,44,45,46,47)),
+                    WHERE version NOT IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,43,44,45,46,47,48)),
                 to_regclass(@obsolete) IS NULL
             """, connection);
         check.Parameters.AddWithValue("obsolete", $"{_schema}.uq_chief_of_staff_priority_links_target");
@@ -955,7 +995,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (45, "045_runtime_root_turn_replay.sql"),
             (46, "046_workflow_generation_jobs.sql"),
             (47, "047_terminal_cleanup_recovery_guard.sql"),
-            (48, "048_source_control_pull_request_effect_identity.sql")
+            (48, "048_source_control_pull_request_effect_identity.sql"),
+            (49, "049_runtime_observation_v2_cursors.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""
@@ -1088,7 +1129,10 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 44),
                 to_regclass(@runtimeReplacementOperations) IS NOT NULL,
                 to_regclass(@runtimeReplacementActiveIndex) IS NOT NULL,
-                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 45)
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 45),
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 48),
+                to_regclass(@runtimeObservationCursors) IS NOT NULL,
+                to_regclass(@runtimeObservationCursorExpiry) IS NOT NULL
             """, connection);
         command.Parameters.AddWithValue("projectRunRequests", $"{_schema}.project_run_requests");
         command.Parameters.AddWithValue("projectRunCancellations", $"{_schema}.project_run_cancellations");
@@ -1126,6 +1170,10 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             $"{_schema}.runtime_replacement_operations");
         command.Parameters.AddWithValue("runtimeReplacementActiveIndex",
             $"{_schema}.uq_runtime_replacement_one_active");
+        command.Parameters.AddWithValue("runtimeObservationCursors",
+            $"{_schema}.runtime_observation_v2_cursors");
+        command.Parameters.AddWithValue("runtimeObservationCursorExpiry",
+            $"{_schema}.ix_runtime_observation_v2_cursors_expiry");
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(1L, reader.GetInt64(0));
@@ -1193,6 +1241,9 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.True(reader.GetBoolean(47));
         Assert.Contains("native-root-turn-replay", reader.GetString(41));
         Assert.Equal(1L, reader.GetInt64(48));
+        Assert.Equal(1L, reader.GetInt64(49));
+        Assert.True(reader.GetBoolean(50));
+        Assert.True(reader.GetBoolean(51));
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version, bool includePreviouslyUnregistered = true)

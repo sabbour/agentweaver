@@ -151,6 +151,9 @@ public static partial class CoordinationEndpoints
         app.MapGet(
             "/api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-observation/v1",
             ReadRuntimeObservationV1Async).RequireAuthorization();
+        app.MapGet(
+            "/api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-observation/v2",
+            ReadRuntimeObservationV2Async).RequireAuthorization();
         return app;
     }
 

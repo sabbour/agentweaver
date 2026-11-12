@@ -29,7 +29,8 @@ internal sealed record SpendBudgetAdmissionContext(
 /// <param name="CreditDenial">Copilot hard credit limit denial, when the credit limit blocks the send.</param>
 /// <param name="SpendBudgetDenialCode">Spend budget denial code, when a spend budget blocks the send.</param>
 internal sealed record RuntimeNativePreparationOutcome(
-    RuntimeNativeCreditDenialReceipt? CreditDenial, string? SpendBudgetDenialCode);
+    RuntimeNativeCreditDenialReceipt? CreditDenial,
+    string? SpendBudgetDenialCode);
 
 /// <summary>What Events must show for one dispatch before its reservation retires.</summary>
 /// <param name="SourceReceiptIds">Source receipts that a completed child dispatch acknowledged.</param>

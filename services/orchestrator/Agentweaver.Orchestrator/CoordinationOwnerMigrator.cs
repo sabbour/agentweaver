@@ -26,7 +26,8 @@ public static class CoordinationOwnerMigrator
         // Version 045 adds immutable native root-turn replay evidence; 046 adds durable workflow-generation jobs.
         // Version 047 prevents recovery after terminal cleanup is admitted.
         // Version 048 separates PR effect identity, original authorization lineage, and result identity.
-        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48])];
+        // Version 049 stores opaque V2 observation cursors.
+        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49])];
 
     /// <summary>
     /// Applies the supported embedded migrations in order under a schema-scoped PostgreSQL lock.
@@ -128,7 +129,8 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(45) && !applied.Contains(43)) ||
             (applied.Contains(46) && !applied.Contains(45)) ||
             (applied.Contains(47) && !applied.Contains(46)) ||
-            (applied.Contains(48) && !applied.Contains(38)))
+            (applied.Contains(48) && !applied.Contains(38)) ||
+            (applied.Contains(49) && !applied.Contains(47)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
         // Apply every catalog version that is not yet recorded, in catalog order. Operator tooling relies on
         // this: it can only cap what runs by checking that the catalog itself ends at the approved version.
@@ -185,6 +187,7 @@ public static class CoordinationOwnerMigrator
                 46 => "workflow_generation_jobs",
                 47 => "terminal_cleanup_recovery_guard",
                 48 => "source_control_pull_request_effect_identity",
+                49 => "runtime_observation_v2_cursors",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
             var filename = version == 10 ? $"{migrationName}.sql" : $"{version:000}_{migrationName}.sql";
@@ -683,8 +686,7 @@ public static class CoordinationOwnerMigrator
                         AND (SELECT count(*) FROM pg_constraint
                              WHERE conrelid = to_regclass(@runtimeRunStartIntents) AND contype = 'c'
                                AND convalidated) = 4)
-                )
-                ,
+                ),
                 (
                     ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 44) = 0
                         AND to_regclass(@runtimeReplacementOperations) IS NULL)
@@ -771,6 +773,18 @@ public static class CoordinationOwnerMigrator
                                   'original_authorization_fingerprint', 'effect_state', 'result_fingerprint')
                               AND attnum > 0 AND NOT attisdropped) = 5)
                 )
+                ,
+                (
+                    ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 48) = 0
+                        AND to_regclass(@runtimeObservationCursors) IS NULL
+                        AND to_regclass(@runtimeObservationCursorExpiry) IS NULL)
+                    OR
+                    ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 48) = 1
+                        AND (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 47) = 1
+                        AND to_regclass(@runtimeObservationCursors) IS NOT NULL
+                        AND to_regclass(@runtimeObservationCursorExpiry) IS NOT NULL
+                        AND to_regclass(@runtimeObservationAttemptIndex) IS NOT NULL)
+                )
             """, connection);
         command.Parameters.AddWithValue(
             "runListIndex", NpgsqlDbType.Text, $"{schema}.ix_accepted_runs_project_created");
@@ -804,6 +818,14 @@ public static class CoordinationOwnerMigrator
         command.Parameters.AddWithValue(
             "sourceControlPullRequestOperations", NpgsqlDbType.Text,
             $"{schema}.source_control_pull_request_operations");
+        command.Parameters.AddWithValue(
+            "runtimeObservationCursors", NpgsqlDbType.Text, $"{schema}.runtime_observation_v2_cursors");
+        command.Parameters.AddWithValue(
+            "runtimeObservationCursorExpiry", NpgsqlDbType.Text,
+            $"{schema}.ix_runtime_observation_v2_cursors_expiry");
+        command.Parameters.AddWithValue(
+            "runtimeObservationAttemptIndex", NpgsqlDbType.Text,
+            $"{schema}.ix_runtime_observation_v2_attempt");
         command.Parameters.AddWithValue("runs", NpgsqlDbType.Text, $"{schema}.accepted_runs");
         command.Parameters.AddWithValue("userDismissals", NpgsqlDbType.Text, $"{schema}.user_notification_dismissals");
         // Bind the relation name as data; schema validation alone does not prove the table exists.

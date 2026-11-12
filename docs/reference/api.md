@@ -1174,6 +1174,7 @@ accepting owner state does not start an automatic scheduler.
 | GET | `/sessions/{sessionId}/tree` | Read session tree. | Yes |
 | GET | `/sessions/{sessionId}/status` | Read activity, lifecycle, and blockers. | Yes |
 | GET | `/sessions/{sessionId}/runtime-observation/v1` | Read current runtime evidence; native registration is conditional. | Yes |
+| GET | `/sessions/{sessionId}/runtime-observation/v2` | Read paged runtime evidence with an exact-attempt lookup. | Yes |
 | POST | `/sessions/{sessionId}/turn-failure` | Report failed turn. | Yes |
 | POST | `/sessions/{sessionId}/decisions/gates/{requestId}/answer` | Answer exact pending question. | Yes |
 | POST | `/sessions/{sessionId}/decisions/questions` | Request a question gate. | Yes |
@@ -1202,6 +1203,29 @@ accepting owner state does not start an automatic scheduler.
 | POST | `/sessions/{sessionId}/build-test/commands/{checkpointId}/{stepId}/workspace-capture/verify` | Verify produced Workspace capture. | No |
 | POST | `/sessions/{sessionId}/suspend` | Request fenced suspend. | No |
 | POST | `/sessions/{sessionId}/resume` | Request retained-Workspace resume. | No |
+
+`GET /api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-observation/v2`
+requires current Coordination authority and rechecks the accepted selection,
+owner state, decision, session mapping, and execution fence before it returns.
+The response uses `Cache-Control: no-store`. `pageSize` accepts 1 through 100
+and defaults to 100. A returned `cursor` pins later pages to the same snapshot
+and expires after 24 hours. Use `attemptId` for an exact lookup; it must be a
+non-empty GUID and cannot be combined with `cursor`.
+
+An exact lookup returns at most 100 facts. If more facts exist, the response
+sets `exactUnavailableReason` to
+`attempt_history_exceeds_bounded_aggregate` and returns a history cursor. Use
+that cursor without `attemptId` to browse the retained history. If the owner
+has no exact evidence, it returns `attempt_evidence_not_retained`; an empty
+result does not prove that the attempt did not occur.
+
+The history reports whether v2 evidence coverage started. A missing coverage
+marker reports `complete: false` and
+`incompleteReason: "legacy_or_uninstrumented_history"`. Missing native-send,
+tool-execution, or consumption proof remains `unavailable`; an empty result or
+an owner reservation does not prove that native work ran. Version 1 remains
+unchanged. See [runtime observation contracts](./contracts.md#runtime-observation-v2)
+for the response fields and evidence limits.
 
 `POST /api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-replacements`
 requires the current coordinator-root authority and a `RuntimeReplacementRequest`

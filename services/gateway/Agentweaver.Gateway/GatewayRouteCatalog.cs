@@ -507,7 +507,8 @@ public static class GatewayRouteCatalog
             string operationId,
             string summary,
             bool body = false,
-            bool acceptsOnly = false) =>
+            bool acceptsOnly = false,
+            string[]? query = null) =>
             Add(
                 method,
                 GatewayOwner.Orchestrator,
@@ -515,6 +516,7 @@ public static class GatewayRouteCatalog
                 "/api" + coordination + suffix,
                 operationId,
                 summary,
+                query: query,
                 body: body,
                 acceptsOnly: acceptsOnly,
                 forwardTenantSelector: true);
@@ -553,6 +555,9 @@ public static class GatewayRouteCatalog
             "readSessionStatus", "Read session status");
         Coordination("GET", "/sessions/{sessionId}/runtime-observation/v1",
             "readRuntimeObservationV1", "Read current runtime evidence");
+        Coordination("GET", "/sessions/{sessionId}/runtime-observation/v2",
+            "readRuntimeObservationV2", "Read paged runtime evidence",
+            query: ["pageSize", "cursor", "attemptId"]);
         Coordination("POST", "/sessions/{sessionId}/turn-failure",
             "reportTurnFailure", "Report a turn failure", body: true);
         Coordination("POST", "/sessions/{sessionId}/decisions/gates/{requestId}/answer",

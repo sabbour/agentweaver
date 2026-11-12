@@ -61,6 +61,45 @@ public sealed class RuntimeObservationContractsTests
     }
 
     [Fact]
+    public void V2KeepsMissingProofAndLegacyCoverageExplicit()
+    {
+        var binding = new RuntimeObservationV2Binding(
+            "project", "run", "root", "root", true, ValidHash, 1, 1,
+            null, null, DateTimeOffset.UtcNow);
+        var unknown = new RuntimeObservationCount(RuntimeObservationSectionState.Unknown, null,
+            "legacy_or_uninstrumented_history");
+        var unavailable = new RuntimeObservationCount(RuntimeObservationSectionState.Unavailable, null,
+            "native_send_proof_not_complete");
+        var response = new RuntimeObservationV2(
+            2,
+            binding,
+            new(null, null, null, null, null, "nanoAiu", "copilotRun"),
+            new(unknown, unavailable, unavailable, unavailable, unknown, unavailable),
+            new(RuntimeObservationSectionState.Unknown, null),
+            new(Guid.NewGuid(), 0, false, null, "legacy_or_uninstrumented_history",
+                false, [], null, null)).Validate();
+
+        Assert.Equal("legacy_or_uninstrumented_history", response.History.IncompleteReason);
+        Assert.Equal(RuntimeObservationSectionState.Unknown, response.Totals.ModelSlotsReserved.State);
+        Assert.Equal("native_send_proof_not_complete", response.Totals.NativeSendsKnown.Reason);
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            (response with
+            {
+                History = response.History with { ExactAttempt = true }
+            }).Validate());
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            (response with
+            {
+                Binding = binding with { RuntimeInstanceId = Guid.NewGuid() }
+            }).Validate());
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            (response with
+            {
+                Binding = binding with { RegistrationRevision = 1 }
+            }).Validate());
+    }
+
+    [Fact]
     public void EvidenceCollectionsRejectOversizedOrDuplicatedRows()
     {
         var timestamp = DateTimeOffset.UtcNow;

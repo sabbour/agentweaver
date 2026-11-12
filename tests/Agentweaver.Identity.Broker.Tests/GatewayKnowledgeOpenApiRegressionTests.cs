@@ -101,6 +101,7 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             if (path == "metrics")
                 Assert.Equal("day", queries[2].GetProperty("schema").GetProperty("enum")[0].GetString());
         }
+
         var schemas = root.GetProperty("components").GetProperty("schemas");
         foreach (var name in new[] { "ProjectMetrics", "ProjectMetricsDay", "ProjectUsage", "ProjectUsageItem", "ProjectUsageCost" })
         {
@@ -111,6 +112,68 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         }
         AssertNullablePropertyType(schemas.GetProperty("ProjectUsageItem").GetProperty("properties"), "inputTokens", "number");
         AssertNullablePropertyType(schemas.GetProperty("ProjectUsageCost").GetProperty("properties"), "amount", "number");
+    }
+
+    [Fact]
+    public async Task RuntimeObservationV2PublishesStablePagingAndExactAttemptLookup()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa), () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException("OpenAPI must not call owners."));
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = document.RootElement;
+        var routePath =
+            "/api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-observation/v2";
+        var operation = root.GetProperty("paths").GetProperty(routePath).GetProperty("get");
+        Assert.Equal("readRuntimeObservationV2", operation.GetProperty("operationId").GetString());
+        Assert.Equal("Orchestrator", operation.GetProperty("x-agentweaver-owner").GetString());
+        Assert.True(operation.GetProperty("responses").TryGetProperty("400", out _));
+        Assert.True(operation.GetProperty("responses").TryGetProperty("409", out _));
+        Assert.True(operation.GetProperty("responses").TryGetProperty("503", out _));
+        Assert.Equal("no-store", operation.GetProperty("responses").GetProperty("200")
+            .GetProperty("headers").GetProperty("Cache-Control").GetProperty("schema")
+            .GetProperty("example").GetString());
+        Assert.Equal(
+            "#/components/schemas/RuntimeObservationV2",
+            operation.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        var queries = operation.GetProperty("parameters").EnumerateArray()
+            .Where(parameter => parameter.GetProperty("in").GetString() == "query").ToArray();
+        Assert.Equal(["pageSize", "cursor", "attemptId"],
+            queries.Select(parameter => parameter.GetProperty("name").GetString()));
+        Assert.Equal(1, queries[0].GetProperty("schema").GetProperty("minimum").GetInt32());
+        Assert.Equal(100, queries[0].GetProperty("schema").GetProperty("maximum").GetInt32());
+        Assert.Equal(4096, queries[1].GetProperty("schema").GetProperty("maxLength").GetInt32());
+        Assert.Equal("uuid", queries[2].GetProperty("schema").GetProperty("format").GetString());
+
+        var schemas = root.GetProperty("components").GetProperty("schemas");
+        var history = schemas.GetProperty("RuntimeObservationV2History");
+        Assert.False(history.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(100, history.GetProperty("properties").GetProperty("items").GetProperty("maxItems").GetInt32());
+        Assert.Contains("exactUnavailableReason",
+            history.GetProperty("required").EnumerateArray().Select(property => property.GetString()));
+        var fact = schemas.GetProperty("RuntimeObservationV2Fact");
+        Assert.False(fact.GetProperty("additionalProperties").GetBoolean());
+        Assert.Contains("checkpointId",
+            fact.GetProperty("required").EnumerateArray().Select(property => property.GetString()));
+        Assert.Contains("accountedThroughLedgerEventCount",
+            fact.GetProperty("required").EnumerateArray().Select(property => property.GetString()));
+        var evidence = schemas.GetProperty("RuntimeObservationEvidenceLink");
+        Assert.False(evidence.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            ["state", "reason", "receiptId", "payloadHash", "rangeComplete", "eventCount"],
+            evidence.GetProperty("required").EnumerateArray().Select(property => property.GetString()));
+
+        var route = Assert.Single(
+            GatewayHost::Agentweaver.Gateway.GatewayRouteCatalog.Routes,
+            item => item.OperationId == "readRuntimeObservationV2");
+        Assert.Equal(
+            "/api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-observation/v2",
+            route.OwnerPath);
+        Assert.Equal(["pageSize", "cursor", "attemptId"], route.QueryParameters.ToArray());
     }
 
     [Fact]

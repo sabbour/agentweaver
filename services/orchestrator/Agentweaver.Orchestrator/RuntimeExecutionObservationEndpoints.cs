@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Globalization;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Microsoft.AspNetCore.Http;
@@ -97,6 +99,137 @@ public static partial class CoordinationEndpoints
         }
     }
 
+    private static async Task<IResult> ReadRuntimeObservationV2Async(
+            string projectId,
+            string runId,
+            string sessionId,
+            HttpContext context,
+            OrchestratorOptions options,
+            ProjectsRunSelectionClient projects,
+            CoordinationOwnerStore sessions,
+            RuntimeUsageSourceStore evidenceStore,
+            CancellationToken cancellationToken)
+    {
+        context.Response.Headers.CacheControl = "no-store";
+        try
+        {
+            return await ExecuteAsync(async () =>
+            {
+                var (pageSize, cursor, attemptId) = ReadRuntimeObservationV2Query(context.Request);
+                var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+                var identity = new SessionIdentity(projectId, runId, sessionId);
+                var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                    context, projectId, runId, cancellationToken).ConfigureAwait(false);
+                var owner = await ReadRuntimeObservationOwnerAsync(
+                    actor, identity, selection, sessions, cancellationToken).ConfigureAwait(false);
+                var selectionHash = CoordinationOwnerStore.HashSelection(selection.Selection);
+                if (!owner.AcceptedSelectionHash.Equals(selectionHash, StringComparison.OrdinalIgnoreCase))
+                    throw new CoordinationException(
+                        "runtime_owner_context_stale", StatusCodes.Status409Conflict);
+                var limits = CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(selection.Selection.Snapshot);
+                var scope = new RuntimeObservationV2ReadScope(
+                    actor.Issuer, actor.Subject, selection.Authorization.TenantId,
+                    projectId, runId, owner.RootSessionId, sessionId, owner.AcceptedSelectionHash,
+                    selection.Selection.ContextRevision, owner.ExecutionFence, owner.SessionExecutionFence,
+                    RuntimeObservationAuthorizationHash(selection.Authorization));
+                var stored = await evidenceStore.ReadObservationV2Async(
+                    scope, pageSize, cursor, attemptId, cancellationToken).ConfigureAwait(false);
+                var observedAt = DateTimeOffset.UtcNow;
+                var observation = new RuntimeObservationV2(
+                    2,
+                    new RuntimeObservationV2Binding(
+                        projectId, runId, owner.RootSessionId, sessionId, owner.IsCoordinatorRoot,
+                        owner.AcceptedSelectionHash.ToLowerInvariant(), owner.ExecutionFence,
+                        owner.ExecutionFence, stored.RecordedBindingFact?.RuntimeInstanceId,
+                        stored.RecordedBindingFact?.RegistrationRevision, observedAt),
+                    new RuntimeObservationV2Limits(
+                        limits.MaxModelTurns, limits.MaxToolCalls, limits.MaxPromptTokens,
+                        limits.CopilotSoftCreditLimit, limits.CopilotHardCreditLimit,
+                        "nanoAiu", "copilotRun"),
+                    stored.Totals,
+                    stored.CreditGuard,
+                    stored.History).Validate();
+
+                await RequireUnchangedAuthorizedSelectionAsync(
+                    context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+                var currentSelection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                    context, projectId, runId, cancellationToken).ConfigureAwait(false);
+                var currentOwner = await ReadRuntimeObservationOwnerAsync(
+                    actor, identity, currentSelection, sessions, cancellationToken).ConfigureAwait(false);
+                if (CoordinationOwnerStore.HashSelection(currentSelection.Selection) != selectionHash ||
+                    currentSelection.Authorization.TenantId != selection.Authorization.TenantId ||
+                    RuntimeObservationAuthorizationHash(currentSelection.Authorization) !=
+                        RuntimeObservationAuthorizationHash(selection.Authorization) ||
+                    currentOwner != owner)
+                    throw new CoordinationException(
+                        "runtime_owner_context_stale", StatusCodes.Status409Conflict);
+                return Results.Ok(observation);
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RuntimeAuthorizationException exception)
+        {
+            var statusCode = exception.Code.EndsWith("_conflict", StringComparison.Ordinal) ||
+                    exception.Code.EndsWith("_stale", StringComparison.Ordinal) ||
+                    exception.Code is "runtime_registration_unknown" or "runtime_registration_invalid"
+                        ? StatusCodes.Status409Conflict
+                    : StatusCodes.Status403Forbidden;
+            return Results.Json(new { error = exception.Code }, statusCode: statusCode);
+        }
+        catch (HttpRequestException)
+        {
+            return Results.Json(new { error = "runtime_observation_owner_unavailable" },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Results.Json(new { error = "runtime_observation_owner_timeout" },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+    }
+
+    private static async Task<SessionRuntimeOwnerState> ReadRuntimeObservationOwnerAsync(
+        CoordinationActor actor,
+        SessionIdentity identity,
+        AuthorizedRunSelection selection,
+        CoordinationOwnerStore sessions,
+        CancellationToken cancellationToken) =>
+        await sessions.ReadRuntimeOwnerStateForV2ObservationAsync(
+            actor,
+            identity,
+            selection.Authorization.TenantId,
+            CoordinationOwnerStore.HashSelection(selection.Selection),
+            cancellationToken).ConfigureAwait(false);
+
+    private static string RuntimeObservationAuthorizationHash(ProjectsAuthorizationContext authorization) =>
+        RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(authorization));
+
+    internal static (int PageSize, string? Cursor, Guid? AttemptId) ReadRuntimeObservationV2Query(
+        HttpRequest request)
+    {
+        foreach (var key in request.Query.Keys)
+            if (key is not ("pageSize" or "cursor" or "attemptId") ||
+                request.Query[key].Count != 1)
+                throw new CoordinationException("runtime_observation_v2_query_invalid", 400);
+
+        var pageSize = 100;
+        if (request.Query.TryGetValue("pageSize", out var pageSizeValues) &&
+            (!int.TryParse(pageSizeValues[0], NumberStyles.None, CultureInfo.InvariantCulture, out pageSize) ||
+             pageSize is < 1 or > RuntimeObservationV2History.MaximumItems))
+            throw new CoordinationException("runtime_observation_v2_query_invalid", 400);
+        var cursor = request.Query["cursor"].FirstOrDefault();
+        if (cursor is { Length: > 4096 } || cursor is { Length: 0 })
+            throw new CoordinationException("runtime_observation_v2_query_invalid", 400);
+        Guid? attemptId = null;
+        if (request.Query.TryGetValue("attemptId", out var attemptValues))
+        {
+            if (!Guid.TryParseExact(attemptValues[0], "D", out var parsed) || parsed == Guid.Empty)
+                throw new CoordinationException("runtime_observation_v2_query_invalid", 400);
+            attemptId = parsed;
+        }
+        if (cursor is not null && attemptId is not null)
+            throw new CoordinationException("runtime_observation_v2_query_invalid", 400);
+        return (pageSize, cursor, attemptId);
+    }
     /// <summary>
     /// Builds an execution observation from the current accepted selection, runtime owner, decision, and checkpoint.
     /// </summary>

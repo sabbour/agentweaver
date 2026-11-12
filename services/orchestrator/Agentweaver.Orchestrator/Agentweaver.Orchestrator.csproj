@@ -67,5 +67,6 @@
     <EmbeddedResource Include="Migrations\046_workflow_generation_jobs.sql" />
     <EmbeddedResource Include="Migrations\047_terminal_cleanup_recovery_guard.sql" />
     <EmbeddedResource Include="Migrations\048_source_control_pull_request_effect_identity.sql" />
+    <EmbeddedResource Include="Migrations\049_runtime_observation_v2_cursors.sql" />
   </ItemGroup>
 </Project>
