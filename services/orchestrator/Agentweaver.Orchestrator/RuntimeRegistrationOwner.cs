@@ -280,6 +280,51 @@ internal sealed class RuntimeRegistrationOwner(
         return replacement;
     }
 
+    internal async Task<RuntimeRegistration> ReplaceAfterCheckpointRecoveryFenceAsync(
+        HttpContext context,
+        Guid previousRuntimeInstanceId,
+        long previousRegistrationRevision,
+        Guid operationId,
+        string projectId,
+        string runId,
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        var current = await registrations.ReadAsync(
+            previousRuntimeInstanceId, cancellationToken).ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_registration_unknown");
+        var released = RestoreReleasedRegistrationForRecovery(current, previousRegistrationRevision);
+        return await ReplaceAfterResumeFenceAsync(
+            context,
+            released,
+            operationId,
+            projectId,
+            runId,
+            sessionId,
+            new(released.Binding.EnvironmentId, released.Binding.ProfileId),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static RuntimeRegistration RestoreReleasedRegistrationForRecovery(
+        RuntimeRegistration current, long previousRegistrationRevision)
+    {
+        if (previousRegistrationRevision < 1 || previousRegistrationRevision == long.MaxValue)
+            throw new RuntimeAuthorizationException("runtime_registration_stale");
+        return current switch
+        {
+            { State: RuntimeRegistrationState.Active } registration
+                when registration.Revision == previousRegistrationRevision => registration,
+            { State: RuntimeRegistrationState.Revoked } registration
+                when registration.Revision == previousRegistrationRevision + 1 =>
+                registration with
+                {
+                    Revision = previousRegistrationRevision,
+                    State = RuntimeRegistrationState.Active
+                },
+            _ => throw new RuntimeAuthorizationException("runtime_registration_stale")
+        };
+    }
+
     internal async Task<RuntimeRegistration> ReplaceOrdinaryAsync(
         RuntimeActorAuthorization actor,
         RuntimeRegistration releasedRegistration,

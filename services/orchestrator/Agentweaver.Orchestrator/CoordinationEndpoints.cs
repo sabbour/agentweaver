@@ -1884,6 +1884,7 @@ public static partial class CoordinationEndpoints
         OrchestratorOptions options,
         ProjectsRunSelectionClient projects,
         CoordinationOwnerStore store,
+        PostgresMafCheckpointStore checkpoints,
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>
         {
@@ -1891,8 +1892,50 @@ public static partial class CoordinationEndpoints
             var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
             var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
                 context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            MafExecutionCheckpointStore? checkpointStore = null;
+            RuntimeRegistrationOwner? registrations = null;
+            if (request.CheckpointRecovery is not null)
+            {
+                registrations = context.RequestServices.GetService<RuntimeRegistrationOwner>()
+                    ?? throw new CoordinationException(
+                        "runtime_registration_owner_unavailable", StatusCodes.Status503ServiceUnavailable);
+                var runStatus = await store.ReadOwnerRunStatusAsync(
+                    actor, projectId, runId, cancellationToken).ConfigureAwait(false);
+                var identity = new SessionIdentity(projectId, runId, runStatus.RootSessionId);
+                var binding = CreateExecutionCheckpointBinding(
+                    identity,
+                    actor,
+                    request.ExecutionFence,
+                    MafExecutionCheckpointStore.CurrentSdkVersion,
+                    PostgresMafCheckpointStore.ReadSelectedModelReference(selection.Selection.Snapshot));
+                checkpointStore = new MafExecutionCheckpointStore(checkpoints, binding);
+            }
             var result = await store.RecoverRunExecutionAsync(
-                actor, projectId, runId, request, cancellationToken, selection).ConfigureAwait(false);
+                actor, projectId, runId, request, cancellationToken, selection, checkpointStore)
+                .ConfigureAwait(false);
+            if (request.CheckpointRecovery is not null)
+            {
+                await RequireUnchangedAuthorizedSelectionAsync(
+                    context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+                var registration = await registrations!.ReplaceAfterCheckpointRecoveryFenceAsync(
+                    context,
+                    request.CheckpointRecovery.RuntimeInstanceId,
+                    request.CheckpointRecovery.RegistrationRevision,
+                    result.OperationId,
+                    projectId,
+                    runId,
+                    result.Session.SessionId,
+                    cancellationToken).ConfigureAwait(false);
+                result = result with
+                {
+                    CheckpointRecovery = result.CheckpointRecovery! with
+                    {
+                        RuntimeInstanceId = registration.RuntimeInstanceId,
+                        RegistrationRevision = registration.Revision
+                    }
+                };
+                return Results.Accepted(value: result);
+            }
             return Results.Ok(result);
         }, cancellationToken);
 

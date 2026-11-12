@@ -826,7 +826,10 @@ internal sealed class CoordinatorDecisionOwnerStore
         long nextFence,
         Guid operationId,
         string actionKind,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool preservePendingGate = false,
+        long? expectedDecisionStateVersion = null,
+        string? expectedCheckpointWorkPlanId = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
@@ -837,13 +840,21 @@ internal sealed class CoordinatorDecisionOwnerStore
         else
             ValidateInput(actor, identity, selection);
         if (nextFence != previousFence + 1 || operationId == Guid.Empty ||
-            actionKind is not ("execution.failed" or "execution.indeterminate" or "execution.recovered" or "execution.cancelled"))
+            actionKind is not ("execution.failed" or "execution.indeterminate" or "execution.recovered" or
+                "execution.checkpoint_recovery" or "execution.cancelled") ||
+            preservePendingGate != (actionKind == "execution.checkpoint_recovery") ||
+            preservePendingGate != expectedDecisionStateVersion.HasValue)
             throw new CoordinationException("coordinator_decision_invalid", StatusCodes.Status400BadRequest);
 
         var latest = await ReadLatestDecisionAsync(
             connection, transaction, identity, cancellationToken).ConfigureAwait(false);
         if (latest is null)
+        {
+            if (preservePendingGate)
+                throw new CoordinationException(
+                    "checkpoint_recovery_gate_unavailable", StatusCodes.Status409Conflict);
             return;
+        }
 
         var decisionActor = cancelling
             ? new CoordinationActor(latest.Envelope.Issuer, latest.Envelope.Subject)
@@ -863,6 +874,25 @@ internal sealed class CoordinatorDecisionOwnerStore
             throw InvalidPersistedState();
         var currentState = restored.State;
         ValidateStateActor(currentState, decisionActor);
+        if (preservePendingGate && latest.StateVersion != expectedDecisionStateVersion)
+            throw new CoordinationException(
+                "checkpoint_recovery_gate_unavailable", StatusCodes.Status409Conflict);
+        if (preservePendingGate && currentState.PendingGate is { } pendingGate &&
+            pendingGate.Fence != previousFence)
+            throw new CoordinationException(
+                "checkpoint_recovery_gate_unavailable", StatusCodes.Status409Conflict);
+        var currentWorkPlanId = currentState.ConfirmedWorkPlan?.Plan.Id
+            ?? currentState.CandidateWorkPlan?.Plan.Id;
+        if (preservePendingGate && currentWorkPlanId is not null &&
+            !string.Equals(currentWorkPlanId, expectedCheckpointWorkPlanId, StringComparison.Ordinal))
+            throw new CoordinationException(
+                "checkpoint_recovery_checkpoint_stale", StatusCodes.Status409Conflict);
+        if (preservePendingGate && currentState.PendingGate is null &&
+            await HasCancelledGateAtStateVersionAsync(
+                connection, transaction, identity, expectedDecisionStateVersion!.Value, cancellationToken)
+                .ConfigureAwait(false))
+            throw new CoordinationException(
+                "checkpoint_recovery_gate_unavailable", StatusCodes.Status409Conflict);
 
         var selectionContext = await _runSelectionContexts.ReadAsync(
             selection.Selection, previousFence, cancellationToken).ConfigureAwait(false);
@@ -881,7 +911,9 @@ internal sealed class CoordinatorDecisionOwnerStore
             currentState.ConfirmedWorkPlan,
             currentState.CandidateWorkPlan,
             currentState.LastScopeDiff,
-            pendingGate: null,
+            pendingGate: preservePendingGate
+                ? currentState.PendingGate! with { Fence = nextFence }
+                : null,
             decisionReceipts: currentState.DecisionReceipts,
             workPlanRevisionAttempts: currentState.WorkPlanRevisionAttempts);
         if (!nextStateResult.IsValid || nextStateResult.Value is null)
@@ -964,7 +996,8 @@ internal sealed class CoordinatorDecisionOwnerStore
             nextState,
             requestId,
             stateVersion,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            preservePendingGate).ConfigureAwait(false);
         await InsertOutboxEventAsync(
             connection,
             transaction,
@@ -1048,9 +1081,39 @@ internal sealed class CoordinatorDecisionOwnerStore
         CoordinatorDecisionState state,
         string idempotencyKey,
         long stateVersion,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool preservePendingGate = false)
     {
         var nextGate = state.PendingGate;
+        if (preservePendingGate)
+        {
+            if (previousGate is null && nextGate is null)
+                return;
+            if (previousGate is null || nextGate is null ||
+                !string.Equals(previousGate.RequestId, nextGate.RequestId, StringComparison.Ordinal) ||
+                nextGate.Fence != previousGate.Fence + 1 ||
+                nextGate with { Fence = previousGate.Fence } != previousGate)
+                throw new CoordinationException(
+                    "checkpoint_recovery_gate_unavailable", StatusCodes.Status409Conflict);
+
+            await using var rebind = new NpgsqlCommand($"""
+                UPDATE {_gates}
+                SET gate = @gate, execution_fence = @fence, state_version = @version,
+                    updated_at = clock_timestamp()
+                WHERE project_id = @project AND run_id = @run AND request_id = @request
+                    AND gate_state = 'pending' AND execution_fence = @previousFence
+                """, connection, transaction);
+            AddIdentity(rebind, identity);
+            rebind.Parameters.AddWithValue("request", NpgsqlDbType.Varchar, nextGate.RequestId);
+            rebind.Parameters.AddWithValue("gate", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(nextGate, JsonOptions));
+            rebind.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, nextGate.Fence);
+            rebind.Parameters.AddWithValue("version", NpgsqlDbType.Bigint, stateVersion);
+            rebind.Parameters.AddWithValue("previousFence", NpgsqlDbType.Bigint, previousGate.Fence);
+            if (await rebind.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                throw new CoordinationException("coordinator_gate_stale", StatusCodes.Status409Conflict);
+            return;
+        }
+
         if (previousGate is not null &&
             (nextGate is null ||
              !string.Equals(previousGate.RequestId, nextGate.RequestId, StringComparison.Ordinal)))
@@ -1081,6 +1144,7 @@ internal sealed class CoordinatorDecisionOwnerStore
                 if (await resolve.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
                     throw new CoordinationException("coordinator_gate_stale", StatusCodes.Status409Conflict);
             }
+
             else
             {
                 await using var cancel = new NpgsqlCommand($"""
@@ -1126,6 +1190,25 @@ internal sealed class CoordinatorDecisionOwnerStore
         insert.Parameters.AddWithValue("version", NpgsqlDbType.Bigint, stateVersion);
         insert.Parameters.AddWithValue("idempotency", NpgsqlDbType.Varchar, idempotencyKey);
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<bool> HasCancelledGateAtStateVersionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity identity,
+        long stateVersion,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1 FROM {_gates}
+                WHERE project_id = @project AND run_id = @run AND session_id = @session
+                    AND gate_state = 'cancelled' AND state_version = @version)
+            """, connection, transaction);
+        AddIdentity(command, identity);
+        command.Parameters.AddWithValue("version", NpgsqlDbType.Bigint, stateVersion);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)
+            ?? false);
     }
 
     /// <summary>

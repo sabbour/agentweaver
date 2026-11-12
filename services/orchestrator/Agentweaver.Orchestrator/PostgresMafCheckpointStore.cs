@@ -121,7 +121,8 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         JsonElement value,
         CheckpointInfo? parent,
         CancellationToken cancellationToken,
-        byte[]? workspaceSeed = null)
+        byte[]? workspaceSeed = null,
+        long? parentExecutionFence = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
@@ -140,7 +141,8 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         ValidateOriginWorkspaceSeed(
             value, validatedBinding, checkpointId, selection.SelectionHash, workspaceSeed);
         if (parent is not null && !await CheckpointExistsAsync(
-                connection, transaction, validatedBinding, parent.CheckpointId, cancellationToken)
+                connection, transaction, validatedBinding, parent.CheckpointId,
+                parentExecutionFence ?? validatedBinding.ExecutionFence, cancellationToken)
                 .ConfigureAwait(false))
             throw new CoordinationException("checkpoint_parent_not_found", StatusCodes.Status409Conflict);
 
@@ -571,6 +573,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         NpgsqlTransaction transaction,
         MafCheckpointBinding binding,
         string checkpointId,
+        long parentExecutionFence,
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand($"""
@@ -578,12 +581,13 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
                 SELECT 1 FROM {_schema}.maf_workflow_checkpoints
                 WHERE project_id = @project AND run_id = @run AND session_id = @session
                     AND store_name = @store AND checkpoint_id = @checkpoint
-                    AND execution_fence = @fence
+                    AND execution_fence = @parentFence
             )
             """, connection, transaction);
         AddBinding(command, binding);
         command.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, binding.StoreName);
         command.Parameters.AddWithValue("checkpoint", NpgsqlDbType.Varchar, checkpointId);
+        command.Parameters.AddWithValue("parentFence", NpgsqlDbType.Bigint, parentExecutionFence);
         command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, binding.ExecutionFence);
         return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)
             ?? false);

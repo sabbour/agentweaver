@@ -815,7 +815,22 @@ public sealed record RecoverRunExecutionRequest(
     long ExpectedRunStateVersion,
     string IdempotencyKey,
     string CauseCode,
-    string Reference);
+    string Reference)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CheckpointRecoveryRequest? CheckpointRecovery { get; init; }
+}
+
+/// <summary>
+/// Pins the checkpoint and runtime authority for an active-checkpoint recovery.
+/// </summary>
+public sealed record CheckpointRecoveryRequest(
+    string SourceCheckpointId,
+    long SourceCheckpointRevision,
+    long ExpectedDecisionStateVersion,
+    Guid RuntimeInstanceId,
+    long RegistrationRevision,
+    string AcceptedSelectionHash);
 
 /// <summary>
 /// Returns the state and version changes caused by a run-execution transition.
@@ -837,7 +852,39 @@ public sealed record RunExecutionTransitionResult(
     string? PreviousCauseCode,
     string? PreviousReference,
     ImmutableArray<SessionExecutionFenceChange> FencedSessions,
-    bool IsDuplicate = false);
+    bool IsDuplicate = false)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CheckpointRecoveryStatus? CheckpointRecovery { get; init; }
+}
+
+/// <summary>
+/// Reports an accepted checkpoint recovery that still needs Host continuation.
+/// </summary>
+public sealed record CheckpointRecoveryStatus(
+    string Phase,
+    string SourceCheckpointId,
+    long SourceCheckpointRevision,
+    long PreviousExecutionFence,
+    long ExecutionFence,
+    Guid PreviousRuntimeInstanceId,
+    long PreviousRegistrationRevision)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SourceCheckpointHash { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RecoveryCheckpointId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? RecoveryCheckpointRevision { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? RuntimeInstanceId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? RegistrationRevision { get; init; }
+}
 
 /// <summary>
 /// Reports one session whose execution fence changed during a run transition.

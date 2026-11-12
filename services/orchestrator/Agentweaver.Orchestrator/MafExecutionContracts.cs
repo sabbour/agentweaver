@@ -360,14 +360,25 @@ internal sealed record MafExecutionCheckpoint(
         ImmutableDictionary<string, MafRubberduckTerminalReceipt>.Empty.WithComparers(StringComparer.Ordinal);
     public ImmutableDictionary<string, string> RubberduckFailureCodes { get; init; } =
         ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MafCheckpointRecoveryLineage? RecoveryLineage { get; init; }
 }
+
+internal sealed record MafCheckpointRecoveryLineage(
+    string SourceCheckpointId,
+    long SourceCheckpointRevision,
+    string SourceCheckpointHash,
+    long SourceExecutionFence,
+    Guid RecoveryOperationId,
+    long RecoveryExecutionFence);
 
 /// <summary>
 /// A checkpoint state paired with the database checkpoint metadata that identifies its parent.
 /// </summary>
 internal sealed record MafExecutionCheckpointSnapshot(
     CheckpointInfo Info,
-    MafExecutionCheckpoint State)
+    MafExecutionCheckpoint State,
+    string PayloadHash = "")
 {
     public string? ParentCheckpointId { get; init; }
     public bool HasParentMetadata { get; init; }
@@ -725,6 +736,12 @@ internal static class MafExecutionCheckpointContract
             state.RubberduckIntents is null || state.RubberduckReceipts is null ||
             state.RubberduckFailureCodes is null)
             throw new ArgumentException("MAF execution dispatch state is required.", nameof(state));
+        if (state.RecoveryLineage is { } lineage &&
+            (!IsIdentifier(lineage.SourceCheckpointId) || lineage.SourceCheckpointRevision < 1 ||
+             !IsHash(lineage.SourceCheckpointHash) || lineage.SourceExecutionFence < 1 ||
+             lineage.RecoveryOperationId == Guid.Empty ||
+             lineage.RecoveryExecutionFence != lineage.SourceExecutionFence + 1))
+            throw new ArgumentException("MAF checkpoint recovery lineage is invalid.", nameof(state));
         MafScribeGateContract.ValidateState(state);
         if (state.Progress.WorkItems.Any(item =>
                 string.IsNullOrWhiteSpace(item.Key) || item.Key.Length > 128 ||
