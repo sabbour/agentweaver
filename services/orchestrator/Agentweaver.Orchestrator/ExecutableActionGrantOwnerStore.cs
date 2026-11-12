@@ -1168,7 +1168,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
             reader.GetString(0) != binding.TenantId ||
-            reader.GetString(1).Trim() != binding.AcceptedSelectionHash ||
+            !string.Equals(reader.GetString(1).Trim(), binding.AcceptedSelectionHash,
+                StringComparison.OrdinalIgnoreCase) ||
             reader.GetInt64(2) != binding.ExecutionFence ||
             reader.GetString(3) is "completed" or "failed" or "indeterminate" or "cancelled")
             throw new RuntimeAuthorizationException("runtime_native_tool_rejection_conflict");
@@ -1181,7 +1182,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand($"""
-            SELECT h.current_revision, r.state, r.expires_at, r.binding_hash
+            SELECT h.current_revision, r.state, r.expires_at
             FROM {_schema}.runtime_registration_heads h
             JOIN {_schema}.runtime_registration_revisions r
               ON r.runtime_instance_id = h.runtime_instance_id AND r.revision = h.current_revision
@@ -1194,8 +1195,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
             reader.GetInt64(0) != registration.Revision || reader.GetInt32(1) != 0 ||
             reader.GetFieldValue<DateTimeOffset>(2) != registration.ExpiresAt ||
-            registration.ExpiresAt <= timeProvider.GetUtcNow() ||
-            reader.GetString(3).Trim() != RuntimeRegistrationStore.ComputeBindingHash(registration.Binding))
+            reader.GetFieldValue<DateTimeOffset>(2) <= timeProvider.GetUtcNow())
             throw new RuntimeAuthorizationException("runtime_native_tool_rejection_conflict");
     }
 
