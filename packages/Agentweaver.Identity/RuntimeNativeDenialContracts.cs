@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -403,18 +404,32 @@ public static class RuntimeFixedCreditGuardContract
             ?? throw new ArgumentException("A host message is required.", nameof(request));
         var metadata = message.Metadata
             ?? throw new ArgumentException("Host message metadata is required.", nameof(request));
-        return RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(new
-        {
-            message.Kind,
-            message.MessageId,
-            message.ContextId,
-            message.Role,
-            message.Parts,
-            metadata.Runtime.Registration,
-            metadata.Runtime.Purpose,
-            metadata.DeliveryMode
-        }));
+        return HashHostRequest(
+            message.Kind, message.MessageId, message.ContextId, message.Role, message.Parts,
+            metadata.Runtime.Registration, metadata.Runtime.Purpose, metadata.DeliveryMode);
     }
+
+    /// <summary>Hashes the non-secret host request fields when the runtime proof is not retained.</summary>
+    public static string HashHostRequest(
+        string kind,
+        Guid messageId,
+        string contextId,
+        string role,
+        ImmutableArray<RuntimeA2ATextPart> parts,
+        RuntimeRegistration registration,
+        RuntimeCredentialPurpose purpose,
+        AddressedMessageDeliveryMode deliveryMode) =>
+        RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            Kind = kind,
+            MessageId = messageId,
+            ContextId = contextId,
+            Role = role,
+            Parts = parts,
+            Registration = registration,
+            Purpose = purpose,
+            DeliveryMode = deliveryMode
+        }));
 
     /// <summary>Validates a zero-limit receipt against its registration and request hash.</summary>
     public static void ValidateReceipt(RuntimeFixedCreditGuardReceipt receipt)

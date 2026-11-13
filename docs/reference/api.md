@@ -1322,11 +1322,14 @@ new operation IDs. It does not resend the credential or roll back authority.
 
 For a saved child join, guarded owner writes return `409` with
 `checkpoint_recovery_dispatch_held` while the hold is active. The continuation
-does not send a child task message or import a child result. After recovery is
-ready, ordinary dispatch can send the saved message. A malformed or mismatched
-manifest keeps the hold active. Retry an accepted request only with the same
-idempotency key. A new key does not bypass the hold. Unsupported or unresolved
-child history stays held for review.
+does not send another child task message. In its final owner transaction, it
+imports a completed-but-unjoined result only after it verifies the saved result
+material, child session and fence, and native accounting against the frozen
+manifest. A missing, malformed, or mismatched result keeps the hold active.
+After recovery is ready, ordinary dispatch can send the saved message for a
+member that was pending and unsent. Retry an accepted request only with the
+same idempotency key. A new key does not bypass the hold. Unsupported or
+unresolved child history stays held for review.
 
 For gate recovery, `readRunStatus` and root `readSessionStatus` expose the
 current recovery step, reason, checkpoint IDs, fences, and old and new runtime
@@ -1336,7 +1339,8 @@ recovery progress through its cursor. These reads do not retry the operation.
 For gate recovery, do not start a second recovery with a new key while the
 first operation is pending. A new key is allowed after gate recovery is
 blocked. A child-join hold remains active until all required registrations
-and readiness checks are complete.
+and readiness checks are complete. The final owner transaction joins verified
+completed-but-unjoined results before it releases the hold.
 
 #### Dispatch completion and startup readback
 

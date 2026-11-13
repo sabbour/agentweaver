@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
@@ -561,19 +562,20 @@ public sealed record RuntimeRootTurnCompletionReceipt(
                 new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))));
     }
 
-    private static void RequireMaterial(
+    internal static void RequireMaterial(
         SessionMaterialAcknowledgment acknowledgment,
         Guid eventId,
         SessionMaterialKind kind,
         RuntimeRegistration registration,
-        SdkSessionFacts source)
+        SdkSessionFacts source,
+        string failureCode = "runtime_root_turn_receipt_invalid")
     {
         var binding = registration.Binding;
         if (acknowledgment is null || acknowledgment.ContractVersion != 1 ||
             acknowledgment.EventId != eventId ||
             acknowledgment.Identity != new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId) ||
             acknowledgment.Position < 1)
-            throw new RuntimeAuthorizationException("runtime_root_turn_receipt_invalid");
+            throw new RuntimeAuthorizationException(failureCode);
         SessionMaterialValidation.Validate(acknowledgment.Reference);
         var material = acknowledgment.Reference.Material!;
         if (material.Kind != kind || material.TenantId != binding.TenantId ||
@@ -588,7 +590,7 @@ public sealed record RuntimeRootTurnCompletionReceipt(
             material.ReasoningEffort != source.ReasoningEffort ||
             material.ModelBindingPin != source.ModelBindingPin ||
             material.ResolvedModelBindingPin != source.ResolvedModelBindingPin)
-            throw new RuntimeAuthorizationException("runtime_root_turn_receipt_invalid");
+            throw new RuntimeAuthorizationException(failureCode);
     }
 }
 
@@ -1009,6 +1011,47 @@ public sealed record RuntimeChildTurnCompletionReceipt(
             request, evidence.Recorded, evidence.AccountingOwnerRevision, userMaterial, assistantMaterial);
     }
 
+    /// <summary>Rebuilds a child receipt from verified native accounting and original material after recovery.</summary>
+    public static RuntimeChildTurnCompletionReceipt CreateForCheckpointRecovery(
+        RuntimeRegistration registration,
+        Guid requestId,
+        string contextId,
+        string prompt,
+        string workPlanId,
+        string associationId,
+        string? workItemBindingSha256,
+        RuntimeChildTurnAccountingEvidence evidence,
+        SessionMaterialAcknowledgment userMaterial,
+        SessionMaterialAcknowledgment assistantMaterial)
+    {
+        ArgumentNullException.ThrowIfNull(registration);
+        ArgumentNullException.ThrowIfNull(prompt);
+        ArgumentNullException.ThrowIfNull(evidence);
+        var recorded = evidence.Recorded;
+        var admission = recorded.Admission;
+        RuntimeNativeTurnContract.ValidateRecorded(recorded);
+        if (admission.Registration != registration ||
+            admission.MessageId != requestId ||
+            admission.Source.SdkSessionId != contextId ||
+            admission.PromptHash != RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt)) ||
+            evidence.AccountingStatus != "priced" ||
+            evidence.AccountingOwnerRevision <= recorded.OwnerRevision)
+            throw new RuntimeAuthorizationException("runtime_child_turn_receipt_invalid");
+        RuntimeRootTurnCompletionReceipt.RequireMaterial(
+            userMaterial, requestId, SessionMaterialKind.TurnContent, registration, admission.Source,
+            "runtime_child_turn_receipt_invalid");
+        RuntimeRootTurnCompletionReceipt.RequireMaterial(
+            assistantMaterial, RuntimeRootTurnCompletionReceipt.AssistantEventId(requestId),
+            SessionMaterialKind.TurnContent, registration, admission.Source,
+            "runtime_child_turn_receipt_invalid");
+        var requestHash = RuntimeFixedCreditGuardContract.HashHostRequest(
+            "message", requestId, contextId, "user", [new("text", prompt)],
+            registration, RuntimeCredentialPurpose.Observe, AddressedMessageDeliveryMode.Enqueue);
+        return Create(
+            requestId, requestHash, contextId, workPlanId, associationId, workItemBindingSha256,
+            recorded, evidence.AccountingOwnerRevision, userMaterial, assistantMaterial);
+    }
+
     private static RuntimeChildTurnCompletionReceipt Create(
         RuntimeA2ASendRequest request,
         RuntimeNativeTurnRecordedReceipt recorded,
@@ -1018,11 +1061,36 @@ public sealed record RuntimeChildTurnCompletionReceipt(
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(recorded);
+        var dispatch = request.Message.Metadata.ChildDispatch
+            ?? throw new RuntimeAuthorizationException("runtime_child_turn_receipt_invalid");
+        return Create(
+            request.Message.MessageId,
+            RuntimeFixedCreditGuardContract.HashHostRequest(request),
+            request.Message.ContextId,
+            dispatch.WorkPlanId,
+            dispatch.AssociationId,
+            dispatch.WorkItemBindingSha256,
+            recorded,
+            accountingOwnerRevision,
+            userMaterial,
+            assistantMaterial);
+    }
+
+    private static RuntimeChildTurnCompletionReceipt Create(
+        Guid requestId,
+        string requestHash,
+        string contextId,
+        string workPlanId,
+        string associationId,
+        string? workItemBindingSha256,
+        RuntimeNativeTurnRecordedReceipt recorded,
+        long accountingOwnerRevision,
+        SessionMaterialAcknowledgment userMaterial,
+        SessionMaterialAcknowledgment assistantMaterial)
+    {
         var registration = recorded.Admission.Registration;
         var source = recorded.Admission.Source;
         var binding = registration.Binding;
-        var dispatch = request.Message.Metadata.ChildDispatch
-            ?? throw new RuntimeAuthorizationException("runtime_child_turn_receipt_invalid");
         var native = recorded.Observation;
         var image = binding.Image
             ?? throw new RuntimeAuthorizationException("runtime_child_turn_receipt_invalid");
@@ -1033,14 +1101,14 @@ public sealed record RuntimeChildTurnCompletionReceipt(
             : throw new RuntimeAuthorizationException("runtime_child_turn_receipt_invalid");
         return new RuntimeChildTurnCompletionReceipt(
             1,
-            request.Message.MessageId,
-            RuntimeFixedCreditGuardContract.HashHostRequest(request),
+            requestId,
+            requestHash,
             recorded.Admission.PromptHash,
             native.OutputHash,
-            dispatch.WorkPlanId,
-            dispatch.AssociationId,
+            workPlanId,
+            associationId,
             binding.SessionId,
-            request.Message.ContextId,
+            contextId,
             registration.RuntimeInstanceId,
             registration.Revision,
             RuntimeContractValidation.RegistrationHash(registration),
@@ -1065,7 +1133,7 @@ public sealed record RuntimeChildTurnCompletionReceipt(
             RuntimeRootTurnCompletionReceipt.ProjectMaterial(userMaterial),
             RuntimeRootTurnCompletionReceipt.ProjectMaterial(assistantMaterial))
         {
-            WorkItemBindingSha256 = dispatch.WorkItemBindingSha256
+            WorkItemBindingSha256 = workItemBindingSha256
         };
     }
 }

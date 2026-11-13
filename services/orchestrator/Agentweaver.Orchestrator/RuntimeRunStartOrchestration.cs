@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -512,7 +513,9 @@ internal sealed partial class RuntimeRunStartContinuation(
     RuntimeEnvironmentContextClient environment,
     RuntimeRunStartOptions options,
     IHttpClientFactory clients,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    EventsAddressedMessageClient? events = null,
+    RuntimeUsageSourceStore? usageSources = null)
 {
     private sealed record CheckpointRecoveryMemberContinuation(
         ChildRecoveryMember Member,
@@ -1422,9 +1425,39 @@ internal sealed partial class RuntimeRunStartContinuation(
                     }
                 }
             }
+            var completedUnjoinedMaterials =
+                ImmutableDictionary.CreateBuilder<string, ChildRecoveryCompletedUnjoinedMaterial>(
+                    StringComparer.Ordinal);
+            if (childManifest is not null &&
+                childManifest.Members.Any(member => member.Disposition == "completedUnjoined"))
+            {
+                var materialReader = events
+                    ?? throw new RuntimeAuthorizationException("events_session_material_unavailable");
+                foreach (var member in childManifest.Members.Where(
+                             candidate => candidate.Disposition == "completedUnjoined"))
+                {
+                    await RequireBoundaryAsync().ConfigureAwait(false);
+                    var childIdentity = new SessionIdentity(
+                        result.Session.ProjectId, result.Session.RunId, member.Session.SessionId);
+                    var user = await materialReader.ReadSessionMaterialAsync(
+                        context, childIdentity, member.MessageId, SessionMaterialKind.TurnContent,
+                        runtimeActor, token).ConfigureAwait(false);
+                    var assistant = await materialReader.ReadSessionMaterialAsync(
+                        context, childIdentity,
+                        RuntimeRootTurnCompletionReceipt.AssistantEventId(member.MessageId),
+                        SessionMaterialKind.TurnContent, runtimeActor, token).ConfigureAwait(false);
+                    var prompt = ReadCompletedTurnText(
+                        user, childIdentity, member.MessageId, member.PromptHash);
+                    var answer = ReadCompletedTurnText(
+                        assistant, childIdentity,
+                        RuntimeRootTurnCompletionReceipt.AssistantEventId(member.MessageId), null);
+                    completedUnjoinedMaterials.Add(member.AssociationId,
+                        new(prompt, answer, user.Material, assistant.Material));
+                }
+            }
             await requireCurrentSelection(token).ConfigureAwait(false);
             await requireCurrentGate(token).ConfigureAwait(false);
-            status = status with
+            var readyStatus = status with
             {
                 CurrentStep = "ready",
                 ReasonCode = null,
@@ -1454,11 +1487,13 @@ internal sealed partial class RuntimeRunStartContinuation(
                 ReceiptLinks = JsonSerializer.Serialize(readyLinks, JsonOptions)
             };
             result = await recoveryStore.UpdateCheckpointRecoveryProgressAsync(
-                actor, result.Session, result.OperationId, status, cancellationToken, readyIntent)
+                actor, result.Session, result.OperationId, readyStatus, cancellationToken, readyIntent,
+                checkpointStore, usageSources, completedUnjoinedMaterials.ToImmutable(), childManifest)
                 .ConfigureAwait(false);
             status = result.CheckpointRecovery!;
             return result;
         }
+
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             return await PersistFailureAsync("checkpoint_recovery_continuation_timeout").ConfigureAwait(false);
@@ -1484,6 +1519,36 @@ internal sealed partial class RuntimeRunStartContinuation(
             await PersistAsync(status.CurrentStep, reason, phase: phase).ConfigureAwait(false);
             return result;
         }
+    }
+
+    private static string ReadCompletedTurnText(
+        SessionMaterialReadResult material,
+        SessionIdentity identity,
+        Guid eventId,
+        string? expectedHash)
+    {
+        var binding = material.Material.Reference.Material;
+        if (material.Material.Identity != identity || material.Material.EventId != eventId ||
+            binding is not { Kind: SessionMaterialKind.TurnContent } ||
+            material.Bytes.Length is <= 0 or > SessionMaterialValidation.MaximumBytes ||
+            RuntimeContractValidation.Hash(material.Bytes) != binding.Sha256)
+            throw new RuntimeAuthorizationException("checkpoint_recovery_result_material_invalid");
+        string text;
+        try
+        {
+            text = new UTF8Encoding(false, true).GetString(material.Bytes);
+        }
+        catch (DecoderFallbackException exception)
+        {
+            throw new RuntimeAuthorizationException(
+                "checkpoint_recovery_result_material_invalid", null, exception);
+        }
+        if (text.Length > AddressedMessageValidation.MaximumTextLength ||
+            text.Any(character => char.IsControl(character) && character is not ('\r' or '\n' or '\t')) ||
+            expectedHash is not null &&
+                RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(text)) != expectedHash)
+            throw new RuntimeAuthorizationException("checkpoint_recovery_result_material_invalid");
+        return text;
     }
 
     internal static void RequireReplacementPlacement(

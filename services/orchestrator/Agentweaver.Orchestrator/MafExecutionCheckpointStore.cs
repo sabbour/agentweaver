@@ -252,13 +252,36 @@ internal sealed class MafExecutionCheckpointStore
     /// <returns>The persisted snapshot, including parent metadata.</returns>
     /// <exception cref="CoordinationException">Thrown when the parent, revision, or transition check fails.</exception>
     /// <remarks>A transaction-scoped advisory lock serializes updates for this session; an exact current-checkpoint replay is delegated to the checkpoint owner for idempotent handling.</remarks>
-    internal async Task<MafExecutionCheckpointSnapshot> AppendInTransactionAsync(
+    internal Task<MafExecutionCheckpointSnapshot> AppendInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         string checkpointId,
         CheckpointInfo? expectedParent,
         MafExecutionCheckpoint state,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        AppendInTransactionCoreAsync(
+            connection, transaction, checkpointId, expectedParent, state, cancellationToken,
+            allowCompletedUnjoinedRecoveryImport: false);
+
+    internal Task<MafExecutionCheckpointSnapshot> AppendCompletedUnjoinedRecoveryImportInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string checkpointId,
+        CheckpointInfo? expectedParent,
+        MafExecutionCheckpoint state,
+        CancellationToken cancellationToken) =>
+        AppendInTransactionCoreAsync(
+            connection, transaction, checkpointId, expectedParent, state, cancellationToken,
+            allowCompletedUnjoinedRecoveryImport: true);
+
+    private async Task<MafExecutionCheckpointSnapshot> AppendInTransactionCoreAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string checkpointId,
+        CheckpointInfo? expectedParent,
+        MafExecutionCheckpoint state,
+        CancellationToken cancellationToken,
+        bool allowCompletedUnjoinedRecoveryImport)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
@@ -290,15 +313,15 @@ internal sealed class MafExecutionCheckpointStore
         {
             // Let the durable owner compare payloads; matching checkpoint IDs alone do not prove a replay.
             var replayPayload = MafExecutionCheckpointContract.Serialize(state);
-            var replay = await _checkpoints.AppendInTransactionAsync(
+            var replay = await AppendCheckpointInTransactionAsync(
                 connection,
                 transaction,
-                _binding,
-                _binding.Identity.SessionId,
                 checkpointId,
                 replayPayload,
                 expectedParent,
-                cancellationToken, workspaceSeed).ConfigureAwait(false);
+                cancellationToken,
+                workspaceSeed,
+                allowCompletedUnjoinedRecoveryImport).ConfigureAwait(false);
             return new MafExecutionCheckpointSnapshot(replay.Info, state)
             {
                 ParentCheckpointId = replay.ParentCheckpointId,
@@ -326,21 +349,39 @@ internal sealed class MafExecutionCheckpointStore
         }
 
         var payload = MafExecutionCheckpointContract.Serialize(state);
-        var checkpoint = await _checkpoints.AppendInTransactionAsync(
+        var checkpoint = await AppendCheckpointInTransactionAsync(
             connection,
             transaction,
-            _binding,
-            _binding.Identity.SessionId,
             checkpointId,
             payload,
             expectedParent,
-            cancellationToken, workspaceSeed).ConfigureAwait(false);
+            cancellationToken,
+            workspaceSeed,
+            allowCompletedUnjoinedRecoveryImport).ConfigureAwait(false);
         return new MafExecutionCheckpointSnapshot(checkpoint.Info, state)
         {
             ParentCheckpointId = checkpoint.ParentCheckpointId,
             HasParentMetadata = checkpoint.HasParentMetadata
         };
     }
+
+    private Task<(CheckpointInfo Info, string? ParentCheckpointId, bool HasParentMetadata)>
+        AppendCheckpointInTransactionAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
+            string checkpointId,
+            JsonElement payload,
+            CheckpointInfo? expectedParent,
+            CancellationToken cancellationToken,
+            byte[]? workspaceSeed,
+            bool allowCompletedUnjoinedRecoveryImport) =>
+        allowCompletedUnjoinedRecoveryImport
+            ? _checkpoints.AppendCompletedUnjoinedRecoveryImportInTransactionAsync(
+                connection, transaction, _binding, _binding.Identity.SessionId, checkpointId, payload,
+                expectedParent, cancellationToken, workspaceSeed)
+            : _checkpoints.AppendInTransactionAsync(
+                connection, transaction, _binding, _binding.Identity.SessionId, checkpointId, payload,
+                expectedParent, cancellationToken, workspaceSeed);
 
     /// <summary>
     /// Loads large workspace seed bytes referenced by an intent from the checkpoint owner.

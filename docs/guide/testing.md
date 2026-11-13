@@ -234,9 +234,25 @@ and hold release. The PostgreSQL tests require a Docker-compatible engine.
 The child-join cases in `MafCheckpointStorePostgresTests` check the frozen
 manifest, exact replay, dispatch hold, lock order, member registration barrier,
 wrong-member rejection, hold release after readiness, malformed-manifest
-handling, and rejection of unsupported BuildTest history. They require
-PostgreSQL and run on hosted GitHub CI. Controlled tests do not prove a live
-Environment or Host recovery.
+handling, and rejection of unsupported BuildTest history. These focused unit
+tests check that a completed-but-unjoined child does not need a replacement
+registration and that its saved material uses the original registration fence:
+`ChildRecoveryRegistrationBarrierAllowsCompletedUnjoinedMemberForFinalImport`
+and `CheckpointRecoveryChildMaterialMustMatchOriginalRegistrationFence`.
+Run them without the PostgreSQL tests:
+
+```powershell
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --configuration Release --filter FullyQualifiedName~ChildRecoveryRegistrationBarrierAllowsCompletedUnjoinedMemberForFinalImport
+dotnet test tests\Agentweaver.Identity.Tests\Agentweaver.Identity.Tests.csproj --configuration Release --filter FullyQualifiedName~CheckpointRecoveryChildMaterialMustMatchOriginalRegistrationFence
+```
+
+Hosted GitHub CI runs these PostgreSQL integration tests:
+`ChildRecoveryImportsVerifiedCompletedUnjoinedResultAndReleasesHold`,
+`ChildRecoveryRejectsMismatchedOrMalformedCompletedUnjoinedResultAndKeepsHold`,
+and `ChildRecoveryCompletedUnjoinedImportRetryIsIdempotent`. They check
+verified result import and hold release, rejection with the hold retained, and
+one-time import on retry. Do not run these PostgreSQL tests locally. Controlled
+tests do not prove a live Environment or Host recovery.
 
 ## Test Scribe Knowledge output
 

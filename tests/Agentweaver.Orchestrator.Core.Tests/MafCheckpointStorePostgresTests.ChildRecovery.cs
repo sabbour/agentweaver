@@ -14,6 +14,8 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 
 public sealed partial class MafCheckpointStorePostgresTests
 {
+    private const string CompletedUnjoinedResult = "The approved work is complete.";
+
     private static readonly JsonSerializerOptions ChildRecoveryJsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
@@ -274,6 +276,97 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.False(await IsChildRecoveryHeldAsync());
     }
 
+    [Fact]
+    public async Task ChildRecoveryImportsVerifiedCompletedUnjoinedResultAndReleasesHold()
+    {
+        var state = await PrepareCompletedUnjoinedImportAsync();
+        var member = Assert.Single(state.Manifest.Members);
+        var material = state.Material;
+        Assert.NotEqual(member.AssociationHash, member.WorkItemBindingSha256);
+
+        var imported = await state.Fixture.Owner.UpdateCheckpointRecoveryProgressAsync(
+            _actor, _binding.Identity, state.Recovered.OperationId, state.ReadyStatus,
+            CancellationToken.None, state.RootIntent, state.CheckpointStore, state.UsageSources,
+            ImmutableDictionary<string, ChildRecoveryCompletedUnjoinedMaterial>.Empty
+                .WithComparers(StringComparer.Ordinal)
+                .Add(member.AssociationId, material),
+            state.Manifest);
+
+        Assert.Equal("ready", imported.CheckpointRecovery!.Phase);
+        Assert.False(imported.CheckpointRecovery.DispatchHeld);
+        Assert.False(await IsChildRecoveryHeldAsync());
+        var child = await state.Fixture.Owner.ReadSessionStatusAsync(
+            _actor, state.Fixture.Child, CancellationToken.None);
+        Assert.Equal(CoordinationLifecycleState.Completed, child.Lifecycle);
+        Assert.Equal(state.Recovered.ExecutionFence, child.ExecutionFence);
+        var checkpoint = await state.CheckpointStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(checkpoint);
+        Assert.NotEqual(state.Recovered.CheckpointRecovery!.RecoveryCheckpointId, checkpoint.Info.CheckpointId);
+        Assert.Equal(material.Result, checkpoint.State.Results[member.AssociationId]);
+        Assert.False(checkpoint.State.PendingDispatches.ContainsKey(member.AssociationId));
+        Assert.Equal(MafExecutionTaskStatus.Succeeded,
+            checkpoint.State.Progress.WorkItems[member.AssociationId]);
+        Assert.Equal(member.MessageId, checkpoint.State.ChildTurnReceipts[member.AssociationId].RequestId);
+    }
+
+    [Fact]
+    public async Task ChildRecoveryRejectsMismatchedOrMalformedCompletedUnjoinedResultAndKeepsHold()
+    {
+        var state = await PrepareCompletedUnjoinedImportAsync();
+        var member = Assert.Single(state.Manifest.Members);
+        var imports = ImmutableDictionary<string, ChildRecoveryCompletedUnjoinedMaterial>.Empty
+            .WithComparers(StringComparer.Ordinal);
+
+        var mismatch = CreateCompletedUnjoinedMaterial(state.Fixture, "forged result");
+        var mismatchFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            state.Fixture.Owner.UpdateCheckpointRecoveryProgressAsync(
+                _actor, _binding.Identity, state.Recovered.OperationId, state.ReadyStatus,
+                CancellationToken.None, state.RootIntent, state.CheckpointStore, state.UsageSources,
+                imports.Add(member.AssociationId, mismatch), state.Manifest));
+        Assert.Equal("runtime_native_turn_accounting_invalid", mismatchFailure.Code);
+        Assert.True(await IsChildRecoveryHeldAsync());
+
+        var malformed = CreateCompletedUnjoinedMaterial(state.Fixture, string.Empty);
+        var malformedFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            state.Fixture.Owner.UpdateCheckpointRecoveryProgressAsync(
+                _actor, _binding.Identity, state.Recovered.OperationId, state.ReadyStatus,
+                CancellationToken.None, state.RootIntent, state.CheckpointStore, state.UsageSources,
+                imports.Add(member.AssociationId, malformed), state.Manifest));
+        Assert.Equal("checkpoint_recovery_result_material_invalid", malformedFailure.Code);
+        Assert.True(await IsChildRecoveryHeldAsync());
+        var checkpoint = await state.CheckpointStore.ReadLatestAsync(CancellationToken.None);
+        Assert.Equal(state.Recovered.CheckpointRecovery!.RecoveryCheckpointId, checkpoint!.Info.CheckpointId);
+        Assert.False(checkpoint.State.Results.ContainsKey(member.AssociationId));
+    }
+
+    [Fact]
+    public async Task ChildRecoveryCompletedUnjoinedImportRetryIsIdempotent()
+    {
+        var state = await PrepareCompletedUnjoinedImportAsync();
+        var member = Assert.Single(state.Manifest.Members);
+        var imports = ImmutableDictionary<string, ChildRecoveryCompletedUnjoinedMaterial>.Empty
+            .WithComparers(StringComparer.Ordinal)
+            .Add(member.AssociationId, state.Material);
+
+        var first = await state.Fixture.Owner.UpdateCheckpointRecoveryProgressAsync(
+            _actor, _binding.Identity, state.Recovered.OperationId, state.ReadyStatus,
+            CancellationToken.None, state.RootIntent, state.CheckpointStore, state.UsageSources,
+            imports, state.Manifest);
+        var firstCheckpoint = await state.CheckpointStore.ReadLatestAsync(CancellationToken.None);
+        var replay = await state.Fixture.Owner.UpdateCheckpointRecoveryProgressAsync(
+            _actor, _binding.Identity, state.Recovered.OperationId, state.ReadyStatus,
+            CancellationToken.None, state.RootIntent, state.CheckpointStore, state.UsageSources,
+            imports, state.Manifest);
+        var replayCheckpoint = await state.CheckpointStore.ReadLatestAsync(CancellationToken.None);
+
+        Assert.Equal("ready", first.CheckpointRecovery!.Phase);
+        Assert.Equal(first.CheckpointRecovery, replay.CheckpointRecovery);
+        Assert.Equal(firstCheckpoint!.Info.CheckpointId, replayCheckpoint!.Info.CheckpointId);
+        Assert.Equal(firstCheckpoint.PayloadHash, replayCheckpoint.PayloadHash);
+        Assert.Single(replayCheckpoint.State.ChildTurnReceipts);
+        Assert.False(await IsChildRecoveryHeldAsync());
+    }
+
     [Theory]
     [InlineData("root", "placement")]
     [InlineData("root", "activation")]
@@ -351,12 +444,11 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.True(await IsChildRecoveryHeldAsync());
     }
 
-    private async Task<RuntimeRunStartIntent> MarkRecoveryMemberReadyAsync(
+    private async Task<RuntimeRunStartIntent> MarkRecoveryRootReadyAsync(
         ChildRecoveryFixture fixture,
         RunExecutionTransitionResult recovered,
         ChildCheckpointRecoveryManifest manifest)
     {
-        var member = Assert.Single(manifest.Members.Where(item => item.Disposition == "pendingUnsent"));
         var registrations = new RuntimeRegistrationStore(_fixture.DataSource, _schema, TimeProvider.System);
         var rootPreviousRegistration = await registrations.ReadAsync(
             manifest.RootStartup.RuntimeInstanceId, CancellationToken.None)
@@ -400,7 +492,18 @@ public sealed partial class MafCheckpointStorePostgresTests
             currentStep: "ready",
             consumeOperationId: rootConsumeId,
             exchangeOperationId: rootExchangeId);
+        return rootIntent;
+    }
 
+    private async Task<RuntimeRunStartIntent> MarkRecoveryMemberReadyAsync(
+        ChildRecoveryFixture fixture,
+        RunExecutionTransitionResult recovered,
+        ChildCheckpointRecoveryManifest manifest)
+    {
+        var rootIntent = await MarkRecoveryRootReadyAsync(fixture, recovered, manifest);
+        var member = Assert.Single(manifest.Members.Where(item => item.Disposition == "pendingUnsent"));
+        var registrations = new RuntimeRegistrationStore(_fixture.DataSource, _schema, TimeProvider.System);
+        var starts = new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema);
         var previousRegistration = await registrations.ReadAsync(
             member.Startup.RegistrationId!.Value, CancellationToken.None)
             ?? throw new InvalidOperationException("The saved child registration is missing.");
@@ -447,6 +550,88 @@ public sealed partial class MafCheckpointStorePostgresTests
         return rootIntent;
     }
 
+    private async Task<CompletedUnjoinedImportContext> PrepareCompletedUnjoinedImportAsync()
+    {
+        var fixture = await PrepareChildRecoveryAsync(nativeState: "completed");
+        var recovered = await fixture.Owner.RecoverRunExecutionAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, fixture.Request,
+            CancellationToken.None, _selection, _executionStore);
+        var manifest = await fixture.Owner.ReadCheckpointRecoveryManifestAsync(
+            _actor, _binding.Identity, recovered.OperationId, CancellationToken.None);
+        var member = Assert.Single(manifest.Members);
+        Assert.Equal("completedUnjoined", member.Disposition);
+        Assert.Equal("partial", member.NativeOrigin!.SourceReportStatus);
+        Assert.Null(member.NativeOrigin.SourceCompletionManifestHash);
+        var rootIntent = await MarkRecoveryRootReadyAsync(fixture, recovered, manifest);
+        var readyStatus = WithCurrentRootRegistration(
+            recovered.CheckpointRecovery! with
+            {
+                Phase = "ready",
+                CurrentStep = "ready",
+                ReasonCode = null,
+                RecoveryMaterialMode = "nativeCache",
+                DispatchHeld = false
+            },
+            rootIntent);
+        var checkpointStore = new MafExecutionCheckpointStore(
+            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
+            _binding with { ExecutionFence = recovered.ExecutionFence });
+        var usageSources = new RuntimeUsageSourceStore(
+            _fixture.DataSource,
+            new OrchestratorOptions(
+                _actor.Issuer, "orchestrator", "https://projects.test/", "projects",
+                "https://events.test/", "events", _schema),
+            TimeProvider.System);
+        return new CompletedUnjoinedImportContext(
+            fixture, recovered, manifest, rootIntent, readyStatus, checkpointStore, usageSources,
+            CreateCompletedUnjoinedMaterial(fixture, fixture.Result));
+    }
+
+    private static ChildRecoveryCompletedUnjoinedMaterial CreateCompletedUnjoinedMaterial(
+        ChildRecoveryFixture fixture,
+        string result)
+    {
+        var registration = fixture.ChildRegistration;
+        var binding = registration.Binding;
+        SessionMaterialAcknowledgment Material(Guid eventId, long position, string content)
+        {
+            var bytes = Encoding.UTF8.GetBytes(content);
+            return new SessionMaterialAcknowledgment(
+                1,
+                fixture.Child,
+                eventId,
+                position,
+                new SessionObjectReference(
+                    new ObjectKey($"material/{eventId:N}"),
+                    SessionMaterialValidation.Purpose(SessionMaterialKind.TurnContent),
+                    bytes.Length)
+                {
+                    Material = new SessionMaterialBinding(
+                        1,
+                        SessionMaterialKind.TurnContent,
+                        binding.TenantId,
+                        RuntimeContractValidation.Hash(bytes),
+                        registration.RuntimeInstanceId,
+                        registration.Revision,
+                        binding.ExecutionFence,
+                        binding.AcceptedSelectionHash,
+                        "1.0.18",
+                        "1.0.97",
+                        binding.ModelSelectionReference!,
+                        "gpt-6.1-sol")
+                });
+        }
+
+        return new(
+            fixture.Prompt,
+            result,
+            Material(fixture.Dispatch.MessageId, 1, fixture.Prompt),
+            Material(
+                RuntimeRootTurnCompletionReceipt.AssistantEventId(fixture.Dispatch.MessageId),
+                2,
+                result));
+    }
+
     private static CheckpointRecoveryStatus WithCurrentRootRegistration(
         CheckpointRecoveryStatus status,
         RuntimeRunStartIntent rootIntent)
@@ -489,6 +674,9 @@ public sealed partial class MafCheckpointStorePostgresTests
         };
         var registration = await registrations.ReplaceAsync(
             previousRegistration, operationId, binding, expiresAt, CancellationToken.None);
+        Assert.Equal(
+            RuntimeRegistrationStore.CreateReplacementId(previousRegistration.RuntimeInstanceId, operationId),
+            registration.RuntimeInstanceId);
         var bootstrapId = owner.LogicalTurnOrdinal == 0
             ? RuntimeRunStartKeys.ReplacementOperationId(operationId, "checkpoint-bootstrap")
             : RuntimeRunStartKeys.ReplacementOperationId(
@@ -1009,6 +1197,10 @@ public sealed partial class MafCheckpointStorePostgresTests
         if (nativeState is "prepared" or "sending")
             await PrepareChildNativeAsync(
                 registration, dispatch, prompt, source, nativeState == "sending");
+        else if (nativeState == "completed")
+            await PrepareChildNativeAsync(
+                registration, dispatch, prompt, source, begin: true, complete: true,
+                result: CompletedUnjoinedResult);
         var run = await owner.ReadOwnerRunStatusAsync(
             _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, CancellationToken.None);
         var request = new RecoverRunExecutionRequest(
@@ -1018,7 +1210,9 @@ public sealed partial class MafCheckpointStorePostgresTests
                 source.Info.CheckpointId, source.State.Revision, decision.StateVersion,
                 rootRuntimeId, 1, selectionHash.ToLowerInvariant())
         };
-        return new ChildRecoveryFixture(owner, decisions, spawned.Node.Identity, childIntent, plan.Plan, source, request);
+        return new ChildRecoveryFixture(
+            owner, decisions, spawned.Node.Identity, childIntent, plan.Plan, source, request,
+            registration, dispatch, prompt, CompletedUnjoinedResult);
     }
 
     private async Task PrepareChildNativeAsync(
@@ -1026,7 +1220,9 @@ public sealed partial class MafCheckpointStorePostgresTests
         MafExecutionDispatchIntent dispatch,
         string prompt,
         MafExecutionCheckpointSnapshot checkpoint,
-        bool begin)
+        bool begin,
+        bool complete = false,
+        string? result = null)
     {
         var options = new OrchestratorOptions(
             _actor.Issuer, "orchestrator", "https://projects.test/", "projects",
@@ -1064,7 +1260,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         }, CancellationToken.None);
         if (!begin)
             return;
-        await store.ExecuteLockedAsync(registration.RuntimeInstanceId, async (connection, transaction, token) =>
+        var beginResult = await store.ExecuteLockedAsync(registration.RuntimeInstanceId, async (connection, transaction, token) =>
         {
             var result = await store.BeginNativeTurnWithinTransactionAsync(
                 connection, transaction, registration, grant,
@@ -1075,6 +1271,87 @@ public sealed partial class MafCheckpointStorePostgresTests
             await transaction.CommitAsync(token);
             return result;
         }, CancellationToken.None);
+        if (!complete)
+            return;
+
+        var admission = beginResult.Admission
+            ?? throw new InvalidOperationException("The native turn did not begin.");
+        var answer = result ?? throw new InvalidOperationException("A completed result is required.");
+        var observation = new RuntimeNativeTurnObservation(
+            source,
+            Guid.NewGuid().ToString("D"),
+            "controlled-native-turn",
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            DateTimeOffset.UtcNow.AddSeconds(-1),
+            "controlled-cursor",
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(answer)),
+            null)
+        {
+            UsageEventIds = []
+        };
+        var recorded = await store.ExecuteLockedAsync(
+            registration.RuntimeInstanceId, async (connection, transaction, token) =>
+            {
+                var receipt = await store.RecordNativeTurnWithinTransactionAsync(
+                    connection, transaction, registration, grant,
+                    new(null!, admission, observation), token);
+                await transaction.CommitAsync(token);
+                return receipt;
+            }, CancellationToken.None);
+        var accounting = new RuntimeNativeTurnAccountingRequest(null!, recorded, []);
+        var snapshot = CreateZeroUsageEstimateSnapshot(registration, source, dispatch.MessageId);
+        _ = await store.ExecuteLockedAsync(
+            registration.RuntimeInstanceId, async (connection, transaction, token) =>
+            {
+                var receipt = await store.CompleteNativeTurnWithinTransactionAsync(
+                    connection, transaction, registration, grant, accounting, snapshot, token);
+                await transaction.CommitAsync(token);
+                return receipt;
+            }, CancellationToken.None);
+    }
+
+    private static RuntimeUsageCostSnapshotReceipt CreateZeroUsageEstimateSnapshot(
+        RuntimeRegistration registration,
+        SdkSessionFacts source,
+        Guid dispatchId)
+    {
+        var card = new CostRateCard(
+            "child-recovery-card", "2026-10-17", SdkMeterSources.CopilotNanoAiu, "AIC",
+            1_000_000_000m, ImmutableDictionary<string, decimal>.Empty)
+        {
+            ProviderSourceUrl =
+                "https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing",
+            SnapshotVersion = "2026-10-17",
+            RetrievedOn = new DateOnly(2026, 10, 17),
+            TokenRateCurrency = "USD",
+            TokensPerRateUnit = 1_000_000m,
+            CreditsPerCurrencyUnit = 100m,
+            LongContextThresholdTokens = 272_000,
+            ContentHash = new string('a', 64),
+            ModelTokenRates = ImmutableDictionary<string, CostModelTokenRates>.Empty
+                .WithComparers(StringComparer.Ordinal)
+                .Add(source.ModelId, new(
+                    new(2m, 0.1m, 2.5m, 10m),
+                    new(4m, 0.2m, 5m, 15m))
+                )
+        };
+        var binding = new CostBinding(
+            SdkMeterSources.CopilotNanoAiu, "copilot.usage-cost", "1.0.0", 1,
+            "cost-options", "cost", 1, ImmutableHashSet<string>.Empty, card);
+        var scope = registration.Binding;
+        return new RuntimeUsageCostSnapshotReceipt(
+            1,
+            RuntimeUsageSourceReceiptContract.HashSource(registration, source),
+            binding,
+            new(0, "AIC", CostDisposition.Estimate, card, null),
+            new(scope.TenantId, scope.ProjectId, scope.RunId, 0, true, [], []))
+        {
+            DispatchId = dispatchId,
+            RepresentedReceipts = [],
+            RateCardContentHash = card.ContentHash
+        };
     }
 
     private sealed record ChildRecoveryFixture(
@@ -1084,5 +1361,19 @@ public sealed partial class MafCheckpointStorePostgresTests
         RuntimeRunStartIntent ChildIntent,
         WorkPlan Plan,
         MafExecutionCheckpointSnapshot Source,
-        RecoverRunExecutionRequest Request);
+        RecoverRunExecutionRequest Request,
+        RuntimeRegistration ChildRegistration,
+        MafExecutionDispatchIntent Dispatch,
+        string Prompt,
+        string Result);
+
+    private sealed record CompletedUnjoinedImportContext(
+        ChildRecoveryFixture Fixture,
+        RunExecutionTransitionResult Recovered,
+        ChildCheckpointRecoveryManifest Manifest,
+        RuntimeRunStartIntent RootIntent,
+        CheckpointRecoveryStatus ReadyStatus,
+        MafExecutionCheckpointStore CheckpointStore,
+        RuntimeUsageSourceStore UsageSources,
+        ChildRecoveryCompletedUnjoinedMaterial Material);
 }

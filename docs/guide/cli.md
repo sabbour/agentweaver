@@ -202,8 +202,15 @@ pending gate and admission of a saved child join. A `202` response means the
 operation is still pending. Retry it with the same idempotency key. For a
 pending gate, a `ready` response means the Host restored the saved boundary.
 The gate remains pending, and the run remains incomplete. For a child join,
-this version keeps `dispatchHeld` set. It does not resume children or clear the
-hold. Read the
+the owner keeps `dispatchHeld` set while it restores saved, unsent children.
+It registers the root and all required children before it starts any bootstrap.
+The final owner transaction imports a completed-but-unjoined result only when
+the saved material, child session and fence, and native accounting match the
+frozen manifest. It does not send another task message for that child. A
+missing or mismatched result keeps the hold active. After recovery is `ready`,
+ordinary dispatch can send saved messages for children that were pending and
+unsent. `ready` does not mean that all child tasks or the run are complete.
+Read the
 [recovery API reference](../reference/api.md#recover-a-host-at-a-pending-gate)
 before you use this field.
 

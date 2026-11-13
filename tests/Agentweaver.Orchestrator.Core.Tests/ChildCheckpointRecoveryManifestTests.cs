@@ -142,6 +142,24 @@ public sealed class ChildCheckpointRecoveryManifestTests
     }
 
     [Fact]
+    public void ChildRecoveryRegistrationBarrierAllowsCompletedUnjoinedMemberForFinalImport()
+    {
+        var manifest = CreateManifest();
+        var completed = Assert.Single(manifest.Members) with { Disposition = "completedUnjoined" };
+        manifest = manifest with { Members = [completed] };
+
+        Assert.Empty(CheckpointRecoveryMemberBarrier.RequiredMembers(manifest));
+        CheckpointRecoveryMemberBarrier.RequireAllRegistered(
+            manifest, rootRegistered: true, new HashSet<string>(StringComparer.Ordinal));
+        Assert.Equal("checkpoint_recovery_boundary_unsupported",
+            Assert.Throws<CoordinationException>(() =>
+                CheckpointRecoveryMemberBarrier.RequiredMembers(manifest with
+                {
+                    Members = [completed with { Disposition = "unresolved" }]
+                })).Code);
+    }
+
+    [Fact]
     public void ManifestRoundTripsDeterministicallyAndRejectsChangedBytes()
     {
         var manifest = CreateManifest();
@@ -236,10 +254,10 @@ public sealed class ChildCheckpointRecoveryManifestTests
     }
 
     [Fact]
-    public void DispositionRequiresBothTerminalReceiptAndPricedNativeEvidence()
+    public void DispositionRequiresBothTerminalReceiptAndAccountedNativeEvidence()
     {
         var member = Assert.Single(CreateManifest().Members);
-        var completed = CreateNative("completed", 2);
+        var completed = CreateNative("completed", 2) with { SourceReportHash = new string('6', 64) };
         Assert.Equal(("joined", (string?)null), ChildCheckpointRecoveryCensus.Classify(
             member.Session, member.Startup, completed, null, MafExecutionTaskStatus.Succeeded, true, true));
         Assert.Equal(("unresolved", "child_terminal_evidence_unavailable"), ChildCheckpointRecoveryCensus.Classify(
@@ -247,6 +265,38 @@ public sealed class ChildCheckpointRecoveryManifestTests
         Assert.Equal(("unresolved", "child_terminal_evidence_unavailable"), ChildCheckpointRecoveryCensus.Classify(
             member.Session, member.Startup, completed with { AccountingStatus = "pending" }, null,
             MafExecutionTaskStatus.Succeeded, true, true));
+        Assert.Equal(("unresolved", "child_terminal_evidence_unavailable"), ChildCheckpointRecoveryCensus.Classify(
+            member.Session, member.Startup, completed with { AccountingStatus = "unpriced" }, null,
+            MafExecutionTaskStatus.Succeeded, true, true));
+    }
+
+    [Fact]
+    public void DispositionRecognizesCompletedUnjoinedNativeResultOnlyForAnActivePendingChild()
+    {
+        var member = Assert.Single(CreateManifest().Members);
+        var intent = CreateIntent() with { MessageId = member.MessageId };
+        var completed = CreateNative("completed", 4) with
+        {
+            DispatchId = member.MessageId,
+            TerminalOutcome = "native-completed",
+            SourceReportStatus = "partial",
+            SourceReportHash = new string('6', 64),
+            SourceCompletionManifestHash = null
+        };
+
+        Assert.Equal(("completedUnjoined", (string?)null), ChildCheckpointRecoveryCensus.Classify(
+            member.Session, member.Startup, completed, intent, MafExecutionTaskStatus.Running, false, false));
+        Assert.Equal(("unresolved", "original_child_material_unavailable"), ChildCheckpointRecoveryCensus.Classify(
+            member.Session, member.Startup, completed with { AccountingStatus = "unpriced" },
+            intent, MafExecutionTaskStatus.Running, false, false));
+        Assert.Equal(("unresolved", "child_boundary_inconsistent"), ChildCheckpointRecoveryCensus.Classify(
+            member.Session, member.Startup, completed, intent, MafExecutionTaskStatus.Running, true, false));
+        Assert.Equal(("unresolved", "child_boundary_inconsistent"), ChildCheckpointRecoveryCensus.Classify(
+            member.Session with { TurnState = "completed" }, member.Startup, completed,
+            intent, MafExecutionTaskStatus.Running, false, false));
+        Assert.Equal(("unresolved", "original_child_material_unavailable"), ChildCheckpointRecoveryCensus.Classify(
+            member.Session, member.Startup, completed with { AccountingStatus = "pending" },
+            intent, MafExecutionTaskStatus.Running, false, false));
     }
 
     [Fact]
@@ -341,6 +391,9 @@ public sealed class ChildCheckpointRecoveryManifestTests
     private static ChildRecoveryNativeOrigin CreateNative(string state, long ownerRevision) =>
         new(Guid.NewGuid(), "checkpoint-1", 1, 1, 1, new string('1', 64), new string('a', 64),
             new string('2', 64), ownerRevision, Guid.NewGuid(), 1, new string('3', 64),
-            new string('4', 64), "model-1", "model-id", null, false, false, state, null,
-            "source-complete", null, null, new string('5', 64), "priced", null, null, null);
+            new string('4', 64), "model-1", "model-id", null, false, false, state,
+            state == "completed" ? "native-completed" : null,
+            state == "completed" ? "partial" : "unknown",
+            null,
+            null, new string('5', 64), state == "completed" ? "priced" : "pending", null, null, null);
 }
