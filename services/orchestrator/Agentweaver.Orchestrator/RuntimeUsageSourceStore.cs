@@ -2713,7 +2713,7 @@ internal sealed class RuntimeUsageSourceStore(
                     blocked.Manifest.SourceExecutionFence != previousReceipt.DestinationFence)
                     throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
                 await RequireRecoveryCheckpointDescendantAsync(
-                    connection, transaction, currentReceipt, blocked.Manifest, cancellationToken)
+                    connection, transaction, previousReceipt, blocked.Manifest, cancellationToken)
                     .ConfigureAwait(false);
                 break;
             }
