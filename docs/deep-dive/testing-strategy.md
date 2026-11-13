@@ -54,6 +54,10 @@ claiming production credentials or service availability.
 | Browser | Built application with controlled services or injected page contract, depending on suite | Production sign-in or a different browser journey |
 | Deployment tooling | Manifest inputs, local renders and controlled transports | Actual target permissions, rollout or native resource behavior |
 
+`CheckpointRecoveryRequiresCacheOrSavedTurnHistory` checks the AgentRuntime
+guard for missing, empty, and fresh-session material. It uses no database and
+does not prove a PostgreSQL recovery journey or production material restore.
+
 For example, RubberDuck durable tests restore checkpointed operation and
 response after restart, preserve `REQUEST_CHANGES` as failure, and reject
 changed evidence before an owner call. Pure tests alone cannot establish that

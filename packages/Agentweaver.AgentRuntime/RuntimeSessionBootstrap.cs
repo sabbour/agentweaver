@@ -164,6 +164,7 @@ public sealed class RuntimeSessionBootstrap(
                     };
                 }
             }
+            RequireCheckpointRecoveryMaterial(checkpointRecoveryOperationId, recovery);
             await RequireSourceAuthorityAsync(cancellationToken);
             session = await sessions.CreateAsync(
                 registration, modelReference, modelCredential.Credential, RequireSourceAuthorityAsync,
@@ -219,6 +220,8 @@ public sealed class RuntimeSessionBootstrap(
             if (resumeBootstrap is not null &&
                 session.RecoveryMode is not (RuntimeSessionRecoveryMode.NativeCache or RuntimeSessionRecoveryMode.JournalRebuild))
                 throw new RuntimeAuthorizationException("runtime_resume_cache_unavailable");
+            RequireCheckpointRecoveryMaterial(
+                checkpointRecoveryOperationId, recovery, session.RecoveryMode);
             await RequireSourceAuthorityAsync(cancellationToken);
             authorized = new AuthorizedRuntimeSession(registration, source.Receipt, source.Credential,
                 session, modelCredential, owner, broker, actor, timeProvider, actions, requireReadiness,
@@ -265,6 +268,29 @@ public sealed class RuntimeSessionBootstrap(
             ? owner.ReadCurrentForCheckpointRecoveryAsync(
                 runtimeInstanceId, operationId, actor, cancellationToken)
             : owner.ReadCurrentAsync(runtimeInstanceId, actor, cancellationToken);
+
+    internal static void RequireCheckpointRecoveryMaterial(
+        Guid? operationId,
+        RuntimeSessionRecovery? recovery,
+        RuntimeSessionRecoveryMode? mode = null)
+    {
+        if (operationId is null)
+            return;
+
+        var hasCache = recovery?.Cache is not null;
+        var hasJournal = recovery is { Turns.Count: > 0, JournalEvidence: { ThroughPosition: > 0 } };
+        var restored = mode switch
+        {
+            null => hasCache || hasJournal,
+            RuntimeSessionRecoveryMode.NativeCache => hasCache,
+            RuntimeSessionRecoveryMode.JournalRebuild => hasJournal,
+            _ => false
+        };
+        if (restored)
+            return;
+
+        throw new RuntimeAuthorizationException("runtime_checkpoint_recovery_material_unavailable");
+    }
 
     /// <summary>Validates registration shape, active state, expiry, and actor bearer lifetime.</summary>
     internal static void RequireCurrent(

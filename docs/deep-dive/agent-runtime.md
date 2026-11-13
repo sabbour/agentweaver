@@ -166,6 +166,11 @@ Rebuilt context marks earlier messages as history, not permission to repeat
 effects. Same-process message deduplication does not establish exactly-once
 execution after process loss.
 
+Checkpoint recovery requires a compatible cache or saved turn history with
+authenticated journal evidence before AgentHost creates the SDK session.
+Configuration-only, zero-turn child state is not supported by this path. A
+fresh session cannot count as restored material.
+
 Suspend stops new turn admission, drains admitted turns, flushes usage and
 native state, and flushes the mounted workspace before returning evidence.
 Resume verifies saved configuration, cache or journal input, current
