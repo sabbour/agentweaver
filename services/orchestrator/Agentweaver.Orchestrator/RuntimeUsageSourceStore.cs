@@ -1509,18 +1509,36 @@ internal sealed class RuntimeUsageSourceStore(
         string? expectedPromptHash,
         CancellationToken cancellationToken)
     {
+        NativeDispatch dispatch;
+        try
+        {
+            dispatch = await ReadNativeDispatchAsync(
+                connection, transaction, registration, dispatchId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RuntimeAuthorizationException exception)
+            when (exception.Code == "runtime_native_turn_admission_unavailable")
+        {
+            return null;
+        }
         var source = await ReadCurrentSourceAsync(
             connection, transaction, registration, cancellationToken).ConfigureAwait(false);
-        var dispatch = await ReadNativeDispatchAsync(
-            connection, transaction, registration, dispatchId, cancellationToken).ConfigureAwait(false);
         var rebinds = await _executionEvidence.ReadNativeChildRebindsAsync(
             connection, transaction, registration.Binding.ProjectId, registration.Binding.RunId,
             dispatchId, cancellationToken).ConfigureAwait(false);
         var requestHash = rebinds.IsEmpty ? dispatch.RequestHash : rebinds[^1].EffectiveRequestHash;
         var admission = new RuntimeNativeTurnAdmissionReceipt(
             registration, source.Source, dispatchId, dispatch.PromptHash, requestHash, dispatch.OwnerRevision);
-        var rebind = await RequireNativeDispatchBindingAsync(
-            connection, transaction, dispatch, admission, source, cancellationToken).ConfigureAwait(false);
+        NativeChildRebindReceipt? rebind;
+        try
+        {
+            rebind = await RequireNativeDispatchBindingAsync(
+                connection, transaction, dispatch, admission, source, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RuntimeAuthorizationException exception)
+            when (exception.Code == "runtime_native_turn_admission_invalid")
+        {
+            return null;
+        }
         if (expectedPromptHash is not null && dispatch.PromptHash != expectedPromptHash)
             return null;
         string? checkpointHash = null;
