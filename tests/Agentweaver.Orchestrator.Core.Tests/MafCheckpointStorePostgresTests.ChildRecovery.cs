@@ -514,7 +514,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         }
 
         var (ready, _) = await ContinueCheckpointRecoveryAsync(
-            fixture, successor, successorManifest, expectedBootstrapSessions: []);
+            fixture, successor, successorManifest);
         AssertCheckpointRecoveryReady(ready);
         Assert.False(await IsChildRecoveryHeldAsync());
         await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
@@ -1054,6 +1054,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         var recovery = result.CheckpointRecovery;
         Assert.True(recovery?.Phase == "ready",
             $"Expected checkpoint recovery to be ready; phase '{recovery?.Phase ?? "<missing>"}', " +
+            $"step '{recovery?.CurrentStep ?? "<missing>"}', " +
             $"reason '{recovery?.ReasonCode ?? "<none>"}'.");
     }
 
@@ -2665,7 +2666,11 @@ public sealed partial class MafCheckpointStorePostgresTests
         "hosted-copilot",
         SdkMeterSources.CopilotNanoAiu,
         registration.Binding.AcceptedSelectionHash,
-        registration.Revision);
+        registration.Revision)
+    {
+        ModelBindingPin = registration.Binding.ModelBindingPin,
+        ResolvedModelBindingPin = registration.Binding.ModelBindingPin
+    };
 
     private static RuntimeUsageCostSnapshotReceipt CreateZeroUsageEstimateSnapshot(
         RuntimeRegistration registration,
