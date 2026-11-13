@@ -825,7 +825,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                     previous.ProviderFencingGeneration + 1,
                     DateTimeOffset.UtcNow.AddHours(1))
                 {
-                    PodUid = $"recovered-pod-{envelope.Owner.SessionId}"
+                    PodUid = $"recovered-pod-{envelope.Owner.SessionId}-{envelope.OperationId:N}"
                 };
                 _replacements[envelope.Owner.SessionId] = new(
                     placement, profileId,
