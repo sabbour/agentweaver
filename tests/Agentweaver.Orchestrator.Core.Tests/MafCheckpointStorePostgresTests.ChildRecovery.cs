@@ -1115,7 +1115,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         command.Parameters.AddWithValue("root", _binding.Identity.SessionId);
         command.Parameters.AddWithValue("tenant", "tenant-1");
         command.Parameters.AddWithValue("selection",
-            CoordinationOwnerStore.HashSelection(_selection.Selection));
+            CoordinationOwnerStore.HashSelection(_selection.Selection).ToLowerInvariant());
         command.Parameters.AddWithValue("fence", _binding.ExecutionFence);
         command.Parameters.AddWithValue("softLimit", NpgsqlDbType.Numeric, softLimit);
         command.Parameters.AddWithValue("hardLimit", NpgsqlDbType.Numeric, hardLimit);

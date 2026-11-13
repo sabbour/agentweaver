@@ -347,7 +347,7 @@ internal sealed partial class CoordinationOwnerStore
         command.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, manifest.TenantId);
         AddRunScope(command, manifest.Root.ProjectId, manifest.Root.RunId);
         command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, member.Session.SessionId);
-        command.Parameters.AddWithValue("selection", NpgsqlDbType.Char, manifest.SelectionHash);
+        command.Parameters.AddWithValue("selection", NpgsqlDbType.Char, manifest.SelectionHash.ToLowerInvariant());
         command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, manifest.HoldFence);
         var json = (string?)await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)
             ?? throw new CoordinationException(
