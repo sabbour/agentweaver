@@ -84,7 +84,7 @@ internal sealed partial class RuntimeExecutionEvidenceLedgerStore
                 throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
             receipts.Add(receipt.Validate());
         }
-        return receipts.ToImmutable();
+        return NativeChildRebindReceipt.ValidateChain(receipts.ToImmutable(), dispatchId);
     }
 
     private async Task<NativeChildRebindReceipt?> ReadNativeChildRebindAsync(
@@ -142,24 +142,56 @@ internal sealed partial class RuntimeExecutionEvidenceLedgerStore
                        AND pg_get_constraintdef(oid) LIKE '%destinationFence%'
                        AND pg_get_constraintdef(oid) LIKE '%priorAuthorityKey%'
                        AND pg_get_constraintdef(oid) LIKE '%priorReceiptId%'
-                       AND pg_get_constraintdef(oid) LIKE '%priorReceiptHash%'),
-                   EXISTS (SELECT 1 FROM pg_indexes
-                     WHERE schemaname = @schema
-                       AND indexname = 'uq_native_child_rebind_destination'
-                       AND indexdef LIKE 'CREATE UNIQUE INDEX uq_native_child_rebind_destination ON %'
-                       AND indexdef LIKE '%project_id%' AND indexdef LIKE '%run_id%'
-                       AND indexdef LIKE '%dispatchId%' AND indexdef LIKE '%destinationFence%'
-                       AND indexdef LIKE '%native-child-rebind%'),
-                   EXISTS (SELECT 1 FROM pg_indexes
-                     WHERE schemaname = @schema
-                       AND indexname = 'uq_native_child_rebind_prior'
-                       AND indexdef LIKE 'CREATE UNIQUE INDEX uq_native_child_rebind_prior ON %'
-                       AND indexdef LIKE '%project_id%' AND indexdef LIKE '%run_id%'
-                       AND indexdef LIKE '%dispatchId%' AND indexdef LIKE '%priorAuthorityKey%'
-                       AND indexdef LIKE '%native-child-rebind%')
+                       AND pg_get_constraintdef(oid) LIKE '%priorReceiptHash%'
+                       AND pg_get_constraintdef(oid) LIKE '%IS TRUE%'
+                       AND pg_get_constraintdef(oid) LIKE '%^[0-9a-fA-F]{8}-'
+                       AND pg_get_constraintdef(oid) LIKE '%^[1-9][0-9]*$%'
+                       AND pg_get_constraintdef(oid) LIKE '%origin%'
+                       AND pg_get_constraintdef(oid) LIKE '%receipt:%'
+                       AND pg_get_constraintdef(oid) LIKE '%||%'
+                       AND (length(pg_get_constraintdef(oid)) -
+                            length(replace(pg_get_constraintdef(oid), ' AND ', ''))) = 60
+                       AND (length(pg_get_constraintdef(oid)) -
+                            length(replace(pg_get_constraintdef(oid), ' OR ', ''))) = 8),
+                   EXISTS (
+                     SELECT 1
+                     FROM pg_index i
+                     JOIN pg_am am ON am.oid = (SELECT relam FROM pg_class WHERE oid = i.indexrelid)
+                     WHERE i.indexrelid = to_regclass(@destinationIndex)
+                       AND i.indrelid = to_regclass(@table)
+                       AND i.indisunique AND i.indisready AND i.indisvalid
+                       AND i.indnkeyatts = 4 AND i.indnatts = 4 AND am.amname = 'btree'
+                       AND regexp_replace(pg_get_indexdef(i.indexrelid, 1, true), '[[:space:]()]', '', 'g') = 'project_id'
+                       AND regexp_replace(pg_get_indexdef(i.indexrelid, 2, true), '[[:space:]()]', '', 'g') = 'run_id'
+                       AND regexp_replace(pg_get_indexdef(i.indexrelid, 3, true), '[[:space:]()]', '', 'g') =
+                           'receipt_json->>''dispatchId''::text::uuid'
+                       AND regexp_replace(pg_get_indexdef(i.indexrelid, 4, true), '[[:space:]()]', '', 'g') =
+                           'receipt_json->>''destinationFence''::text::bigint'
+                       AND regexp_replace(pg_get_expr(i.indpred, i.indrelid), '[[:space:]()]', '', 'g') =
+                           'receipt_kind::text=''native-child-rebind''::text'),
+                   EXISTS (
+                     SELECT 1
+                     FROM pg_index i
+                     JOIN pg_am am ON am.oid = (SELECT relam FROM pg_class WHERE oid = i.indexrelid)
+                     WHERE i.indexrelid = to_regclass(@priorIndex)
+                       AND i.indrelid = to_regclass(@table)
+                       AND i.indisunique AND i.indisready AND i.indisvalid
+                       AND i.indnkeyatts = 4 AND i.indnatts = 4 AND am.amname = 'btree'
+                       AND regexp_replace(pg_get_indexdef(i.indexrelid, 1, true), '[[:space:]()]', '', 'g') = 'project_id'
+                       AND regexp_replace(pg_get_indexdef(i.indexrelid, 2, true), '[[:space:]()]', '', 'g') = 'run_id'
+                       AND regexp_replace(pg_get_indexdef(i.indexrelid, 3, true), '[[:space:]()]', '', 'g') =
+                           'receipt_json->>''dispatchId''::text::uuid'
+                       AND regexp_replace(pg_get_indexdef(i.indexrelid, 4, true), '[[:space:]()]', '', 'g') =
+                           'receipt_json->>''priorAuthorityKey''::text'
+                       AND regexp_replace(pg_get_expr(i.indpred, i.indrelid), '[[:space:]()]', '', 'g') =
+                           'receipt_kind::text=''native-child-rebind''::text')
             """, connection, transaction);
         command.Parameters.AddWithValue("schema", NpgsqlDbType.Text, _schema);
         command.Parameters.AddWithValue("table", NpgsqlDbType.Text, $"{_schema}.maf_runtime_evidence_receipts");
+        command.Parameters.AddWithValue("destinationIndex", NpgsqlDbType.Text,
+            $"{_schema}.uq_native_child_rebind_destination");
+        command.Parameters.AddWithValue("priorIndex", NpgsqlDbType.Text,
+            $"{_schema}.uq_native_child_rebind_prior");
         command.Parameters.AddWithValue("kindCheck", NpgsqlDbType.Text,
             "CHECK (((receipt_kind)::text = ANY ((ARRAY['numeric-limit-denial'::character varying, 'replacement-comparison'::character varying, 'numeric-limit-native-no-send'::character varying, 'native-root-turn-completion'::character varying, 'native-root-turn-replay'::character varying, 'checkpoint-recovery-supersession'::character varying, 'native-child-rebind'::character varying])::text[])))");
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);

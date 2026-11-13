@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using NpgsqlTypes;
 using Xunit;
 
 namespace Agentweaver.Orchestrator.Core.Tests;
@@ -557,9 +558,93 @@ public sealed partial class MafCheckpointStorePostgresTests
     {
         var context = await PrepareReadyNativeRebindAsync();
         var replacement = await ReadReplacementChildRegistrationAsync(context.Fixture.Child);
+        var preparation = await PrepareChildNativeAsync(
+            replacement, context.Fixture.Dispatch, context.Fixture.Plan, context.Fixture.Prompt, context.Checkpoint,
+            begin: false);
+        var options = new OrchestratorOptions(
+            _actor.Issuer, "orchestrator", "https://projects.test/", "projects",
+            "https://events.test/", "events", _schema);
+        var httpContext = new DefaultHttpContext
+        {
+            User = new(new ClaimsIdentity(
+            [
+                new Claim("sub", _actor.Subject),
+                new Claim("iss", _actor.Issuer),
+                new Claim("aud", options.Audience),
+                new Claim("aud", options.ProjectsAudience),
+                new Claim("aud", options.EventsAudience),
+                new Claim("project_id", _binding.Identity.ProjectId),
+                new Claim("run_id", _binding.Identity.RunId),
+                new Claim("scope", "api.read projects.orchestrator")
+            ], "native-rebind-action-grant-test"))
+        };
+        httpContext.Request.Headers.Authorization = "Bearer native-rebind-test-token";
+        httpContext.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
+        using var projectsHttp = new HttpClient(new ReviewSelectionAuthorityHandler(
+            _selection.Selection, _actor.Issuer, _actor.Subject));
+        var projects = new ProjectsRunSelectionClient(projectsHttp, options, new ReviewNoSnapshotResolver());
+        var grants = new ExecutableActionGrantOwnerStore(
+            _fixture.DataSource, options, TimeProvider.System, projects,
+            new HttpContextAccessor { HttpContext = httpContext });
+        var actionRequest = new RuntimeActionRequest(
+            1, replacement.RuntimeInstanceId, replacement.Revision, replacement.Binding.ExecutionFence,
+            context.Fixture.Dispatch.MessageId, "model.turn", context.Fixture.Dispatch.PromptHash)
+        {
+            DispatchId = context.Fixture.Dispatch.MessageId
+        };
+        var actionGrant = await grants.IssueRuntimeActionGrantAsync(
+            httpContext, replacement, actionRequest, CancellationToken.None);
+        Assert.Equal(actionGrant, await grants.IssueRuntimeActionGrantAsync(
+            httpContext, replacement, actionRequest, CancellationToken.None));
+        Assert.Equal(ExecutableActionGrantLookupStatus.Current,
+            (await grants.GetCurrentAsync(actionGrant)).Status);
+
+        var usageEventId = Guid.NewGuid();
         await PrepareChildNativeAsync(
-            replacement, context.Fixture.Dispatch, context.Fixture.Prompt, context.Checkpoint,
-            begin: true, complete: true, result: context.Fixture.Result);
+            replacement, context.Fixture.Dispatch, context.Fixture.Plan, context.Fixture.Prompt, context.Checkpoint,
+            begin: true, complete: true, result: context.Fixture.Result,
+            usageEventIds: [usageEventId]);
+
+        var usageSources = new RuntimeUsageSourceStore(_fixture.DataSource, options, TimeProvider.System);
+        var accountedOutput = await usageSources.ExecuteLockedAsync(
+            replacement.RuntimeInstanceId, async (connection, transaction, token) =>
+            {
+                var evidence = await usageSources.RequireNativeTurnAccountedWithinTransactionAsync(
+                    connection, transaction, replacement, preparation.Message, context.Fixture.Result, token);
+                await transaction.CommitAsync(token);
+                return evidence;
+            }, CancellationToken.None);
+        Assert.Equal("priced", accountedOutput.AccountingStatus);
+
+        var latest = await context.CheckpointStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(latest);
+        var associationId = "native-rebind-usage-reuse";
+        var duplicateDispatch = new MafExecutionDispatchIntent(
+            associationId, context.Fixture.Child.SessionId, Guid.NewGuid(),
+            context.Fixture.Dispatch.PromptHash);
+        await context.CheckpointStore.AppendAsync(
+            "native-rebind-usage-reuse",
+            latest.Info,
+            latest.State with
+            {
+                Revision = checked(latest.State.Revision + 1),
+                Progress = latest.State.Progress with
+                {
+                    WorkItems = latest.State.Progress.WorkItems.SetItem(
+                        associationId, MafExecutionTaskStatus.Running)
+                },
+                PendingDispatches = latest.State.PendingDispatches.SetItem(associationId, duplicateDispatch)
+            },
+            CancellationToken.None);
+        var duplicateCheckpoint = await context.CheckpointStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(duplicateCheckpoint);
+        var duplicateFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            PrepareChildNativeAsync(
+                replacement, duplicateDispatch, context.Fixture.Plan, context.Fixture.Prompt,
+                duplicateCheckpoint, begin: true, complete: true,
+                result: "A duplicate usage event must not be accepted.",
+                usageEventIds: [usageEventId]));
+        Assert.Equal("runtime_native_turn_usage_reused", duplicateFailure.Code);
 
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
@@ -576,7 +661,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                 savedRevision = reader.GetInt64(1);
             }
             Assert.Equal("completed", savedState);
-            Assert.Equal(3, savedRevision);
+            Assert.Equal(4, savedRevision);
             await using var transaction = await connection.BeginTransactionAsync();
             var receipts = await new RuntimeExecutionEvidenceLedgerStore(_schema).ReadNativeChildRebindsAsync(
             connection, transaction, _binding.Identity.ProjectId, _binding.Identity.RunId,
@@ -592,11 +677,11 @@ public sealed partial class MafCheckpointStorePostgresTests
         var replacement = await ReadReplacementChildRegistrationAsync(context.Fixture.Child);
 
         await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => PrepareChildNativeAsync(
-            replacement, context.Fixture.Dispatch, context.Fixture.Prompt, context.Fixture.Source,
+            replacement, context.Fixture.Dispatch, context.Fixture.Plan, context.Fixture.Prompt, context.Fixture.Source,
             begin: false));
         await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => PrepareChildNativeAsync(
             replacement, context.Fixture.Dispatch with { PromptHash = new string('f', 64) },
-            context.Fixture.Prompt, context.Checkpoint, begin: false));
+            context.Fixture.Plan, context.Fixture.Prompt, context.Checkpoint, begin: false));
 
         await context.CheckpointStore.AppendAsync(
             "native-rebind-descendant",
@@ -607,7 +692,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.NotNull(descendant);
         Assert.NotEqual(context.Checkpoint.Info.CheckpointId, descendant.Info.CheckpointId);
         await PrepareChildNativeAsync(
-            replacement, context.Fixture.Dispatch, context.Fixture.Prompt, descendant,
+            replacement, context.Fixture.Dispatch, context.Fixture.Plan, context.Fixture.Prompt, descendant,
             begin: false);
         var current = await context.CheckpointStore.ReadLatestAsync(CancellationToken.None);
         Assert.NotNull(current);
@@ -619,28 +704,14 @@ public sealed partial class MafCheckpointStorePostgresTests
     {
         var fixture = await PrepareChildRecoveryAsync(nativeState: "prepared");
         var original = fixture.ChildRegistration;
+        var native = fixture.NativeAdmission
+            ?? throw new InvalidOperationException("The prepared child has no native admission fixture.");
         var store = new RuntimeUsageSourceStore(_fixture.DataSource, new OrchestratorOptions(
             _actor.Issuer, "orchestrator", "https://projects.test/", "projects",
             "https://events.test/", "events", _schema), TimeProvider.System);
-        var grant = new RuntimeGrantReceipt(
-            Guid.NewGuid(), original.RuntimeInstanceId, original.Revision, 1, _actor.Issuer,
-            RuntimeCredentialPurpose.Observe, original.Binding.ObservationEndpoint,
-            RuntimeCredentialState.Active, new string('a', 64), original.ExpiresAt, DateTimeOffset.UtcNow);
-        var source = new SdkSessionFacts(
-            original.RuntimeInstanceId, RuntimeContractValidation.NativeSessionId(original.Binding),
-            "1.0.18", "1.0.97", original.Binding.ModelSelectionReference!,
-            "gpt-6.1-sol", new string('c', 64), 1, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
-            original.Binding.AcceptedSelectionHash, original.Revision);
-        var request = new RuntimeA2ASendRequest(new(
-            "message", fixture.Dispatch.MessageId, source.SdkSessionId, "user", [new("text", fixture.Prompt)],
-            new(new(1, original, grant.GrantId, grant.Revision, RuntimeCredentialPurpose.Observe),
-                AddressedMessageDeliveryMode.Enqueue)));
-        await store.ExecuteLockedAsync(original.RuntimeInstanceId, async (connection, transaction, token) =>
-        {
-            _ = await store.RegisterWithinTransactionAsync(connection, transaction, original, grant, source, token);
-            await transaction.CommitAsync(token);
-            return true;
-        }, CancellationToken.None);
+        var grant = native.Grant;
+        var source = native.Source;
+        var request = native.Message;
         static Task<RuntimeUsageCostSnapshotReceipt> NoCost(SdkSessionFacts _, CancellationToken __) =>
             throw new InvalidOperationException("This fixture must not send a cost request.");
         var beginTask = store.ExecuteLockedAsync(original.RuntimeInstanceId, async (connection, transaction, token) =>
@@ -685,7 +756,7 @@ public sealed partial class MafCheckpointStorePostgresTests
     [Fact]
     public async Task NativeChildRebindPreservesReservationsAndCreditGuard()
     {
-        var fixture = await PrepareChildRecoveryAsync(nativeState: "prepared");
+        var fixture = await PrepareChildRecoveryAsync(nativeState: "prepared", withCreditGuard: true);
         var dispatchesBefore = await ReadDispatchReservationCountAsync();
         await SeedCreditGuardAsync();
         var guardBefore = await ReadCreditGuardSnapshotAsync();
@@ -704,6 +775,26 @@ public sealed partial class MafCheckpointStorePostgresTests
         var replacement = await ReadReplacementChildRegistrationAsync(fixture.Child);
         Assert.Equal(context.Ready.ExecutionFence, replacement.Binding.ExecutionFence);
         Assert.Equal(fixture.Dispatch.MessageId, context.Fixture.Dispatch.MessageId);
+    }
+
+    [Fact]
+    public async Task PreparedNativeRecoveryRejectsCreditGuardWithChangedConfiguredLimit()
+    {
+        var fixture = await PrepareChildRecoveryAsync(nativeState: "prepared", withCreditGuard: true);
+        await SeedCreditGuardAsync(softLimit: 4);
+        var before = await fixture.Owner.ReadOwnerRunStatusAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, CancellationToken.None);
+
+        var failure = await Assert.ThrowsAsync<CoordinationException>(() =>
+            fixture.Owner.RecoverRunExecutionAsync(
+                _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, fixture.Request,
+                CancellationToken.None, _selection, _executionStore));
+
+        Assert.Equal("checkpoint_recovery_progress_conflict", failure.Code);
+        var after = await fixture.Owner.ReadOwnerRunStatusAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, CancellationToken.None);
+        Assert.Equal(before, after);
+        Assert.False(await IsChildRecoveryHeldAsync());
     }
 
     [Fact]
@@ -870,7 +961,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         return (long)(await command.ExecuteScalarAsync())!;
     }
 
-    private async Task SeedCreditGuardAsync()
+    private async Task SeedCreditGuardAsync(decimal softLimit = 3, decimal hardLimit = 5)
     {
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
@@ -880,7 +971,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                  cost_rate_scope_identity, copilot_aic_floor, accounted_through_event_position,
                  usage_witness_digest, soft_warning_emitted, hard_cap_exhausted)
             VALUES
-                (@project, @run, @root, @tenant, @selection, @fence, 7, 3, 5,
+                (@project, @run, @root, @tenant, @selection, @fence, 7, @softLimit, @hardLimit,
                  'scope-1', 4, 3, @digest, true, true)
             """, connection);
         command.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
@@ -890,6 +981,8 @@ public sealed partial class MafCheckpointStorePostgresTests
         command.Parameters.AddWithValue("selection",
             CoordinationOwnerStore.HashSelection(_selection.Selection));
         command.Parameters.AddWithValue("fence", _binding.ExecutionFence);
+        command.Parameters.AddWithValue("softLimit", NpgsqlDbType.Numeric, softLimit);
+        command.Parameters.AddWithValue("hardLimit", NpgsqlDbType.Numeric, hardLimit);
         command.Parameters.AddWithValue("digest", new string('a', 64));
         await command.ExecuteNonQueryAsync();
     }
@@ -1205,11 +1298,31 @@ public sealed partial class MafCheckpointStorePostgresTests
                 fixture.Owner, fixture.Decisions, contexts, checkpoints, cancellationToken,
                 allowCoordinatorRoot: true, checkpointRecoveryRegistration: authorization);
         }
+        var usageSources = new RuntimeUsageSourceStore(_fixture.DataSource, options, TimeProvider.System);
+        async Task RegisterReplacementSourceAsync(
+            RuntimeRegistration registration, RuntimeGrantReceipt grant)
+        {
+            if (!manifest.Members.Any(member =>
+                    member.Session.SessionId == registration.Binding.SessionId &&
+                    member.Disposition == "pendingUnsent" &&
+                    member.NativeOrigin?.State == "prepared"))
+                return;
+            var source = CreateNativeSourceFacts(registration);
+            await usageSources.ExecuteLockedAsync(
+                registration.RuntimeInstanceId, async (connection, transaction, token) =>
+                {
+                    var receipt = await usageSources.RegisterWithinTransactionAsync(
+                        connection, transaction, registration, grant, source, token);
+                    await transaction.CommitAsync(token);
+                    return receipt;
+                }, CancellationToken.None);
+        }
         var peer = new RecoveryRuntimePeer(
             initial, ReadOwnerAsync,
             failRootActivation ? manifest.Root.SessionId : null,
             emptyEvidenceSessionId,
-            emptyEvidenceReceiptName);
+            emptyEvidenceReceiptName,
+            RegisterReplacementSourceAsync);
         using var environmentHttp = new HttpClient(peer);
         using var brokerHttp = new HttpClient(new RecoveryBrokerPeer(registrationStore, peer));
         var registrationOwner = new RuntimeRegistrationOwner(
@@ -1226,9 +1339,6 @@ public sealed partial class MafCheckpointStorePostgresTests
             ? null
             : new EventsAddressedMessageClient(
                 eventsHttp, options, new HttpContextAccessor { HttpContext = context });
-        var usageSources = completedUnjoinedMaterial is null
-            ? null
-            : new RuntimeUsageSourceStore(_fixture.DataSource, options, TimeProvider.System);
         var continuation = new RuntimeRunStartContinuation(
             starts, registrationOwner,
             new RuntimeEnvironmentContextClient(environmentHttp, new(new Uri("https://environment.test/"))),
@@ -1247,7 +1357,7 @@ public sealed partial class MafCheckpointStorePostgresTests
 
         var result = await continuation.ContinueCheckpointRecoveryAsync(
             context, _actor, runtimeActor, recovered, rootIntent, registrationOwner,
-            checkpointStore, fixture.Owner, NoGate, NoGate, CancellationToken.None);
+            checkpointStore, fixture.Owner, NoGate, NoGate, CancellationToken.None, servedSelection);
         var currentRootIntent = await starts.ReadIntentForStatusAsync(
             manifest.Root.ProjectId, manifest.Root.RunId, manifest.Root.SessionId, CancellationToken.None)
             ?? throw new InvalidOperationException("The root startup intent disappeared.");
@@ -1338,7 +1448,8 @@ public sealed partial class MafCheckpointStorePostgresTests
         Func<string, Guid, CancellationToken, Task<RuntimeOwnerContext>> readOwner,
         string? failActivationSessionId,
         string? emptyEvidenceSessionId,
-        string? emptyEvidenceReceiptName) : HttpMessageHandler
+        string? emptyEvidenceReceiptName,
+        Func<RuntimeRegistration, RuntimeGrantReceipt, Task> registerReplacementSource) : HttpMessageHandler
     {
         private readonly Dictionary<string, RecoveryRuntimeReplacement> _replacements =
             new(StringComparer.Ordinal);
@@ -1362,6 +1473,8 @@ public sealed partial class MafCheckpointStorePostgresTests
                     return Error(request, HttpStatusCode.Conflict, "runtime_configuration_conflict");
                 var replacement = _replacements[sessionId];
                 var readiness = CreateRecoveryReadiness(configure.Registration, replacement.Placement);
+                await registerReplacementSource(configure.Registration, readiness.Activation.SourceGrant)
+                    .ConfigureAwait(false);
                 _readiness[sessionId] = readiness;
                 return Success(request, emptyEvidenceSessionId == sessionId &&
                     emptyEvidenceReceiptName == "activation"
@@ -2000,7 +2113,7 @@ public sealed partial class MafCheckpointStorePostgresTests
     }
 
     private async Task<ChildRecoveryFixture> PrepareChildRecoveryAsync(
-        bool includeBuildTest = false, string nativeState = "absent")
+        bool includeBuildTest = false, string nativeState = "absent", bool withCreditGuard = false)
     {
         var fixtureId = Guid.NewGuid().ToString("N");
         // Runtime registrations accept only opaque identifiers, so this fixture pins a model reference without '/'.
@@ -2068,6 +2181,8 @@ public sealed partial class MafCheckpointStorePostgresTests
             ModelSelectionReference = modelReference,
             ModelSourceMode = ModelSourceMode.HostedCopilot,
             PlacementProviderId = ReviewSandboxProviderId,
+            CopilotSoftCreditLimit = withCreditGuard ? 3 : null,
+            CopilotHardCreditLimit = withCreditGuard ? 5 : null,
             Image = new SandboxImageIdentity("sha256:" + new string('a', 64), "linux/amd64", 1024),
             EnvironmentLifecycleGeneration = 1,
             EnvironmentLeaseRevision = 1,
@@ -2205,12 +2320,13 @@ public sealed partial class MafCheckpointStorePostgresTests
             childPresenting.StateVersion, presentedMessage: null, cancellationToken: CancellationToken.None);
         var source = await _executionStore.ReadLatestAsync(CancellationToken.None);
         Assert.NotNull(source);
+        NativeAdmissionFixture? nativeAdmission = null;
         if (nativeState is "prepared" or "sending")
-            await PrepareChildNativeAsync(
-                registration, dispatch, prompt, source, nativeState == "sending");
+            nativeAdmission = await PrepareChildNativeAsync(
+                registration, dispatch, plan.Plan, prompt, source, nativeState == "sending");
         else if (nativeState == "completed")
-            await PrepareChildNativeAsync(
-                registration, dispatch, prompt, source, begin: true, complete: true,
+            nativeAdmission = await PrepareChildNativeAsync(
+                registration, dispatch, plan.Plan, prompt, source, begin: true, complete: true,
                 result: CompletedUnjoinedResult);
         var run = await owner.ReadOwnerRunStatusAsync(
             _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, CancellationToken.None);
@@ -2223,31 +2339,42 @@ public sealed partial class MafCheckpointStorePostgresTests
         };
         return new ChildRecoveryFixture(
             owner, decisions, spawned.Node.Identity, childIntent, plan.Plan, source, request,
-            registration, dispatch, prompt, CompletedUnjoinedResult);
+            registration, dispatch, prompt, CompletedUnjoinedResult, nativeAdmission);
     }
 
-    private async Task PrepareChildNativeAsync(
+    private async Task<NativeAdmissionFixture> PrepareChildNativeAsync(
         RuntimeRegistration registration,
         MafExecutionDispatchIntent dispatch,
+        WorkPlan plan,
         string prompt,
         MafExecutionCheckpointSnapshot checkpoint,
         bool begin,
         bool complete = false,
-        string? result = null)
+        string? result = null,
+        ImmutableArray<Guid>? usageEventIds = null)
     {
         var options = new OrchestratorOptions(
             _actor.Issuer, "orchestrator", "https://projects.test/", "projects",
             "https://events.test/", "events", _schema);
         var store = new RuntimeUsageSourceStore(_fixture.DataSource, options, TimeProvider.System);
-        var grant = new RuntimeGrantReceipt(
+        var starts = new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema);
+        var intent = await starts.ReadIntentForStatusAsync(
+            registration.Binding.ProjectId, registration.Binding.RunId,
+            registration.Binding.SessionId, CancellationToken.None)
+            ?? throw new InvalidOperationException("The child startup intent is missing.");
+        using var links = JsonDocument.Parse(intent.ReceiptLinks);
+        var readiness = links.RootElement.TryGetProperty("activation", out var activation)
+            ? activation.Deserialize<RuntimeHostReadinessReceipt>(ChildRecoveryJsonOptions)
+            : null;
+        var grant = readiness?.SourceGrant ?? new RuntimeGrantReceipt(
             Guid.NewGuid(), registration.RuntimeInstanceId, registration.Revision, 1, _actor.Issuer,
             RuntimeCredentialPurpose.Observe, registration.Binding.ObservationEndpoint,
             RuntimeCredentialState.Active, new string('a', 64), registration.ExpiresAt, DateTimeOffset.UtcNow);
-        var source = new SdkSessionFacts(
-            registration.RuntimeInstanceId, RuntimeContractValidation.NativeSessionId(registration.Binding),
-            "1.0.18", "1.0.97", registration.Binding.ModelSelectionReference!,
-            "gpt-6.1-sol", new string('c', 64), 1, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
-            registration.Binding.AcceptedSelectionHash, registration.Revision);
+        readiness ??= new RuntimeHostReadinessReceipt(
+            1, registration.RuntimeInstanceId, registration.Revision, registration.Binding.ExecutionFence,
+            registration.Binding.Image ?? new SandboxImageIdentity(
+                "sha256:" + new string('a', 64), "linux/amd64", 1024), [], grant);
+        var source = CreateNativeSourceFacts(registration);
         await store.ExecuteLockedAsync(registration.RuntimeInstanceId, async (connection, transaction, token) =>
         {
             var receipt = await store.RegisterWithinTransactionAsync(
@@ -2255,10 +2382,10 @@ public sealed partial class MafCheckpointStorePostgresTests
             await transaction.CommitAsync(token);
             return receipt;
         }, CancellationToken.None);
-        var message = new RuntimeA2ASendRequest(new(
-            "message", dispatch.MessageId, source.SdkSessionId, "user", [new("text", prompt)],
-            new(new(1, registration, grant.GrantId, grant.Revision, RuntimeCredentialPurpose.Observe),
-                AddressedMessageDeliveryMode.Enqueue)));
+        var message = MafExecutionDispatchRequestBuilder.Build(
+            registration, readiness, dispatch.MessageId, prompt, checkpoint.State.WorkPlanId,
+            dispatch.AssociationId, plan.Items.SingleOrDefault(item => item.Id == dispatch.AssociationId)
+                is { } item ? MafExecutionDispatchRequestBuilder.HashWorkItemBinding(item) : null);
         static Task<RuntimeUsageCostSnapshotReceipt> NoCost(SdkSessionFacts _, CancellationToken __) =>
             throw new InvalidOperationException("This fixture must not send a cost request.");
         await store.ExecuteLockedAsync(registration.RuntimeInstanceId, async (connection, transaction, token) =>
@@ -2270,7 +2397,7 @@ public sealed partial class MafCheckpointStorePostgresTests
             return prepared;
         }, CancellationToken.None);
         if (!begin)
-            return;
+            return new(grant, source, message);
         var beginResult = await store.ExecuteLockedAsync(registration.RuntimeInstanceId, async (connection, transaction, token) =>
         {
             var result = await store.BeginNativeTurnWithinTransactionAsync(
@@ -2283,7 +2410,7 @@ public sealed partial class MafCheckpointStorePostgresTests
             return result;
         }, CancellationToken.None);
         if (!complete)
-            return;
+            return new(grant, source, message);
 
         var admission = beginResult.Admission
             ?? throw new InvalidOperationException("The native turn did not begin.");
@@ -2300,7 +2427,7 @@ public sealed partial class MafCheckpointStorePostgresTests
             RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(answer)),
             null)
         {
-            UsageEventIds = []
+            UsageEventIds = usageEventIds ?? []
         };
         var recorded = await store.ExecuteLockedAsync(
             registration.RuntimeInstanceId, async (connection, transaction, token) =>
@@ -2321,7 +2448,22 @@ public sealed partial class MafCheckpointStorePostgresTests
                 await transaction.CommitAsync(token);
                 return receipt;
             }, CancellationToken.None);
+        return new(grant, source, message);
     }
+
+    private static SdkSessionFacts CreateNativeSourceFacts(RuntimeRegistration registration) => new(
+        registration.RuntimeInstanceId,
+        RuntimeContractValidation.NativeSessionId(registration.Binding),
+        "1.0.18",
+        "1.0.97",
+        registration.Binding.ModelSelectionReference!,
+        "gpt-6.1-sol",
+        new string('c', 64),
+        1,
+        "hosted-copilot",
+        SdkMeterSources.CopilotNanoAiu,
+        registration.Binding.AcceptedSelectionHash,
+        registration.Revision);
 
     private static RuntimeUsageCostSnapshotReceipt CreateZeroUsageEstimateSnapshot(
         RuntimeRegistration registration,
@@ -2376,7 +2518,13 @@ public sealed partial class MafCheckpointStorePostgresTests
         RuntimeRegistration ChildRegistration,
         MafExecutionDispatchIntent Dispatch,
         string Prompt,
-        string Result);
+        string Result,
+        NativeAdmissionFixture? NativeAdmission);
+
+    private sealed record NativeAdmissionFixture(
+        RuntimeGrantReceipt Grant,
+        SdkSessionFacts Source,
+        RuntimeA2ASendRequest Message);
 
     private sealed record ReadyNativeRebindContext(
         ChildRecoveryFixture Fixture,

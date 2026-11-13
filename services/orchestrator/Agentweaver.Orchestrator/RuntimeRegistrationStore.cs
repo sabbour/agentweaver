@@ -281,6 +281,25 @@ internal sealed class RuntimeRegistrationStore
         return registration;
     }
 
+    internal async Task<RuntimeRegistration?> ReadRevisionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid runtimeInstanceId,
+        long revision,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT runtime_instance_id, revision, binding_json, binding_hash, state, expires_at
+            FROM {_revisions}
+            WHERE runtime_instance_id = @runtime AND revision = @revision
+            FOR SHARE
+            """, connection, transaction);
+        command.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, runtimeInstanceId);
+        command.Parameters.AddWithValue("revision", NpgsqlDbType.Bigint, revision);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadRegistration(reader) : null;
+    }
+
     /// <summary>
     /// Reads an ordered page of runtime IDs whose current binding names the requested session.
     /// </summary>

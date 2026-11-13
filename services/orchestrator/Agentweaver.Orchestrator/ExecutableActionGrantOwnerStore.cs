@@ -987,7 +987,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
                   binding.WorkflowStepId is null))
             {
                 var dispatch = await _runtimeSources.ReadNativeActionDispatchEvidenceAsync(
-                    connection, transaction, registration, admittedDispatch, request.InputHash,
+                    connection, transaction, registration, admittedDispatch,
+                    denial.Kind == RuntimeNumericLimitKind.ModelTurns ? request.InputHash : null,
                     cancellationToken).ConfigureAwait(false);
                 if (dispatch is null)
                     throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_incomplete");
@@ -1197,11 +1198,11 @@ internal sealed class ExecutableActionGrantOwnerStore(
             binding.RuntimeInstanceId == denial.RuntimeInstanceId &&
             binding.RegistrationRevision == denial.RegistrationRevision &&
             binding.ExecutionFence == denial.ExecutionFence &&
-            binding.CheckpointId == denial.CheckpointId &&
-            binding.CheckpointRevision == denial.CheckpointRevision &&
-            binding.CheckpointHash == denial.CheckpointHash &&
-            binding.WorkPlanId == denial.WorkPlanId &&
-            binding.AssociationId == denial.AssociationId;
+            (denial.CheckpointId is null || binding.CheckpointId == denial.CheckpointId) &&
+            (denial.CheckpointRevision is null || binding.CheckpointRevision == denial.CheckpointRevision) &&
+            (denial.CheckpointHash is null || binding.CheckpointHash == denial.CheckpointHash) &&
+            (denial.WorkPlanId is null || binding.WorkPlanId == denial.WorkPlanId) &&
+            (denial.AssociationId is null || binding.AssociationId == denial.AssociationId);
     }
 
     internal async Task<RuntimeReplacementComparisonBlocker> ReadReplacementComparisonBlockerAsync(

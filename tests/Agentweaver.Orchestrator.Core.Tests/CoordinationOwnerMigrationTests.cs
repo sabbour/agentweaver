@@ -1,9 +1,11 @@
+using System.Text.Json;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
 using Agentweaver.Persistence.Postgres;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Npgsql;
+using NpgsqlTypes;
 using Xunit;
 
 namespace Agentweaver.Orchestrator.Core.Tests;
@@ -210,6 +212,17 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             await acceptedRun.ExecuteNonQueryAsync();
         }
 
+        foreach (var missing in new[]
+                 {
+                     "dispatchId", "recoveryOperationId", "destinationFence",
+                     "priorAuthorityKey", "priorReceiptId", "priorReceiptHash"
+                 })
+        {
+            var invalid = await Assert.ThrowsAsync<PostgresException>(() =>
+                InsertMalformedNativeRebindAsync(projectId, runId, Guid.NewGuid(), missing));
+            Assert.Equal(PostgresErrorCodes.CheckViolation, invalid.SqlState);
+        }
+
         var dispatchId = Guid.NewGuid();
         await InsertNativeRebindAsync(
             projectId, runId, dispatchId, 3, "origin", null, null);
@@ -289,6 +302,50 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             await damage.ExecuteNonQueryAsync();
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var repairAndDamage = new NpgsqlCommand($"""
+            CREATE UNIQUE INDEX uq_native_child_rebind_prior
+                ON "{_schema}".maf_runtime_evidence_receipts
+                    (project_id, run_id, ((receipt_json->>'dispatchId')::uuid),
+                     (receipt_json->>'priorAuthorityKey'))
+                WHERE receipt_kind = 'native-child-rebind';
+            DROP INDEX "{_schema}".uq_native_child_rebind_destination;
+            CREATE UNIQUE INDEX uq_native_child_rebind_destination
+                ON "{_schema}".maf_runtime_evidence_receipts
+                    (project_id, run_id, ((receipt_json->>'dispatchId')::uuid),
+                     ((receipt_json->>'destinationFence')::bigint), receipt_id)
+                WHERE receipt_kind = 'native-child-rebind';
+            """, connection))
+            await repairAndDamage.ExecuteNonQueryAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var weakenConstraint = new NpgsqlCommand($"""
+            DROP INDEX "{_schema}".uq_native_child_rebind_destination;
+            CREATE UNIQUE INDEX uq_native_child_rebind_destination
+                ON "{_schema}".maf_runtime_evidence_receipts
+                    (project_id, run_id, ((receipt_json->>'dispatchId')::uuid),
+                     ((receipt_json->>'destinationFence')::bigint))
+                WHERE receipt_kind = 'native-child-rebind';
+            ALTER TABLE "{_schema}".maf_runtime_evidence_receipts
+                DROP CONSTRAINT maf_runtime_evidence_native_child_rebind_fields_check;
+            ALTER TABLE "{_schema}".maf_runtime_evidence_receipts
+                ADD CONSTRAINT maf_runtime_evidence_native_child_rebind_fields_check
+                CHECK (receipt_kind <> 'native-child-rebind' OR
+                    (receipt_json ? 'dispatchId' AND
+                     receipt_json ? 'recoveryOperationId' AND
+                     receipt_json ? 'destinationFence' AND
+                     receipt_json ? 'priorAuthorityKey' AND
+                     receipt_json ? 'priorReceiptId' AND
+                     receipt_json ? 'priorReceiptHash') IS TRUE);
+            """, connection))
+            await weakenConstraint.ExecuteNonQueryAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                new RuntimeExecutionEvidenceLedgerStore(_schema).RequireNativeChildRebindSchemaAsync(
+                    connection, transaction: null, requireApplied: true, CancellationToken.None));
 
         async Task InsertNativeRebindAsync(
             string project,
@@ -303,6 +360,40 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             await InsertNativeRebindOnConnectionAsync(
                     connection, project, run, dispatch, destinationFence, priorKey,
                     priorReceipt, priorHash, Guid.NewGuid());
+        }
+
+        async Task InsertMalformedNativeRebindAsync(
+            string project,
+            string run,
+            Guid dispatch,
+            string missingField)
+        {
+            var receipt = new Dictionary<string, object?>
+            {
+                ["projectId"] = project,
+                ["runId"] = run,
+                ["dispatchId"] = dispatch,
+                ["recoveryOperationId"] = Guid.NewGuid(),
+                ["destinationFence"] = "3",
+                ["priorAuthorityKey"] = "origin",
+                ["priorReceiptId"] = null,
+                ["priorReceiptHash"] = null
+            };
+            receipt.Remove(missingField);
+            var json = JsonSerializer.Serialize(receipt);
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using var insert = new NpgsqlCommand($"""
+                    INSERT INTO "{_schema}".maf_runtime_evidence_receipts
+                        (project_id, run_id, receipt_id, receipt_kind, attempt_id, payload_hash, receipt_json)
+                    VALUES (@project, @run, @receipt, 'native-child-rebind', @attempt, @hash, @json)
+                    """, connection);
+            insert.Parameters.AddWithValue("project", project);
+            insert.Parameters.AddWithValue("run", run);
+            insert.Parameters.AddWithValue("receipt", Guid.NewGuid());
+            insert.Parameters.AddWithValue("attempt", Guid.NewGuid());
+            insert.Parameters.AddWithValue("hash", new string('d', 64));
+            insert.Parameters.AddWithValue("json", NpgsqlDbType.Jsonb, json);
+            await insert.ExecuteNonQueryAsync();
         }
 
         async Task InsertNativeRebindOnConnectionAsync(
