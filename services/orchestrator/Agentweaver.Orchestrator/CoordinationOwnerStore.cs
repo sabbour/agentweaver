@@ -4375,7 +4375,7 @@ internal sealed partial class CoordinationOwnerStore
         update.Parameters.AddWithValue("nextFence", NpgsqlDbType.Bigint, nextFence);
         update.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, run.TenantId);
         update.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, identity.SessionId);
-        update.Parameters.AddWithValue("selection", NpgsqlDbType.Char, run.SelectionHash);
+        update.Parameters.AddWithValue("selection", NpgsqlDbType.Char, run.SelectionHash.ToLowerInvariant());
         update.Parameters.AddWithValue("softLimit", NpgsqlDbType.Numeric, (object?)softLimit ?? DBNull.Value);
         update.Parameters.AddWithValue("hardLimit", NpgsqlDbType.Numeric, (object?)hardLimit ?? DBNull.Value);
         if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
@@ -4403,7 +4403,7 @@ internal sealed partial class CoordinationOwnerStore
         command.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, run.TenantId);
         AddRunScope(command, identity.ProjectId, identity.RunId);
         command.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, identity.SessionId);
-        command.Parameters.AddWithValue("selection", NpgsqlDbType.Char, run.SelectionHash);
+        command.Parameters.AddWithValue("selection", NpgsqlDbType.Char, run.SelectionHash.ToLowerInvariant());
         command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, fence);
         var json = (string?)await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)
             ?? throw new CoordinationException(

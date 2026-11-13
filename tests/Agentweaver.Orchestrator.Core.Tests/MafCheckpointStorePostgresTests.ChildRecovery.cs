@@ -277,10 +277,10 @@ public sealed partial class MafCheckpointStorePostgresTests
 
         var (ready, rootReadyIntent) = await ContinueCheckpointRecoveryAsync(
             fixture, recovered, manifest);
-        Assert.Equal("ready", ready.CheckpointRecovery!.Phase);
+        AssertCheckpointRecoveryReady(ready);
         Assert.False(await IsChildRecoveryHeldAsync());
         _ = await fixture.Owner.UpdateCheckpointRecoveryProgressAsync(
-            _actor, _binding.Identity, recovered.OperationId, ready.CheckpointRecovery,
+            _actor, _binding.Identity, recovered.OperationId, ready.CheckpointRecovery!,
             CancellationToken.None, rootReadyIntent);
         Assert.False(await IsChildRecoveryHeldAsync());
     }
@@ -356,8 +356,8 @@ public sealed partial class MafCheckpointStorePostgresTests
         var secondManifest = await fixture.Owner.ReadCheckpointRecoveryManifestAsync(
             _actor, _binding.Identity, second.OperationId, CancellationToken.None);
         var (ready, _) = await ContinueCheckpointRecoveryAsync(fixture, second, secondManifest);
-        Assert.Equal("ready", ready.CheckpointRecovery!.Phase);
-        Assert.False(ready.CheckpointRecovery.DispatchHeld);
+        AssertCheckpointRecoveryReady(ready);
+        Assert.False(ready.CheckpointRecovery!.DispatchHeld);
         Assert.False(await IsChildRecoveryHeldAsync());
         var finalReplay = await restartedOwner.RecoverRunExecutionAsync(
             _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, fixture.Request,
@@ -411,8 +411,8 @@ public sealed partial class MafCheckpointStorePostgresTests
         var secondManifest = await restartedOwner.ReadCheckpointRecoveryManifestAsync(
             _actor, _binding.Identity, second.OperationId, CancellationToken.None);
         var (ready, _) = await ContinueCheckpointRecoveryAsync(fixture, second, secondManifest);
-        Assert.Equal("ready", ready.CheckpointRecovery!.Phase);
-        Assert.False(ready.CheckpointRecovery.DispatchHeld);
+        AssertCheckpointRecoveryReady(ready);
+        Assert.False(ready.CheckpointRecovery!.DispatchHeld);
         Assert.False(await IsChildRecoveryHeldAsync());
 
         var firstReplay = await restartedOwner.RecoverRunExecutionAsync(
@@ -513,7 +513,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         }
 
         var (ready, _) = await ContinueCheckpointRecoveryAsync(fixture, successor, successorManifest);
-        Assert.Equal("ready", ready.CheckpointRecovery!.Phase);
+        AssertCheckpointRecoveryReady(ready);
         Assert.False(await IsChildRecoveryHeldAsync());
         await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
         await using (var transaction = await connection.BeginTransactionAsync())
@@ -781,6 +781,14 @@ public sealed partial class MafCheckpointStorePostgresTests
             OwnerRevision = guardBefore.OwnerRevision + 2,
             ExecutionFence = context.Ready.ExecutionFence
         }, guardAfter);
+        var starts = new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema);
+        var rootIntent = await starts.ReadIntentForStatusAsync(
+            _binding.Identity.ProjectId, _binding.Identity.RunId, _binding.Identity.SessionId,
+            CancellationToken.None);
+        Assert.NotNull(rootIntent);
+        var rootRegistration = ReadIntentReceipt<RuntimeRegistration>(rootIntent, "registration");
+        Assert.Equal(3m, rootRegistration.Binding.CopilotSoftCreditLimit);
+        Assert.Equal(5m, rootRegistration.Binding.CopilotHardCreditLimit);
         var replacement = await ReadReplacementChildRegistrationAsync(fixture.Child);
         Assert.Equal(context.Ready.ExecutionFence, replacement.Binding.ExecutionFence);
         Assert.Equal(fixture.Dispatch.MessageId, context.Fixture.Dispatch.MessageId);
@@ -861,7 +869,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         var manifest = await context.Fixture.Owner.ReadCheckpointRecoveryManifestAsync(
             _actor, _binding.Identity, next.OperationId, CancellationToken.None);
         var (ready, _) = await ContinueCheckpointRecoveryAsync(context.Fixture, next, manifest);
-        Assert.Equal("ready", ready.CheckpointRecovery!.Phase);
+        AssertCheckpointRecoveryReady(ready);
 
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var transaction = await connection.BeginTransactionAsync();
@@ -975,7 +983,7 @@ public sealed partial class MafCheckpointStorePostgresTests
             _actor, _binding.Identity, successor.OperationId, CancellationToken.None);
         var (ready, _) = await ContinueCheckpointRecoveryAsync(
             context.Fixture, successor, successorManifest);
-        Assert.Equal("ready", ready.CheckpointRecovery!.Phase);
+        AssertCheckpointRecoveryReady(ready);
 
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var transaction = await connection.BeginTransactionAsync();
@@ -1027,13 +1035,21 @@ public sealed partial class MafCheckpointStorePostgresTests
         var successorManifest = await restartOwner.ReadCheckpointRecoveryManifestAsync(
             _actor, _binding.Identity, successor.OperationId, CancellationToken.None);
         var (ready, _) = await ContinueCheckpointRecoveryAsync(fixture, successor, successorManifest);
-        Assert.Equal("ready", ready.CheckpointRecovery!.Phase);
+        AssertCheckpointRecoveryReady(ready);
         var checkpointStore = new MafExecutionCheckpointStore(
             new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
             _binding with { ExecutionFence = ready.ExecutionFence });
         var checkpoint = await checkpointStore.ReadLatestAsync(CancellationToken.None);
         Assert.NotNull(checkpoint);
         return new(fixture, ready, successorManifest, checkpointStore, checkpoint, restartOwner);
+    }
+
+    private static void AssertCheckpointRecoveryReady(RunExecutionTransitionResult result)
+    {
+        var recovery = result.CheckpointRecovery;
+        Assert.True(recovery?.Phase == "ready",
+            $"Expected checkpoint recovery to be ready; phase '{recovery?.Phase ?? "<missing>"}', " +
+            $"reason '{recovery?.ReasonCode ?? "<none>"}'.");
     }
 
     private async Task<RuntimeRegistration> ReadReplacementChildRegistrationAsync(SessionIdentity child)
@@ -2347,7 +2363,11 @@ public sealed partial class MafCheckpointStorePostgresTests
 
         var item = Assert.Single(plan.Plan.Items);
         var childId = MafExecutionPlanner.CreateChildSessionId(_binding.Identity, plan.Plan.Id, item.Id);
-        const string prompt = "Execute the approved work item.";
+        var checkpointAtDispatch = await _executionStore.ReadLatestAsync(CancellationToken.None);
+        var stateAtDispatch = checkpointAtDispatch?.State ?? new MafExecutionCheckpoint(
+            0, plan.Plan.Id, decision.StateVersion, MafExecutionProgress.Empty);
+        var prompt = CoordinationEndpoints.BuildNativeChildPrompt(
+            plan, stateAtDispatch, item.Id, childId);
         var dispatch = new MafExecutionDispatchIntent(
             item.Id, childId, MafExecutionPlanner.CreateDispatchMessageId(_binding.Identity, plan.Plan.Id, item.Id),
             RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt)))

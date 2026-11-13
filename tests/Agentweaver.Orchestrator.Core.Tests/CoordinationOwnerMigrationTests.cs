@@ -713,7 +713,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                         'numeric-limit-native-no-send',
                         'native-root-turn-completion',
                         'native-root-turn-replay',
-                        'checkpoint-recovery-supersession'));
+                        'checkpoint-recovery-supersession',
+                        'native-child-rebind'));
             """, connection))
             await restore.ExecuteNonQueryAsync();
         await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
