@@ -488,13 +488,11 @@ public sealed partial class MafCheckpointStorePostgresTests
                 previousRegistration.Binding.EnvironmentProviderFencingGeneration + 1
         };
         var registration = await registrations.ReplaceAsync(
-            previousRegistration,
-            RuntimeRunStartKeys.ReplacementOperationId(operationId, sessionId, "checkpoint-registration"),
-            binding,
-            expiresAt,
-            CancellationToken.None);
-        var bootstrapId = RuntimeRunStartKeys.ReplacementOperationId(
-            operationId, sessionId, "checkpoint-bootstrap");
+            previousRegistration, operationId, binding, expiresAt, CancellationToken.None);
+        var bootstrapId = owner.LogicalTurnOrdinal == 0
+            ? RuntimeRunStartKeys.ReplacementOperationId(operationId, "checkpoint-bootstrap")
+            : RuntimeRunStartKeys.ReplacementOperationId(
+                operationId, sessionId, "checkpoint-bootstrap");
         var placement = previousPlacement with
         {
             SandboxIdempotencyKey = RuntimeRunStartKeys.SandboxIdempotencyKey(owner, bootstrapId),

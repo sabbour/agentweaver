@@ -5658,6 +5658,12 @@ internal sealed partial class CoordinationOwnerStore
             return false;
         try
         {
+            if (expectedRuntimeInstanceId is not { } previousRuntimeInstanceId ||
+                sourceRegistrationRevision is not { } previousRegistrationRevision ||
+                previousRegistrationRevision <= 0 || previousRegistrationRevision == long.MaxValue)
+                return false;
+            var replacementRuntimeInstanceId = RuntimeRegistrationStore.CreateReplacementId(
+                previousRuntimeInstanceId, manifest.OperationId);
             using var links = JsonDocument.Parse(intent.Links);
             var root = links.RootElement;
             if (member is not null &&
@@ -5666,9 +5672,8 @@ internal sealed partial class CoordinationOwnerStore
                 return false;
             if (root.GetProperty("registration").Deserialize<RuntimeRegistration>(JsonOptions) is not
                     { State: RuntimeRegistrationState.Active } registration ||
-                registration.RuntimeInstanceId != expectedRuntimeInstanceId ||
-                sourceRegistrationRevision is null or <= 0 or long.MaxValue ||
-                registration.Revision != sourceRegistrationRevision + 1 ||
+                registration.RuntimeInstanceId != replacementRuntimeInstanceId ||
+                registration.Revision != 1 ||
                 registration.Revision != registrationRevision ||
                 registration.ExpiresAt != registrationExpiresAt ||
                 registration.ExpiresAt <= _timeProvider.GetUtcNow() ||
