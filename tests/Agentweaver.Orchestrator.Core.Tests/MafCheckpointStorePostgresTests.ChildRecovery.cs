@@ -986,24 +986,9 @@ public sealed partial class MafCheckpointStorePostgresTests
             CancellationToken.None, _selection, blockedCheckpointStore);
         var successorManifest = await owner.ReadCheckpointRecoveryManifestAsync(
             _actor, _binding.Identity, successor.OperationId, CancellationToken.None);
-        // TEMP-DIAG #2748
-        string? failure = null;
-        RuntimeRunStartContinuation.RecoveryFailureObserver.Value = exception =>
-        {
-            failure ??= exception.ToString();
-        };
-        RunExecutionTransitionResult ready;
-        try
-        {
-            (ready, _) = await ContinueCheckpointRecoveryAsync(
-                context.Fixture, successor, successorManifest);
-        }
-        finally
-        {
-            RuntimeRunStartContinuation.RecoveryFailureObserver.Value = null;
-        }
-        Assert.True(ready.CheckpointRecovery?.Phase == "ready",
-            $"op4 not ready: {failure ?? "<no exception captured>"}");
+        var (ready, _) = await ContinueCheckpointRecoveryAsync(
+            context.Fixture, successor, successorManifest);
+        AssertCheckpointRecoveryReady(ready);
 
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var transaction = await connection.BeginTransactionAsync();
@@ -1123,12 +1108,13 @@ public sealed partial class MafCheckpointStorePostgresTests
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
             UPDATE "{_schema}".maf_execution_run_guards
-            SET owner_revision = 7,
+            SET owner_revision = owner_revision + 1,
                 copilot_soft_credit_limit = @softLimit,
                 copilot_hard_credit_limit = @hardLimit,
-                cost_rate_scope_identity = 'scope-1',
-                copilot_aic_floor = 4,
-                accounted_through_event_position = 3,
+                cost_rate_scope_identity = COALESCE(cost_rate_scope_identity, 'scope-1'),
+                copilot_aic_floor = GREATEST(COALESCE(copilot_aic_floor, 0), 4),
+                accounted_through_event_position =
+                    GREATEST(COALESCE(accounted_through_event_position, -1) + 1, 3),
                 usage_witness_digest = @digest,
                 soft_warning_emitted = true,
                 hard_cap_exhausted = true

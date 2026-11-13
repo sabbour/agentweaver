@@ -2823,12 +2823,14 @@ internal sealed class RuntimeUsageSourceStore(
         if (checkpoints.Count == 0 || checkpoints.Count > NativeChildRebindReceipt.MaximumLineageEdges + 1 ||
             checkpoints[0].Id != descendant.SourceCheckpointId ||
             checkpoints[0].Fence != previousReceipt.DestinationFence ||
-            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(checkpoints[0].Payload)) !=
-                descendant.SourceCheckpointHash ||
+            !string.Equals(
+                RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(checkpoints[0].Payload)),
+                descendant.SourceCheckpointHash, StringComparison.OrdinalIgnoreCase) ||
             checkpoints[^1].Id != previousReceipt.AnchorCheckpointId ||
             checkpoints[^1].Fence != previousReceipt.DestinationFence ||
-            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(checkpoints[^1].Payload)) !=
-                previousReceipt.AnchorCheckpointHash)
+            !string.Equals(
+                RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(checkpoints[^1].Payload)),
+                previousReceipt.AnchorCheckpointHash, StringComparison.OrdinalIgnoreCase))
             throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
         for (var index = 1; index < checkpoints.Count; index++)
             if (checkpoints[index].Depth != index ||
