@@ -829,8 +829,8 @@ public sealed partial class MafCheckpointStorePostgresTests
                 };
                 _replacements[envelope.Owner.SessionId] = new(
                     placement, profileId,
-                    new Uri($"https://runtime.test/runtime/v2/{envelope.Owner.SessionId}/configure"),
-                    new Uri($"https://runtime.test/runtime/v2/{envelope.Owner.SessionId}/observe"));
+                    new Uri($"https://runtime.test/runtime/v2/{envelope.Owner.SessionId}/{envelope.OperationId:N}/configure"),
+                    new Uri($"https://runtime.test/runtime/v2/{envelope.Owner.SessionId}/{envelope.OperationId:N}/observe"));
                 return Success(request, emptyEvidenceSessionId == envelope.Owner.SessionId &&
                     emptyEvidenceReceiptName == "placement"
                     ? placement with { ContractVersion = 0 }
