@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -1658,6 +1659,8 @@ public sealed partial class MafCheckpointStorePostgresTests
                 var previous = envelope.PreviousPlacement;
                 var profileId = CreateResolvedProfileId(
                     previous.SourceProfileId, envelope.OperationId, envelope.Owner.SessionId);
+                var sandboxOperationId = new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(
+                    $"{envelope.OperationId:N}\0{envelope.Owner.SessionId}")).AsSpan(0, 16));
                 var placement = new RuntimeRunStartPlacementReceipt(
                     1,
                     previous.EnvironmentId,
@@ -1667,7 +1670,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                     previous.WorkspaceResourceGeneration,
                     previous.WorkspaceDataGeneration,
                     previous.NetworkPolicyGeneration,
-                    Guid.NewGuid(),
+                    sandboxOperationId,
                     new ProviderResourceRef(
                         ProviderSeam.Sandbox,
                         previous.SandboxResource.ProviderId,
@@ -1677,7 +1680,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                     previous.LeaseRevision + 1,
                     previous.CurrentFencingGeneration + 1,
                     previous.ProviderFencingGeneration + 1,
-                    DateTimeOffset.UtcNow.AddHours(1))
+                    previous.LeaseExpiresAt)
                 {
                     PodUid = $"recovered-pod-{envelope.Owner.SessionId}-{envelope.OperationId:N}"
                 };
@@ -2264,6 +2267,9 @@ public sealed partial class MafCheckpointStorePostgresTests
         // Runtime registrations accept only opaque identifiers, so this fixture pins a model reference without '/'.
         const string modelReference = "model:provider-alpha";
         _reviewSelectionContext = await InitializeReviewSelectionAsync(modelReference, withCreditGuard);
+        var acceptedModel = withCreditGuard
+            ? RuntimeAcceptedModelSelection.Read(_selection.Selection.Snapshot)
+            : null;
         var steps = includeBuildTest
             ? new[]
             {
@@ -2325,6 +2331,9 @@ public sealed partial class MafCheckpointStorePostgresTests
         {
             ModelSelectionReference = modelReference,
             ModelSourceMode = ModelSourceMode.HostedCopilot,
+            ModelConnectionId = acceptedModel?.ConnectionId,
+            ModelConnectionScope = acceptedModel?.ConnectionScope,
+            ModelBindingPin = _reviewModelBindingPin,
             PlacementProviderId = ReviewSandboxProviderId,
             CopilotSoftCreditLimit = withCreditGuard ? 3 : null,
             CopilotHardCreditLimit = withCreditGuard ? 5 : null,
@@ -2428,6 +2437,9 @@ public sealed partial class MafCheckpointStorePostgresTests
                 WorkflowStepId = item.WorkflowStepId,
                 ModelSelectionReference = item.ModelSelectionReference,
                 ModelSourceMode = ModelSourceMode.HostedCopilot,
+                ModelConnectionId = acceptedModel?.ConnectionId,
+                ModelConnectionScope = acceptedModel?.ConnectionScope,
+                ModelBindingPin = _reviewModelBindingPin,
                 PlacementProviderId = ReviewSandboxProviderId,
                 CopilotSoftCreditLimit = withCreditGuard ? 3 : null,
                 CopilotHardCreditLimit = withCreditGuard ? 5 : null,
