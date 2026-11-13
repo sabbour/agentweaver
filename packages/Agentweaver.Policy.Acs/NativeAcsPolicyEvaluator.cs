@@ -35,7 +35,15 @@ public sealed class NativeAcsPolicyEvaluator
 
         var validation = _validator.Validate(artifact);
         if (!validation.IsValid)
-            return Error("unavailable", validation.Diagnostics.FirstOrDefault()?.Code ?? "artifact_invalid");
+        {
+            var failureCode = validation.DependencyFailure switch
+            {
+                NativeAcsValidationDependencyFailure.OpaUnavailable => "opa_unavailable",
+                NativeAcsValidationDependencyFailure.NativeValidatorUnavailable => "native_validator_unavailable",
+                _ => validation.Diagnostics.FirstOrDefault()?.Code ?? "artifact_invalid",
+            };
+            return Error("unavailable", failureCode);
+        }
 
         var artifactHash = artifact.ContentSha256;
 

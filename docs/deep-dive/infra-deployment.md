@@ -217,20 +217,24 @@ registry digest and the AgentHost compressed pull size.
 For an ACR candidate, `npm run azure:build-acr-candidate` uses those Docker
 and .NET build paths from a detached exact-source worktree. It downloads the
 pinned OPA binary when the source includes the ACS package and builds
-Orchestrator with its Dockerfile. For an older commit without the package, the
-builder skips the OPA download and uses .NET container publishing for
-Orchestrator. It pushes the same ten `linux/amd64` images to ACR and verifies
+Orchestrator and Projects & Config with their Dockerfiles. For an older commit
+without the Orchestrator Dockerfile and package, the builder skips the OPA
+download and uses .NET container publishing for Orchestrator. Projects &
+Config uses its .NET container path when the selected source has no Projects &
+Config Dockerfile. If that Dockerfile exists without the pinned ACS package,
+the builder stops. It pushes the same ten `linux/amd64` images to ACR and verifies
 the source commit, Git tree, component version, digest, and AgentHost compressed
 pull size. This local command does not replace the automatic GHCR workflow.
 
 ### ACS runtime assets
 
-The Orchestrator and AgentHost source builds include the Linux-x64
+The Orchestrator, AgentHost, and Projects & Config source builds include the Linux-x64
 `AgentControlSpecification` package from a checked-in local feed. The root
 `NuGet.Config` maps only this package to `eng/acs/nuget`; other packages restore
 from nuget.org. Each Dockerfile restores and publishes with the `linux-x64`
 runtime identifier, verifies the native library hash, and runs an image probe
-before the build can finish.
+before the build can finish. The probe also validates a complete artifact with
+the shared `NativeAcsArtifactValidator`.
 
 Each image build downloads OPA `0.70.0` from the official OPA site, checks its
 SHA-256, and places it at `/app/opa`. The image sets `ACS_OPA_PATH=/app/opa`.

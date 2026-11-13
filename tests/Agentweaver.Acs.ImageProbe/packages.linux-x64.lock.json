@@ -7,6 +7,22 @@
         "requested": "[0.4.0-beta.0, )",
         "resolved": "0.4.0-beta.0",
         "contentHash": "vtILlhbuAJ2TSi9BZwZuGcXLxj5YwxudIwO0kRo91rowwmRWBme8RRdaxOc+i2fccRBk1C3nppVAo2P1N5nQ6Q=="
+      },
+      "YamlDotNet": {
+        "type": "Transitive",
+        "resolved": "18.0.0",
+        "contentHash": "ptHVgcYmLejGuWXV7RMFoEqFKYMXnieOlWLPzEslfDtzZ9ngMhjYwykfqjBN2+fMEAEyobozkj07lKEpR4dssA=="
+      },
+      "agentweaver.abstractions": {
+        "type": "Project"
+      },
+      "agentweaver.policy.acs": {
+        "type": "Project",
+        "dependencies": {
+          "AgentControlSpecification": "[0.4.0-beta.0, )",
+          "Agentweaver.Abstractions": "[1.7.0, )",
+          "YamlDotNet": "[18.0.0, )"
+        }
       }
     },
     "net10.0/linux-x64": {

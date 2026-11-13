@@ -350,8 +350,8 @@ namespace Agentweaver.Projects.Config.Migrations
                         .IsRequired()
                         .ValueGeneratedOnAdd()
                         .HasColumnType("text")
-                        .HasDefaultValueSql("pg_current_xact_id()::text")
-                        .HasColumnName("write_transaction_id");
+                        .HasColumnName("write_transaction_id")
+                        .HasDefaultValueSql("pg_current_xact_id()::text");
 
                     b.HasKey("ScopeType", "ScopeId", "PolicyId", "Revision", "RelativePath");
 
@@ -500,6 +500,10 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasColumnName("updated_at");
 
                     b.HasKey("ScopeType", "ScopeId", "PolicyId");
+
+                    b.HasIndex("ScopeType", "ScopeId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_native_acs_policy_heads_scope");
 
                     b.ToTable("native_acs_policy_heads", "projects_config", t =>
                         {
@@ -658,13 +662,6 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasColumnType("bytea")
                         .HasColumnName("manifest_bytes");
 
-                    b.Property<string>("WriteTransactionId")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("text")
-                        .HasDefaultValueSql("pg_current_xact_id()::text")
-                        .HasColumnName("write_transaction_id");
-
                     b.Property<Guid>("MembershipId")
                         .HasColumnType("uuid")
                         .HasColumnName("membership_id");
@@ -686,6 +683,13 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.Property<long>("RoleAssignmentRevision")
                         .HasColumnType("bigint")
                         .HasColumnName("role_assignment_revision");
+
+                    b.Property<string>("WriteTransactionId")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasColumnName("write_transaction_id")
+                        .HasDefaultValueSql("pg_current_xact_id()::text");
 
                     b.HasKey("ScopeType", "ScopeId", "PolicyId", "Revision");
 

@@ -34,10 +34,12 @@ test('requires a full source SHA and an ACR login server', () => {
   ]) assert.throws(() => parseBuildAcrCandidateArgs(args), /Usage:|registry must be/);
 });
 
-for (const hasAcsRuntime of [true, false]) test(
-  hasAcsRuntime
-    ? 'builds and verifies all ten images with the pinned ACS runtime'
-    : 'builds older source commits without the ACS runtime',
+for (const [hasAcsRuntime, hasProjectsConfigDockerfile] of [[true, true], [false, false], [false, true]]) test(
+  hasProjectsConfigDockerfile && !hasAcsRuntime
+    ? 'refuses a Projects Config Dockerfile without the pinned ACS runtime'
+    : hasAcsRuntime
+      ? 'builds and verifies all ten images with the pinned ACS runtime'
+      : 'builds older source commits without the ACS runtime',
   async () => {
   const testRoot = path.join(root, `.acr-candidate-test-${randomUUID()}`);
   const worktreePath = path.join(testRoot, 'source');
@@ -60,6 +62,11 @@ for (const hasAcsRuntime of [true, false]) test(
         const acsFeed = path.join(worktreePath, 'eng', 'acs', 'nuget');
         mkdirSync(acsFeed, { recursive: true });
         writeFileSync(path.join(acsFeed, 'AgentControlSpecification.0.4.0-beta.0.nupkg'), '');
+      }
+      if (hasProjectsConfigDockerfile) {
+        const projectsConfig = path.join(worktreePath, 'services', 'projects-config', 'Agentweaver.Projects.Config');
+        mkdirSync(projectsConfig, { recursive: true });
+        writeFileSync(path.join(projectsConfig, 'Dockerfile'), '');
       }
       writeFileSync(path.join(worktreePath, 'releases', 'foundation.json'), JSON.stringify({
         components: componentIds.map(id => ({ id, version })),
@@ -90,7 +97,7 @@ for (const hasAcsRuntime of [true, false]) test(
   };
   let loginArgs;
   try {
-    const report = await buildAcrCandidate({ sourceSha, registry }, {
+    const build = buildAcrCandidate({ sourceSha, registry }, {
       root,
       worktreePath,
       exec,
@@ -98,6 +105,12 @@ for (const hasAcsRuntime of [true, false]) test(
       verifyImage,
       measureAgentHost,
     });
+    if (hasProjectsConfigDockerfile && !hasAcsRuntime) {
+      await assert.rejects(build, /Projects Config Dockerfile requires the pinned ACS package/);
+      assert.equal(loginArgs, undefined);
+      return;
+    }
+    const report = await build;
 
     assert.deepEqual(loginArgs, ['acr', 'login', '--name', 'agentweaverasabbour']);
     assert.deepEqual(report.images.map(image => image.repository), IMAGE_REPOSITORIES);
@@ -107,7 +120,7 @@ for (const hasAcsRuntime of [true, false]) test(
     assert.equal(measuredImage, `${registry}/agentweaver-agenthost@${digests['agentweaver-agenthost']}`);
     const dockerBuilds = calls.filter(({ name, args }) =>
       name === 'docker' && args[0] === 'buildx' && args[1] === 'build');
-    assert.equal(dockerBuilds.length, hasAcsRuntime ? 4 : 3);
+    assert.equal(dockerBuilds.length, hasAcsRuntime ? 5 : 3);
     for (const dockerBuild of dockerBuilds) {
       assert.ok(dockerBuild.args.includes('linux/amd64'));
       assert.ok(dockerBuild.args.includes(`org.opencontainers.image.revision=${sourceSha}`));
@@ -122,6 +135,15 @@ for (const hasAcsRuntime of [true, false]) test(
       args[1].endsWith(path.join('Agentweaver.Orchestrator', 'Agentweaver.Orchestrator.csproj')) &&
       args.includes('-t:PublishContainer'));
     assert.equal(orchestratorContainerPublish, !hasAcsRuntime);
+    const projectsConfigDockerBuild = dockerBuilds.some(({ args }) =>
+      args.some(argument => argument.endsWith(
+        path.join('services', 'projects-config', 'Agentweaver.Projects.Config', 'Dockerfile'))));
+    assert.equal(projectsConfigDockerBuild, hasProjectsConfigDockerfile);
+    const projectsConfigContainerPublish = calls.some(({ name, args }) =>
+      name === 'dotnet' && args[0] === 'publish' &&
+      args[1].endsWith(path.join('Agentweaver.Projects.Config', 'Agentweaver.Projects.Config.csproj')) &&
+      args.includes('-t:PublishContainer'));
+    assert.equal(projectsConfigContainerPublish, !hasProjectsConfigDockerfile);
     const opaDownload = calls.find(({ name, args }) => name === 'curl' && args.includes('--output'));
     if (hasAcsRuntime) {
       assert.ok(opaDownload.args.includes('https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static'));

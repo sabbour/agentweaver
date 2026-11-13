@@ -786,6 +786,13 @@
     },
     {
       "consumer": "Agentweaver.Projects.Config",
+      "dependency": "Agentweaver.Policy.Acs",
+      "versions": [
+        "1.0.0"
+      ]
+    },
+    {
+      "consumer": "Agentweaver.Projects.Config",
       "dependency": "Agentweaver.ObjectStore.AzureBlob",
       "versions": [
         "0.0.0",

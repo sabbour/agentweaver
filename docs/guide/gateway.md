@@ -560,6 +560,13 @@ Gateway request bodies are limited to 64 KiB by default. The Knowledge import
 endpoint accepts up to 1 MiB. Inline Skill preview and import each accept up to
 3 MiB.
 
+The canonical Platform Policy validation and write routes accept request
+bodies up to 5 MiB. All three routes have a 5 MiB response limit. They forward
+the optional tenant selector, expose `Cache-Control`, and are not available
+as MCP tools. The owner performs policy authorization and validation. Route
+presence in source does not prove deployment or policy activation; see the
+[API reference](../reference/api.md#catalog-and-platform-routes).
+
 The Gateway does not expose journal object-content reads. It exposes
 run-produced files only through the Source Control output-capture routes:
 capture, list, read, diff, and file. Each capture is a pinned, immutable copy

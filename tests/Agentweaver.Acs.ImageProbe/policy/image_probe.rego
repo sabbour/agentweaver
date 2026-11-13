@@ -9,6 +9,5 @@ pre_model_call_verdict := {
 	"reason": "acs_image_probe_denied",
 	"message": "The image probe requested a deny.",
 } if {
-	input.intervention_point == "pre_model_call"
-	input.policy_target.value.block == true
+	input.policy_target.value.action_id == "blocked"
 }

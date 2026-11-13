@@ -69,15 +69,15 @@ The build fails if the hash does not match.
 
 ## Image flow and checks
 
-The Orchestrator and AgentHost Dockerfiles restore the package for
-`linux-x64`, publish the service, and verify the packaged native library hash.
-Each Dockerfile copies the verified OPA binary to `/app/opa`, sets
-`ACS_OPA_PATH=/app/opa`, and sets `LD_LIBRARY_PATH=/app`. The image build runs
-the same probe inside each final image. It removes the probe's own native
+The Orchestrator, AgentHost, and Projects & Config Dockerfiles restore the
+package for `linux-x64`, publish the service, and verify the packaged native
+library hash. Each Dockerfile copies the verified OPA binary to `/app/opa`,
+sets `ACS_OPA_PATH=/app/opa`, and sets `LD_LIBRARY_PATH=/app`. The image build
+runs the same probe inside each final image. It removes the probe's own native
 library, then loads the image's library through that search path. The probe
-checks OPA allow, deny,
-fail-closed behavior with an invalid OPA path, and timeout denial. A failed
-asset check or probe stops that image build.
+validates a complete artifact with the shared validator and checks OPA allow,
+deny, fail-closed behavior with an invalid OPA path, and timeout denial. A
+failed asset check or probe stops that image build.
 
 The build does not download assets at runtime, search `PATH` for OPA, enable a
 permissive mode, activate ACS, or change stored policy data. It proves runtime

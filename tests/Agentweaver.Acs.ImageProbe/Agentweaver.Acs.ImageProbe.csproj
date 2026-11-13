@@ -9,6 +9,9 @@
     <PackageReference Include="AgentControlSpecification" Version="0.4.0-beta.0" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\packages\Agentweaver.Policy.Acs\Agentweaver.Policy.Acs.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <None Update="manifest.yaml" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Update="policy\image_probe.rego" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>

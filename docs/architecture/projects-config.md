@@ -135,6 +135,12 @@ reads only existing Memory provider selections through the private
 Knowledge-selection route. This does not grant access to general run selections
 or create a provider pin.
 
+The Platform Policy API reads, validates, and writes the canonical ACS source.
+It stores one complete artifact and one head for the Platform scope. The
+artifact contains all policy domains, but this API does not activate it or
+change the v4 Policy path. See the [Policy API contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract)
+for authorization, limits, and error behavior.
+
 The Identity broker validates upstream identity but does not forward upstream tenant or role claims or assign application roles. OAuth scopes remain necessary route permissions, but they are not authority by themselves. Role claims and request headers never create authority; missing, ambiguous, stale, or foreign memberships fail closed.
 
 | Route | Operation |
@@ -174,6 +180,9 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `GET /api/platform/runtime-defaults` | Read the platform administrator's current defaults. |
 | `PUT /api/platform/runtime-defaults` | Append platform defaults with an expected revision. |
 | `GET /api/platform/components` | Report the active implementation and readiness of every platform component area for a current TenantAdmin or PlatformAdmin. Projects collects owner reports in parallel. See [Platform components](../guide/platform-components.md). |
+| `GET /api/policies/platform` | Read the current canonical ACS Policy artifact as a complete, hash-verified source. Requires `api.read` and a current unbound PlatformAdmin; it does not require `projects.admin`. |
+| `POST /api/policies/platform/validate` | Validate a complete Platform Policy artifact without changing stored policy state. |
+| `PUT /api/policies/platform` | Append a validated complete Platform Policy artifact at an expected revision. Requires `api.read`, `projects.admin`, and a current unbound PlatformAdmin. Off by default: returns `503` unless head writes are enabled. A retry of a saved request returns its receipt. |
 | `PUT /api/projects/{projectId}/runs/{runId}/selection` | Accept or idempotently replay a run-selection request from the Orchestrator. |
 | `GET /api/projects/{projectId}/runs/{runId}/selection` | Read the immutable selection snapshot for the authorized Orchestrator. |
 | `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, mapped only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. Requires native TLS 1.2 or TLS 1.3, accepts no query or body, and returns a bounded `Cache-Control: no-store` receipt only for the exact signed project/run binding, active project, current actor membership, active Orchestrator assignment, and matching accepted run-selection snapshot. |

@@ -1977,6 +1977,22 @@ public sealed partial class ProjectsConfigService
         throw ProjectConfigException.Forbidden();
     }
 
+    public async Task EnsurePlatformPolicyReaderAsync(
+        ProjectAuthorizationContext caller,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireUnboundRequest();
+        if (!await HasCurrentRoleAsync(
+                caller,
+                ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId,
+                ProjectAuthorityRole.PlatformAdmin,
+                cancellationToken).ConfigureAwait(false))
+            throw ProjectConfigException.Forbidden();
+    }
+
     /// <summary>Rejects stale or revoked membership revisions before project operations.</summary>
     private async Task EnsureCurrentMembershipAsync(
         ProjectAuthorizationContext caller,

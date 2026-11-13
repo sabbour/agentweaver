@@ -2,13 +2,16 @@ using System.Collections.Immutable;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 
 namespace Agentweaver.Abstractions;
 
 /// <summary>One relative file that belongs to a complete native ACS artifact.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record NativeAcsArtifactFile(string RelativePath, ImmutableArray<byte> Bytes);
 
 /// <summary>The exact manifest and every relative module or data file, bound by one content hash.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record NativeAcsArtifact(
     ImmutableArray<byte> ManifestBytes,
     ImmutableArray<NativeAcsArtifactFile> Files,
@@ -82,10 +85,17 @@ public sealed record NativeAcsDiagnostic(
     int? Line = null,
     int? Column = null);
 
+public enum NativeAcsValidationDependencyFailure
+{
+    OpaUnavailable,
+    NativeValidatorUnavailable,
+}
+
 /// <summary>Validation result for one complete, content-pinned ACS artifact.</summary>
 public sealed record NativeAcsValidationResult(
     bool IsValid,
-    ImmutableArray<NativeAcsDiagnostic> Diagnostics);
+    ImmutableArray<NativeAcsDiagnostic> Diagnostics,
+    NativeAcsValidationDependencyFailure? DependencyFailure = null);
 
 /// <summary>Native ACS decision bound to the exact artifact hash that was evaluated.</summary>
 public sealed record NativeAcsEvaluationResult(

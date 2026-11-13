@@ -1,4 +1,5 @@
 using System.Data;
+using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Agentweaver.Abstractions;
@@ -24,10 +25,7 @@ internal sealed class NativeAcsPolicyStore(
         ArgumentNullException.ThrowIfNull(caller);
         ArgumentNullException.ThrowIfNull(request);
         ValidateRequest(request);
-        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
-        caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
-        caller.RequireUnboundRequest();
-        var roleGrants = GetAuthorizingGrants(caller, request);
+        var roleGrants = EnsureWriteAuthorized(caller, request);
         var requestDigest = RequestDigest(request);
         var scopeDigest = ScopeDigest(caller, request);
 
@@ -40,24 +38,12 @@ internal sealed class NativeAcsPolicyStore(
         {
         var authorizingGrant = await LockAndCheckAuthorityAsync(
             db, caller, request, roleGrants, cancellationToken).ConfigureAwait(false);
-        var prior = await db.NativeAcsPolicyIdempotency.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.ScopeDigest == scopeDigest, cancellationToken)
+        var replay = await FindReceiptAsync(db, caller, request, scopeDigest, requestDigest, cancellationToken)
             .ConfigureAwait(false);
-        if (prior is not null)
+        if (replay is not null)
         {
-            if (prior.ScopeType != request.ScopeType ||
-                prior.ScopeId != request.ScopeId ||
-                prior.PolicyId != request.PolicyId ||
-                prior.ActorIssuer != caller.Issuer ||
-                prior.ActorId != caller.ActorId ||
-                prior.IdempotencyKey != request.IdempotencyKey ||
-                prior.RequestDigest != requestDigest)
-                throw IdempotencyConflict();
-
-            var replay = JsonSerializer.Deserialize<NativeAcsPolicyWriteReceipt>(prior.ReceiptJson, JsonOptions)
-                ?? throw new InvalidOperationException("The saved native ACS policy receipt could not be read.");
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            return replay with { Replayed = true };
+            return replay;
         }
 
         var currentRevision = await LockHeadAsync(db, request, cancellationToken).ConfigureAwait(false);
@@ -226,6 +212,122 @@ internal sealed class NativeAcsPolicyStore(
         }
     }
 
+    /// <summary>
+    /// Returns the durable receipt for an identical earlier request after a fresh authority check.
+    /// It does not validate the artifact again, so a lost response can be recovered while the validator is down.
+    /// </summary>
+    internal async Task<NativeAcsPolicyWriteReceipt?> FindReplayAsync(
+        ProjectAuthorizationContext caller,
+        NativeAcsPolicyWriteRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateRequest(request);
+        var roleGrants = EnsureWriteAuthorized(caller, request);
+
+        await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+            .ConfigureAwait(false);
+        await LockAndCheckAuthorityAsync(db, caller, request, roleGrants, cancellationToken).ConfigureAwait(false);
+        var receipt = await FindReceiptAsync(
+            db, caller, request, ScopeDigest(caller, request), RequestDigest(request), cancellationToken)
+            .ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return receipt;
+    }
+
+    /// <summary>Returns the stable policy ID of the one head for a scope, or null when the scope has no head.</summary>
+    internal async Task<string?> FindPolicyIdAsync(
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId,
+        CancellationToken cancellationToken)
+    {
+        await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        return await db.NativeAcsPolicyHeads.AsNoTracking()
+            .Where(item => item.ScopeType == scopeType && item.ScopeId == scopeId)
+            .Select(item => item.PolicyId)
+            .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    internal async Task<NativeAcsPolicyReadResult?> ReadAsync(
+        NativeAcsPolicyScopeType scopeType,
+        string scopeId,
+        CancellationToken cancellationToken)
+    {
+        await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        var head = await db.NativeAcsPolicyHeads.AsNoTracking()
+            .SingleOrDefaultAsync(item =>
+                item.ScopeType == scopeType &&
+                item.ScopeId == scopeId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (head is null)
+            return null;
+        var policyId = head.PolicyId;
+
+        var revision = await db.NativeAcsPolicyRevisions.AsNoTracking()
+            .SingleOrDefaultAsync(item =>
+                item.ScopeType == scopeType &&
+                item.ScopeId == scopeId &&
+                item.PolicyId == policyId &&
+                item.Revision == head.CurrentRevision,
+                cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new ProjectConfigException(
+                "native_acs_policy_corrupt",
+                "The current native ACS policy revision is unavailable.",
+                StatusCodes.Status500InternalServerError);
+        var storedFiles = await db.NativeAcsPolicyArtifactFiles.AsNoTracking()
+            .Where(item =>
+                item.ScopeType == scopeType &&
+                item.ScopeId == scopeId &&
+                item.PolicyId == policyId &&
+                item.Revision == head.CurrentRevision)
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var artifact = new NativeAcsArtifact(
+            revision.ManifestBytes.ToImmutableArray(),
+            storedFiles
+                .OrderBy(item => item.RelativePath, StringComparer.Ordinal)
+                .Select(item => new NativeAcsArtifactFile(
+                    item.RelativePath,
+                    item.Bytes.ToImmutableArray()))
+                .ToImmutableArray(),
+            revision.ContentSha256);
+        if (!string.Equals(
+                NativeAcsArtifactHash.Compute(artifact),
+                revision.ContentSha256,
+                StringComparison.Ordinal))
+            throw new ProjectConfigException(
+                "native_acs_policy_corrupt",
+                "The current native ACS policy artifact failed its integrity check.",
+                StatusCodes.Status500InternalServerError);
+
+        return new NativeAcsPolicyReadResult(
+            head.ScopeType,
+            head.ScopeId,
+            head.PolicyId,
+            head.CurrentRevision,
+            revision.ContentSha256,
+            artifact,
+            head.UpdatedAt);
+    }
+
+    internal static IReadOnlyList<ProjectAuthorizationGrant> EnsureWriteAuthorized(
+        ProjectAuthorizationContext caller,
+        NativeAcsPolicyWriteRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(request);
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+        caller.RequireUnboundRequest();
+        return GetAuthorizingGrants(caller, request);
+    }
+
     private static IReadOnlyList<ProjectAuthorizationGrant> GetAuthorizingGrants(
         ProjectAuthorizationContext caller,
         NativeAcsPolicyWriteRequest request)
@@ -324,6 +426,33 @@ internal sealed class NativeAcsPolicyStore(
             grant.AssignmentId == assignmentId && grant.Revision == revision);
     }
 
+    private static async Task<NativeAcsPolicyWriteReceipt?> FindReceiptAsync(
+        ProjectsConfigDbContext db,
+        ProjectAuthorizationContext caller,
+        NativeAcsPolicyWriteRequest request,
+        string scopeDigest,
+        string requestDigest,
+        CancellationToken cancellationToken)
+    {
+        var prior = await db.NativeAcsPolicyIdempotency.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.ScopeDigest == scopeDigest, cancellationToken)
+            .ConfigureAwait(false);
+        if (prior is null)
+            return null;
+        if (prior.ScopeType != request.ScopeType ||
+            prior.ScopeId != request.ScopeId ||
+            prior.PolicyId != request.PolicyId ||
+            prior.ActorIssuer != caller.Issuer ||
+            prior.ActorId != caller.ActorId ||
+            prior.IdempotencyKey != request.IdempotencyKey ||
+            prior.RequestDigest != requestDigest)
+            throw IdempotencyConflict();
+
+        var replay = JsonSerializer.Deserialize<NativeAcsPolicyWriteReceipt>(prior.ReceiptJson, JsonOptions)
+            ?? throw new InvalidOperationException("The saved native ACS policy receipt could not be read.");
+        return replay with { Replayed = true };
+    }
+
     private static async Task<long?> LockHeadAsync(
         ProjectsConfigDbContext db,
         NativeAcsPolicyWriteRequest request,
@@ -377,6 +506,13 @@ internal sealed class NativeAcsPolicyStore(
 
     private static void ValidateRequest(NativeAcsPolicyWriteRequest request)
     {
+        ValidateWriteMetadata(request);
+        ValidateArtifact(request.Artifact);
+    }
+
+    internal static void ValidateWriteMetadata(NativeAcsPolicyWriteRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
         if (!Enum.IsDefined(request.ScopeType) ||
             string.IsNullOrWhiteSpace(request.ScopeId) ||
             request.ScopeId.Length > 256 ||
@@ -396,15 +532,19 @@ internal sealed class NativeAcsPolicyStore(
             throw ProjectConfigException.Invalid(
                 "native_acs_policy_invalid",
                 "The platform policy scope ID is invalid.");
-        if (request.Artifact.ManifestBytes.IsDefaultOrEmpty ||
-            request.Artifact.Files.IsDefault ||
-            request.Artifact.Files.Any(file =>
+    }
+
+    private static void ValidateArtifact(NativeAcsArtifact artifact)
+    {
+        if (artifact.ManifestBytes.IsDefaultOrEmpty ||
+            artifact.Files.IsDefault ||
+            artifact.Files.Any(file =>
             file is null ||
             string.IsNullOrWhiteSpace(file.RelativePath) ||
             file.RelativePath.Length > 256 ||
             file.Bytes.IsDefault) ||
-            request.Artifact.Files.Select(file => file.RelativePath).Distinct(StringComparer.Ordinal).Count() !=
-            request.Artifact.Files.Length)
+            artifact.Files.Select(file => file.RelativePath).Distinct(StringComparer.Ordinal).Count() !=
+            artifact.Files.Length)
             throw ProjectConfigException.Invalid(
                 "native_acs_policy_invalid",
                 "The native ACS policy artifact is invalid.");
@@ -412,7 +552,7 @@ internal sealed class NativeAcsPolicyStore(
         string contentHash;
         try
         {
-            contentHash = NativeAcsArtifactHash.Compute(request.Artifact);
+            contentHash = NativeAcsArtifactHash.Compute(artifact);
         }
         catch (ArgumentException)
         {
@@ -420,7 +560,7 @@ internal sealed class NativeAcsPolicyStore(
                 "native_acs_policy_invalid",
                 "The native ACS policy artifact is invalid.");
         }
-        if (!string.Equals(request.Artifact.ContentSha256, contentHash, StringComparison.Ordinal))
+        if (!string.Equals(artifact.ContentSha256, contentHash, StringComparison.Ordinal))
             throw ProjectConfigException.Invalid(
                 "native_acs_policy_invalid",
                 "The native ACS policy artifact is invalid.");

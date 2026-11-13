@@ -73,7 +73,10 @@ facts are unavailable.
 
 `Agentweaver.Policy.Acs` consumes these contracts. It is not a provider seam
 or an active host. The deployed v4 Policy path continues to use its existing
-YAML adapter. See the [native ACS contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract).
+YAML adapter. `NativeAcsValidationResult.DependencyFailure` reports an
+unavailable OPA or native validator separately from artifact diagnostics.
+Invalid policy input remains a validation diagnostic. See the
+[native ACS contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract).
 
 ## 6. Runtime view
 

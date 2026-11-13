@@ -20,6 +20,7 @@ public sealed class NativeAcsArtifactValidator
     private const int MaximumDiagnostics = 32;
     private const int MaximumDiagnosticMessageLength = 2048;
     private const int MaximumOpaAstCharacters = 4_194_304;
+    private const int MaximumOpaErrorCharacters = 65_536;
     private const int MaximumOpaParseMilliseconds = 5000;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private static readonly HashSet<string> AllowedInputPaths = new(StringComparer.Ordinal)
@@ -152,11 +153,10 @@ public sealed class NativeAcsArtifactValidator
         if (!hashMatches)
             Add(diagnostics, "artifact_hash", "The ACS artifact hash does not match all supplied bytes.");
 
-        if (!File.Exists(_opaPath))
-            Add(diagnostics, "opa_missing", "The pinned OPA executable is not available.");
-
         if (diagnostics.Count > 0)
             return Result(false, diagnostics);
+        if (!File.Exists(_opaPath))
+            return Result(false, diagnostics, NativeAcsValidationDependencyFailure.OpaUnavailable);
 
         var isNetworkArtifact = NativeAcsFiniteNetworkProfile.IsCandidate(artifact);
         string manifest;
@@ -178,19 +178,19 @@ public sealed class NativeAcsArtifactValidator
                     regoModules.Add(file.RelativePath, text);
                     var remainingMilliseconds = MaximumOpaParseMilliseconds -
                         (int)opaParseStopwatch.ElapsedMilliseconds;
+                    // A timeout does not prove that the policy is invalid.
                     if (remainingMilliseconds <= 0)
-                    {
-                        Add(diagnostics, "opa_parse_timeout", "OPA exceeded the Rego parse time limit.", file.RelativePath);
-                        break;
-                    }
+                        return Result(false, diagnostics, NativeAcsValidationDependencyFailure.OpaUnavailable);
 
-                    ValidateInputFacts(
+                    var dependencyFailure = ValidateInputFacts(
                         file.RelativePath,
                         text,
                         diagnostics,
                         definedRulePaths,
                         remainingMilliseconds,
                         isNetworkArtifact);
+                    if (dependencyFailure is not null)
+                        return Result(false, diagnostics, dependencyFailure);
                 }
                 else if (file.RelativePath.EndsWith(".json", StringComparison.Ordinal))
                 {
@@ -238,8 +238,15 @@ public sealed class NativeAcsArtifactValidator
         try
         {
             var nativeResult = ArtifactValidator.Validate(manifest, regoModules, _opaPath);
+            NativeAcsValidationDependencyFailure? nativeDependencyFailure = null;
             foreach (var diagnostic in nativeResult.Diagnostics)
             {
+                if (ClassifyNativeDependencyFailure(diagnostic.Code) is { } dependencyFailure)
+                {
+                    nativeDependencyFailure ??= dependencyFailure;
+                    continue;
+                }
+
                 Add(
                     diagnostics,
                     diagnostic.Code,
@@ -249,12 +256,18 @@ public sealed class NativeAcsArtifactValidator
                     ToInt32(diagnostic.Column));
             }
 
+            // A process, timeout, or staging failure does not prove that the artifact is invalid.
+            if (nativeDependencyFailure is { } failure)
+                return Result(false, diagnostics, failure);
             if (!nativeResult.Valid && diagnostics.Count == 0)
                 Add(diagnostics, "native_validation", "The native ACS validator rejected the artifact.");
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            Add(diagnostics, "native_validation", "The native ACS validator could not validate the artifact.");
+            return Result(
+                false,
+                diagnostics,
+                NativeAcsValidationDependencyFailure.NativeValidatorUnavailable);
         }
 
         return Result(diagnostics.Count == 0, diagnostics);
@@ -263,7 +276,18 @@ public sealed class NativeAcsArtifactValidator
     public static string ComputeContentSha256(NativeAcsArtifact artifact)
         => NativeAcsArtifactHash.Compute(artifact);
 
-    private void ValidateInputFacts(
+    // Codes from AgentControlSpecification 0.4.0-beta.0 artifact validation that report dependency state.
+    internal static NativeAcsValidationDependencyFailure? ClassifyNativeDependencyFailure(string? code) =>
+        code switch
+        {
+            "opa_timeout" or "opa_invalid_executable" or "opa_execution_error" =>
+                NativeAcsValidationDependencyFailure.OpaUnavailable,
+            "rego_staging_error" or "validation_internal_error" =>
+                NativeAcsValidationDependencyFailure.NativeValidatorUnavailable,
+            _ => null,
+        };
+
+    private NativeAcsValidationDependencyFailure? ValidateInputFacts(
         string relativePath,
         string module,
         ImmutableArray<NativeAcsDiagnostic>.Builder diagnostics,
@@ -288,13 +312,10 @@ public sealed class NativeAcsArtifactValidator
         {
             using var process = Process.Start(startInfo);
             if (process is null)
-            {
-                Add(diagnostics, "opa_parse", "OPA could not start its Rego parser.", relativePath);
-                return;
-            }
+                return NativeAcsValidationDependencyFailure.OpaUnavailable;
 
             var outputTask = ReadBoundedAsync(process.StandardOutput, MaximumOpaAstCharacters);
-            var errorTask = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
+            var errorTask = ReadBoundedAsync(process.StandardError, MaximumOpaErrorCharacters);
             process.StandardInput.Write(module);
             process.StandardInput.Close();
 
@@ -310,7 +331,7 @@ public sealed class NativeAcsArtifactValidator
                     process.Kill(entireProcessTree: true);
                 process.WaitForExit();
                 Add(diagnostics, "opa_output_limit", "OPA exceeded the Rego parse output limit.", relativePath);
-                return;
+                return null;
             }
 
             var remainingMilliseconds = Math.Max(0, timeoutMilliseconds - (int)stopwatch.ElapsedMilliseconds);
@@ -318,25 +339,35 @@ public sealed class NativeAcsArtifactValidator
             {
                 process.Kill(entireProcessTree: true);
                 process.WaitForExit();
-                Add(diagnostics, "opa_parse_timeout", "OPA exceeded the Rego parse time limit.", relativePath);
-                return;
+                return NativeAcsValidationDependencyFailure.OpaUnavailable;
             }
 
             Task.WaitAll(outputTask, errorTask);
             var (output, exceededLimit) = outputTask.Result;
-            if (process.ExitCode != 0 || exceededLimit)
+            if (exceededLimit)
             {
-                Add(diagnostics, "opa_parse", "OPA could not parse the Rego module within its output limit.", relativePath);
-                return;
+                Add(diagnostics, "opa_output_limit", "OPA exceeded the Rego parse output limit.", relativePath);
+                return null;
+            }
+
+            if (process.ExitCode != 0)
+            {
+                // Only a structured OPA parse error proves that the module is invalid.
+                var (error, errorExceeded) = errorTask.Result;
+                if (process.ExitCode != 1 || errorExceeded || !IsRegoParseError(error))
+                    return NativeAcsValidationDependencyFailure.OpaUnavailable;
+                Add(diagnostics, "opa_parse", "OPA could not parse the Rego module.", relativePath);
+                return null;
             }
 
             using var document = JsonDocument.Parse(output);
             ValidateAstInputFacts(document.RootElement, relativePath, diagnostics, allowNetworkFacts);
             CollectRulePaths(document.RootElement, definedRulePaths);
+            return null;
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            Add(diagnostics, "opa_parse", "OPA could not inspect the Rego module.", relativePath);
+            return NativeAcsValidationDependencyFailure.OpaUnavailable;
         }
     }
 
@@ -620,6 +651,27 @@ public sealed class NativeAcsArtifactValidator
         }
     }
 
+    private static bool IsRegoParseError(string error)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(error);
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                document.RootElement.TryGetProperty("errors", out var errors) &&
+                errors.ValueKind == JsonValueKind.Array &&
+                errors.GetArrayLength() > 0 &&
+                errors.EnumerateArray().All(item =>
+                    item.ValueKind == JsonValueKind.Object &&
+                    item.TryGetProperty("code", out var code) &&
+                    code.ValueKind == JsonValueKind.String &&
+                    code.GetString() == "rego_parse_error");
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private static void ValidateAstInputFacts(
         JsonElement element,
         string relativePath,
@@ -829,6 +881,7 @@ public sealed class NativeAcsArtifactValidator
 
     private static NativeAcsValidationResult Result(
         bool valid,
-        ImmutableArray<NativeAcsDiagnostic>.Builder diagnostics) =>
-        new(valid, diagnostics.ToImmutable());
+        ImmutableArray<NativeAcsDiagnostic>.Builder diagnostics,
+        NativeAcsValidationDependencyFailure? dependencyFailure = null) =>
+        new(valid && dependencyFailure is null, diagnostics.ToImmutable(), dependencyFailure);
 }
