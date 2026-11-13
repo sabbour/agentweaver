@@ -5689,7 +5689,9 @@ internal sealed partial class CoordinationOwnerStore
                 registration.Binding.WorkflowStepId != workflowStepId ||
                 modelSelectionReference is not null &&
                     registration.Binding.ModelSelectionReference != modelSelectionReference ||
-                registration.Binding.AcceptedSelectionHash != manifest.SelectionHash ||
+                !string.Equals(
+                    registration.Binding.AcceptedSelectionHash, manifest.SelectionHash,
+                    StringComparison.OrdinalIgnoreCase) ||
                 registration.Binding.ExecutionFence != manifest.HoldFence ||
                 registration.Binding.TurnId != (logicalTurnOrdinal == 0
                     ? CreateCoordinatorRootRuntimeTurnId(manifest.Root, manifest.HoldFence)
