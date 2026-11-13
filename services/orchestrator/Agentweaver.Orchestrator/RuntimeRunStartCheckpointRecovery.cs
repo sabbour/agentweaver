@@ -31,7 +31,7 @@ internal sealed partial class RuntimeRunStartContinuation
             intent.ExecutionFence != status.PreviousExecutionFence &&
                 intent.ExecutionFence != status.ExecutionFence ||
             intent.CleanupObligation ||
-            intent.AcceptedSelectionHash != manifest.SelectionHash ||
+            !HasMatchingCheckpointRecoverySelectionHash(intent.AcceptedSelectionHash, manifest.SelectionHash) ||
             CoordinationRuntimeRunStartStore.ReadChildBinding(intent) != member.Startup.Binding)
             throw new RuntimeAuthorizationException("checkpoint_recovery_runtime_stale");
 
@@ -360,6 +360,9 @@ internal sealed partial class RuntimeRunStartContinuation
             consumeOperationId: member.ConsumeId,
             exchangeOperationId: member.ExchangeId).ConfigureAwait(false);
     }
+
+    internal static bool HasMatchingCheckpointRecoverySelectionHash(string intentHash, string manifestHash) =>
+        string.Equals(intentHash, manifestHash, StringComparison.OrdinalIgnoreCase);
 
     private static T? ReadLinked<T>(IReadOnlyDictionary<string, JsonElement> links, string key) =>
         links.TryGetValue(key, out var value) && value.ValueKind != JsonValueKind.Null

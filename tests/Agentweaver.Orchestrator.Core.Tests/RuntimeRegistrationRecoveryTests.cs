@@ -131,6 +131,18 @@ public sealed class RuntimeRegistrationRecoveryTests
     }
 
     [Fact]
+    public void CheckpointRecoverySelectionHashComparisonIgnoresHexCaseButRejectsDifferentHashes()
+    {
+        var intentHash = new string('a', 64);
+        var manifestHash = intentHash.ToUpperInvariant();
+
+        Assert.True(RuntimeRunStartContinuation.HasMatchingCheckpointRecoverySelectionHash(
+            intentHash, manifestHash));
+        Assert.False(RuntimeRunStartContinuation.HasMatchingCheckpointRecoverySelectionHash(
+            intentHash, new string('b', 64)));
+    }
+
+    [Fact]
     public void NewRecoveryReplacesPreviousRuntimeEvidenceFromAnOlderOperation()
     {
         var oldOperationId = Guid.NewGuid();

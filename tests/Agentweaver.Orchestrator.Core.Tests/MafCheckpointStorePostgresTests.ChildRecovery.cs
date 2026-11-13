@@ -440,7 +440,8 @@ public sealed partial class MafCheckpointStorePostgresTests
 
     [Theory]
     [InlineData("forged result", "runtime_native_turn_accounting_invalid")]
-    [InlineData("", "checkpoint_recovery_result_material_invalid")]
+    [InlineData("bad\u0001result", "checkpoint_recovery_result_material_invalid")]
+    [InlineData("", "events_session_material_invalid")]
     public async Task ChildRecoveryRejectsMismatchedOrMalformedCompletedUnjoinedResultAndKeepsHold(
         string result,
         string expectedReason)
@@ -581,6 +582,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                 new Claim("iss", _actor.Issuer),
                 new Claim("aud", options.Audience),
                 new Claim("aud", options.ProjectsAudience),
+                new Claim("aud", options.EventsAudience),
                 new Claim("project_id", manifest.Root.ProjectId),
                 new Claim("run_id", manifest.Root.RunId),
                 new Claim("scope", "api.read projects.orchestrator")
@@ -653,7 +655,14 @@ public sealed partial class MafCheckpointStorePostgresTests
         var currentRootIntent = await starts.ReadIntentForStatusAsync(
             manifest.Root.ProjectId, manifest.Root.RunId, manifest.Root.SessionId, CancellationToken.None)
             ?? throw new InvalidOperationException("The root startup intent disappeared.");
-        if (emptyEvidenceReceiptName is null)
+        if (recovered.CheckpointRecovery?.Phase != "pending")
+        {
+            Assert.Equal(recovered.CheckpointRecovery?.Phase, result.CheckpointRecovery?.Phase);
+            Assert.Equal(recovered.OperationId, result.OperationId);
+            Assert.Equal(recovered.ExecutionFence, result.ExecutionFence);
+            Assert.Empty(peer.BootstrapSessions);
+        }
+        else if (emptyEvidenceReceiptName is null)
         {
             var currentRoot = ReadIntentReceipt<RuntimeRegistration>(currentRootIntent, "registration");
             var previousRoot = initial[manifest.Root.SessionId].Registration;
@@ -670,8 +679,11 @@ public sealed partial class MafCheckpointStorePostgresTests
                     pendingChild.Session.SessionId, CancellationToken.None)
                     ?? throw new InvalidOperationException("The child startup intent disappeared.");
                 var currentChild = ReadIntentReceipt<RuntimeRegistration>(childIntent, "registration");
-                Assert.NotEqual(initial[pendingChild.Session.SessionId].Registration.Binding.ProfileId,
-                    currentChild.Binding.ProfileId);
+                Assert.True(
+                    initial[pendingChild.Session.SessionId].Registration.Binding.ProfileId !=
+                        currentChild.Binding.ProfileId,
+                    $"phase={result.CheckpointRecovery?.Phase} step={result.CheckpointRecovery?.CurrentStep} " +
+                    $"reason={result.CheckpointRecovery?.ReasonCode}");
                 Assert.NotEqual(initial[pendingChild.Session.SessionId].Registration.Binding.ConfigureEndpoint,
                     currentChild.Binding.ConfigureEndpoint);
                 Assert.Equal(manifest.Root.SessionId, Assert.Single(peer.BootstrapSessions));
@@ -690,8 +702,11 @@ public sealed partial class MafCheckpointStorePostgresTests
                     pendingChild.Session.SessionId, CancellationToken.None)
                     ?? throw new InvalidOperationException("The child startup intent disappeared.");
                 var currentChild = ReadIntentReceipt<RuntimeRegistration>(childIntent, "registration");
-                Assert.NotEqual(initial[pendingChild.Session.SessionId].Registration.Binding.ProfileId,
-                    currentChild.Binding.ProfileId);
+                Assert.True(
+                    initial[pendingChild.Session.SessionId].Registration.Binding.ProfileId !=
+                        currentChild.Binding.ProfileId,
+                    $"phase={result.CheckpointRecovery?.Phase} step={result.CheckpointRecovery?.CurrentStep} " +
+                    $"reason={result.CheckpointRecovery?.ReasonCode}");
                 Assert.NotEqual(initial[pendingChild.Session.SessionId].Registration.Binding.ConfigureEndpoint,
                     currentChild.Binding.ConfigureEndpoint);
                 Assert.Collection(
