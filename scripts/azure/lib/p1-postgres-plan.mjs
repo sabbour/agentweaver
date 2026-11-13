@@ -436,8 +436,9 @@ export function buildP1PostgresPlan(targetName = 'agentweaver') {
     // 042 adds coordinator run-start intents with exact SELECT,INSERT,UPDATE grants.
     // 043 and 045 add native root-turn evidence kinds; 044 adds replacement operations.
     // 047 guards recovery while terminal cleanup is admitted; 048 binds PR effect and result identity.
-    // 049 adds the owner-managed runtime-observation cursor table; 050 adds constraints and indexes on the existing evidence ledger.
-    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50],
+    // 049 adds the owner-managed runtime-observation cursor table; 050 adds supersession receipts;
+    // 051 adds immutable native-child rebind receipts.
+    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51],
     // Bind each owner migration catalog into the reviewed plan hash.
     environmentVersions: Array.from({ length: 12 }, (_, index) => index + 1),
     eventsVersions: Array.from({ length: 11 }, (_, index) => index + 1),

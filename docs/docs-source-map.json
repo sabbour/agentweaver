@@ -430,6 +430,8 @@
       ],
       "required": [
         "docs/architecture/environment-sandbox.md",
+        "docs/architecture/agenthost.md",
+        "docs/deep-dive/orchestration.md",
         "docs/architecture/design/provider-seams.md",
         "docs/reference/api.md",
         "docs/guide/gateway.md",

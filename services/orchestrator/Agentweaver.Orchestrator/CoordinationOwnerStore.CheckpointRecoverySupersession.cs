@@ -114,8 +114,55 @@ internal sealed partial class CoordinationOwnerStore
             .OrderBy(member => member.AssociationId, StringComparer.Ordinal)
             .ToArray();
         if (pendingUnsent.Length == 0 ||
-            pendingUnsent.Any(member => !member.NativeOriginProvenAbsent || member.NativeOrigin is not null) ||
             CheckpointRecoveryMemberBarrier.RequiredMembers(successorManifest).Length != pendingUnsent.Length)
+            throw new CoordinationException(
+                "checkpoint_recovery_supersession_unavailable", StatusCodes.Status409Conflict);
+
+        var ledger = new RuntimeExecutionEvidenceLedgerStore(_schema[1..^1]);
+        var emptyAcknowledgmentsHash = ChildCheckpointRecoveryManifestCodec.Hash(Array.Empty<JsonElement>());
+        foreach (var member in pendingUnsent)
+        {
+            if (member.NativeOriginProvenAbsent && member.NativeOrigin is null)
+                continue;
+            if (member.NativeOrigin is not { } native || member.NativeOriginProvenAbsent ||
+                native.State != "prepared" || native.OwnerRevision != 1 ||
+                native.TerminalOutcome is not null || native.SourceReportStatus != "unknown" ||
+                native.SourceReportHash is not null || native.SourceCompletionManifestHash is not null ||
+                native.AcknowledgmentReferencesHash != emptyAcknowledgmentsHash ||
+                native.AccountingStatus != "unknown" || native.UsageWitnessWatermark is not null ||
+                native.UsageWitnessDigest is not null || native.RetiredThroughEventPosition is not null)
+                throw new CoordinationException(
+                    "checkpoint_recovery_supersession_unavailable", StatusCodes.Status409Conflict);
+
+            _ = await ledger.RequireNativeChildRebindSchemaAsync(
+                connection, transaction, requireApplied: true, cancellationToken).ConfigureAwait(false);
+            var rebinds = await ledger.ReadNativeChildRebindsAsync(
+                connection, transaction, identity.ProjectId, identity.RunId, native.DispatchId,
+                cancellationToken).ConfigureAwait(false);
+            var prior = rebinds.LastOrDefault();
+            if ((prior is null) != (member.PriorNativeRebindReceiptId is null) ||
+                prior is not null &&
+                (prior.ReceiptId != member.PriorNativeRebindReceiptId ||
+                 prior.CanonicalPayloadHash != member.PriorNativeRebindPayloadHash))
+                throw new CoordinationException(
+                    "checkpoint_recovery_supersession_unavailable", StatusCodes.Status409Conflict);
+
+            var lockedOrigin = await ChildCheckpointRecoveryCensus.ReadNativeOriginAsync(
+                connection, transaction, _schema, identity, member.Session, member.Startup.Binding,
+                selectionHash, cancellationToken).ConfigureAwait(false);
+            if (lockedOrigin != native)
+                throw new CoordinationException(
+                    "checkpoint_recovery_supersession_unavailable", StatusCodes.Status409Conflict);
+        }
+
+        var predecessorMembers = supersededManifest.Members.ToDictionary(
+            member => member.AssociationId, StringComparer.Ordinal);
+        if (successorManifest.Members.Any(member =>
+                predecessorMembers.TryGetValue(member.AssociationId, out var predecessor) &&
+                predecessor.NativeOrigin is not null &&
+                (member.NativeOrigin != predecessor.NativeOrigin ||
+                 member.PriorNativeRebindReceiptId != predecessor.PriorNativeRebindReceiptId ||
+                 member.PriorNativeRebindPayloadHash != predecessor.PriorNativeRebindPayloadHash)))
             throw new CoordinationException(
                 "checkpoint_recovery_supersession_unavailable", StatusCodes.Status409Conflict);
 
@@ -127,6 +174,9 @@ internal sealed partial class CoordinationOwnerStore
                 member.MessageId,
                 member.PromptHash,
                 member.NativeOriginProvenAbsent,
+                member.NativeOrigin,
+                member.PriorNativeRebindReceiptId,
+                member.PriorNativeRebindPayloadHash,
                 member.Startup.Binding,
                 member.Startup.RegistrationId,
                 member.Startup.RegistrationRevision
@@ -153,7 +203,6 @@ internal sealed partial class CoordinationOwnerStore
             status.GateAuthorizedActorId
         }, JsonOptions));
 
-        var ledger = new RuntimeExecutionEvidenceLedgerStore(_schema[1..^1]);
         if (await ledger.ReadCheckpointRecoverySupersessionAsync(
                 connection, transaction, identity.ProjectId, identity.RunId, operationId, cancellationToken)
             .ConfigureAwait(false) is not null)

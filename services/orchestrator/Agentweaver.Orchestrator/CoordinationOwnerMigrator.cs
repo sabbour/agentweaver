@@ -27,7 +27,8 @@ public static class CoordinationOwnerMigrator
         // Version 047 prevents recovery after terminal cleanup is admitted.
         // Version 048 separates PR effect identity, original authorization lineage, and result identity.
         // Version 049 stores opaque V2 observation cursors; 050 adds recovery supersession receipts.
-        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50])];
+        // Version 051 adds immutable native-child rebind receipts.
+        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51])];
 
     /// <summary>
     /// Applies the supported embedded migrations in order under a schema-scoped PostgreSQL lock.
@@ -75,7 +76,7 @@ public static class CoordinationOwnerMigrator
         // Fail on any version this build doesn't know, or on a version whose prerequisite is missing.
         // Optional owner features remain compatible with their complete pre-migration shapes
         // until the reviewed maintenance plan applies them.
-        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33 or 35 or 36 or 37 or 38 or 39 or 40 or 41 or 42 or 43 or 44 or 45 or 46 or 47 or 48 or 49 or 50)) ||
+        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33 or 35 or 36 or 37 or 38 or 39 or 40 or 41 or 42 or 43 or 44 or 45 or 46 or 47 or 48 or 49 or 50 or 51)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -130,7 +131,8 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(46) && !applied.Contains(45)) ||
             (applied.Contains(47) && !applied.Contains(46)) ||
             (applied.Contains(48) && !applied.Contains(38)) ||
-            (applied.Contains(50) && !applied.Contains(45)))
+            (applied.Contains(50) && !applied.Contains(45)) ||
+            (applied.Contains(51) && !applied.Contains(50)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
         // Apply every catalog version that is not yet recorded, in catalog order. Operator tooling relies on
         // this: it can only cap what runs by checking that the catalog itself ends at the approved version.
@@ -189,6 +191,7 @@ public static class CoordinationOwnerMigrator
                 48 => "source_control_pull_request_effect_identity",
                 49 => "runtime_observation_v2_cursors",
                 50 => "checkpoint_recovery_supersession",
+                51 => "native_child_rebind",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
             var filename = version == 10 ? $"{migrationName}.sql" : $"{version:000}_{migrationName}.sql";
@@ -227,7 +230,7 @@ public static class CoordinationOwnerMigrator
         // record, the spend_budget_reservations table, and the spend_budget_accounting_cursors table.
         // Six columns cover version 030: its migration record, its two tables, and its three unique indexes.
         // Two columns cover version 031: its migration record and the promotion dismissal table.
-        // Additive migrations 032, 033, and 035-050 remain optional to readiness.
+        // Additive migrations 032, 033, and 035-051 remain optional to readiness.
         // so the owner can start before maintenance applies the reviewed plan; accept only complete shapes.
         await using var command = new NpgsqlCommand($"""
             SELECT
@@ -247,7 +250,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -655,12 +658,21 @@ public static class CoordinationOwnerMigrator
                                       AND pg_get_constraintdef(oid) = @runtimeEvidenceReplayKindCheck))
                             OR
                             ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 50) = 1
+                                AND (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 51) = 0
                                 AND (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 45) = 1
                                 AND EXISTS (SELECT 1 FROM pg_constraint
                                     WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
                                       AND conname = 'maf_runtime_evidence_receipts_receipt_kind_check'
                                       AND contype = 'c' AND convalidated
                                       AND pg_get_constraintdef(oid) = @runtimeEvidenceSupersessionKindCheck))
+                            OR
+                            ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 51) = 1
+                                AND (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 50) = 1
+                                AND EXISTS (SELECT 1 FROM pg_constraint
+                                    WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
+                                      AND conname = 'maf_runtime_evidence_receipts_receipt_kind_check'
+                                      AND contype = 'c' AND convalidated
+                                      AND pg_get_constraintdef(oid) = @runtimeEvidenceNativeChildRebindKindCheck))
                         )
                         AND (
                             ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 50) = 0
@@ -669,6 +681,7 @@ public static class CoordinationOwnerMigrator
                                       AND contype = 'c' AND convalidated) = 9)
                             OR
                             ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 50) = 1
+                                AND (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 51) = 0
                                 AND (SELECT count(*) FROM pg_constraint
                                     WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
                                       AND conname = 'maf_runtime_evidence_supersession_fields_check'
@@ -679,6 +692,28 @@ public static class CoordinationOwnerMigrator
                                 AND (SELECT count(*) FROM pg_constraint
                                     WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
                                       AND contype = 'c' AND convalidated) = 10)
+                            OR
+                            ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 51) = 1
+                                AND (SELECT count(*) FROM pg_constraint
+                                    WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
+                                      AND conname = 'maf_runtime_evidence_supersession_fields_check'
+                                      AND contype = 'c' AND convalidated
+                                      AND pg_get_constraintdef(oid) LIKE '%supersedesOperationId%'
+                                      AND pg_get_constraintdef(oid) LIKE '%successorOperationId%'
+                                      AND pg_get_constraintdef(oid) LIKE '%attempt_id%') = 1
+                                AND (SELECT count(*) FROM pg_constraint
+                                    WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
+                                      AND conname = @runtimeEvidenceNativeChildRebindFieldsConstraint
+                                      AND contype = 'c' AND convalidated
+                                      AND pg_get_constraintdef(oid) LIKE '%dispatchId%'
+                                      AND pg_get_constraintdef(oid) LIKE '%recoveryOperationId%'
+                                      AND pg_get_constraintdef(oid) LIKE '%destinationFence%'
+                                      AND pg_get_constraintdef(oid) LIKE '%priorAuthorityKey%'
+                                      AND pg_get_constraintdef(oid) LIKE '%priorReceiptId%'
+                                      AND pg_get_constraintdef(oid) LIKE '%priorReceiptHash%') = 1
+                                AND (SELECT count(*) FROM pg_constraint
+                                    WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
+                                      AND contype = 'c' AND convalidated) = 11)
                         )
                         AND EXISTS (SELECT 1 FROM pg_constraint
                             WHERE conrelid = to_regclass(@runtimeEvidenceReceipts) AND contype = 'p'
@@ -842,6 +877,46 @@ public static class CoordinationOwnerMigrator
                               AND indexdef LIKE 'CREATE UNIQUE INDEX uq_checkpoint_recovery_supersession_successor ON %'
                               AND indexdef LIKE '%successorOperationId%'))
                 )
+                ,
+                (
+                    ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 51) = 0
+                        AND NOT EXISTS (SELECT 1 FROM pg_constraint
+                            WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
+                              AND conname = @runtimeEvidenceNativeChildRebindFieldsConstraint)
+                        AND to_regclass(@runtimeEvidenceNativeChildRebindDestinationIndex) IS NULL
+                        AND to_regclass(@runtimeEvidenceNativeChildRebindPriorIndex) IS NULL)
+                    OR
+                    ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 51) = 1
+                        AND (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 50) = 1
+                        AND EXISTS (SELECT 1 FROM pg_constraint
+                            WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
+                              AND conname = @runtimeEvidenceNativeChildRebindFieldsConstraint
+                              AND contype = 'c' AND convalidated
+                              AND pg_get_constraintdef(oid) LIKE '%dispatchId%'
+                              AND pg_get_constraintdef(oid) LIKE '%recoveryOperationId%'
+                              AND pg_get_constraintdef(oid) LIKE '%destinationFence%'
+                              AND pg_get_constraintdef(oid) LIKE '%priorAuthorityKey%'
+                              AND pg_get_constraintdef(oid) LIKE '%priorReceiptId%'
+                              AND pg_get_constraintdef(oid) LIKE '%priorReceiptHash%')
+                        AND EXISTS (SELECT 1 FROM pg_indexes
+                            WHERE schemaname = @schema
+                              AND indexname = 'uq_native_child_rebind_destination'
+                              AND indexdef LIKE 'CREATE UNIQUE INDEX uq_native_child_rebind_destination ON %'
+                              AND indexdef LIKE '%project_id%'
+                              AND indexdef LIKE '%run_id%'
+                              AND indexdef LIKE '%dispatchId%'
+                              AND indexdef LIKE '%destinationFence%'
+                              AND indexdef LIKE '%native-child-rebind%')
+                        AND EXISTS (SELECT 1 FROM pg_indexes
+                            WHERE schemaname = @schema
+                              AND indexname = 'uq_native_child_rebind_prior'
+                              AND indexdef LIKE 'CREATE UNIQUE INDEX uq_native_child_rebind_prior ON %'
+                              AND indexdef LIKE '%project_id%'
+                              AND indexdef LIKE '%run_id%'
+                              AND indexdef LIKE '%dispatchId%'
+                              AND indexdef LIKE '%priorAuthorityKey%'
+                              AND indexdef LIKE '%native-child-rebind%'))
+                )
             """, connection);
         command.Parameters.AddWithValue(
             "runListIndex", NpgsqlDbType.Text, $"{schema}.ix_accepted_runs_project_created");
@@ -966,12 +1041,20 @@ public static class CoordinationOwnerMigrator
             "CHECK (((receipt_kind)::text = ANY ((ARRAY['numeric-limit-denial'::character varying, 'replacement-comparison'::character varying, 'numeric-limit-native-no-send'::character varying, 'native-root-turn-completion'::character varying, 'native-root-turn-replay'::character varying])::text[])))");
         command.Parameters.AddWithValue("runtimeEvidenceSupersessionKindCheck", NpgsqlDbType.Text,
             "CHECK (((receipt_kind)::text = ANY ((ARRAY['numeric-limit-denial'::character varying, 'replacement-comparison'::character varying, 'numeric-limit-native-no-send'::character varying, 'native-root-turn-completion'::character varying, 'native-root-turn-replay'::character varying, 'checkpoint-recovery-supersession'::character varying])::text[])))");
+        command.Parameters.AddWithValue("runtimeEvidenceNativeChildRebindKindCheck", NpgsqlDbType.Text,
+            "CHECK (((receipt_kind)::text = ANY ((ARRAY['numeric-limit-denial'::character varying, 'replacement-comparison'::character varying, 'numeric-limit-native-no-send'::character varying, 'native-root-turn-completion'::character varying, 'native-root-turn-replay'::character varying, 'checkpoint-recovery-supersession'::character varying, 'native-child-rebind'::character varying])::text[])))");
         command.Parameters.AddWithValue("runtimeEvidenceSupersessionFieldsConstraint", NpgsqlDbType.Text,
             "maf_runtime_evidence_supersession_fields_check");
         command.Parameters.AddWithValue("runtimeEvidenceSupersessionSourceIndex", NpgsqlDbType.Text,
             $"{schema}.uq_checkpoint_recovery_supersession_source");
         command.Parameters.AddWithValue("runtimeEvidenceSupersessionSuccessorIndex", NpgsqlDbType.Text,
             $"{schema}.uq_checkpoint_recovery_supersession_successor");
+        command.Parameters.AddWithValue("runtimeEvidenceNativeChildRebindFieldsConstraint", NpgsqlDbType.Text,
+            "maf_runtime_evidence_native_child_rebind_fields_check");
+        command.Parameters.AddWithValue("runtimeEvidenceNativeChildRebindDestinationIndex", NpgsqlDbType.Text,
+            $"{schema}.uq_native_child_rebind_destination");
+        command.Parameters.AddWithValue("runtimeEvidenceNativeChildRebindPriorIndex", NpgsqlDbType.Text,
+            $"{schema}.uq_native_child_rebind_prior");
         command.Parameters.AddWithValue("runtimeRunStartIntents", NpgsqlDbType.Text,
             $"{schema}.runtime_run_start_intents");
         command.Parameters.AddWithValue("runtimeReplacementOperations", NpgsqlDbType.Text,
@@ -1034,7 +1117,7 @@ public static class CoordinationOwnerMigrator
             !reader.GetBoolean(53) || !reader.GetBoolean(54) ||
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
             // Columns 57 onward are boolean checks for complete migration shapes. A partial apply never counts as ready.
-                Enumerable.Range(57, 59).Any(column => !reader.GetBoolean(column)))
+                Enumerable.Range(57, 60).Any(column => !reader.GetBoolean(column)))
                     throw new InvalidOperationException(
                         "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }

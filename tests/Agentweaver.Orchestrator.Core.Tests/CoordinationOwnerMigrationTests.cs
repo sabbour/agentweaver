@@ -131,6 +131,223 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     }
 
     [Fact]
+    public async Task NativeChildRebindMigrationIsOptionalUntilAppliedAndEnforcesImmutableUniqueReceipts()
+    {
+        await ApplyMigrationsThroughAsync(50);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            var pending = await Assert.ThrowsAsync<CoordinationException>(() =>
+                new RuntimeExecutionEvidenceLedgerStore(_schema).RequireNativeChildRebindSchemaAsync(
+                    connection, transaction, requireApplied: true, CancellationToken.None));
+            Assert.Equal("database_update_pending", pending.Code);
+            Assert.Equal(StatusCodes.Status503ServiceUnavailable, pending.StatusCode);
+            await transaction.RollbackAsync();
+        }
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var before = new NpgsqlCommand($"""
+            SELECT (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 51),
+                   to_regclass(@destinationIndex) IS NOT NULL,
+                   to_regclass(@priorIndex) IS NOT NULL,
+                   EXISTS (SELECT 1 FROM pg_constraint
+                     WHERE conrelid = to_regclass(@table)
+                       AND conname = 'maf_runtime_evidence_native_child_rebind_fields_check')
+            """, connection))
+        {
+            before.Parameters.AddWithValue("table", $"{_schema}.maf_runtime_evidence_receipts");
+            before.Parameters.AddWithValue("destinationIndex", $"{_schema}.uq_native_child_rebind_destination");
+            before.Parameters.AddWithValue("priorIndex", $"{_schema}.uq_native_child_rebind_prior");
+            await using var reader = await before.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(0L, reader.GetInt64(0));
+            Assert.False(reader.GetBoolean(1));
+            Assert.False(reader.GetBoolean(2));
+            Assert.False(reader.GetBoolean(3));
+        }
+
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var after = new NpgsqlCommand($"""
+            SELECT (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 51),
+                   to_regclass(@destinationIndex) IS NOT NULL,
+                   to_regclass(@priorIndex) IS NOT NULL,
+                   (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                     WHERE conrelid = to_regclass(@table)
+                       AND conname = 'maf_runtime_evidence_native_child_rebind_fields_check')
+            """, connection))
+        {
+            after.Parameters.AddWithValue("table", $"{_schema}.maf_runtime_evidence_receipts");
+            after.Parameters.AddWithValue("destinationIndex", $"{_schema}.uq_native_child_rebind_destination");
+            after.Parameters.AddWithValue("priorIndex", $"{_schema}.uq_native_child_rebind_prior");
+            await using var reader = await after.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(1L, reader.GetInt64(0));
+            Assert.True(reader.GetBoolean(1));
+            Assert.True(reader.GetBoolean(2));
+            var fields = reader.GetString(3);
+            Assert.Contains("dispatchId", fields, StringComparison.Ordinal);
+            Assert.Contains("recoveryOperationId", fields, StringComparison.Ordinal);
+            Assert.Contains("destinationFence", fields, StringComparison.Ordinal);
+            Assert.Contains("priorAuthorityKey", fields, StringComparison.Ordinal);
+            Assert.Contains("priorReceiptId", fields, StringComparison.Ordinal);
+            Assert.Contains("priorReceiptHash", fields, StringComparison.Ordinal);
+        }
+
+        const string projectId = "native-child-rebind-project";
+        const string runId = "native-child-rebind-run";
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var acceptedRun = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".accepted_runs
+                (project_id, run_id, accepted_selection, accepted_selection_hash,
+                 accepted_by_issuer, accepted_by_subject)
+            VALUES (@project, @run, jsonb_build_object(), repeat('a', 64), 'issuer', 'actor')
+            """, connection))
+        {
+            acceptedRun.Parameters.AddWithValue("project", projectId);
+            acceptedRun.Parameters.AddWithValue("run", runId);
+            await acceptedRun.ExecuteNonQueryAsync();
+        }
+
+        var dispatchId = Guid.NewGuid();
+        await InsertNativeRebindAsync(
+            projectId, runId, dispatchId, 3, "origin", null, null);
+        var priorReceiptId = Guid.NewGuid();
+        var destinationConflict = await Assert.ThrowsAsync<PostgresException>(() =>
+            InsertNativeRebindAsync(
+                projectId, runId, dispatchId, 3,
+                $"receipt:{priorReceiptId:D}", priorReceiptId, new string('b', 64)));
+        Assert.Equal(PostgresErrorCodes.UniqueViolation, destinationConflict.SqlState);
+        var priorConflict = await Assert.ThrowsAsync<PostgresException>(() =>
+            InsertNativeRebindAsync(projectId, runId, dispatchId, 4, "origin", null, null));
+        Assert.Equal(PostgresErrorCodes.UniqueViolation, priorConflict.SqlState);
+
+        var role = "native_rebind_" + Guid.NewGuid().ToString("N");
+        var receiptId = Guid.NewGuid();
+        try
+        {
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using (var grants = new NpgsqlCommand($"""
+                CREATE ROLE "{role}" NOLOGIN;
+                GRANT USAGE ON SCHEMA "{_schema}" TO "{role}";
+                GRANT SELECT, INSERT ON "{_schema}".maf_runtime_evidence_receipts TO "{role}";
+                """, connection))
+                await grants.ExecuteNonQueryAsync();
+            var restrictedConnection = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
+            {
+                Options = $"-c role={role}"
+            };
+            await using var restricted = NpgsqlDataSource.Create(restrictedConnection.ConnectionString);
+            await using (var restrictedConnectionOpen = await restricted.OpenConnectionAsync())
+            {
+                await InsertNativeRebindOnConnectionAsync(
+                    restrictedConnectionOpen, projectId, runId, Guid.NewGuid(), 5,
+                    "origin", null, null, receiptId);
+                await using var read = new NpgsqlCommand($"""
+                    SELECT count(*) FROM "{_schema}".maf_runtime_evidence_receipts
+                    WHERE project_id = @project AND run_id = @run AND receipt_id = @receipt
+                    """, restrictedConnectionOpen);
+                read.Parameters.AddWithValue("project", projectId);
+                read.Parameters.AddWithValue("run", runId);
+                read.Parameters.AddWithValue("receipt", receiptId);
+                Assert.Equal(1L, (long)(await read.ExecuteScalarAsync())!);
+
+                await using var update = new NpgsqlCommand($"""
+                    UPDATE "{_schema}".maf_runtime_evidence_receipts
+                    SET payload_hash = repeat('c', 64)
+                    WHERE project_id = @project AND run_id = @run AND receipt_id = @receipt
+                    """, restrictedConnectionOpen);
+                update.Parameters.AddWithValue("project", projectId);
+                update.Parameters.AddWithValue("run", runId);
+                update.Parameters.AddWithValue("receipt", receiptId);
+                var updateDenied = await Assert.ThrowsAsync<PostgresException>(() => update.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, updateDenied.SqlState);
+
+                await using var delete = new NpgsqlCommand($"""
+                    DELETE FROM "{_schema}".maf_runtime_evidence_receipts
+                    WHERE project_id = @project AND run_id = @run AND receipt_id = @receipt
+                    """, restrictedConnectionOpen);
+                delete.Parameters.AddWithValue("project", projectId);
+                delete.Parameters.AddWithValue("run", runId);
+                delete.Parameters.AddWithValue("receipt", receiptId);
+                var deleteDenied = await Assert.ThrowsAsync<PostgresException>(() => delete.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, deleteDenied.SqlState);
+            }
+        }
+        finally
+        {
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using var cleanup = new NpgsqlCommand(
+                $"DROP OWNED BY \"{role}\"; DROP ROLE \"{role}\"", connection);
+            await cleanup.ExecuteNonQueryAsync();
+        }
+
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var damage = new NpgsqlCommand(
+            $"DROP INDEX \"{_schema}\".uq_native_child_rebind_prior", connection))
+            await damage.ExecuteNonQueryAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+
+        async Task InsertNativeRebindAsync(
+            string project,
+            string run,
+            Guid dispatch,
+            long destinationFence,
+            string priorKey,
+            Guid? priorReceipt,
+            string? priorHash)
+        {
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await InsertNativeRebindOnConnectionAsync(
+                    connection, project, run, dispatch, destinationFence, priorKey,
+                    priorReceipt, priorHash, Guid.NewGuid());
+        }
+
+        async Task InsertNativeRebindOnConnectionAsync(
+            NpgsqlConnection connection,
+            string project,
+            string run,
+            Guid dispatch,
+            long destinationFence,
+            string priorKey,
+            Guid? priorReceipt,
+            string? priorHash,
+            Guid receipt)
+        {
+            var attempt = Guid.NewGuid();
+            var operation = Guid.NewGuid();
+            var hash = new string('a', 64);
+            await using var insert = new NpgsqlCommand($"""
+                INSERT INTO "{_schema}".maf_runtime_evidence_receipts
+                    (project_id, run_id, receipt_id, receipt_kind, attempt_id, payload_hash, receipt_json)
+                VALUES (@project, @run, @receipt, 'native-child-rebind', @attempt, @hash,
+                    jsonb_build_object(
+                        'projectId', @project, 'runId', @run,
+                        'receiptId', @receipt::text, 'canonicalPayloadHash', @hash,
+                        'dispatchId', @dispatch::text, 'recoveryOperationId', @operation::text,
+                        'destinationFence', @destination::text, 'priorAuthorityKey', @priorKey,
+                        'priorReceiptId', @priorReceipt::text, 'priorReceiptHash', @priorHash))
+                """, connection);
+            insert.Parameters.AddWithValue("project", project);
+            insert.Parameters.AddWithValue("run", run);
+            insert.Parameters.AddWithValue("receipt", receipt);
+            insert.Parameters.AddWithValue("attempt", attempt);
+            insert.Parameters.AddWithValue("hash", hash);
+            insert.Parameters.AddWithValue("dispatch", dispatch);
+            insert.Parameters.AddWithValue("operation", operation);
+            insert.Parameters.AddWithValue("destination", destinationFence);
+            insert.Parameters.AddWithValue("priorKey", priorKey);
+            insert.Parameters.AddWithValue("priorReceipt", NpgsqlTypes.NpgsqlDbType.Text,
+                (object?)priorReceipt?.ToString("D") ?? DBNull.Value);
+            insert.Parameters.AddWithValue("priorHash", NpgsqlTypes.NpgsqlDbType.Text,
+                (object?)priorHash ?? DBNull.Value);
+            await insert.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
     public async Task RootAdmissionMigrationIsOptionalBeforeItIsApplied()
     {
         await ApplyMigrationsThroughAsync(33);
@@ -642,7 +859,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                       AND created_at = '2026-10-20T00:00:00Z'),
                 -- A pre-033 owner rejects repository identity and later Core migrations.
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations
-                    WHERE version NOT IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,43,44,45,46,47,48,49,50)),
+                    WHERE version NOT IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,43,44,45,46,47,48,49,50,51)),
                 to_regclass(@obsolete) IS NULL
             """, connection);
         check.Parameters.AddWithValue("obsolete", $"{_schema}.uq_chief_of_staff_priority_links_target");
@@ -1028,7 +1245,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (47, "047_terminal_cleanup_recovery_guard.sql"),
             (48, "048_source_control_pull_request_effect_identity.sql"),
             (49, "049_runtime_observation_v2_cursors.sql"),
-            (50, "050_checkpoint_recovery_supersession.sql")
+            (50, "050_checkpoint_recovery_supersession.sql"),
+            (51, "051_native_child_rebind.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""
@@ -1169,7 +1387,12 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                 (SELECT count(*) FROM pg_constraint
                  WHERE conrelid = to_regclass(@runtimeEvidenceReceipts) AND conname = @supersessionFields),
                 to_regclass(@supersessionSourceIndex) IS NOT NULL,
-                to_regclass(@supersessionSuccessorIndex) IS NOT NULL
+                to_regclass(@supersessionSuccessorIndex) IS NOT NULL,
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 51),
+                (SELECT count(*) FROM pg_constraint
+                 WHERE conrelid = to_regclass(@runtimeEvidenceReceipts) AND conname = @nativeRebindFields),
+                to_regclass(@nativeRebindDestinationIndex) IS NOT NULL,
+                to_regclass(@nativeRebindPriorIndex) IS NOT NULL
             """, connection);
         command.Parameters.AddWithValue("projectRunRequests", $"{_schema}.project_run_requests");
         command.Parameters.AddWithValue("projectRunCancellations", $"{_schema}.project_run_cancellations");
@@ -1217,6 +1440,12 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             "supersessionSourceIndex", $"{_schema}.uq_checkpoint_recovery_supersession_source");
         command.Parameters.AddWithValue(
             "supersessionSuccessorIndex", $"{_schema}.uq_checkpoint_recovery_supersession_successor");
+        command.Parameters.AddWithValue(
+            "nativeRebindFields", "maf_runtime_evidence_native_child_rebind_fields_check");
+        command.Parameters.AddWithValue(
+            "nativeRebindDestinationIndex", $"{_schema}.uq_native_child_rebind_destination");
+        command.Parameters.AddWithValue(
+            "nativeRebindPriorIndex", $"{_schema}.uq_native_child_rebind_prior");
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(1L, reader.GetInt64(0));
@@ -1240,7 +1469,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
         // The default history skips reserved versions 017 and 034.
         Assert.Equal(
-            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]),
+            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51]),
             reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
@@ -1291,6 +1520,10 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.Equal(1L, reader.GetInt64(53));
         Assert.True(reader.GetBoolean(54));
         Assert.True(reader.GetBoolean(55));
+        Assert.Equal(1L, reader.GetInt64(56));
+        Assert.Equal(1L, reader.GetInt64(57));
+        Assert.True(reader.GetBoolean(58));
+        Assert.True(reader.GetBoolean(59));
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version, bool includePreviouslyUnregistered = true)

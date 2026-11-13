@@ -636,6 +636,12 @@ It contains no predicted native message or turn ID.
 `MaxModelTurns` reserves whole-run send capacity when that existing MAF dispatch is prepared.
 Exact replay consumes no new slot; sending or uncertain work cannot be resent or refunded.
 This is not a count of internal SDK model API calls.
+For a recovered prepared child, the immutable dispatch row remains the **origin**.
+A verified `native-child-rebind` receipt can authorize a separate **effective
+binding** after the replacement is ready and the recovery hold is released.
+Ordinary dispatch then uses the saved message and prompt through that binding.
+Recovery does not send the message or change the origin row. Observation keeps
+origin fields and reports the optional origin/effective projection separately.
 `RuntimeNativeTurnBeginResult` contains exactly one admission or
 `RuntimeNativeCreditDenialReceipt`. A hard-limit denial binds the current
 registration, source, dispatch, checkpoint, measured credits, ledger digest and

@@ -14,7 +14,7 @@
   "sourceControlPullRequestOperationsPrerequisiteVersion": 12,
   "currentImage": {
     "requiredCoreVersions": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
-    "optionalCoreVersions": [32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50],
+    "optionalCoreVersions": [32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51],
     "repositoryIdentityWriteVersion": 33,
     "rootModelTurnAdmissionsVersion": 36,
     "beforeRepositoryIdentityUpdateError": "database_update_pending"
@@ -23,7 +23,7 @@
     "maximumKnownCoreVersion": 32,
     "acceptsCore033": false
   },
-  "rolloutOrder": ["deployCurrentImages", "drainOlderOrchestratorReplicas", "applyCore032And033And035And036And037And038And039And040And041And042And043And044And045And046And047And048And049And050"],
-  "applyByDefault": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50],
+  "rolloutOrder": ["deployCurrentImages", "drainOlderOrchestratorReplicas", "applyCore032And033And035And036And037And038And039And040And041And042And043And044And045And046And047And048And049And050And051"],
+  "applyByDefault": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51],
   "separateApprovalRequired": []
 }

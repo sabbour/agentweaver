@@ -17,7 +17,7 @@ const digest = character => `sha256:${character.repeat(64)}`;
 const range = (minSchema, maxSchema, supportedVersions = Array.from(
   { length: maxSchema - minSchema + 1 }, (_, index) => minSchema + index)) =>
   ({ minSchema, maxSchema, supportedVersions });
-const coreRange = () => range(31, 50, [31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]);
+const coreRange = () => range(31, 51, [31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51]);
 const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' });
 const fail = (stderr = 'failed', status = 1) => ({ status, stdout: '', stderr });
 const CLIENT_ID = '12345678-1234-4123-8123-123456789abc';
@@ -229,7 +229,7 @@ test('grant markers must match the reviewed plan exactly', () => {
   assert.throws(() => verifyGrantsMarker(goodLogs['events-and-sessions'], expected), /does not match/);
 });
 
-test('the reviewed plan includes 035 through 050, skips reserved Core 034, and matches the hash', () => {
+test('the reviewed plan includes 035 through 051, skips reserved Core 034, and matches the hash', () => {
   assert.equal(p1PostgresPlanHash(), REVIEWED_PLAN_SHA256);
   assert.ok(!plan.coreVersions.includes(17));
   assert.ok(plan.coreVersions.includes(32));
@@ -242,7 +242,7 @@ test('the reviewed plan includes 035 through 050, skips reserved Core 034, and m
   assert.ok(plan.coreVersions.includes(40));
   assert.ok(plan.coreVersions.includes(41));
   assert.ok(plan.coreVersions.includes(42));
-  assert.equal(Math.max(...plan.coreVersions), 50);
+  assert.equal(Math.max(...plan.coreVersions), 51);
   assert.deepEqual(plan.eventsVersions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
   assert.deepEqual(plan.environmentVersions, Array.from({ length: 12 }, (_, index) => index + 1));
 });
@@ -849,7 +849,7 @@ test('service ordering does not treat skipped Core 034 as compatible', () => {
 });
 
 test('the schema range comes from the readiness check in the migrator source', () => {
-  // Orchestrator requires 31 and optionally accepts 032, 033, and 035 through 050 during rollout.
+  // Orchestrator requires 31 and optionally accepts 032, 033, and 035 through 051 during rollout.
   // Git output passes through redaction, which must not change the parsed text.
   const read = (path, component) => schemaRangeFromSource(redact(readFileSync(path, 'utf8')), component);
   assert.deepEqual(read('services/orchestrator/Agentweaver.Orchestrator/CoordinationOwnerMigrator.cs',
@@ -874,7 +874,7 @@ test('the schema range comes from the readiness check in the migrator source', (
   assert.equal(schemaRangeFromSource(older, 'Agentweaver.Other'), undefined);
 });
 
-test('pinned owner readiness shapes preserve the Core 034 gap through current Core 050', async () => {
+test('pinned owner readiness shapes preserve the Core 034 gap through current Core 051', async () => {
   // These pinned source projections cover the pre-032, pre-035, and post-035 readiness shapes.
   const oldCommit = 'aab23a5daeca847966e92944a653423f2541d665';
   const newCommit = '077884663e7f7b727199fa56d405c005ccebe650';
@@ -934,7 +934,7 @@ test('pinned owner readiness shapes preserve the Core 034 gap through current Co
   assert.equal(newRange.maxSchema, 35);
   assert.equal(currentRange.minSchema, Math.max(...compatibility.currentImage.requiredCoreVersions));
   assert.equal(currentRange.maxSchema, Math.max(...compatibility.currentImage.optionalCoreVersions));
-  assert.deepEqual(currentRange.supportedVersions, [31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]);
+  assert.deepEqual(currentRange.supportedVersions, [31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51]);
   assert.ok(!currentRange.supportedVersions.includes(34));
   assert.equal(oldRange.maxSchema, compatibility.preRepositoryIdentityImage.maximumKnownCoreVersion);
   assert.ok(oldRange.maxSchema < 33);

@@ -254,6 +254,22 @@ verified result import and hold release, rejection with the hold retained, and
 one-time import on retry. Do not run these PostgreSQL tests locally. Controlled
 tests do not prove a live Environment or Host recovery.
 
+The prepared-native-child recovery cases also run only in hosted PostgreSQL
+CI. They cover immutable-origin supersession, ready-commit rollback and replay,
+ordinary replacement accounting, verified checkpoint descendants,
+serialization with begin, reservation and credit-guard preservation,
+replacement observation, and migration compatibility:
+`ChildRecoverySupersessionRebindsPreparedNativeDispatchWithoutChangingOrigin`,
+`ChildRecoveryNativeRebindReadyCommitRollsBackAndReplaysAfterRestart`,
+`NativeChildRebindCompletesOriginalMessageThroughReplacementAccounting`,
+`NativeChildRebindAcceptsOnlyVerifiedCheckpointDescendants`,
+`NativeChildRebindSerializesWithBeginAndSupersession`,
+`NativeChildRebindPreservesReservationsAndCreditGuard`,
+`ReboundNativeDispatchObservationKeepsOriginAndShowsEffectiveBinding`, and
+`NativeChildRebindMigrationIsOptionalUntilAppliedAndEnforcesImmutableUniqueReceipts`.
+`RuntimeObservationContractsTests.ReboundDispatchProjectionKeepsOriginAndEffectiveBindingsSeparate`
+checks the public projection without PostgreSQL.
+
 `CheckpointRecoveryRequiresCacheOrSavedTurnHistory` checks that the checkpoint
 recovery guard rejects missing cache and saved turn history. A fresh
 session and configuration-only, zero-turn state do not count as restored

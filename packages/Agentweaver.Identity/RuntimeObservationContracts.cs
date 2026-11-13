@@ -79,6 +79,50 @@ public sealed record RuntimeObservationCreditGuard(
     }
 }
 
+/// <summary>One native dispatch authority binding exposed without its underlying receipt payload.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeObservationNativeBinding(
+    [property: JsonRequired] Guid RuntimeInstanceId,
+    [property: JsonRequired] long RegistrationRevision,
+    [property: JsonRequired] long ExecutionFence,
+    [property: JsonRequired] string CheckpointId,
+    [property: JsonRequired] long CheckpointRevision,
+    [property: JsonRequired] string SourceHash)
+{
+    public RuntimeObservationNativeBinding Validate()
+    {
+        if (RuntimeInstanceId == Guid.Empty || RegistrationRevision < 1 ||
+            ExecutionFence < 1 || CheckpointRevision < 1)
+            throw new RuntimeAuthorizationException("runtime_observation_dispatch_invalid");
+        RuntimeContractValidation.ValidateIdentifier(CheckpointId);
+        RuntimeContractValidation.ValidateHash(SourceHash);
+        return this;
+    }
+}
+
+/// <summary>Verified origin and effective authority for one retained native dispatch.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeObservationNativeRebind(
+    [property: JsonRequired] RuntimeObservationNativeBinding Origin,
+    [property: JsonRequired] RuntimeObservationNativeBinding Effective,
+    [property: JsonRequired] Guid ReceiptId,
+    [property: JsonRequired] string ReceiptHash,
+    [property: JsonRequired] Guid RecoveryOperationId,
+    [property: JsonRequired] string EffectiveRequestHash)
+{
+    public RuntimeObservationNativeRebind Validate()
+    {
+        if (Origin is null || Effective is null ||
+            ReceiptId == Guid.Empty || RecoveryOperationId == Guid.Empty)
+            throw new RuntimeAuthorizationException("runtime_observation_dispatch_invalid");
+        _ = Origin.Validate();
+        _ = Effective.Validate();
+        RuntimeContractValidation.ValidateHash(ReceiptHash);
+        RuntimeContractValidation.ValidateHash(EffectiveRequestHash);
+        return this;
+    }
+}
+
 /// <summary>One bounded owner dispatch record, including optional report and accounting witness state.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeObservationDispatch(
@@ -99,6 +143,9 @@ public sealed record RuntimeObservationDispatch(
     [property: JsonRequired] DateTimeOffset CreatedAt,
     [property: JsonRequired] DateTimeOffset UpdatedAt)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeObservationNativeRebind? NativeRebind { get; init; }
+
     /// <summary>Checks dispatch scope, revisions, timestamps, and optional witness digest.</summary>
     public RuntimeObservationDispatch Validate()
     {
@@ -119,6 +166,8 @@ public sealed record RuntimeObservationDispatch(
             ValidateState(AccountingState);
         if (WitnessDigest is not null)
             RuntimeContractValidation.ValidateHash(WitnessDigest);
+        if (NativeRebind is not null)
+            _ = NativeRebind.Validate();
         return this;
     }
 

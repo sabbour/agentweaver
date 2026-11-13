@@ -779,31 +779,16 @@ public static partial class CoordinationEndpoints
                         "maf_execution_child_registration_stale", StatusCodes.Status409Conflict);
                 // Build the message for the host. Its message ID is the dispatch ID used for the
                 // dispatch row and for any spend budget reservation.
-                var proof = new RuntimeHostSessionProof(
-                    1,
+                var message = MafExecutionDispatchRequestBuilder.Build(
                     registration,
-                    readiness.SourceGrant.GrantId,
-                    readiness.SourceGrant.Revision,
-                    RuntimeCredentialPurpose.Observe);
-                var message = new RuntimeA2ASendRequest(new RuntimeA2AMessage(
-                    "message",
+                    readiness,
                     intent.MessageId,
-                    RuntimeContractValidation.NativeSessionId(registration.Binding),
-                    "user",
-                    [new("text", prompt)],
-                    new(proof, AddressedMessageDeliveryMode.Enqueue)
-                    {
-                        ChildDispatch = new(
-                            1,
-                            plan.Plan.Id,
-                            intent.AssociationId)
-                        {
-                            WorkItemBindingSha256 = plan.Plan.Items
-                                .SingleOrDefault(item => item.Id == intent.AssociationId) is { } workItem
-                                    ? HashWorkItemBinding(workItem)
-                                    : null
-                        }
-                    }));
+                    prompt,
+                    plan.Plan.Id,
+                    intent.AssociationId,
+                    plan.Plan.Items.SingleOrDefault(item => item.Id == intent.AssociationId) is { } workItem
+                        ? HashWorkItemBinding(workItem)
+                        : null);
                 if (IsWallTimeLimitReached())
                     return null;
                 var sendActor = await CreateRuntimeActorAsync(token).ConfigureAwait(false);
