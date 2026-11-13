@@ -984,7 +984,7 @@ internal sealed class RuntimeUsageSourceStore(
         // The owner rechecks a rebound dispatch against its recovery anchor and current descendant.
         var checkpointHash = await RequireNativeCheckpointAsync(
             connection, transaction, registration, admission, checkpointDispatch,
-            cancellationToken, rebind).ConfigureAwait(false);
+            cancellationToken, rebind, checkpoint).ConfigureAwait(false);
         if (registration.Binding.MaxModelTurns is { } maxModelTurns)
         {
             var observedCount = await RuntimeModelTurnReservationStore.CountRunWideAsync(
@@ -2924,12 +2924,20 @@ internal sealed class RuntimeUsageSourceStore(
     private async Task<string> RequireNativeCheckpointAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeNativeTurnAdmissionReceipt admission, NativeDispatch dispatch, CancellationToken cancellationToken,
-        NativeChildRebindReceipt? rebind = null)
+        NativeChildRebindReceipt? rebind = null,
+        MafExecutionCheckpointSnapshot? callerCheckpoint = null)
     {
         if (rebind is not null)
-            return await RequireReboundNativeCheckpointAsync(
+        {
+            var rebound = await RequireReboundNativeCheckpointAsync(
                 connection, transaction, registration, admission, dispatch, rebind, cancellationToken)
                 .ConfigureAwait(false);
+            if (callerCheckpoint is not null &&
+                (callerCheckpoint.Info.CheckpointId != rebound.CheckpointId ||
+                 callerCheckpoint.State.Revision != rebound.Revision))
+                throw new RuntimeAuthorizationException("runtime_native_turn_checkpoint_stale");
+            return rebound.PayloadHash;
+        }
 
         await using var command = new NpgsqlCommand($"""
             SELECT checkpoint.payload::text
@@ -2975,7 +2983,8 @@ internal sealed class RuntimeUsageSourceStore(
         return RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(payload));
     }
 
-    private async Task<string> RequireReboundNativeCheckpointAsync(
+    private async Task<(string CheckpointId, long Revision, string PayloadHash)>
+        RequireReboundNativeCheckpointAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         RuntimeRegistration registration,
@@ -3097,7 +3106,10 @@ internal sealed class RuntimeUsageSourceStore(
         decision.Parameters.AddWithValue("decision", NpgsqlDbType.Bigint, rebind.AnchorDecisionStateVersion);
         if (await decision.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
             throw new RuntimeAuthorizationException("runtime_native_turn_checkpoint_stale");
-        return RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(chain[0].Payload!));
+        return (
+            chain[0].Id,
+            latest.Revision,
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(chain[0].Payload!)));
     }
 
     /// <summary>

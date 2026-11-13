@@ -512,7 +512,8 @@ public sealed partial class MafCheckpointStorePostgresTests
             await transaction.CommitAsync();
         }
 
-        var (ready, _) = await ContinueCheckpointRecoveryAsync(fixture, successor, successorManifest);
+        var (ready, _) = await ContinueCheckpointRecoveryAsync(
+            fixture, successor, successorManifest, expectedBootstrapSessions: []);
         AssertCheckpointRecoveryReady(ready);
         Assert.False(await IsChildRecoveryHeldAsync());
         await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
@@ -685,9 +686,10 @@ public sealed partial class MafCheckpointStorePostgresTests
         var context = await PrepareReadyNativeRebindAsync();
         var replacement = await ReadReplacementChildRegistrationAsync(context.Fixture.Child);
 
-        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => PrepareChildNativeAsync(
+        var staleCheckpoint = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => PrepareChildNativeAsync(
             replacement, context.Fixture.Dispatch, context.Fixture.Plan, context.Fixture.Prompt, context.Fixture.Source,
             begin: false));
+        Assert.Equal("runtime_native_turn_checkpoint_stale", staleCheckpoint.Code);
         await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => PrepareChildNativeAsync(
             replacement, context.Fixture.Dispatch with { PromptHash = new string('f', 64) },
             context.Fixture.Plan, context.Fixture.Prompt, context.Checkpoint, begin: false));
@@ -791,6 +793,8 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.Equal(5m, rootRegistration.Binding.CopilotHardCreditLimit);
         var replacement = await ReadReplacementChildRegistrationAsync(fixture.Child);
         Assert.Equal(context.Ready.ExecutionFence, replacement.Binding.ExecutionFence);
+        Assert.Equal(3m, replacement.Binding.CopilotSoftCreditLimit);
+        Assert.Equal(5m, replacement.Binding.CopilotHardCreditLimit);
         Assert.Equal(fixture.Dispatch.MessageId, context.Fixture.Dispatch.MessageId);
     }
 
@@ -1101,14 +1105,19 @@ public sealed partial class MafCheckpointStorePostgresTests
     {
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
-            INSERT INTO "{_schema}".maf_execution_run_guards
-                (project_id, run_id, root_session_id, tenant_id, accepted_selection_hash,
-                 execution_fence, owner_revision, copilot_soft_credit_limit, copilot_hard_credit_limit,
-                 cost_rate_scope_identity, copilot_aic_floor, accounted_through_event_position,
-                 usage_witness_digest, soft_warning_emitted, hard_cap_exhausted)
-            VALUES
-                (@project, @run, @root, @tenant, @selection, @fence, 7, @softLimit, @hardLimit,
-                 'scope-1', 4, 3, @digest, true, true)
+            UPDATE "{_schema}".maf_execution_run_guards
+            SET owner_revision = 7,
+                copilot_soft_credit_limit = @softLimit,
+                copilot_hard_credit_limit = @hardLimit,
+                cost_rate_scope_identity = 'scope-1',
+                copilot_aic_floor = 4,
+                accounted_through_event_position = 3,
+                usage_witness_digest = @digest,
+                soft_warning_emitted = true,
+                hard_cap_exhausted = true
+            WHERE project_id = @project AND run_id = @run AND root_session_id = @root
+              AND tenant_id = @tenant AND accepted_selection_hash = @selection
+              AND execution_fence = @fence
             """, connection);
         command.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
         command.Parameters.AddWithValue("run", _binding.Identity.RunId);
@@ -1120,7 +1129,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         command.Parameters.AddWithValue("softLimit", NpgsqlDbType.Numeric, softLimit);
         command.Parameters.AddWithValue("hardLimit", NpgsqlDbType.Numeric, hardLimit);
         command.Parameters.AddWithValue("digest", new string('a', 64));
-        await command.ExecuteNonQueryAsync();
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }
 
     private async Task<CreditGuardSnapshot?> ReadCreditGuardSnapshotAsync()
@@ -1365,7 +1374,8 @@ public sealed partial class MafCheckpointStorePostgresTests
             bool failRootActivation = false,
             string? emptyEvidenceSessionId = null,
             string? emptyEvidenceReceiptName = null,
-            ChildRecoveryCompletedUnjoinedMaterial? completedUnjoinedMaterial = null)
+            ChildRecoveryCompletedUnjoinedMaterial? completedUnjoinedMaterial = null,
+            string[]? expectedBootstrapSessions = null)
     {
         var starts = new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema);
         var rootIntent = await starts.ReadIntentForStatusAsync(
@@ -1459,6 +1469,8 @@ public sealed partial class MafCheckpointStorePostgresTests
             emptyEvidenceSessionId,
             emptyEvidenceReceiptName,
             RegisterReplacementSourceAsync);
+        void AssertBootstrapSessions(params string[] expected) =>
+            Assert.Equal(expectedBootstrapSessions ?? expected, peer.BootstrapSessions);
         using var environmentHttp = new HttpClient(peer);
         using var brokerHttp = new HttpClient(new RecoveryBrokerPeer(registrationStore, peer));
         var registrationOwner = new RuntimeRegistrationOwner(
@@ -1528,7 +1540,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                     $"reason={result.CheckpointRecovery?.ReasonCode}");
                 Assert.NotEqual(initial[pendingChild.Session.SessionId].Registration.Binding.ConfigureEndpoint,
                     currentChild.Binding.ConfigureEndpoint);
-                Assert.Equal(manifest.Root.SessionId, Assert.Single(peer.BootstrapSessions));
+                AssertBootstrapSessions(manifest.Root.SessionId);
                 using var childLinks = JsonDocument.Parse(childIntent.ReceiptLinks);
                 Assert.False(RuntimeRunStartContinuation.HasCheckpointRecoveryBootstrapEvidence(
                     result.OperationId,
@@ -1551,10 +1563,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                     $"reason={result.CheckpointRecovery?.ReasonCode}");
                 Assert.NotEqual(initial[pendingChild.Session.SessionId].Registration.Binding.ConfigureEndpoint,
                     currentChild.Binding.ConfigureEndpoint);
-                Assert.Collection(
-                    peer.BootstrapSessions,
-                    session => Assert.Equal(manifest.Root.SessionId, session),
-                    session => Assert.Equal(pendingChild.Session.SessionId, session));
+                AssertBootstrapSessions(manifest.Root.SessionId, pendingChild.Session.SessionId);
                 using var childLinks = JsonDocument.Parse(childIntent.ReceiptLinks);
                 Assert.True(RuntimeRunStartContinuation.HasCheckpointRecoveryBootstrapEvidence(
                     result.OperationId,
@@ -1563,7 +1572,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                     ?? new(StringComparer.Ordinal)));
             }
             else
-                Assert.Equal(manifest.Root.SessionId, Assert.Single(peer.BootstrapSessions));
+                AssertBootstrapSessions(manifest.Root.SessionId);
         }
         return (result, currentRootIntent);
     }
@@ -2254,7 +2263,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         var fixtureId = Guid.NewGuid().ToString("N");
         // Runtime registrations accept only opaque identifiers, so this fixture pins a model reference without '/'.
         const string modelReference = "model:provider-alpha";
-        _reviewSelectionContext = await InitializeReviewSelectionAsync(modelReference);
+        _reviewSelectionContext = await InitializeReviewSelectionAsync(modelReference, withCreditGuard);
         var steps = includeBuildTest
             ? new[]
             {
@@ -2420,6 +2429,8 @@ public sealed partial class MafCheckpointStorePostgresTests
                 ModelSelectionReference = item.ModelSelectionReference,
                 ModelSourceMode = ModelSourceMode.HostedCopilot,
                 PlacementProviderId = ReviewSandboxProviderId,
+                CopilotSoftCreditLimit = withCreditGuard ? 3 : null,
+                CopilotHardCreditLimit = withCreditGuard ? 5 : null,
                 Image = new SandboxImageIdentity("sha256:" + new string('a', 64), "linux/amd64", 1024),
                 EnvironmentLifecycleGeneration = 1,
                 EnvironmentLeaseRevision = 1,
@@ -2528,11 +2539,16 @@ public sealed partial class MafCheckpointStorePostgresTests
                 is { } item ? MafExecutionDispatchRequestBuilder.HashWorkItemBinding(item) : null);
         static Task<RuntimeUsageCostSnapshotReceipt> NoCost(SdkSessionFacts _, CancellationToken __) =>
             throw new InvalidOperationException("This fixture must not send a cost request.");
+        Task<RuntimeUsageCostSnapshotReceipt> ReadCostSnapshotAsync(
+            SdkSessionFacts facts, CancellationToken cancellationToken) =>
+            registration.Binding.CopilotHardCreditLimit is not null
+                ? Task.FromResult(CreateZeroUsageEstimateSnapshot(registration, facts, dispatch.MessageId))
+                : NoCost(facts, cancellationToken);
         await store.ExecuteLockedAsync(registration.RuntimeInstanceId, async (connection, transaction, token) =>
         {
             var prepared = await store.PrepareNativeTurnWithinTransactionAsync(
                 connection, transaction, _binding.Identity, checkpoint, dispatch, registration,
-                message, NoCost, token);
+                message, ReadCostSnapshotAsync, token);
             await transaction.CommitAsync(token);
             return prepared;
         }, CancellationToken.None);
@@ -2545,7 +2561,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                 new(new(grant.GrantId, registration.RuntimeInstanceId, grant.Revision,
                     RuntimeCredentialPurpose.Observe, grant.Audience, grant.ConfigurationHash,
                     "controlled-store-only", grant.ExpiresAt, Guid.NewGuid()), message, source),
-                NoCost, token);
+                ReadCostSnapshotAsync, token);
             await transaction.CommitAsync(token);
             return result;
         }, CancellationToken.None);
@@ -2578,8 +2594,42 @@ public sealed partial class MafCheckpointStorePostgresTests
                 await transaction.CommitAsync(token);
                 return receipt;
             }, CancellationToken.None);
-        var accounting = new RuntimeNativeTurnAccountingRequest(null!, recorded, []);
         var snapshot = CreateZeroUsageEstimateSnapshot(registration, source, dispatch.MessageId);
+        var scope = registration.Binding;
+        var card = snapshot.Binding!.RateCard!;
+        var references = recorded.Observation.UsageEventIds.Select(eventId =>
+            new RuntimeUsageCostReceiptReference(
+                eventId,
+                new(SdkUsageIdentity.Create(
+                        registration.RuntimeInstanceId, source.SdkSessionId, eventId.ToString("D")),
+                    new(scope.TenantId, scope.ProjectId, scope.RunId, scope.SessionId, scope.AgentId)
+                    {
+                        TurnId = scope.TurnId
+                    },
+                    new string('e', 64),
+                    CostDisposition.Reconciled, 0m, "AIC", null, card.Id, card.Version, DateTimeOffset.UnixEpoch)
+                {
+                    RateCardContentHash = snapshot.RateCardContentHash
+                })).ToImmutableArray();
+        var accounting = new RuntimeNativeTurnAccountingRequest(null!, recorded, references);
+        if (references.IsEmpty)
+            snapshot = snapshot with
+            {
+                CopilotTotals = new(scope.TenantId, scope.ProjectId, scope.RunId, 0, true, [], []),
+                RepresentedReceipts = references
+            };
+        else
+        {
+            var amount = new UsageAmountTotal(SdkMeterSources.CopilotNanoAiu, "AIC", 0m, references.Length, 0);
+            snapshot = snapshot with
+            {
+                CopilotTotals = new(
+                    scope.TenantId, scope.ProjectId, scope.RunId, references.Length, true,
+                    [new(scope.AgentId, references.Length, null, null, null, null, null, null, true, [amount])],
+                    [amount]),
+                RepresentedReceipts = references
+            };
+        }
         _ = await store.ExecuteLockedAsync(
             registration.RuntimeInstanceId, async (connection, transaction, token) =>
             {
