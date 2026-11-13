@@ -372,14 +372,14 @@ public sealed partial class MafCheckpointStorePostgresTests
     }
 
     private async Task<WorkPlanRunSelectionContext> InitializeReviewSelectionAsync(
-        string modelReference = "model:provider/alpha")
+        string modelReference = "model:provider/alpha", bool withCreditGuard = false)
     {
         // Give this PostgreSQL case a realistic provider snapshot so restart recovery can revalidate the pin.
         const string projectId = "project-1";
         var runId = Guid.NewGuid().ToString("D");
         var selection = new EffectiveRunSelection(
             projectId, runId, 1, 1, 1, "context-v1",
-            CreateReviewSelectionSnapshot(projectId, runId, modelReference));
+            CreateReviewSelectionSnapshot(projectId, runId, modelReference, withCreditGuard));
         _selection = new AuthorizedRunSelection(
             selection,
             new ProjectsAuthorizationContext(
@@ -411,7 +411,7 @@ public sealed partial class MafCheckpointStorePostgresTests
     }
 
     private static JsonElement CreateReviewSelectionSnapshot(
-        string projectId, string runId, string modelReference)
+        string projectId, string runId, string modelReference, bool withCreditGuard = false)
     {
         // The accepted snapshot and server catalog must agree exactly for durable binding recovery.
         var capabilities = ReviewSandboxCapabilities();
@@ -423,6 +423,17 @@ public sealed partial class MafCheckpointStorePostgresTests
         {
             Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
         };
+        var runLimits = new Dictionary<string, object>(StringComparer.Ordinal)
+        {
+            ["maxChildren"] = 100,
+            ["maxConcurrentChildren"] = 32,
+            ["maxWallTimeSeconds"] = 3600
+        };
+        if (withCreditGuard)
+        {
+            runLimits["copilotSoftCreditLimit"] = 3;
+            runLimits["copilotHardCreditLimit"] = 5;
+        }
         return JsonSerializer.SerializeToElement(new
         {
             projectId,
@@ -440,12 +451,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                 },
                 casting = new[] { new { agentId = "agent-1", role = "engineer" } }
             },
-            runLimits = new
-            {
-                maxChildren = 100,
-                maxConcurrentChildren = 32,
-                maxWallTimeSeconds = 3600
-            },
+            runLimits,
             modelSelection = new { reference = modelReference, sourceMode = "hostedCopilot" },
             providers = new[]
             {

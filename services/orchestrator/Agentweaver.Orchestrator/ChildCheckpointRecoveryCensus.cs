@@ -125,16 +125,16 @@ internal static class ChildCheckpointRecoveryCensus
             var native = await ReadNativeOriginAsync(
                 connection, transaction, schema, root, child, binding, selectionHash,
                 cancellationToken).ConfigureAwait(false);
-            var nativeOriginFence = native?.ExecutionFence ??
-                originMember?.NativeOrigin?.ExecutionFence ?? originFence;
-            var spawnHash = await ReadSpawnCommandHashAsync(
-            connection, transaction, schema, root, child, binding, actor,
-            nativeOriginFence, cancellationToken)
-            .ConfigureAwait(false);
-            if (originMember is not null && originMember.SpawnCommandHash != spawnHash)
-                throw InvalidBoundary();
             var fixedAssociation = source.State.FixedWorkAssociations.GetValueOrDefault(binding.AssociationId);
             var workItem = plan.Plan.Items.SingleOrDefault(item => item.Id == binding.AssociationId);
+            var expectedOriginFence = native?.ExecutionFence ?? originMember?.NativeOrigin?.ExecutionFence ??
+                (fixedAssociation is null ? originFence : null);
+            var (spawnHash, spawnFence) = await ReadSpawnCommandHashAsync(
+                connection, transaction, schema, root, child, binding, actor,
+                expectedOriginFence, cancellationToken).ConfigureAwait(false);
+            var nativeOriginFence = expectedOriginFence ?? spawnFence;
+            if (originMember is not null && originMember.SpawnCommandHash != spawnHash)
+                throw InvalidBoundary();
             if ((fixedAssociation is null) == (workItem is null))
                 throw InvalidBoundary();
             var stepId = fixedAssociation?.StepId ?? workItem!.WorkflowStepId;
@@ -175,7 +175,7 @@ internal static class ChildCheckpointRecoveryCensus
                 if (originMember is not null &&
                     (originMember.PriorNativeRebindReceiptId != priorNativeRebind?.ReceiptId ||
                      originMember.PriorNativeRebindPayloadHash != priorNativeRebind?.CanonicalPayloadHash))
-                    throw InvalidBoundary();
+                    throw InvalidBoundary("The recovery member does not pin the prior native rebind receipt.");
             }
             if (native is not null)
             {
@@ -189,7 +189,7 @@ internal static class ChildCheckpointRecoveryCensus
                         : originMember.Startup.RegistrationId != native.RuntimeInstanceId ||
                           originMember.Startup.RegistrationRevision != native.RegistrationRevision ||
                           originMember.NativeOrigin?.RuntimeBindingHash != native.RuntimeBindingHash)
-                        throw InvalidBoundary();
+                        throw InvalidBoundary("The native origin does not match its prepared registration.");
                 }
                 else
                 {
@@ -199,10 +199,10 @@ internal static class ChildCheckpointRecoveryCensus
                          priorNativeRebind.OriginState != "prepared" ||
                          effectiveStartup.RegistrationId != priorNativeRebind.RuntimeInstanceId ||
                          effectiveStartup.RegistrationRevision != priorNativeRebind.RegistrationRevision ||
-                         registration is null ||
-                         RuntimeContractValidation.RegistrationHash(registration) !=
-                             priorNativeRebind.RegistrationHash)
-                        throw InvalidBoundary();
+                         originMember is null && (registration is null ||
+                             RuntimeContractValidation.RegistrationHash(registration) !=
+                                 priorNativeRebind.RegistrationHash))
+                        throw InvalidBoundary("The prior native rebind does not match its origin authority.");
                 }
             }
             var originIntent = native is null
@@ -211,7 +211,7 @@ internal static class ChildCheckpointRecoveryCensus
                     connection, transaction, schema, root, native, binding, selectionHash, cancellationToken)
                     .ConfigureAwait(false);
             if (intent is not null && originIntent != intent)
-                throw InvalidBoundary();
+                throw InvalidBoundary("The current startup intent differs from the native origin intent.");
             if (originIntent?.EgressReceipt is { } egress &&
                 (egress.Fence.Owner.TenantId != tenantId ||
                  egress.Fence.Owner.ProjectId != root.ProjectId ||
@@ -220,7 +220,7 @@ internal static class ChildCheckpointRecoveryCensus
                  egress.Fence.LifecycleGeneration != originRootStartup.Placement.LifecycleGeneration ||
                  egress.PolicyGeneration != originRootStartup.Placement.NetworkPolicyGeneration ||
                  egress.ContextRevision != binding.ContextRevision))
-                throw InvalidBoundary();
+                throw InvalidBoundary("The native origin egress receipt does not match the recovery boundary.");
             var (messageStatus, messageRequestHash) = await ReadMessageAsync(
                 connection, transaction, schema, root, child, binding, actor, cancellationToken)
                 .ConfigureAwait(false);
@@ -228,7 +228,7 @@ internal static class ChildCheckpointRecoveryCensus
                 ? source.State.Progress.WorkItems.GetValueOrDefault(binding.AssociationId)
                 : source.State.Progress.FixedWorkItems.GetValueOrDefault(binding.AssociationId);
             if (intent is not null && (registration is null || startup.Placement is null))
-                throw InvalidBoundary();
+                throw InvalidBoundary("The pending child intent has no registration or placement.");
             var hasResult = source.State.Results.TryGetValue(binding.AssociationId, out var result);
             var hasReceipt = source.State.ChildTurnReceipts.TryGetValue(binding.AssociationId, out var receipt);
             var workItemBindingHash = workItem is null
@@ -260,7 +260,7 @@ internal static class ChildCheckpointRecoveryCensus
             if (priorNativeRebind is not null &&
                 NativeChildRebindOriginFingerprint.Create(tenantId, root, member).Hash !=
                     priorNativeRebind.OriginFingerprint)
-                throw InvalidBoundary();
+                throw InvalidBoundary("The member origin fingerprint differs from the prior native rebind.");
             budget.Include(member);
             members.Add(member);
         }
@@ -289,7 +289,7 @@ internal static class ChildCheckpointRecoveryCensus
             rootStartup, members.ToImmutable(), pins, captures, claim, reservations, otherNativeWork);
     }
 
-    internal static async Task<string> ReadSpawnCommandHashAsync(
+    internal static async Task<(string CommandHash, long ExecutionFence)> ReadSpawnCommandHashAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         string schema,
@@ -297,7 +297,7 @@ internal static class ChildCheckpointRecoveryCensus
         ChildRecoverySession child,
         RuntimeChildStartBinding binding,
         CoordinationActor actor,
-        long sourceFence,
+        long? expectedOriginFence,
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand($"""
@@ -313,8 +313,10 @@ internal static class ChildCheckpointRecoveryCensus
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
             reader.GetString(0) != root.SessionId || reader.GetString(1) != child.SessionId ||
             reader.GetString(2) != actor.Issuer || reader.GetString(3) != actor.Subject ||
-            reader.GetInt64(4) != sourceFence || reader.GetString(5) != "spawn")
+            (expectedOriginFence is { } expectedFence && reader.GetInt64(4) != expectedFence) ||
+            reader.GetString(5) != "spawn")
             throw InvalidBoundary();
+        var spawnFence = reader.GetInt64(4);
         try
         {
             using var result = JsonDocument.Parse(reader.GetString(7));
@@ -326,7 +328,7 @@ internal static class ChildCheckpointRecoveryCensus
                 identity.GetProperty("sessionId").GetString() != child.SessionId ||
                 node.GetProperty("parentSessionId").GetString() != root.SessionId ||
                 node.GetProperty("rootSessionId").GetString() != root.SessionId ||
-                node.GetProperty("executionFence").GetInt64() != sourceFence ||
+                node.GetProperty("executionFence").GetInt64() != spawnFence ||
                 node.GetProperty("stateVersion").GetInt64() != binding.InitialStateVersion)
                 throw InvalidBoundary();
         }
@@ -336,7 +338,7 @@ internal static class ChildCheckpointRecoveryCensus
             throw new CoordinationException(
                 "checkpoint_recovery_boundary_unsupported", StatusCodes.Status409Conflict, exception);
         }
-        return reader.GetString(6);
+        return (reader.GetString(6), spawnFence);
     }
 
     internal static (string Disposition, string? Reason) Classify(
@@ -1055,8 +1057,8 @@ internal static class ChildCheckpointRecoveryCensus
         return work.ToImmutable();
     }
 
-    private static CoordinationException InvalidBoundary() =>
-        new("checkpoint_recovery_boundary_unsupported", StatusCodes.Status409Conflict);
+    private static CoordinationException InvalidBoundary(string? reason = null) =>
+        new("checkpoint_recovery_boundary_unsupported", StatusCodes.Status409Conflict) { Reason = reason };
 
     private static void AddRun(NpgsqlCommand command, SessionIdentity root)
     {
