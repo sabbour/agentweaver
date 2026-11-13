@@ -517,6 +517,9 @@ internal sealed partial class RuntimeRunStartContinuation(
     EventsAddressedMessageClient? events = null,
     RuntimeUsageSourceStore? usageSources = null)
 {
+    // TEMP-DIAG #2748
+    internal static readonly AsyncLocal<Action<Exception>?> RecoveryFailureObserver = new();
+
     private sealed record CheckpointRecoveryMemberContinuation(
         ChildRecoveryMember Member,
         RuntimeRunStartIntent Intent,
@@ -1519,6 +1522,8 @@ internal sealed partial class RuntimeRunStartContinuation(
         catch (Exception exception) when (
             exception is RuntimeAuthorizationException or CoordinationException or HttpRequestException or JsonException)
         {
+            // TEMP-DIAG #2748
+            RecoveryFailureObserver.Value?.Invoke(exception);
             var reason = FailureCode(exception);
             var failure = ClassifyCheckpointRecoveryFailure(
                 HasCheckpointRecoveryBootstrapEvidence(result.OperationId, ReadReceiptLinks(intent)),
