@@ -567,27 +567,6 @@ public sealed partial class MafCheckpointStorePostgresTests
         var options = new OrchestratorOptions(
             _actor.Issuer, "orchestrator", "https://projects.test/", "projects",
             "https://events.test/", "events", _schema);
-        var peer = new RecoveryRuntimePeer(
-            initial,
-            failRootActivation ? manifest.Root.SessionId : null,
-            emptyEvidenceSessionId,
-            emptyEvidenceReceiptName);
-        using var environmentHttp = new HttpClient(peer);
-        using var brokerHttp = new HttpClient(new RecoveryBrokerPeer(registrationStore, peer));
-        using var projectsHttp = new HttpClient(new ReviewSelectionAuthorityHandler(
-            _selection.Selection, _actor.Issuer, _actor.Subject));
-        var projects = new ProjectsRunSelectionClient(
-            projectsHttp, options, new ReviewNoSnapshotResolver());
-        var catalog = ProviderCatalog.Create([], [], []).Value!;
-        var contexts = new CoordinatorRunSelectionContextStore(
-            _fixture.DataSource, _schema, catalog, new ProviderResolver(catalog), []);
-        var registrationOwner = new RuntimeRegistrationOwner(
-            options, projects, fixture.Owner, fixture.Decisions, contexts,
-            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
-            registrationStore,
-            new RuntimeEnvironmentContextClient(environmentHttp, new(new Uri("https://environment.test/"))),
-            TimeProvider.System);
-        var clients = new RecoveryRuntimeHttpClientFactory(environmentHttp, brokerHttp);
         var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
         const string bearer = "recovery-test-token";
         using var services = new ServiceCollection()
@@ -600,6 +579,7 @@ public sealed partial class MafCheckpointStorePostgresTests
             [
                 new Claim("sub", _actor.Subject),
                 new Claim("iss", _actor.Issuer),
+                new Claim("aud", options.Audience),
                 new Claim("aud", options.ProjectsAudience),
                 new Claim("project_id", manifest.Root.ProjectId),
                 new Claim("run_id", manifest.Root.RunId),
@@ -610,6 +590,36 @@ public sealed partial class MafCheckpointStorePostgresTests
         context.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
         var runtimeActor = new RuntimeActorAuthorization(
             new SecretCredential(bearer, expiresAt), "tenant-1");
+        using var projectsHttp = new HttpClient(new ReviewSelectionAuthorityHandler(
+            _selection.Selection, _actor.Issuer, _actor.Subject));
+        var projects = new ProjectsRunSelectionClient(
+            projectsHttp, options, new ReviewNoSnapshotResolver());
+        var contexts = CreateReviewSelectionContextStore();
+        var checkpoints = new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null);
+        async Task<RuntimeOwnerContext> ReadOwnerAsync(
+            string sessionId, Guid operationId, CancellationToken cancellationToken)
+        {
+            var authorization = await fixture.Owner.ReadCheckpointRecoveryRegistrationAuthorizationAsync(
+                _actor, manifest.Root.ProjectId, manifest.Root.RunId, sessionId, operationId,
+                cancellationToken);
+            return await CoordinationEndpoints.ReadRuntimeOwnerContextCoreAsync(
+                manifest.Root.ProjectId, manifest.Root.RunId, sessionId, context, options, projects,
+                fixture.Owner, fixture.Decisions, contexts, checkpoints, cancellationToken,
+                allowCoordinatorRoot: true, checkpointRecoveryRegistration: authorization);
+        }
+        var peer = new RecoveryRuntimePeer(
+            initial, ReadOwnerAsync,
+            failRootActivation ? manifest.Root.SessionId : null,
+            emptyEvidenceSessionId,
+            emptyEvidenceReceiptName);
+        using var environmentHttp = new HttpClient(peer);
+        using var brokerHttp = new HttpClient(new RecoveryBrokerPeer(registrationStore, peer));
+        var registrationOwner = new RuntimeRegistrationOwner(
+            options, projects, fixture.Owner, fixture.Decisions, contexts, checkpoints,
+            registrationStore,
+            new RuntimeEnvironmentContextClient(environmentHttp, new(new Uri("https://environment.test/"))),
+            TimeProvider.System);
+        var clients = new RecoveryRuntimeHttpClientFactory(environmentHttp, brokerHttp);
         using var eventsHttp = completedUnjoinedMaterial is null
             ? null
             : new HttpClient(new RecoveryEventsPeer(
@@ -641,7 +651,9 @@ public sealed partial class MafCheckpointStorePostgresTests
         {
             var currentRoot = ReadIntentReceipt<RuntimeRegistration>(currentRootIntent, "registration");
             var previousRoot = initial[manifest.Root.SessionId].Registration;
-            Assert.NotEqual(previousRoot.Binding.ProfileId, currentRoot.Binding.ProfileId);
+            Assert.True(previousRoot.Binding.ProfileId != currentRoot.Binding.ProfileId,
+                $"phase={result.CheckpointRecovery?.Phase} step={result.CheckpointRecovery?.CurrentStep} " +
+                $"reason={result.CheckpointRecovery?.ReasonCode}");
             Assert.NotEqual(previousRoot.Binding.ConfigureEndpoint, currentRoot.Binding.ConfigureEndpoint);
             var pendingChildren = manifest.Members.Where(member => member.Disposition == "pendingUnsent").ToArray();
             if (failRootActivation)
@@ -699,7 +711,6 @@ public sealed partial class MafCheckpointStorePostgresTests
         Guid BootstrapOperationId);
 
     private sealed record RecoveryRuntimeReplacement(
-        RuntimeOwnerContext Owner,
         RuntimeRunStartPlacementReceipt Placement,
         string ProfileId,
         Uri ConfigureEndpoint,
@@ -707,6 +718,7 @@ public sealed partial class MafCheckpointStorePostgresTests
 
     private sealed class RecoveryRuntimePeer(
         IReadOnlyDictionary<string, RecoveryRuntimeSeed> initial,
+        Func<string, Guid, CancellationToken, Task<RuntimeOwnerContext>> readOwner,
         string? failActivationSessionId,
         string? emptyEvidenceSessionId,
         string? emptyEvidenceReceiptName) : HttpMessageHandler
@@ -795,7 +807,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                     PodUid = $"recovered-pod-{envelope.Owner.SessionId}"
                 };
                 _replacements[envelope.Owner.SessionId] = new(
-                    envelope.Owner, placement, profileId,
+                    placement, profileId,
                     new Uri($"https://runtime.test/runtime/v2/{envelope.Owner.SessionId}/configure"),
                     new Uri($"https://runtime.test/runtime/v2/{envelope.Owner.SessionId}/observe"));
                 return Success(request, emptyEvidenceSessionId == envelope.Owner.SessionId &&
@@ -828,7 +840,10 @@ public sealed partial class MafCheckpointStorePostgresTests
                     if (profileId != replacement.ProfileId)
                         throw new InvalidOperationException("Unexpected recovery profile.");
                     return Success(request, Context(
-                        initial[sessionId].Registration, replacement.Owner, replacement.Placement,
+                        initial[sessionId].Registration,
+                        await readOwner(sessionId, QueryOperationId(request.RequestUri.Query), cancellationToken)
+                            .ConfigureAwait(false),
+                        replacement.Placement,
                         replacement.ProfileId, replacement.ConfigureEndpoint, replacement.ObservationEndpoint));
                 }
 
