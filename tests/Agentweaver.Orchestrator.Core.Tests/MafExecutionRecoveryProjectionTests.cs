@@ -243,6 +243,83 @@ public sealed class MafExecutionRecoveryProjectionTests
     }
 
     [Fact]
+    public void RecoveredCommittedOpenPullRequestWaitsForReceiptWithoutMarkingNewIntentCommitted()
+    {
+        var source = MafBuildTestSourceInputTests.Fixture().Run;
+        var workflow = WorkflowTestData.Snapshot(WorkflowTestData.Definition(
+            WorkflowDefinitionOrigin.BuiltIn,
+            WorkflowTestData.Open("implement", 0, []),
+            WorkflowTestData.Platform(
+                "publish", 1, ["implement"], WorkflowPlatformGate.OpenPullRequest)));
+        var plan = WorkPlanValidator.ValidateAndSnapshot(
+            workflow,
+            WorkflowTestData.Plan(WorkflowTestData.Item("implementation")),
+            WorkflowTestData.SelectionContext()).Value!;
+        var workspace = new SourceControlPullRequestWorkspaceLocator(
+            "workspace",
+            Guid.NewGuid(),
+            new string('a', 40),
+            "feature/agent-change",
+            new string('c', 40),
+            source.Pin.DefaultBranch);
+        var intent = MafOpenPullRequestContract.CreateIntent(
+            Guid.NewGuid(), source.Identity, "open-pr-intent", 2, plan.Plan.Id,
+            "publish", 3, source.Pin.AcceptedRun.Fence, source.Pin.AcceptedRun.AcceptedSelectionHash,
+            source.Pin, workspace, 1);
+        var progress = MafExecutionProgress.Empty with
+        {
+            NonModelSteps = MafExecutionProgress.Empty.NonModelSteps.Add(
+                "publish", MafExecutionTaskStatus.Running)
+        };
+        var sourceFence = intent.ExecutionFence;
+        var recoveryFence = sourceFence + 1;
+        var lineage = new MafCheckpointRecoveryLineage(
+            "source-checkpoint", 1, new string('a', 64), sourceFence, Guid.NewGuid(), recoveryFence);
+        var checkpoint = new MafExecutionCheckpoint(
+            3, plan.Plan.Id, 4, progress)
+        {
+            OpenPullRequestIntents =
+                ImmutableDictionary<string, MafExecutionOpenPullRequestIntent>.Empty
+                    .WithComparers(StringComparer.Ordinal)
+                    .Add(intent.StepId, intent),
+            RecoveryLineage = lineage
+        };
+
+        var recovered = MafExecutionRecoveryProjector.Project(
+            Snapshot(checkpoint), plan, 4, true, null);
+        var operation = Assert.Single(recovered.PlatformGateOperations);
+        Assert.Equal("committedAwaitingReceipt", operation.EvidenceState);
+        Assert.Equal("reconcileCommitted", operation.EffectRecoveryState);
+        var step = Assert.Single(recovered.Steps, item => item.StepId == "publish");
+        Assert.Equal("running", step.CheckpointStatus);
+        Assert.Equal("reconcileCommitted", step.EffectRecoveryState);
+
+        var currentBinding = intent.Request.ExecutionBinding! with
+        {
+            DecisionStateVersion = 4,
+            ExecutionFence = recoveryFence
+        };
+        var newIntent = intent with
+        {
+            DecisionStateVersion = 4,
+            ExecutionFence = recoveryFence,
+            Request = intent.Request with { ExecutionBinding = currentBinding }
+        };
+        var later = MafExecutionRecoveryProjector.Project(
+            Snapshot(checkpoint with
+            {
+                OpenPullRequestIntents = checkpoint.OpenPullRequestIntents.SetItem(
+                    newIntent.StepId, newIntent)
+            }),
+            plan,
+            4,
+            true,
+            null);
+        Assert.Equal("mayRepeat",
+            Assert.Single(later.PlatformGateOperations).EffectRecoveryState);
+    }
+
+    [Fact]
     public void MissingOrMismatchedCheckpointNeverClaimsWorkIsReady()
     {
         var plan = CreatePlan(WorkflowTestData.Item("accepted-work"));

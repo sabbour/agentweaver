@@ -707,6 +707,19 @@ association, and prompt through the effective binding, then follows the usual
 native report and accounting path. `ready` still means that the Host restored
 the boundary; it does not mean that the child task or run is complete.
 
+One committed OpenPullRequest effect is also recoverable at a saved child join.
+Before advancing the fence, the owner requires exactly one running intent with
+no receipt and an exact matching committed Source Control operation and stored
+pull request. Missing, pending, uncertain, or mismatched operation evidence
+blocks recovery before the fence changes. After recovery is admitted, the
+owner reads the stored pull request under current authority, verifies its
+result fingerprint, and does not create another pull request or rewrite the
+original operation. Orchestrator then records the receipt from the original
+intent. Until that receipt is saved, recovery reports `reconcileCommitted`;
+the dispatch hold remains active through the normal readiness checks. Other
+platform-effect history remains unsupported at this boundary. See the
+[committed pull request recovery flow](../architecture/environment-sandbox.md#reconcile-a-committed-pull-request).
+
 If a child-join recovery is blocked at Host activation after the replacement
 registration set is complete, a new operation can supersede it. The owner
 requires exact retirement and registration receipts, the same saved child and

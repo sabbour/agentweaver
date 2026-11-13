@@ -819,7 +819,8 @@ internal static partial class SourceControlEndpoints
                 projects,
                 decisions,
                 sourceControlOwner,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                request.ExecutionBinding).ConfigureAwait(false);
             EnsureAdapterMatchesPin(adapter, run.Pin);
             EnsureApiCredential(run.Pin);
             if (request.ExecutionBinding is not null)
@@ -888,7 +889,8 @@ internal static partial class SourceControlEndpoints
             run.Pin.AcceptedRun.Subject, binding);
         var operation = await sourceControlOwner.BeginOpenPullRequestOperationAsync(
             run.Pin, run.Identity, binding.OperationId, fingerprint, effectFingerprint,
-            authorizationFingerprint, cancellationToken).ConfigureAwait(false);
+            authorizationFingerprint, cancellationToken,
+            requireCommittedReplay: run.RequiresCommittedOpenPullRequestReplay).ConfigureAwait(false);
 
         var selectionContext = await runSelectionContexts.ReadAsync(
             run.Selection.Selection, binding.ExecutionFence, cancellationToken).ConfigureAwait(false)
@@ -993,9 +995,18 @@ internal static partial class SourceControlEndpoints
                 !string.Equals(operation.ResultFingerprint, resultFingerprint, StringComparison.OrdinalIgnoreCase))
                 throw new CoordinationException(
                     "source_control_run_binding_changed", StatusCodes.Status409Conflict);
-            await sourceControlOwner.CompleteOpenPullRequestOperationInTransactionAsync(
-                connection, transaction, run.Identity, binding.OperationId, run.Pin.PinId,
-                fingerprint, resultFingerprint, pullRequest.Number, cancellationToken).ConfigureAwait(false);
+            if (operation.EffectState == "committed")
+            {
+                if (operation.PullRequestNumber != pullRequest.Number)
+                    throw new CoordinationException(
+                        "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+            }
+            else
+            {
+                await sourceControlOwner.CompleteOpenPullRequestOperationInTransactionAsync(
+                    connection, transaction, run.Identity, binding.OperationId, run.Pin.PinId,
+                    fingerprint, resultFingerprint, pullRequest.Number, cancellationToken).ConfigureAwait(false);
+            }
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
         catch when (remoteCreateAttempted)
@@ -2843,7 +2854,8 @@ internal static partial class SourceControlEndpoints
         ProjectsRunSelectionClient projects,
         CoordinatorDecisionOwnerStore decisions,
         SourceControlOwnerStore sourceControlOwner,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        SourceControlPullRequestExecutionBinding? executionBinding = null)
     {
         var actor = RequireOwnerActor(context, options, projectId, runId);
         var identity = new SessionIdentity(projectId, runId, sessionId);
@@ -2851,15 +2863,22 @@ internal static partial class SourceControlEndpoints
             context, projectId, runId, cancellationToken).ConfigureAwait(false);
         var current = await decisions.ReadCurrentAsync(
             actor, identity, selection, cancellationToken).ConfigureAwait(false);
-        var pin = await sourceControlOwner.ReadRepositoryPinAsync(
-            actor, identity, selection, cancellationToken).ConfigureAwait(false);
+        var (pin, requiresCommittedReplay) = executionBinding is null
+            ? (await sourceControlOwner.ReadRepositoryPinAsync(
+                    actor, identity, selection, cancellationToken).ConfigureAwait(false), false)
+            : await sourceControlOwner.ReadOpenPullRequestPinAsync(
+                actor, identity, selection, current.StateVersion, current.State.Fence,
+                executionBinding, cancellationToken).ConfigureAwait(false);
         var settings = SourceControlProjectConfigurationResolver.Resolve(selection.Selection.Snapshot);
         EnsurePinnedConfiguration(pin, settings);
         if (pin.AcceptedRun.Fence != current.State.Fence)
             throw new CoordinationException(
                 "source_control_run_binding_changed", StatusCodes.Status409Conflict);
         return new SourceControlRunContext(
-            actor, identity, selection, pin, current.StateVersion);
+            actor, identity, selection, pin, current.StateVersion)
+        {
+            RequiresCommittedOpenPullRequestReplay = requiresCommittedReplay
+        };
     }
 
     /// <summary>
@@ -3371,7 +3390,10 @@ internal sealed record SourceControlRunContext(
     SessionIdentity Identity,
     AuthorizedRunSelection Selection,
     SourceControlRepositoryPin Pin,
-    long DecisionStateVersion);
+    long DecisionStateVersion)
+{
+    public bool RequiresCommittedOpenPullRequestReplay { get; init; }
+}
 
 /// <summary>
 /// The workspace identifier, base commit, and branch requested for a repository checkout.

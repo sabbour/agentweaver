@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "v1-checkpoint-committed-effect-recovery.json",
+    "sha256": "19035d619c563010d215ddf0cd0405a0393c0c26a6572924d77c693c8ebaafe1"
+  },
+  "drawio": {
+    "file": "v1-checkpoint-committed-effect-recovery.drawio",
+    "sha256": "3667480aea2ae9ed1ee553ff5124220332e6feeedd2858cb8d28d1a22cd45278"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "format": "png",
+    "border": 16,
+    "scale": 2,
+    "rendererVersion": "32.6.10"
+  },
+  "png": {
+    "file": "v1-checkpoint-committed-effect-recovery.png",
+    "sha256": "4376893538500cac936c0cac71d79b57678adfb0333a8de870be4fdb164d429b"
+  }
+}

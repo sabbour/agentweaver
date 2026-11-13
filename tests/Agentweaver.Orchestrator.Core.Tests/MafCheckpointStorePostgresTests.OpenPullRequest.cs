@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -111,6 +112,79 @@ public sealed partial class MafCheckpointStorePostgresTests
             Assert.False(await executor.ExecuteAsync(intent, CancellationToken.None));
             Assert.Equal(1, owner.ProviderCreates);
             Assert.Equal(1, owner.PullRequestRequests);
+        }
+    }
+
+    [Fact]
+    public async Task RecoveredCommittedReplayUsesCurrentBindingAndSkipsSeparateDiffRequest()
+    {
+        var (_, intent, source) = await PersistOpenPullRequestIntentAsync();
+        var binding = intent.Request.ExecutionBinding! with
+        {
+            DecisionStateVersion = intent.DecisionStateVersion + 1,
+            ExecutionFence = intent.ExecutionFence + 1
+        };
+        var recoveredIntent = intent with
+        {
+            DecisionStateVersion = binding.DecisionStateVersion,
+            ExecutionFence = binding.ExecutionFence,
+            Request = intent.Request with { ExecutionBinding = binding }
+        };
+        var owner = new DispatchOwnerHandler(intent) { ReturnExistingPullRequest = true };
+        var (executor, client) = CreateDispatchExecutor(
+            intent, source, owner, authorizedIntent: _ => recoveredIntent);
+        using (client)
+        {
+            Assert.True(await executor.ExecuteAsync(intent, CancellationToken.None));
+            Assert.Equal(0, owner.DiffRequests);
+            Assert.Equal(0, owner.ProviderCreates);
+            Assert.Equal(1, owner.PullRequestRequests);
+            Assert.Equal(binding.ExecutionFence, owner.LastExecutionFence);
+
+            var completed = await _executionStore.ReadLatestAsync(CancellationToken.None);
+            Assert.NotNull(completed);
+            Assert.Equal(MafExecutionTaskStatus.Succeeded,
+                completed.State.Progress.NonModelSteps["publish"]);
+            Assert.Equal(42, completed.State.OpenPullRequestReceipts["publish"].PullRequestNumber);
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentRecoveredCommittedReplaysWriteOneReceiptWithoutCreatingAnotherPullRequest()
+    {
+        var (before, intent, source) = await PersistOpenPullRequestIntentAsync();
+        var binding = intent.Request.ExecutionBinding! with
+        {
+            DecisionStateVersion = intent.DecisionStateVersion + 1,
+            ExecutionFence = intent.ExecutionFence + 1
+        };
+        var recoveredIntent = intent with
+        {
+            DecisionStateVersion = binding.DecisionStateVersion,
+            ExecutionFence = binding.ExecutionFence,
+            Request = intent.Request with { ExecutionBinding = binding }
+        };
+        var owner = new DispatchOwnerHandler(intent) { ReturnExistingPullRequest = true };
+        var (executor, client) = CreateDispatchExecutor(
+            intent, source, owner, authorizedIntent: _ => recoveredIntent);
+        using (client)
+        {
+            var results = await Task.WhenAll(
+                executor.ExecuteAsync(intent, CancellationToken.None),
+                executor.ExecuteAsync(intent, CancellationToken.None));
+
+            Assert.All(results, result => Assert.True(result));
+            Assert.Equal(0, owner.DiffRequests);
+            Assert.Equal(0, owner.ProviderCreates);
+            Assert.Equal(2, owner.PullRequestRequests);
+            Assert.All(owner.ExecutionFences, fence => Assert.Equal(binding.ExecutionFence, fence));
+
+            var completed = await _executionStore.ReadLatestAsync(CancellationToken.None);
+            Assert.NotNull(completed);
+            Assert.Equal(before.State.Revision + 1, completed.State.Revision);
+            Assert.Equal(MafExecutionTaskStatus.Succeeded,
+                completed.State.Progress.NonModelSteps["publish"]);
+            Assert.Single(completed.State.OpenPullRequestReceipts);
         }
     }
 
@@ -308,6 +382,29 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.False(pendingReplay.IsNew);
         Assert.Null(pendingReplay.PullRequestNumber);
 
+        var binding = intent.Request.ExecutionBinding!;
+        var refreshedBinding = binding with
+        {
+            DecisionStateVersion = binding.DecisionStateVersion + 1,
+            ExecutionFence = binding.ExecutionFence + 1
+        };
+        var refreshedRequest = intent.Request with { ExecutionBinding = refreshedBinding };
+        var refreshedAuthorizationFingerprint =
+            MafOpenPullRequestContract.OriginalAuthorizationFingerprint(
+                intent.Identity, source.Pin.AcceptedRun.TenantId, source.Pin.AcceptedRun.Issuer,
+                source.Pin.AcceptedRun.Subject, refreshedBinding);
+        var pendingReauthorization = await Assert.ThrowsAsync<CoordinationException>(() =>
+            owner.BeginOpenPullRequestOperationAsync(
+                source.Pin,
+                intent.Identity,
+                intent.OperationId,
+                MafOpenPullRequestContract.OwnerRequestFingerprint(intent.Identity, refreshedRequest),
+                effectFingerprint,
+                refreshedAuthorizationFingerprint,
+                CancellationToken.None,
+                requireCommittedReplay: true));
+        Assert.Equal("source_control_run_binding_changed", pendingReauthorization.Code);
+
         var resultFingerprint = MafOpenPullRequestContract.EffectResultFingerprint(
             intent.Identity, intent.Request.ExecutionBinding!, source.Pin.Repository,
             new SourceControlPullRequest(
@@ -349,26 +446,17 @@ public sealed partial class MafCheckpointStorePostgresTests
 
         var changedFingerprint = MafOpenPullRequestContract.OwnerRequestFingerprint(
             intent.Identity, intent.Request with { Title = "changed" });
+        var changedEffectFingerprint = MafOpenPullRequestContract.EffectRequestFingerprint(
+            intent.Identity, intent.Request with { Title = "changed" });
         var changed = await Assert.ThrowsAsync<CoordinationException>(() =>
             owner.BeginOpenPullRequestOperationAsync(
-                source.Pin, intent.Identity, intent.OperationId, changedFingerprint, effectFingerprint,
+                source.Pin, intent.Identity, intent.OperationId, changedFingerprint, changedEffectFingerprint,
                 authorizationFingerprint, CancellationToken.None));
         Assert.Equal("source_control_run_binding_changed", changed.Code);
 
-        var binding = intent.Request.ExecutionBinding!;
-        var refreshedBinding = binding with
-        {
-            DecisionStateVersion = binding.DecisionStateVersion + 1,
-            ExecutionFence = binding.ExecutionFence + 1
-        };
-        var refreshedRequest = intent.Request with { ExecutionBinding = refreshedBinding };
         Assert.Equal(effectFingerprint,
             MafOpenPullRequestContract.EffectRequestFingerprint(intent.Identity, refreshedRequest));
-        var refreshedAuthorizationFingerprint =
-            MafOpenPullRequestContract.OriginalAuthorizationFingerprint(
-                intent.Identity, source.Pin.AcceptedRun.TenantId, source.Pin.AcceptedRun.Issuer,
-                source.Pin.AcceptedRun.Subject, refreshedBinding);
-        var staleAuthorization = await Assert.ThrowsAsync<CoordinationException>(() =>
+        var changedBinding = await Assert.ThrowsAsync<CoordinationException>(() =>
             owner.BeginOpenPullRequestOperationAsync(
                 source.Pin,
                 intent.Identity,
@@ -377,7 +465,37 @@ public sealed partial class MafCheckpointStorePostgresTests
                 effectFingerprint,
                 refreshedAuthorizationFingerprint,
                 CancellationToken.None));
-        Assert.Equal("source_control_run_binding_changed", staleAuthorization.Code);
+        Assert.Equal("source_control_run_binding_changed", changedBinding.Code);
+
+        var refreshedReplay = await owner.BeginOpenPullRequestOperationAsync(
+            source.Pin,
+            intent.Identity,
+            intent.OperationId,
+            MafOpenPullRequestContract.OwnerRequestFingerprint(intent.Identity, refreshedRequest),
+            effectFingerprint,
+            refreshedAuthorizationFingerprint,
+            CancellationToken.None,
+            requireCommittedReplay: true);
+        Assert.False(refreshedReplay.IsNew);
+        Assert.Equal(42, refreshedReplay.PullRequestNumber);
+        Assert.Equal(resultFingerprint, refreshedReplay.ResultFingerprint);
+
+        await using var verify = await _fixture.DataSource.OpenConnectionAsync();
+        await using var verifyOperation = new NpgsqlCommand($"""
+            SELECT request_fingerprint, effect_fingerprint, original_authorization_fingerprint
+            FROM "{_schema}".source_control_pull_request_operations
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+              AND operation_id = @operation
+            """, verify);
+        verifyOperation.Parameters.AddWithValue("project", intent.Identity.ProjectId);
+        verifyOperation.Parameters.AddWithValue("run", intent.Identity.RunId);
+        verifyOperation.Parameters.AddWithValue("session", intent.Identity.SessionId);
+        verifyOperation.Parameters.AddWithValue("operation", intent.OperationId);
+        await using var verifyReader = await verifyOperation.ExecuteReaderAsync();
+        Assert.True(await verifyReader.ReadAsync());
+        Assert.Equal(fingerprint, verifyReader.GetString(0).TrimEnd());
+        Assert.Equal(effectFingerprint, verifyReader.GetString(1).TrimEnd());
+        Assert.Equal(authorizationFingerprint, verifyReader.GetString(2).TrimEnd());
     }
 
     [Fact]
@@ -452,16 +570,7 @@ public sealed partial class MafCheckpointStorePostgresTests
 
     private SourceControlRunContext CreateCurrentSourceControlRun()
     {
-        var capabilities = ImmutableHashSet.Create(StringComparer.Ordinal,
-            SourceControlCapabilities.RepositoryRead,
-            SourceControlCapabilities.RepositoryCheckout,
-            SourceControlCapabilities.PullRequestRead,
-            SourceControlCapabilities.PullRequestWrite);
-        var catalog = ProviderCatalog.Create(
-            [new ProviderRegistration(new ProviderDescriptor(
-                ProviderSeam.SourceControl, "github", new(1, 0, 0), 1,
-                ProviderHostingPattern.InProcess, capabilities), true, "source-v1", 1)],
-            [new ProviderSelection(ProviderSeam.SourceControl, "github")], []).Value!;
+        var catalog = CreateChildRecoverySourceControlCatalog(out var capabilities);
         var resolver = new ProviderResolver(catalog);
         var candidate = resolver.Resolve(new ProviderResolutionRequest(
             ProviderSeam.SourceControl, null, new(1, 0, 0), 1,
@@ -499,6 +608,75 @@ public sealed partial class MafCheckpointStorePostgresTests
         return new(_actor, _binding.Identity, _selection, pin, 1);
     }
 
+    private static ProviderCatalog CreateChildRecoverySourceControlCatalog(
+        out ImmutableHashSet<string> capabilities)
+    {
+        capabilities = ImmutableHashSet.Create(StringComparer.Ordinal,
+            SourceControlCapabilities.RepositoryRead,
+            SourceControlCapabilities.RepositoryCheckout,
+            SourceControlCapabilities.PullRequestRead,
+            SourceControlCapabilities.PullRequestWrite);
+        return ProviderCatalog.Create(
+            [new ProviderRegistration(new ProviderDescriptor(
+                ProviderSeam.SourceControl, "github", new(1, 0, 0), 1,
+                ProviderHostingPattern.InProcess, capabilities), true, "source-v1", 1)],
+            [new ProviderSelection(ProviderSeam.SourceControl, "github")], []).Value!;
+    }
+
+    private async Task<string> CommitOpenPullRequestOperationAsync(
+        MafExecutionOpenPullRequestIntent intent,
+        SourceControlRepositoryPin pin)
+    {
+        var catalog = ProviderCatalog.Create([], [], []).Value!;
+        var owner = new SourceControlOwnerStore(
+            _fixture.DataSource, _schema, catalog, new ProviderResolver(catalog));
+        var requestFingerprint = MafOpenPullRequestContract.OwnerRequestFingerprint(
+            intent.Identity, intent.Request);
+        var effectFingerprint = MafOpenPullRequestContract.EffectRequestFingerprint(
+            intent.Identity, intent.Request);
+        var authorizationFingerprint = MafOpenPullRequestContract.OriginalAuthorizationFingerprint(
+            intent.Identity,
+            pin.AcceptedRun.TenantId,
+            pin.AcceptedRun.Issuer,
+            pin.AcceptedRun.Subject,
+            intent.Request.ExecutionBinding!);
+        var claim = await owner.BeginOpenPullRequestOperationAsync(
+            pin,
+            intent.Identity,
+            intent.OperationId,
+            requestFingerprint,
+            effectFingerprint,
+            authorizationFingerprint,
+            CancellationToken.None);
+        Assert.True(claim.IsNew);
+        var pullRequest = new SourceControlPullRequest(
+            42,
+            new Uri("https://github.com/octo/repo/pull/42"),
+            "open",
+            intent.Request.HeadBranch,
+            intent.Request.ExpectedHeadSha,
+            intent.Request.BaseBranch,
+            intent.Request.ExpectedBaseSha,
+            false,
+            SourceControlPullRequestDisposition.Created);
+        var resultFingerprint = MafOpenPullRequestContract.EffectResultFingerprint(
+            intent.Identity, intent.Request.ExecutionBinding!, pin.Repository, pullRequest);
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await owner.CompleteOpenPullRequestOperationInTransactionAsync(
+            connection,
+            transaction,
+            intent.Identity,
+            intent.OperationId,
+            pin.PinId,
+            requestFingerprint,
+            resultFingerprint,
+            pullRequest.Number,
+            CancellationToken.None);
+        await transaction.CommitAsync();
+        return resultFingerprint;
+    }
+
     private static SourceControlRepositoryPin WithPinId(
         SourceControlRepositoryPin pin,
         string pinId) =>
@@ -521,7 +699,8 @@ public sealed partial class MafCheckpointStorePostgresTests
         SourceControlRunContext source,
         DispatchOwnerHandler owner,
         Func<SourceControlRepositoryPin>? currentPin = null,
-        Func<long>? currentDecisionVersion = null)
+        Func<long>? currentDecisionVersion = null,
+        Func<MafExecutionOpenPullRequestIntent, MafExecutionOpenPullRequestIntent>? authorizedIntent = null)
     {
         currentPin ??= () => source.Pin;
         currentDecisionVersion ??= () => intent.DecisionStateVersion;
@@ -541,7 +720,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                     currentIntent, source.Actor, currentIntent.Identity, "tenant-1",
                     currentDecisionVersion(), currentIntent.ExecutionFence,
                     currentIntent.AcceptedSelectionHash, currentPin());
-                return Task.CompletedTask;
+                return Task.FromResult(authorizedIntent?.Invoke(currentIntent) ?? currentIntent);
             },
             async (_, _, token) =>
             {
@@ -589,11 +768,19 @@ public sealed partial class MafCheckpointStorePostgresTests
         string? diffHeadSha = null)
         : HttpMessageHandler
     {
-        public int PullRequestRequests { get; private set; }
-        public int ProviderCreates { get; private set; }
+        private int _pullRequestRequests;
+        private int _diffRequests;
+        private int _providerCreates;
+
+        public int PullRequestRequests => Volatile.Read(ref _pullRequestRequests);
+        public int DiffRequests => Volatile.Read(ref _diffRequests);
+        public int ProviderCreates => Volatile.Read(ref _providerCreates);
+        public bool ReturnExistingPullRequest { get; set; }
+        public long? LastExecutionFence { get; private set; }
         public bool CloseOnReplay { get; set; }
         public bool FailPullRequest { get; set; }
-        public List<Guid> OperationIds { get; } = [];
+        public ConcurrentBag<long> ExecutionFences { get; } = [];
+        public ConcurrentBag<Guid> OperationIds { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -603,6 +790,7 @@ public sealed partial class MafCheckpointStorePostgresTests
             var path = request.RequestUri!.AbsolutePath;
             if (path.EndsWith("/diff", StringComparison.Ordinal))
             {
+                Interlocked.Increment(ref _diffRequests);
                 afterDiff?.Invoke();
                 var payload = JsonSerializer.Serialize(new
                 {
@@ -621,16 +809,19 @@ public sealed partial class MafCheckpointStorePostgresTests
                 await request.Content!.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
             var operationId = body.RootElement.GetProperty("executionBinding")
                 .GetProperty("operationId").GetGuid();
+            var executionFence = body.RootElement.GetProperty("executionBinding")
+                .GetProperty("executionFence").GetInt64();
+            LastExecutionFence = executionFence;
+            ExecutionFences.Add(executionFence);
             OperationIds.Add(operationId);
-            PullRequestRequests++;
+            Interlocked.Increment(ref _pullRequestRequests);
             if (FailPullRequest)
                 return Response(
                     """{"error":"source_control_run_binding_changed"}""",
                     request,
                     HttpStatusCode.Conflict);
-            var created = ProviderCreates == 0;
-            if (created)
-                ProviderCreates++;
+            var created = !ReturnExistingPullRequest &&
+                Interlocked.CompareExchange(ref _providerCreates, 1, 0) == 0;
             var payloadBody = JsonSerializer.Serialize(new
             {
                 number = 42,

@@ -3972,7 +3972,14 @@ internal sealed partial class CoordinationOwnerStore
                     connection, transaction, identity, run.Fence, sourceCheckpoint, cancellationToken)
                     .ConfigureAwait(false)
                 : null;
-            RequireNoChildJoinPlatformHistory(sourceCheckpoint.State, hasRegisteredChild);
+            var recoverCommittedOpenPullRequest = RequireNoChildJoinPlatformHistory(
+                sourceCheckpoint.State,
+                hasRegisteredChild,
+                allowCommittedOpenPullRequest: hasRegisteredChild);
+            if (recoverCommittedOpenPullRequest)
+                await RequireCommittedOpenPullRequestForRecoveryAsync(
+                    connection, transaction, identity, actor, run.TenantId,
+                    sourceCheckpoint.State, cancellationToken).ConfigureAwait(false);
             if (hasRegisteredChild)
             {
                 if (sourceCheckpoint.State.PendingDispatches.Count == 0 &&
@@ -4428,15 +4435,17 @@ internal sealed partial class CoordinationOwnerStore
         return registration;
     }
 
-    internal static void RequireNoChildJoinPlatformHistory(
-        MafExecutionCheckpoint checkpoint, bool hasRegisteredChild = false)
+    internal static bool RequireNoChildJoinPlatformHistory(
+        MafExecutionCheckpoint checkpoint,
+        bool hasRegisteredChild = false,
+        bool allowCommittedOpenPullRequest = false)
     {
         if (!hasRegisteredChild &&
             checkpoint.PendingDispatches.Count == 0 && checkpoint.FixedWorkAssociations.Count == 0 &&
             checkpoint.Results.Count == 0 && checkpoint.ChildTurnReceipts.Count == 0 &&
             !checkpoint.Progress.WorkItems.Values.Concat(checkpoint.Progress.FixedWorkItems.Values)
                 .Any(status => status != MafExecutionTaskStatus.Pending))
-            return;
+            return false;
 
         var intent = checkpoint.BuildTestIntents.OrderBy(item => item.Key, StringComparer.Ordinal).FirstOrDefault();
         if (intent.Value is not null)
@@ -4456,6 +4465,25 @@ internal sealed partial class CoordinationOwnerStore
                 StepId = receipt.Key,
                 OperationId = receipt.Value.OperationId
             };
+        var openPullRequestIntent = checkpoint.OpenPullRequestIntents.Count == 1
+            ? checkpoint.OpenPullRequestIntents.First().Value
+            : null;
+        var onlyRunningOpenPullRequestIntent =
+            checkpoint.OpenPullRequestIntents.Count == 1 &&
+            checkpoint.OpenPullRequestReceipts.Count == 0 &&
+            checkpoint.ScribeIntents.Count == 0 && checkpoint.ScribeReceipts.Count == 0 &&
+            checkpoint.BuildTestIntents.Count == 0 && checkpoint.BuildTestReceipts.Count == 0 &&
+            checkpoint.MergeIntents.Count == 0 && checkpoint.MergeReceipts.Count == 0 &&
+            checkpoint.ReviewIntents.Count == 0 && checkpoint.ReviewReceipts.Count == 0 &&
+            checkpoint.RubberduckIntents.Count == 0 && checkpoint.RubberduckReceipts.Count == 0 &&
+            checkpoint.RubberduckFailureCodes.Count == 0 &&
+            openPullRequestIntent is not null &&
+            checkpoint.Progress.NonModelSteps.GetValueOrDefault(openPullRequestIntent.StepId) ==
+                MafExecutionTaskStatus.Running &&
+            checkpoint.Progress.NonModelSteps.All(item =>
+                item.Key == openPullRequestIntent.StepId || item.Value == MafExecutionTaskStatus.Pending);
+        if (allowCommittedOpenPullRequest && onlyRunningOpenPullRequestIntent)
+            return true;
         if (checkpoint.ScribeIntents.Count > 0 || checkpoint.ScribeReceipts.Count > 0 ||
             checkpoint.OpenPullRequestIntents.Count > 0 || checkpoint.OpenPullRequestReceipts.Count > 0 ||
             checkpoint.MergeIntents.Count > 0 || checkpoint.MergeReceipts.Count > 0 ||
@@ -4464,7 +4492,70 @@ internal sealed partial class CoordinationOwnerStore
             checkpoint.RubberduckFailureCodes.Count > 0)
             throw new CoordinationException(
                 "checkpoint_recovery_boundary_unsupported", StatusCodes.Status409Conflict);
+        return false;
     }
+
+    private async Task RequireCommittedOpenPullRequestForRecoveryAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity identity,
+        CoordinationActor actor,
+        string tenantId,
+        MafExecutionCheckpoint checkpoint,
+        CancellationToken cancellationToken)
+    {
+        var intent = checkpoint.OpenPullRequestIntents.Single().Value;
+        var binding = intent.Request.ExecutionBinding;
+        if (binding is null ||
+            binding.OperationId != intent.OperationId ||
+            binding.ExecutionFence != intent.ExecutionFence ||
+            binding.DecisionStateVersion != intent.DecisionStateVersion ||
+            !string.Equals(binding.SourceControlPinId, intent.SourceControlPinId, StringComparison.Ordinal))
+            throw UnsupportedCommittedPullRequestRecovery(intent);
+
+        var requestFingerprint = MafOpenPullRequestContract.OwnerRequestFingerprint(identity, intent.Request);
+        var effectFingerprint = MafOpenPullRequestContract.EffectRequestFingerprint(identity, intent.Request);
+        var authorizationFingerprint = MafOpenPullRequestContract.OriginalAuthorizationFingerprint(
+            identity, tenantId, actor.Issuer, actor.Subject, binding);
+        await using var command = new NpgsqlCommand($"""
+            SELECT tenant_id, pin_id, request_fingerprint, effect_fingerprint,
+                   original_authorization_fingerprint, effect_state, pull_request_number,
+                   result_fingerprint, completed_at
+            FROM {_schema}.source_control_pull_request_operations
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+              AND operation_id = @operation
+            FOR UPDATE
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, identity.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, identity.RunId);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+        command.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, intent.OperationId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw UnsupportedCommittedPullRequestRecovery(intent);
+        var storedResultFingerprint = reader.IsDBNull(7) ? null : reader.GetString(7).TrimEnd();
+        if (!string.Equals(reader.GetString(0), tenantId, StringComparison.Ordinal) ||
+            !string.Equals(reader.GetString(1), intent.SourceControlPinId, StringComparison.Ordinal) ||
+            !string.Equals(reader.GetString(2).TrimEnd(), requestFingerprint, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(reader.GetString(3).TrimEnd(), effectFingerprint, StringComparison.OrdinalIgnoreCase) ||
+            reader.IsDBNull(4) ||
+            !string.Equals(reader.GetString(4).TrimEnd(), authorizationFingerprint, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(reader.GetString(5), "committed", StringComparison.Ordinal) ||
+            reader.IsDBNull(6) || reader.GetInt64(6) < 1 ||
+            storedResultFingerprint is not { Length: 64 } ||
+            !storedResultFingerprint.All(Uri.IsHexDigit) ||
+            reader.IsDBNull(8))
+            throw UnsupportedCommittedPullRequestRecovery(intent);
+    }
+
+    private static CoordinationException UnsupportedCommittedPullRequestRecovery(
+        MafExecutionOpenPullRequestIntent intent) =>
+        new("checkpoint_recovery_boundary_unsupported", StatusCodes.Status409Conflict)
+        {
+            Reason = "open_pull_request_commit_unverified",
+            StepId = intent.StepId,
+            OperationId = intent.OperationId
+        };
 
     internal static void RequireGateCheckpointBoundary(MafExecutionCheckpoint checkpoint)
     {

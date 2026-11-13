@@ -37,6 +37,14 @@
       ]
     },
     {
+      "name": "v1-checkpoint-committed-effect-recovery",
+      "concept": "Reconcile a committed pull request during saved-child Host recovery without repeating the provider effect",
+      "docs": [
+        "docs/architecture/environment-sandbox.md",
+        "docs/deep-dive/orchestration.md"
+      ]
+    },
+    {
       "name": "v1-environment-buildtest-command",
       "concept": "Accepted BuildTest command, gated provider execution, and trusted output collection",
       "docs": ["docs/architecture/environment-sandbox.md"]

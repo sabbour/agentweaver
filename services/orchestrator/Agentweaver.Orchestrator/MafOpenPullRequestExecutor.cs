@@ -10,7 +10,8 @@ internal sealed class MafOpenPullRequestExecutor(
     MafSourceControlOwnerClient sourceControlClient,
     NpgsqlDataSource dataSource,
     Func<CancellationToken, Task<RuntimeActorAuthorization>> createRuntimeActorAsync,
-    Func<MafExecutionOpenPullRequestIntent, CancellationToken, Task> requireCurrentAsync,
+    Func<MafExecutionOpenPullRequestIntent, CancellationToken, Task<MafExecutionOpenPullRequestIntent>>
+        requireCurrentAsync,
     Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task> requireDecisionAsync,
     Func<bool> isWallTimeLimitReached,
     Action markWallTimeLimitReached,
@@ -35,34 +36,37 @@ internal sealed class MafOpenPullRequestExecutor(
             updateCheckpoint(beforeCall);
             return false;
         }
-        await requireCurrentAsync(intent, cancellationToken).ConfigureAwait(false);
-
-        var diffActor = await createRuntimeActorAsync(cancellationToken).ConfigureAwait(false);
-        SourceControlWorkspaceDiffView diff;
-        try
+        var ownerIntent = await requireCurrentAsync(intent, cancellationToken).ConfigureAwait(false);
+        if (ownerIntent.ExecutionFence == intent.ExecutionFence &&
+            ownerIntent.DecisionStateVersion == intent.DecisionStateVersion)
         {
-            diff = await sourceControlClient.ReadWorkspaceDiffAsync(
-                diffActor, intent.Identity, intent.Workspace, cancellationToken).ConfigureAwait(false);
+            var diffActor = await createRuntimeActorAsync(cancellationToken).ConfigureAwait(false);
+            SourceControlWorkspaceDiffView diff;
+            try
+            {
+                diff = await sourceControlClient.ReadWorkspaceDiffAsync(
+                    diffActor, intent.Identity, intent.Workspace, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                diffActor.Bearer.Invalidate();
+            }
+            MafOpenPullRequestContract.RequireWorkspaceRevision(intent, diff);
+            ownerIntent = await requireCurrentAsync(intent, cancellationToken).ConfigureAwait(false);
         }
-        finally
-        {
-            diffActor.Bearer.Invalidate();
-        }
-        MafOpenPullRequestContract.RequireWorkspaceRevision(intent, diff);
 
-        await requireCurrentAsync(intent, cancellationToken).ConfigureAwait(false);
         var pullRequestActor = await createRuntimeActorAsync(cancellationToken).ConfigureAwait(false);
         SourceControlPullRequest pullRequest;
         try
         {
             pullRequest = await sourceControlClient.CreateOrReusePullRequestAsync(
-                pullRequestActor, intent.Identity, intent.Request, cancellationToken).ConfigureAwait(false);
+                pullRequestActor, intent.Identity, ownerIntent.Request, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             pullRequestActor.Bearer.Invalidate();
         }
-        await requireCurrentAsync(intent, cancellationToken).ConfigureAwait(false);
+        _ = await requireCurrentAsync(intent, cancellationToken).ConfigureAwait(false);
         var receipt = MafOpenPullRequestContract.CreateReceipt(intent, pullRequest);
 
         // The remote call is outside this transaction; revalidate the decision before retaining its receipt.

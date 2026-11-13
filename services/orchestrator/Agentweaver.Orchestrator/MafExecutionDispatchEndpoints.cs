@@ -1664,27 +1664,74 @@ public static partial class CoordinationEndpoints
                 return await mergeExecutor.ExecuteAsync(intent, token).ConfigureAwait(false);
             }
 
-            async Task RequireCurrentOpenPullRequestAsync(
+            async Task<MafExecutionOpenPullRequestIntent> RequireCurrentOpenPullRequestAsync(
                 MafExecutionOpenPullRequestIntent intent, CancellationToken token)
             {
                 await RevalidateOpenPullRequestDispatchAsync(token).ConfigureAwait(false);
                 var sourceOwner = context.RequestServices.GetRequiredService<SourceControlOwnerStore>();
-                var pin = await sourceOwner.ReadRepositoryPinAsync(
-                    actor, identity, selection, token).ConfigureAwait(false);
-                MafOpenPullRequestContract.RequireCurrentSource(
-                    intent, actor, identity, selection.Authorization.TenantId,
-                    decision.StateVersion, decision.State.Fence, decision.SelectionHash, pin);
                 var latest = await execution.ReadLatestAsync(token).ConfigureAwait(false)
                     ?? throw new CoordinationException(
                         "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
+                var recoveredIntent =
+                    intent.ExecutionFence < decision.State.Fence &&
+                    latest.State.DecisionStateVersion == decision.StateVersion &&
+                    latest.State.RecoveryLineage is { } lineage &&
+                    lineage.RecoveryExecutionFence == decision.State.Fence;
+                var authorizedIntent = recoveredIntent
+                    ? intent with
+                    {
+                        DecisionStateVersion = decision.StateVersion,
+                        ExecutionFence = decision.State.Fence,
+                        Request = intent.Request with
+                        {
+                            ExecutionBinding = intent.Request.ExecutionBinding! with
+                            {
+                                DecisionStateVersion = decision.StateVersion,
+                                ExecutionFence = decision.State.Fence
+                            }
+                        }
+                    }
+                    : intent;
+                SourceControlRepositoryPin pin;
+                if (recoveredIntent)
+                {
+                    var (recoveredPin, requiresCommittedReplay) = await sourceOwner.ReadOpenPullRequestPinAsync(
+                        actor, identity, selection, decision.StateVersion, decision.State.Fence,
+                        authorizedIntent.Request.ExecutionBinding!, token).ConfigureAwait(false);
+                    if (!requiresCommittedReplay)
+                        throw new CoordinationException(
+                            "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+                    pin = recoveredPin;
+                }
+                else
+                {
+                    pin = await sourceOwner.ReadRepositoryPinAsync(
+                        actor, identity, selection, token).ConfigureAwait(false);
+                }
+                if (!string.Equals(
+                        MafOpenPullRequestContract.EffectRequestFingerprint(identity, authorizedIntent.Request),
+                        MafOpenPullRequestContract.EffectRequestFingerprint(identity, intent.Request),
+                        StringComparison.Ordinal))
+                    throw new CoordinationException(
+                        "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+                MafOpenPullRequestContract.RequireCurrentSource(
+                    authorizedIntent, actor, identity, selection.Authorization.TenantId,
+                    decision.StateVersion, decision.State.Fence, decision.SelectionHash, pin);
                 if (latest.State.WorkPlanId != intent.WorkPlanId ||
-                    latest.State.DecisionStateVersion != intent.DecisionStateVersion ||
+                    latest.State.DecisionStateVersion != decision.StateVersion ||
                     !latest.State.OpenPullRequestIntents.TryGetValue(intent.StepId, out var retained) ||
                     !MafExecutionCheckpointContract.OpenPullRequestIntentsMatch(intent, retained) ||
                     latest.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) !=
                         MafExecutionTaskStatus.Running)
                     throw new CoordinationException(
                         "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+                if (recoveredIntent &&
+                    (latest.State.RecoveryLineage is not { } recoveredLineage ||
+                     recoveredLineage.RecoveryExecutionFence != decision.State.Fence ||
+                     recoveredLineage.SourceExecutionFence >= recoveredLineage.RecoveryExecutionFence))
+                    throw new CoordinationException(
+                        "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+                return authorizedIntent;
             }
 
             async Task RevalidateOpenPullRequestDispatchAsync(CancellationToken token)

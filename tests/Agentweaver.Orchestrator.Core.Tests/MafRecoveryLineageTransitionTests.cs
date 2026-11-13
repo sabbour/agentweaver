@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator;
 using Agentweaver.Orchestrator.Core;
@@ -45,6 +46,72 @@ public sealed class MafRecoveryLineageTransitionTests
             CoordinationOwnerStore.RequireNoChildJoinPlatformHistory(checkpoint));
         Assert.Equal("checkpoint_recovery_boundary_unsupported", error.Code);
         Assert.Equal(409, error.StatusCode);
+    }
+
+    [Fact]
+    public void ChildBoundaryAllowsOnlyOneRunningOpenPullRequestAsAnOwnerVerifiedCandidate()
+    {
+        var source = MafBuildTestSourceInputTests.Fixture().Run;
+        var workspace = new SourceControlPullRequestWorkspaceLocator(
+            "workspace", Guid.NewGuid(), new string('a', 40),
+            "feature/agent-change", new string('c', 40), source.Pin.DefaultBranch);
+        var intent = MafOpenPullRequestContract.CreateIntent(
+            Guid.NewGuid(), source.Identity, "open-pr-intent", 2, "plan", "publish",
+            1, source.Pin.AcceptedRun.Fence, source.Pin.AcceptedRun.AcceptedSelectionHash,
+            source.Pin, workspace, 1);
+        var empty = new MafExecutionCheckpoint(2, "plan", 1, MafExecutionProgress.Empty)
+        {
+            Progress = MafExecutionProgress.Empty with
+            {
+                NonModelSteps = MafExecutionProgress.Empty.NonModelSteps.Add(
+                    intent.StepId, MafExecutionTaskStatus.Running)
+            },
+            OpenPullRequestIntents =
+                ImmutableDictionary<string, MafExecutionOpenPullRequestIntent>.Empty
+                    .WithComparers(StringComparer.Ordinal)
+                    .Add(intent.StepId, intent)
+        };
+
+        Assert.True(CoordinationOwnerStore.RequireNoChildJoinPlatformHistory(
+            empty,
+            hasRegisteredChild: true,
+            allowCommittedOpenPullRequest: true));
+        Assert.Throws<CoordinationException>(() =>
+            CoordinationOwnerStore.RequireNoChildJoinPlatformHistory(
+                empty, hasRegisteredChild: true));
+        var second = MafOpenPullRequestContract.CreateIntent(
+            Guid.NewGuid(), source.Identity, "second-open-pr", 3, "plan", "publish-2",
+            1, source.Pin.AcceptedRun.Fence, source.Pin.AcceptedRun.AcceptedSelectionHash,
+            source.Pin, workspace, 1);
+        var multiple = empty with
+        {
+            Revision = 3,
+            Progress = empty.Progress with
+            {
+                NonModelSteps = empty.Progress.NonModelSteps.Add(
+                    second.StepId, MafExecutionTaskStatus.Running)
+            },
+            OpenPullRequestIntents = empty.OpenPullRequestIntents.Add(second.StepId, second)
+        };
+        Assert.Throws<CoordinationException>(() =>
+            CoordinationOwnerStore.RequireNoChildJoinPlatformHistory(
+                multiple,
+                hasRegisteredChild: true,
+                allowCommittedOpenPullRequest: true));
+        var otherPlatformProgress = empty with
+        {
+            Revision = 3,
+            Progress = empty.Progress with
+            {
+                NonModelSteps = empty.Progress.NonModelSteps.Add(
+                    "merge", MafExecutionTaskStatus.Succeeded)
+            }
+        };
+        Assert.Throws<CoordinationException>(() =>
+            CoordinationOwnerStore.RequireNoChildJoinPlatformHistory(
+                otherPlatformProgress,
+                hasRegisteredChild: true,
+                allowCommittedOpenPullRequest: true));
     }
 
     [Theory]

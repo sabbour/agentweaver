@@ -142,7 +142,8 @@ internal sealed class SourceControlOwnerStore(
         string requestFingerprint,
         string effectFingerprint,
         string authorizationFingerprint,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requireCommittedReplay = false)
     {
         ArgumentNullException.ThrowIfNull(pin);
         if (identity.ProjectId != pin.AcceptedRun.ProjectId ||
@@ -158,25 +159,29 @@ internal sealed class SourceControlOwnerStore(
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);
-        await using var insert = new NpgsqlCommand($"""
-            INSERT INTO {PullRequestOperations} (
-                tenant_id, project_id, run_id, session_id, operation_id,
-                pin_id, request_fingerprint, effect_fingerprint, original_authorization_fingerprint, effect_state)
-            VALUES (@tenant, @project, @run, @session, @operation,
-                @pin, @fingerprint, @effectFingerprint, @authorizationFingerprint, 'pending')
-            ON CONFLICT (project_id, run_id, session_id, operation_id) DO NOTHING
-            RETURNING operation_id
-            """, connection, transaction);
-        AddScope(insert, identity);
-        insert.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, pin.AcceptedRun.TenantId);
-        insert.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
-        insert.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
-        insert.Parameters.AddWithValue("pin", NpgsqlDbType.Varchar, pin.PinId);
-        insert.Parameters.AddWithValue("fingerprint", NpgsqlDbType.Char, requestFingerprint.ToLowerInvariant());
-        insert.Parameters.AddWithValue("effectFingerprint", NpgsqlDbType.Char, effectFingerprint.ToLowerInvariant());
-        insert.Parameters.AddWithValue(
-            "authorizationFingerprint", NpgsqlDbType.Char, authorizationFingerprint.ToLowerInvariant());
-        var inserted = await insert.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is Guid;
+        var inserted = false;
+        if (!requireCommittedReplay)
+        {
+            await using var insert = new NpgsqlCommand($"""
+                INSERT INTO {PullRequestOperations} (
+                    tenant_id, project_id, run_id, session_id, operation_id,
+                    pin_id, request_fingerprint, effect_fingerprint, original_authorization_fingerprint, effect_state)
+                VALUES (@tenant, @project, @run, @session, @operation,
+                    @pin, @fingerprint, @effectFingerprint, @authorizationFingerprint, 'pending')
+                ON CONFLICT (project_id, run_id, session_id, operation_id) DO NOTHING
+                RETURNING operation_id
+                """, connection, transaction);
+            AddScope(insert, identity);
+            insert.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, pin.AcceptedRun.TenantId);
+            insert.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+            insert.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+            insert.Parameters.AddWithValue("pin", NpgsqlDbType.Varchar, pin.PinId);
+            insert.Parameters.AddWithValue("fingerprint", NpgsqlDbType.Char, requestFingerprint.ToLowerInvariant());
+            insert.Parameters.AddWithValue("effectFingerprint", NpgsqlDbType.Char, effectFingerprint.ToLowerInvariant());
+            insert.Parameters.AddWithValue(
+                "authorizationFingerprint", NpgsqlDbType.Char, authorizationFingerprint.ToLowerInvariant());
+            inserted = await insert.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is Guid;
+        }
         if (inserted)
         {
             // Commit the attempt before the remote call so a lost response cannot authorize a fresh create.
@@ -187,7 +192,7 @@ internal sealed class SourceControlOwnerStore(
         await using var read = new NpgsqlCommand($"""
             SELECT tenant_id, pin_id, request_fingerprint,
                    effect_fingerprint, original_authorization_fingerprint,
-                   effect_state, pull_request_number, result_fingerprint
+                   effect_state, pull_request_number, result_fingerprint, completed_at
             FROM {PullRequestOperations}
             WHERE project_id = @project AND run_id = @run AND session_id = @session
               AND operation_id = @operation
@@ -208,6 +213,27 @@ internal sealed class SourceControlOwnerStore(
         var effectState = reader.GetString(5);
         long? pullRequestNumber = reader.IsDBNull(6) ? null : reader.GetInt64(6);
         var resultFingerprint = reader.IsDBNull(7) ? null : reader.GetString(7).TrimEnd();
+        var hasCompletionTime = !reader.IsDBNull(8);
+        var committedExactEffect =
+            IsSha256(storedRequestFingerprint) &&
+            IsSha256(storedEffectFingerprint) &&
+            storedAuthorizationFingerprint is not null &&
+            IsSha256(storedAuthorizationFingerprint) &&
+            string.Equals(storedTenant, pin.AcceptedRun.TenantId, StringComparison.Ordinal) &&
+            string.Equals(storedPin, pin.PinId, StringComparison.Ordinal) &&
+            string.Equals(storedEffectFingerprint, effectFingerprint, StringComparison.OrdinalIgnoreCase) &&
+            effectState == "committed" &&
+            pullRequestNumber is > 0 &&
+            resultFingerprint is not null && IsSha256(resultFingerprint) &&
+            hasCompletionTime;
+        if (requireCommittedReplay && !committedExactEffect)
+            throw new CoordinationException(
+                "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+        if (committedExactEffect && requireCommittedReplay)
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return new(false, pullRequestNumber, effectState, resultFingerprint);
+        }
         if (!string.Equals(storedTenant, pin.AcceptedRun.TenantId, StringComparison.Ordinal) ||
             !string.Equals(storedPin, pin.PinId, StringComparison.Ordinal) ||
             !string.Equals(storedRequestFingerprint, requestFingerprint, StringComparison.OrdinalIgnoreCase) ||
@@ -654,6 +680,73 @@ internal sealed class SourceControlOwnerStore(
             actor, identity, selection, cancellationToken).ConfigureAwait(false);
         return pin ?? throw new CoordinationException(
             "source_control_pin_unavailable", StatusCodes.Status404NotFound);
+    }
+
+    internal async Task<(SourceControlRepositoryPin Pin, bool RequiresCommittedReplay)>
+        ReadOpenPullRequestPinAsync(
+            CoordinationActor actor,
+            SessionIdentity identity,
+            AuthorizedRunSelection selection,
+            long decisionStateVersion,
+            long executionFence,
+            SourceControlPullRequestExecutionBinding binding,
+            CancellationToken cancellationToken)
+    {
+        var selectionHash = HashSelection(selection.Selection);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var owner = await ReadOwnerBindingAsync(
+            connection, transaction: null, actor, identity, selection.Authorization.TenantId,
+            selectionHash, forUpdate: false, cancellationToken).ConfigureAwait(false);
+        if (owner.ExecutionState == "completed" ||
+            owner.SessionLifecycle != "active" ||
+            owner.DecisionState != "accepted" ||
+            owner.StateVersion != decisionStateVersion ||
+            owner.RunFence != executionFence)
+            throw new CoordinationException(
+                "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+
+        var pin = await ReadPinAsync(
+            connection, transaction: null, identity, selectionHash, cancellationToken).ConfigureAwait(false)
+            ?? throw new CoordinationException(
+                "source_control_pin_unavailable", StatusCodes.Status404NotFound);
+        EnsureCurrentBinding(owner, selection, pin.AcceptedRun, allowStaleExecutionFence: true);
+        if (binding.OperationId == Guid.Empty ||
+            binding.DecisionStateVersion != owner.StateVersion ||
+            binding.ExecutionFence != owner.RunFence ||
+            !string.Equals(binding.AcceptedSelectionHash, selectionHash, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(binding.SourceControlPinId, pin.PinId, StringComparison.Ordinal))
+            throw new CoordinationException(
+                "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+
+        if (pin.AcceptedRun.Fence == owner.RunFence)
+            return (pin, false);
+        var acceptedRun = pin.AcceptedRun;
+        var currentAcceptedRun = new SourceControlAcceptedRunBinding(
+            acceptedRun.Issuer,
+            acceptedRun.Subject,
+            acceptedRun.TenantId,
+            acceptedRun.ProjectId,
+            acceptedRun.RunId,
+            acceptedRun.RootSessionId,
+            acceptedRun.AcceptedSelectionHash,
+            acceptedRun.ProjectRevision,
+            acceptedRun.ProjectConfigurationRevision,
+            acceptedRun.PlatformRuntimeRevision,
+            acceptedRun.ContextRevision,
+            owner.RunFence);
+        return (new SourceControlRepositoryPin(
+            pin.PinId,
+            currentAcceptedRun,
+            pin.ProviderBinding,
+            pin.Repository,
+            pin.ApiCredential,
+            pin.CheckoutCredential,
+            pin.WebhookCredential,
+            pin.ProviderRepositoryId,
+            pin.DefaultBranch,
+            pin.IsPrivate,
+            pin.PinnedAt,
+            pin.GitHubAppBinding), true);
     }
 
     /// <summary>
@@ -2423,18 +2516,22 @@ internal sealed class SourceControlOwnerStore(
     private static void EnsureCurrentBinding(
         OwnerBindingSnapshot owner,
         AuthorizedRunSelection selection,
-        SourceControlAcceptedRunBinding acceptedRun)
+        SourceControlAcceptedRunBinding acceptedRun,
+        bool allowStaleExecutionFence = false)
     {
         var effective = selection.Selection;
         if (owner.ExecutionState == "completed" ||
             owner.SessionLifecycle != "active" ||
             owner.DecisionState != "accepted" ||
+            acceptedRun.Issuer != owner.AcceptedIssuer ||
+            acceptedRun.Subject != owner.AcceptedSubject ||
             acceptedRun.AcceptedSelectionHash != owner.AcceptedSelectionHash ||
             acceptedRun.ProjectRevision != effective.ProjectRevision ||
             acceptedRun.ProjectConfigurationRevision != effective.ProjectConfigurationRevision ||
             acceptedRun.PlatformRuntimeRevision != effective.PlatformRuntimeRevision ||
             acceptedRun.ContextRevision != effective.ContextRevision ||
-            acceptedRun.Fence != owner.RunFence ||
+            (acceptedRun.Fence != owner.RunFence &&
+             (!allowStaleExecutionFence || acceptedRun.Fence > owner.RunFence)) ||
             acceptedRun.TenantId != selection.Authorization.TenantId ||
             acceptedRun.ProjectId != effective.ProjectId ||
             acceptedRun.RunId != effective.RunId ||
