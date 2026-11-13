@@ -863,12 +863,13 @@ public sealed partial class MafCheckpointStorePostgresTests
             "root-turn", 1, 1, 1, _selection.Selection.ContextRevision, selectionHash.ToLowerInvariant(),
             _binding.ExecutionFence, 0, 1, decision.StateVersion);
         var rootIntent = await starts.EnsureIntentAsync(rootRuntime, CancellationToken.None);
+        var rootEnvironmentId = RuntimeRunStartKeys.EnvironmentId(rootRuntime);
         var registrationStore = new RuntimeRegistrationStore(_fixture.DataSource, _schema, TimeProvider.System);
         var rootRegistration = await registrationStore.RegisterAsync(new RuntimeBinding(
             _actor.Issuer, _actor.Subject, "tenant-1", _binding.Identity.ProjectId, _binding.Identity.RunId,
             _binding.Identity.SessionId, CoordinationEndpoints.CoordinatorRuntimeAgentId, "root-turn", 1, 1, 1,
             _selection.Selection.ContextRevision, selectionHash.ToLowerInvariant(), _binding.ExecutionFence,
-            "root-environment", "root-resource", 1, "profile-1",
+            rootEnvironmentId, "root-resource", 1, "profile-1",
             new("https://runtime.test/runtime/v1/configure"), new("https://runtime.test/observation"))
         {
             ModelSelectionReference = modelReference,
@@ -882,7 +883,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         }, DateTimeOffset.UtcNow.AddHours(1), CancellationToken.None);
         var rootRuntimeId = rootRegistration.RuntimeInstanceId;
         var rootPlacement = new RuntimeRunStartPlacementReceipt(
-            1, "root-environment", "profile-1", "root-volume", "root-sandbox-key",
+            1, rootEnvironmentId, "profile-1", "root-volume", "root-sandbox-key",
             1, 0, 1, Guid.NewGuid(),
             new ProviderResourceRef(ProviderSeam.Sandbox, ReviewSandboxProviderId, "root-resource", 1),
             1, 1, 1, 1, rootRegistration.ExpiresAt) { PodUid = "root-pod" };
@@ -895,7 +896,7 @@ public sealed partial class MafCheckpointStorePostgresTests
             EnvironmentProviderFencingGeneration = 1
         };
         _ = await starts.UpdateAsync(rootIntent, rootIntent.RowVersion, "ready", "ready", null,
-            "root-environment", rootRuntimeId,
+            rootEnvironmentId, rootRuntimeId,
             new { registration = rootRegistration, placement = rootPlacement, bootstrap = rootBootstrap },
             CancellationToken.None);
 
@@ -924,7 +925,7 @@ public sealed partial class MafCheckpointStorePostgresTests
             EgressReceipt = new RuntimeEgressVerificationReceipt(
                 1, new EnvironmentGenerationFence(
                     new EnvironmentOwnerIdentity("tenant-1", _binding.Identity.ProjectId,
-                        _binding.Identity.RunId, "root-environment"), 1),
+                        _binding.Identity.RunId, rootEnvironmentId), 1),
                 1, _selection.Selection.ContextRevision, new string('b', 64))
         };
         var association = new ConfirmedWorkPlanItemAssociation(item.Id, decision.StateVersion, selectionHash);
@@ -951,13 +952,16 @@ public sealed partial class MafCheckpointStorePostgresTests
                     _ = await _executionStore.AppendInTransactionAsync(
                         connection, transaction, Guid.NewGuid().ToString("N"), latest?.Info, next, token);
             });
+        var childEnvironmentId = RuntimeRunStartKeys.EnvironmentId(
+            "tenant-1", _binding.Identity.ProjectId, _binding.Identity.RunId, childId,
+            selectionHash.ToLowerInvariant());
         var childIntent = await starts.ReadIntentForStatusAsync(
             _binding.Identity.ProjectId, _binding.Identity.RunId, childId, CancellationToken.None);
         Assert.NotNull(childIntent);
         var registration = await registrationStore.RegisterAsync(new RuntimeBinding(
                 _actor.Issuer, _actor.Subject, "tenant-1", _binding.Identity.ProjectId, _binding.Identity.RunId,
                 childId, item.AgentId, "child-turn", 1, 1, 1, _selection.Selection.ContextRevision,
-                selectionHash.ToLowerInvariant(), _binding.ExecutionFence, "child-environment",
+                selectionHash.ToLowerInvariant(), _binding.ExecutionFence, childEnvironmentId,
                 "child-resource", 1, "profile-1", new("https://runtime.test/runtime/v1/configure"),
                 new("https://runtime.test/observation"))
             {
@@ -972,7 +976,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                 EnvironmentProviderFencingGeneration = 1
             }, DateTimeOffset.UtcNow.AddHours(1), CancellationToken.None);
         var placement = new RuntimeRunStartPlacementReceipt(
-            1, "child-environment", "profile-1", "child-volume", "child-sandbox-key",
+            1, childEnvironmentId, "profile-1", "child-volume", "child-sandbox-key",
             1, 0, 1, Guid.NewGuid(),
             new ProviderResourceRef(ProviderSeam.Sandbox, ReviewSandboxProviderId, "child-resource", 1),
             1, 1, 1, 1, registration.ExpiresAt) { PodUid = "child-pod" };
