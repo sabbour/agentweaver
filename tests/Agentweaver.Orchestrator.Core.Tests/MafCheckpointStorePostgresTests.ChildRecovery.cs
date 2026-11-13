@@ -2211,6 +2211,8 @@ public sealed partial class MafCheckpointStorePostgresTests
     public async Task ChildRecoveryPreservesAndReauthorizesOnlyACommittedOpenPullRequest()
     {
         var fixture = await PrepareChildRecoveryAsync(includeOpenPullRequest: true);
+        var sourceCheckpoint = await _executionStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(sourceCheckpoint);
         var intent = Assert.Single(fixture.Source.State.OpenPullRequestIntents).Value;
         var sourceControlRun = CreateCurrentSourceControlRun();
         var resultFingerprint = await CommitOpenPullRequestOperationAsync(intent, sourceControlRun.Pin);
@@ -2230,7 +2232,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.Empty(latest.State.OpenPullRequestReceipts);
         Assert.Equal(fixture.Source.Info.CheckpointId,
             latest.State.RecoveryLineage!.SourceCheckpointId);
-        Assert.Equal(fixture.Source.PayloadHash,
+        Assert.Equal(sourceCheckpoint.PayloadHash,
             latest.State.RecoveryLineage.SourceCheckpointHash);
 
         var sourceControlCatalog = CreateChildRecoverySourceControlCatalog(out _);
@@ -2266,6 +2268,8 @@ public sealed partial class MafCheckpointStorePostgresTests
         string operationState)
     {
         var fixture = await PrepareChildRecoveryAsync(includeOpenPullRequest: true);
+        var sourceCheckpoint = await _executionStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(sourceCheckpoint);
         var intent = Assert.Single(fixture.Source.State.OpenPullRequestIntents).Value;
         if (operationState != "missing")
         {
@@ -2303,7 +2307,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.Equal(before.StateVersion, after.StateVersion);
         var retained = await _executionStore.ReadLatestAsync(CancellationToken.None);
         Assert.Equal(fixture.Source.Info.CheckpointId, retained!.Info.CheckpointId);
-        Assert.Equal(fixture.Source.PayloadHash, retained.PayloadHash);
+        Assert.Equal(sourceCheckpoint.PayloadHash, retained.PayloadHash);
     }
 
     [Theory]
@@ -2314,6 +2318,8 @@ public sealed partial class MafCheckpointStorePostgresTests
         string fingerprintColumn)
     {
         var fixture = await PrepareChildRecoveryAsync(includeOpenPullRequest: true);
+        var sourceCheckpoint = await _executionStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(sourceCheckpoint);
         var intent = Assert.Single(fixture.Source.State.OpenPullRequestIntents).Value;
         var sourceControlRun = CreateCurrentSourceControlRun();
         await CommitOpenPullRequestOperationAsync(intent, sourceControlRun.Pin);
@@ -2348,7 +2354,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.Equal(before.StateVersion, after.StateVersion);
         var retained = await _executionStore.ReadLatestAsync(CancellationToken.None);
         Assert.Equal(fixture.Source.Info.CheckpointId, retained!.Info.CheckpointId);
-        Assert.Equal(fixture.Source.PayloadHash, retained.PayloadHash);
+        Assert.Equal(sourceCheckpoint.PayloadHash, retained.PayloadHash);
     }
 
     [Fact]
