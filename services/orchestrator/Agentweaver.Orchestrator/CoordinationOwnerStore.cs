@@ -3942,15 +3942,25 @@ internal sealed partial class CoordinationOwnerStore
                 connection, transaction, cancellationToken).ConfigureAwait(false);
             sourceCheckpoint = await checkpointStore.ReadLatestInTransactionAsync(
                 connection, transaction, cancellationToken).ConfigureAwait(false);
-            if (sourceCheckpoint is null ||
-                sourceCheckpoint.Info.CheckpointId != checkpointRecovery.SourceCheckpointId ||
-                sourceCheckpoint.State.Revision != checkpointRecovery.SourceCheckpointRevision ||
-                sourceCheckpoint.State.DecisionStateVersion != checkpointRecovery.ExpectedDecisionStateVersion)
-                throw new CoordinationException(
-                    "checkpoint_recovery_checkpoint_stale", StatusCodes.Status409Conflict);
             var recoveryHeld = await CheckpointRecoveryHold.IsHeldAsync(
                     connection, transaction, _schema, projectId, runId, cancellationToken)
                 .ConfigureAwait(false);
+            if (sourceCheckpoint is null)
+                throw new CoordinationException(
+                    recoveryHeld
+                        ? "checkpoint_recovery_dispatch_held"
+                        : "checkpoint_recovery_checkpoint_stale",
+                    StatusCodes.Status409Conflict);
+            var sourceCheckpointStale =
+                sourceCheckpoint.Info.CheckpointId != checkpointRecovery.SourceCheckpointId ||
+                sourceCheckpoint.State.Revision != checkpointRecovery.SourceCheckpointRevision ||
+                sourceCheckpoint.State.DecisionStateVersion != checkpointRecovery.ExpectedDecisionStateVersion;
+            if (recoveryHeld && sourceCheckpointStale)
+                throw new CoordinationException(
+                    "checkpoint_recovery_dispatch_held", StatusCodes.Status409Conflict);
+            if (sourceCheckpointStale)
+                throw new CoordinationException(
+                    "checkpoint_recovery_checkpoint_stale", StatusCodes.Status409Conflict);
             var originManifest = recoveryHeld
                 ? await ReadCheckpointRecoveryOriginManifestAsync(
                     connection, transaction, identity, run.Fence, sourceCheckpoint, cancellationToken)
