@@ -214,6 +214,7 @@ internal sealed class SourceControlOwnerStore(
         long? pullRequestNumber = reader.IsDBNull(6) ? null : reader.GetInt64(6);
         var resultFingerprint = reader.IsDBNull(7) ? null : reader.GetString(7).TrimEnd();
         var hasCompletionTime = !reader.IsDBNull(8);
+        await reader.DisposeAsync().ConfigureAwait(false);
         var committedExactEffect =
             IsSha256(storedRequestFingerprint) &&
             IsSha256(storedEffectFingerprint) &&
@@ -244,7 +245,6 @@ internal sealed class SourceControlOwnerStore(
                  StringComparison.OrdinalIgnoreCase)))
             throw new CoordinationException(
                 "source_control_run_binding_changed", StatusCodes.Status409Conflict);
-        await reader.DisposeAsync().ConfigureAwait(false);
         if (storedAuthorizationFingerprint is null ||
             string.Equals(storedEffectFingerprint, storedRequestFingerprint, StringComparison.OrdinalIgnoreCase))
         {
