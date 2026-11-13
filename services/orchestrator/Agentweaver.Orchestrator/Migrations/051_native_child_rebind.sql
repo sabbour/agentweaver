@@ -36,7 +36,7 @@ ALTER TABLE {schema}.maf_runtime_evidence_receipts
                  receipt_json->>'priorReceiptId' ~
                    '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' AND
                  receipt_json->>'priorReceiptHash' ~ '^[0-9a-f]{64}$')
-            ) IS TRUE));
+            )) IS TRUE));
 
 CREATE UNIQUE INDEX uq_native_child_rebind_destination
     ON {schema}.maf_runtime_evidence_receipts

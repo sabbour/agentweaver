@@ -1429,24 +1429,29 @@ internal sealed class RuntimeUsageSourceStore(
     }
 
     /// <summary>
-    /// Locks the active root and dispatch rows and returns the complete native-dispatch snapshot.
+    /// Reads the complete native-dispatch snapshot and locks the active root and dispatch when
+    /// <paramref name="lockRows"/> is true.
     /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when the root or dispatch is unavailable under the current fence.</exception>
+    /// <exception cref="RuntimeAuthorizationException">
+    /// Thrown when the dispatch is unavailable. When <paramref name="lockRows"/> is true, the active root must also
+    /// be available under the current fence.
+    /// </exception>
     private async Task<NativeDispatch> ReadNativeDispatchAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
-        Guid messageId, CancellationToken cancellationToken)
+        Guid messageId, CancellationToken cancellationToken, bool lockRows = true)
     {
-        await using (var root = new NpgsqlCommand($"""
-            SELECT owner.session_id
-            FROM {_sessions} owner
-            JOIN {_dispatches} dispatch
-                ON owner.project_id = dispatch.project_id AND owner.run_id = dispatch.run_id
-                    AND owner.session_id = dispatch.root_session_id
-            WHERE dispatch.project_id = @project AND dispatch.run_id = @run AND dispatch.dispatch_id = @message
-                AND owner.lifecycle_state = 'active' AND owner.execution_fence = @fence
-            FOR UPDATE OF owner
-            """, connection, transaction))
+        if (lockRows)
         {
+            await using var root = new NpgsqlCommand($"""
+                SELECT owner.session_id
+                FROM {_sessions} owner
+                JOIN {_dispatches} dispatch
+                    ON owner.project_id = dispatch.project_id AND owner.run_id = dispatch.run_id
+                        AND owner.session_id = dispatch.root_session_id
+                WHERE dispatch.project_id = @project AND dispatch.run_id = @run AND dispatch.dispatch_id = @message
+                    AND owner.lifecycle_state = 'active' AND owner.execution_fence = @fence
+                FOR UPDATE OF owner
+                """, connection, transaction);
             AddNativeScope(root, registration, messageId);
             root.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, registration.Binding.ExecutionFence);
             if (await root.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not string rootId)
@@ -1465,7 +1470,7 @@ internal sealed class RuntimeUsageSourceStore(
                 is_cost_producing, hard_cap_serialized, created_at
             FROM {_dispatches}
             WHERE project_id = @project AND run_id = @run AND dispatch_id = @message
-            FOR UPDATE
+            {(lockRows ? "FOR UPDATE" : "")}
             """, connection, transaction);
         AddNativeScope(command, registration, messageId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -2176,7 +2181,7 @@ internal sealed class RuntimeUsageSourceStore(
     {
         var native = member.NativeOrigin
             ?? throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
-        var registration = member.SavedRegistration
+        var savedRegistration = member.SavedRegistration
             ?? throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
         var binding = member.Startup.Binding;
         if (native.State != "completed" ||
@@ -2184,19 +2189,16 @@ internal sealed class RuntimeUsageSourceStore(
             native.SourceReportStatus != "partial" ||
             native.SourceReportHash is null ||
             native.AccountingStatus is not ("priced" or "unpriced") ||
-            registration.RuntimeInstanceId != native.RuntimeInstanceId ||
-            registration.Revision != native.RegistrationRevision ||
-            RuntimeContractValidation.RegistrationHash(registration) != native.RuntimeBindingHash ||
             binding.ParentRootSessionId != root.SessionId ||
             binding.ChildSessionId != member.Session.SessionId ||
             binding.AssociationId != member.AssociationId ||
             binding.DispatchMessageId != native.DispatchId ||
             binding.PromptHash != native.PromptHash ||
-            native.ExecutionFence != sourceFence ||
             !string.Equals(native.AcceptedSelectionHash, acceptedSelectionHash,
                 StringComparison.OrdinalIgnoreCase) ||
-            registration.Binding.ExecutionFence != sourceFence ||
-            !string.Equals(registration.Binding.AcceptedSelectionHash, acceptedSelectionHash,
+            savedRegistration.Binding.SessionId != member.Session.SessionId ||
+            savedRegistration.Binding.ExecutionFence != sourceFence ||
+            !string.Equals(savedRegistration.Binding.AcceptedSelectionHash, acceptedSelectionHash,
                 StringComparison.OrdinalIgnoreCase))
             throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
 
@@ -2206,11 +2208,67 @@ internal sealed class RuntimeUsageSourceStore(
         if (currentOrigin != native)
             throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
 
+        var rebinds = await _executionEvidence.ReadNativeChildRebindsAsync(
+            connection, transaction, root.ProjectId, root.RunId, native.DispatchId, cancellationToken)
+            .ConfigureAwait(false);
+        RuntimeRegistration effectiveRegistration;
+        NativeChildRebindReceipt? effectiveRebind;
+        if (rebinds.IsEmpty)
+        {
+            if (member.PriorNativeRebindReceiptId is not null ||
+                member.PriorNativeRebindPayloadHash is not null ||
+                savedRegistration.RuntimeInstanceId != native.RuntimeInstanceId ||
+                savedRegistration.Revision != native.RegistrationRevision ||
+                savedRegistration.Binding.ExecutionFence != native.ExecutionFence ||
+                RuntimeContractValidation.RegistrationHash(savedRegistration) != native.RuntimeBindingHash)
+                throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
+            effectiveRegistration = savedRegistration;
+            effectiveRebind = null;
+        }
+        else
+        {
+            effectiveRebind = rebinds[^1];
+            if (effectiveRebind.ReceiptId != member.PriorNativeRebindReceiptId ||
+                effectiveRebind.CanonicalPayloadHash != member.PriorNativeRebindPayloadHash ||
+                effectiveRebind.OriginFingerprint !=
+                    NativeChildRebindOriginFingerprint.Create(effectiveRebind.TenantId, root, member).Hash)
+                throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
+            effectiveRegistration = await _registrations.ReadRevisionAsync(
+                connection, transaction, effectiveRebind.RuntimeInstanceId,
+                effectiveRebind.RegistrationRevision, cancellationToken).ConfigureAwait(false)
+                ?? throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
+            if (RuntimeContractValidation.RegistrationHash(effectiveRegistration) !=
+                effectiveRebind.RegistrationHash)
+                throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
+        }
+
         var source = await ReadCurrentSourceAsync(
-            connection, transaction, registration, cancellationToken).ConfigureAwait(false);
-        if (source.CanonicalPayloadHash != native.SdkSourceReceiptHash ||
+            connection, transaction, effectiveRegistration, cancellationToken).ConfigureAwait(false);
+        var dispatch = await ReadNativeDispatchAsync(
+            connection, transaction, effectiveRegistration, native.DispatchId, cancellationToken,
+            lockRows: false).ConfigureAwait(false);
+        if (!MatchesNativeOrigin(dispatch, native) ||
             source.Source.ModelSelectionReference != native.ModelSelectionReference ||
-            source.Source.ModelId != native.SelectedModelId)
+            source.Source.ModelId != native.SelectedModelId ||
+            (effectiveRebind is null
+                ? source.CanonicalPayloadHash != native.SdkSourceReceiptHash
+                : source.CanonicalPayloadHash != effectiveRebind.SdkSourceReceiptHash))
+            throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
+
+        var admission = new RuntimeNativeTurnAdmissionReceipt(
+            effectiveRegistration,
+            source.Source,
+            native.DispatchId,
+            native.PromptHash,
+            effectiveRebind?.EffectiveRequestHash ?? native.RequestHash,
+            checked(native.OwnerRevision - 2));
+        var validatedRebind = await RequireNativeDispatchBindingAsync(
+            connection, transaction, dispatch, admission, source, cancellationToken,
+            requireReleasedHold: false).ConfigureAwait(false);
+        if ((effectiveRebind is null) != (validatedRebind is null) ||
+            effectiveRebind is not null &&
+            (validatedRebind!.ReceiptId != effectiveRebind.ReceiptId ||
+             validatedRebind.CanonicalPayloadHash != effectiveRebind.CanonicalPayloadHash))
             throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
 
         string reportJson;
@@ -2256,9 +2314,6 @@ internal sealed class RuntimeUsageSourceStore(
                 "runtime_native_turn_accounting_invalid", null, exception);
         }
 
-        var admission = new RuntimeNativeTurnAdmissionReceipt(
-            registration, source.Source, native.DispatchId, native.PromptHash, native.RequestHash,
-            checked(ownerRevision - 2));
         RuntimeNativeTurnContract.ValidateObservation(admission, observation);
         if (ownerRevision != native.OwnerRevision ||
             reportHash != native.SourceReportHash ||
@@ -2384,7 +2439,7 @@ internal sealed class RuntimeUsageSourceStore(
                 manifestMember.PromptHash != receipt.PromptHash ||
                 manifestMember.AssociationHash != receipt.AssociationHash ||
                 manifestMember.WorkItemBindingSha256 != receipt.WorkItemBindingSha256 ||
-                manifestMember.MessageRequestHash != receipt.MessageRequestHash ||
+                (manifestMember.MessageRequestHash ?? nativeOrigin.RequestHash) != receipt.MessageRequestHash ||
                 manifestMember.EgressReceiptHash != receipt.EgressReceiptHash ||
                 NativeChildRebindOriginFingerprint.Create(manifest, manifestMember).Hash !=
                     receipt.OriginFingerprint ||
@@ -2467,6 +2522,11 @@ internal sealed class RuntimeUsageSourceStore(
                      receipt.Lineage[^1].SupersessionPayloadHash is not null)
                 throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
 
+            if (previous is not null && receipt.SourceFence > previous.DestinationFence)
+                await RequireNativeChildRebindRecoveryGapAsync(
+                    connection, transaction, previous, receipt, manifest, cancellationToken)
+                    .ConfigureAwait(false);
+
             previous = receipt;
             if (receipt.DestinationFence == binding.Binding.ExecutionFence)
                 current = receipt;
@@ -2493,6 +2553,7 @@ internal sealed class RuntimeUsageSourceStore(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         RuntimeRegistration effectiveRegistration,
+        ChildRecoveryNativeOrigin lockedOrigin,
         Guid dispatchId,
         bool requireReleasedHold,
         CancellationToken cancellationToken)
@@ -2502,8 +2563,10 @@ internal sealed class RuntimeUsageSourceStore(
             .ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
         var dispatch = await ReadNativeDispatchAsync(
-            connection, transaction, effectiveRegistration, dispatchId, cancellationToken)
+            connection, transaction, effectiveRegistration, dispatchId, cancellationToken, lockRows: false)
             .ConfigureAwait(false);
+        if (!MatchesNativeOrigin(dispatch, lockedOrigin))
+            throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_conflict");
         var receipts = await _executionEvidence.ReadNativeChildRebindsAsync(
             connection, transaction, effectiveRegistration.Binding.ProjectId,
             effectiveRegistration.Binding.RunId, dispatchId, cancellationToken).ConfigureAwait(false);
@@ -2516,6 +2579,270 @@ internal sealed class RuntimeUsageSourceStore(
             connection, transaction, dispatch, admission, source.Receipt, cancellationToken,
             requireReleasedHold).ConfigureAwait(false);
     }
+
+    private async Task RequireNativeChildRebindRecoveryGapAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        NativeChildRebindReceipt previousReceipt,
+        NativeChildRebindReceipt currentReceipt,
+        ChildCheckpointRecoveryManifest currentManifest,
+        CancellationToken cancellationToken)
+    {
+        var recoveryGap = currentReceipt.SourceFence - previousReceipt.DestinationFence;
+        var lineage = currentReceipt.Lineage[^1];
+        if (recoveryGap < 1 || lineage.SupersedesOperationId is not { } supersededOperationId ||
+            lineage.SupersessionReceiptId is not { } supersessionReceiptId ||
+            lineage.SupersessionPayloadHash is not { } supersessionPayloadHash ||
+            currentReceipt.SupersessionReceiptId != supersessionReceiptId ||
+            currentReceipt.SupersessionReceiptHash != supersessionPayloadHash)
+            throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+
+        var successor = await ReadNativeRecoveryOperationAsync(
+            connection, transaction, currentReceipt.ProjectId, currentReceipt.RunId,
+            currentReceipt.RecoveryOperationId, cancellationToken).ConfigureAwait(false);
+        if (successor.Result.CheckpointRecovery is not { Phase: "ready", DispatchHeld: false } ||
+            successor.Manifest.OperationId != currentManifest.OperationId ||
+            ChildCheckpointRecoveryManifestCodec.Hash(successor.Manifest) != currentReceipt.ManifestSha256)
+            throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+
+        var blockedCount = 0;
+        while (true)
+        {
+            if (blockedCount >= NativeChildRebindReceipt.MaximumLineageEdges)
+                throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+            var supersession = await _executionEvidence.ReadCheckpointRecoverySupersessionAsync(
+                connection, transaction, currentReceipt.ProjectId, currentReceipt.RunId,
+                supersededOperationId, cancellationToken).ConfigureAwait(false);
+            if (supersession is null ||
+                supersession.ReceiptId != supersessionReceiptId ||
+                supersession.CanonicalPayloadHash != supersessionPayloadHash ||
+                supersession.SupersedesOperationId != supersededOperationId ||
+                supersession.SuccessorOperationId != successor.Result.OperationId ||
+                supersession.SuccessorRequestHash != successor.RequestHash ||
+                supersession.SuccessorManifestSha256 !=
+                    ChildCheckpointRecoveryManifestCodec.Hash(successor.Manifest) ||
+                supersession.SuccessorSourceCheckpointId != successor.Manifest.SourceCheckpointId ||
+                supersession.SuccessorSourceFence != successor.Manifest.SourceExecutionFence ||
+                supersession.SuccessorSourceCheckpointHash != successor.Manifest.SourceCheckpointHash ||
+                supersession.TenantId != currentReceipt.TenantId ||
+                supersession.ProjectId != currentReceipt.ProjectId ||
+                supersession.RunId != currentReceipt.RunId ||
+                supersession.RootSessionId != currentReceipt.RootSessionId ||
+                supersession.SelectionHash != currentReceipt.SelectionHash ||
+                supersession.WorkPlanId != currentReceipt.WorkPlanId ||
+                supersession.WorkPlanHash != currentReceipt.WorkPlanHash ||
+                supersession.ChildIdentitySha256 !=
+                    CheckpointRecoverySupersessionSource.ChildIdentityHash(successor.Manifest))
+                throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+
+            var blocked = await ReadNativeRecoveryOperationAsync(
+                connection, transaction, currentReceipt.ProjectId, currentReceipt.RunId,
+                supersededOperationId, cancellationToken).ConfigureAwait(false);
+            if (blocked.Result.CheckpointRecovery is not
+                {
+                    Phase: "blocked",
+                    CurrentStep: "activation",
+                    BoundaryKind: "childJoin",
+                    DispatchHeld: true,
+                    ReasonCode: "checkpoint_recovery_host_bootstrap_spent" or
+                        "runtime_activation_owner_unavailable" or
+                        "runtime_activation_owner_timeout" or
+                        "runtime_owner_unavailable" or
+                        "runtime_owner_timeout"
+                } status ||
+                blocked.Result.ExecutionFence != status.ExecutionFence ||
+                blocked.Result.PreviousExecutionFence + 1 != status.ExecutionFence ||
+                status.ChildManifestSha256 != ChildCheckpointRecoveryManifestCodec.Hash(blocked.Manifest) ||
+                status.SupersededByOperationId != successor.Result.OperationId ||
+                status.SupersededByReceiptId != supersession.ReceiptId ||
+                status.SupersededByPayloadHash != supersession.CanonicalPayloadHash ||
+                supersession.SupersededRequestHash != blocked.RequestHash ||
+                supersession.SupersededManifestSha256 != status.ChildManifestSha256 ||
+                supersession.SupersededAdmissionSha256 != ComputeRecoveryAdmissionHash(
+                    blocked.Result, status) ||
+                supersession.TerminalStatusSha256 != RuntimeContractValidation.Hash(
+                    Encoding.UTF8.GetBytes(blocked.TerminalStatusJson)) ||
+                supersession.TerminalPhaseVersion != blocked.PhaseVersion ||
+                supersession.SupersededCheckpointId != status.RecoveryCheckpointId ||
+                supersession.SupersededFence != status.ExecutionFence ||
+                supersession.SupersededCheckpointHash != status.RecoveryCheckpointHash ||
+                blocked.Manifest.Root.ProjectId != currentReceipt.ProjectId ||
+                blocked.Manifest.Root.RunId != currentReceipt.RunId ||
+                blocked.Manifest.Root.SessionId != currentReceipt.RootSessionId ||
+                blocked.Manifest.TenantId != currentReceipt.TenantId ||
+                blocked.Manifest.OperationId != blocked.Result.OperationId ||
+                blocked.Manifest.HoldFence != status.ExecutionFence ||
+                blocked.Manifest.SourceExecutionFence != blocked.Result.PreviousExecutionFence ||
+                blocked.Manifest.WorkPlanId != currentReceipt.WorkPlanId ||
+                blocked.Manifest.WorkPlanHash != currentReceipt.WorkPlanHash ||
+                blocked.Manifest.OtherNativeWork.Length != 0)
+                throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+
+            var members = blocked.Manifest.Members.Where(member =>
+                member.AssociationId == currentReceipt.AssociationId &&
+                member.Session.SessionId == currentReceipt.ChildSessionId).ToArray();
+            if (members.Length != 1 ||
+                members[0].Disposition != "pendingUnsent" ||
+                members[0].NativeOrigin is not { State: "prepared", OwnerRevision: 1 } ||
+                members[0].PriorNativeRebindReceiptId != previousReceipt.ReceiptId ||
+                members[0].PriorNativeRebindPayloadHash != previousReceipt.CanonicalPayloadHash ||
+                NativeChildRebindOriginFingerprint.Create(blocked.Manifest, members[0]).Hash !=
+                    previousReceipt.OriginFingerprint)
+                throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+
+            blockedCount++;
+            if (status.SupersedesOperationId is not { } nextSupersededOperationId)
+            {
+                if (status.SupersessionReceiptId is not null ||
+                    status.SupersessionPayloadHash is not null ||
+                    blocked.Manifest.SourceExecutionFence != previousReceipt.DestinationFence)
+                    throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+                await RequireRecoveryCheckpointDescendantAsync(
+                    connection, transaction, currentReceipt, blocked.Manifest, cancellationToken)
+                    .ConfigureAwait(false);
+                break;
+            }
+
+            if (status.SupersessionReceiptId is not { } nextReceiptId ||
+                status.SupersessionPayloadHash is not { } nextPayloadHash)
+                throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+            successor = blocked;
+            supersededOperationId = nextSupersededOperationId;
+            supersessionReceiptId = nextReceiptId;
+            supersessionPayloadHash = nextPayloadHash;
+        }
+
+        if (blockedCount != recoveryGap)
+            throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+    }
+
+    private async Task<NativeRecoveryOperation> ReadNativeRecoveryOperationAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string projectId,
+        string runId,
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT request_hash, result::text,
+                   (result #- ARRAY['checkpointRecovery', 'supersededByOperationId']
+                           #- ARRAY['checkpointRecovery', 'supersededByReceiptId']
+                           #- ARRAY['checkpointRecovery', 'supersededByPayloadHash'])::text,
+                   progress::text, phase_version
+            FROM {_executionOperations}
+            WHERE project_id = @project AND run_id = @run
+              AND operation_id = @operation AND operation_kind = 'recovery'
+            FOR SHARE
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, runId);
+        command.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+        var requestHash = reader.GetString(0).Trim();
+        var resultJson = reader.GetString(1);
+        var terminalStatusJson = reader.GetString(2);
+        var progress = Deserialize<JsonElement>(reader.GetString(3));
+        var phaseVersion = reader.GetInt64(4);
+        await reader.DisposeAsync().ConfigureAwait(false);
+        var result = Deserialize<RunExecutionTransitionResult>(resultJson);
+        if (result.OperationId != operationId || result.Session.ProjectId != projectId ||
+            result.Session.RunId != runId || result.CheckpointRecovery is null ||
+            phaseVersion < 1)
+            throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+        var manifest = CoordinationOwnerStore.ReadCheckpointRecoveryManifest(result, progress);
+        return new(requestHash, resultJson, terminalStatusJson, phaseVersion, result, manifest);
+    }
+
+    private async Task RequireRecoveryCheckpointDescendantAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        NativeChildRebindReceipt previousReceipt,
+        ChildCheckpointRecoveryManifest descendant,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            WITH RECURSIVE chain AS (
+                SELECT checkpoint_id, parent_checkpoint_id, execution_fence, payload::text,
+                       0 AS depth, ARRAY[checkpoint_id]::text[] AS path
+                FROM {_checkpoints}
+                WHERE project_id = @project AND run_id = @run AND session_id = @root
+                  AND store_name = 'coordinator-execution'
+                  AND checkpoint_id = @descendant AND execution_fence = @fence
+                UNION ALL
+                SELECT parent.checkpoint_id, parent.parent_checkpoint_id,
+                       parent.execution_fence, parent.payload::text,
+                       child.depth + 1, child.path || parent.checkpoint_id
+                FROM chain child
+                JOIN {_checkpoints} parent
+                  ON parent.project_id = @project AND parent.run_id = @run
+                 AND parent.session_id = @root
+                 AND parent.store_name = 'coordinator-execution'
+                 AND parent.execution_fence = @fence
+                 AND parent.checkpoint_id = child.parent_checkpoint_id
+                WHERE child.checkpoint_id <> @anchor
+                  AND child.depth < @maximumDepth
+                  AND NOT parent.checkpoint_id = ANY(child.path)
+            )
+            SELECT checkpoint_id, parent_checkpoint_id, execution_fence, payload, depth
+            FROM chain
+            ORDER BY depth
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, previousReceipt.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, previousReceipt.RunId);
+        command.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, previousReceipt.RootSessionId);
+        command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, previousReceipt.DestinationFence);
+        command.Parameters.AddWithValue("descendant", NpgsqlDbType.Varchar, descendant.SourceCheckpointId);
+        command.Parameters.AddWithValue("anchor", NpgsqlDbType.Varchar, previousReceipt.AnchorCheckpointId);
+        command.Parameters.AddWithValue("maximumDepth", NpgsqlDbType.Integer,
+            NativeChildRebindReceipt.MaximumLineageEdges);
+        var checkpoints = new List<(string Id, string? Parent, long Fence, string Payload, int Depth)>();
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                checkpoints.Add((reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1),
+                    reader.GetInt64(2), reader.GetString(3), reader.GetInt32(4)));
+        }
+        if (checkpoints.Count == 0 || checkpoints.Count > NativeChildRebindReceipt.MaximumLineageEdges + 1 ||
+            checkpoints[0].Id != descendant.SourceCheckpointId ||
+            checkpoints[0].Fence != previousReceipt.DestinationFence ||
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(checkpoints[0].Payload)) !=
+                descendant.SourceCheckpointHash ||
+            checkpoints[^1].Id != previousReceipt.AnchorCheckpointId ||
+            checkpoints[^1].Fence != previousReceipt.DestinationFence ||
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(checkpoints[^1].Payload)) !=
+                previousReceipt.AnchorCheckpointHash)
+            throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+        for (var index = 1; index < checkpoints.Count; index++)
+            if (checkpoints[index].Depth != index ||
+                checkpoints[index - 1].Parent != checkpoints[index].Id ||
+                checkpoints[index].Fence != previousReceipt.DestinationFence)
+                throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+    }
+
+    private static string ComputeRecoveryAdmissionHash(
+        RunExecutionTransitionResult result,
+        CheckpointRecoveryStatus status) =>
+        RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            operationId = result.OperationId,
+            result.PreviousExecutionFence,
+            result.ExecutionFence,
+            result.PreviousRunStateVersion,
+            result.RunStateVersion,
+            status.SourceCheckpointId,
+            status.SourceCheckpointRevision,
+            status.SourceCheckpointHash,
+            status.RecoveryCheckpointId,
+            status.RecoveryCheckpointRevision,
+            status.RecoveryCheckpointHash,
+            status.ChildManifestSha256,
+            status.BoundaryKind,
+            status.GateRequestId,
+            status.GateAuthorizedActorId
+        }, JsonOptions));
 
     private async Task<ChildCheckpointRecoveryManifest> ReadNativeRebindManifestAsync(
         NpgsqlConnection connection,
@@ -2822,6 +3149,14 @@ internal sealed class RuntimeUsageSourceStore(
     /// </summary>
     private sealed record NativeDispatchMarker(string State, long OwnerRevision);
 
+    private sealed record NativeRecoveryOperation(
+        string RequestHash,
+        string ResultJson,
+        string TerminalStatusJson,
+        long PhaseVersion,
+        RunExecutionTransitionResult Result,
+        ChildCheckpointRecoveryManifest Manifest);
+
     /// <summary>
     /// Reconciled cost observation and guard revisions used to decide whether a turn can proceed.
     /// </summary>
@@ -2996,7 +3331,8 @@ internal sealed class RuntimeUsageSourceStore(
             throw new RuntimeAuthorizationException("runtime_sdk_source_conflict");
 
         var dispatch = await ReadNativeDispatchAsync(
-            connection, transaction, effectiveRegistration, dispatchId, cancellationToken).ConfigureAwait(false);
+            connection, transaction, effectiveRegistration, dispatchId, cancellationToken, lockRows: false)
+            .ConfigureAwait(false);
         if (dispatch.ChildSessionId != sessionId)
             throw new RuntimeAuthorizationException("runtime_usage_source_completion_invalid");
         var admission = new RuntimeNativeTurnAdmissionReceipt(
@@ -3063,7 +3399,6 @@ internal sealed class RuntimeUsageSourceStore(
               AND root_session_id = @session AND accepted_selection_hash = @selection
               AND execution_fence = @fence AND state = 'ready' AND current_step = 'ready'
               AND NOT cleanup_obligation
-            FOR SHARE
             """, connection, transaction);
         command.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, receipt.TenantId);
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, receipt.ProjectId);

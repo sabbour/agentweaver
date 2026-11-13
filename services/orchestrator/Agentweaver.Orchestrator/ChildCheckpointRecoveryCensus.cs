@@ -122,9 +122,14 @@ internal static class ChildCheckpointRecoveryCensus
                  originMember.PromptHash != binding.PromptHash))
                 throw InvalidBoundary();
 
+            var native = await ReadNativeOriginAsync(
+                connection, transaction, schema, root, child, binding, selectionHash,
+                cancellationToken).ConfigureAwait(false);
+            var nativeOriginFence = native?.ExecutionFence ??
+                originMember?.NativeOrigin?.ExecutionFence ?? originFence;
             var spawnHash = await ReadSpawnCommandHashAsync(
             connection, transaction, schema, root, child, binding, actor,
-            originMember?.NativeOrigin?.ExecutionFence ?? originFence, cancellationToken)
+            nativeOriginFence, cancellationToken)
             .ConfigureAwait(false);
             if (originMember is not null && originMember.SpawnCommandHash != spawnHash)
                 throw InvalidBoundary();
@@ -144,7 +149,7 @@ internal static class ChildCheckpointRecoveryCensus
                  fixedAssociation.WorkPlanId != plan.Plan.Id ||
                  !string.Equals(
                      fixedAssociation.AcceptedSelectionHash, selectionHash, StringComparison.OrdinalIgnoreCase) ||
-                 fixedAssociation.ExecutionFence != originFence ||
+                 fixedAssociation.ExecutionFence != nativeOriginFence ||
                  fixedAssociation.DecisionStateVersion != binding.DecisionStateVersion ||
                  fixedAssociation.WorkflowId != plan.Workflow.Definition.Id ||
                  fixedAssociation.DefinitionRevision != plan.Workflow.Definition.Revision ||
@@ -159,9 +164,6 @@ internal static class ChildCheckpointRecoveryCensus
                 (intent.AssociationId != binding.AssociationId || intent.ChildSessionId != child.SessionId ||
                  intent.MessageId != binding.DispatchMessageId || intent.PromptHash != binding.PromptHash))
                 throw InvalidBoundary();
-            var native = await ReadNativeOriginAsync(
-                connection, transaction, schema, root, child, binding, selectionHash,
-                cancellationToken).ConfigureAwait(false);
             NativeChildRebindReceipt? priorNativeRebind = null;
             if (native is not null)
             {
@@ -193,8 +195,8 @@ internal static class ChildCheckpointRecoveryCensus
                 {
                     var effectiveStartup = originMember?.Startup ?? startup;
                     if (priorNativeRebind.DispatchId != native.DispatchId ||
-                         priorNativeRebind.OriginOwnerRevision != native.OwnerRevision ||
-                         priorNativeRebind.OriginState != native.State ||
+                         priorNativeRebind.OriginOwnerRevision != 1 ||
+                         priorNativeRebind.OriginState != "prepared" ||
                          effectiveStartup.RegistrationId != priorNativeRebind.RuntimeInstanceId ||
                          effectiveStartup.RegistrationRevision != priorNativeRebind.RegistrationRevision ||
                          registration is null ||

@@ -137,22 +137,7 @@ internal sealed partial class RuntimeExecutionEvidenceLedgerStore
                      WHERE conrelid = to_regclass(@table)
                        AND conname = 'maf_runtime_evidence_native_child_rebind_fields_check'
                        AND contype = 'c' AND convalidated
-                       AND pg_get_constraintdef(oid) LIKE '%dispatchId%'
-                       AND pg_get_constraintdef(oid) LIKE '%recoveryOperationId%'
-                       AND pg_get_constraintdef(oid) LIKE '%destinationFence%'
-                       AND pg_get_constraintdef(oid) LIKE '%priorAuthorityKey%'
-                       AND pg_get_constraintdef(oid) LIKE '%priorReceiptId%'
-                       AND pg_get_constraintdef(oid) LIKE '%priorReceiptHash%'
-                       AND pg_get_constraintdef(oid) LIKE '%IS TRUE%'
-                       AND pg_get_constraintdef(oid) LIKE '%^[0-9a-fA-F]{8}-'
-                       AND pg_get_constraintdef(oid) LIKE '%^[1-9][0-9]*$%'
-                       AND pg_get_constraintdef(oid) LIKE '%origin%'
-                       AND pg_get_constraintdef(oid) LIKE '%receipt:%'
-                       AND pg_get_constraintdef(oid) LIKE '%||%'
-                       AND (length(pg_get_constraintdef(oid)) -
-                            length(replace(pg_get_constraintdef(oid), ' AND ', ''))) = 60
-                       AND (length(pg_get_constraintdef(oid)) -
-                            length(replace(pg_get_constraintdef(oid), ' OR ', ''))) = 8),
+                       AND {NativeChildRebindSchemaContract.FieldsConstraintStructure}),
                    EXISTS (
                      SELECT 1
                      FROM pg_index i

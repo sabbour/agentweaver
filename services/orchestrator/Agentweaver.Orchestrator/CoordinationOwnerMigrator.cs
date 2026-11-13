@@ -705,22 +705,7 @@ public static class CoordinationOwnerMigrator
                                     WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
                                       AND conname = @runtimeEvidenceNativeChildRebindFieldsConstraint
                                       AND contype = 'c' AND convalidated
-                                      AND pg_get_constraintdef(oid) LIKE '%dispatchId%'
-                                      AND pg_get_constraintdef(oid) LIKE '%recoveryOperationId%'
-                                      AND pg_get_constraintdef(oid) LIKE '%destinationFence%'
-                                      AND pg_get_constraintdef(oid) LIKE '%priorAuthorityKey%'
-                                      AND pg_get_constraintdef(oid) LIKE '%priorReceiptId%'
-                                      AND pg_get_constraintdef(oid) LIKE '%priorReceiptHash%'
-                                      AND pg_get_constraintdef(oid) LIKE '%IS TRUE%'
-                                      AND pg_get_constraintdef(oid) LIKE '%^[0-9a-fA-F]{8}-'
-                                      AND pg_get_constraintdef(oid) LIKE '%^[1-9][0-9]*$%'
-                                      AND pg_get_constraintdef(oid) LIKE '%origin%'
-                                      AND pg_get_constraintdef(oid) LIKE '%receipt:%'
-                                      AND pg_get_constraintdef(oid) LIKE '%||%'
-                                      AND (length(pg_get_constraintdef(oid)) -
-                                           length(replace(pg_get_constraintdef(oid), ' AND ', ''))) = 60
-                                      AND (length(pg_get_constraintdef(oid)) -
-                                           length(replace(pg_get_constraintdef(oid), ' OR ', ''))) = 8) = 1
+                                      AND {NativeChildRebindSchemaContract.FieldsConstraintStructure}) = 1
                                 AND (SELECT count(*) FROM pg_constraint
                                     WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
                                       AND contype = 'c' AND convalidated) = 11)
@@ -902,13 +887,7 @@ public static class CoordinationOwnerMigrator
                             WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
                               AND conname = @runtimeEvidenceNativeChildRebindFieldsConstraint
                               AND contype = 'c' AND convalidated
-                              AND pg_get_constraintdef(oid) LIKE '%dispatchId%'
-                              AND pg_get_constraintdef(oid) LIKE '%recoveryOperationId%'
-                              AND pg_get_constraintdef(oid) LIKE '%destinationFence%'
-                              AND pg_get_constraintdef(oid) LIKE '%priorAuthorityKey%'
-                              AND pg_get_constraintdef(oid) LIKE '%priorReceiptId%'
-                              AND pg_get_constraintdef(oid) LIKE '%priorReceiptHash%'
-                              AND pg_get_constraintdef(oid) LIKE '%IS TRUE%')
+                              AND {NativeChildRebindSchemaContract.FieldsConstraintStructure})
                         AND EXISTS (
                             SELECT 1
                             FROM pg_index i

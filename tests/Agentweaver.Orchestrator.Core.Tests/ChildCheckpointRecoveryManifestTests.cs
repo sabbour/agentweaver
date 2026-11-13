@@ -213,6 +213,22 @@ public sealed class ChildCheckpointRecoveryManifestTests
     }
 
     [Fact]
+    public void NativeChildRebindReceiptChainCountsBlockedRecoveryEdgesAgainstBound()
+    {
+        var first = CreateNativeChildRebindReceipt();
+
+        Assert.Equal(2, NativeChildRebindReceipt.ValidateChain(
+            [first, CreateNativeChildRebindSuccessor(first, recoveryGap: 255)],
+            first.DispatchId).Length);
+
+        Assert.Equal("checkpoint_recovery_native_rebind_invalid",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                NativeChildRebindReceipt.ValidateChain(
+                    [first, CreateNativeChildRebindSuccessor(first, recoveryGap: 256)],
+                    first.DispatchId)).Code);
+    }
+
+    [Fact]
     public void NativeChildRebindOriginFingerprintTracksBusinessAndModelPins()
     {
         var manifest = CreateManifest();
@@ -539,6 +555,49 @@ public sealed class ChildCheckpointRecoveryManifestTests
             new string('8', 64), new string('9', 64), NativeChildRebindReceipt.ReceiptIdFor(
                 operationId, dispatchId), NativeChildRebindReceipt.AttemptIdFor(operationId, dispatchId), "");
         return receipt with { CanonicalPayloadHash = HashNativeChildRebindReceipt(receipt) };
+    }
+
+    private static NativeChildRebindReceipt CreateNativeChildRebindSuccessor(
+        NativeChildRebindReceipt previous,
+        long recoveryGap)
+    {
+        var operationId = Guid.NewGuid();
+        var sourceFence = previous.DestinationFence + recoveryGap;
+        var destinationFence = sourceFence + 1;
+        var supersedesOperationId = Guid.NewGuid();
+        var supersessionReceiptId = Guid.NewGuid();
+        var supersessionHash = new string('a', 64);
+        const string sourceCheckpointId = "successor-source-checkpoint";
+        const string anchorCheckpointId = "successor-anchor-checkpoint";
+        var sourceHash = new string('b', 64);
+        var anchorHash = new string('c', 64);
+        var lineage = ImmutableArray.Create(new NativeChildRebindCheckpointReference(
+            operationId, sourceCheckpointId, 3, sourceHash, sourceFence,
+            anchorCheckpointId, 4, anchorHash, destinationFence,
+            supersedesOperationId, supersessionReceiptId, supersessionHash));
+        var successor = previous with
+        {
+            RecoveryOperationId = operationId,
+            ManifestSha256 = new string('d', 64),
+            PriorAuthorityKey = $"receipt:{previous.ReceiptId:D}",
+            PriorReceiptId = previous.ReceiptId,
+            PriorReceiptHash = previous.CanonicalPayloadHash,
+            SourceCheckpointId = sourceCheckpointId,
+            SourceCheckpointRevision = 3,
+            SourceCheckpointHash = sourceHash,
+            SourceFence = sourceFence,
+            AnchorCheckpointId = anchorCheckpointId,
+            AnchorCheckpointRevision = 4,
+            AnchorCheckpointHash = anchorHash,
+            DestinationFence = destinationFence,
+            Lineage = lineage,
+            SupersessionReceiptId = supersessionReceiptId,
+            SupersessionReceiptHash = supersessionHash,
+            ReceiptId = NativeChildRebindReceipt.ReceiptIdFor(operationId, previous.DispatchId),
+            AttemptId = NativeChildRebindReceipt.AttemptIdFor(operationId, previous.DispatchId),
+            CanonicalPayloadHash = ""
+        };
+        return successor with { CanonicalPayloadHash = HashNativeChildRebindReceipt(successor) };
     }
 
     private static string HashNativeChildRebindReceipt(NativeChildRebindReceipt receipt) =>
