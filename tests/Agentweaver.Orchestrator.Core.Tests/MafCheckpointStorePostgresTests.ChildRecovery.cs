@@ -2001,13 +2001,7 @@ public sealed partial class MafCheckpointStorePostgresTests
             registration.Binding.ActorIssuer, RuntimeCredentialPurpose.Observe,
             registration.Binding.ObservationEndpoint, RuntimeCredentialState.Active,
             new string('d', 64), now.AddMinutes(30), now);
-        var source = new SdkSessionFacts(
-            registration.RuntimeInstanceId,
-            RuntimeContractValidation.NativeSessionId(registration.Binding),
-            "1.0.18", "1.0.97", registration.Binding.ModelSelectionReference!,
-            "gpt-6.1-sol", new string('c', 64), 1, "hosted-copilot",
-            SdkMeterSources.CopilotNanoAiu, registration.Binding.AcceptedSelectionHash,
-            registration.Revision);
+        var source = CreateNativeSourceFacts(registration);
         var activation = new RuntimeHostReadinessReceipt(
             1, registration.RuntimeInstanceId, registration.Revision,
             registration.Binding.ExecutionFence, image, phases, grant)
