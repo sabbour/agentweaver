@@ -256,6 +256,53 @@ internal sealed record NativeChildRebindReceipt(
         return this;
     }
 
+    internal static ImmutableArray<NativeChildRebindReceipt> ValidateChain(
+        ImmutableArray<NativeChildRebindReceipt> receipts,
+        Guid dispatchId)
+    {
+        if (receipts.IsDefault || receipts.Length > MaximumLineageEdges)
+            throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+
+        var receiptIds = new HashSet<Guid>();
+        var attemptIds = new HashSet<Guid>();
+        var operationIds = new HashSet<Guid>();
+        var priorKeys = new HashSet<string>(StringComparer.Ordinal);
+        var destinationFences = new HashSet<long>();
+        NativeChildRebindReceipt? previous = null;
+        var edgeCount = 0;
+        foreach (var receipt in receipts)
+        {
+            receipt.Validate();
+            edgeCount = checked(edgeCount + receipt.Lineage.Length +
+                (receipt.SupersessionReceiptId is null ? 0 : 1));
+            if (edgeCount > MaximumLineageEdges ||
+                receipt.DispatchId != dispatchId ||
+                !receiptIds.Add(receipt.ReceiptId) ||
+                !attemptIds.Add(receipt.AttemptId) ||
+                !operationIds.Add(receipt.RecoveryOperationId) ||
+                !priorKeys.Add(receipt.PriorAuthorityKey) ||
+                !destinationFences.Add(receipt.DestinationFence))
+                throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+
+            if (previous is null)
+            {
+                if (receipt.PriorAuthorityKey != "origin" ||
+                    receipt.PriorReceiptId is not null || receipt.PriorReceiptHash is not null)
+                    throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+            }
+            else if (receipt.PriorAuthorityKey != $"receipt:{previous.ReceiptId:D}" ||
+                     receipt.PriorReceiptId != previous.ReceiptId ||
+                     receipt.PriorReceiptHash != previous.CanonicalPayloadHash ||
+                     receipt.OriginFingerprint != previous.OriginFingerprint ||
+                     receipt.OriginalRequestHash != previous.OriginalRequestHash ||
+                     receipt.SourceFence != previous.DestinationFence)
+                throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+
+            previous = receipt;
+        }
+        return receipts;
+    }
+
     internal static Guid ReceiptIdFor(Guid recoveryOperationId, Guid dispatchId) =>
         GuidFor($"native-child-rebind-receipt\0{recoveryOperationId:D}\0{dispatchId:D}");
 
@@ -285,6 +332,45 @@ internal sealed record NativeChildRebindOriginFingerprint(
     string State,
     long OwnerRevision)
 {
+    internal static bool HasSameModelAndCostBinding(
+        RuntimeRegistration origin,
+        RuntimeRegistration replacement,
+        ChildRecoveryNativeOrigin native,
+        SdkSessionFacts originSource,
+        SdkSessionFacts replacementSource)
+    {
+        var oldBinding = origin.Binding;
+        var newBinding = replacement.Binding;
+        return origin.RuntimeInstanceId == native.RuntimeInstanceId &&
+            origin.Revision == native.RegistrationRevision &&
+            RuntimeContractValidation.RegistrationHash(origin) == native.RuntimeBindingHash &&
+            originSource.RuntimeInstanceId == origin.RuntimeInstanceId &&
+            originSource.RegistrationRevision == origin.Revision &&
+            originSource.ModelSelectionReference == native.ModelSelectionReference &&
+            originSource.ModelId == native.SelectedModelId &&
+            replacementSource.RuntimeInstanceId == replacement.RuntimeInstanceId &&
+            replacementSource.RegistrationRevision == replacement.Revision &&
+            replacementSource.ModelSelectionReference == originSource.ModelSelectionReference &&
+            replacementSource.ModelId == originSource.ModelId &&
+            replacementSource.MeterSource == originSource.MeterSource &&
+            newBinding.ModelSelectionReference == oldBinding.ModelSelectionReference &&
+            newBinding.ModelCredentialReference == oldBinding.ModelCredentialReference &&
+            newBinding.ModelSourceMode == oldBinding.ModelSourceMode &&
+            newBinding.ReasoningEffort == oldBinding.ReasoningEffort &&
+            newBinding.ModelBindingPin == oldBinding.ModelBindingPin &&
+            newBinding.ModelConnectionId == oldBinding.ModelConnectionId &&
+            newBinding.ModelConnectionScope == oldBinding.ModelConnectionScope &&
+            newBinding.PlacementProviderId == oldBinding.PlacementProviderId &&
+            newBinding.MaxModelTurns == oldBinding.MaxModelTurns &&
+            newBinding.MaxToolCalls == oldBinding.MaxToolCalls &&
+            newBinding.MaxPromptTokens == oldBinding.MaxPromptTokens &&
+            newBinding.MaxRevisionAttempts == oldBinding.MaxRevisionAttempts &&
+            newBinding.CopilotSoftCreditLimit == oldBinding.CopilotSoftCreditLimit &&
+            newBinding.CopilotHardCreditLimit == oldBinding.CopilotHardCreditLimit &&
+            (newBinding.ModelBindingPin is null ||
+             newBinding.ModelBindingPin.ModelId == native.SelectedModelId);
+    }
+
     internal static NativeChildRebindOriginFingerprint Create(
         ChildCheckpointRecoveryManifest manifest,
         ChildRecoveryMember member) =>

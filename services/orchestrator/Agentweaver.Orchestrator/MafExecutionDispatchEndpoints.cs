@@ -945,88 +945,7 @@ public static partial class CoordinationEndpoints
                 MafExecutionCheckpoint state,
                 string associationId,
                 MafExecutionFixedWorkAssociation? newFixedAssociation = null)
-            {
-                var workItem = action.WorkItem;
-                var requiredResults = new HashSet<string>(
-                    workItem?.DependsOn ?? ImmutableArray<string>.Empty, StringComparer.Ordinal);
-                var dependencySteps = action.Step.DependsOn.ToHashSet(StringComparer.Ordinal);
-                foreach (var item in plan.Plan.Items)
-                    if (dependencySteps.Contains(item.WorkflowStepId))
-                        requiredResults.Add(item.Id);
-                foreach (var fixedAssociation in state.FixedWorkAssociations.Values)
-                    if (dependencySteps.Contains(fixedAssociation.StepId))
-                        requiredResults.Add(fixedAssociation.AssociationId);
-                var platformResults = plan.Workflow.Definition.Steps
-                    .Where(step => dependencySteps.Contains(step.Id) && step.BuildTestCommand is not null)
-                    .Select(step => state.BuildTestReceipts.TryGetValue(step.Id, out var receipt)
-                        ? (step.Id, Receipt: receipt)
-                        : throw new CoordinationException(
-                            "maf_execution_dependency_result_unavailable", StatusCodes.Status409Conflict))
-                    .ToArray();
-                var pullRequestResults = plan.Workflow.Definition.Steps
-                    .Where(step =>
-                        dependencySteps.Contains(step.Id) &&
-                        step.PlatformGate == WorkflowPlatformGate.OpenPullRequest)
-                    .Select(step => state.OpenPullRequestReceipts.TryGetValue(step.Id, out var receipt)
-                        ? (step.Id, Receipt: receipt)
-                        : throw new CoordinationException(
-                            "maf_execution_dependency_result_unavailable", StatusCodes.Status409Conflict))
-                    .ToArray();
-                var mergeResults = plan.Workflow.Definition.Steps
-                    .Where(step =>
-                        dependencySteps.Contains(step.Id) &&
-                        step.PlatformGate == WorkflowPlatformGate.Merge)
-                    .Select(step => state.MergeReceipts.TryGetValue(step.Id, out var receipt)
-                        ? (step.Id, Receipt: receipt)
-                        : throw new CoordinationException(
-                            "maf_execution_dependency_result_unavailable", StatusCodes.Status409Conflict))
-                    .ToArray();
-
-                if (requiredResults.Count == 0 &&
-                    platformResults.Length == 0 &&
-                    pullRequestResults.Length == 0 &&
-                    mergeResults.Length == 0)
-                {
-                    if (workItem is not null)
-                        return workItem.Task;
-                    var fixedWork = newFixedAssociation ??
-                        state.FixedWorkAssociations.GetValueOrDefault(associationId)
-                        ?? throw new CoordinationException(
-                            "maf_execution_dispatch_intent_conflict", StatusCodes.Status409Conflict);
-                    return fixedWork.Specification.Task;
-                }
-
-                var task = workItem?.Task ?? (newFixedAssociation ??
-                    state.FixedWorkAssociations.GetValueOrDefault(associationId)
-                    ?? throw new CoordinationException(
-                        "maf_execution_dispatch_intent_conflict", StatusCodes.Status409Conflict))
-                    .Specification.Task;
-                var completed = requiredResults.Order(StringComparer.Ordinal)
-                    .Where(state.Results.ContainsKey).ToArray();
-                if (completed.Length != requiredResults.Count)
-                    throw new CoordinationException(
-                        "maf_execution_dependency_result_unavailable", StatusCodes.Status409Conflict);
-                var prompt = new StringBuilder(task).Append("\n\nCompleted prerequisite results:");
-                foreach (var completedAssociationId in completed)
-                    prompt.Append("\n\n[").Append(completedAssociationId).Append("]\n")
-                        .Append(state.Results[completedAssociationId]);
-                foreach (var (stepId, receipt) in platformResults)
-                    prompt.Append("\n\n[").Append(stepId).Append("]\n")
-                        .Append(BuildTestResultSummary(receipt));
-                foreach (var (stepId, receipt) in pullRequestResults)
-                    prompt.Append("\n\n[").Append(stepId).Append("]\n")
-                        .Append(MafOpenPullRequestContract.ResultSummary(receipt));
-                foreach (var (stepId, receipt) in mergeResults)
-                    prompt.Append("\n\n[").Append(stepId).Append("]\n")
-                        .Append(MafMergeContract.ResultSummary(receipt));
-                var value = prompt.ToString();
-                if (value.Length > AddressedMessageValidation.MaximumTextLength ||
-                    value.Any(character => char.IsControl(character) &&
-                        character is not ('\r' or '\n' or '\t')))
-                    throw new CoordinationException(
-                        "maf_execution_prompt_limit_exceeded", StatusCodes.Status409Conflict);
-                return value;
-            }
+                => BuildNativeChildPrompt(plan, action, state, associationId, newFixedAssociation);
 
             string HashWorkItemBinding(WorkPlanItem item) =>
                 RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(item));
@@ -3525,6 +3444,109 @@ public static partial class CoordinationEndpoints
             outputCount = receipt.Outputs.Length,
             receipt.FailureCode
         });
+
+    internal static string BuildNativeChildPrompt(
+        WorkPlanSnapshot plan,
+        MafExecutionCheckpoint state,
+        string associationId,
+        string childSessionId)
+    {
+        var workItem = plan.Plan.Items.SingleOrDefault(item => item.Id == associationId);
+        if (workItem is not null)
+        {
+            var step = plan.Workflow.Definition.Steps.SingleOrDefault(
+                candidate => candidate.Id == workItem.WorkflowStepId);
+            if (step is not null)
+                return BuildNativeChildPrompt(plan, new(step, workItem), state, associationId);
+        }
+
+        if (state.FixedWorkAssociations.TryGetValue(associationId, out var fixedAssociation) &&
+            fixedAssociation.ChildSessionId == childSessionId)
+        {
+            var step = plan.Workflow.Definition.Steps.SingleOrDefault(
+                candidate => candidate.Id == fixedAssociation.StepId);
+            if (step is not null)
+                return BuildNativeChildPrompt(plan, new(step, null), state, associationId, fixedAssociation);
+        }
+
+        throw new CoordinationException(
+            "maf_execution_dispatch_intent_conflict", StatusCodes.Status409Conflict);
+    }
+
+    private static string BuildNativeChildPrompt(
+        WorkPlanSnapshot plan,
+        MafExecutionAction action,
+        MafExecutionCheckpoint state,
+        string associationId,
+        MafExecutionFixedWorkAssociation? newFixedAssociation = null)
+    {
+        var workItem = action.WorkItem;
+        var requiredResults = new HashSet<string>(
+            workItem?.DependsOn ?? ImmutableArray<string>.Empty, StringComparer.Ordinal);
+        var dependencySteps = action.Step.DependsOn.ToHashSet(StringComparer.Ordinal);
+        foreach (var item in plan.Plan.Items)
+            if (dependencySteps.Contains(item.WorkflowStepId))
+                requiredResults.Add(item.Id);
+        foreach (var fixedAssociation in state.FixedWorkAssociations.Values)
+            if (dependencySteps.Contains(fixedAssociation.StepId))
+                requiredResults.Add(fixedAssociation.AssociationId);
+        var platformResults = plan.Workflow.Definition.Steps
+            .Where(step => dependencySteps.Contains(step.Id) && step.BuildTestCommand is not null)
+            .Select(step => state.BuildTestReceipts.TryGetValue(step.Id, out var receipt)
+                ? (step.Id, Receipt: receipt)
+                : throw new CoordinationException(
+                    "maf_execution_dependency_result_unavailable", StatusCodes.Status409Conflict))
+            .ToArray();
+        var pullRequestResults = plan.Workflow.Definition.Steps
+            .Where(step =>
+                dependencySteps.Contains(step.Id) &&
+                step.PlatformGate == WorkflowPlatformGate.OpenPullRequest)
+            .Select(step => state.OpenPullRequestReceipts.TryGetValue(step.Id, out var receipt)
+                ? (step.Id, Receipt: receipt)
+                : throw new CoordinationException(
+                    "maf_execution_dependency_result_unavailable", StatusCodes.Status409Conflict))
+            .ToArray();
+        var mergeResults = plan.Workflow.Definition.Steps
+            .Where(step =>
+                dependencySteps.Contains(step.Id) &&
+                step.PlatformGate == WorkflowPlatformGate.Merge)
+            .Select(step => state.MergeReceipts.TryGetValue(step.Id, out var receipt)
+                ? (step.Id, Receipt: receipt)
+                : throw new CoordinationException(
+                    "maf_execution_dependency_result_unavailable", StatusCodes.Status409Conflict))
+            .ToArray();
+        var task = workItem?.Task ?? (newFixedAssociation ??
+            state.FixedWorkAssociations.GetValueOrDefault(associationId)
+            ?? throw new CoordinationException(
+                "maf_execution_dispatch_intent_conflict", StatusCodes.Status409Conflict))
+            .Specification.Task;
+        if (requiredResults.Count == 0 &&
+            platformResults.Length == 0 && pullRequestResults.Length == 0 && mergeResults.Length == 0)
+            return task;
+
+        var completed = requiredResults.Order(StringComparer.Ordinal)
+            .Where(state.Results.ContainsKey).ToArray();
+        if (completed.Length != requiredResults.Count)
+            throw new CoordinationException(
+                "maf_execution_dependency_result_unavailable", StatusCodes.Status409Conflict);
+        var prompt = new StringBuilder(task).Append("\n\nCompleted prerequisite results:");
+        foreach (var completedAssociationId in completed)
+            prompt.Append("\n\n[").Append(completedAssociationId).Append("]\n")
+                .Append(state.Results[completedAssociationId]);
+        foreach (var (stepId, receipt) in platformResults)
+            prompt.Append("\n\n[").Append(stepId).Append("]\n").Append(BuildTestResultSummary(receipt));
+        foreach (var (stepId, receipt) in pullRequestResults)
+            prompt.Append("\n\n[").Append(stepId).Append("]\n")
+                .Append(MafOpenPullRequestContract.ResultSummary(receipt));
+        foreach (var (stepId, receipt) in mergeResults)
+            prompt.Append("\n\n[").Append(stepId).Append("]\n").Append(MafMergeContract.ResultSummary(receipt));
+        var value = prompt.ToString();
+        if (value.Length > AddressedMessageValidation.MaximumTextLength ||
+            value.Any(character => char.IsControl(character) && character is not ('\r' or '\n' or '\t')))
+            throw new CoordinationException(
+                "maf_execution_prompt_limit_exceeded", StatusCodes.Status409Conflict);
+        return value;
+    }
 
     /// <summary>
     /// Checks whether a dispatch response exactly replays a result already stored for the same deterministic intent.

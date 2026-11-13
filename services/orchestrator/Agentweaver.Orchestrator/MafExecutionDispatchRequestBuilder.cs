@@ -1,5 +1,7 @@
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
+using Agentweaver.Orchestrator.Core;
 
 namespace Agentweaver.Orchestrator;
 
@@ -34,4 +36,7 @@ internal static class MafExecutionDispatchRequestBuilder
                 }
             }));
     }
+
+    internal static string HashWorkItemBinding(WorkPlanItem item) =>
+            RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(item));
 }

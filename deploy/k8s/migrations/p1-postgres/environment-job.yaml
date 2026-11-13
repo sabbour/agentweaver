@@ -52,7 +52,7 @@ spec:
             - name: Environment__Migration__RuntimeRole
               value: "agentweaver-id-environment"
             - name: Environment__Migration__PlanSha256
-              value: "b78cf7fc4bc6980412a5770d6d3cdca5fb514d8af7c3c0eb7038b8d7d482384f"
+              value: "1e209db35e95aeb8bc1b38169bbe49d4f47f8cd4b3dae31b693d1ceef4a0ae9c"
           volumeMounts:
             - name: tmp
               mountPath: /tmp

@@ -2000,7 +2000,8 @@ public static partial class CoordinationEndpoints
                             token => RequireUnchangedAuthorizedSelectionAsync(
                                 context, projectId, runId, selection, projects, token),
                             RequireCurrentGate,
-                            cancellationToken).ConfigureAwait(false);
+                            cancellationToken,
+                            selection).ConfigureAwait(false);
                     }
                     finally
                     {

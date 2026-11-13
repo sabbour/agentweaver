@@ -123,8 +123,9 @@ internal static class ChildCheckpointRecoveryCensus
                 throw InvalidBoundary();
 
             var spawnHash = await ReadSpawnCommandHashAsync(
-                connection, transaction, schema, root, child, binding, actor, originFence, cancellationToken)
-                .ConfigureAwait(false);
+            connection, transaction, schema, root, child, binding, actor,
+            originMember?.NativeOrigin?.ExecutionFence ?? originFence, cancellationToken)
+            .ConfigureAwait(false);
             if (originMember is not null && originMember.SpawnCommandHash != spawnHash)
                 throw InvalidBoundary();
             var fixedAssociation = source.State.FixedWorkAssociations.GetValueOrDefault(binding.AssociationId);
@@ -164,7 +165,7 @@ internal static class ChildCheckpointRecoveryCensus
             NativeChildRebindReceipt? priorNativeRebind = null;
             if (native is not null)
             {
-                var rebinds = await new RuntimeExecutionEvidenceLedgerStore(schema)
+                var rebinds = await new RuntimeExecutionEvidenceLedgerStore(schema[1..^1])
                     .ReadNativeChildRebindsAsync(
                         connection, transaction, root.ProjectId, root.RunId, native.DispatchId,
                         cancellationToken).ConfigureAwait(false);
@@ -196,7 +197,9 @@ internal static class ChildCheckpointRecoveryCensus
                          priorNativeRebind.OriginState != native.State ||
                          effectiveStartup.RegistrationId != priorNativeRebind.RuntimeInstanceId ||
                          effectiveStartup.RegistrationRevision != priorNativeRebind.RegistrationRevision ||
-                         effectiveStartup.RegistrationBindingHash != priorNativeRebind.RegistrationHash)
+                         registration is null ||
+                         RuntimeContractValidation.RegistrationHash(registration) !=
+                             priorNativeRebind.RegistrationHash)
                         throw InvalidBoundary();
                 }
             }

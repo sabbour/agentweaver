@@ -1083,7 +1083,8 @@ internal sealed partial class RuntimeRunStartContinuation(
         CoordinationOwnerStore recoveryStore,
         Func<CancellationToken, Task> requireCurrentSelection,
         Func<CancellationToken, Task> requireCurrentGate,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AuthorizedRunSelection? selection = null)
     {
         var status = result.CheckpointRecovery
             ?? throw new CoordinationException(
@@ -1167,7 +1168,8 @@ internal sealed partial class RuntimeRunStartContinuation(
                 RegistrationRevision = registrationRevision ?? status.RegistrationRevision
             };
             result = await recoveryStore.UpdateCheckpointRecoveryProgressAsync(
-                actor, result.Session, result.OperationId, status, cancellationToken).ConfigureAwait(false);
+                actor, result.Session, result.OperationId, status, cancellationToken,
+                selection: selection).ConfigureAwait(false);
             status = result.CheckpointRecovery!;
         }
 
@@ -1503,7 +1505,8 @@ internal sealed partial class RuntimeRunStartContinuation(
                     exchangeOperationId: exchangeId).ConfigureAwait(false);
             result = await recoveryStore.UpdateCheckpointRecoveryProgressAsync(
                 actor, result.Session, result.OperationId, readyStatus, cancellationToken, readyIntent,
-                checkpointStore, usageSources, completedUnjoinedMaterials.ToImmutable(), childManifest)
+                checkpointStore, usageSources, completedUnjoinedMaterials.ToImmutable(), childManifest,
+                selection)
                 .ConfigureAwait(false);
             status = result.CheckpointRecovery!;
             return result;

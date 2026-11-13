@@ -1,5 +1,8 @@
 using System.Collections.Immutable;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
@@ -174,6 +177,32 @@ public sealed class ChildCheckpointRecoveryManifestTests
     }
 
     [Fact]
+    public void LegacyManifestWithoutCreatedAtStillRoundTrips()
+    {
+        var manifest = CreateManifest();
+        var member = Assert.Single(manifest.Members);
+        manifest = manifest with
+        {
+            Members = [member with
+            {
+                NativeOrigin = CreateNative("prepared", 1) with { DispatchId = member.MessageId },
+                NativeOriginProvenAbsent = false
+            }]
+        };
+        var encoded = ChildCheckpointRecoveryManifestCodec.Encode(manifest);
+        var legacy = JsonNode.Parse(encoded.Json)!.AsObject();
+        var legacyOrigin = legacy["members"]![0]!["nativeOrigin"]!.AsObject();
+        Assert.True(legacyOrigin.Remove("createdAt"));
+        var json = legacy.ToJsonString();
+        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
+
+        var decoded = ChildCheckpointRecoveryManifestCodec.Decode(json, hash);
+
+        Assert.Equal(default, Assert.Single(decoded.Members).NativeOrigin!.CreatedAt);
+        Assert.Equal(json, ChildCheckpointRecoveryManifestCodec.Encode(decoded).Json);
+    }
+
+    [Fact]
     public void NativeChildRebindReceiptRejectsUnknownContractVersion()
     {
         var receipt = CreateNativeChildRebindReceipt() with { ContractVersion = 2 };
@@ -210,6 +239,54 @@ public sealed class ChildCheckpointRecoveryManifestTests
             {
                 NativeOrigin = native with { CostBindingHash = new string('c', 64) }
             }).Hash);
+    }
+
+    [Fact]
+    public void NativeChildRebindKeepsLegacyModelAndProviderPins()
+    {
+        var binding = new RuntimeBinding(
+            "issuer", "actor", "tenant", "project", "run", "child", "agent", "turn",
+            1, 1, 1, "context", new string('a', 64), 1, "environment", "placement", 1, "profile",
+            new Uri("https://runtime.test/configure"), new Uri("https://runtime.test/observation"))
+        {
+            ModelSelectionReference = "model-reference",
+            PlacementProviderId = "sandbox-provider"
+        };
+        var origin = new RuntimeRegistration(
+            Guid.NewGuid(), 1, binding, RuntimeRegistrationState.Active, DateTimeOffset.UtcNow.AddMinutes(5));
+        var replacement = origin with
+        {
+            RuntimeInstanceId = Guid.NewGuid(),
+            Revision = 2,
+            Binding = binding with { ExecutionFence = 2, PlacementUid = "replacement-placement" }
+        };
+        var originSource = Source(origin, "gpt-6.1-sol");
+        var replacementSource = Source(replacement, "gpt-6.1-sol");
+        var native = CreateNative("prepared", 1) with
+        {
+            RuntimeInstanceId = origin.RuntimeInstanceId,
+            RegistrationRevision = origin.Revision,
+            RuntimeBindingHash = RuntimeContractValidation.RegistrationHash(origin),
+            ModelSelectionReference = binding.ModelSelectionReference!,
+            SelectedModelId = originSource.ModelId
+        };
+
+        Assert.True(NativeChildRebindOriginFingerprint.HasSameModelAndCostBinding(
+            origin, replacement, native, originSource, replacementSource));
+        Assert.False(NativeChildRebindOriginFingerprint.HasSameModelAndCostBinding(
+            origin, replacement, native, originSource, Source(replacement, "changed-model-id")));
+        Assert.False(NativeChildRebindOriginFingerprint.HasSameModelAndCostBinding(
+            origin, replacement with
+            {
+                Binding = replacement.Binding with { PlacementProviderId = "changed-provider" }
+            }, native, originSource, replacementSource));
+
+        static SdkSessionFacts Source(RuntimeRegistration registration, string modelId) => new(
+            registration.RuntimeInstanceId,
+            RuntimeContractValidation.NativeSessionId(registration.Binding),
+            "1.0.18", "1.0.97", registration.Binding.ModelSelectionReference!,
+            modelId, new string('c', 64), 1, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
+            registration.Binding.AcceptedSelectionHash, registration.Revision);
     }
 
     [Fact]

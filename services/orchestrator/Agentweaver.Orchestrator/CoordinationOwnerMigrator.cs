@@ -710,7 +710,17 @@ public static class CoordinationOwnerMigrator
                                       AND pg_get_constraintdef(oid) LIKE '%destinationFence%'
                                       AND pg_get_constraintdef(oid) LIKE '%priorAuthorityKey%'
                                       AND pg_get_constraintdef(oid) LIKE '%priorReceiptId%'
-                                      AND pg_get_constraintdef(oid) LIKE '%priorReceiptHash%') = 1
+                                      AND pg_get_constraintdef(oid) LIKE '%priorReceiptHash%'
+                                      AND pg_get_constraintdef(oid) LIKE '%IS TRUE%'
+                                      AND pg_get_constraintdef(oid) LIKE '%^[0-9a-fA-F]{8}-'
+                                      AND pg_get_constraintdef(oid) LIKE '%^[1-9][0-9]*$%'
+                                      AND pg_get_constraintdef(oid) LIKE '%origin%'
+                                      AND pg_get_constraintdef(oid) LIKE '%receipt:%'
+                                      AND pg_get_constraintdef(oid) LIKE '%||%'
+                                      AND (length(pg_get_constraintdef(oid)) -
+                                           length(replace(pg_get_constraintdef(oid), ' AND ', ''))) = 60
+                                      AND (length(pg_get_constraintdef(oid)) -
+                                           length(replace(pg_get_constraintdef(oid), ' OR ', ''))) = 8) = 1
                                 AND (SELECT count(*) FROM pg_constraint
                                     WHERE conrelid = to_regclass(@runtimeEvidenceReceipts)
                                       AND contype = 'c' AND convalidated) = 11)
@@ -897,25 +907,40 @@ public static class CoordinationOwnerMigrator
                               AND pg_get_constraintdef(oid) LIKE '%destinationFence%'
                               AND pg_get_constraintdef(oid) LIKE '%priorAuthorityKey%'
                               AND pg_get_constraintdef(oid) LIKE '%priorReceiptId%'
-                              AND pg_get_constraintdef(oid) LIKE '%priorReceiptHash%')
-                        AND EXISTS (SELECT 1 FROM pg_indexes
-                            WHERE schemaname = @schema
-                              AND indexname = 'uq_native_child_rebind_destination'
-                              AND indexdef LIKE 'CREATE UNIQUE INDEX uq_native_child_rebind_destination ON %'
-                              AND indexdef LIKE '%project_id%'
-                              AND indexdef LIKE '%run_id%'
-                              AND indexdef LIKE '%dispatchId%'
-                              AND indexdef LIKE '%destinationFence%'
-                              AND indexdef LIKE '%native-child-rebind%')
-                        AND EXISTS (SELECT 1 FROM pg_indexes
-                            WHERE schemaname = @schema
-                              AND indexname = 'uq_native_child_rebind_prior'
-                              AND indexdef LIKE 'CREATE UNIQUE INDEX uq_native_child_rebind_prior ON %'
-                              AND indexdef LIKE '%project_id%'
-                              AND indexdef LIKE '%run_id%'
-                              AND indexdef LIKE '%dispatchId%'
-                              AND indexdef LIKE '%priorAuthorityKey%'
-                              AND indexdef LIKE '%native-child-rebind%'))
+                              AND pg_get_constraintdef(oid) LIKE '%priorReceiptHash%'
+                              AND pg_get_constraintdef(oid) LIKE '%IS TRUE%')
+                        AND EXISTS (
+                            SELECT 1
+                            FROM pg_index i
+                            JOIN pg_am am ON am.oid = (SELECT relam FROM pg_class WHERE oid = i.indexrelid)
+                            WHERE i.indexrelid = to_regclass(@runtimeEvidenceNativeChildRebindDestinationIndex)
+                              AND i.indrelid = to_regclass(@runtimeEvidenceReceipts)
+                              AND i.indisunique AND i.indisready AND i.indisvalid
+                              AND i.indnkeyatts = 4 AND i.indnatts = 4 AND am.amname = 'btree'
+                              AND regexp_replace(pg_get_indexdef(i.indexrelid, 1, true), '[[:space:]()]', '', 'g') = 'project_id'
+                              AND regexp_replace(pg_get_indexdef(i.indexrelid, 2, true), '[[:space:]()]', '', 'g') = 'run_id'
+                              AND regexp_replace(pg_get_indexdef(i.indexrelid, 3, true), '[[:space:]()]', '', 'g') =
+                                  'receipt_json->>''dispatchId''::text::uuid'
+                              AND regexp_replace(pg_get_indexdef(i.indexrelid, 4, true), '[[:space:]()]', '', 'g') =
+                                  'receipt_json->>''destinationFence''::text::bigint'
+                              AND regexp_replace(pg_get_expr(i.indpred, i.indrelid), '[[:space:]()]', '', 'g') =
+                                  'receipt_kind::text=''native-child-rebind''::text')
+                        AND EXISTS (
+                            SELECT 1
+                            FROM pg_index i
+                            JOIN pg_am am ON am.oid = (SELECT relam FROM pg_class WHERE oid = i.indexrelid)
+                            WHERE i.indexrelid = to_regclass(@runtimeEvidenceNativeChildRebindPriorIndex)
+                              AND i.indrelid = to_regclass(@runtimeEvidenceReceipts)
+                              AND i.indisunique AND i.indisready AND i.indisvalid
+                              AND i.indnkeyatts = 4 AND i.indnatts = 4 AND am.amname = 'btree'
+                              AND regexp_replace(pg_get_indexdef(i.indexrelid, 1, true), '[[:space:]()]', '', 'g') = 'project_id'
+                              AND regexp_replace(pg_get_indexdef(i.indexrelid, 2, true), '[[:space:]()]', '', 'g') = 'run_id'
+                              AND regexp_replace(pg_get_indexdef(i.indexrelid, 3, true), '[[:space:]()]', '', 'g') =
+                                  'receipt_json->>''dispatchId''::text::uuid'
+                              AND regexp_replace(pg_get_indexdef(i.indexrelid, 4, true), '[[:space:]()]', '', 'g') =
+                                  'receipt_json->>''priorAuthorityKey''::text'
+                              AND regexp_replace(pg_get_expr(i.indpred, i.indrelid), '[[:space:]()]', '', 'g') =
+                                  'receipt_kind::text=''native-child-rebind''::text'))
                 )
             """, connection);
         command.Parameters.AddWithValue(

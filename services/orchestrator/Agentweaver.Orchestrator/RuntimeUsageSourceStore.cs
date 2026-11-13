@@ -62,6 +62,7 @@ internal sealed class RuntimeUsageSourceStore(
     private readonly PostgresOutbox _outbox = new(dataSource, options.Schema);
     private readonly SpendBudgetExposureStore _spendBudgets = new(dataSource, options, timeProvider);
     private readonly RuntimeExecutionEvidenceLedgerStore _executionEvidence = new(options.Schema);
+    private readonly RuntimeRegistrationStore _registrations = new(dataSource, options.Schema, timeProvider);
     private readonly RuntimeObservationV2Store _runtimeObservationV2 = new(dataSource, options.Schema);
 
     internal Task<RuntimeObservationV2StoreResult> ReadObservationV2Async(
@@ -193,27 +194,29 @@ internal sealed class RuntimeUsageSourceStore(
         command.Parameters.AddWithValue(
             "limit", NpgsqlDbType.Integer, RuntimeObservationDispatchCollection.MaximumItems + 1);
 
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
         {
-            using var cost = JsonDocument.Parse(reader.GetString(22));
-            storedRows.Add((
-                reader.GetGuid(0),
-                new NativeDispatch(
-                    reader.GetString(1), reader.GetString(2), reader.GetGuid(3), reader.GetInt64(4),
-                    reader.GetInt64(5), reader.GetString(6).Trim(), reader.GetString(7).Trim(),
-                    reader.GetString(8), reader.GetString(9), reader.GetString(10).Trim(),
-                    reader.GetString(11).Trim(), reader.GetInt64(12), reader.GetString(13),
-                    reader.GetString(14), reader.GetString(15), reader.GetString(16),
-                    reader.GetInt64(17), reader.GetInt64(18),
-                    reader.IsDBNull(19) ? null : reader.GetString(19).Trim(),
-                    reader.IsDBNull(20) ? null : reader.GetString(20),
-                    reader.GetString(21).Trim(), ChildCheckpointRecoveryManifestCodec.Hash(cost.RootElement),
-                    reader.GetBoolean(23), reader.GetBoolean(24), reader.GetFieldValue<DateTimeOffset>(25)),
-                reader.GetString(27), reader.GetString(28),
-                reader.IsDBNull(29) ? null : reader.GetInt64(29),
-                reader.IsDBNull(30) ? null : reader.GetString(30),
-                reader.GetFieldValue<DateTimeOffset>(26)));
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                using var cost = JsonDocument.Parse(reader.GetString(22));
+                storedRows.Add((
+                    reader.GetGuid(0),
+                    new NativeDispatch(
+                        reader.GetString(1), reader.GetString(2), reader.GetGuid(3), reader.GetInt64(4),
+                        reader.GetInt64(5), reader.GetString(6).Trim(), reader.GetString(7).Trim(),
+                        reader.GetString(8), reader.GetString(9), reader.GetString(10).Trim(),
+                        reader.GetString(11).Trim(), reader.GetInt64(12), reader.GetString(13),
+                        reader.GetString(14), reader.GetString(15), reader.GetString(16),
+                        reader.GetInt64(17), reader.GetInt64(18),
+                        reader.IsDBNull(19) ? null : reader.GetString(19).Trim(),
+                        reader.IsDBNull(20) ? null : reader.GetString(20),
+                        reader.GetString(21).Trim(), ChildCheckpointRecoveryManifestCodec.Hash(cost.RootElement),
+                        reader.GetBoolean(23), reader.GetBoolean(24), reader.GetFieldValue<DateTimeOffset>(25)),
+                    reader.GetString(27), reader.GetString(28),
+                    reader.IsDBNull(29) ? null : reader.GetInt64(29),
+                    reader.IsDBNull(30) ? null : reader.GetString(30),
+                    reader.GetFieldValue<DateTimeOffset>(26)));
+            }
         }
 
         RuntimeSdkSourceReceipt? source = null;
@@ -2308,7 +2311,8 @@ internal sealed class RuntimeUsageSourceStore(
         NativeDispatch dispatch,
         RuntimeNativeTurnAdmissionReceipt admission,
         RuntimeSdkSourceReceipt source,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requireReleasedHold = true)
     {
         var binding = admission.Registration;
         var receipts = await _executionEvidence.ReadNativeChildRebindsAsync(
@@ -2387,6 +2391,37 @@ internal sealed class RuntimeUsageSourceStore(
                 !MatchesNativeOrigin(dispatch, nativeOrigin))
                 throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
 
+            var originRegistration = await _registrations.ReadRevisionAsync(
+                connection, transaction, nativeOrigin.RuntimeInstanceId, nativeOrigin.RegistrationRevision,
+                cancellationToken).ConfigureAwait(false)
+                ?? throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+            var originSource = await ReadSourceAsync(
+                connection, transaction, nativeOrigin.RuntimeInstanceId, cancellationToken).ConfigureAwait(false)
+                ?? throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+            var receiptRegistration = receipt.RuntimeInstanceId == binding.RuntimeInstanceId &&
+                receipt.RegistrationRevision == binding.Revision
+                ? binding
+                : await _registrations.ReadRevisionAsync(
+                    connection, transaction, receipt.RuntimeInstanceId, receipt.RegistrationRevision,
+                    cancellationToken).ConfigureAwait(false);
+            var receiptSource = receipt.RuntimeInstanceId == source.RuntimeInstanceId &&
+                receipt.SdkSourceReceiptHash == source.CanonicalPayloadHash
+                ? source
+                : (await ReadSourceAsync(
+                    connection, transaction, receipt.RuntimeInstanceId, cancellationToken).ConfigureAwait(false))
+                    ?.Receipt;
+            if (receiptRegistration is null || receiptSource is null ||
+                RuntimeContractValidation.RegistrationHash(receiptRegistration) != receipt.RegistrationHash ||
+                receiptSource.RuntimeInstanceId != receipt.RuntimeInstanceId ||
+                receiptSource.RegistrationRevision != receipt.RegistrationRevision ||
+                receiptSource.SourceGrantId != receipt.SourceGrantId ||
+                receiptSource.CanonicalPayloadHash != receipt.SdkSourceReceiptHash ||
+                originSource.Receipt.CanonicalPayloadHash != nativeOrigin.SdkSourceReceiptHash ||
+                !NativeChildRebindOriginFingerprint.HasSameModelAndCostBinding(
+                    originRegistration, receiptRegistration, nativeOrigin,
+                    originSource.Receipt.Source, receiptSource.Source))
+                throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+
             if (previous is null)
             {
                 if (receipt.PriorAuthorityKey != "origin" ||
@@ -2437,6 +2472,9 @@ internal sealed class RuntimeUsageSourceStore(
                 current = receipt;
         }
 
+        var holdIsHeld = requireReleasedHold && await CheckpointRecoveryHold.IsHeldAsync(
+            connection, transaction, _schema, binding.Binding.ProjectId, binding.Binding.RunId,
+            cancellationToken).ConfigureAwait(false);
         if (current is null || current.RecoveryOperationId != receipts[^1].RecoveryOperationId ||
             current.RuntimeInstanceId != binding.RuntimeInstanceId ||
             current.RegistrationRevision != binding.Revision ||
@@ -2446,11 +2484,37 @@ internal sealed class RuntimeUsageSourceStore(
             current.EffectiveRequestHash != admission.RequestHash ||
             current.PromptHash != admission.PromptHash ||
             current.RegistrationRevision < 1 ||
-            await CheckpointRecoveryHold.IsHeldAsync(
-                connection, transaction, _schema, binding.Binding.ProjectId, binding.Binding.RunId,
-                cancellationToken).ConfigureAwait(false))
+            holdIsHeld)
             throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
         return current;
+    }
+
+    internal async Task<NativeChildRebindReceipt?> ValidateNativeChildRebindChainAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RuntimeRegistration effectiveRegistration,
+        Guid dispatchId,
+        bool requireReleasedHold,
+        CancellationToken cancellationToken)
+    {
+        var source = await ReadSourceAsync(
+            connection, transaction, effectiveRegistration.RuntimeInstanceId, cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+        var dispatch = await ReadNativeDispatchAsync(
+            connection, transaction, effectiveRegistration, dispatchId, cancellationToken)
+            .ConfigureAwait(false);
+        var receipts = await _executionEvidence.ReadNativeChildRebindsAsync(
+            connection, transaction, effectiveRegistration.Binding.ProjectId,
+            effectiveRegistration.Binding.RunId, dispatchId, cancellationToken).ConfigureAwait(false);
+        if (receipts.IsEmpty)
+            return null;
+        var admission = new RuntimeNativeTurnAdmissionReceipt(
+            effectiveRegistration, source.Receipt.Source, dispatchId, dispatch.PromptHash,
+            receipts[^1].EffectiveRequestHash, dispatch.OwnerRevision);
+        return await RequireNativeDispatchBindingAsync(
+            connection, transaction, dispatch, admission, source.Receipt, cancellationToken,
+            requireReleasedHold).ConfigureAwait(false);
     }
 
     private async Task<ChildCheckpointRecoveryManifest> ReadNativeRebindManifestAsync(
@@ -2860,40 +2924,181 @@ internal sealed class RuntimeUsageSourceStore(
             CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false);
+        var rebinds = await _executionEvidence.ReadNativeChildRebindsAsync(
+            connection, transaction, projectId, runId, dispatchId, cancellationToken).ConfigureAwait(false);
+        RuntimeSdkSourceReceipt source;
+
+        if (rebinds.IsEmpty)
+        {
+            await using var command = new NpgsqlCommand($"""
+                SELECT completion.source_completion_manifest_json::text,
+                       completion.source_completion_manifest_hash,
+                       completion.runtime_instance_id, completion.registration_revision,
+                       completion.execution_fence, completion.accepted_selection_hash,
+                       source.receipt_json::text, source.canonical_payload_hash
+                FROM {_dispatches} completion
+                JOIN {_sources} source
+                  ON source.runtime_instance_id = completion.runtime_instance_id
+                 AND source.registration_revision = completion.registration_revision
+                 AND source.canonical_payload_hash = completion.sdk_source_receipt_hash
+                WHERE completion.project_id = @project AND completion.run_id = @run
+                  AND completion.child_session_id = @session AND completion.dispatch_id = @dispatch
+                  AND completion.source_report_status = 'source-complete'
+                  AND completion.source_completion_manifest_json IS NOT NULL
+                """, connection, transaction);
+            AddSourceCompletionScope(command, projectId, runId, sessionId, dispatchId);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                await reader.DisposeAsync().ConfigureAwait(false);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return null;
+            }
+            var manifest = Deserialize<UsageDispatchSourceCompletionManifest>(reader.GetString(0));
+            source = Deserialize<RuntimeSdkSourceReceipt>(reader.GetString(6));
+            UsageDispatchSourceCompletionManifestContract.Validate(manifest);
+            if (manifest.DispatchId != dispatchId.ToString("D") || manifest.ProjectId != projectId ||
+                manifest.RunId != runId || manifest.SessionId != sessionId ||
+                manifest.ReceiptDigest != reader.GetString(1) ||
+                manifest.RuntimeInstanceId != reader.GetGuid(2) ||
+                manifest.RegistrationRevision != reader.GetInt64(3) ||
+                manifest.ExecutionFence != reader.GetInt64(4) ||
+                source.RuntimeInstanceId != manifest.RuntimeInstanceId ||
+                source.RegistrationRevision != manifest.RegistrationRevision ||
+                source.CanonicalPayloadHash != reader.GetString(7))
+                throw new RuntimeAuthorizationException("runtime_usage_source_completion_invalid");
+            var selectionHash = reader.GetString(5).Trim();
+            if (source.Source.SourceMode != "hosted-copilot" ||
+                source.Source.MeterSource != SdkMeterSources.CopilotNanoAiu)
+            {
+                await reader.DisposeAsync().ConfigureAwait(false);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return null;
+            }
+            await reader.DisposeAsync().ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return (manifest, selectionHash);
+        }
+
+        var latestReceipt = rebinds[^1];
+        var effectiveRegistration = await ReadNativeRebindRegistrationAsync(
+            connection, transaction, latestReceipt, cancellationToken).ConfigureAwait(false);
+        var storedSource = await ReadSourceAsync(
+            connection, transaction, effectiveRegistration.RuntimeInstanceId, cancellationToken).ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_sdk_source_unknown");
+        source = storedSource.Receipt;
+        if (source.RegistrationRevision != effectiveRegistration.Revision ||
+            source.CanonicalPayloadHash != latestReceipt.SdkSourceReceiptHash ||
+            source.CanonicalPayloadHash != RuntimeUsageSourceReceiptContract.HashSource(
+                effectiveRegistration, source.Source))
+            throw new RuntimeAuthorizationException("runtime_sdk_source_conflict");
+
+        var dispatch = await ReadNativeDispatchAsync(
+            connection, transaction, effectiveRegistration, dispatchId, cancellationToken).ConfigureAwait(false);
+        if (dispatch.ChildSessionId != sessionId)
+            throw new RuntimeAuthorizationException("runtime_usage_source_completion_invalid");
+        var admission = new RuntimeNativeTurnAdmissionReceipt(
+            effectiveRegistration, source.Source, dispatchId, dispatch.PromptHash,
+            latestReceipt.EffectiveRequestHash, dispatch.OwnerRevision);
+        var effective = await RequireNativeDispatchBindingAsync(
+            connection, transaction, dispatch, admission, source, cancellationToken).ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+
+        await using (var command = new NpgsqlCommand($"""
+            SELECT source_completion_manifest_json::text, source_completion_manifest_hash,
+                   accepted_selection_hash
+            FROM {_dispatches}
+            WHERE project_id = @project AND run_id = @run AND child_session_id = @session
+              AND dispatch_id = @dispatch AND source_report_status = 'source-complete'
+              AND source_completion_manifest_json IS NOT NULL
+            """, connection, transaction))
+        {
+            AddSourceCompletionScope(command, projectId, runId, sessionId, dispatchId);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                await reader.DisposeAsync().ConfigureAwait(false);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return null;
+            }
+            var manifest = Deserialize<UsageDispatchSourceCompletionManifest>(reader.GetString(0));
+            UsageDispatchSourceCompletionManifestContract.Validate(manifest);
+            var selectionHash = reader.GetString(2).Trim();
+            if (manifest.DispatchId != dispatchId.ToString("D") ||
+                manifest.ProjectId != projectId || manifest.RunId != runId ||
+                manifest.SessionId != sessionId || manifest.ReceiptDigest != reader.GetString(1) ||
+                manifest.RuntimeInstanceId != effective.RuntimeInstanceId ||
+                manifest.RegistrationRevision != effective.RegistrationRevision ||
+                manifest.ExecutionFence != effective.DestinationFence ||
+                source.RuntimeInstanceId != manifest.RuntimeInstanceId ||
+                source.RegistrationRevision != manifest.RegistrationRevision ||
+                source.CanonicalPayloadHash != effective.SdkSourceReceiptHash ||
+                !string.Equals(selectionHash, effective.SelectionHash, StringComparison.OrdinalIgnoreCase))
+                throw new RuntimeAuthorizationException("runtime_usage_source_completion_invalid");
+            if (source.Source.SourceMode != "hosted-copilot" ||
+                source.Source.MeterSource != SdkMeterSources.CopilotNanoAiu)
+            {
+                await reader.DisposeAsync().ConfigureAwait(false);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return null;
+            }
+            await reader.DisposeAsync().ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return (manifest, selectionHash);
+        }
+    }
+
+    private async Task<RuntimeRegistration> ReadNativeRebindRegistrationAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        NativeChildRebindReceipt receipt,
+        CancellationToken cancellationToken)
+    {
         await using var command = new NpgsqlCommand($"""
-            SELECT dispatch.source_completion_manifest_json::text, dispatch.source_completion_manifest_hash,
-                dispatch.runtime_instance_id, dispatch.registration_revision, dispatch.execution_fence,
-                dispatch.accepted_selection_hash, source.receipt_json::text, dispatch.sdk_source_receipt_hash
-            FROM {_dispatches} dispatch
-            JOIN {_sources} source ON source.runtime_instance_id = dispatch.runtime_instance_id
-                AND source.registration_revision = dispatch.registration_revision
-                AND source.canonical_payload_hash = dispatch.sdk_source_receipt_hash
-            WHERE dispatch.project_id = @project AND dispatch.run_id = @run AND dispatch.child_session_id = @session
-                AND dispatch.dispatch_id = @dispatch AND dispatch.source_report_status = 'source-complete'
-                AND dispatch.source_completion_manifest_json IS NOT NULL
-            """, connection);
+            SELECT receipt_links::text
+            FROM {_schema}.runtime_run_start_intents
+            WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
+              AND root_session_id = @session AND accepted_selection_hash = @selection
+              AND execution_fence = @fence AND state = 'ready' AND current_step = 'ready'
+              AND NOT cleanup_obligation
+            FOR SHARE
+            """, connection, transaction);
+        command.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, receipt.TenantId);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, receipt.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, receipt.RunId);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, receipt.ChildSessionId);
+        command.Parameters.AddWithValue("selection", NpgsqlDbType.Char, receipt.SelectionHash);
+        command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, receipt.DestinationFence);
+        var json = (string?)await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+        using var links = JsonDocument.Parse(json);
+        var registration = links.RootElement.GetProperty("registration").Deserialize<RuntimeRegistration>(JsonOptions)
+            ?? throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+        RuntimeContractValidation.Validate(registration);
+        if (registration.State != RuntimeRegistrationState.Active ||
+            registration.ExpiresAt <= timeProvider.GetUtcNow() ||
+            registration.RuntimeInstanceId != receipt.RuntimeInstanceId ||
+            registration.Revision != receipt.RegistrationRevision ||
+            RuntimeContractValidation.RegistrationHash(registration) != receipt.RegistrationHash ||
+            registration.Binding.ProjectId != receipt.ProjectId ||
+            registration.Binding.RunId != receipt.RunId ||
+            registration.Binding.SessionId != receipt.ChildSessionId ||
+            registration.Binding.ExecutionFence != receipt.DestinationFence ||
+            !string.Equals(registration.Binding.AcceptedSelectionHash, receipt.SelectionHash,
+                StringComparison.OrdinalIgnoreCase))
+            throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+        return registration;
+    }
+
+    private static void AddSourceCompletionScope(
+        NpgsqlCommand command, string projectId, string runId, string sessionId, Guid dispatchId)
+    {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
         command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, runId);
         command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, sessionId);
         command.Parameters.AddWithValue("dispatch", NpgsqlDbType.Uuid, dispatchId);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-            return null;
-        var manifest = Deserialize<UsageDispatchSourceCompletionManifest>(reader.GetString(0));
-        var source = Deserialize<RuntimeSdkSourceReceipt>(reader.GetString(6));
-        UsageDispatchSourceCompletionManifestContract.Validate(manifest);
-        if (manifest.DispatchId != dispatchId.ToString("D") || manifest.ProjectId != projectId ||
-            manifest.RunId != runId || manifest.SessionId != sessionId ||
-            manifest.ReceiptDigest != reader.GetString(1) || manifest.RuntimeInstanceId != reader.GetGuid(2) ||
-            manifest.RegistrationRevision != reader.GetInt64(3) || manifest.ExecutionFence != reader.GetInt64(4) ||
-            source.RuntimeInstanceId != manifest.RuntimeInstanceId ||
-            source.RegistrationRevision != manifest.RegistrationRevision ||
-            source.CanonicalPayloadHash != reader.GetString(7))
-            throw new RuntimeAuthorizationException("runtime_usage_source_completion_invalid");
-        if (source.Source.SourceMode != "hosted-copilot" ||
-            source.Source.MeterSource != SdkMeterSources.CopilotNanoAiu)
-            return null;
-        return (manifest, reader.GetString(5));
     }
 
     /// <summary>

@@ -845,7 +845,7 @@ test('service ordering does not treat skipped Core 034 as compatible', () => {
     ranges: { [orchestrator.expected]: coreRange() },
     targetSchema: { orchestrator: 34 },
     currentSchema: { orchestrator: 33 },
-  }), /supported versions: 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50\), not 34/);
+  }), /supported versions: 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51\), not 34/);
 });
 
 test('the schema range comes from the readiness check in the migrator source', () => {
@@ -974,7 +974,7 @@ test('Core 047 requires the target owner before migration even when schema order
       assert.equal(receipt.serviceOrder.order, 'deploy-first');
       const names = receipt.steps.map(step => step.name);
       assert.ok(names.indexOf('app-ready') < names.indexOf('orchestrator-migrated'));
-      assert.equal(fake.cluster.get(`configmap/${STATE_NAME}`).data['orchestrator.schema'], '50');
+      assert.equal(fake.cluster.get(`configmap/${STATE_NAME}`).data['orchestrator.schema'], '51');
       assert.equal(receipt.readinessGap?.planned, undefined);
     } finally { fake.done(); }
   }
@@ -986,7 +986,7 @@ test('a matching or absent old target image cannot bypass the Core 047 compatibi
       schemaRanges: { [digest('a')]: range(31, 32), [digest('b')]: range(11, 11) } });
     try {
       await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']),
-        receiptDir: fake.receiptDir }, fake.deps), /accepts schema 31-32, not 50 from the reviewed plan/);
+        receiptDir: fake.receiptDir }, fake.deps), /accepts schema 31-32, not 51 from the reviewed plan/);
       assert.ok(!fake.calls.some(call => call.args[4] === 'create'));
     } finally { fake.done(); }
   }

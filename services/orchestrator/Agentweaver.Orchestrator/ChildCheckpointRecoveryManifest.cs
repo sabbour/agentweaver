@@ -90,6 +90,7 @@ internal sealed record ChildRecoveryNativeOrigin(
     long? UsageWitnessWatermark,
     string? UsageWitnessDigest,
     long? RetiredThroughEventPosition,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     DateTimeOffset CreatedAt);
 
 internal sealed record ChildRecoveryMember(

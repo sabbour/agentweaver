@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
+using Agentweaver.Orchestrator.Core;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -74,6 +75,7 @@ internal sealed partial class CoordinationOwnerStore
         ChildCheckpointRecoveryManifest manifest,
         MafExecutionCheckpointSnapshot anchor,
         RuntimeRunStartIntent rootIntent,
+        WorkPlanSnapshot plan,
         RuntimeUsageSourceStore usageSources,
         CancellationToken cancellationToken)
     {
@@ -125,6 +127,19 @@ internal sealed partial class CoordinationOwnerStore
                 throw new CoordinationException(
                     "checkpoint_recovery_native_rebind_conflict", StatusCodes.Status409Conflict);
 
+            var originalRegistration = await new RuntimeRegistrationStore(
+                _dataSource, _schema[1..^1], _timeProvider).ReadRevisionAsync(
+                    connection, transaction, native.RuntimeInstanceId, native.RegistrationRevision,
+                    cancellationToken).ConfigureAwait(false)
+                ?? throw new CoordinationException(
+                    "checkpoint_recovery_native_rebind_conflict", StatusCodes.Status409Conflict);
+            var originalSource = await usageSources.ReadSourceAsync(
+                connection, transaction, native.RuntimeInstanceId, cancellationToken).ConfigureAwait(false)
+                ?? throw new RuntimeAuthorizationException("runtime_sdk_source_unknown");
+            if (originalSource.Receipt.CanonicalPayloadHash != native.SdkSourceReceiptHash)
+                throw new CoordinationException(
+                    "checkpoint_recovery_native_rebind_conflict", StatusCodes.Status409Conflict);
+
             var rebinds = await ledger.ReadNativeChildRebindsAsync(
                 connection, transaction, identity.ProjectId, identity.RunId, native.DispatchId,
                 cancellationToken).ConfigureAwait(false);
@@ -135,6 +150,23 @@ internal sealed partial class CoordinationOwnerStore
                  prior.CanonicalPayloadHash != member.PriorNativeRebindPayloadHash))
                 throw new CoordinationException(
                     "checkpoint_recovery_native_rebind_conflict", StatusCodes.Status409Conflict);
+            if (prior is not null)
+            {
+                var priorRegistration = await new RuntimeRegistrationStore(
+                    _dataSource, _schema[1..^1], _timeProvider).ReadRevisionAsync(
+                        connection, transaction, prior.RuntimeInstanceId, prior.RegistrationRevision,
+                        cancellationToken).ConfigureAwait(false)
+                    ?? throw new CoordinationException(
+                        "checkpoint_recovery_native_rebind_conflict", StatusCodes.Status409Conflict);
+                var validatedPrior = await usageSources.ValidateNativeChildRebindChainAsync(
+                    connection, transaction, priorRegistration, native.DispatchId,
+                    requireReleasedHold: false, cancellationToken).ConfigureAwait(false);
+                if (validatedPrior is null ||
+                    validatedPrior.ReceiptId != prior.ReceiptId ||
+                    validatedPrior.CanonicalPayloadHash != prior.CanonicalPayloadHash)
+                    throw new CoordinationException(
+                        "checkpoint_recovery_native_rebind_conflict", StatusCodes.Status409Conflict);
+            }
 
             var (registration, readiness) = await ReadReadyChildBindingAsync(
                 connection, transaction, manifest, member, cancellationToken).ConfigureAwait(false);
@@ -146,17 +178,27 @@ internal sealed partial class CoordinationOwnerStore
                 source.ConfigurationHash != readiness.SourceGrant.ConfigurationHash ||
                 source.Receipt.CanonicalPayloadHash !=
                     RuntimeUsageSourceReceiptContract.HashSource(registration, source.Receipt.Source) ||
-                source.Receipt.RuntimeInstanceId != registration.RuntimeInstanceId)
+                source.Receipt.RuntimeInstanceId != registration.RuntimeInstanceId ||
+                registration.Binding.PlacementProviderId != member.IsolationProviderId ||
+                originalRegistration.Binding.PlacementProviderId != member.IsolationProviderId ||
+                !NativeChildRebindOriginFingerprint.HasSameModelAndCostBinding(
+                    originalRegistration, registration, native,
+                    originalSource.Receipt.Source, source.Receipt.Source))
                 throw new RuntimeAuthorizationException("runtime_sdk_source_conflict");
 
-            var (requestHash, prompt) = await ReadSavedNativePromptAsync(
-                connection, transaction, identity, member, cancellationToken).ConfigureAwait(false);
+            var prompt = CoordinationEndpoints.BuildNativeChildPrompt(
+                plan, anchor.State, member.AssociationId, member.Session.SessionId);
+            var requestHash = native.RequestHash;
+            if (RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt)) != member.PromptHash)
+                throw new CoordinationException(
+                    "checkpoint_recovery_native_rebind_conflict", StatusCodes.Status409Conflict);
             var effectiveRequest = MafExecutionDispatchRequestBuilder.Build(
                 registration, readiness, member.MessageId, prompt, manifest.WorkPlanId,
                 member.AssociationId, member.WorkItemBindingSha256);
             var effectiveRequestHash = RuntimeNativeTurnContract.RequestHash(effectiveRequest);
             var origin = NativeChildRebindOriginFingerprint.Create(manifest, member);
             if (origin.RequestHash != native.RequestHash ||
+                member.MessageRequestHash is not null &&
                 member.MessageRequestHash != requestHash ||
                 member.EgressReceiptHash is null)
                 throw new CoordinationException(
@@ -270,39 +312,4 @@ internal sealed partial class CoordinationOwnerStore
         return (registration, readiness);
     }
 
-    private async Task<(string RequestHash, string Prompt)> ReadSavedNativePromptAsync(
-        NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
-        SessionIdentity identity,
-        ChildRecoveryMember member,
-        CancellationToken cancellationToken)
-    {
-        await using var command = new NpgsqlCommand($"""
-            SELECT canonical_request::text
-            FROM {_messages}
-            WHERE project_id = @project AND run_id = @run AND message_id = @message
-            FOR SHARE
-            """, connection, transaction);
-        AddRunScope(command, identity.ProjectId, identity.RunId);
-        command.Parameters.AddWithValue("message", NpgsqlDbType.Uuid, member.MessageId);
-        var json = (string?)await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)
-            ?? throw new CoordinationException(
-                "checkpoint_recovery_native_rebind_invalid", StatusCodes.Status409Conflict);
-        using var request = JsonDocument.Parse(json);
-        var requestHash = ChildCheckpointRecoveryManifestCodec.Hash(request.RootElement);
-        var payload = request.RootElement.GetProperty("payload");
-        var saved = payload.Deserialize<RuntimeA2ASendRequest>(JsonOptions)
-            ?? throw new CoordinationException(
-                "checkpoint_recovery_native_rebind_invalid", StatusCodes.Status409Conflict);
-        if (requestHash != member.MessageRequestHash ||
-            saved.Message.MessageId != member.MessageId ||
-            saved.Message.Role != "user" ||
-            saved.Message.Parts.Length != 1 ||
-            saved.Message.Parts[0].Kind != "text" ||
-            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(saved.Message.Parts[0].Text)) !=
-                member.PromptHash)
-            throw new CoordinationException(
-                "checkpoint_recovery_native_rebind_conflict", StatusCodes.Status409Conflict);
-        return (requestHash, saved.Message.Parts[0].Text);
-    }
 }
