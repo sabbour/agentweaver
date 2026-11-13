@@ -314,6 +314,8 @@ internal static class MafExecutionRecoveryProjector
             state.ReviewIntents.ContainsKey(stepId) ||
             state.ScribeIntents.ContainsKey(stepId) ||
             state.RubberduckIntents.ContainsKey(stepId);
+        if (IsRecoveredCommittedOpenPullRequest(stepId, state))
+            return "reconcileCommitted";
         if (hasIntent && !HasPlatformReceipt(stepId, state))
             return "mayRepeat";
         if (status == MafExecutionTaskStatus.Running && !HasPlatformReceipt(stepId, state))
@@ -347,8 +349,10 @@ internal static class MafExecutionRecoveryProjector
             var hasReceipt = state.OpenPullRequestReceipts.ContainsKey(stepId);
             operations.Add(new MafExecutionRecoveryPlatformOperationSnapshot(
                 stepId, WorkflowPlatformGate.OpenPullRequest, intent.OperationId,
-                hasReceipt ? "terminalReceiptRecorded" : "intentOnly",
-                hasReceipt ? null : "mayRepeat"));
+                hasReceipt ? "terminalReceiptRecorded" :
+                    IsRecoveredCommittedOpenPullRequest(stepId, state) ? "committedAwaitingReceipt" : "intentOnly",
+                hasReceipt ? null :
+                    IsRecoveredCommittedOpenPullRequest(stepId, state) ? "reconcileCommitted" : "mayRepeat"));
         }
         // Merge uses the same recorded-evidence rule; a receipt is not a claim of physical exactly-once execution.
         foreach (var (stepId, intent) in state.MergeIntents.OrderBy(item => item.Key, StringComparer.Ordinal))
@@ -404,6 +408,16 @@ internal static class MafExecutionRecoveryProjector
         state.MergeReceipts.ContainsKey(stepId) ||
         state.ReviewReceipts.ContainsKey(stepId) ||
         state.RubberduckReceipts.ContainsKey(stepId);
+
+    private static bool IsRecoveredCommittedOpenPullRequest(
+        string stepId,
+        MafExecutionCheckpoint state) =>
+        !state.OpenPullRequestReceipts.ContainsKey(stepId) &&
+        state.Progress.NonModelSteps.GetValueOrDefault(stepId) == MafExecutionTaskStatus.Running &&
+        state.OpenPullRequestIntents.TryGetValue(stepId, out var intent) &&
+        state.RecoveryLineage is { } lineage &&
+        lineage.SourceExecutionFence < lineage.RecoveryExecutionFence &&
+        intent.ExecutionFence <= lineage.SourceExecutionFence;
 
     private static string ToStatus(MafExecutionTaskStatus status) =>
         status.ToString().ToLowerInvariant();

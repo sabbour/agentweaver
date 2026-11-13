@@ -28,6 +28,16 @@ connects the lifecycle, placement and recovery views.
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-checkpoint-gate-recovery.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-checkpoint-gate-recovery.drawio'">Open editable draw.io source</a></p>
 
+### Reconcile a committed pull request
+
+<figure class="aw-diagram" tabindex="0">
+  <a :href="'/agentweaver/v1/diagrams/flagship/v1-checkpoint-committed-effect-recovery.png'">
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-checkpoint-committed-effect-recovery.png'" alt="Before advancing the recovery fence, Orchestrator requires one running OpenPullRequest intent with no receipt and an exact committed Source Control operation and result. Missing, pending, uncertain, or mismatched evidence blocks recovery without changing the fence. For an exact committed operation, Orchestrator keeps the child dispatch hold active, reads the stored pull request under current authority, and verifies its result without creating another pull request or changing the original fingerprints. Orchestrator records the receipt from the original intent. A missing or mismatched stored result keeps recovery blocked and the hold active." />
+  </a>
+  <figcaption>Committed OpenPullRequest recovery is limited to one exact operation at a saved child join. The owner returns the stored pull request under current authority; Orchestrator records the original receipt and keeps the dispatch hold until Host readiness.</figcaption>
+</figure>
+<p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-checkpoint-committed-effect-recovery.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-checkpoint-committed-effect-recovery.drawio'">Open editable draw.io source</a></p>
+
 ## Coordinator first-start
 
 After Orchestrator accepts the root and admits its first message, it stores a

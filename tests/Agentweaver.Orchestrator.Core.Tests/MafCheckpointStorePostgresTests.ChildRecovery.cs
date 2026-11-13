@@ -2208,6 +2208,150 @@ public sealed partial class MafCheckpointStorePostgresTests
     }
 
     [Fact]
+    public async Task ChildRecoveryPreservesAndReauthorizesOnlyACommittedOpenPullRequest()
+    {
+        var fixture = await PrepareChildRecoveryAsync(includeOpenPullRequest: true);
+        var intent = Assert.Single(fixture.Source.State.OpenPullRequestIntents).Value;
+        var sourceControlRun = CreateCurrentSourceControlRun();
+        var resultFingerprint = await CommitOpenPullRequestOperationAsync(intent, sourceControlRun.Pin);
+
+        var recovered = await fixture.Owner.RecoverRunExecutionAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, fixture.Request,
+            CancellationToken.None, _selection, _executionStore);
+        Assert.Equal(_binding.ExecutionFence + 1, recovered.ExecutionFence);
+        var current = new MafExecutionCheckpointStore(
+            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
+            _binding with { ExecutionFence = recovered.ExecutionFence });
+        var latest = await current.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(latest);
+        Assert.Equal(intent, latest.State.OpenPullRequestIntents["publish"]);
+        Assert.Equal(MafExecutionTaskStatus.Running,
+            latest.State.Progress.NonModelSteps["publish"]);
+        Assert.Empty(latest.State.OpenPullRequestReceipts);
+        Assert.Equal(fixture.Source.Info.CheckpointId,
+            latest.State.RecoveryLineage!.SourceCheckpointId);
+        Assert.Equal(fixture.Source.PayloadHash,
+            latest.State.RecoveryLineage.SourceCheckpointHash);
+
+        var sourceControlCatalog = CreateChildRecoverySourceControlCatalog(out _);
+        var sourceControl = new SourceControlOwnerStore(
+            _fixture.DataSource, _schema, sourceControlCatalog,
+            new ProviderResolver(sourceControlCatalog));
+        var decision = await fixture.Decisions.ReadCurrentAsync(
+            _actor, _binding.Identity, _selection, CancellationToken.None);
+        var recoveredBinding = intent.Request.ExecutionBinding! with
+        {
+            DecisionStateVersion = decision.StateVersion,
+            ExecutionFence = recovered.ExecutionFence
+        };
+        var (recoveredPin, requiresCommittedReplay) = await sourceControl.ReadOpenPullRequestPinAsync(
+            _actor, _binding.Identity, _selection, decision.StateVersion,
+            recovered.ExecutionFence, recoveredBinding, CancellationToken.None);
+        Assert.True(requiresCommittedReplay);
+        Assert.Equal(intent.SourceControlPinId, recoveredPin.PinId);
+        Assert.Equal(recovered.ExecutionFence, recoveredPin.AcceptedRun.Fence);
+        var stalePinFailure = await Assert.ThrowsAsync<CoordinationException>(() =>
+            sourceControl.ReadRepositoryPinAsync(
+                _actor, _binding.Identity, _selection, CancellationToken.None));
+        Assert.Equal("source_control_run_binding_changed", stalePinFailure.Code);
+        Assert.True(MafOpenPullRequestContract.IsValidIntent(intent));
+        Assert.True(resultFingerprint.All(Uri.IsHexDigit));
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("pending")]
+    [InlineData("indeterminate")]
+    public async Task ChildRecoveryRejectsMissingPendingOrIndeterminateOpenPullRequestBeforeFenceAdvance(
+        string operationState)
+    {
+        var fixture = await PrepareChildRecoveryAsync(includeOpenPullRequest: true);
+        var intent = Assert.Single(fixture.Source.State.OpenPullRequestIntents).Value;
+        if (operationState != "missing")
+        {
+            var sourceControlRun = CreateCurrentSourceControlRun();
+            var catalog = ProviderCatalog.Create([], [], []).Value!;
+            var owner = new SourceControlOwnerStore(
+                _fixture.DataSource, _schema, catalog, new ProviderResolver(catalog));
+            await owner.BeginOpenPullRequestOperationAsync(
+                sourceControlRun.Pin,
+                intent.Identity,
+                intent.OperationId,
+                MafOpenPullRequestContract.OwnerRequestFingerprint(intent.Identity, intent.Request),
+                MafOpenPullRequestContract.EffectRequestFingerprint(intent.Identity, intent.Request),
+                MafOpenPullRequestContract.OriginalAuthorizationFingerprint(
+                    intent.Identity, sourceControlRun.Pin.AcceptedRun.TenantId,
+                    sourceControlRun.Pin.AcceptedRun.Issuer, sourceControlRun.Pin.AcceptedRun.Subject,
+                    intent.Request.ExecutionBinding!),
+                CancellationToken.None);
+            if (operationState == "indeterminate")
+                await owner.MarkOpenPullRequestOperationIndeterminateAsync(
+                    intent.Identity, intent.OperationId, CancellationToken.None);
+        }
+
+        var before = await fixture.Owner.ReadOwnerRunStatusAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, CancellationToken.None);
+        var failure = await Assert.ThrowsAsync<CoordinationException>(() =>
+            fixture.Owner.RecoverRunExecutionAsync(
+                _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, fixture.Request,
+                CancellationToken.None, _selection, _executionStore));
+        Assert.Equal("checkpoint_recovery_boundary_unsupported", failure.Code);
+        Assert.Equal("open_pull_request_commit_unverified", failure.Reason);
+        var after = await fixture.Owner.ReadOwnerRunStatusAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, CancellationToken.None);
+        Assert.Equal(before.ExecutionFence, after.ExecutionFence);
+        Assert.Equal(before.StateVersion, after.StateVersion);
+        var retained = await _executionStore.ReadLatestAsync(CancellationToken.None);
+        Assert.Equal(fixture.Source.Info.CheckpointId, retained!.Info.CheckpointId);
+        Assert.Equal(fixture.Source.PayloadHash, retained.PayloadHash);
+    }
+
+    [Theory]
+    [InlineData("request_fingerprint")]
+    [InlineData("effect_fingerprint")]
+    [InlineData("original_authorization_fingerprint")]
+    public async Task ChildRecoveryRejectsMismatchedCommittedOpenPullRequestBeforeFenceAdvance(
+        string fingerprintColumn)
+    {
+        var fixture = await PrepareChildRecoveryAsync(includeOpenPullRequest: true);
+        var intent = Assert.Single(fixture.Source.State.OpenPullRequestIntents).Value;
+        var sourceControlRun = CreateCurrentSourceControlRun();
+        await CommitOpenPullRequestOperationAsync(intent, sourceControlRun.Pin);
+
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            UPDATE "{_schema}".source_control_pull_request_operations
+            SET {fingerprintColumn} = @fingerprint
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+              AND operation_id = @operation
+            """, connection))
+        {
+            command.Parameters.AddWithValue("fingerprint", new string('f', 64));
+            command.Parameters.AddWithValue("project", intent.Identity.ProjectId);
+            command.Parameters.AddWithValue("run", intent.Identity.RunId);
+            command.Parameters.AddWithValue("session", intent.Identity.SessionId);
+            command.Parameters.AddWithValue("operation", intent.OperationId);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+
+        var before = await fixture.Owner.ReadOwnerRunStatusAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, CancellationToken.None);
+        var failure = await Assert.ThrowsAsync<CoordinationException>(() =>
+            fixture.Owner.RecoverRunExecutionAsync(
+                _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, fixture.Request,
+                CancellationToken.None, _selection, _executionStore));
+        Assert.Equal("checkpoint_recovery_boundary_unsupported", failure.Code);
+        Assert.Equal("open_pull_request_commit_unverified", failure.Reason);
+        var after = await fixture.Owner.ReadOwnerRunStatusAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, CancellationToken.None);
+        Assert.Equal(before.ExecutionFence, after.ExecutionFence);
+        Assert.Equal(before.StateVersion, after.StateVersion);
+        var retained = await _executionStore.ReadLatestAsync(CancellationToken.None);
+        Assert.Equal(fixture.Source.Info.CheckpointId, retained!.Info.CheckpointId);
+        Assert.Equal(fixture.Source.PayloadHash, retained.PayloadHash);
+    }
+
+    [Fact]
     public async Task CompletedBuildTestHistoryRejectsChildRecoveryBeforeAdmission()
     {
         var fixture = await PrepareChildRecoveryAsync(includeBuildTest: true);
@@ -2259,7 +2403,10 @@ public sealed partial class MafCheckpointStorePostgresTests
     }
 
     private async Task<ChildRecoveryFixture> PrepareChildRecoveryAsync(
-        bool includeBuildTest = false, string nativeState = "absent", bool withCreditGuard = false)
+        bool includeBuildTest = false,
+        string nativeState = "absent",
+        bool withCreditGuard = false,
+        bool includeOpenPullRequest = false)
     {
         var fixtureId = Guid.NewGuid().ToString("N");
         // Runtime registrations accept only opaque identifiers, so this fixture pins a model reference without '/'.
@@ -2277,6 +2424,13 @@ public sealed partial class MafCheckpointStorePostgresTests
                 },
                 WorkflowTestData.Open("implement", 1, ["build-test"])
             }
+            : includeOpenPullRequest
+                ? new[]
+                {
+                    WorkflowTestData.Open("implement", 0, []),
+                    WorkflowTestData.Platform(
+                        "publish", 1, ["implement"], WorkflowPlatformGate.OpenPullRequest)
+                }
             : [WorkflowTestData.Open("implement", 0, [])];
         var result = WorkPlanValidator.ValidateAndSnapshot(
             WorkflowTestData.Snapshot(WorkflowTestData.Definition(WorkflowDefinitionOrigin.BuiltIn, steps)),
@@ -2481,6 +2635,58 @@ public sealed partial class MafCheckpointStorePostgresTests
             childPresenting.StateVersion, presentedMessage: null, cancellationToken: CancellationToken.None);
         var source = await _executionStore.ReadLatestAsync(CancellationToken.None);
         Assert.NotNull(source);
+        if (includeOpenPullRequest)
+        {
+            var sourceControlRun = CreateCurrentSourceControlRun();
+            var currentPin = sourceControlRun.Pin;
+            var catalog = CreateChildRecoverySourceControlCatalog(out _);
+            var resolver = new ProviderResolver(catalog);
+            var sourceControlOwner = new SourceControlOwnerStore(
+                _fixture.DataSource, _schema, catalog, resolver);
+            await sourceControlOwner.PersistRepositoryPinAsync(
+                _actor, _binding.Identity, _selection, currentPin, decision.StateVersion,
+                CancellationToken.None);
+
+            var pendingProgress = source.State.Progress with
+            {
+                NonModelSteps = source.State.Progress.NonModelSteps.SetItem(
+                    "publish", MafExecutionTaskStatus.Pending)
+            };
+            var pending = await _executionStore.AppendAsync(
+                "child-recovery-open-pr-pending",
+                source.Info,
+                source.State with
+                {
+                    Revision = checked(source.State.Revision + 1),
+                    Progress = pendingProgress
+                },
+                CancellationToken.None);
+            var workspace = new SourceControlPullRequestWorkspaceLocator(
+                "workspace",
+                Guid.Parse("5956a121-5556-4c16-848c-0d4a2937966d"),
+                new string('a', 40),
+                "feature/agent-change",
+                new string('c', 40),
+                currentPin.DefaultBranch);
+            var pullRequestIntent = MafOpenPullRequestContract.CreateIntent(
+                Guid.NewGuid(),
+                _binding.Identity,
+                "child-recovery-open-pr-intent",
+                checked(pending.State.Revision + 1),
+                plan.Plan.Id,
+                "publish",
+                decision.StateVersion,
+                _binding.ExecutionFence,
+                selectionHash,
+                currentPin,
+                workspace,
+                1);
+            var withOpenPullRequest = CoordinationEndpoints.PrepareOpenPullRequestCheckpoint(
+                pending, pullRequestIntent)
+                ?? throw new InvalidOperationException("The OpenPullRequest intent was not prepared.");
+            source = await _executionStore.AppendAsync(
+                pullRequestIntent.CheckpointId, pending.Info, withOpenPullRequest, CancellationToken.None);
+        }
         NativeAdmissionFixture? nativeAdmission = null;
         if (nativeState is "prepared" or "sending")
             nativeAdmission = await PrepareChildNativeAsync(

@@ -1,0 +1,69 @@
+{
+  "$schema": "../sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Reconcile a committed pull request during Host recovery",
+  "alt": "Before advancing the recovery fence, Orchestrator requires one running OpenPullRequest intent with no receipt and an exact committed Source Control operation and result. Missing, pending, uncertain, or mismatched evidence blocks recovery without changing the fence. For an exact committed operation, Orchestrator keeps the child dispatch hold active, reads the stored pull request under current authority, and verifies its result without creating another pull request or changing the original fingerprints. Orchestrator records the receipt from the original intent. A missing or mismatched stored result keeps recovery blocked and the hold active.",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "orchestrator",
+      "label": "Orchestrator",
+      "subLabel": "Recovery fence, checkpoint, and dispatch hold",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": { "text": "Coordinator", "tone": "neutral" }
+    },
+    {
+      "id": "sourcecontrol",
+      "label": "Source Control owner",
+      "subLabel": "Committed operation and stored pull request",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": { "text": "Owner", "tone": "neutral" }
+    }
+  ],
+  "steps": [
+    {
+      "type": "note",
+      "over": ["orchestrator", "sourcecontrol"],
+      "label": "At a saved child join, require one running OpenPullRequest intent with no receipt and an exact committed operation before fence advance. Reject other effects."
+    },
+    {
+      "type": "message",
+      "from": "orchestrator",
+      "to": "orchestrator",
+      "label": "Advance fence; keep hold active",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "orchestrator",
+      "to": "sourcecontrol",
+      "label": "Read the saved operation and pull request under current authority; keep original fingerprints",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "sourcecontrol",
+      "to": "orchestrator",
+      "label": "Return the verified stored pull request; do not create another",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "orchestrator",
+      "to": "orchestrator",
+      "label": "Record original receipt; keep hold until ready",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "note",
+      "over": ["orchestrator", "sourcecontrol"],
+      "label": "If the stored result is missing or mismatched, keep recovery blocked and the hold active. Do not write a receipt or create another pull request."
+    }
+  ]
+}

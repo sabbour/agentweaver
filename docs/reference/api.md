@@ -1252,8 +1252,11 @@ Merge, IndependentReview, and RubberDuck intent/receipt evidence, failed
 dependencies, and the current pending decision blocker. RubberDuck operations
 also expose `failureCode` for a retryable owner failure or invalid verdict.
 External-effect intents without receipts are marked `mayRepeat`; unresolved
-running effects are `indeterminate`. A saved
-terminal receipt is reported only
+running effects are `indeterminate`. At a recovered child join, the one
+supported committed OpenPullRequest effect is reported as `reconcileCommitted`
+until its original intent receives a saved receipt. This state means recovery
+must read and verify the already stored pull request; it does not mean the
+effect can be repeated or is complete. A saved terminal receipt is reported only
 as recorded evidence, not as proof of physical exactly-once execution. Missing or
 plan-mismatched checkpoints, or checkpoint progress incompatible with the
 accepted plan, are marked unavailable, not safe or complete. The projection
@@ -1287,9 +1290,13 @@ The opt-in path supports two boundaries:
   session, association, startup intent, and saved dispatch message. The root
   and every required child must have a current registration before any Host
   bootstrap starts. The owner keeps `dispatchHeld` set until the root and all
-  required children pass readiness checks. A `202` response means that the
-  owner saved the admission or has more continuation work. It does not mean
-  that the child task has completed.
+  required children pass readiness checks. The only supported platform-effect
+  exception is one running OpenPullRequest intent with no receipt and an exact
+  committed Source Control operation and stored result. The owner checks this
+  before it advances the fence. Missing, pending, uncertain, or mismatched
+  operation evidence blocks recovery. A `202` response means that the owner
+  saved the admission or has more continuation work. It does not mean that
+  the child task has completed.
 
 The owner rejects other boundaries and unsupported platform-effect history.
 Both paths require matching fences and versions, current authority, and the

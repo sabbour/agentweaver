@@ -169,6 +169,28 @@
       ]
     },
     {
+      "name": "Committed OpenPullRequest recovery",
+      "sourcePrefixes": [
+        "services/orchestrator/Agentweaver.Orchestrator/CoordinationOwnerStore.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/MafExecutionDispatchEndpoints.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/MafExecutionRecoveryProjection.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/MafOpenPullRequestExecutor.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/SourceControlEndpoints.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/SourceControlOwnerStore.cs",
+        "docs/diagrams/src/flagship/v1-checkpoint-committed-effect-recovery.json",
+        "tests/Agentweaver.Orchestrator.Core.Tests/MafCheckpointStorePostgresTests.ChildRecovery.cs",
+        "tests/Agentweaver.Orchestrator.Core.Tests/MafCheckpointStorePostgresTests.OpenPullRequest.cs",
+        "tests/Agentweaver.Orchestrator.Core.Tests/MafExecutionRecoveryProjectionTests.cs",
+        "tests/Agentweaver.Orchestrator.Core.Tests/MafRecoveryLineageTransitionTests.cs"
+      ],
+      "required": [
+        "docs/specs/host-recovery-committed-effects.md",
+        "docs/deep-dive/orchestration.md",
+        "docs/reference/api.md",
+        "docs/diagrams/src/flagship/v1-checkpoint-committed-effect-recovery.json"
+      ]
+    },
+    {
       "name": "Orchestrator coordination owner",
       "sourcePrefixes": [
         "services/orchestrator/Agentweaver.Orchestrator/"
@@ -439,6 +461,7 @@
         "docs/guide/environment-sandbox-testing.md",
         "docs/diagrams/src/flagship/v1-environment-sandbox-lifecycle.json",
         "docs/diagrams/src/flagship/v1-checkpoint-gate-recovery.json",
+        "docs/diagrams/src/flagship/v1-checkpoint-committed-effect-recovery.json",
         "docs/diagrams/src/flagship/v1-environment-buildtest-command.json"
       ]
     },
