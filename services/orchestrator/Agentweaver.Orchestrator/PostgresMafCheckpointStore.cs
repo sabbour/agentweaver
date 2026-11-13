@@ -112,7 +112,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
     /// Appends an idempotent checkpoint using the caller's transaction after locking and validating current run state.
     /// </summary>
     /// <exception cref="CoordinationException">Thrown when the owner binding, selection, parent, or idempotent checkpoint differs.</exception>
-    internal async Task<(CheckpointInfo Info, string? ParentCheckpointId, bool HasParentMetadata)> AppendInTransactionAsync(
+    internal Task<(CheckpointInfo Info, string? ParentCheckpointId, bool HasParentMetadata)> AppendInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         MafCheckpointBinding binding,
@@ -122,7 +122,40 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         CheckpointInfo? parent,
         CancellationToken cancellationToken,
         byte[]? workspaceSeed = null,
-        long? parentExecutionFence = null)
+        long? parentExecutionFence = null) =>
+        AppendInTransactionCoreAsync(
+            connection, transaction, binding, sessionId, checkpointId, value, parent,
+            cancellationToken, allowHeldRecoveryImport: false, workspaceSeed, parentExecutionFence);
+
+    internal Task<(CheckpointInfo Info, string? ParentCheckpointId, bool HasParentMetadata)>
+        AppendCompletedUnjoinedRecoveryImportInTransactionAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
+            MafCheckpointBinding binding,
+            string sessionId,
+            string checkpointId,
+            JsonElement value,
+            CheckpointInfo? parent,
+            CancellationToken cancellationToken,
+            byte[]? workspaceSeed = null,
+            long? parentExecutionFence = null) =>
+        AppendInTransactionCoreAsync(
+            connection, transaction, binding, sessionId, checkpointId, value, parent,
+            cancellationToken, allowHeldRecoveryImport: true, workspaceSeed, parentExecutionFence);
+
+    private async Task<(CheckpointInfo Info, string? ParentCheckpointId, bool HasParentMetadata)>
+        AppendInTransactionCoreAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
+            MafCheckpointBinding binding,
+            string sessionId,
+            string checkpointId,
+            JsonElement value,
+            CheckpointInfo? parent,
+            CancellationToken cancellationToken,
+            bool allowHeldRecoveryImport,
+            byte[]? workspaceSeed,
+            long? parentExecutionFence)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
@@ -133,7 +166,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         if (!IsIdentifier(checkpointId))
             throw new ArgumentException("A stable checkpoint identifier is required.", nameof(checkpointId));
 
-        if (await CheckpointRecoveryHold.IsHeldAsync(
+        if (!allowHeldRecoveryImport && await CheckpointRecoveryHold.IsHeldAsync(
                 connection, transaction, _schema,
                 validatedBinding.Identity.ProjectId, validatedBinding.Identity.RunId, cancellationToken)
             .ConfigureAwait(false))

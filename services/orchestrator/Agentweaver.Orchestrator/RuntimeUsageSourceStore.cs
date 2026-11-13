@@ -1957,6 +1957,129 @@ internal sealed class RuntimeUsageSourceStore(
             recorded, source.CanonicalPayloadHash, dispatch.OwnerRevision, reader.GetString(1));
     }
 
+    internal async Task<RuntimeChildTurnAccountingEvidence> RequireNativeTurnAccountedForRecoveryWithinTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity root,
+        ChildRecoveryMember member,
+        string acceptedSelectionHash,
+        long sourceFence,
+        string answer,
+        CancellationToken cancellationToken)
+    {
+        var native = member.NativeOrigin
+            ?? throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
+        var registration = member.SavedRegistration
+            ?? throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
+        var binding = member.Startup.Binding;
+        if (native.State != "completed" ||
+            native.TerminalOutcome != "native-completed" ||
+            native.SourceReportStatus != "partial" ||
+            native.SourceReportHash is null ||
+            native.AccountingStatus is not ("priced" or "unpriced") ||
+            registration.RuntimeInstanceId != native.RuntimeInstanceId ||
+            registration.Revision != native.RegistrationRevision ||
+            RuntimeContractValidation.RegistrationHash(registration) != native.RuntimeBindingHash ||
+            binding.ParentRootSessionId != root.SessionId ||
+            binding.ChildSessionId != member.Session.SessionId ||
+            binding.AssociationId != member.AssociationId ||
+            binding.DispatchMessageId != native.DispatchId ||
+            binding.PromptHash != native.PromptHash ||
+            native.ExecutionFence != sourceFence ||
+            !string.Equals(native.AcceptedSelectionHash, acceptedSelectionHash,
+                StringComparison.OrdinalIgnoreCase) ||
+            registration.Binding.ExecutionFence != sourceFence ||
+            !string.Equals(registration.Binding.AcceptedSelectionHash, acceptedSelectionHash,
+                StringComparison.OrdinalIgnoreCase))
+            throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
+
+        var currentOrigin = await ChildCheckpointRecoveryCensus.ReadNativeOriginAsync(
+            connection, transaction, _schema, root, member.Session, binding,
+            acceptedSelectionHash, sourceFence, cancellationToken).ConfigureAwait(false);
+        if (currentOrigin != native)
+            throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
+
+        var source = await ReadCurrentSourceAsync(
+            connection, transaction, registration, cancellationToken).ConfigureAwait(false);
+        if (source.CanonicalPayloadHash != native.SdkSourceReceiptHash ||
+            source.Source.ModelSelectionReference != native.ModelSelectionReference ||
+            source.Source.ModelId != native.SelectedModelId)
+            throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
+
+        string reportJson;
+        string reportHash;
+        string acknowledgmentsJson;
+        long ownerRevision;
+        await using (var command = new NpgsqlCommand($"""
+            SELECT source_report_json::text, source_report_hash,
+                   acknowledgment_references::text, owner_revision
+            FROM {_dispatches}
+            WHERE project_id = @project AND run_id = @run AND dispatch_id = @dispatch
+                AND child_session_id = @child AND dispatch_state = 'completed'
+                AND source_report_status = 'partial' AND source_report_hash IS NOT NULL
+                AND accounting_status IN ('priced', 'unpriced')
+            FOR UPDATE
+            """, connection, transaction))
+        {
+            command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, root.ProjectId);
+            command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, root.RunId);
+            command.Parameters.AddWithValue("dispatch", NpgsqlDbType.Uuid, native.DispatchId);
+            command.Parameters.AddWithValue("child", NpgsqlDbType.Varchar, member.Session.SessionId);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+                reader.IsDBNull(0) || reader.IsDBNull(1) || reader.IsDBNull(2))
+                throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
+            reportJson = reader.GetString(0);
+            reportHash = reader.GetString(1).Trim();
+            acknowledgmentsJson = reader.GetString(2);
+            ownerRevision = reader.GetInt64(3);
+        }
+
+        RuntimeNativeTurnObservation observation;
+        ImmutableArray<RuntimeUsageCostReceiptReference> references;
+        try
+        {
+            observation = Deserialize<RuntimeNativeTurnObservation>(reportJson);
+            references = Deserialize<ImmutableArray<RuntimeUsageCostReceiptReference>>(acknowledgmentsJson);
+        }
+        catch (Exception exception) when (exception is JsonException or ArgumentException or
+                                           InvalidOperationException)
+        {
+            throw new RuntimeAuthorizationException(
+                "runtime_native_turn_accounting_invalid", null, exception);
+        }
+
+        var admission = new RuntimeNativeTurnAdmissionReceipt(
+            registration, source.Source, native.DispatchId, native.PromptHash, native.RequestHash,
+            checked(ownerRevision - 2));
+        RuntimeNativeTurnContract.ValidateObservation(admission, observation);
+        if (ownerRevision != native.OwnerRevision ||
+            reportHash != native.SourceReportHash ||
+            native.SourceReportHash != RuntimeNativeTurnContract.ObservationHash(observation) ||
+            observation.OutputHash != RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(answer)) ||
+            observation.CompletedAt > timeProvider.GetUtcNow() ||
+            source.CanonicalPayloadHash != native.SdkSourceReceiptHash)
+            throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
+
+        using (var acknowledgments = JsonDocument.Parse(acknowledgmentsJson))
+        {
+            if (ChildCheckpointRecoveryManifestCodec.Hash(acknowledgments.RootElement) !=
+                native.AcknowledgmentReferencesHash)
+                throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
+        }
+
+        var recorded = new RuntimeNativeTurnRecordedReceipt(
+            admission,
+            observation,
+            native.SourceReportHash
+                ?? throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid"),
+            checked(ownerRevision - 1));
+        RuntimeNativeTurnContract.ValidateRecorded(recorded);
+        _ = RuntimeNativeTurnContract.AccountingSnapshotRequest(recorded, references);
+        return new RuntimeChildTurnAccountingEvidence(
+            recorded, source.CanonicalPayloadHash, ownerRevision, native.AccountingStatus);
+    }
+
     /// <summary>
     /// Verifies that the dispatch row matches the runtime, source, model, prompt, and request in its admission receipt.
     /// </summary>

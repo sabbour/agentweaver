@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 
@@ -113,7 +114,20 @@ internal sealed record ChildRecoveryMember(
     ChildRecoveryNativeOrigin? NativeOrigin,
     bool NativeOriginProvenAbsent,
     string? ResultHash,
-    string? TurnReceiptHash);
+    string? TurnReceiptHash)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeRegistration? SavedRegistration { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkItemBindingSha256 { get; init; }
+}
+
+internal sealed record ChildRecoveryCompletedUnjoinedMaterial(
+    string Prompt,
+    string Result,
+    SessionMaterialAcknowledgment UserMaterial,
+    SessionMaterialAcknowledgment AssistantMaterial);
 
 internal sealed record ChildRecoveryCapture(
     string SessionId,

@@ -120,7 +120,8 @@ internal static class ChildCheckpointRecoveryCensus
                 fixedAssociation is not null &&
                 (fixedAssociation.ChildSessionId != child.SessionId ||
                  fixedAssociation.WorkPlanId != plan.Plan.Id ||
-                 fixedAssociation.AcceptedSelectionHash != selectionHash ||
+                 !string.Equals(
+                     fixedAssociation.AcceptedSelectionHash, selectionHash, StringComparison.OrdinalIgnoreCase) ||
                  fixedAssociation.ExecutionFence != sourceFence ||
                  fixedAssociation.DecisionStateVersion != binding.DecisionStateVersion ||
                  fixedAssociation.WorkflowId != plan.Workflow.Definition.Id ||
@@ -189,7 +190,11 @@ internal static class ChildCheckpointRecoveryCensus
                 messageStatus, messageRequestHash, progress.ToString(), disposition, reason,
                 native, native is null,
                 hasResult ? ChildCheckpointRecoveryManifestCodec.Hash(result) : null,
-                hasReceipt ? ChildCheckpointRecoveryManifestCodec.Hash(receipt) : null);
+                hasReceipt ? ChildCheckpointRecoveryManifestCodec.Hash(receipt) : null)
+            {
+                SavedRegistration = disposition == "completedUnjoined" ? registration : null,
+                WorkItemBindingSha256 = workItemBindingHash
+            };
             budget.Include(member);
             members.Add(member);
         }
@@ -283,14 +288,22 @@ internal static class ChildCheckpointRecoveryCensus
             progress is MafExecutionTaskStatus.Succeeded or
                 MafExecutionTaskStatus.Failed or MafExecutionTaskStatus.Indeterminate)
         {
-            if (native is not { State: "completed", SourceReportStatus: "source-complete",
-                    AccountingStatus: "priced" } ||
+            if (!HasCompletedNativeAccounting(native) ||
                 !hasResult || !hasReceipt)
                 return ("unresolved", "child_terminal_evidence_unavailable");
             return ("joined", null);
         }
         if (native is { State: "completed" })
-            return ("unresolved", "original_child_material_unavailable");
+        {
+            if (hasResult || hasReceipt || intent is null ||
+                progress != MafExecutionTaskStatus.Running ||
+                child.Lifecycle != "active" || child.TurnState != "active" ||
+                startup.CleanupObligation)
+                return ("unresolved", "child_boundary_inconsistent");
+            if (!HasCompletedNativeAccounting(native))
+                return ("unresolved", "original_child_material_unavailable");
+            return ("completedUnjoined", null);
+        }
         if (hasResult || hasReceipt || intent is null || progress != MafExecutionTaskStatus.Running ||
             child.Lifecycle != "active" ||
             child.TurnState is "completed" or "failed" or "indeterminate")
@@ -307,6 +320,16 @@ internal static class ChildCheckpointRecoveryCensus
             return ("unresolved", "native_state_unavailable");
         return ("pendingUnsent", null);
     }
+
+    private static bool HasCompletedNativeAccounting(ChildRecoveryNativeOrigin? native) =>
+        native is
+        {
+            State: "completed",
+            TerminalOutcome: "native-completed",
+            SourceReportStatus: "partial",
+            SourceReportHash: not null,
+            AccountingStatus: "priced"
+        };
 
     internal static bool IsJoinedReceiptBound(
         RuntimeChildTurnCompletionReceipt receipt,

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Xunit;
@@ -350,6 +351,68 @@ public sealed class RuntimeUsageSourceReceiptTests
 
         Assert.Throws<RuntimeAuthorizationException>(() =>
             receipt.ValidateAgainstAccountingEvidence(request, registration, evidence));
+    }
+
+    [Fact]
+    public void CheckpointRecoveryChildMaterialMustMatchOriginalRegistrationFence()
+    {
+        var (admission, request, _) = NativeTurn();
+        var registration = admission.Registration;
+        var binding = registration.Binding;
+        var content = Encoding.UTF8.GetBytes("Actual request.");
+        var eventId = admission.MessageId;
+        var material = new SessionMaterialAcknowledgment(
+            1,
+            new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId),
+            eventId,
+            1,
+            new SessionObjectReference(
+                new ObjectKey($"material/{eventId:N}"),
+                SessionMaterialValidation.Purpose(SessionMaterialKind.TurnContent),
+                content.Length)
+            {
+                Material = new SessionMaterialBinding(
+                    1,
+                    SessionMaterialKind.TurnContent,
+                    binding.TenantId,
+                    RuntimeContractValidation.Hash(content),
+                    registration.RuntimeInstanceId,
+                    registration.Revision,
+                    binding.ExecutionFence,
+                    binding.AcceptedSelectionHash,
+                    admission.Source.SdkVersion,
+                    admission.Source.RuntimeVersion,
+                    admission.Source.ModelSelectionReference,
+                    admission.Source.ModelId)
+                {
+                    MaxPromptTokens = admission.Source.MaxPromptTokens,
+                    ReasoningEffort = admission.Source.ReasoningEffort,
+                    ModelBindingPin = admission.Source.ModelBindingPin,
+                    ResolvedModelBindingPin = admission.Source.ResolvedModelBindingPin
+                }
+            });
+
+        RuntimeRootTurnCompletionReceipt.RequireMaterial(
+            material, eventId, SessionMaterialKind.TurnContent, registration, admission.Source,
+            "runtime_child_turn_receipt_invalid");
+        Assert.Equal("runtime_child_turn_receipt_invalid",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeRootTurnCompletionReceipt.RequireMaterial(
+                    material with
+                    {
+                        Reference = material.Reference with
+                        {
+                            Material = material.Reference.Material! with
+                            {
+                                ExecutionFence = binding.ExecutionFence + 1
+                            }
+                        }
+                    },
+                    eventId,
+                    SessionMaterialKind.TurnContent,
+                    registration,
+                    admission.Source,
+                    "runtime_child_turn_receipt_invalid")).Code);
     }
 
     private static RuntimeChildTurnCompletionReceipt ChildCompletion(

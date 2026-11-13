@@ -675,8 +675,21 @@ authenticated native-cache or journal material before Orchestrator reports
 
 For a saved child join, Orchestrator checks the saved child boundary, records a
 frozen manifest, advances the fence, and writes a checkpoint with recovery
-lineage. This version does not continue child sessions or import their
-results. It reports the recovery as `pending` and keeps `dispatchHeld` true.
+lineage. It keeps `dispatchHeld` true while it restores saved children with
+proven-unsent native work. The continuation registers the root and every
+required child before it bootstraps any child. It does not send a new task
+message during recovery.
+
+If a child completed native work before the checkpoint joined its result,
+Orchestrator reads the original prompt and result material and checks their
+session, event, and content bindings. It also checks the saved registration,
+execution fence, and native accounting against the frozen manifest. The final
+owner transaction adds the result and completion receipt to one successor
+checkpoint, completes the child session, and releases the hold only after all
+required readiness checks pass. A missing or mismatched result rolls back that
+transaction and keeps the hold active. Recovery does not run the completed
+child again.
+
 Guarded owner writes fail while the hold is active. The owner rejects
 unsupported platform-effect history instead of replaying it. Retry a pending
 operation with the same recovery request and idempotency key. Neither boundary

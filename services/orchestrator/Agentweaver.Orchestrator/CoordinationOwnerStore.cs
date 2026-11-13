@@ -4597,7 +4597,7 @@ internal sealed partial class CoordinationOwnerStore
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var command = new NpgsqlCommand($"""
-            SELECT result
+            SELECT result::text
             FROM {_executionOperations}
             WHERE project_id = @project AND run_id = @run AND session_id = @session
                 AND actor_issuer = @issuer AND actor_subject = @subject
@@ -5239,8 +5239,29 @@ internal sealed partial class CoordinationOwnerStore
         Guid operationId,
         CheckpointRecoveryStatus status,
         CancellationToken cancellationToken,
-        RuntimeRunStartIntent? readyIntent = null)
+        RuntimeRunStartIntent? readyIntent = null,
+        MafExecutionCheckpointStore? checkpointStore = null,
+        RuntimeUsageSourceStore? usageSources = null,
+        ImmutableDictionary<string, ChildRecoveryCompletedUnjoinedMaterial>? completedUnjoinedMaterials = null,
+        ChildCheckpointRecoveryManifest? completedUnjoinedManifest = null)
     {
+        var imports = completedUnjoinedMaterials ??
+            ImmutableDictionary<string, ChildRecoveryCompletedUnjoinedMaterial>.Empty
+                .WithComparers(StringComparer.Ordinal);
+        if (imports.Count > 0 &&
+            (status.BoundaryKind != "childJoin" || status.Phase != "ready" ||
+             checkpointStore is null || usageSources is null || completedUnjoinedManifest is null ||
+             completedUnjoinedManifest.OperationId != operationId ||
+             completedUnjoinedManifest.Root != identity ||
+             completedUnjoinedManifest.HoldFence != status.ExecutionFence ||
+             completedUnjoinedManifest.SourceExecutionFence != status.PreviousExecutionFence ||
+             !string.Equals(
+                 ChildCheckpointRecoveryManifestCodec.Hash(completedUnjoinedManifest),
+                 status.ChildManifestSha256,
+                 StringComparison.Ordinal)))
+            throw new CoordinationException(
+                "checkpoint_recovery_import_invalid", StatusCodes.Status409Conflict);
+
         if (readyIntent is not null &&
             (status.Phase != "ready" || status.CurrentStep != "ready" || status.ReasonCode is not null ||
              status.RuntimeInstanceId is null || status.RuntimeInstanceId == Guid.Empty ||
@@ -5265,6 +5286,96 @@ internal sealed partial class CoordinationOwnerStore
             throw new CoordinationException(
                 "checkpoint_recovery_progress_conflict", StatusCodes.Status409Conflict);
         RequireWriter(root, actor);
+
+        var importedSessions = new Dictionary<string, SessionRow>(StringComparer.Ordinal);
+        MafExecutionCheckpointSnapshot? importCheckpoint = null;
+        if (imports.Count > 0)
+        {
+            await using (var terminalRead = new NpgsqlCommand($"""
+                SELECT result
+                FROM {_executionOperations}
+                WHERE project_id = @project AND run_id = @run AND session_id = @session
+                    AND operation_id = @operation AND operation_kind = 'recovery'
+                    AND actor_issuer = @issuer AND actor_subject = @subject
+                """, connection, transaction))
+            {
+                AddRunScope(terminalRead, identity.ProjectId, identity.RunId);
+                terminalRead.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+                terminalRead.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+                terminalRead.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, actor.Issuer);
+                terminalRead.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, actor.Subject);
+                if (await terminalRead.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not string stored)
+                    throw new CoordinationException(
+                        "checkpoint_recovery_operation_unavailable", StatusCodes.Status409Conflict);
+                var existing = JsonSerializer.Deserialize<RunExecutionTransitionResult>(stored, JsonOptions)
+                    ?? throw new CoordinationException(
+                        "execution_operation_result_unavailable", StatusCodes.Status503ServiceUnavailable);
+                if (existing.Session != identity || existing.OperationId != operationId)
+                    throw new CoordinationException(
+                        "checkpoint_recovery_progress_conflict", StatusCodes.Status409Conflict);
+                if (existing.CheckpointRecovery is not { Phase: "pending" })
+                {
+                    await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                    return existing;
+                }
+            }
+
+            var members = completedUnjoinedManifest!.Members
+                .Where(member => member.Disposition == "completedUnjoined")
+                .OrderBy(member => member.Session.SessionId, StringComparer.Ordinal)
+                .ToArray();
+            if (members.Length != imports.Count ||
+                members.Any(member => !imports.ContainsKey(member.AssociationId)) ||
+                imports.Keys.Any(associationId =>
+                    !members.Any(member => member.AssociationId == associationId)))
+                throw new CoordinationException(
+                    "checkpoint_recovery_import_invalid", StatusCodes.Status409Conflict);
+
+            foreach (var member in members)
+            {
+                var child = await ReadSessionAsync(
+                    connection, transaction, member.Session is { } saved
+                        ? new SessionIdentity(identity.ProjectId, identity.RunId, saved.SessionId)
+                        : throw new CoordinationException(
+                            "checkpoint_recovery_import_invalid", StatusCodes.Status409Conflict),
+                    forUpdate: true, cancellationToken).ConfigureAwait(false);
+                RequireWriter(child, actor);
+                RequireCurrentActiveSession(child, run);
+                if (member.Session.ExecutionFence != status.PreviousExecutionFence ||
+                    member.Session.StateVersion == long.MaxValue ||
+                    child.ParentSessionId != identity.SessionId ||
+                    child.RootSessionId != identity.SessionId ||
+                    child.Detached ||
+                    child.ExecutionFence != status.ExecutionFence ||
+                    child.StateVersion != member.Session.StateVersion + 1 ||
+                    child.LifecycleState != "active" ||
+                    child.TurnState != "active" ||
+                    child.LogicalTurnOrdinal != member.Session.LogicalTurnOrdinal ||
+                    child.WorkPlanItemId != member.Session.WorkPlanItemId ||
+                    child.ArchivedAt is not null)
+                    throw new CoordinationException(
+                        "checkpoint_recovery_import_conflict", StatusCodes.Status409Conflict);
+                importedSessions.Add(member.AssociationId, child);
+            }
+
+            await MafExecutionCheckpointStore.AcquireExecutionLockInTransactionAsync(
+                connection, transaction, identity, cancellationToken).ConfigureAwait(false);
+            importCheckpoint = await checkpointStore!.ReadLatestInTransactionAsync(
+                connection, transaction, cancellationToken).ConfigureAwait(false);
+            if (importCheckpoint is null ||
+                importCheckpoint.Info.CheckpointId != status.RecoveryCheckpointId ||
+                importCheckpoint.State.Revision != status.RecoveryCheckpointRevision ||
+                importCheckpoint.State.DecisionStateVersion != status.DecisionStateVersion ||
+                importCheckpoint.State.RecoveryLineage is not { } lineage ||
+                lineage.SourceCheckpointId != status.SourceCheckpointId ||
+                lineage.SourceCheckpointRevision != status.SourceCheckpointRevision ||
+                lineage.SourceCheckpointHash != status.SourceCheckpointHash ||
+                lineage.RecoveryOperationId != operationId ||
+                lineage.RecoveryExecutionFence != status.ExecutionFence)
+                throw new CoordinationException(
+                    "checkpoint_recovery_checkpoint_stale", StatusCodes.Status409Conflict);
+        }
+
         await using var read = new NpgsqlCommand($"""
             SELECT phase_version, result, progress
             FROM {_executionOperations}
@@ -5300,6 +5411,18 @@ internal sealed partial class CoordinationOwnerStore
         if (current.BoundaryKind == "childJoin")
         {
             childManifest = ReadCheckpointRecoveryManifest(result, storedProgress);
+            if (imports.Count > 0 &&
+                !string.Equals(
+                    ChildCheckpointRecoveryManifestCodec.Hash(childManifest),
+                    ChildCheckpointRecoveryManifestCodec.Hash(completedUnjoinedManifest!),
+                    StringComparison.Ordinal))
+                throw new CoordinationException(
+                    "checkpoint_recovery_import_invalid", StatusCodes.Status409Conflict);
+            if (status.Phase == "ready" &&
+                childManifest.Members.Any(member => member.Disposition == "completedUnjoined") &&
+                imports.Count == 0)
+                throw new CoordinationException(
+                    "checkpoint_recovery_import_invalid", StatusCodes.Status409Conflict);
             if (status.Phase == "ready" &&
                 (readyIntent is null ||
                  !await AreCheckpointRecoveryMembersReadyAsync(
@@ -5318,6 +5441,28 @@ internal sealed partial class CoordinationOwnerStore
         {
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return result;
+        }
+
+        if (imports.Count > 0)
+        {
+            if (childManifest is null || importCheckpoint is null || readyIntent is null ||
+                status.Phase != "ready")
+                throw new CoordinationException(
+                    "checkpoint_recovery_import_invalid", StatusCodes.Status409Conflict);
+            await ImportCompletedUnjoinedResultsInTransactionAsync(
+                connection,
+                transaction,
+                identity,
+                run,
+                operationId,
+                status,
+                childManifest,
+                importCheckpoint,
+                importedSessions,
+                imports,
+                checkpointStore!,
+                usageSources!,
+                cancellationToken).ConfigureAwait(false);
         }
 
         if (readyIntent is not null)
@@ -5411,6 +5556,196 @@ internal sealed partial class CoordinationOwnerStore
             _timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return updated;
+    }
+
+    private async Task ImportCompletedUnjoinedResultsInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity identity,
+        AcceptedRunRow run,
+        Guid operationId,
+        CheckpointRecoveryStatus status,
+        ChildCheckpointRecoveryManifest manifest,
+        MafExecutionCheckpointSnapshot source,
+        IReadOnlyDictionary<string, SessionRow> childSessions,
+        ImmutableDictionary<string, ChildRecoveryCompletedUnjoinedMaterial> materials,
+        MafExecutionCheckpointStore checkpointStore,
+        RuntimeUsageSourceStore usageSources,
+        CancellationToken cancellationToken)
+    {
+        var members = manifest.Members
+            .Where(member => member.Disposition == "completedUnjoined")
+            .OrderBy(member => member.AssociationId, StringComparer.Ordinal)
+            .ToArray();
+        if (status.Phase != "ready" || status.DispatchHeld != false ||
+            status.BoundaryKind != "childJoin" ||
+            source.Info.CheckpointId != status.RecoveryCheckpointId ||
+            source.State.Revision != status.RecoveryCheckpointRevision ||
+            source.State.WorkPlanId != manifest.WorkPlanId ||
+            source.State.DecisionStateVersion != status.DecisionStateVersion ||
+            source.State.RecoveryLineage is not { } lineage ||
+            lineage.RecoveryOperationId != operationId ||
+            lineage.RecoveryExecutionFence != status.ExecutionFence ||
+            manifest.Root != identity ||
+            manifest.SourceExecutionFence != status.PreviousExecutionFence ||
+            manifest.HoldFence != status.ExecutionFence ||
+            members.Length != materials.Count ||
+            members.Any(member => !materials.ContainsKey(member.AssociationId)) ||
+            materials.Keys.Any(associationId =>
+                !members.Any(member => member.AssociationId == associationId)))
+            throw new CoordinationException(
+                "checkpoint_recovery_import_invalid", StatusCodes.Status409Conflict);
+
+        var state = source.State;
+        var progress = state.Progress;
+        var results = state.Results;
+        var receipts = state.ChildTurnReceipts;
+        foreach (var member in members)
+        {
+            if (!childSessions.TryGetValue(member.AssociationId, out var child) ||
+                !state.PendingDispatches.TryGetValue(member.AssociationId, out var dispatch) ||
+                dispatch.AssociationId != member.AssociationId ||
+                dispatch.ChildSessionId != member.Session.SessionId ||
+                dispatch.MessageId != member.MessageId ||
+                dispatch.PromptHash != member.PromptHash ||
+                dispatch.EgressReceipt is null ||
+                member.EgressReceiptHash is null ||
+                ChildCheckpointRecoveryManifestCodec.Hash(dispatch.EgressReceipt) != member.EgressReceiptHash ||
+                results.ContainsKey(member.AssociationId) ||
+                receipts.ContainsKey(member.AssociationId) ||
+                member.Progress != nameof(MafExecutionTaskStatus.Running) ||
+                member.Session.ExecutionFence != manifest.SourceExecutionFence ||
+                member.Session.Lifecycle != "active" ||
+                member.Session.TurnState != "active" ||
+                member.Session.ParentSessionId != identity.SessionId ||
+                member.Session.RootSessionId != identity.SessionId ||
+                member.Session.Detached ||
+                member.Startup.Binding.ParentRootSessionId != identity.SessionId ||
+                member.Startup.Binding.ChildSessionId != member.Session.SessionId ||
+                member.Startup.Binding.WorkPlanId != manifest.WorkPlanId ||
+                member.Startup.Binding.AssociationId != member.AssociationId ||
+                member.Startup.Binding.DispatchMessageId != member.MessageId ||
+                member.Startup.Binding.PromptHash != member.PromptHash ||
+                member.Startup.Binding.WorkPlanItemId != member.Session.WorkPlanItemId ||
+                child.ExecutionFence != status.ExecutionFence ||
+                child.StateVersion != checked(member.Session.StateVersion + 1) ||
+                child.TurnState != "active" || child.LifecycleState != "active")
+                throw new CoordinationException(
+                    "checkpoint_recovery_import_conflict", StatusCodes.Status409Conflict);
+
+            var workItemAssociation = state.FixedWorkAssociations.TryGetValue(
+                member.AssociationId, out var fixedAssociation);
+            if (workItemAssociation)
+            {
+                if (member.Startup.Binding.WorkPlanItemId is not null ||
+                    ChildCheckpointRecoveryManifestCodec.Hash(fixedAssociation!) != member.AssociationHash ||
+                    progress.FixedWorkItems.GetValueOrDefault(member.AssociationId) !=
+                        MafExecutionTaskStatus.Running)
+                    throw new CoordinationException(
+                        "checkpoint_recovery_import_conflict", StatusCodes.Status409Conflict);
+                progress = progress with
+                {
+                    FixedWorkItems = progress.FixedWorkItems.SetItem(
+                        member.AssociationId, MafExecutionTaskStatus.Succeeded)
+                };
+            }
+            else
+            {
+                if (member.Startup.Binding.WorkPlanItemId is null ||
+                    member.WorkItemBindingSha256 is null ||
+                    progress.WorkItems.GetValueOrDefault(member.AssociationId) !=
+                        MafExecutionTaskStatus.Running)
+                    throw new CoordinationException(
+                        "checkpoint_recovery_import_conflict", StatusCodes.Status409Conflict);
+                progress = progress with
+                {
+                    WorkItems = progress.WorkItems.SetItem(
+                        member.AssociationId, MafExecutionTaskStatus.Succeeded)
+                };
+            }
+
+            var imported = materials[member.AssociationId];
+            if (string.IsNullOrEmpty(imported.Prompt) || string.IsNullOrEmpty(imported.Result) ||
+                RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(imported.Prompt)) != member.PromptHash ||
+                imported.Result.Length > AddressedMessageValidation.MaximumTextLength ||
+                imported.Result.Any(character =>
+                    char.IsControl(character) && character is not ('\r' or '\n' or '\t')))
+                throw new RuntimeAuthorizationException("checkpoint_recovery_result_material_invalid");
+
+            var registration = member.SavedRegistration
+                ?? throw new RuntimeAuthorizationException("checkpoint_recovery_import_registration_invalid");
+            var evidence = await usageSources.RequireNativeTurnAccountedForRecoveryWithinTransactionAsync(
+                connection,
+                transaction,
+                identity,
+                member,
+                run.SelectionHash,
+                manifest.SourceExecutionFence,
+                imported.Result,
+                cancellationToken).ConfigureAwait(false);
+            var receipt = RuntimeChildTurnCompletionReceipt.CreateForCheckpointRecovery(
+                    registration,
+                    member.MessageId,
+                    RuntimeContractValidation.NativeSessionId(registration.Binding),
+                    imported.Prompt,
+                    manifest.WorkPlanId,
+                    member.AssociationId,
+                    member.WorkItemBindingSha256,
+                    evidence,
+                    imported.UserMaterial,
+                    imported.AssistantMaterial)
+                .ValidateEvidenceFor(manifest.WorkPlanId, member.AssociationId);
+            if (receipt.PromptSha256 != member.PromptHash ||
+                receipt.OutputSha256 != RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(imported.Result)) ||
+                receipt.ChildSessionId != member.Session.SessionId ||
+                receipt.ExecutionFence != manifest.SourceExecutionFence ||
+                !string.Equals(
+                    receipt.AcceptedSelectionHash, run.SelectionHash, StringComparison.OrdinalIgnoreCase))
+                throw new RuntimeAuthorizationException("checkpoint_recovery_import_receipt_invalid");
+            receipts = receipts.Add(member.AssociationId, receipt);
+            results = results.Add(member.AssociationId, imported.Result);
+        }
+
+        foreach (var member in members)
+        {
+            var child = childSessions[member.AssociationId];
+            await using var finish = new NpgsqlCommand($"""
+                UPDATE {_sessions}
+                SET turn_state = 'completed',
+                    lifecycle_state = 'completed',
+                    state_version = state_version + 1
+                WHERE project_id = @project AND run_id = @run AND session_id = @session
+                    AND parent_session_id = @parent AND root_session_id = @root
+                    AND NOT detached AND lifecycle_state = 'active' AND turn_state = 'active'
+                    AND execution_fence = @fence AND state_version = @version
+                """, connection, transaction);
+            AddRunScope(finish, identity.ProjectId, identity.RunId);
+            finish.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, child.SessionId);
+            finish.Parameters.AddWithValue("parent", NpgsqlDbType.Varchar, identity.SessionId);
+            finish.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, identity.SessionId);
+            finish.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, status.ExecutionFence);
+            finish.Parameters.AddWithValue("version", NpgsqlDbType.Bigint, child.StateVersion);
+            if (await finish.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                throw new CoordinationException(
+                    "checkpoint_recovery_import_conflict", StatusCodes.Status409Conflict);
+        }
+
+        var next = state with
+        {
+            Revision = checked(state.Revision + 1),
+            Progress = progress,
+            PendingDispatches = state.PendingDispatches.RemoveRange(
+                members.Select(member => member.AssociationId)),
+            Results = results,
+            ChildTurnReceipts = receipts
+        };
+        _ = await checkpointStore.AppendCompletedUnjoinedRecoveryImportInTransactionAsync(
+            connection,
+            transaction,
+            Guid.NewGuid().ToString("N"),
+            source.Info,
+            next,
+            cancellationToken).ConfigureAwait(false);
     }
 
     internal static void RequireCurrentCheckpointRecoveryOwner(
@@ -5525,7 +5860,7 @@ internal sealed partial class CoordinationOwnerStore
             rootIntent.ExecutionFence != manifest.HoldFence || rootIntent.CleanupObligation)
             return false;
         var members = manifest.Members;
-        if (members.Any(member => member.Disposition is "completedUnjoined" or "unresolved"))
+        if (members.Any(member => member.Disposition == "unresolved"))
             return false;
         var required = members.Where(member => member.Disposition == "pendingUnsent").ToArray();
         var bySession = new Dictionary<string, CheckpointRecoveryReadyRuntimeRow>(StringComparer.Ordinal);
