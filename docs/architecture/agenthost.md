@@ -167,9 +167,15 @@ The recovery operation ID also scopes the Host's registration, skill, source,
 and configuration calls while the replacement starts. The Host does not answer
 the gate or send a model turn during this continuation.
 
-This Host continuation does not handle child joins. Orchestrator can admit a
-child-join boundary, but this version keeps recovery pending and
-`dispatchHeld` true. It does not start child runtimes or clear the hold.
+For a saved child join, Orchestrator restores the root and required children
+while `dispatchHeld` remains true. It does not send a child message during
+recovery. When a pending child has a prepared native dispatch, Orchestrator
+checks the immutable origin and its no-send proof. In the final ready
+transaction, it appends a `native-child-rebind` receipt for the replacement
+registration and releases the hold. The original dispatch row remains
+unchanged. `ready` means the Host restored the saved boundary; it does not mean
+that a child task or the run is complete. After the hold is released, ordinary
+dispatch uses the same saved message through the verified effective binding.
 
 The Broker saves the bootstrap receipt before Environment activates the Host.
 After a transport or timeout failure, the same recovery operation can continue;

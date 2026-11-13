@@ -89,7 +89,8 @@ internal sealed record ChildRecoveryNativeOrigin(
     string AccountingStatus,
     long? UsageWitnessWatermark,
     string? UsageWitnessDigest,
-    long? RetiredThroughEventPosition);
+    long? RetiredThroughEventPosition,
+    DateTimeOffset CreatedAt);
 
 internal sealed record ChildRecoveryMember(
     string AssociationId,
@@ -121,6 +122,12 @@ internal sealed record ChildRecoveryMember(
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WorkItemBindingSha256 { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? PriorNativeRebindReceiptId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PriorNativeRebindPayloadHash { get; init; }
 }
 
 internal sealed record ChildRecoveryCompletedUnjoinedMaterial(
@@ -259,6 +266,9 @@ internal static class ChildCheckpointRecoveryManifestCodec
                 string.IsNullOrWhiteSpace(member.AssociationId) ||
                 string.IsNullOrWhiteSpace(member.Session.SessionId) ||
                 member.NativeOriginProvenAbsent != (member.NativeOrigin is null) ||
+                (member.PriorNativeRebindReceiptId is null) !=
+                    (member.PriorNativeRebindPayloadHash is null) ||
+                member.PriorNativeRebindReceiptId == Guid.Empty ||
                 member.Disposition is not ("joined" or "completedUnjoined" or "pendingUnsent" or "unresolved")) ||
             manifest.RepositoryPins.IsDefault || manifest.OutputCaptures.IsDefault ||
             manifest.Reservations.IsDefault || manifest.OtherNativeWork.IsDefault ||

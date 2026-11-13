@@ -1339,11 +1339,15 @@ with a new idempotency key. The new request must use the blocked operation's
 recovery checkpoint as its source. The owner accepts this retry only when the
 child manifest still binds the same plan, messages, prompts, and results; it
 has complete retirement and replacement-registration evidence; and every
-pending dispatch has owner evidence that no native dispatch row exists. A
-prepared native dispatch is not supported by this retry path. The owner returns
-`409 checkpoint_recovery_dispatch_held` while the earlier recovery is still
-pending. It returns `409 checkpoint_recovery_supersession_unavailable` when it
-cannot prove the supersession conditions.
+pending dispatch has owner evidence that it was not sent. That evidence can be
+an absent native row or the same locked native origin from the frozen manifest,
+still `prepared` at owner revision 1 with no report or accounting progress.
+The owner also verifies the prior effective binding. A prepared origin is
+eligible only when the full no-send proof passes; other native states remain
+unsupported. The owner returns `409 checkpoint_recovery_dispatch_held` while
+the earlier recovery is still pending. It returns
+`409 checkpoint_recovery_supersession_unavailable` when it cannot prove the
+supersession conditions.
 
 The new operation advances the fence again, writes its own checkpoint and
 dispatch hold, and restores the root and required children again. It does not
@@ -1352,8 +1356,13 @@ stays blocked. Its replay reports `supersededByOperationId`; its `dispatchHeld`
 field reflects the run's current hold. The blocked operation cannot change or
 release the successor's hold. The run's latest status reports the new operation
 and its active hold. Only the new operation can release that hold after
-readiness and result checks pass. Unsupported or unresolved child history stays
-held for review.
+readiness and result checks pass. For a prepared native origin, the final ready
+transaction appends one verified `native-child-rebind` receipt before it
+releases the hold. It does not change the original dispatch row. `ready` still
+means that the Host restored the saved boundary; it does not mean that a child
+task or the run is complete. After release, ordinary dispatch uses the same
+saved child, association, message, and prompt through the effective binding.
+Unsupported or unresolved child history stays held for review.
 
 For gate recovery, `readRunStatus` and root `readSessionStatus` expose the
 current recovery step, reason, checkpoint IDs, fences, and old and new runtime

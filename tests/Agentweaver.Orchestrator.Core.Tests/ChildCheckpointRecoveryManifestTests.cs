@@ -174,6 +174,45 @@ public sealed class ChildCheckpointRecoveryManifestTests
     }
 
     [Fact]
+    public void NativeChildRebindReceiptRejectsUnknownContractVersion()
+    {
+        var receipt = CreateNativeChildRebindReceipt() with { ContractVersion = 2 };
+        receipt = receipt with { CanonicalPayloadHash = HashNativeChildRebindReceipt(receipt) };
+
+        Assert.Equal("checkpoint_recovery_native_rebind_invalid",
+            Assert.Throws<RuntimeAuthorizationException>(() => receipt.Validate()).Code);
+    }
+
+    [Fact]
+    public void NativeChildRebindOriginFingerprintTracksBusinessAndModelPins()
+    {
+        var manifest = CreateManifest();
+        var member = Assert.Single(manifest.Members);
+        var native = CreateNative("prepared", 1) with { DispatchId = member.MessageId };
+        member = member with { NativeOrigin = native };
+        var originHash = NativeChildRebindOriginFingerprint.Create(manifest, member).Hash;
+
+        Assert.NotEqual(originHash, NativeChildRebindOriginFingerprint.Create(
+            manifest, member with { AssociationHash = new string('a', 64) }).Hash);
+        Assert.NotEqual(originHash, NativeChildRebindOriginFingerprint.Create(
+            manifest, member with { WorkItemBindingSha256 = new string('b', 64) }).Hash);
+        Assert.NotEqual(originHash, NativeChildRebindOriginFingerprint.Create(
+            manifest, member with
+            {
+                NativeOrigin = native with
+                {
+                    ModelSelectionReference = "changed-model-reference",
+                    SelectedModelId = "changed-model-id"
+                }
+            }).Hash);
+        Assert.NotEqual(originHash, NativeChildRebindOriginFingerprint.Create(
+            manifest, member with
+            {
+                NativeOrigin = native with { CostBindingHash = new string('c', 64) }
+            }).Hash);
+    }
+
+    [Fact]
     public void ManifestRejectsDuplicateMembersAndBoundsWithoutTruncation()
     {
         var manifest = CreateManifest();
@@ -395,5 +434,37 @@ public sealed class ChildCheckpointRecoveryManifestTests
             state == "completed" ? "native-completed" : null,
             state == "completed" ? "partial" : "unknown",
             null,
-            null, new string('5', 64), state == "completed" ? "priced" : "pending", null, null, null);
+            null, new string('5', 64), state == "completed" ? "priced" : "pending", null, null, null,
+            DateTimeOffset.Parse("2030-01-01T00:00:00Z"));
+
+    private static NativeChildRebindReceipt CreateNativeChildRebindReceipt()
+    {
+        var operationId = Guid.NewGuid();
+        var dispatchId = Guid.NewGuid();
+        const string sourceCheckpointId = "source-checkpoint";
+        const string anchorCheckpointId = "anchor-checkpoint";
+        const long sourceFence = 1;
+        const long destinationFence = sourceFence + 1;
+        var sourceHash = new string('a', 64);
+        var anchorHash = new string('b', 64);
+        var lineage = ImmutableArray.Create(new NativeChildRebindCheckpointReference(
+            operationId, sourceCheckpointId, 1, sourceHash, sourceFence,
+            anchorCheckpointId, 2, anchorHash, destinationFence, null, null, null));
+        var receipt = new NativeChildRebindReceipt(
+            1, "tenant", "project", "run", "root", "child", "issuer", "actor",
+            new string('c', 64), operationId, new string('d', 64), "plan",
+            new string('e', 64), new string('f', 64), "association", new string('1', 64),
+            null, dispatchId, dispatchId, new string('2', 64), new string('3', 64),
+            new string('4', 64), new string('5', 64), "prepared", 1, "origin", null, null,
+            sourceCheckpointId, 1, sourceHash, sourceFence, 1, anchorCheckpointId, 2,
+            anchorHash, destinationFence, 1, lineage, null, null, Guid.NewGuid(), 1,
+            new string('6', 64), new string('7', 64), Guid.NewGuid(), 1,
+            new string('8', 64), new string('9', 64), NativeChildRebindReceipt.ReceiptIdFor(
+                operationId, dispatchId), NativeChildRebindReceipt.AttemptIdFor(operationId, dispatchId), "");
+        return receipt with { CanonicalPayloadHash = HashNativeChildRebindReceipt(receipt) };
+    }
+
+    private static string HashNativeChildRebindReceipt(NativeChildRebindReceipt receipt) =>
+        RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(
+            receipt with { CanonicalPayloadHash = "" }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
 }

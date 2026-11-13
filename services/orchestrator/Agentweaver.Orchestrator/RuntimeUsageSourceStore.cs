@@ -20,6 +20,23 @@ internal sealed record RuntimeObservationEvidence(
     RuntimeObservationDispatchCollection Dispatches,
     RuntimeObservationToolReservationCollection ToolReservations);
 
+internal sealed record RuntimeNativeActionDispatchEvidence(
+    string RootSessionId,
+    string ChildSessionId,
+    Guid DispatchId,
+    string State,
+    Guid RuntimeInstanceId,
+    long RegistrationRevision,
+    long ExecutionFence,
+    string SourceHash,
+    string RequestHash,
+    string CheckpointId,
+    long CheckpointRevision,
+    long DecisionStateVersion,
+    string? CheckpointHash,
+    string WorkPlanId,
+    string AssociationId);
+
 /// <summary>
 /// Persists runtime SDK source receipts, usage observations, native-turn dispatch state, and credit-limit evidence.
 /// The store uses PostgreSQL transactions and outbox events to make admission, accounting, and denials replay-safe.
@@ -39,6 +56,7 @@ internal sealed class RuntimeUsageSourceStore(
     private readonly string _checkpoints = $"\"{options.Schema}\".maf_workflow_checkpoints";
     private readonly string _sessions = $"\"{options.Schema}\".coordination_sessions";
     private readonly string _decisions = $"\"{options.Schema}\".coordinator_decisions";
+    private readonly string _executionOperations = $"\"{options.Schema}\".coordination_execution_operations";
     private readonly string _guards = $"\"{options.Schema}\".maf_execution_run_guards";
     private readonly string _outboxEvents = $"\"{options.Schema}\".outbox_events";
     private readonly PostgresOutbox _outbox = new(dataSource, options.Schema);
@@ -119,18 +137,48 @@ internal sealed class RuntimeUsageSourceStore(
         CancellationToken cancellationToken)
     {
         var binding = registration.Binding;
-        var rows = new List<RuntimeObservationDispatch>(RuntimeObservationDispatchCollection.MaximumItems + 1);
+        var storedRows = new List<(
+            Guid DispatchId,
+            NativeDispatch Dispatch,
+            string ReportState,
+            string AccountingState,
+            long? WitnessWatermark,
+            string? WitnessDigest,
+            DateTimeOffset UpdatedAt)>(
+            RuntimeObservationDispatchCollection.MaximumItems + 1);
         await using var command = new NpgsqlCommand($"""
-            SELECT dispatch_id, root_session_id, child_session_id, work_plan_id, association_id,
-                checkpoint_id, checkpoint_revision, execution_fence, owner_revision, dispatch_state,
-                source_report_status, accounting_status, usage_witness_watermark, usage_witness_digest,
-                created_at, updated_at
-            FROM {_dispatches}
-            WHERE project_id = @project AND run_id = @run AND root_session_id = @root
-                AND child_session_id = @session AND runtime_instance_id = @runtime
-                AND registration_revision = @registrationRevision AND execution_fence = @fence
-                AND accepted_selection_hash = @selectionHash
-            ORDER BY created_at DESC, dispatch_id DESC
+            SELECT d.dispatch_id, d.root_session_id, d.child_session_id, d.runtime_instance_id, d.registration_revision,
+                d.execution_fence, d.runtime_binding_hash, d.sdk_source_receipt_hash,
+                d.model_selection_reference, d.selected_model_id, d.prompt_hash, d.request_hash,
+                d.owner_revision, d.dispatch_state, d.work_plan_id, d.association_id,
+                d.checkpoint_id, d.checkpoint_revision, d.decision_state_version,
+                d.source_report_hash, d.source_report_json::text, d.accepted_selection_hash,
+                jsonb_build_object('byok', d.accepted_byok_descriptor, 'cost', d.cost_binding_identity)::text,
+                d.is_cost_producing, d.hard_cap_serialized, d.created_at, d.updated_at,
+                d.source_report_status, d.accounting_status, d.usage_witness_watermark,
+                d.usage_witness_digest
+            FROM {_dispatches} d
+            LEFT JOIN LATERAL (
+                SELECT receipt_json
+                FROM {_schema}.maf_runtime_evidence_receipts receipt
+                WHERE receipt.project_id = d.project_id AND receipt.run_id = d.run_id
+                  AND receipt.receipt_kind = 'native-child-rebind'
+                  AND receipt.receipt_json->>'dispatchId' = d.dispatch_id::text
+                ORDER BY (receipt.receipt_json->>'destinationFence')::bigint DESC
+                LIMIT 1
+            ) rebind ON true
+            WHERE d.project_id = @project AND d.run_id = @run AND d.root_session_id = @root
+                AND d.child_session_id = @session
+                AND (
+                    (d.runtime_instance_id = @runtime AND d.registration_revision = @registrationRevision
+                     AND d.execution_fence = @fence AND d.accepted_selection_hash = @selectionHash)
+                    OR
+                    (rebind.receipt_json->>'runtimeInstanceId' = @runtimeText
+                     AND (rebind.receipt_json->>'registrationRevision')::bigint = @registrationRevision
+                     AND (rebind.receipt_json->>'destinationFence')::bigint = @fence
+                     AND upper(rebind.receipt_json->>'selectionHash') = upper(trim(@selectionHash)))
+                )
+            ORDER BY d.created_at DESC, d.dispatch_id DESC
             LIMIT @limit
             """, connection, transaction);
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
@@ -138,6 +186,7 @@ internal sealed class RuntimeUsageSourceStore(
         command.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, rootSessionId);
         command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, binding.SessionId);
         command.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, registration.RuntimeInstanceId);
+        command.Parameters.AddWithValue("runtimeText", NpgsqlDbType.Text, registration.RuntimeInstanceId.ToString("D"));
         command.Parameters.AddWithValue("registrationRevision", NpgsqlDbType.Bigint, registration.Revision);
         command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, binding.ExecutionFence);
         command.Parameters.AddWithValue("selectionHash", NpgsqlDbType.Char, binding.AcceptedSelectionHash);
@@ -147,23 +196,76 @@ internal sealed class RuntimeUsageSourceStore(
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            rows.Add(new RuntimeObservationDispatch(
+            using var cost = JsonDocument.Parse(reader.GetString(22));
+            storedRows.Add((
                 reader.GetGuid(0),
-                reader.GetString(1),
-                reader.GetString(2),
-                reader.GetString(3),
-                reader.GetString(4),
-                reader.GetString(5),
-                reader.GetInt64(6),
-                reader.GetInt64(7),
-                reader.GetInt64(8),
-                reader.GetString(9),
-                reader.GetString(10),
-                reader.GetString(11),
-                reader.IsDBNull(12) ? null : reader.GetInt64(12),
-                reader.IsDBNull(13) ? null : reader.GetString(13),
-                reader.GetFieldValue<DateTimeOffset>(14),
-                reader.GetFieldValue<DateTimeOffset>(15)));
+                new NativeDispatch(
+                    reader.GetString(1), reader.GetString(2), reader.GetGuid(3), reader.GetInt64(4),
+                    reader.GetInt64(5), reader.GetString(6).Trim(), reader.GetString(7).Trim(),
+                    reader.GetString(8), reader.GetString(9), reader.GetString(10).Trim(),
+                    reader.GetString(11).Trim(), reader.GetInt64(12), reader.GetString(13),
+                    reader.GetString(14), reader.GetString(15), reader.GetString(16),
+                    reader.GetInt64(17), reader.GetInt64(18),
+                    reader.IsDBNull(19) ? null : reader.GetString(19).Trim(),
+                    reader.IsDBNull(20) ? null : reader.GetString(20),
+                    reader.GetString(21).Trim(), ChildCheckpointRecoveryManifestCodec.Hash(cost.RootElement),
+                    reader.GetBoolean(23), reader.GetBoolean(24), reader.GetFieldValue<DateTimeOffset>(25)),
+                reader.GetString(27), reader.GetString(28),
+                reader.IsDBNull(29) ? null : reader.GetInt64(29),
+                reader.IsDBNull(30) ? null : reader.GetString(30),
+                reader.GetFieldValue<DateTimeOffset>(26)));
+        }
+
+        RuntimeSdkSourceReceipt? source = null;
+        var rows = new List<RuntimeObservationDispatch>(storedRows.Count);
+        foreach (var (dispatchId, dispatch, reportState, accountingState,
+                     witnessWatermark, witnessDigest, updatedAt) in storedRows)
+        {
+            var receipts = await _executionEvidence.ReadNativeChildRebindsAsync(
+                connection, transaction, binding.ProjectId, binding.RunId,
+                dispatchId, cancellationToken).ConfigureAwait(false);
+            NativeChildRebindReceipt? rebind = null;
+            if (!receipts.IsEmpty)
+            {
+                source ??= await ReadCurrentSourceAsync(
+                    connection, transaction, registration, cancellationToken).ConfigureAwait(false);
+                var admission = new RuntimeNativeTurnAdmissionReceipt(
+                    registration, source.Source, dispatchId,
+                    dispatch.PromptHash, receipts[^1].EffectiveRequestHash, dispatch.OwnerRevision);
+                rebind = await RequireNativeDispatchBindingAsync(
+                    connection, transaction, dispatch, admission, source, cancellationToken).ConfigureAwait(false);
+            }
+            rows.Add(new RuntimeObservationDispatch(
+                dispatchId,
+                dispatch.RootSessionId,
+                dispatch.ChildSessionId,
+                dispatch.WorkPlanId,
+                dispatch.AssociationId,
+                dispatch.CheckpointId,
+                dispatch.CheckpointRevision,
+                dispatch.ExecutionFence,
+                dispatch.OwnerRevision,
+                dispatch.State,
+                reportState,
+                accountingState,
+                witnessWatermark,
+                witnessDigest,
+                dispatch.CreatedAt,
+                updatedAt)
+            {
+                NativeRebind = rebind is null
+                    ? null
+                    : new RuntimeObservationNativeRebind(
+                        new(dispatch.RuntimeInstanceId, dispatch.RegistrationRevision, dispatch.ExecutionFence,
+                            dispatch.CheckpointId, dispatch.CheckpointRevision, dispatch.SourceHash),
+                        new(rebind.RuntimeInstanceId, rebind.RegistrationRevision, rebind.DestinationFence,
+                            rebind.AnchorCheckpointId, rebind.AnchorCheckpointRevision,
+                            rebind.SdkSourceReceiptHash),
+                        rebind.ReceiptId,
+                        rebind.CanonicalPayloadHash,
+                        rebind.RecoveryOperationId,
+                        rebind.EffectiveRequestHash)
+            });
         }
 
         var truncated = rows.Count > RuntimeObservationDispatchCollection.MaximumItems;
@@ -423,11 +525,13 @@ internal sealed class RuntimeUsageSourceStore(
             RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(part.Text)),
             RuntimeNativeTurnContract.RequestHash(request.Message), checked(dispatch.OwnerRevision + 1));
         RuntimeNativeTurnContract.ValidateAdmission(admission, registration, request.Source, request.Message);
-        RequireNativeDispatch(dispatch, admission, source.Receipt.CanonicalPayloadHash);
+        var rebind = await RequireNativeDispatchBindingAsync(
+            connection, transaction, dispatch, admission, source.Receipt, cancellationToken).ConfigureAwait(false);
         if (dispatch.State != "prepared")
             throw new RuntimeAuthorizationException("runtime_native_turn_indeterminate");
         var checkpointHash = await RequireNativeCheckpointAsync(
-            connection, transaction, registration, admission, dispatch, cancellationToken).ConfigureAwait(false);
+            connection, transaction, registration, admission, dispatch, cancellationToken, rebind)
+            .ConfigureAwait(false);
         var binding = registration.Binding;
         if (RequiresCopilotCreditSnapshot(binding))
         {
@@ -846,11 +950,10 @@ internal sealed class RuntimeUsageSourceStore(
             source.Source.ModelSelectionReference, source.Source.ModelId, intent.PromptHash, admission.RequestHash,
             1, "prepared", checkpoint.State.WorkPlanId, intent.AssociationId, checkpoint.Info.CheckpointId,
             checkpoint.State.Revision, checkpoint.State.DecisionStateVersion, null, null);
-        // The dispatch must belong to the checkpoint that is stored for this run.
-        var checkpointHash = await RequireNativeCheckpointAsync(
-            connection, transaction, registration, admission, prepared, cancellationToken).ConfigureAwait(false);
         var marker = await ReadNativeDispatchMarkerAsync(
             connection, transaction, registration, intent.MessageId, cancellationToken).ConfigureAwait(false);
+        NativeChildRebindReceipt? rebind = null;
+        var checkpointDispatch = prepared;
         if (marker is not null)
         {
             // A dispatch row already exists for this message, for example from a retried request.
@@ -859,18 +962,26 @@ internal sealed class RuntimeUsageSourceStore(
             // earlier attempt may have been sent, so the result is indeterminate.
             var existingDispatch = await ReadNativeDispatchAsync(
                 connection, transaction, registration, intent.MessageId, cancellationToken).ConfigureAwait(false);
-            RequireNativeDispatch(existingDispatch, admission, source.CanonicalPayloadHash);
+            rebind = await RequireNativeDispatchBindingAsync(
+                connection, transaction, existingDispatch, admission, source, cancellationToken)
+                .ConfigureAwait(false);
             if (existingDispatch.RootSessionId != prepared.RootSessionId ||
                 existingDispatch.WorkPlanId != prepared.WorkPlanId ||
                 existingDispatch.AssociationId != prepared.AssociationId ||
-                existingDispatch.CheckpointId != prepared.CheckpointId ||
-                existingDispatch.CheckpointRevision != prepared.CheckpointRevision ||
-                existingDispatch.DecisionStateVersion != prepared.DecisionStateVersion)
+                rebind is null &&
+                (existingDispatch.CheckpointId != prepared.CheckpointId ||
+                 existingDispatch.CheckpointRevision != prepared.CheckpointRevision ||
+                 existingDispatch.DecisionStateVersion != prepared.DecisionStateVersion))
                 throw new RuntimeAuthorizationException("runtime_native_turn_conflict");
             if (existingDispatch.State != "prepared" || existingDispatch.OwnerRevision != 1)
                 throw new RuntimeAuthorizationException("runtime_native_turn_indeterminate");
             marker = new(existingDispatch.State, existingDispatch.OwnerRevision);
+            checkpointDispatch = existingDispatch;
         }
+        // The owner rechecks a rebound dispatch against its recovery anchor and current descendant.
+        var checkpointHash = await RequireNativeCheckpointAsync(
+            connection, transaction, registration, admission, checkpointDispatch,
+            cancellationToken, rebind).ConfigureAwait(false);
         if (registration.Binding.MaxModelTurns is { } maxModelTurns)
         {
             var observedCount = await RuntimeModelTurnReservationStore.CountRunWideAsync(
@@ -972,11 +1083,14 @@ internal sealed class RuntimeUsageSourceStore(
         // prepared revision; anything else means another writer changed it.
         var retained = await ReadNativeDispatchAsync(
             connection, transaction, registration, intent.MessageId, cancellationToken).ConfigureAwait(false);
-        RequireNativeDispatch(retained, admission, source.CanonicalPayloadHash);
+        rebind = await RequireNativeDispatchBindingAsync(
+            connection, transaction, retained, admission, source, cancellationToken).ConfigureAwait(false);
         if (retained.RootSessionId != prepared.RootSessionId || retained.WorkPlanId != prepared.WorkPlanId ||
-            retained.AssociationId != prepared.AssociationId || retained.CheckpointId != prepared.CheckpointId ||
-            retained.CheckpointRevision != prepared.CheckpointRevision ||
-            retained.DecisionStateVersion != prepared.DecisionStateVersion)
+            retained.AssociationId != prepared.AssociationId ||
+            rebind is null &&
+            (retained.CheckpointId != prepared.CheckpointId ||
+             retained.CheckpointRevision != prepared.CheckpointRevision ||
+             retained.DecisionStateVersion != prepared.DecisionStateVersion))
             throw new RuntimeAuthorizationException("runtime_native_turn_conflict");
         if (retained.State != "prepared" || retained.OwnerRevision != 1)
             throw new RuntimeAuthorizationException("runtime_native_turn_indeterminate");
@@ -1269,7 +1383,9 @@ internal sealed class RuntimeUsageSourceStore(
         RuntimeNativeTurnContract.ValidateObservation(request.Admission, request.Observation);
         var dispatch = await ReadNativeDispatchAsync(
             connection, transaction, registration, request.Admission.MessageId, cancellationToken).ConfigureAwait(false);
-        RequireNativeDispatch(dispatch, request.Admission, source.Receipt.CanonicalPayloadHash);
+        _ = await RequireNativeDispatchBindingAsync(
+            connection, transaction, dispatch, request.Admission, source.Receipt, cancellationToken)
+            .ConfigureAwait(false);
         await RequireUniqueNativeUsageAsync(
             connection, transaction, request.Admission, request.Observation, cancellationToken).ConfigureAwait(false);
         var hash = RuntimeNativeTurnContract.ObservationHash(request.Observation);
@@ -1341,7 +1457,9 @@ internal sealed class RuntimeUsageSourceStore(
                 execution_fence, runtime_binding_hash, sdk_source_receipt_hash, model_selection_reference,
                 selected_model_id, prompt_hash, request_hash, owner_revision, dispatch_state,
                 work_plan_id, association_id, checkpoint_id, checkpoint_revision, decision_state_version,
-                source_report_hash, source_report_json::text
+                source_report_hash, source_report_json::text, accepted_selection_hash,
+                jsonb_build_object('byok', accepted_byok_descriptor, 'cost', cost_binding_identity)::text,
+                is_cost_producing, hard_cap_serialized, created_at
             FROM {_dispatches}
             WHERE project_id = @project AND run_id = @run AND dispatch_id = @message
             FOR UPDATE
@@ -1350,12 +1468,74 @@ internal sealed class RuntimeUsageSourceStore(
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             throw new RuntimeAuthorizationException("runtime_native_turn_admission_unavailable");
+        using var cost = JsonDocument.Parse(reader.GetString(21));
         return new(reader.GetString(0), reader.GetString(1), reader.GetGuid(2), reader.GetInt64(3),
             reader.GetInt64(4), reader.GetString(5), reader.GetString(6), reader.GetString(7),
             reader.GetString(8), reader.GetString(9), reader.GetString(10), reader.GetInt64(11),
             reader.GetString(12), reader.GetString(13), reader.GetString(14), reader.GetString(15),
             reader.GetInt64(16), reader.GetInt64(17), reader.IsDBNull(18) ? null : reader.GetString(18),
-            reader.IsDBNull(19) ? null : reader.GetString(19));
+            reader.IsDBNull(19) ? null : reader.GetString(19), reader.GetString(20).Trim(),
+            ChildCheckpointRecoveryManifestCodec.Hash(cost.RootElement), reader.GetBoolean(22),
+            reader.GetBoolean(23), reader.GetFieldValue<DateTimeOffset>(24));
+    }
+
+    internal async Task<bool> IsNativeDispatchAdmittedForActionGrantAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RuntimeRegistration registration,
+        Guid dispatchId,
+        string promptHash,
+        CancellationToken cancellationToken)
+    {
+        var evidence = await ReadNativeActionDispatchEvidenceAsync(
+            connection, transaction, registration, dispatchId, promptHash, cancellationToken)
+            .ConfigureAwait(false);
+        return evidence is { State: "prepared" or "sending" };
+    }
+
+    internal async Task<RuntimeNativeActionDispatchEvidence?> ReadNativeActionDispatchEvidenceAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RuntimeRegistration registration,
+        Guid dispatchId,
+        string? expectedPromptHash,
+        CancellationToken cancellationToken)
+    {
+        var source = await ReadCurrentSourceAsync(
+            connection, transaction, registration, cancellationToken).ConfigureAwait(false);
+        var dispatch = await ReadNativeDispatchAsync(
+            connection, transaction, registration, dispatchId, cancellationToken).ConfigureAwait(false);
+        var rebinds = await _executionEvidence.ReadNativeChildRebindsAsync(
+            connection, transaction, registration.Binding.ProjectId, registration.Binding.RunId,
+            dispatchId, cancellationToken).ConfigureAwait(false);
+        var requestHash = rebinds.IsEmpty ? dispatch.RequestHash : rebinds[^1].EffectiveRequestHash;
+        var admission = new RuntimeNativeTurnAdmissionReceipt(
+            registration, source.Source, dispatchId, dispatch.PromptHash, requestHash, dispatch.OwnerRevision);
+        var rebind = await RequireNativeDispatchBindingAsync(
+            connection, transaction, dispatch, admission, source, cancellationToken).ConfigureAwait(false);
+        if (expectedPromptHash is not null && dispatch.PromptHash != expectedPromptHash)
+            return null;
+        string? checkpointHash = null;
+        if (dispatch.State is "prepared" or "sending")
+            checkpointHash = await RequireNativeCheckpointAsync(
+                connection, transaction, registration, admission, dispatch, cancellationToken, rebind)
+                .ConfigureAwait(false);
+        return new RuntimeNativeActionDispatchEvidence(
+            dispatch.RootSessionId,
+            dispatch.ChildSessionId,
+            dispatchId,
+            dispatch.State,
+            rebind?.RuntimeInstanceId ?? dispatch.RuntimeInstanceId,
+            rebind?.RegistrationRevision ?? dispatch.RegistrationRevision,
+            rebind?.DestinationFence ?? dispatch.ExecutionFence,
+            rebind?.SdkSourceReceiptHash ?? dispatch.SourceHash,
+            rebind?.EffectiveRequestHash ?? dispatch.RequestHash,
+            rebind?.AnchorCheckpointId ?? dispatch.CheckpointId,
+            rebind?.AnchorCheckpointRevision ?? dispatch.CheckpointRevision,
+            rebind?.AnchorDecisionStateVersion ?? dispatch.DecisionStateVersion,
+            rebind?.AnchorCheckpointHash ?? checkpointHash,
+            dispatch.WorkPlanId,
+            dispatch.AssociationId);
     }
 
     /// <summary>
@@ -1409,15 +1589,20 @@ internal sealed class RuntimeUsageSourceStore(
 
         var dispatch = await ReadNativeDispatchAsync(
             connection, transaction, registration, request.Denial.DispatchId, cancellationToken).ConfigureAwait(false);
+        var rebound = (await _executionEvidence.ReadNativeChildRebindsAsync(
+            connection, transaction, registration.Binding.ProjectId, registration.Binding.RunId,
+            request.Denial.DispatchId, cancellationToken).ConfigureAwait(false)).LastOrDefault();
         var expectedAdmission = new RuntimeNativeTurnAdmissionReceipt(
             registration, source.Receipt.Source, request.Denial.DispatchId, dispatch.PromptHash,
-            dispatch.RequestHash, checked(dispatch.OwnerRevision + 1));
-        RequireNativeDispatch(dispatch, expectedAdmission, source.Receipt.CanonicalPayloadHash);
+            rebound?.EffectiveRequestHash ?? dispatch.RequestHash, checked(dispatch.OwnerRevision + 1));
+        var rebind = await RequireNativeDispatchBindingAsync(
+            connection, transaction, dispatch, expectedAdmission, source.Receipt, cancellationToken)
+            .ConfigureAwait(false);
         if (dispatch.State != "prepared" ||
             dispatch.OwnerRevision != request.Denial.DispatchRevisionAfter)
             throw new RuntimeAuthorizationException("runtime_native_credit_denial_conflict");
         var checkpointHash = await RequireNativeCheckpointAsync(
-            connection, transaction, registration, expectedAdmission, dispatch, cancellationToken)
+            connection, transaction, registration, expectedAdmission, dispatch, cancellationToken, rebind)
             .ConfigureAwait(false);
         if (checkpointHash != storedDenial.CheckpointHash ||
             RuntimeNativeDenialContract.DispatchHash(
@@ -1802,7 +1987,8 @@ internal sealed class RuntimeUsageSourceStore(
             throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
         var dispatch = await ReadNativeDispatchAsync(
             connection, transaction, registration, admission.MessageId, cancellationToken).ConfigureAwait(false);
-        RequireNativeDispatch(dispatch, admission, source.CanonicalPayloadHash);
+        var rebind = await RequireNativeDispatchBindingAsync(
+            connection, transaction, dispatch, admission, source, cancellationToken).ConfigureAwait(false);
         if (dispatch.State is not ("terminal_pending_accounting" or "completed") ||
             dispatch.ReportHash != expected.CanonicalPayloadHash || dispatch.ReportJson is null ||
             expected.OwnerRevision !=
@@ -1815,7 +2001,8 @@ internal sealed class RuntimeUsageSourceStore(
         if (recorded.Observation.CompletedAt > timeProvider.GetUtcNow())
             throw new RuntimeAuthorizationException("runtime_native_turn_observation_invalid");
         await RequireNativeCheckpointAsync(
-            connection, transaction, registration, admission, dispatch, cancellationToken).ConfigureAwait(false);
+            connection, transaction, registration, admission, dispatch, cancellationToken, rebind)
+            .ConfigureAwait(false);
         await RequireUniqueNativeUsageAsync(
             connection, transaction, admission, recorded.Observation, cancellationToken).ConfigureAwait(false);
         return (dispatch, recorded);
@@ -1834,14 +2021,30 @@ internal sealed class RuntimeUsageSourceStore(
             return;
         await using var command = new NpgsqlCommand($"""
             SELECT EXISTS (
-                SELECT 1 FROM {_dispatches}
-                WHERE project_id = @project AND run_id = @run AND dispatch_id <> @message
-                    AND runtime_instance_id = @runtime
-                    AND source_report_json->'source'->>'sdkSessionId' = @sdk_session
-                    AND (source_report_json->'usageEventIds') ?| @events)
+                SELECT 1
+                FROM {_dispatches} dispatch
+                LEFT JOIN LATERAL (
+                    SELECT receipt_json
+                    FROM {_schema}.maf_runtime_evidence_receipts receipt
+                    WHERE receipt.project_id = dispatch.project_id AND receipt.run_id = dispatch.run_id
+                      AND receipt.receipt_kind = 'native-child-rebind'
+                      AND receipt.receipt_json->>'dispatchId' = dispatch.dispatch_id::text
+                    ORDER BY (receipt.receipt_json->>'destinationFence')::bigint DESC
+                    LIMIT 1
+                ) rebind ON true
+                WHERE dispatch.project_id = @project AND dispatch.run_id = @run
+                    AND dispatch.dispatch_id <> @message
+                    AND dispatch.source_report_json->'source'->>'sdkSessionId' = @sdk_session
+                    AND (dispatch.source_report_json->'usageEventIds') ?| @events
+                    AND (
+                        dispatch.runtime_instance_id = @runtime
+                        OR rebind.receipt_json->>'runtimeInstanceId' = @runtimeText
+                    ))
             """, connection, transaction);
         AddNativeScope(command, admission.Registration, admission.MessageId);
         command.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, admission.Source.RuntimeInstanceId);
+        command.Parameters.AddWithValue("runtimeText", NpgsqlDbType.Text,
+            admission.Source.RuntimeInstanceId.ToString("D"));
         command.Parameters.AddWithValue("sdk_session", NpgsqlDbType.Text, admission.Source.SdkSessionId);
         command.Parameters.AddWithValue("events", NpgsqlDbType.Array | NpgsqlDbType.Text,
             observation.UsageEventIds.Select(id => id.ToString("D")).ToArray());
@@ -1932,7 +2135,8 @@ internal sealed class RuntimeUsageSourceStore(
         RuntimeNativeTurnContract.ValidateAdmission(admission, registration, source.Source, message);
         var dispatch = await ReadNativeDispatchAsync(
             connection, transaction, registration, admission.MessageId, cancellationToken).ConfigureAwait(false);
-        RequireNativeDispatch(dispatch, admission, source.CanonicalPayloadHash);
+        _ = await RequireNativeDispatchBindingAsync(
+            connection, transaction, dispatch, admission, source, cancellationToken).ConfigureAwait(false);
         if (dispatch.State != "completed" || dispatch.ReportJson is null || dispatch.ReportHash is null)
             throw new RuntimeAuthorizationException("runtime_native_accounting_pending");
         var observation = Deserialize<RuntimeNativeTurnObservation>(dispatch.ReportJson);
@@ -1995,7 +2199,7 @@ internal sealed class RuntimeUsageSourceStore(
 
         var currentOrigin = await ChildCheckpointRecoveryCensus.ReadNativeOriginAsync(
             connection, transaction, _schema, root, member.Session, binding,
-            acceptedSelectionHash, sourceFence, cancellationToken).ConfigureAwait(false);
+            acceptedSelectionHash, cancellationToken).ConfigureAwait(false);
         if (currentOrigin != native)
             throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
 
@@ -2083,7 +2287,7 @@ internal sealed class RuntimeUsageSourceStore(
     /// <summary>
     /// Verifies that the dispatch row matches the runtime, source, model, prompt, and request in its admission receipt.
     /// </summary>
-    private static void RequireNativeDispatch(
+    private static void RequireOriginNativeDispatch(
         NativeDispatch dispatch, RuntimeNativeTurnAdmissionReceipt admission, string sourceHash)
     {
         var registration = admission.Registration;
@@ -2098,6 +2302,211 @@ internal sealed class RuntimeUsageSourceStore(
             throw new RuntimeAuthorizationException("runtime_native_turn_admission_invalid");
     }
 
+    private async Task<NativeChildRebindReceipt?> RequireNativeDispatchBindingAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        NativeDispatch dispatch,
+        RuntimeNativeTurnAdmissionReceipt admission,
+        RuntimeSdkSourceReceipt source,
+        CancellationToken cancellationToken)
+    {
+        var binding = admission.Registration;
+        var receipts = await _executionEvidence.ReadNativeChildRebindsAsync(
+            connection, transaction, binding.Binding.ProjectId, binding.Binding.RunId,
+            admission.MessageId, cancellationToken).ConfigureAwait(false);
+        if (receipts.IsEmpty)
+        {
+            RequireOriginNativeDispatch(dispatch, admission, source.CanonicalPayloadHash);
+            return null;
+        }
+
+        var receiptIds = new HashSet<Guid>();
+        var operationIds = new HashSet<Guid>();
+        var priorKeys = new HashSet<string>(StringComparer.Ordinal);
+        var destinationFences = new HashSet<long>();
+        NativeChildRebindReceipt? previous = null;
+        NativeChildRebindReceipt? current = null;
+        foreach (var receipt in receipts)
+        {
+            receipt.Validate();
+            if (!receiptIds.Add(receipt.ReceiptId) ||
+                !operationIds.Add(receipt.RecoveryOperationId) ||
+                !priorKeys.Add(receipt.PriorAuthorityKey) ||
+                !destinationFences.Add(receipt.DestinationFence) ||
+                receipt.ProjectId != binding.Binding.ProjectId ||
+                receipt.RunId != binding.Binding.RunId ||
+                receipt.RootSessionId != dispatch.RootSessionId ||
+                receipt.ChildSessionId != dispatch.ChildSessionId ||
+                receipt.DispatchId != admission.MessageId ||
+                receipt.MessageId != admission.MessageId ||
+                receipt.PromptHash != dispatch.PromptHash ||
+                receipt.OriginalRequestHash != dispatch.RequestHash ||
+                receipt.WorkPlanId != dispatch.WorkPlanId ||
+                receipt.AssociationId != dispatch.AssociationId ||
+                receipt.SelectionHash != dispatch.AcceptedSelectionHash ||
+                receipt.DestinationFence <= receipt.SourceFence ||
+                receipt.DestinationFence <= 0 ||
+                !string.Equals(receipt.SelectionHash, binding.Binding.AcceptedSelectionHash,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+
+            var manifest = await ReadNativeRebindManifestAsync(
+                connection, transaction, receipt, cancellationToken).ConfigureAwait(false);
+            var members = manifest.Members.Where(member =>
+                member.AssociationId == receipt.AssociationId &&
+                member.Session.SessionId == receipt.ChildSessionId).ToArray();
+            if (members.Length != 1)
+                throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+            var manifestMember = members[0];
+            if (manifestMember.NativeOrigin is not { } nativeOrigin ||
+                manifestMember.Disposition != "pendingUnsent" ||
+                ChildCheckpointRecoveryManifestCodec.Hash(manifest) != receipt.ManifestSha256 ||
+                manifest.OperationId != receipt.RecoveryOperationId ||
+                manifest.WorkPlanId != receipt.WorkPlanId ||
+                manifest.WorkPlanHash != receipt.WorkPlanHash ||
+                manifest.WorkflowHash != receipt.WorkflowHash ||
+                manifest.TenantId != receipt.TenantId ||
+                manifest.Root.ProjectId != receipt.ProjectId ||
+                manifest.Root.RunId != receipt.RunId ||
+                manifest.Root.SessionId != receipt.RootSessionId ||
+                !string.Equals(manifest.SelectionHash, receipt.SelectionHash, StringComparison.OrdinalIgnoreCase) ||
+                manifest.SourceCheckpointId != receipt.SourceCheckpointId ||
+                manifest.SourceCheckpointRevision != receipt.SourceCheckpointRevision ||
+                manifest.SourceCheckpointHash != receipt.SourceCheckpointHash ||
+                manifest.SourceExecutionFence != receipt.SourceFence ||
+                manifest.SourceDecisionStateVersion != receipt.SourceDecisionStateVersion ||
+                manifest.HoldFence != receipt.DestinationFence ||
+                manifestMember.MessageId != receipt.MessageId ||
+                manifestMember.PromptHash != receipt.PromptHash ||
+                manifestMember.AssociationHash != receipt.AssociationHash ||
+                manifestMember.WorkItemBindingSha256 != receipt.WorkItemBindingSha256 ||
+                manifestMember.MessageRequestHash != receipt.MessageRequestHash ||
+                manifestMember.EgressReceiptHash != receipt.EgressReceiptHash ||
+                NativeChildRebindOriginFingerprint.Create(manifest, manifestMember).Hash !=
+                    receipt.OriginFingerprint ||
+                !MatchesNativeOrigin(dispatch, nativeOrigin))
+                throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+
+            if (previous is null)
+            {
+                if (receipt.PriorAuthorityKey != "origin" ||
+                    receipt.PriorReceiptId is not null || receipt.PriorReceiptHash is not null)
+                    throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+            }
+            else if (receipt.PriorAuthorityKey != $"receipt:{previous.ReceiptId:D}" ||
+                     receipt.PriorReceiptId != previous.ReceiptId ||
+                     receipt.PriorReceiptHash != previous.CanonicalPayloadHash ||
+                     receipt.OriginFingerprint != previous.OriginFingerprint ||
+                     receipt.OriginalRequestHash != previous.OriginalRequestHash ||
+                     receipt.DestinationFence <= previous.DestinationFence)
+                throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+
+            if (receipt.Lineage.Length == 0 ||
+                receipt.Lineage[^1].OperationId != receipt.RecoveryOperationId ||
+                receipt.Lineage[^1].SourceCheckpointId != receipt.SourceCheckpointId ||
+                receipt.Lineage[^1].SourceCheckpointRevision != receipt.SourceCheckpointRevision ||
+                receipt.Lineage[^1].SourceCheckpointHash != receipt.SourceCheckpointHash ||
+                receipt.Lineage[^1].SourceFence != receipt.SourceFence ||
+                receipt.Lineage[^1].DestinationCheckpointId != receipt.AnchorCheckpointId ||
+                receipt.Lineage[^1].DestinationCheckpointRevision != receipt.AnchorCheckpointRevision ||
+                receipt.Lineage[^1].DestinationCheckpointHash != receipt.AnchorCheckpointHash ||
+                receipt.Lineage[^1].DestinationFence != receipt.DestinationFence)
+                throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+
+            if (receipt.SupersessionReceiptId is { } supersessionId)
+            {
+                var supersession = await _executionEvidence.ReadCheckpointRecoverySupersessionAsync(
+                    connection, transaction, receipt.ProjectId, receipt.RunId,
+                    receipt.Lineage[^1].SupersedesOperationId
+                        ?? throw new RuntimeAuthorizationException(
+                            "checkpoint_recovery_native_rebind_invalid"),
+                    cancellationToken).ConfigureAwait(false);
+                if (supersession is null || supersession.ReceiptId != supersessionId ||
+                    supersession.CanonicalPayloadHash != receipt.SupersessionReceiptHash ||
+                    supersession.SuccessorOperationId != receipt.RecoveryOperationId)
+                    throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+            }
+            else if (receipt.SupersessionReceiptHash is not null ||
+                     receipt.Lineage[^1].SupersedesOperationId is not null ||
+                     receipt.Lineage[^1].SupersessionReceiptId is not null ||
+                     receipt.Lineage[^1].SupersessionPayloadHash is not null)
+                throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+
+            previous = receipt;
+            if (receipt.DestinationFence == binding.Binding.ExecutionFence)
+                current = receipt;
+        }
+
+        if (current is null || current.RecoveryOperationId != receipts[^1].RecoveryOperationId ||
+            current.RuntimeInstanceId != binding.RuntimeInstanceId ||
+            current.RegistrationRevision != binding.Revision ||
+            current.RegistrationHash != RuntimeContractValidation.RegistrationHash(binding) ||
+            current.SdkSourceReceiptHash != source.CanonicalPayloadHash ||
+            current.SourceGrantId != source.SourceGrantId ||
+            current.EffectiveRequestHash != admission.RequestHash ||
+            current.PromptHash != admission.PromptHash ||
+            current.RegistrationRevision < 1 ||
+            await CheckpointRecoveryHold.IsHeldAsync(
+                connection, transaction, _schema, binding.Binding.ProjectId, binding.Binding.RunId,
+                cancellationToken).ConfigureAwait(false))
+            throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+        return current;
+    }
+
+    private async Task<ChildCheckpointRecoveryManifest> ReadNativeRebindManifestAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        NativeChildRebindReceipt receipt,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT result::text, progress::text
+            FROM {_executionOperations}
+            WHERE project_id = @project AND run_id = @run
+              AND operation_id = @operation AND operation_kind = 'recovery'
+            FOR SHARE
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, receipt.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, receipt.RunId);
+        command.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, receipt.RecoveryOperationId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+        var operation = JsonSerializer.Deserialize<RunExecutionTransitionResult>(
+            reader.GetString(0), JsonOptions);
+        var progress = JsonSerializer.Deserialize<JsonElement>(reader.GetString(1));
+        await reader.DisposeAsync().ConfigureAwait(false);
+        if (operation?.CheckpointRecovery is not { Phase: "ready", DispatchHeld: false } status ||
+            operation.OperationId != receipt.RecoveryOperationId ||
+            operation.Session.ProjectId != receipt.ProjectId ||
+            operation.Session.RunId != receipt.RunId ||
+            operation.Session.SessionId != receipt.RootSessionId ||
+            operation.ExecutionFence != receipt.DestinationFence ||
+            status.RecoveryCheckpointId != receipt.AnchorCheckpointId ||
+            status.RecoveryCheckpointRevision != receipt.AnchorCheckpointRevision ||
+            status.RecoveryCheckpointHash != receipt.AnchorCheckpointHash)
+            throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+        return CoordinationOwnerStore.ReadCheckpointRecoveryManifest(operation, progress);
+    }
+
+    private static bool MatchesNativeOrigin(NativeDispatch dispatch, ChildRecoveryNativeOrigin native)
+    {
+        return dispatch.RuntimeInstanceId == native.RuntimeInstanceId &&
+            dispatch.RegistrationRevision == native.RegistrationRevision &&
+            dispatch.ExecutionFence == native.ExecutionFence &&
+            dispatch.AcceptedSelectionHash == native.AcceptedSelectionHash &&
+            dispatch.PromptHash == native.PromptHash &&
+            dispatch.RequestHash == native.RequestHash &&
+            dispatch.BindingHash == native.RuntimeBindingHash &&
+            dispatch.SourceHash == native.SdkSourceReceiptHash &&
+            dispatch.ModelSelectionReference == native.ModelSelectionReference &&
+            dispatch.ModelId == native.SelectedModelId &&
+            dispatch.CostBindingHash == native.CostBindingHash &&
+            dispatch.IsCostProducing == native.IsCostProducing &&
+            dispatch.HardCapSerialized == native.HardCapSerialized &&
+            dispatch.CreatedAt == native.CreatedAt;
+    }
+
     /// <summary>
     /// Reads the bound root checkpoint and requires that it still contains this running dispatch intent.
     /// </summary>
@@ -2105,8 +2514,14 @@ internal sealed class RuntimeUsageSourceStore(
     /// <exception cref="RuntimeAuthorizationException">Thrown when the checkpoint is no longer latest or its intent, revision, fence, or progress changed.</exception>
     private async Task<string> RequireNativeCheckpointAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
-        RuntimeNativeTurnAdmissionReceipt admission, NativeDispatch dispatch, CancellationToken cancellationToken)
+        RuntimeNativeTurnAdmissionReceipt admission, NativeDispatch dispatch, CancellationToken cancellationToken,
+        NativeChildRebindReceipt? rebind = null)
     {
+        if (rebind is not null)
+            return await RequireReboundNativeCheckpointAsync(
+                connection, transaction, registration, admission, dispatch, rebind, cancellationToken)
+                .ConfigureAwait(false);
+
         await using var command = new NpgsqlCommand($"""
             SELECT checkpoint.payload::text
             FROM {_checkpoints} checkpoint
@@ -2149,6 +2564,131 @@ internal sealed class RuntimeUsageSourceStore(
             !IsNativeDispatchRunning(checkpoint, dispatch.AssociationId))
             throw new RuntimeAuthorizationException("runtime_native_turn_checkpoint_stale");
         return RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(payload));
+    }
+
+    private async Task<string> RequireReboundNativeCheckpointAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RuntimeRegistration registration,
+        RuntimeNativeTurnAdmissionReceipt admission,
+        NativeDispatch dispatch,
+        NativeChildRebindReceipt rebind,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            WITH RECURSIVE leaves AS (
+                SELECT checkpoint.checkpoint_id, checkpoint.parent_checkpoint_id,
+                       checkpoint.execution_fence, checkpoint.payload, 0 AS depth
+                FROM {_checkpoints} checkpoint
+                WHERE checkpoint.project_id = @project AND checkpoint.run_id = @run
+                  AND checkpoint.session_id = @root
+                  AND checkpoint.store_name = 'coordinator-execution'
+                  AND checkpoint.execution_fence = @fence
+                  AND NOT EXISTS (
+                      SELECT 1 FROM {_checkpoints} child
+                      WHERE child.project_id = checkpoint.project_id
+                        AND child.run_id = checkpoint.run_id
+                        AND child.session_id = checkpoint.session_id
+                        AND child.store_name = checkpoint.store_name
+                        AND child.parent_checkpoint_id = checkpoint.checkpoint_id)
+                ORDER BY checkpoint.checkpoint_id
+                LIMIT 2
+            ),
+            chain AS (
+                SELECT checkpoint_id, parent_checkpoint_id, execution_fence, payload, depth,
+                       ARRAY[checkpoint_id]::text[] AS path
+                FROM leaves
+                UNION ALL
+                SELECT parent.checkpoint_id, parent.parent_checkpoint_id,
+                       parent.execution_fence, parent.payload, child.depth + 1,
+                       child.path || parent.checkpoint_id
+                FROM chain child
+                JOIN {_checkpoints} parent
+                  ON parent.project_id = @project AND parent.run_id = @run
+                 AND parent.session_id = @root
+                 AND parent.store_name = 'coordinator-execution'
+                 AND parent.execution_fence = @fence
+                 AND parent.checkpoint_id = child.parent_checkpoint_id
+                WHERE child.checkpoint_id <> @anchor
+                  AND NOT parent.checkpoint_id = ANY(child.path)
+            )
+            SELECT depth, checkpoint_id, parent_checkpoint_id, execution_fence,
+                   CASE WHEN depth = 0 OR checkpoint_id = @anchor THEN payload::text END
+            FROM chain
+            ORDER BY depth, checkpoint_id
+            """, connection, transaction);
+        AddNativeScope(command, registration, admission.MessageId);
+        command.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, dispatch.RootSessionId);
+        command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, registration.Binding.ExecutionFence);
+        command.Parameters.AddWithValue("anchor", NpgsqlDbType.Varchar, rebind.AnchorCheckpointId);
+        var chain = new List<(int Depth, string Id, string? Parent, long Fence, string? Payload)>();
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                chain.Add((reader.GetInt32(0), reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.GetInt64(3), reader.IsDBNull(4) ? null : reader.GetString(4)));
+        }
+        if (chain.Count == 0 || chain[0].Depth != 0 ||
+            chain.Count(row => row.Depth == 0) != 1 ||
+            chain.Select(row => row.Id).Distinct(StringComparer.Ordinal).Count() != chain.Count)
+            throw new RuntimeAuthorizationException("runtime_native_turn_checkpoint_stale");
+        for (var index = 1; index < chain.Count; index++)
+            if (chain[index].Depth != index ||
+                chain[index - 1].Parent != chain[index].Id ||
+                chain[index].Fence != registration.Binding.ExecutionFence)
+                throw new RuntimeAuthorizationException("runtime_native_turn_checkpoint_stale");
+        var anchorIndex = chain.FindIndex(row => row.Id == rebind.AnchorCheckpointId);
+        if (anchorIndex < 0 ||
+            chain[anchorIndex].Fence != rebind.DestinationFence ||
+            Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                Encoding.UTF8.GetBytes(chain[anchorIndex].Payload!))) !=
+                rebind.AnchorCheckpointHash)
+            throw new RuntimeAuthorizationException("runtime_native_turn_checkpoint_stale");
+        using var anchorDocument = JsonDocument.Parse(chain[anchorIndex].Payload!);
+        var anchorState = MafExecutionCheckpointContract.Deserialize(anchorDocument.RootElement);
+        if (anchorState.Revision != rebind.AnchorCheckpointRevision ||
+            anchorState.DecisionStateVersion != rebind.AnchorDecisionStateVersion ||
+            anchorState.WorkPlanId != rebind.WorkPlanId ||
+            anchorState.RecoveryLineage is not { } anchorLineage ||
+            anchorLineage.RecoveryOperationId != rebind.RecoveryOperationId ||
+            anchorLineage.RecoveryExecutionFence != rebind.DestinationFence)
+            throw new RuntimeAuthorizationException("runtime_native_turn_checkpoint_stale");
+
+        using var latestDocument = JsonDocument.Parse(chain[0].Payload!);
+        var latest = MafExecutionCheckpointContract.Deserialize(latestDocument.RootElement);
+        if (latest.WorkPlanId != rebind.WorkPlanId ||
+            latest.DecisionStateVersion != rebind.AnchorDecisionStateVersion ||
+            latest.RecoveryLineage != anchorLineage ||
+            !latest.PendingDispatches.TryGetValue(rebind.AssociationId, out var pending) ||
+            pending.ChildSessionId != dispatch.ChildSessionId ||
+            pending.MessageId != admission.MessageId ||
+            pending.PromptHash != admission.PromptHash ||
+            pending.EgressReceipt is null ||
+            ChildCheckpointRecoveryManifestCodec.Hash(pending.EgressReceipt) != rebind.EgressReceiptHash ||
+            latest.Results.ContainsKey(rebind.AssociationId) ||
+            !IsNativeDispatchRunning(latest, rebind.AssociationId))
+            throw new RuntimeAuthorizationException("runtime_native_turn_checkpoint_stale");
+
+        await using var decision = new NpgsqlCommand($"""
+            SELECT 1 FROM {_decisions} current
+            WHERE current.project_id = @project AND current.run_id = @run
+              AND current.session_id = @root
+              AND current.execution_fence = @fence
+              AND current.state_version = @decision
+              AND NOT EXISTS (
+                  SELECT 1 FROM {_decisions} next
+                  WHERE next.project_id = current.project_id AND next.run_id = current.run_id
+                    AND next.session_id = current.session_id
+                    AND next.state_version > current.state_version)
+            """, connection, transaction);
+        AddNativeScope(decision, registration, admission.MessageId);
+        decision.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, dispatch.RootSessionId);
+        decision.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, registration.Binding.ExecutionFence);
+        decision.Parameters.AddWithValue("decision", NpgsqlDbType.Bigint, rebind.AnchorDecisionStateVersion);
+        if (await decision.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
+            throw new RuntimeAuthorizationException("runtime_native_turn_checkpoint_stale");
+        return RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(chain[0].Payload!));
     }
 
     /// <summary>
@@ -2209,7 +2749,9 @@ internal sealed class RuntimeUsageSourceStore(
         long ExecutionFence, string BindingHash, string SourceHash, string ModelSelectionReference,
         string ModelId, string PromptHash, string RequestHash, long OwnerRevision, string State,
         string WorkPlanId, string AssociationId, string CheckpointId, long CheckpointRevision,
-        long DecisionStateVersion, string? ReportHash, string? ReportJson);
+        long DecisionStateVersion, string? ReportHash, string? ReportJson,
+        string AcceptedSelectionHash = "", string CostBindingHash = "",
+        bool IsCostProducing = false, bool HardCapSerialized = false, DateTimeOffset CreatedAt = default);
 
     /// <summary>
     /// Minimal dispatch state and owner revision used to bind a credit-denial decision.
@@ -2357,7 +2899,7 @@ internal sealed class RuntimeUsageSourceStore(
     /// <summary>
     /// Loads the source receipt and database metadata for a runtime ID.
     /// </summary>
-    private async Task<StoredSource?> ReadSourceAsync(
+    internal async Task<StoredSource?> ReadSourceAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, Guid runtimeInstanceId,
         CancellationToken cancellationToken)
     {
@@ -2423,5 +2965,5 @@ internal sealed class RuntimeUsageSourceStore(
     /// <summary>
     /// The SDK source receipt paired with the configuration hash used to authorize it.
     /// </summary>
-    private sealed record StoredSource(RuntimeSdkSourceReceipt Receipt, string ConfigurationHash);
+    internal sealed record StoredSource(RuntimeSdkSourceReceipt Receipt, string ConfigurationHash);
 }

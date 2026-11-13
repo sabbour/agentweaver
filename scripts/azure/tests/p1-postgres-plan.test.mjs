@@ -227,11 +227,11 @@ test('Only reviewed owner functions receive direct runtime EXECUTE', () => {
 });
 
 // The Core catalog includes feature migrations and preserves the reserved 034 gap.
-test('Core plan includes migration 050 and exact owner grants', () => {
+test('Core plan includes migration 051 and exact owner grants', () => {
   // The plan must include every shipped resource and only the table operations its owner requires.
   const plan = buildP1PostgresPlan();
   assert.deepEqual(plan.coreVersions,
-    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]);
+    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51]);
   assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
     .find(table => table.table === 'runtime_run_start_intents'),
   { table: 'runtime_run_start_intents', privileges: ['SELECT', 'INSERT', 'UPDATE'] });

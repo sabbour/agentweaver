@@ -29,8 +29,12 @@
     },
     {
       "name": "v1-checkpoint-gate-recovery",
-      "concept": "Pending-gate Host recovery with a retained workspace and stable retries",
-      "docs": ["docs/architecture/environment-sandbox.md"]
+      "concept": "Pending-gate and saved-child Host recovery with immutable native rebind",
+      "docs": [
+        "docs/architecture/environment-sandbox.md",
+        "docs/architecture/agenthost.md",
+        "docs/deep-dive/orchestration.md"
+      ]
     },
     {
       "name": "v1-environment-buildtest-command",

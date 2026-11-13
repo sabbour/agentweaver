@@ -4007,6 +4007,13 @@ internal sealed partial class CoordinationOwnerStore
                     run.Fence, operationId, checkpointRecovery, rootStartup, sourceCheckpoint,
                     decision.ConfirmedWorkPlan!, children, cancellationToken, originManifest)
                     .ConfigureAwait(false);
+                if (manifest.Members.Any(member =>
+                        member.Disposition == "pendingUnsent" &&
+                        member.NativeOrigin?.State == "prepared"))
+                    _ = await new RuntimeExecutionEvidenceLedgerStore(_schema[1..^1])
+                        .RequireNativeChildRebindSchemaAsync(
+                            connection, transaction, requireApplied: true, cancellationToken)
+                        .ConfigureAwait(false);
                 childManifest = ChildCheckpointRecoveryManifestCodec.Encode(manifest);
                 childBoundary = true;
                 childRecoveryIndeterminate = manifest.OtherNativeWork.Length > 0 ||
@@ -4065,6 +4072,10 @@ internal sealed partial class CoordinationOwnerStore
             connection, transaction, projectId, runId, previousFence, cancellationToken)
             .ConfigureAwait(false);
         var nextFence = checked(previousFence + 1);
+        if (checkpointRecovery is not null)
+            await AdvanceCheckpointRecoveryCreditGuardAsync(
+                connection, transaction, identity, run, previousFence, nextFence, cancellationToken)
+                .ConfigureAwait(false);
         var fencedSessions = ImmutableArray.CreateBuilder<SessionExecutionFenceChange>();
         var rootStateVersion = 0L;
         // Recovery restores owner state at a new fence; it does not replay physical runtime effects.
@@ -4308,6 +4319,57 @@ internal sealed partial class CoordinationOwnerStore
                 connection, transaction, _schema, projectId, runId, cancellationToken).ConfigureAwait(false))
             throw new CoordinationException(
                 "checkpoint_recovery_dispatch_held", StatusCodes.Status409Conflict);
+    }
+
+    private async Task AdvanceCheckpointRecoveryCreditGuardAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity identity,
+        AcceptedRunRow run,
+        long previousFence,
+        long nextFence,
+        CancellationToken cancellationToken)
+    {
+        await using var read = new NpgsqlCommand($"""
+            SELECT owner_revision, execution_fence, tenant_id, root_session_id, accepted_selection_hash
+            FROM {_schema}.maf_execution_run_guards
+            WHERE project_id = @project AND run_id = @run
+            FOR UPDATE
+            """, connection, transaction);
+        AddRunScope(read, identity.ProjectId, identity.RunId);
+        await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return;
+        var revision = reader.GetInt64(0);
+        var fence = reader.GetInt64(1);
+        var tenant = reader.GetString(2);
+        var root = reader.GetString(3);
+        var selectionHash = reader.GetString(4).Trim();
+        await reader.DisposeAsync().ConfigureAwait(false);
+        if (revision < 1 || fence != previousFence || tenant != run.TenantId ||
+            root != identity.SessionId ||
+            !string.Equals(selectionHash, run.SelectionHash, StringComparison.OrdinalIgnoreCase))
+            throw new CoordinationException(
+                "checkpoint_recovery_progress_conflict", StatusCodes.Status409Conflict);
+
+        await using var update = new NpgsqlCommand($"""
+            UPDATE {_schema}.maf_execution_run_guards
+            SET execution_fence = @nextFence, owner_revision = owner_revision + 1,
+                updated_at = clock_timestamp()
+            WHERE project_id = @project AND run_id = @run AND owner_revision = @revision
+              AND execution_fence = @previousFence AND tenant_id = @tenant AND root_session_id = @root
+              AND accepted_selection_hash = @selection
+            """, connection, transaction);
+        AddRunScope(update, identity.ProjectId, identity.RunId);
+        update.Parameters.AddWithValue("revision", NpgsqlDbType.Bigint, revision);
+        update.Parameters.AddWithValue("previousFence", NpgsqlDbType.Bigint, previousFence);
+        update.Parameters.AddWithValue("nextFence", NpgsqlDbType.Bigint, nextFence);
+        update.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, run.TenantId);
+        update.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, identity.SessionId);
+        update.Parameters.AddWithValue("selection", NpgsqlDbType.Char, run.SelectionHash);
+        if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+            throw new CoordinationException(
+                "checkpoint_recovery_progress_conflict", StatusCodes.Status409Conflict);
     }
 
     internal static void RequireNoChildJoinPlatformHistory(
@@ -5392,6 +5454,8 @@ internal sealed partial class CoordinationOwnerStore
                 throw new CoordinationException(
                     "checkpoint_recovery_import_invalid", StatusCodes.Status409Conflict);
 
+            await LockCheckpointRecoverySessionsAsync(
+                connection, transaction, completedUnjoinedManifest!, cancellationToken).ConfigureAwait(false);
             foreach (var member in members)
             {
                 var child = await ReadSessionAsync(
@@ -5491,6 +5555,30 @@ internal sealed partial class CoordinationOwnerStore
                 throw new CoordinationException(
                     "checkpoint_recovery_members_not_ready", StatusCodes.Status409Conflict);
         }
+        if (status.Phase == "ready" && childManifest is not null && imports.Count == 0)
+        {
+            if (checkpointStore is null || usageSources is null)
+                throw new CoordinationException(
+                    "checkpoint_recovery_checkpoint_stale", StatusCodes.Status409Conflict);
+            await LockCheckpointRecoverySessionsAsync(
+                connection, transaction, childManifest, cancellationToken).ConfigureAwait(false);
+            await checkpointStore.AcquireExecutionLockInTransactionAsync(
+                connection, transaction, cancellationToken).ConfigureAwait(false);
+            importCheckpoint = await checkpointStore.ReadLatestInTransactionAsync(
+                connection, transaction, cancellationToken).ConfigureAwait(false);
+            if (importCheckpoint is null ||
+                importCheckpoint.Info.CheckpointId != status.RecoveryCheckpointId ||
+                importCheckpoint.State.Revision != status.RecoveryCheckpointRevision ||
+                importCheckpoint.State.DecisionStateVersion != status.DecisionStateVersion ||
+                importCheckpoint.State.RecoveryLineage is not { } lineage ||
+                lineage.SourceCheckpointId != status.SourceCheckpointId ||
+                lineage.SourceCheckpointRevision != status.SourceCheckpointRevision ||
+                lineage.SourceCheckpointHash != status.SourceCheckpointHash ||
+                lineage.RecoveryOperationId != operationId ||
+                lineage.RecoveryExecutionFence != status.ExecutionFence)
+                throw new CoordinationException(
+                    "checkpoint_recovery_checkpoint_stale", StatusCodes.Status409Conflict);
+        }
         RequireImmutableCheckpointRecoveryAdmission(current, status);
         if (status.Phase == "ready" && readyIntent is null ||
             readyIntent is not null &&
@@ -5502,6 +5590,18 @@ internal sealed partial class CoordinationOwnerStore
         {
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return result;
+        }
+
+        if (status.Phase == "ready" && childManifest is not null &&
+            childManifest.Members.Any(member =>
+                member.Disposition == "pendingUnsent" && member.NativeOrigin?.State == "prepared"))
+        {
+            if (importCheckpoint is null || readyIntent is null || usageSources is null)
+                throw new CoordinationException(
+                    "checkpoint_recovery_checkpoint_stale", StatusCodes.Status409Conflict);
+            await AppendNativeChildRebindsAsync(
+                connection, transaction, identity, run, actor, operationId, status, childManifest,
+                importCheckpoint, readyIntent, usageSources, cancellationToken).ConfigureAwait(false);
         }
 
         if (imports.Count > 0)
@@ -5925,7 +6025,7 @@ internal sealed partial class CoordinationOwnerStore
         return manifest;
     }
 
-    private static ChildCheckpointRecoveryManifest ReadCheckpointRecoveryManifest(
+    internal static ChildCheckpointRecoveryManifest ReadCheckpointRecoveryManifest(
         RunExecutionTransitionResult operation,
         JsonElement progress)
     {
@@ -5940,7 +6040,7 @@ internal sealed partial class CoordinationOwnerStore
                 manifest.GetString()!, digest.GetString()!);
             if (operation.CheckpointRecovery is not { BoundaryKind: "childJoin" } status ||
                 status.ChildManifestSha256 != digest.GetString() ||
-                status.DispatchHeld != true ||
+                status.DispatchHeld != (status.Phase != "ready") ||
                 value.OperationId != operation.OperationId ||
                 value.Root != operation.Session ||
                 value.HoldFence != operation.ExecutionFence ||

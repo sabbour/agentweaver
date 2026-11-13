@@ -676,7 +676,10 @@ authenticated native-cache or journal material before Orchestrator reports
 For a saved child join, Orchestrator checks the saved child boundary, records a
 frozen manifest, advances the fence, and writes a checkpoint with recovery
 lineage. It keeps `dispatchHeld` true while it restores saved children with
-proven-unsent native work. The continuation registers the root and every
+proven-unsent native work. A pending child with no native row follows the
+existing path. A prepared native origin is eligible only when its immutable
+row still has owner revision 1, no report, and no accounting progress, and the
+owner verifies any prior effective binding. The continuation registers the root and every
 required child before it bootstraps any child. It does not send a new task
 message during recovery. AgentHost must restore a compatible native cache or
 saved turn history before it can report readiness. Configuration-only,
@@ -693,15 +696,29 @@ required readiness checks pass. A missing or mismatched result rolls back that
 transaction and keeps the hold active. Recovery does not run the completed
 child again.
 
+For a prepared pending child, the final ready transaction also appends one
+immutable `native-child-rebind` receipt before it releases the hold. The receipt
+links the original dispatch to the ready replacement and the recovery
+checkpoint. It does not update the origin row or create another dispatch.
+Checkpoint reads accept a later current leaf only when its lineage proves
+descent from the receipt anchor and the saved child work remains unchanged.
+After the hold is released, ordinary dispatch uses the same saved message,
+association, and prompt through the effective binding, then follows the usual
+native report and accounting path. `ready` still means that the Host restored
+the boundary; it does not mean that the child task or run is complete.
+
 If a child-join recovery is blocked at Host activation after the replacement
 registration set is complete, a new operation can supersede it. The owner
 requires exact retirement and registration receipts, the same saved child and
-plan identity, and owner evidence that each pending dispatch has no native
-dispatch row. It records the link with the new fence, checkpoint, and hold in
-one transaction. The old operation stays blocked and cannot release the new
-hold. The new operation restores the root and required children again. If the
-owner cannot verify the saved no-send and replacement evidence, it rejects the
-new operation and keeps the hold active.
+plan identity, and owner evidence that each pending dispatch has either no
+native row or the same prepared, revision-1 origin with no report or accounting
+progress. The owner verifies the prior effective binding and includes the
+origin fingerprint and no-send state in its supersession proof. It records the
+link with the new fence, checkpoint, and hold in one transaction. The old
+operation stays blocked and cannot release the new hold. The new operation
+restores the root and required children again. It appends any rebind only after
+the replacement is ready. If the owner cannot verify the saved no-send and
+replacement evidence, it rejects the new operation and keeps the hold active.
 
 Guarded owner writes fail while the hold is active. The owner rejects
 unsupported platform-effect history instead of replaying it. Retry a pending

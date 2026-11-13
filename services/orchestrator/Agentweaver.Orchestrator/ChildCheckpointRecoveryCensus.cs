@@ -159,17 +159,47 @@ internal static class ChildCheckpointRecoveryCensus
                  intent.MessageId != binding.DispatchMessageId || intent.PromptHash != binding.PromptHash))
                 throw InvalidBoundary();
             var native = await ReadNativeOriginAsync(
-                connection, transaction, schema, root, child, binding, selectionHash, originFence,
+                connection, transaction, schema, root, child, binding, selectionHash,
                 cancellationToken).ConfigureAwait(false);
-            if (native is not null &&
-                (originMember is null
-                    ? registration is null || native.RuntimeInstanceId != registration.RuntimeInstanceId ||
-                      native.RegistrationRevision != registration.Revision ||
-                      native.RuntimeBindingHash != RuntimeContractValidation.RegistrationHash(registration)
-                    : originMember.Startup.RegistrationId != native.RuntimeInstanceId ||
-                      originMember.Startup.RegistrationRevision != native.RegistrationRevision ||
-                      originMember.NativeOrigin?.RuntimeBindingHash != native.RuntimeBindingHash))
-                throw InvalidBoundary();
+            NativeChildRebindReceipt? priorNativeRebind = null;
+            if (native is not null)
+            {
+                var rebinds = await new RuntimeExecutionEvidenceLedgerStore(schema)
+                    .ReadNativeChildRebindsAsync(
+                        connection, transaction, root.ProjectId, root.RunId, native.DispatchId,
+                        cancellationToken).ConfigureAwait(false);
+                priorNativeRebind = rebinds.LastOrDefault();
+                if (originMember is not null &&
+                    (originMember.PriorNativeRebindReceiptId != priorNativeRebind?.ReceiptId ||
+                     originMember.PriorNativeRebindPayloadHash != priorNativeRebind?.CanonicalPayloadHash))
+                    throw InvalidBoundary();
+            }
+            if (native is not null)
+            {
+                if (priorNativeRebind is null)
+                {
+                    if (originMember is null
+                        ? registration is null || native.ExecutionFence != sourceFence ||
+                          native.RuntimeInstanceId != registration.RuntimeInstanceId ||
+                          native.RegistrationRevision != registration.Revision ||
+                          native.RuntimeBindingHash != RuntimeContractValidation.RegistrationHash(registration)
+                        : originMember.Startup.RegistrationId != native.RuntimeInstanceId ||
+                          originMember.Startup.RegistrationRevision != native.RegistrationRevision ||
+                          originMember.NativeOrigin?.RuntimeBindingHash != native.RuntimeBindingHash)
+                        throw InvalidBoundary();
+                }
+                else
+                {
+                    var effectiveStartup = originMember?.Startup ?? startup;
+                    if (priorNativeRebind.DispatchId != native.DispatchId ||
+                         priorNativeRebind.OriginOwnerRevision != native.OwnerRevision ||
+                         priorNativeRebind.OriginState != native.State ||
+                         effectiveStartup.RegistrationId != priorNativeRebind.RuntimeInstanceId ||
+                         effectiveStartup.RegistrationRevision != priorNativeRebind.RegistrationRevision ||
+                         effectiveStartup.RegistrationBindingHash != priorNativeRebind.RegistrationHash)
+                        throw InvalidBoundary();
+                }
+            }
             var originIntent = native is null
                 ? intent
                 : await ReadOriginIntentAsync(
@@ -218,8 +248,14 @@ internal static class ChildCheckpointRecoveryCensus
                 hasReceipt ? ChildCheckpointRecoveryManifestCodec.Hash(receipt) : null)
             {
                 SavedRegistration = disposition == "completedUnjoined" ? registration : null,
-                WorkItemBindingSha256 = workItemBindingHash
+                WorkItemBindingSha256 = workItemBindingHash,
+                PriorNativeRebindReceiptId = priorNativeRebind?.ReceiptId,
+                PriorNativeRebindPayloadHash = priorNativeRebind?.CanonicalPayloadHash
             };
+            if (priorNativeRebind is not null &&
+                NativeChildRebindOriginFingerprint.Create(tenantId, root, member).Hash !=
+                    priorNativeRebind.OriginFingerprint)
+                throw InvalidBoundary();
             budget.Include(member);
             members.Add(member);
         }
@@ -676,7 +712,6 @@ internal static class ChildCheckpointRecoveryCensus
         ChildRecoverySession child,
         RuntimeChildStartBinding binding,
         string selectionHash,
-        long sourceFence,
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand($"""
@@ -688,7 +723,7 @@ internal static class ChildCheckpointRecoveryCensus
                    is_cost_producing, hard_cap_serialized, dispatch_state, terminal_outcome,
                    source_report_status, source_report_hash, source_completion_manifest_hash,
                    acknowledgment_references::text, accounting_status, usage_witness_watermark,
-                   usage_witness_digest, retired_through_event_position
+                   usage_witness_digest, retired_through_event_position, created_at
             FROM {schema}.maf_execution_dispatches
             WHERE project_id = @project AND run_id = @run AND child_session_id = @child
             ORDER BY association_id, dispatch_id
@@ -702,7 +737,6 @@ internal static class ChildCheckpointRecoveryCensus
             return null;
         if (reader.GetString(0) != binding.AssociationId || reader.GetString(1) != binding.WorkPlanId ||
             reader.GetString(2) != root.SessionId || reader.GetGuid(3) != binding.DispatchMessageId ||
-            reader.GetInt64(7) != sourceFence ||
             !string.Equals(reader.GetString(8), selectionHash, StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(reader.GetString(9), binding.PromptHash, StringComparison.OrdinalIgnoreCase) ||
             reader.GetString(16) != binding.ModelSelectionReference)
@@ -721,7 +755,8 @@ internal static class ChildCheckpointRecoveryCensus
             ChildCheckpointRecoveryManifestCodec.Hash(acknowledgments.RootElement), reader.GetString(27),
             reader.IsDBNull(28) ? null : reader.GetInt64(28),
             reader.IsDBNull(29) ? null : reader.GetString(29),
-            reader.IsDBNull(30) ? null : reader.GetInt64(30));
+            reader.IsDBNull(30) ? null : reader.GetInt64(30),
+            reader.GetFieldValue<DateTimeOffset>(31));
         if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             throw InvalidBoundary();
         return origin;

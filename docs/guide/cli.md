@@ -210,6 +210,10 @@ frozen manifest. It does not send another task message for that child. A
 missing or mismatched result keeps the hold active. After recovery is `ready`,
 ordinary dispatch can send saved messages for children that were pending and
 unsent. `ready` does not mean that all child tasks or the run are complete.
+For a prepared native child, the owner preserves the original dispatch row and
+adds a verified `native-child-rebind` receipt before it releases the hold.
+This receipt changes the effective runtime binding, not the saved message,
+prompt, or model selection. Recovery itself does not send the child message.
 Read the
 [recovery API reference](../reference/api.md#recover-a-host-at-a-pending-gate)
 before you use this field.

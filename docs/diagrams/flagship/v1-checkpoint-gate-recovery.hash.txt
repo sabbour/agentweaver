@@ -2,11 +2,11 @@
   "version": 2,
   "source": {
     "file": "v1-checkpoint-gate-recovery.json",
-    "sha256": "f35dd90215bea022882f44be6da2a3f1404c761aab9171ebff3a796ee9a6fc17"
+    "sha256": "566422352c24d6f1c847ea105ae0aff5209a056333b8b2b3e2fb5c6c0acd9e8e"
   },
   "drawio": {
     "file": "v1-checkpoint-gate-recovery.drawio",
-    "sha256": "a62f7ba78f628fd71291f41ad5298ccac498d0e3cc6a870aebbed07c557c79b1"
+    "sha256": "262f52a7a64dd650b8d44b2eb4e127b05874d9c6be7ae1ff9f493e29a933f851"
   },
   "renderer": {
     "renderer": "draw.io Desktop",
@@ -17,6 +17,6 @@
   },
   "png": {
     "file": "v1-checkpoint-gate-recovery.png",
-    "sha256": "35817dd50bfa6bad65f605eab30c81195c368dbcc08bae0fc4e65c427803d6ae"
+    "sha256": "14d9aac0bf6ae3eb8131165523c009544c92a6f5eb0f6cabd90547dbd175d495"
   }
 }

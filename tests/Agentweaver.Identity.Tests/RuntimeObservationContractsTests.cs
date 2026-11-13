@@ -143,6 +143,39 @@ public sealed class RuntimeObservationContractsTests
     }
 
     [Fact]
+    public void ReboundDispatchProjectionKeepsOriginAndEffectiveBindingsSeparate()
+    {
+        var timestamp = DateTimeOffset.UtcNow;
+        var originRuntime = Guid.NewGuid();
+        var effectiveRuntime = Guid.NewGuid();
+        var projection = new RuntimeObservationNativeRebind(
+            new(originRuntime, 1, 1, "origin-checkpoint", 1, ValidHash),
+            new(effectiveRuntime, 2, 2, "recovery-checkpoint", 3, new string('b', 64)),
+            Guid.NewGuid(), new string('c', 64), Guid.NewGuid(), new string('d', 64));
+        var dispatch = new RuntimeObservationDispatch(
+            Guid.NewGuid(), "root", "child", "plan", "association",
+            "origin-checkpoint", 1, 1, 1, "prepared", null, null, null, null,
+            timestamp, timestamp)
+        {
+            NativeRebind = projection
+        }.Validate();
+
+        var json = JsonSerializer.Serialize(dispatch, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.Equal(originRuntime, dispatch.NativeRebind!.Origin.RuntimeInstanceId);
+        Assert.Equal(effectiveRuntime, dispatch.NativeRebind.Effective.RuntimeInstanceId);
+        Assert.Contains("\"nativeRebind\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"origin\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"effective\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("receiptPayload", json, StringComparison.Ordinal);
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            (dispatch with
+            {
+                NativeRebind = projection with { EffectiveRequestHash = "not-a-hash" }
+            }).Validate());
+    }
+
+    [Fact]
     public void PublicProjectionDoesNotSerializeRegistrationSecretsOrPayloads()
     {
         var timestamp = DateTimeOffset.UtcNow;

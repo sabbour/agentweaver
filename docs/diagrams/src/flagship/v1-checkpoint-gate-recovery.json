@@ -1,8 +1,8 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Recover a Host at a pending gate",
-  "alt": "Orchestrator checks the saved gate, checkpoint, accepted selection, and root registration. It retires the old Host placement through Environment, creates a replacement with the same workspace, registers the Host at the next fence, and asks Broker to bootstrap it. Environment activates the Host. The Host restores the selected checkpoint boundary from authenticated native cache or journal evidence and returns readiness. The gate stays pending. Transport and timeout failures retry the same operation. A post-receipt activation failure blocks that operation; a new operation advances the fence once, retires the failed Host, and does not replay the credential.",
+  "title": "Recover a Host at a gate or saved child join",
+  "alt": "For a pending gate, Orchestrator checks the saved gate, checkpoint, accepted selection, and root registration. It retires the old Host placement through Environment, creates a replacement with the same workspace, registers the Host at the next fence, and asks Broker to bootstrap it. The Host restores the selected boundary from authenticated native cache or journal evidence and returns readiness. For a saved child join, Orchestrator keeps the hold while it restores all required Hosts. A prepared native origin remains unchanged; Orchestrator appends one verified rebind receipt in the ready transaction before it releases the hold. Ordinary dispatch then sends the same saved message through the effective binding. Transport and timeout failures retry the same operation. A post-receipt activation failure blocks that operation; a new operation advances the fence once, retires the failed Host, and does not replay the credential.",
   "autonumber": true,
   "participants": [
     {
@@ -189,6 +189,34 @@
               "label": "Stop as blocked; do not answer or recreate the gate",
               "line": "solid",
               "arrow": "cross"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "Saved child join",
+      "sections": [
+        {
+          "label": "Prepared native origin",
+          "steps": [
+            {
+              "type": "message",
+              "from": "orchestrator",
+              "to": "orchestrator",
+              "label": "Verify the revision-1 no-send origin and prior binding; append the immutable rebind before ready releases the hold",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "orchestrator",
+              "to": "agenthost",
+              "label": "After release, ordinary dispatch sends the same message through the effective binding and uses normal report and accounting",
+              "line": "solid",
+              "arrow": "filled"
             }
           ]
         }
