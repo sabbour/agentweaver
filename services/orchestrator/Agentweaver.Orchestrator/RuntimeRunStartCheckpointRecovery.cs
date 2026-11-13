@@ -134,6 +134,17 @@ internal sealed partial class RuntimeRunStartContinuation
         if (retirement.State != "released")
             return null;
 
+        links["checkpointRecoveryRetirement"] =
+            JsonSerializer.SerializeToElement(retirement, JsonOptions);
+        intent = await recoveryStore.PersistCheckpointRecoveryCleanupEvidenceAsync(
+            intent,
+            JsonSerializer.Serialize(links, JsonOptions),
+            status.ExecutionFence,
+            bootstrapId,
+            RuntimeRunStartKeys.EnvironmentId(owner),
+            null,
+            CancellationToken.None).ConfigureAwait(false);
+
         await requireBoundary(cancellationToken).ConfigureAwait(false);
         var placement = await RuntimeOwnerHttpTransport.SendRuntimeRunStartAsync<
                 RuntimeRunStartPlacementReceipt>(

@@ -1228,6 +1228,8 @@ internal sealed partial class RuntimeRunStartContinuation(
                 JsonSerializer.SerializeToElement(previousRegistration, JsonOptions),
                 JsonSerializer.SerializeToElement(previousPlacement, JsonOptions),
                 JsonSerializer.SerializeToElement(previousBootstrapId, JsonOptions));
+            cleanupLinks["checkpointRecoveryRetirement"] =
+                JsonSerializer.SerializeToElement(retirement, JsonOptions);
             cleanupLinks.Remove("placement");
             intent = await recoveryStore.PersistCheckpointRecoveryCleanupEvidenceAsync(
                 intent,
@@ -1980,7 +1982,7 @@ internal sealed partial class RuntimeRunStartContinuation(
             throw new RuntimeAuthorizationException("runtime_start_registration_stale");
     }
 
-    private static bool IsResolvedProfileId(string sourceProfileId, string resolvedProfileId)
+    internal static bool IsResolvedProfileId(string sourceProfileId, string resolvedProfileId)
     {
         if (string.Equals(sourceProfileId, resolvedProfileId, StringComparison.Ordinal))
             return true;

@@ -1330,19 +1330,41 @@ The replacement Host must restore a compatible native cache or saved turn
 history before it can report readiness. Configuration-only, zero-turn child
 state is not supported by this recovery path and keeps the hold active.
 After recovery is ready, ordinary dispatch can send the saved message for a
-member that was pending and unsent. Retry an accepted request only with the
-same idempotency key. A new key does not bypass the hold. Unsupported or
-unresolved child history stays held for review.
+member that was pending and unsent. Retry a pending request with the same
+idempotency key. A new key does not bypass an active hold.
+
+If a child-join recovery becomes `blocked` at Host activation after the
+replacement registrations are ready, you can start a new recovery operation
+with a new idempotency key. The new request must use the blocked operation's
+recovery checkpoint as its source. The owner accepts this retry only when the
+child manifest still binds the same plan, messages, prompts, and results; it
+has complete retirement and replacement-registration evidence; and every
+pending dispatch has owner evidence that no native dispatch row exists. A
+prepared native dispatch is not supported by this retry path. The owner returns
+`409 checkpoint_recovery_dispatch_held` while the earlier recovery is still
+pending. It returns `409 checkpoint_recovery_supersession_unavailable` when it
+cannot prove the supersession conditions.
+
+The new operation advances the fence again, writes its own checkpoint and
+dispatch hold, and restores the root and required children again. It does not
+make the blocked operation ready or reuse its bootstrap. The blocked operation
+stays blocked. Its replay reports `supersededByOperationId`; its `dispatchHeld`
+field reflects the run's current hold. The blocked operation cannot change or
+release the successor's hold. The run's latest status reports the new operation
+and its active hold. Only the new operation can release that hold after
+readiness and result checks pass. Unsupported or unresolved child history stays
+held for review.
 
 For gate recovery, `readRunStatus` and root `readSessionStatus` expose the
 current recovery step, reason, checkpoint IDs, fences, and old and new runtime
 identities. For child-join admission, the status exposes `boundaryKind`,
-`dispatchHeld`, and `childManifestSha256`. `replayRunEvents` exposes committed
-recovery progress through its cursor. These reads do not retry the operation.
+`dispatchHeld`, `childManifestSha256`, and any supersession link.
+`replayRunEvents` exposes committed recovery progress through its cursor.
+These reads do not retry the operation.
 For gate recovery, do not start a second recovery with a new key while the
 first operation is pending. A new key is allowed after gate recovery is
-blocked. A child-join hold remains active until all required registrations
-and readiness checks are complete. The final owner transaction joins verified
+blocked. A child-join hold remains active until all required registrations and readiness
+checks are complete. The final owner transaction joins verified
 completed-but-unjoined results before it releases the hold.
 
 #### Dispatch completion and startup readback

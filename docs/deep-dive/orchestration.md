@@ -693,6 +693,16 @@ required readiness checks pass. A missing or mismatched result rolls back that
 transaction and keeps the hold active. Recovery does not run the completed
 child again.
 
+If a child-join recovery is blocked at Host activation after the replacement
+registration set is complete, a new operation can supersede it. The owner
+requires exact retirement and registration receipts, the same saved child and
+plan identity, and owner evidence that each pending dispatch has no native
+dispatch row. It records the link with the new fence, checkpoint, and hold in
+one transaction. The old operation stays blocked and cannot release the new
+hold. The new operation restores the root and required children again. If the
+owner cannot verify the saved no-send and replacement evidence, it rejects the
+new operation and keeps the hold active.
+
 Guarded owner writes fail while the hold is active. The owner rejects
 unsupported platform-effect history instead of replaying it. Retry a pending
 operation with the same recovery request and idempotency key. Neither boundary

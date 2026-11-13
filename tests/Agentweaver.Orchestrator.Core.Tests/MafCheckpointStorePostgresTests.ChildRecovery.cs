@@ -1,4 +1,7 @@
 using System.Collections.Immutable;
+using System.Net;
+using System.Net.Http.Json;
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -7,6 +10,9 @@ using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Xunit;
 
@@ -268,12 +274,140 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.Equal("checkpoint_recovery_members_not_ready", premature.Code);
         Assert.True(await IsChildRecoveryHeldAsync());
 
-        var rootReadyIntent = await MarkRecoveryMemberReadyAsync(fixture, recovered, manifest);
-        var currentReadyStatus = WithCurrentRootRegistration(readyStatus, rootReadyIntent);
+        var (ready, rootReadyIntent) = await ContinueCheckpointRecoveryAsync(
+            fixture, recovered, manifest);
+        Assert.Equal("ready", ready.CheckpointRecovery!.Phase);
+        Assert.False(await IsChildRecoveryHeldAsync());
         _ = await fixture.Owner.UpdateCheckpointRecoveryProgressAsync(
-            _actor, _binding.Identity, recovered.OperationId, currentReadyStatus,
+            _actor, _binding.Identity, recovered.OperationId, ready.CheckpointRecovery,
             CancellationToken.None, rootReadyIntent);
         Assert.False(await IsChildRecoveryHeldAsync());
+    }
+
+    [Fact]
+    public async Task ChildRecoverySupersessionPreservesR1ToR2CheckpointLineageAndReleasesHoldAfterReady()
+    {
+        var fixture = await PrepareChildRecoveryAsync();
+        var first = await fixture.Owner.RecoverRunExecutionAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, fixture.Request,
+            CancellationToken.None, _selection, _executionStore);
+        var firstManifest = await fixture.Owner.ReadCheckpointRecoveryManifestAsync(
+            _actor, _binding.Identity, first.OperationId, CancellationToken.None);
+        var firstCheckpointStore = new MafExecutionCheckpointStore(
+            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
+            _binding with { ExecutionFence = first.ExecutionFence });
+        var firstCheckpoint = await firstCheckpointStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(firstCheckpoint);
+
+        var (blocked, firstRootIntent) = await ContinueCheckpointRecoveryAsync(
+            fixture, first, firstManifest, failRootActivation: true);
+        var firstRootRegistration = ReadIntentReceipt<RuntimeRegistration>(firstRootIntent, "registration");
+        Assert.Equal("blocked", blocked.CheckpointRecovery!.Phase);
+        Assert.Equal("activation", blocked.CheckpointRecovery.CurrentStep);
+        Assert.Equal("checkpoint_recovery_host_bootstrap_spent", blocked.CheckpointRecovery.ReasonCode);
+        Assert.True(await IsChildRecoveryHeldAsync());
+
+        var restartedOwner = new CoordinationOwnerStore(
+            _fixture.DataSource, _schema, TimeProvider.System, fixture.Decisions);
+        var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
+        var secondRequest = fixture.Request with
+        {
+            ExecutionFence = first.ExecutionFence,
+            ExpectedRunStateVersion = blocked.RunStateVersion,
+            IdempotencyKey = "child-recovery-successor",
+            CheckpointRecovery = new CheckpointRecoveryRequest(
+                firstCheckpoint.Info.CheckpointId,
+                firstCheckpoint.State.Revision,
+                blocked.CheckpointRecovery.DecisionStateVersion,
+                firstRootRegistration.RuntimeInstanceId,
+                firstRootRegistration.Revision,
+                selectionHash.ToLowerInvariant())
+        };
+        var second = await restartedOwner.RecoverRunExecutionAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, secondRequest,
+            CancellationToken.None, _selection, firstCheckpointStore);
+        Assert.Equal(first.ExecutionFence + 1, second.ExecutionFence);
+        Assert.Equal(first.OperationId, second.CheckpointRecovery!.SupersedesOperationId);
+        Assert.NotNull(second.CheckpointRecovery.SupersessionReceiptId);
+        var secondCheckpointStore = new MafExecutionCheckpointStore(
+            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
+            _binding with { ExecutionFence = second.ExecutionFence });
+        var secondCheckpoint = await secondCheckpointStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(secondCheckpoint);
+        var secondLineage = Assert.IsType<MafCheckpointRecoveryLineage>(secondCheckpoint.State.RecoveryLineage);
+        Assert.Equal(firstCheckpoint.Info.CheckpointId, secondLineage.SourceCheckpointId);
+        Assert.Equal(first.ExecutionFence, secondLineage.SourceExecutionFence);
+        Assert.Equal(second.ExecutionFence, secondLineage.RecoveryExecutionFence);
+        Assert.Equal(first.OperationId, secondLineage.SupersedesOperationId);
+        Assert.Equal(second.CheckpointRecovery.SupersessionReceiptId, secondLineage.SupersessionReceiptId);
+        Assert.Equal(second.CheckpointRecovery.SupersessionPayloadHash, secondLineage.SupersessionPayloadHash);
+        Assert.True(await IsChildRecoveryHeldAsync());
+
+        var superseded = await restartedOwner.RecoverRunExecutionAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, fixture.Request,
+            CancellationToken.None, _selection, _executionStore);
+        Assert.Equal("blocked", superseded.CheckpointRecovery!.Phase);
+        Assert.Equal(second.OperationId, superseded.CheckpointRecovery!.SupersededByOperationId);
+        Assert.NotNull(superseded.CheckpointRecovery.SupersededByReceiptId);
+        Assert.True(superseded.CheckpointRecovery.DispatchHeld);
+        Assert.True(await IsChildRecoveryHeldAsync());
+
+        var secondManifest = await fixture.Owner.ReadCheckpointRecoveryManifestAsync(
+            _actor, _binding.Identity, second.OperationId, CancellationToken.None);
+        var (ready, _) = await ContinueCheckpointRecoveryAsync(fixture, second, secondManifest);
+        Assert.Equal("ready", ready.CheckpointRecovery!.Phase);
+        Assert.False(ready.CheckpointRecovery.DispatchHeld);
+        Assert.False(await IsChildRecoveryHeldAsync());
+        var finalReplay = await restartedOwner.RecoverRunExecutionAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, fixture.Request,
+            CancellationToken.None, _selection, _executionStore);
+        Assert.Equal("blocked", finalReplay.CheckpointRecovery!.Phase);
+        Assert.Equal(second.OperationId, finalReplay.CheckpointRecovery!.SupersededByOperationId);
+        Assert.False(finalReplay.CheckpointRecovery.DispatchHeld);
+    }
+
+    [Fact]
+    public async Task ChildRecoverySupersessionRejectsPreparedNativeDispatch()
+    {
+        var fixture = await PrepareChildRecoveryAsync(nativeState: "prepared");
+        var first = await fixture.Owner.RecoverRunExecutionAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, fixture.Request,
+            CancellationToken.None, _selection, _executionStore);
+        var manifest = await fixture.Owner.ReadCheckpointRecoveryManifestAsync(
+            _actor, _binding.Identity, first.OperationId, CancellationToken.None);
+        var checkpointStore = new MafExecutionCheckpointStore(
+            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
+            _binding with { ExecutionFence = first.ExecutionFence });
+        var checkpoint = await checkpointStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(checkpoint);
+
+        var (blocked, rootIntent) = await ContinueCheckpointRecoveryAsync(
+            fixture, first, manifest, failRootActivation: true);
+        var rootRegistration = ReadIntentReceipt<RuntimeRegistration>(rootIntent, "registration");
+        var request = fixture.Request with
+        {
+            ExecutionFence = first.ExecutionFence,
+            ExpectedRunStateVersion = blocked.RunStateVersion,
+            IdempotencyKey = "prepared-child-recovery-successor",
+            CheckpointRecovery = new CheckpointRecoveryRequest(
+                checkpoint.Info.CheckpointId,
+                checkpoint.State.Revision,
+                blocked.CheckpointRecovery!.DecisionStateVersion,
+                rootRegistration.RuntimeInstanceId,
+                rootRegistration.Revision,
+                CoordinationOwnerStore.HashSelection(_selection.Selection).ToLowerInvariant())
+        };
+        var failure = await Assert.ThrowsAsync<CoordinationException>(() =>
+            fixture.Owner.RecoverRunExecutionAsync(
+                _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, request,
+                CancellationToken.None, _selection, checkpointStore));
+
+        Assert.Equal("checkpoint_recovery_supersession_unavailable", failure.Code);
+        var current = await fixture.Owner.ReadOwnerRunStatusAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, CancellationToken.None);
+        Assert.Equal(first.ExecutionFence, current.ExecutionFence);
+        Assert.Equal(blocked.RunStateVersion, current.StateVersion);
+        Assert.True(await IsChildRecoveryHeldAsync());
     }
 
     [Fact]
@@ -284,13 +418,8 @@ public sealed partial class MafCheckpointStorePostgresTests
         var material = state.Material;
         Assert.NotEqual(member.AssociationHash, member.WorkItemBindingSha256);
 
-        var imported = await state.Fixture.Owner.UpdateCheckpointRecoveryProgressAsync(
-            _actor, _binding.Identity, state.Recovered.OperationId, state.ReadyStatus,
-            CancellationToken.None, state.RootIntent, state.CheckpointStore, state.UsageSources,
-            ImmutableDictionary<string, ChildRecoveryCompletedUnjoinedMaterial>.Empty
-                .WithComparers(StringComparer.Ordinal)
-                .Add(member.AssociationId, material),
-            state.Manifest);
+        var (imported, _) = await ContinueCheckpointRecoveryAsync(
+            state.Fixture, state.Recovered, state.Manifest, completedUnjoinedMaterial: material);
 
         Assert.Equal("ready", imported.CheckpointRecovery!.Phase);
         Assert.False(imported.CheckpointRecovery.DispatchHeld);
@@ -309,30 +438,22 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.Equal(member.MessageId, checkpoint.State.ChildTurnReceipts[member.AssociationId].RequestId);
     }
 
-    [Fact]
-    public async Task ChildRecoveryRejectsMismatchedOrMalformedCompletedUnjoinedResultAndKeepsHold()
+    [Theory]
+    [InlineData("forged result", "runtime_native_turn_accounting_invalid")]
+    [InlineData("", "checkpoint_recovery_result_material_invalid")]
+    public async Task ChildRecoveryRejectsMismatchedOrMalformedCompletedUnjoinedResultAndKeepsHold(
+        string result,
+        string expectedReason)
     {
         var state = await PrepareCompletedUnjoinedImportAsync();
         var member = Assert.Single(state.Manifest.Members);
-        var imports = ImmutableDictionary<string, ChildRecoveryCompletedUnjoinedMaterial>.Empty
-            .WithComparers(StringComparer.Ordinal);
+        var invalidMaterial = CreateCompletedUnjoinedMaterial(state.Fixture, result);
+        var (failed, _) = await ContinueCheckpointRecoveryAsync(
+            state.Fixture, state.Recovered, state.Manifest,
+            completedUnjoinedMaterial: invalidMaterial);
 
-        var mismatch = CreateCompletedUnjoinedMaterial(state.Fixture, "forged result");
-        var mismatchFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
-            state.Fixture.Owner.UpdateCheckpointRecoveryProgressAsync(
-                _actor, _binding.Identity, state.Recovered.OperationId, state.ReadyStatus,
-                CancellationToken.None, state.RootIntent, state.CheckpointStore, state.UsageSources,
-                imports.Add(member.AssociationId, mismatch), state.Manifest));
-        Assert.Equal("runtime_native_turn_accounting_invalid", mismatchFailure.Code);
-        Assert.True(await IsChildRecoveryHeldAsync());
-
-        var malformed = CreateCompletedUnjoinedMaterial(state.Fixture, string.Empty);
-        var malformedFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
-            state.Fixture.Owner.UpdateCheckpointRecoveryProgressAsync(
-                _actor, _binding.Identity, state.Recovered.OperationId, state.ReadyStatus,
-                CancellationToken.None, state.RootIntent, state.CheckpointStore, state.UsageSources,
-                imports.Add(member.AssociationId, malformed), state.Manifest));
-        Assert.Equal("checkpoint_recovery_result_material_invalid", malformedFailure.Code);
+        Assert.NotEqual("ready", failed.CheckpointRecovery!.Phase);
+        Assert.Equal(expectedReason, failed.CheckpointRecovery.ReasonCode);
         Assert.True(await IsChildRecoveryHeldAsync());
         var checkpoint = await state.CheckpointStore.ReadLatestAsync(CancellationToken.None);
         Assert.Equal(state.Recovered.CheckpointRecovery!.RecoveryCheckpointId, checkpoint!.Info.CheckpointId);
@@ -343,20 +464,13 @@ public sealed partial class MafCheckpointStorePostgresTests
     public async Task ChildRecoveryCompletedUnjoinedImportRetryIsIdempotent()
     {
         var state = await PrepareCompletedUnjoinedImportAsync();
-        var member = Assert.Single(state.Manifest.Members);
-        var imports = ImmutableDictionary<string, ChildRecoveryCompletedUnjoinedMaterial>.Empty
-            .WithComparers(StringComparer.Ordinal)
-            .Add(member.AssociationId, state.Material);
-
-        var first = await state.Fixture.Owner.UpdateCheckpointRecoveryProgressAsync(
-            _actor, _binding.Identity, state.Recovered.OperationId, state.ReadyStatus,
-            CancellationToken.None, state.RootIntent, state.CheckpointStore, state.UsageSources,
-            imports, state.Manifest);
+        var (first, _) = await ContinueCheckpointRecoveryAsync(
+            state.Fixture, state.Recovered, state.Manifest,
+            completedUnjoinedMaterial: state.Material);
         var firstCheckpoint = await state.CheckpointStore.ReadLatestAsync(CancellationToken.None);
-        var replay = await state.Fixture.Owner.UpdateCheckpointRecoveryProgressAsync(
-            _actor, _binding.Identity, state.Recovered.OperationId, state.ReadyStatus,
-            CancellationToken.None, state.RootIntent, state.CheckpointStore, state.UsageSources,
-            imports, state.Manifest);
+        var (replay, _) = await ContinueCheckpointRecoveryAsync(
+            state.Fixture, first, state.Manifest,
+            completedUnjoinedMaterial: state.Material);
         var replayCheckpoint = await state.CheckpointStore.ReadLatestAsync(CancellationToken.None);
 
         Assert.Equal("ready", first.CheckpointRecovery!.Phase);
@@ -382,41 +496,14 @@ public sealed partial class MafCheckpointStorePostgresTests
         var recovered = await fixture.Owner.RecoverRunExecutionAsync(
             _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, fixture.Request,
             CancellationToken.None, _selection, _executionStore);
-        var status = recovered.CheckpointRecovery! with
-        {
-            Phase = "ready",
-            CurrentStep = "ready",
-            ReasonCode = null,
-            RecoveryMaterialMode = "nativeCache",
-            DispatchHeld = false
-        };
         var manifest = await fixture.Owner.ReadCheckpointRecoveryManifestAsync(
             _actor, _binding.Identity, recovered.OperationId, CancellationToken.None);
-        var rootReadyIntent = await MarkRecoveryMemberReadyAsync(fixture, recovered, manifest);
-        status = WithCurrentRootRegistration(status, rootReadyIntent);
         var sessionId = target == "root" ? _binding.Identity.SessionId : fixture.Child.SessionId;
-        var starts = new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema);
-        var intent = await starts.ReadIntentForStatusAsync(
-            _binding.Identity.ProjectId, _binding.Identity.RunId, sessionId, CancellationToken.None)
-            ?? throw new InvalidOperationException("The startup intent is missing.");
-        var webOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-        var links = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
-            intent.ReceiptLinks, webOptions) ?? new(StringComparer.Ordinal);
-        links[receiptName] = JsonSerializer.SerializeToElement(new { }, webOptions);
-        _ = await fixture.Owner.PersistCheckpointRecoveryCleanupEvidenceAsync(
-            intent,
-            JsonSerializer.Serialize(links, webOptions),
-            recovered.ExecutionFence,
-            intent.BootstrapOperationId,
-            intent.EnvironmentId,
-            intent.RuntimeInstanceId,
-            CancellationToken.None);
-
-        var failure = await Assert.ThrowsAsync<CoordinationException>(() =>
-            fixture.Owner.UpdateCheckpointRecoveryProgressAsync(
-                _actor, _binding.Identity, recovered.OperationId, status,
-                CancellationToken.None, rootReadyIntent));
-        Assert.Equal("checkpoint_recovery_members_not_ready", failure.Code);
+        var (failed, _) = await ContinueCheckpointRecoveryAsync(
+            fixture, recovered, manifest, emptyEvidenceSessionId: sessionId,
+            emptyEvidenceReceiptName: receiptName);
+        Assert.NotEqual("ready", failed.CheckpointRecovery!.Phase);
+        Assert.NotNull(failed.CheckpointRecovery.ReasonCode);
         Assert.True(await IsChildRecoveryHeldAsync());
     }
 
@@ -444,110 +531,494 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.True(await IsChildRecoveryHeldAsync());
     }
 
-    private async Task<RuntimeRunStartIntent> MarkRecoveryRootReadyAsync(
-        ChildRecoveryFixture fixture,
-        RunExecutionTransitionResult recovered,
-        ChildCheckpointRecoveryManifest manifest)
+    private async Task<(RunExecutionTransitionResult Result, RuntimeRunStartIntent RootIntent)>
+        ContinueCheckpointRecoveryAsync(
+            ChildRecoveryFixture fixture,
+            RunExecutionTransitionResult recovered,
+            ChildCheckpointRecoveryManifest manifest,
+            bool failRootActivation = false,
+            string? emptyEvidenceSessionId = null,
+            string? emptyEvidenceReceiptName = null,
+            ChildRecoveryCompletedUnjoinedMaterial? completedUnjoinedMaterial = null)
     {
-        var registrations = new RuntimeRegistrationStore(_fixture.DataSource, _schema, TimeProvider.System);
-        var rootPreviousRegistration = await registrations.ReadAsync(
-            manifest.RootStartup.RuntimeInstanceId, CancellationToken.None)
-            ?? throw new InvalidOperationException("The saved root registration is missing.");
-        var rootOwner = RuntimeRunStartContinuation.CreateCheckpointRecoveryOwnerContext(
-            rootPreviousRegistration.Binding, recovered.ExecutionFence);
-        var root = await ReplaceRecoveryRuntimeAsync(
-            registrations, recovered.OperationId, manifest.Root.SessionId,
-            rootPreviousRegistration, manifest.RootStartup.Placement, rootOwner,
-            "recovered-root-resource", "recovered-root-pod");
         var starts = new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema);
         var rootIntent = await starts.ReadIntentForStatusAsync(
             manifest.Root.ProjectId, manifest.Root.RunId, manifest.Root.SessionId, CancellationToken.None)
             ?? throw new InvalidOperationException("The root startup intent is missing.");
-        var rootLinks = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
-            rootIntent.ReceiptLinks, ChildRecoveryJsonOptions) ?? new(StringComparer.Ordinal);
-        rootLinks["registration"] = JsonSerializer.SerializeToElement(root.Registration, ChildRecoveryJsonOptions);
-        rootLinks["placement"] = JsonSerializer.SerializeToElement(root.Placement, ChildRecoveryJsonOptions);
-        var rootBootstrapId = RuntimeRunStartKeys.ReplacementOperationId(
-            recovered.OperationId, "checkpoint-bootstrap");
-        var rootConsumeId = RuntimeRunStartKeys.ReplacementOperationId(
-            recovered.OperationId, "checkpoint-consume");
-        var rootExchangeId = RuntimeRunStartKeys.ReplacementOperationId(
-            recovered.OperationId, "checkpoint-exchange");
-        var rootReadiness = CreateRecoveryReadiness(root.Registration, root.Placement);
-        rootLinks["activation"] = JsonSerializer.SerializeToElement(rootReadiness.Activation, ChildRecoveryJsonOptions);
-        rootLinks["readiness"] = JsonSerializer.SerializeToElement(rootReadiness.Readiness, ChildRecoveryJsonOptions);
-        RuntimeRunStartContinuation.SetCheckpointRecoveryBootstrapEvidence(
-            rootLinks,
-            recovered.OperationId,
-            JsonSerializer.SerializeToElement(
-                CreateRecoveryBootstrapReceipt(root.Registration, rootBootstrapId), ChildRecoveryJsonOptions));
-        rootIntent = await fixture.Owner.PersistCheckpointRecoveryCleanupEvidenceAsync(
-            rootIntent,
-            JsonSerializer.Serialize(rootLinks, ChildRecoveryJsonOptions),
-            recovered.ExecutionFence,
-            rootBootstrapId,
-            root.Placement.EnvironmentId,
-            root.Registration.RuntimeInstanceId,
-            CancellationToken.None,
-            currentStep: "ready",
-            consumeOperationId: rootConsumeId,
-            exchangeOperationId: rootExchangeId);
-        return rootIntent;
+        var registrationStore = new RuntimeRegistrationStore(_fixture.DataSource, _schema, TimeProvider.System);
+        var initial = new Dictionary<string, RecoveryRuntimeSeed>(StringComparer.Ordinal)
+        {
+            [manifest.Root.SessionId] = new(
+                await registrationStore.ReadAsync(manifest.RootStartup.RuntimeInstanceId, CancellationToken.None)
+                    ?? throw new InvalidOperationException("The saved root registration is missing."),
+                manifest.RootStartup.Placement,
+                manifest.RootStartup.BootstrapOperationId)
+        };
+        foreach (var member in manifest.Members.Where(member => member.Startup.RegistrationId is not null))
+        {
+            initial.Add(member.Session.SessionId, new(
+                await registrationStore.ReadAsync(member.Startup.RegistrationId!.Value, CancellationToken.None)
+                    ?? throw new InvalidOperationException("The saved child registration is missing."),
+                member.Startup.Placement
+                    ?? throw new InvalidOperationException("The saved child placement is missing."),
+                member.Startup.BootstrapOperationId));
+        }
+
+        var options = new OrchestratorOptions(
+            _actor.Issuer, "orchestrator", "https://projects.test/", "projects",
+            "https://events.test/", "events", _schema);
+        var peer = new RecoveryRuntimePeer(
+            initial,
+            failRootActivation ? manifest.Root.SessionId : null,
+            emptyEvidenceSessionId,
+            emptyEvidenceReceiptName);
+        using var environmentHttp = new HttpClient(peer);
+        using var brokerHttp = new HttpClient(new RecoveryBrokerPeer(registrationStore, peer));
+        using var projectsHttp = new HttpClient(new ReviewSelectionAuthorityHandler(
+            _selection.Selection, _actor.Issuer, _actor.Subject));
+        var projects = new ProjectsRunSelectionClient(
+            projectsHttp, options, new ReviewNoSnapshotResolver());
+        var catalog = ProviderCatalog.Create([], [], []).Value!;
+        var contexts = new CoordinatorRunSelectionContextStore(
+            _fixture.DataSource, _schema, catalog, new ProviderResolver(catalog), []);
+        var registrationOwner = new RuntimeRegistrationOwner(
+            options, projects, fixture.Owner, fixture.Decisions, contexts,
+            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
+            registrationStore,
+            new RuntimeEnvironmentContextClient(environmentHttp, new(new Uri("https://environment.test/"))),
+            TimeProvider.System);
+        var clients = new RecoveryRuntimeHttpClientFactory(environmentHttp, brokerHttp);
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
+        const string bearer = "recovery-test-token";
+        using var services = new ServiceCollection()
+            .AddSingleton<IAuthenticationService>(new RecoveryOwnerAuthentication(expiresAt))
+            .BuildServiceProvider();
+        var context = new DefaultHttpContext
+        {
+            RequestServices = services,
+            User = new(new ClaimsIdentity(
+            [
+                new Claim("sub", _actor.Subject),
+                new Claim("iss", _actor.Issuer),
+                new Claim("aud", options.ProjectsAudience),
+                new Claim("project_id", manifest.Root.ProjectId),
+                new Claim("run_id", manifest.Root.RunId),
+                new Claim("scope", "api.read projects.orchestrator")
+            ], "checkpoint-recovery-test"))
+        };
+        context.Request.Headers.Authorization = $"Bearer {bearer}";
+        context.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
+        var runtimeActor = new RuntimeActorAuthorization(
+            new SecretCredential(bearer, expiresAt), "tenant-1");
+        using var eventsHttp = completedUnjoinedMaterial is null
+            ? null
+            : new HttpClient(new RecoveryEventsPeer(
+                fixture.Child, completedUnjoinedMaterial));
+        var events = eventsHttp is null
+            ? null
+            : new EventsAddressedMessageClient(
+                eventsHttp, options, new HttpContextAccessor { HttpContext = context });
+        var usageSources = completedUnjoinedMaterial is null
+            ? null
+            : new RuntimeUsageSourceStore(_fixture.DataSource, options, TimeProvider.System);
+        var continuation = new RuntimeRunStartContinuation(
+            starts, registrationOwner,
+            new RuntimeEnvironmentContextClient(environmentHttp, new(new Uri("https://environment.test/"))),
+            new RuntimeRunStartOptions(new Uri("https://environment.test/"), new Uri("https://broker.test/")),
+            clients, TimeProvider.System, events, usageSources);
+        var checkpointStore = new MafExecutionCheckpointStore(
+            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
+            _binding with { ExecutionFence = recovered.ExecutionFence });
+        static Task NoGate(CancellationToken _) => Task.CompletedTask;
+
+        var result = await continuation.ContinueCheckpointRecoveryAsync(
+            context, _actor, runtimeActor, recovered, rootIntent, registrationOwner,
+            checkpointStore, fixture.Owner, NoGate, NoGate, CancellationToken.None);
+        var currentRootIntent = await starts.ReadIntentForStatusAsync(
+            manifest.Root.ProjectId, manifest.Root.RunId, manifest.Root.SessionId, CancellationToken.None)
+            ?? throw new InvalidOperationException("The root startup intent disappeared.");
+        if (emptyEvidenceReceiptName is null)
+        {
+            var currentRoot = ReadIntentReceipt<RuntimeRegistration>(currentRootIntent, "registration");
+            var previousRoot = initial[manifest.Root.SessionId].Registration;
+            Assert.NotEqual(previousRoot.Binding.ProfileId, currentRoot.Binding.ProfileId);
+            Assert.NotEqual(previousRoot.Binding.ConfigureEndpoint, currentRoot.Binding.ConfigureEndpoint);
+            var pendingChildren = manifest.Members.Where(member => member.Disposition == "pendingUnsent").ToArray();
+            if (failRootActivation)
+            {
+                var pendingChild = Assert.Single(pendingChildren);
+                var childIntent = await starts.ReadIntentForStatusAsync(
+                    manifest.Root.ProjectId, manifest.Root.RunId,
+                    pendingChild.Session.SessionId, CancellationToken.None)
+                    ?? throw new InvalidOperationException("The child startup intent disappeared.");
+                var currentChild = ReadIntentReceipt<RuntimeRegistration>(childIntent, "registration");
+                Assert.NotEqual(initial[pendingChild.Session.SessionId].Registration.Binding.ProfileId,
+                    currentChild.Binding.ProfileId);
+                Assert.NotEqual(initial[pendingChild.Session.SessionId].Registration.Binding.ConfigureEndpoint,
+                    currentChild.Binding.ConfigureEndpoint);
+                Assert.Equal(manifest.Root.SessionId, Assert.Single(peer.BootstrapSessions));
+                using var childLinks = JsonDocument.Parse(childIntent.ReceiptLinks);
+                Assert.False(RuntimeRunStartContinuation.HasCheckpointRecoveryBootstrapEvidence(
+                    result.OperationId,
+                    JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                        childLinks.RootElement.GetRawText(), ChildRecoveryJsonOptions)
+                    ?? new(StringComparer.Ordinal)));
+            }
+            else if (pendingChildren.Length == 1)
+            {
+                var pendingChild = pendingChildren[0];
+                var childIntent = await starts.ReadIntentForStatusAsync(
+                    manifest.Root.ProjectId, manifest.Root.RunId,
+                    pendingChild.Session.SessionId, CancellationToken.None)
+                    ?? throw new InvalidOperationException("The child startup intent disappeared.");
+                var currentChild = ReadIntentReceipt<RuntimeRegistration>(childIntent, "registration");
+                Assert.NotEqual(initial[pendingChild.Session.SessionId].Registration.Binding.ProfileId,
+                    currentChild.Binding.ProfileId);
+                Assert.NotEqual(initial[pendingChild.Session.SessionId].Registration.Binding.ConfigureEndpoint,
+                    currentChild.Binding.ConfigureEndpoint);
+                Assert.Collection(
+                    peer.BootstrapSessions,
+                    session => Assert.Equal(manifest.Root.SessionId, session),
+                    session => Assert.Equal(pendingChild.Session.SessionId, session));
+                using var childLinks = JsonDocument.Parse(childIntent.ReceiptLinks);
+                Assert.True(RuntimeRunStartContinuation.HasCheckpointRecoveryBootstrapEvidence(
+                    result.OperationId,
+                    JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                        childLinks.RootElement.GetRawText(), ChildRecoveryJsonOptions)
+                    ?? new(StringComparer.Ordinal)));
+            }
+            else
+                Assert.Equal(manifest.Root.SessionId, Assert.Single(peer.BootstrapSessions));
+        }
+        return (result, currentRootIntent);
     }
 
-    private async Task<RuntimeRunStartIntent> MarkRecoveryMemberReadyAsync(
-        ChildRecoveryFixture fixture,
-        RunExecutionTransitionResult recovered,
-        ChildCheckpointRecoveryManifest manifest)
+    private sealed record RecoveryRuntimeSeed(
+        RuntimeRegistration Registration,
+        RuntimeRunStartPlacementReceipt Placement,
+        Guid BootstrapOperationId);
+
+    private sealed record RecoveryRuntimeReplacement(
+        RuntimeOwnerContext Owner,
+        RuntimeRunStartPlacementReceipt Placement,
+        string ProfileId,
+        Uri ConfigureEndpoint,
+        Uri ObservationEndpoint);
+
+    private sealed class RecoveryRuntimePeer(
+        IReadOnlyDictionary<string, RecoveryRuntimeSeed> initial,
+        string? failActivationSessionId,
+        string? emptyEvidenceSessionId,
+        string? emptyEvidenceReceiptName) : HttpMessageHandler
     {
-        var rootIntent = await MarkRecoveryRootReadyAsync(fixture, recovered, manifest);
-        var member = Assert.Single(manifest.Members.Where(item => item.Disposition == "pendingUnsent"));
-        var registrations = new RuntimeRegistrationStore(_fixture.DataSource, _schema, TimeProvider.System);
-        var starts = new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema);
-        var previousRegistration = await registrations.ReadAsync(
-            member.Startup.RegistrationId!.Value, CancellationToken.None)
-            ?? throw new InvalidOperationException("The saved child registration is missing.");
-        var recoveryOwner = RuntimeRunStartContinuation.CreateCheckpointRecoveryOwnerContext(
-            previousRegistration.Binding, recovered.ExecutionFence, member.Session.LogicalTurnOrdinal);
-        var bootstrapId = RuntimeRunStartKeys.ReplacementOperationId(
-            recovered.OperationId, member.Session.SessionId, "checkpoint-bootstrap");
-        var child = await ReplaceRecoveryRuntimeAsync(
-            registrations, recovered.OperationId, member.Session.SessionId,
-            previousRegistration, member.Startup.Placement!, recoveryOwner,
-            "recovered-child-resource", "recovered-child-pod");
-        var intent = await starts
-            .ReadIntentForStatusAsync(
-                fixture.Child.ProjectId, fixture.Child.RunId, fixture.Child.SessionId, CancellationToken.None)
-            ?? throw new InvalidOperationException("The child startup intent is missing.");
-        var links = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
-            intent.ReceiptLinks, ChildRecoveryJsonOptions) ?? new(StringComparer.Ordinal);
-        links["registration"] = JsonSerializer.SerializeToElement(child.Registration, ChildRecoveryJsonOptions);
-        links["placement"] = JsonSerializer.SerializeToElement(child.Placement, ChildRecoveryJsonOptions);
-        var childReadiness = CreateRecoveryReadiness(child.Registration, child.Placement);
-        links["activation"] = JsonSerializer.SerializeToElement(childReadiness.Activation, ChildRecoveryJsonOptions);
-        links["readiness"] = JsonSerializer.SerializeToElement(childReadiness.Readiness, ChildRecoveryJsonOptions);
-        RuntimeRunStartContinuation.SetCheckpointRecoveryBootstrapEvidence(
-            links,
-            recovered.OperationId,
-            JsonSerializer.SerializeToElement(
-                CreateRecoveryBootstrapReceipt(child.Registration, bootstrapId), ChildRecoveryJsonOptions));
-        var consumeId = RuntimeRunStartKeys.ReplacementOperationId(
-            recovered.OperationId, member.Session.SessionId, "checkpoint-consume");
-        var exchangeId = RuntimeRunStartKeys.ReplacementOperationId(
-            recovered.OperationId, member.Session.SessionId, "checkpoint-exchange");
-        _ = await fixture.Owner.PersistCheckpointRecoveryCleanupEvidenceAsync(
-            intent,
-            JsonSerializer.Serialize(links, ChildRecoveryJsonOptions),
-            recovered.ExecutionFence,
-            bootstrapId,
-            child.Placement.EnvironmentId,
-            child.Registration.RuntimeInstanceId,
-            CancellationToken.None,
-            currentStep: "ready",
-            ready: true,
-            consumeOperationId: consumeId,
-            exchangeOperationId: exchangeId);
-        return rootIntent;
+        private readonly Dictionary<string, RecoveryRuntimeReplacement> _replacements =
+            new(StringComparer.Ordinal);
+        private readonly Dictionary<string, (RuntimeHostReadinessReceipt Activation,
+            EnvironmentRuntimeReadinessContext Readiness)> _readiness = new(StringComparer.Ordinal);
+        private readonly List<string> _bootstrapSessions = [];
+
+        internal IReadOnlyList<string> BootstrapSessions => _bootstrapSessions;
+        internal void RecordBootstrap(string sessionId) => _bootstrapSessions.Add(sessionId);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path == "/internal/runtime/v1/activate")
+            {
+                var configure = await ReadRequestAsync<RuntimeHostConfigureRequest>(
+                    request, cancellationToken).ConfigureAwait(false);
+                var sessionId = configure.Registration.Binding.SessionId;
+                if (sessionId == failActivationSessionId)
+                    return Error(request, HttpStatusCode.Conflict, "runtime_configuration_conflict");
+                var replacement = _replacements[sessionId];
+                var readiness = CreateRecoveryReadiness(configure.Registration, replacement.Placement);
+                _readiness[sessionId] = readiness;
+                return Success(request, emptyEvidenceSessionId == sessionId &&
+                    emptyEvidenceReceiptName == "activation"
+                    ? readiness.Activation with { ContractVersion = 0 }
+                    : readiness.Activation);
+            }
+            if (path.EndsWith("/readiness", StringComparison.Ordinal))
+            {
+                var sessionId = SessionIdFromPath(path);
+                var readiness = _readiness[sessionId].Readiness;
+                return Success(request, emptyEvidenceSessionId == sessionId &&
+                    emptyEvidenceReceiptName == "readiness"
+                    ? readiness with { ContractVersion = 0 }
+                    : readiness);
+            }
+            if (path.EndsWith("/replacement-retire", StringComparison.Ordinal))
+            {
+                var envelope = await ReadRequestAsync<RuntimeReplacementRetirementRequest>(
+                    request, cancellationToken).ConfigureAwait(false);
+                var retirement = envelope.Retirement;
+                return Success(request, new RuntimeRunStartRetirementReceipt(
+                    envelope.ContractVersion,
+                    retirement.BootstrapOperationId,
+                    retirement.RuntimeInstanceId,
+                    retirement.RegistrationRevision,
+                    retirement.Placement.SandboxOperationId,
+                    retirement.Placement.SandboxResource.Generation,
+                    retirement.Placement.ProviderFencingGeneration,
+                    retirement.Placement.SandboxIdempotencyKey,
+                    "released"));
+            }
+            if (path.EndsWith("/replacement-placement", StringComparison.Ordinal))
+            {
+                var envelope = await ReadRequestAsync<RuntimeReplacementPlacementRequest>(
+                    request, cancellationToken).ConfigureAwait(false);
+                var previous = envelope.PreviousPlacement;
+                var profileId = CreateResolvedProfileId(
+                    previous.SourceProfileId, envelope.OperationId, envelope.Owner.SessionId);
+                var placement = new RuntimeRunStartPlacementReceipt(
+                    1,
+                    previous.EnvironmentId,
+                    profileId,
+                    previous.WorkspaceVolumeId,
+                    RuntimeRunStartKeys.SandboxIdempotencyKey(envelope.Owner, envelope.BootstrapOperationId),
+                    previous.WorkspaceResourceGeneration,
+                    previous.WorkspaceDataGeneration,
+                    previous.NetworkPolicyGeneration,
+                    Guid.NewGuid(),
+                    new ProviderResourceRef(
+                        ProviderSeam.Sandbox,
+                        previous.SandboxResource.ProviderId,
+                        $"recovered-{envelope.Owner.SessionId}",
+                        previous.SandboxResource.Generation + 1),
+                    previous.LifecycleGeneration,
+                    previous.LeaseRevision + 1,
+                    previous.CurrentFencingGeneration + 1,
+                    previous.ProviderFencingGeneration + 1,
+                    DateTimeOffset.UtcNow.AddHours(1))
+                {
+                    PodUid = $"recovered-pod-{envelope.Owner.SessionId}"
+                };
+                _replacements[envelope.Owner.SessionId] = new(
+                    envelope.Owner, placement, profileId,
+                    new Uri($"https://runtime.test/runtime/v2/{envelope.Owner.SessionId}/configure"),
+                    new Uri($"https://runtime.test/runtime/v2/{envelope.Owner.SessionId}/observe"));
+                return Success(request, emptyEvidenceSessionId == envelope.Owner.SessionId &&
+                    emptyEvidenceReceiptName == "placement"
+                    ? placement with { ContractVersion = 0 }
+                    : placement);
+            }
+            if (path.Contains("/runtime-bootstrap/profiles/", StringComparison.Ordinal) &&
+                path.EndsWith("/resolve", StringComparison.Ordinal))
+            {
+                var sessionId = SessionIdFromPath(path);
+                var segments = path.Split('/');
+                var sourceProfileId = Uri.UnescapeDataString(segments[^2]);
+                var resolved = _replacements.TryGetValue(sessionId, out var replacement) &&
+                    replacement.Placement.SourceProfileId != sourceProfileId
+                    ? CreateResolvedProfileId(
+                        sourceProfileId,
+                        QueryOperationId(request.RequestUri.Query),
+                        sessionId)
+                    : replacement?.ProfileId ?? sourceProfileId;
+                return Success(request, new RuntimeBootstrapProfileResolveReceipt(
+                    1, sourceProfileId, resolved));
+            }
+            if (path.Contains("/runtime-bootstrap/profiles/", StringComparison.Ordinal))
+            {
+                var sessionId = SessionIdFromPath(path);
+                var profileId = Uri.UnescapeDataString(path.Split('/')[^1]);
+                if (_replacements.TryGetValue(sessionId, out var replacement))
+                {
+                    if (profileId != replacement.ProfileId)
+                        throw new InvalidOperationException("Unexpected recovery profile.");
+                    return Success(request, Context(
+                        initial[sessionId].Registration, replacement.Owner, replacement.Placement,
+                        replacement.ProfileId, replacement.ConfigureEndpoint, replacement.ObservationEndpoint));
+                }
+
+                var seed = initial[sessionId];
+                var owner = RuntimeRunStartContinuation.CreateOwnerContext(seed.Registration.Binding);
+                return Success(request, Context(
+                    seed.Registration, owner, seed.Placement, seed.Registration.Binding.ProfileId,
+                    seed.Registration.Binding.ConfigureEndpoint, seed.Registration.Binding.ObservationEndpoint));
+            }
+            throw new InvalidOperationException($"Unexpected recovery environment route '{path}'.");
+        }
+
+        private static EnvironmentRuntimeBootstrapContext Context(
+            RuntimeRegistration registration,
+            RuntimeOwnerContext owner,
+            RuntimeRunStartPlacementReceipt placement,
+            string profileId,
+            Uri configureEndpoint,
+            Uri observationEndpoint) =>
+            new(
+                1,
+                owner.TenantId,
+                owner.ProjectId,
+                owner.RunId,
+                placement.EnvironmentId,
+                placement.LifecycleGeneration,
+                placement.CurrentFencingGeneration,
+                placement.ProviderFencingGeneration,
+                placement.LeaseRevision,
+                placement.LeaseExpiresAt,
+                placement.SandboxResource,
+                new(Guid.NewGuid()),
+                new("recovery-placement"),
+                profileId,
+                configureEndpoint,
+                observationEndpoint)
+            {
+                RuntimeOwnerContext = owner,
+                Image = registration.Binding.Image
+            };
+
+        private static string CreateResolvedProfileId(string sourceProfileId, Guid operationId, string sessionId)
+        {
+            var prefix = sourceProfileId[..Math.Min(sourceProfileId.Length, 220)];
+            var suffix = RuntimeRunStartKeys.ReplacementOperationId(operationId, sessionId, "profile")
+                .ToString("N")[..24];
+            return $"{prefix}.r.{suffix}";
+        }
+
+        private static Guid QueryOperationId(string query)
+        {
+            var value = query.TrimStart('?').Split('&')
+                .Single(part => part.StartsWith("checkpointRecoveryOperationId=", StringComparison.Ordinal))
+                .Split('=', 2)[1];
+            return Guid.Parse(Uri.UnescapeDataString(value));
+        }
+
+        private static string SessionIdFromPath(string path)
+        {
+            var segments = path.Split('/');
+            var index = Array.IndexOf(segments, "sessions");
+            return Uri.UnescapeDataString(segments[index + 1]);
+        }
+
+        private static async Task<T> ReadRequestAsync<T>(
+            HttpRequestMessage request, CancellationToken cancellationToken) where T : class =>
+            JsonSerializer.Deserialize<T>(
+                await request.Content!.ReadAsStringAsync(cancellationToken).ConfigureAwait(false),
+                ChildRecoveryJsonOptions)
+            ?? throw new InvalidOperationException("The controlled peer request was empty.");
+
+        internal static HttpResponseMessage Success(HttpRequestMessage request, object body) =>
+            Response(request, HttpStatusCode.OK, body);
+
+        private static HttpResponseMessage Error(HttpRequestMessage request, HttpStatusCode status, string code) =>
+            Response(request, status, new { code });
+
+        private static HttpResponseMessage Response(
+            HttpRequestMessage request, HttpStatusCode status, object body)
+        {
+            var response = new HttpResponseMessage(status)
+            {
+                RequestMessage = request,
+                Content = JsonContent.Create(body, options: ChildRecoveryJsonOptions)
+            };
+            response.Headers.CacheControl = new() { NoStore = true };
+            return response;
+        }
+    }
+
+    private sealed class RecoveryBrokerPeer(
+        RuntimeRegistrationStore registrations,
+        RecoveryRuntimePeer environmentPeer) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var bootstrap = JsonSerializer.Deserialize<RuntimeBootstrapRequest>(
+                await request.Content!.ReadAsStringAsync(cancellationToken).ConfigureAwait(false),
+                ChildRecoveryJsonOptions)
+                ?? throw new InvalidOperationException("The controlled broker request was empty.");
+            var registration = await registrations.ReadAsync(
+                bootstrap.RuntimeInstanceId, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("The replacement registration is missing.");
+            environmentPeer.RecordBootstrap(registration.Binding.SessionId);
+            var receipt = new RuntimeBootstrapDeliveryReceipt(
+                bootstrap.OperationId,
+                Guid.NewGuid(),
+                registration.RuntimeInstanceId,
+                registration.Revision,
+                registration.Binding.PlacementUid,
+                registration.Binding.PlacementGeneration,
+                registration.Binding.ExecutionFence,
+                bootstrap.ConfigurationHash,
+                DateTimeOffset.UtcNow)
+            {
+                EnvironmentCurrentFencingGeneration =
+                    registration.Binding.EnvironmentCurrentFencingGeneration,
+                EnvironmentProviderFencingGeneration =
+                    registration.Binding.EnvironmentProviderFencingGeneration
+            };
+            return RecoveryRuntimePeer.Success(request, receipt);
+        }
+    }
+
+    private sealed class RecoveryEventsPeer(
+        SessionIdentity child,
+        ChildRecoveryCompletedUnjoinedMaterial material) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri!.AbsolutePath.Split('/');
+            var sessionIndex = Array.IndexOf(path, "sessions");
+            if (sessionIndex < 0 || Uri.UnescapeDataString(path[sessionIndex + 1]) != child.SessionId)
+                throw new InvalidOperationException("Unexpected recovery material session.");
+            var eventId = Guid.Parse(path[^2]);
+            var result = eventId == material.UserMaterial.EventId
+                ? new SessionMaterialReadResult(
+                    material.UserMaterial, Encoding.UTF8.GetBytes(material.Prompt))
+                : eventId == material.AssistantMaterial.EventId
+                    ? new SessionMaterialReadResult(
+                        material.AssistantMaterial, Encoding.UTF8.GetBytes(material.Result))
+                    : throw new InvalidOperationException("Unexpected recovery material event.");
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = JsonContent.Create(result, options: ChildRecoveryJsonOptions)
+            };
+            response.Headers.CacheControl = new() { NoStore = true };
+            return Task.FromResult(response);
+        }
+    }
+
+    private sealed class RecoveryRuntimeHttpClientFactory(
+        HttpClient environment,
+        HttpClient broker) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) =>
+            name == "runtime-run-start-broker" ? broker : environment;
+    }
+
+    private sealed class RecoveryOwnerAuthentication(DateTimeOffset expiresAt) : IAuthenticationService
+    {
+        public Task<AuthenticateResult> AuthenticateAsync(HttpContext context, string? scheme) =>
+            Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(
+                context.User, new AuthenticationProperties { ExpiresUtc = expiresAt }, "recovery-test")));
+
+        public Task ChallengeAsync(
+            HttpContext context, string? scheme, AuthenticationProperties? properties) =>
+            throw new NotSupportedException();
+
+        public Task ForbidAsync(
+            HttpContext context, string? scheme, AuthenticationProperties? properties) =>
+            throw new NotSupportedException();
+
+        public Task SignInAsync(
+            HttpContext context, string? scheme, ClaimsPrincipal principal, AuthenticationProperties? properties) =>
+            throw new NotSupportedException();
+
+        public Task SignOutAsync(
+            HttpContext context, string? scheme, AuthenticationProperties? properties) =>
+            throw new NotSupportedException();
+    }
+
+    private static T ReadIntentReceipt<T>(RuntimeRunStartIntent intent, string key) where T : class
+    {
+        using var links = JsonDocument.Parse(intent.ReceiptLinks);
+        return links.RootElement.GetProperty(key).Deserialize<T>(ChildRecoveryJsonOptions)
+            ?? throw new InvalidOperationException($"The startup intent has no {key} receipt.");
     }
 
     private async Task<CompletedUnjoinedImportContext> PrepareCompletedUnjoinedImportAsync()
@@ -562,29 +1033,12 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.Equal("completedUnjoined", member.Disposition);
         Assert.Equal("partial", member.NativeOrigin!.SourceReportStatus);
         Assert.Null(member.NativeOrigin.SourceCompletionManifestHash);
-        var rootIntent = await MarkRecoveryRootReadyAsync(fixture, recovered, manifest);
-        var readyStatus = WithCurrentRootRegistration(
-            recovered.CheckpointRecovery! with
-            {
-                Phase = "ready",
-                CurrentStep = "ready",
-                ReasonCode = null,
-                RecoveryMaterialMode = "nativeCache",
-                DispatchHeld = false
-            },
-            rootIntent);
+        var material = CreateCompletedUnjoinedMaterial(fixture, fixture.Result);
         var checkpointStore = new MafExecutionCheckpointStore(
             new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
             _binding with { ExecutionFence = recovered.ExecutionFence });
-        var usageSources = new RuntimeUsageSourceStore(
-            _fixture.DataSource,
-            new OrchestratorOptions(
-                _actor.Issuer, "orchestrator", "https://projects.test/", "projects",
-                "https://events.test/", "events", _schema),
-            TimeProvider.System);
         return new CompletedUnjoinedImportContext(
-            fixture, recovered, manifest, rootIntent, readyStatus, checkpointStore, usageSources,
-            CreateCompletedUnjoinedMaterial(fixture, fixture.Result));
+            fixture, recovered, manifest, checkpointStore, material);
     }
 
     private static ChildRecoveryCompletedUnjoinedMaterial CreateCompletedUnjoinedMaterial(
@@ -630,89 +1084,6 @@ public sealed partial class MafCheckpointStorePostgresTests
                 RuntimeRootTurnCompletionReceipt.AssistantEventId(fixture.Dispatch.MessageId),
                 2,
                 result));
-    }
-
-    private static CheckpointRecoveryStatus WithCurrentRootRegistration(
-        CheckpointRecoveryStatus status,
-        RuntimeRunStartIntent rootIntent)
-    {
-        using var links = JsonDocument.Parse(rootIntent.ReceiptLinks);
-        var registration = links.RootElement.GetProperty("registration")
-            .Deserialize<RuntimeRegistration>(ChildRecoveryJsonOptions)
-            ?? throw new InvalidOperationException("The replacement root registration is missing.");
-        if (registration.RuntimeInstanceId != rootIntent.RuntimeInstanceId)
-            throw new InvalidOperationException("The root intent does not match its replacement registration.");
-        return status with
-        {
-            RuntimeInstanceId = registration.RuntimeInstanceId,
-            RegistrationRevision = registration.Revision
-        };
-    }
-
-    private async Task<(RuntimeRegistration Registration, RuntimeRunStartPlacementReceipt Placement)>
-        ReplaceRecoveryRuntimeAsync(
-            RuntimeRegistrationStore registrations,
-            Guid operationId,
-            string sessionId,
-            RuntimeRegistration previousRegistration,
-            RuntimeRunStartPlacementReceipt previousPlacement,
-            RuntimeOwnerContext owner,
-            string resourceId,
-            string podUid)
-    {
-        var expiresAt = DateTimeOffset.UtcNow.AddHours(1);
-        var binding = previousRegistration.Binding with
-        {
-            TurnId = owner.TurnId,
-            ExecutionFence = owner.ExecutionFence,
-            PlacementUid = resourceId,
-            PlacementGeneration = previousRegistration.Binding.PlacementGeneration + 1,
-            EnvironmentCurrentFencingGeneration =
-                previousRegistration.Binding.EnvironmentCurrentFencingGeneration + 1,
-            EnvironmentProviderFencingGeneration =
-                previousRegistration.Binding.EnvironmentProviderFencingGeneration + 1
-        };
-        var registration = await registrations.ReplaceAsync(
-            previousRegistration, operationId, binding, expiresAt, CancellationToken.None);
-        Assert.Equal(
-            RuntimeRegistrationStore.CreateReplacementId(previousRegistration.RuntimeInstanceId, operationId),
-            registration.RuntimeInstanceId);
-        var bootstrapId = owner.LogicalTurnOrdinal == 0
-            ? RuntimeRunStartKeys.ReplacementOperationId(operationId, "checkpoint-bootstrap")
-            : RuntimeRunStartKeys.ReplacementOperationId(
-                operationId, sessionId, "checkpoint-bootstrap");
-        var placement = previousPlacement with
-        {
-            SandboxIdempotencyKey = RuntimeRunStartKeys.SandboxIdempotencyKey(owner, bootstrapId),
-            SandboxOperationId = Guid.NewGuid(),
-            SandboxResource = new ProviderResourceRef(
-                ProviderSeam.Sandbox, previousPlacement.SandboxResource.ProviderId,
-                resourceId, previousPlacement.SandboxResource.Generation + 1),
-            LeaseRevision = previousPlacement.LeaseRevision + 1,
-            CurrentFencingGeneration = previousPlacement.CurrentFencingGeneration + 1,
-            ProviderFencingGeneration = previousPlacement.ProviderFencingGeneration + 1,
-            LeaseExpiresAt = expiresAt,
-            PodUid = podUid
-        };
-        return (registration, placement);
-    }
-
-    private static RuntimeBootstrapDeliveryReceipt CreateRecoveryBootstrapReceipt(
-        RuntimeRegistration registration,
-        Guid bootstrapId)
-    {
-        var now = DateTimeOffset.UtcNow;
-        return new RuntimeBootstrapDeliveryReceipt(
-            bootstrapId, Guid.NewGuid(), registration.RuntimeInstanceId, registration.Revision,
-            registration.Binding.PlacementUid, registration.Binding.PlacementGeneration,
-            registration.Binding.ExecutionFence,
-            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes("{}")), now)
-        {
-            EnvironmentCurrentFencingGeneration =
-                registration.Binding.EnvironmentCurrentFencingGeneration,
-            EnvironmentProviderFencingGeneration =
-                registration.Binding.EnvironmentProviderFencingGeneration
-        };
     }
 
     private static (RuntimeHostReadinessReceipt Activation, EnvironmentRuntimeReadinessContext Readiness)
@@ -1070,13 +1441,15 @@ public sealed partial class MafCheckpointStorePostgresTests
             EnvironmentProviderFencingGeneration = 1
         }, DateTimeOffset.UtcNow.AddHours(1), CancellationToken.None);
         var rootRuntimeId = rootRegistration.RuntimeInstanceId;
+        var rootBootstrapId = rootIntent.BootstrapOperationId;
         var rootPlacement = new RuntimeRunStartPlacementReceipt(
-            1, rootEnvironmentId, "profile-1", "root-volume", "root-sandbox-key",
+            1, rootEnvironmentId, "profile-1", RuntimeRunStartKeys.WorkspaceVolumeId(rootRuntime),
+            RuntimeRunStartKeys.SandboxIdempotencyKey(rootRuntime, rootBootstrapId),
             1, 0, 1, Guid.NewGuid(),
             new ProviderResourceRef(ProviderSeam.Sandbox, ReviewSandboxProviderId, "root-resource", 1),
             1, 1, 1, 1, rootRegistration.ExpiresAt) { PodUid = "root-pod" };
         var rootBootstrap = new RuntimeBootstrapDeliveryReceipt(
-            rootIntent.BootstrapOperationId, Guid.NewGuid(), rootRuntimeId, rootRegistration.Revision,
+            rootBootstrapId, Guid.NewGuid(), rootRuntimeId, rootRegistration.Revision,
             rootRegistration.Binding.PlacementUid, rootRegistration.Binding.PlacementGeneration,
             rootRegistration.Binding.ExecutionFence, new string('d', 64), DateTimeOffset.UtcNow)
         {
@@ -1163,13 +1536,16 @@ public sealed partial class MafCheckpointStorePostgresTests
                 EnvironmentCurrentFencingGeneration = 1,
                 EnvironmentProviderFencingGeneration = 1
             }, DateTimeOffset.UtcNow.AddHours(1), CancellationToken.None);
+        var childRuntime = RuntimeRunStartContinuation.CreateOwnerContext(registration.Binding);
+        var childBootstrapId = childIntent.BootstrapOperationId;
         var placement = new RuntimeRunStartPlacementReceipt(
-            1, childEnvironmentId, "profile-1", "child-volume", "child-sandbox-key",
+            1, childEnvironmentId, "profile-1", RuntimeRunStartKeys.WorkspaceVolumeId(childRuntime),
+            RuntimeRunStartKeys.SandboxIdempotencyKey(childRuntime, childBootstrapId),
             1, 0, 1, Guid.NewGuid(),
             new ProviderResourceRef(ProviderSeam.Sandbox, ReviewSandboxProviderId, "child-resource", 1),
             1, 1, 1, 1, registration.ExpiresAt) { PodUid = "child-pod" };
         var bootstrap = new RuntimeBootstrapDeliveryReceipt(
-            childIntent.BootstrapOperationId, Guid.NewGuid(), registration.RuntimeInstanceId,
+            childBootstrapId, Guid.NewGuid(), registration.RuntimeInstanceId,
             registration.Revision, registration.Binding.PlacementUid, registration.Binding.PlacementGeneration,
             registration.Binding.ExecutionFence, new string('c', 64), DateTimeOffset.UtcNow)
         {
@@ -1371,9 +1747,6 @@ public sealed partial class MafCheckpointStorePostgresTests
         ChildRecoveryFixture Fixture,
         RunExecutionTransitionResult Recovered,
         ChildCheckpointRecoveryManifest Manifest,
-        RuntimeRunStartIntent RootIntent,
-        CheckpointRecoveryStatus ReadyStatus,
         MafExecutionCheckpointStore CheckpointStore,
-        RuntimeUsageSourceStore UsageSources,
         ChildRecoveryCompletedUnjoinedMaterial Material);
 }

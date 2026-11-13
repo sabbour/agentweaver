@@ -63,10 +63,18 @@ internal static class ChildCheckpointRecoveryCensus
         MafExecutionCheckpointSnapshot source,
         WorkPlanSnapshot plan,
         ImmutableArray<ChildRecoverySession> children,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ChildCheckpointRecoveryManifest? originManifest = null)
     {
         if (children.IsEmpty || plan.Plan.Id != source.State.WorkPlanId)
             throw InvalidBoundary();
+        if (originManifest is not null &&
+            (originManifest.Root != root || originManifest.HoldFence != sourceFence ||
+             sourceFence <= 0 || originManifest.SourceExecutionFence != sourceFence - 1 ||
+             originManifest.Members.Length != children.Length))
+            throw InvalidBoundary();
+        var originFence = originManifest?.SourceExecutionFence ?? sourceFence;
+        var originRootStartup = originManifest?.RootStartup ?? rootStartup;
         var expected = new HashSet<string>(StringComparer.Ordinal);
         expected.UnionWith(source.State.PendingDispatches.Keys);
         expected.UnionWith(source.State.FixedWorkAssociations.Keys);
@@ -89,9 +97,14 @@ internal static class ChildCheckpointRecoveryCensus
                 child.WriterIssuer != actor.Issuer || child.WriterSubject != actor.Subject ||
                 child.ExecutionFence != sourceFence)
                 throw InvalidBoundary();
+            var originMatches = originManifest?.Members
+                .Where(member => member.Session.SessionId == child.SessionId).ToArray();
+            if (originManifest is not null && originMatches!.Length != 1)
+                throw InvalidBoundary();
+            var originMember = originMatches?.SingleOrDefault();
             var (startup, registration) = await ReadStartupAsync(
                 connection, transaction, schema, root, child, tenantId, selectionHash, sourceFence,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, originMember, originFence, originManifest?.OperationId).ConfigureAwait(false);
             var binding = startup.Binding;
             if (binding.ParentRootSessionId != root.SessionId ||
                 binding.ChildSessionId != child.SessionId || binding.WorkPlanId != plan.Plan.Id ||
@@ -102,10 +115,18 @@ internal static class ChildCheckpointRecoveryCensus
                 !expected.Contains(binding.AssociationId) || !observed.Add(binding.AssociationId) ||
                 child.SessionId != MafExecutionIds.CreateChildSessionId(root, plan.Plan.Id, binding.AssociationId))
                 throw InvalidBoundary();
+            if (originMember is not null &&
+                (originMember.AssociationId != binding.AssociationId ||
+                 originMember.Startup.Binding != binding ||
+                 originMember.MessageId != binding.DispatchMessageId ||
+                 originMember.PromptHash != binding.PromptHash))
+                throw InvalidBoundary();
 
             var spawnHash = await ReadSpawnCommandHashAsync(
-                connection, transaction, schema, root, child, binding, actor, sourceFence, cancellationToken)
+                connection, transaction, schema, root, child, binding, actor, originFence, cancellationToken)
                 .ConfigureAwait(false);
+            if (originMember is not null && originMember.SpawnCommandHash != spawnHash)
+                throw InvalidBoundary();
             var fixedAssociation = source.State.FixedWorkAssociations.GetValueOrDefault(binding.AssociationId);
             var workItem = plan.Plan.Items.SingleOrDefault(item => item.Id == binding.AssociationId);
             if ((fixedAssociation is null) == (workItem is null))
@@ -122,7 +143,7 @@ internal static class ChildCheckpointRecoveryCensus
                  fixedAssociation.WorkPlanId != plan.Plan.Id ||
                  !string.Equals(
                      fixedAssociation.AcceptedSelectionHash, selectionHash, StringComparison.OrdinalIgnoreCase) ||
-                 fixedAssociation.ExecutionFence != sourceFence ||
+                 fixedAssociation.ExecutionFence != originFence ||
                  fixedAssociation.DecisionStateVersion != binding.DecisionStateVersion ||
                  fixedAssociation.WorkflowId != plan.Workflow.Definition.Id ||
                  fixedAssociation.DefinitionRevision != plan.Workflow.Definition.Revision ||
@@ -138,12 +159,16 @@ internal static class ChildCheckpointRecoveryCensus
                  intent.MessageId != binding.DispatchMessageId || intent.PromptHash != binding.PromptHash))
                 throw InvalidBoundary();
             var native = await ReadNativeOriginAsync(
-                connection, transaction, schema, root, child, binding, selectionHash, sourceFence,
+                connection, transaction, schema, root, child, binding, selectionHash, originFence,
                 cancellationToken).ConfigureAwait(false);
             if (native is not null &&
-                (registration is null || native.RuntimeInstanceId != registration.RuntimeInstanceId ||
-                 native.RegistrationRevision != registration.Revision ||
-                 native.RuntimeBindingHash != RuntimeContractValidation.RegistrationHash(registration)))
+                (originMember is null
+                    ? registration is null || native.RuntimeInstanceId != registration.RuntimeInstanceId ||
+                      native.RegistrationRevision != registration.Revision ||
+                      native.RuntimeBindingHash != RuntimeContractValidation.RegistrationHash(registration)
+                    : originMember.Startup.RegistrationId != native.RuntimeInstanceId ||
+                      originMember.Startup.RegistrationRevision != native.RegistrationRevision ||
+                      originMember.NativeOrigin?.RuntimeBindingHash != native.RuntimeBindingHash))
                 throw InvalidBoundary();
             var originIntent = native is null
                 ? intent
@@ -156,9 +181,9 @@ internal static class ChildCheckpointRecoveryCensus
                 (egress.Fence.Owner.TenantId != tenantId ||
                  egress.Fence.Owner.ProjectId != root.ProjectId ||
                  egress.Fence.Owner.RunId != root.RunId ||
-                 egress.Fence.Owner.EnvironmentId != rootStartup.EnvironmentId ||
-                 egress.Fence.LifecycleGeneration != rootStartup.Placement.LifecycleGeneration ||
-                 egress.PolicyGeneration != rootStartup.Placement.NetworkPolicyGeneration ||
+                 egress.Fence.Owner.EnvironmentId != originRootStartup.EnvironmentId ||
+                 egress.Fence.LifecycleGeneration != originRootStartup.Placement.LifecycleGeneration ||
+                 egress.PolicyGeneration != originRootStartup.Placement.NetworkPolicyGeneration ||
                  egress.ContextRevision != binding.ContextRevision))
                 throw InvalidBoundary();
             var (messageStatus, messageRequestHash) = await ReadMessageAsync(
@@ -366,7 +391,10 @@ internal static class ChildCheckpointRecoveryCensus
         string tenantId,
         string selectionHash,
         long sourceFence,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ChildRecoveryMember? originMember = null,
+        long? originFence = null,
+        Guid? originOperationId = null)
     {
         await using var command = new NpgsqlCommand($"""
             SELECT tenant_id, accepted_selection_hash, execution_fence, intent_id, bootstrap_operation_id,
@@ -405,6 +433,15 @@ internal static class ChildCheckpointRecoveryCensus
             var placement = ReadReceipt<RuntimeRunStartPlacementReceipt>(links.RootElement, "placement");
             var bootstrap = ReadReceipt<RuntimeBootstrapDeliveryReceipt>(links.RootElement, "bootstrap");
             placement?.Validate();
+            var bootstrapJson = links.RootElement.TryGetProperty("bootstrap", out var bootstrapValue)
+                ? bootstrapValue
+                : (JsonElement?)null;
+            var hasCurrentBootstrap = originMember is not null &&
+                originOperationId is { } recoveryId &&
+                RuntimeRunStartContinuation.HasCheckpointRecoveryBootstrapEvidence(
+                    recoveryId,
+                    JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                        links.RootElement.GetRawText(), JsonOptions) ?? new(StringComparer.Ordinal));
             if (registration is not null &&
                 (registration.RuntimeInstanceId != intent.RuntimeInstanceId ||
                  registration.Binding.ActorIssuer != binding.ActorIssuer ||
@@ -431,24 +468,57 @@ internal static class ChildCheckpointRecoveryCensus
                   registration.Binding.EnvironmentCurrentFencingGeneration != placement.CurrentFencingGeneration ||
                   registration.Binding.EnvironmentProviderFencingGeneration != placement.ProviderFencingGeneration)))
                 throw InvalidBoundary();
-            if (bootstrap is not null &&
-                (registration is null || bootstrap.OperationId != intent.BootstrapOperationId ||
-                 bootstrap.RuntimeInstanceId != registration.RuntimeInstanceId ||
-                 bootstrap.RegistrationRevision != registration.Revision ||
-                 bootstrap.PlacementUid != registration.Binding.PlacementUid ||
-                 bootstrap.PlacementGeneration != registration.Binding.PlacementGeneration ||
-                 bootstrap.ExecutionFence != registration.Binding.ExecutionFence ||
-                 bootstrap.EnvironmentCurrentFencingGeneration !=
-                    registration.Binding.EnvironmentCurrentFencingGeneration ||
-                 bootstrap.EnvironmentProviderFencingGeneration !=
-                    registration.Binding.EnvironmentProviderFencingGeneration))
+            if (originMember is not null)
+            {
+                var previous = originMember.Startup;
+                var originalPlacement = previous.Placement;
+                var bootstrapMismatch = bootstrap is null || registration is null ||
+                     hasCurrentBootstrap
+                         ? bootstrap is null || registration is null ||
+                           bootstrap.OperationId != intent.BootstrapOperationId ||
+                           bootstrap.RuntimeInstanceId != registration.RuntimeInstanceId ||
+                           bootstrap.RegistrationRevision != registration.Revision ||
+                           bootstrap.PlacementUid != registration.Binding.PlacementUid ||
+                           bootstrap.PlacementGeneration != registration.Binding.PlacementGeneration ||
+                           bootstrap.ExecutionFence != registration.Binding.ExecutionFence ||
+                           bootstrap.EnvironmentCurrentFencingGeneration !=
+                               registration.Binding.EnvironmentCurrentFencingGeneration ||
+                           bootstrap.EnvironmentProviderFencingGeneration !=
+                               registration.Binding.EnvironmentProviderFencingGeneration
+                         : bootstrap.OperationId != previous.BootstrapOperationId ||
+                           bootstrap.RuntimeInstanceId != previous.RegistrationId ||
+                           bootstrap.RegistrationRevision != previous.RegistrationRevision ||
+                           originalPlacement is null ||
+                           bootstrap.PlacementUid != originalPlacement.SandboxResource.ResourceId ||
+                           bootstrap.PlacementGeneration != originalPlacement.SandboxResource.Generation ||
+                           bootstrap.ExecutionFence != originFence ||
+                           bootstrap.ConfigurationHash != previous.BootstrapConfigurationHash;
+                if (originFence is null || originOperationId is null ||
+                     previous.BootstrapReceiptHash is null ||
+                     previous.BootstrapConfigurationHash is null ||
+                     bootstrapJson is null ||
+                     HashReceipt(bootstrapJson.Value) != previous.BootstrapReceiptHash ||
+                     bootstrapMismatch)
+                     throw InvalidBoundary();
+            }
+            else if (bootstrap is not null &&
+                      (registration is null || bootstrap.OperationId != intent.BootstrapOperationId ||
+                       bootstrap.RuntimeInstanceId != registration.RuntimeInstanceId ||
+                       bootstrap.RegistrationRevision != registration.Revision ||
+                       bootstrap.PlacementUid != registration.Binding.PlacementUid ||
+                       bootstrap.PlacementGeneration != registration.Binding.PlacementGeneration ||
+                       bootstrap.ExecutionFence != registration.Binding.ExecutionFence ||
+                       bootstrap.EnvironmentCurrentFencingGeneration !=
+                           registration.Binding.EnvironmentCurrentFencingGeneration ||
+                       bootstrap.EnvironmentProviderFencingGeneration !=
+                           registration.Binding.EnvironmentProviderFencingGeneration))
                 throw InvalidBoundary();
             var (currentRevision, bindingHash) = registration is null
                 ? ((long?)null, (string?)null)
                 : await ReadRegistrationAsync(connection, transaction, schema, registration, cancellationToken)
                     .ConfigureAwait(false);
-            var bootstrapHash = links.RootElement.TryGetProperty("bootstrap", out var bootstrapJson)
-                ? HashReceipt(bootstrapJson)
+            var bootstrapHash = bootstrapJson is { } savedBootstrap
+                ? HashReceipt(savedBootstrap)
                 : null;
             var priorStarts = registration is null
                 ? ImmutableArray<ChildRecoveryPriorStartup>.Empty

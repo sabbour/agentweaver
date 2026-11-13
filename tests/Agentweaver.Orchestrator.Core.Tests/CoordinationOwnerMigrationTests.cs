@@ -68,6 +68,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(47)]
     [InlineData(48)]
     [InlineData(49)]
+    [InlineData(50)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         // A partial history must fail verification until every registered resource is installed.
@@ -99,6 +100,34 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
         await AssertCurrentSchemaAsync();
         Assert.Equal(history, await ReadMigrationHistoryAsync(int.MaxValue));
+    }
+
+    [Fact]
+    public async Task CheckpointRecoverySupersessionMigrationIsOptionalUntilApplied()
+    {
+        await ApplyMigrationsThroughAsync(49);
+
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 50),
+                (SELECT count(*) FROM pg_constraint
+                 WHERE conrelid = to_regclass(@runtimeEvidenceReceipts) AND conname = @fields),
+                to_regclass(@sourceIndex) IS NOT NULL,
+                to_regclass(@successorIndex) IS NOT NULL
+            """, connection);
+        command.Parameters.AddWithValue("runtimeEvidenceReceipts", $"{_schema}.maf_runtime_evidence_receipts");
+        command.Parameters.AddWithValue("fields", "maf_runtime_evidence_supersession_fields_check");
+        command.Parameters.AddWithValue("sourceIndex", $"{_schema}.uq_checkpoint_recovery_supersession_source");
+        command.Parameters.AddWithValue(
+            "successorIndex", $"{_schema}.uq_checkpoint_recovery_supersession_successor");
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(0L, reader.GetInt64(0));
+        Assert.Equal(0L, reader.GetInt64(1));
+        Assert.False(reader.GetBoolean(2));
+        Assert.False(reader.GetBoolean(3));
     }
 
     [Fact]
@@ -997,7 +1026,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (46, "046_workflow_generation_jobs.sql"),
             (47, "047_terminal_cleanup_recovery_guard.sql"),
             (48, "048_source_control_pull_request_effect_identity.sql"),
-            (49, "049_runtime_observation_v2_cursors.sql")
+            (49, "049_runtime_observation_v2_cursors.sql"),
+            (50, "050_checkpoint_recovery_supersession.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""
@@ -1133,7 +1163,12 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 45),
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 49),
                 to_regclass(@runtimeObservationCursors) IS NOT NULL,
-                to_regclass(@runtimeObservationCursorExpiry) IS NOT NULL
+                to_regclass(@runtimeObservationCursorExpiry) IS NOT NULL,
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 50),
+                (SELECT count(*) FROM pg_constraint
+                 WHERE conrelid = to_regclass(@runtimeEvidenceReceipts) AND conname = @supersessionFields),
+                to_regclass(@supersessionSourceIndex) IS NOT NULL,
+                to_regclass(@supersessionSuccessorIndex) IS NOT NULL
             """, connection);
         command.Parameters.AddWithValue("projectRunRequests", $"{_schema}.project_run_requests");
         command.Parameters.AddWithValue("projectRunCancellations", $"{_schema}.project_run_cancellations");
@@ -1175,10 +1210,16 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             $"{_schema}.runtime_observation_v2_cursors");
         command.Parameters.AddWithValue("runtimeObservationCursorExpiry",
             $"{_schema}.ix_runtime_observation_v2_cursors_expiry");
+        command.Parameters.AddWithValue(
+            "supersessionFields", "maf_runtime_evidence_supersession_fields_check");
+        command.Parameters.AddWithValue(
+            "supersessionSourceIndex", $"{_schema}.uq_checkpoint_recovery_supersession_source");
+        command.Parameters.AddWithValue(
+            "supersessionSuccessorIndex", $"{_schema}.uq_checkpoint_recovery_supersession_successor");
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(1L, reader.GetInt64(0));
-        Assert.True(reader.GetBoolean(1));
+        Assert.Equal(1L, reader.GetInt64(1));
         Assert.Equal(5L, reader.GetInt64(2));
         Assert.Equal(1L, reader.GetInt64(3));
         Assert.Equal(2L, reader.GetInt64(4));
@@ -1198,7 +1239,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
         // The default history skips reserved versions 017 and 034.
         Assert.Equal(
-            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49]),
+            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]),
             reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
@@ -1245,6 +1286,10 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.Equal(1L, reader.GetInt64(49));
         Assert.True(reader.GetBoolean(50));
         Assert.True(reader.GetBoolean(51));
+        Assert.Equal(1L, reader.GetInt64(52));
+        Assert.Equal(1L, reader.GetInt64(53));
+        Assert.True(reader.GetBoolean(54));
+        Assert.True(reader.GetBoolean(55));
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version, bool includePreviouslyUnregistered = true)
