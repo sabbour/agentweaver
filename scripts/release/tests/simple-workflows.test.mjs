@@ -1367,7 +1367,7 @@ test('v1 image workflow builds the ten existing Kustomize images from exact sour
     ref: '${{ inputs.source_sha || github.sha }}',
     'fetch-depth': 0,
   });
-  assert.equal(steps.filter(({ uses }) => uses === 'docker/build-push-action@v6').length, 4);
+  assert.equal(steps.filter(({ uses }) => uses === 'docker/build-push-action@v6').length, 5);
   assert.equal(steps.filter(({ uses }) => uses === 'docker/build-push-action@v6')
     .every(({ with: options }) => options.provenance === false), true);
   assert.equal(steps.some(({ run = '' }) => run.includes('PublishContainer')), true);
@@ -1415,6 +1415,7 @@ test('v1 image workflow builds the ten existing Kustomize images from exact sour
   assert.deepEqual(dockerSteps.map(({ if: condition }) => condition).sort(), [
     "matrix.id == 'Agentweaver.AgentHost'", "matrix.id == 'Agentweaver.Identity.Broker'",
     "matrix.id == 'Agentweaver.Orchestrator' && steps.orchestrator-mode.outputs.mode == 'docker'",
+    "matrix.id == 'Agentweaver.Projects.Config' && steps.projects-config-mode.outputs.mode == 'docker'",
     "matrix.mode == 'web'",
   ]);
   for (const { with: options } of dockerSteps) {
@@ -1424,7 +1425,8 @@ test('v1 image workflow builds the ten existing Kustomize images from exact sour
   const webBuild = dockerSteps.find(({ if: condition }) => condition === "matrix.mode == 'web'");
   assert.ok(webBuild.with['build-args'].includes('GIT_SHA=${{ steps.source.outputs.sha }}'));
   const publish = steps.find(({ run = '' }) => run.includes('PublishContainer'));
-  assert.equal(publish.if, "matrix.mode == 'dotnet'");
+  assert.equal(publish.if,
+    "matrix.mode == 'dotnet' && (matrix.id != 'Agentweaver.Projects.Config' || steps.projects-config-mode.outputs.mode == 'dotnet')");
   assert.ok(publish.run.includes('-p:ContainerImageTag=sha-${{ steps.source.outputs.sha }}'));
   for (const property of [
     '-p:AgentweaverImageSourceSha=${{ steps.source.outputs.sha }}',
@@ -1448,10 +1450,16 @@ test('v1 image workflow builds the ten existing Kustomize images from exact sour
   assert.ok(legacyPublish.run.includes('-p:AgentweaverImageSourceSha=${{ steps.source.outputs.sha }}'));
   const acsOpa = steps.find(({ name }) => name === 'Download and verify pinned OPA');
   assert.equal(acsOpa.if,
-    "matrix.id == 'Agentweaver.AgentHost' || (matrix.id == 'Agentweaver.Orchestrator' && steps.orchestrator-mode.outputs.mode == 'docker')");
+    "matrix.id == 'Agentweaver.AgentHost' || (matrix.id == 'Agentweaver.Orchestrator' && steps.orchestrator-mode.outputs.mode == 'docker') || (matrix.id == 'Agentweaver.Projects.Config' && steps.projects-config-mode.outputs.mode == 'docker')");
   const orchestratorDocker = steps.find(({ name }) => name === 'Build and push Orchestrator');
   assert.equal(orchestratorDocker.if,
     "matrix.id == 'Agentweaver.Orchestrator' && steps.orchestrator-mode.outputs.mode == 'docker'");
+  const projectsConfigMode = steps.find(({ id }) => id === 'projects-config-mode');
+  assert.equal(projectsConfigMode.if, "matrix.id == 'Agentweaver.Projects.Config'");
+  assert.match(projectsConfigMode.run, /-f "\$dockerfile" && -s "\$package"/);
+  assert.match(projectsConfigMode.run, /Projects Config Dockerfile requires the pinned ACS package/);
+  const projectsConfigDocker = steps.find(({ name }) => name === 'Build and push Projects Config');
+  assert.equal(projectsConfigDocker.with.file, 'services/projects-config/Agentweaver.Projects.Config/Dockerfile');
 });
 
 test('v1 package workflow publishes versioned NuGet packages without image receipts', () => {

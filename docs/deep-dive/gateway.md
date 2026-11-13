@@ -71,6 +71,13 @@ existing Memory selections through its private Knowledge-selection route.
 Gateway does not add an arbitrary proxy path or make the authorization
 decision.
 
+The canonical Platform Policy read, validate, and write operations are also
+fixed catalog routes. The Gateway forwards the optional tenant selector and
+exposes `Cache-Control`; each route has a 5 MiB response limit, and the two
+body routes have a 5 MiB request limit. All three are excluded from MCP.
+Projects & Config owns authorization, validation, and policy state. See the
+[Policy API contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract).
+
 Gateway preserves the owner's response status and body. In particular,
 `202 Accepted` means an owner accepted an operation; it does not prove that a
 resource, model turn, or workflow finished. Gateway has no domain database and

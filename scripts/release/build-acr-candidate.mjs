@@ -29,7 +29,8 @@ const COMPONENTS = [
     project: path.join('services', 'environment', 'Agentweaver.Environment', 'Agentweaver.Environment.csproj') },
   { id: 'Agentweaver.Knowledge', repository: 'agentweaver.knowledge', mode: 'dotnet',
     project: path.join('services', 'knowledge', 'Agentweaver.Knowledge', 'Agentweaver.Knowledge.csproj') },
-  { id: 'Agentweaver.Projects.Config', repository: 'agentweaver.projects.config', mode: 'dotnet',
+  { id: 'Agentweaver.Projects.Config', repository: 'agentweaver.projects.config', mode: 'docker',
+    dockerfile: path.join('services', 'projects-config', 'Agentweaver.Projects.Config', 'Dockerfile'),
     project: path.join('services', 'projects-config', 'Agentweaver.Projects.Config', 'Agentweaver.Projects.Config.csproj') },
 ];
 const OPA_URL = 'https://openpolicyagent.org/downloads/v0.70.0/opa_linux_amd64_static';
@@ -153,8 +154,15 @@ export async function buildAcrCandidate(
     const hasAcsRuntime = existsSync(path.join(
       worktreePath, 'eng', 'acs', 'nuget', 'AgentControlSpecification.0.4.0-beta.0.nupkg',
     ));
+    const hasProjectsConfigDockerfile = existsSync(path.join(
+      worktreePath, 'services', 'projects-config', 'Agentweaver.Projects.Config', 'Dockerfile',
+    ));
+    if (hasProjectsConfigDockerfile && !hasAcsRuntime) {
+      fail('Projects Config Dockerfile requires the pinned ACS package.');
+    }
     const components = COMPONENTS.map(component =>
-      component.id === 'Agentweaver.Orchestrator' && !hasAcsRuntime
+      (component.id === 'Agentweaver.Orchestrator' && !hasAcsRuntime) ||
+      (component.id === 'Agentweaver.Projects.Config' && !hasProjectsConfigDockerfile)
         ? { ...component, mode: 'dotnet' }
         : component);
     const repositories = COMPONENTS.map(component => component.repository);

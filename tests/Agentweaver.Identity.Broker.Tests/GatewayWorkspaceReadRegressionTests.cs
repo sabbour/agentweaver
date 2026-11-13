@@ -22,6 +22,33 @@ public sealed class GatewayWorkspaceReadRegressionTests
     private const string SelectionCode = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     [Fact]
+    public void PlatformPolicyRoutesAreBoundedAndExcludedFromMcp()
+    {
+        var routes = new[]
+        {
+            ("GET", "/api/v1/policies/platform", "readPlatformNativeAcsPolicy"),
+            ("POST", "/api/v1/policies/platform/validate", "validatePlatformNativeAcsPolicy"),
+            ("PUT", "/api/v1/policies/platform", "writePlatformNativeAcsPolicy"),
+        };
+
+        foreach (var (method, path, operationId) in routes)
+        {
+            var route = Assert.Single(GatewayRouteCatalog.Routes, item => item.OperationId == operationId);
+            Assert.Equal(method, route.Method);
+            Assert.Equal(path, route.PublicPath);
+            Assert.Equal(GatewayOwner.Projects, route.Owner);
+            Assert.True(route.ForwardTenantSelector);
+            Assert.True(route.ExcludeFromMcp);
+            Assert.Contains("Cache-Control", route.ExposedResponseHeaders);
+            Assert.Equal(5 * 1024 * 1024, route.MaximumResponseBytes);
+            Assert.Equal(method != "GET", route.HasJsonBody);
+            Assert.Equal(
+                method == "GET" ? null : 5 * 1024 * 1024,
+                route.MaximumRequestBodyBytes);
+        }
+    }
+
+    [Fact]
     public async Task WorkspaceRoutesPublishTypedOwnerBoundReadContracts()
     {
         using var rsa = RSA.Create(2048);

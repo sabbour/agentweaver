@@ -25,6 +25,7 @@ the exact inputs for that run. Later edits do not rewrite the snapshot.
 | `ProjectAuthorization.cs` | Current membership, roles, scopes, and effective permissions |
 | `ProjectConfiguration.cs` | Typed settings, validation, limits, and egress narrowing |
 | `ProjectsConfigService.cs` | Project lifecycle, revision writes, and run selection |
+| `NativeAcsPolicyEndpoints.cs` and `NativeAcsPolicyStore.cs` | Canonical Platform ACS Policy API and immutable policy source |
 | `ModelProviderDraftService.cs` and `ModelProviderDraftRecords.cs` | Customer-provided model-provider metadata in Draft heads and immutable revisions |
 | `ProjectsConfigDbContext.cs` and `ProjectConfigRecords.cs` | Service-owned persistence |
 | `ProjectsConfigCastingService.cs` and `ProjectsConfigCastingTransferService.cs` | Reviewed team proposals and transfers |
@@ -58,6 +59,36 @@ Setup and revocation use a separate privileged path. Ordinary service requests
 do not bootstrap membership.
 
 ## 6. Runtime view
+
+### Store one canonical ACS Policy source
+
+Projects & Config exposes Platform Policy read, validation, and compare-and-swap
+write routes. It uses one head per scope and keeps the Policy ID of an existing
+head. Only an empty scope gets the server-owned `canonical` Policy ID. Each
+artifact contains all policy domains; the API does not accept a
+scope or domain selector from the caller.
+
+The read route returns the current artifact only after the store checks its
+content hash. The validation route does not write state. Head writes are off by
+default; the write route returns `503` until `NativeAcsPolicy:HeadWritesEnabled`
+is `true`. A retry of a saved request first gets its receipt, after a current
+authority check and without new validation. An enabled write validates the
+complete artifact before the existing serializable transaction appends the
+revision, idempotency receipt, audit record, and outbox event. The transaction
+rechecks current membership and role revisions before commit. The schema
+enforces one head per scope. If old data has duplicate heads, the migration
+stops and names the affected scopes and policy IDs. It does not select, delete,
+or change a policy record.
+
+If `ACS_OPA_PATH` is missing, the service still starts. Policy validation then
+returns `503` and the other service functions continue.
+
+Reads require `api.read` and a current unbound PlatformAdmin grant. They do not
+require `projects.admin`. Writes also require `projects.admin` and the
+`WritePlatformRuntimeDefaults` permission. This API stores source only; it
+does not activate ACS or change the v4 Policy path. The
+[native ACS contract](../reference/contracts.md#native-acs-artifact-and-evaluation-contract)
+defines its full error and request contract.
 
 ### Edit configuration safely
 

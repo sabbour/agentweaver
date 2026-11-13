@@ -134,6 +134,21 @@ jobs:
             exit 1
           fi
 
+      - name: Select Projects Config build path
+        id: projects-config-mode
+        if: matrix.id == 'Agentweaver.Projects.Config'
+        run: |
+          dockerfile=services/projects-config/Agentweaver.Projects.Config/Dockerfile
+          package=eng/acs/nuget/AgentControlSpecification.0.4.0-beta.0.nupkg
+          if [[ -f "$dockerfile" && -s "$package" ]]; then
+            echo "mode=docker" >> "$GITHUB_OUTPUT"
+          elif [[ ! -f "$dockerfile" ]]; then
+            echo "mode=dotnet" >> "$GITHUB_OUTPUT"
+          else
+            echo "Projects Config Dockerfile requires the pinned ACS package." >&2
+            exit 1
+          fi
+
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
@@ -180,7 +195,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download and verify pinned OPA
-        if: matrix.id == 'Agentweaver.AgentHost' || (matrix.id == 'Agentweaver.Orchestrator' && steps.orchestrator-mode.outputs.mode == 'docker')
+        if: matrix.id == 'Agentweaver.AgentHost' || (matrix.id == 'Agentweaver.Orchestrator' && steps.orchestrator-mode.outputs.mode == 'docker') || (matrix.id == 'Agentweaver.Projects.Config' && steps.projects-config-mode.outputs.mode == 'docker')
         run: |
           mkdir -p eng/acs
           curl --fail --location --proto '=https' --tlsv1.2 --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 \
@@ -210,6 +225,21 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
+          push: true
+          provenance: false
+          tags: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ steps.source.outputs.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
+            io.agentweaver.source-tree=${{ steps.source.outputs.tree }}
+            org.opencontainers.image.version=${{ steps.source.outputs.version }}
+
+      - name: Build and push Projects Config
+        if: matrix.id == 'Agentweaver.Projects.Config' && steps.projects-config-mode.outputs.mode == 'docker'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/projects-config/Agentweaver.Projects.Config/Dockerfile
           push: true
           provenance: false
           tags: ghcr.io/sabbour/${{ matrix.repository }}:sha-${{ steps.source.outputs.sha }}
@@ -253,7 +283,7 @@ jobs:
             org.opencontainers.image.version=${{ steps.source.outputs.version }}
 
       - name: Build and push .NET service
-        if: matrix.mode == 'dotnet'
+        if: matrix.mode == 'dotnet' && (matrix.id != 'Agentweaver.Projects.Config' || steps.projects-config-mode.outputs.mode == 'dotnet')
         run: >-
           dotnet publish "${{ matrix.project }}"
           -t:PublishContainer

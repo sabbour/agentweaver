@@ -747,6 +747,9 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 table.HasCheckConstraint("ck_native_acs_policy_heads_revision", "current_revision > 0");
             });
             entity.HasKey(head => new { head.ScopeType, head.ScopeId, head.PolicyId });
+            entity.HasIndex(head => new { head.ScopeType, head.ScopeId })
+                .IsUnique()
+                .HasDatabaseName("ux_native_acs_policy_heads_scope");
             entity.Property(head => head.ScopeType).HasColumnName("scope_type").HasConversion<string>().HasMaxLength(16);
             entity.Property(head => head.ScopeId).HasColumnName("scope_id").HasMaxLength(256);
             entity.Property(head => head.PolicyId).HasColumnName("policy_id").HasMaxLength(128);

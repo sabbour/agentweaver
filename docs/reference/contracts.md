@@ -219,21 +219,44 @@ identity source or infer identity from the Broker subject, actor ID, or UPN.
 `NativeAcsEvaluationResult` binds the decision to the artifact hash. Invalid
 artifacts and native runtime failures return an error rather than an allow.
 
-Projects & Config stores complete policy artifacts as immutable revisions. It
-stores the exact manifest bytes and every relative file, with one revision
-head for each policy and scope. A write records its actor-scoped idempotency
-receipt, append-only change audit, and outbox event in the same database
-transaction. The store rechecks the membership and the exact role-assignment
-revision before it commits. Platform writes require an unbound PlatformAdmin
-with `api.read` and `projects.admin`. Project writes require an unbound
-TenantAdmin or project Owner with those scopes. A matching retry returns its
-saved receipt before the current-revision check, but only after current
-authority passes. This source storage slice does not add an HTTP policy API,
-policy activation, or a change to the deployed v4 Policy path.
-`Agentweaver.Policy.Acs` is a shared library, not an active host or Policy
-store. It does not change the deployed v4 YAML adapter or add an API or
-activation path. The [testing guide](../guide/testing.md#test-the-native-acs-profile)
-describes the focused native tests.
+Projects & Config exposes the current Platform policy artifact through a
+source API. It uses one head per scope and keeps the Policy ID of an existing
+head. Only an empty scope gets the server-owned `canonical` Policy ID. Each
+artifact contains all policy domains. Scope and domain selection
+remain server-owned; future consumers evaluate applicable scope/domain
+policies independently, with hard-deny precedence.
+
+| Route | Contract |
+| --- | --- |
+| `GET /api/v1/policies/platform` | Read the current artifact and revision. Requires `api.read`, an active membership, an unbound request, and a current PlatformAdmin grant. Does not require `projects.admin`. Returns `404` when no head exists. |
+| `POST /api/v1/policies/platform/validate` | Validate a complete artifact without changing policy state. Uses the same read authorization. A malformed request returns `400`. A proven invalid artifact returns `422` `native_acs_policy_invalid` with diagnostics. An unavailable, crashed, timed-out, or unconfigured native or OPA dependency returns `503` `native_acs_dependency_unavailable` with a typed dependency value. This includes the native validator codes `opa_timeout`, `opa_invalid_executable`, `opa_execution_error`, `rego_staging_error`, and `validation_internal_error`. Other native validator diagnostics return `422`. |
+| `PUT /api/v1/policies/platform` | Validate and append a complete artifact at `expectedRevision`. Requires `api.read`, `projects.admin`, an active membership, an unbound request, and a current PlatformAdmin grant with `WritePlatformRuntimeDefaults`. Head writes are off by default and return `503` `native_acs_policy_writes_unavailable` until `NativeAcsPolicy:HeadWritesEnabled` is `true`. A retry with the same key and request returns the saved receipt with `replayed: true` after a current authority check, before the write setting and validation checks. A stale revision or conflicting idempotency key returns `409`. |
+
+Reads return the exact manifest and file bytes only after the store verifies
+the artifact hash. Writes record an actor-scoped idempotency receipt,
+append-only change audit, and outbox event in one database transaction. The
+store rechecks the membership and exact role-assignment revision before
+commit. All responses use `Cache-Control: no-store`; the Gateway applies a
+5 MiB request and response limit and returns `413` for an oversized body. The
+Gateway does not expose these routes through MCP.
+Validation and writes share a six-request-per-actor, per-minute limit and one
+active validation slot per Projects & Config process. A busy process returns
+`503` with retry guidance. These are source-level limits; they do not prove
+deployed capacity.
+
+If `ACS_OPA_PATH` is not set to an absolute path, Projects & Config still
+starts. Policy validation and writes then return `503` with dependency `opa`.
+
+The head uniqueness migration stops when a scope has more than one head. The
+error names each affected scope and its policy IDs. The migration changes no
+record; recovery needs a separate reviewed plan.
+
+The API does not activate the stored policy, migrate v4 data, or change the
+deployed v4 Policy path. It does not yet expose project-scope policy routes.
+The [testing guide](../guide/testing.md#test-the-canonical-policy-api)
+describes the source tests. The
+[ACS runtime asset guide](https://github.com/sabbour/agentweaver/blob/v1/eng/acs/README.md)
+describes the pinned package and OPA assets.
 
 ## Current Environment egress verification
 

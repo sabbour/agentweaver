@@ -64,6 +64,7 @@ public sealed class NativeAcsPolicyTests
         var tamperedResult = new NativeAcsArtifactValidator(opaPath).Validate(tampered);
 
         Assert.Contains(tamperedResult.Diagnostics, diagnostic => diagnostic.Code == "artifact_hash");
+        Assert.Null(tamperedResult.DependencyFailure);
 
         var unsafePath = CreateArtifact(ConversionModule, filePath: "../outside.rego");
         var pathResult = new NativeAcsArtifactValidator(opaPath).Validate(unsafePath);
@@ -79,6 +80,89 @@ public sealed class NativeAcsPolicyTests
 
         Assert.Contains(invalidEntryResult.Diagnostics, diagnostic => diagnostic.Code == "file_path");
         Assert.Contains(invalidEntryResult.Diagnostics, diagnostic => diagnostic.Code == "artifact_hash");
+    }
+
+    [Fact]
+    public void ReportsMissingOpaAsDependencyFailure()
+    {
+        var result = new NativeAcsArtifactValidator(Path.Combine(AppContext.BaseDirectory, "missing-opa"))
+            .Validate(CreateArtifact(ConversionModule));
+
+        Assert.False(result.IsValid);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(NativeAcsValidationDependencyFailure.OpaUnavailable, result.DependencyFailure);
+    }
+
+    [NativeAcsFact]
+    public void ReportsInvalidRegoAsPolicyDiagnosticsNotDependencyFailure()
+    {
+        var result = new NativeAcsArtifactValidator(RequirePinnedOpa())
+            .Validate(CreateArtifact("package invalid\nthis is not valid rego"));
+
+        Assert.False(result.IsValid);
+        Assert.Null(result.DependencyFailure);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == "opa_parse");
+    }
+
+    [NativeAcsTheory]
+    [InlineData("exit 2")]
+    [InlineData("echo '{\"errors\":[{\"code\":\"internal_error\"}]}' >&2; exit 1")]
+    [InlineData("exec sleep 30")]
+    public void ReportsUnprovenOpaParseFailureAsDependencyFailure(string parseCommand)
+    {
+        var opaPath = CreateOpaWrapper(RequirePinnedOpa(), parseCommand, subcommand: "parse");
+        try
+        {
+            var result = new NativeAcsArtifactValidator(opaPath).Validate(CreateArtifact(ConversionModule));
+
+            Assert.False(result.IsValid);
+            Assert.Equal(NativeAcsValidationDependencyFailure.OpaUnavailable, result.DependencyFailure);
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Code.StartsWith("opa_parse", StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(opaPath);
+        }
+    }
+
+    [Theory]
+    [InlineData("opa_timeout", NativeAcsValidationDependencyFailure.OpaUnavailable)]
+    [InlineData("opa_invalid_executable", NativeAcsValidationDependencyFailure.OpaUnavailable)]
+    [InlineData("opa_execution_error", NativeAcsValidationDependencyFailure.OpaUnavailable)]
+    [InlineData("rego_staging_error", NativeAcsValidationDependencyFailure.NativeValidatorUnavailable)]
+    [InlineData("validation_internal_error", NativeAcsValidationDependencyFailure.NativeValidatorUnavailable)]
+    public void ClassifiesNativeTimeoutAndProcessDiagnosticsAsDependencyFailures(
+        string code,
+        NativeAcsValidationDependencyFailure expected)
+    {
+        Assert.Equal(expected, NativeAcsArtifactValidator.ClassifyNativeDependencyFailure(code));
+    }
+
+    [Theory]
+    [InlineData("opa_validation_error")]
+    [InlineData("manifest_schema_error")]
+    [InlineData("rego_size_exceeded")]
+    public void KeepsNativeInputDiagnosticsAsInvalidInput(string code)
+    {
+        Assert.Null(NativeAcsArtifactValidator.ClassifyNativeDependencyFailure(code));
+    }
+
+    [NativeAcsFact]
+    public void ReportsNativeOpaProcessFailureAsDependencyFailure()
+    {
+        var opaPath = CreateOpaWrapper(RequirePinnedOpa(), "exit 2", subcommand: "version");
+        try
+        {
+            var result = new NativeAcsArtifactValidator(opaPath).Validate(CreateArtifact(ConversionModule));
+
+            Assert.False(result.IsValid);
+            Assert.NotNull(result.DependencyFailure);
+            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Code.StartsWith("opa_", StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(opaPath);
+        }
     }
 
     [Fact]
@@ -98,6 +182,23 @@ public sealed class NativeAcsPolicyTests
         Assert.Equal(PolicyEvaluationOutcome.Error, result.Outcome);
         Assert.Equal("unavailable", result.ArtifactSha256);
         Assert.Equal("artifact_hash", result.DiagnosticCode);
+    }
+
+    [Fact]
+    public async Task NativeEvaluatorKeepsUnavailableOpaAsAFailClosedDependencyError()
+    {
+        var evaluator = new NativeAcsPolicyEvaluator(
+            new NativeAcsArtifactValidator(Path.Combine(AppContext.BaseDirectory, "missing-opa")),
+            WorkRoot);
+
+        var result = await evaluator.EvaluateAsync(
+            CreateArtifact(ConversionModule),
+            InterventionPoint.PreModelCall,
+            Snapshot("merge"));
+
+        Assert.Equal(PolicyEvaluationOutcome.Error, result.Outcome);
+        Assert.Equal("unavailable", result.ArtifactSha256);
+        Assert.Equal("opa_unavailable", result.DiagnosticCode);
     }
 
     [Fact]
@@ -563,7 +664,11 @@ public sealed class NativeAcsPolicyTests
         return Path.GetFullPath(path);
     }
 
-    private static string CreateOpaWrapper(string realOpa, string evaluationCommand, string? markerPath = null)
+    private static string CreateOpaWrapper(
+        string realOpa,
+        string evaluationCommand,
+        string? markerPath = null,
+        string subcommand = "eval")
     {
         if (!OperatingSystem.IsLinux())
             throw new PlatformNotSupportedException("The pinned ACS package has a Linux-x64 native library.");
@@ -572,7 +677,7 @@ public sealed class NativeAcsPolicyTests
         var markerCommand = markerPath is null ? string.Empty : $": > \"{markerPath}\"; ";
         File.WriteAllText(
             path,
-            $"#!/bin/sh\nif [ \"$1\" = \"eval\" ]; then {markerCommand}{evaluationCommand}; fi\nexec \"{realOpa}\" \"$@\"\n");
+            $"#!/bin/sh\nif [ \"$1\" = \"{subcommand}\" ]; then {markerCommand}{evaluationCommand}; fi\nexec \"{realOpa}\" \"$@\"\n");
         File.SetUnixFileMode(
             path,
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
@@ -607,4 +712,10 @@ public sealed class NativeAcsFactAttribute : FactAttribute
                  !File.Exists(Environment.GetEnvironmentVariable("ACS_OPA_PATH")))
             Skip = "Set ACS_OPA_PATH to the pinned OPA 0.70.0 executable.";
     }
+}
+
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class NativeAcsTheoryAttribute : TheoryAttribute
+{
+    public NativeAcsTheoryAttribute() => Skip = new NativeAcsFactAttribute().Skip;
 }

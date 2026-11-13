@@ -1,6 +1,7 @@
 extern alias AzureIdentity;
 
 using Agentweaver.Providers;
+using Agentweaver.Policy.Acs;
 using Agentweaver.Projects.Config;
 using Agentweaver.Abstractions;
 using Agentweaver.ObjectStore.AzureBlob;
@@ -173,6 +174,13 @@ builder.Services.AddSingleton(ModelBindingCapabilities.FromConfiguration(builder
 builder.Services.AddScoped<ProjectsConfigService>();
 builder.Services.AddScoped<ModelProviderDraftService>();
 builder.Services.AddScoped<NativeAcsPolicyStore>();
+builder.Services.AddMemoryCache();
+// Missing OPA must not stop unrelated service functions. Policy validation then reports that OPA is unavailable.
+if (builder.Configuration["ACS_OPA_PATH"] is { } acsOpaPath &&
+    !string.IsNullOrWhiteSpace(acsOpaPath) &&
+    Path.IsPathFullyQualified(acsOpaPath))
+    builder.Services.AddSingleton(new NativeAcsArtifactValidator(acsOpaPath));
+builder.Services.AddSingleton<NativeAcsPolicyRequestGate>();
 // History stays in Knowledge, so use the mounted backend CA and forward only the request caller.
 builder.Services.AddHttpClient<KnowledgeAgentHistoryClient>(client =>
 {

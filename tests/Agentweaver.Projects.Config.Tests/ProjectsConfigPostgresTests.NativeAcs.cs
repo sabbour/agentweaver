@@ -2,6 +2,8 @@ using System.Collections.Immutable;
 using System.Text;
 using Agentweaver.Abstractions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql;
 using Xunit;
 
@@ -173,6 +175,148 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal(secondProject.ProjectId, second.ScopeId);
         Assert.Equal(1, first.Revision);
         Assert.Equal(1, second.Revision);
+    }
+
+    [Fact]
+    public async Task NativeAcsPolicyHeadsAllowOnlyOnePolicyIdPerScope()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "acs-head-tenant-" + suffix;
+        var caller = await SeedCallerAsync(
+            db, authorityStore, "acs-head-owner-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+            tenantId, ProjectAuthorityRole.TenantAdmin);
+        var project = await new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System)
+            .CreateProjectAsync(caller, "ACS head uniqueness", CancellationToken.None);
+        var store = CreateNativeAcsStore();
+        await store.WriteAsync(
+            caller,
+            Request(project.ProjectId, Artifact("first"), null, "acs-head-first-" + suffix),
+            CancellationToken.None);
+
+        var conflict = await Assert.ThrowsAsync<ProjectConfigException>(() => CreateNativeAcsStore().WriteAsync(
+            caller,
+            Request(
+                project.ProjectId,
+                Artifact("second"),
+                null,
+                "acs-head-second-" + suffix,
+                policyId: "another-policy"),
+            CancellationToken.None));
+
+        Assert.Equal("revision_conflict", conflict.Code);
+        await using var verify = CreateDbContext();
+        Assert.Single(await verify.NativeAcsPolicyHeads.AsNoTracking()
+            .Where(item => item.ScopeId == project.ProjectId)
+            .ToArrayAsync());
+        Assert.Single(await verify.NativeAcsPolicyRevisions.AsNoTracking()
+            .Where(item => item.ScopeId == project.ProjectId)
+            .ToArrayAsync());
+    }
+
+    [Fact]
+    public async Task NativeAcsPolicyHeadMigrationKeepsOneExistingHeadAndRefusesDuplicateHeads()
+    {
+        const string beforeHeadIndex = "20261111192724_AddNativeAcsPolicyStorage";
+        const string headIndex = "20261113221434_EnforceOneNativeAcsPolicyHeadPerScope";
+        await using var db = CreateDbContext();
+        var latestMigration = db.Database.GetMigrations().Last();
+        await using var migrationDb = CreateMigrationDbContext();
+        var migrator = migrationDb.GetService<IMigrator>();
+        var suffix = Guid.NewGuid().ToString("N");
+        var singleScope = "acs-migration-single-" + suffix;
+        var duplicateScope = "acs-migration-duplicate-" + suffix;
+        var seeded = new[]
+        {
+            (Scope: singleScope, PolicyId: "legacy-" + suffix[..8]),
+            (Scope: duplicateScope, PolicyId: "first-" + suffix[..8]),
+            (Scope: duplicateScope, PolicyId: "second-" + suffix[..8]),
+        };
+        try
+        {
+            await migrator.MigrateAsync(beforeHeadIndex);
+            await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+            {
+                foreach (var head in seeded)
+                {
+                    await using var insert = new NpgsqlCommand(
+                        """
+                        INSERT INTO projects_config.native_acs_policy_heads
+                            (scope_type, scope_id, policy_id, current_revision, created_at, updated_at)
+                        VALUES ('Project', @scope_id, @policy_id, 3, now(), now())
+                        """,
+                        connection);
+                    insert.Parameters.AddWithValue("scope_id", head.Scope);
+                    insert.Parameters.AddWithValue("policy_id", head.PolicyId);
+                    await insert.ExecuteNonQueryAsync();
+                }
+            }
+            var before = await ReadMigrationHeadsAsync(singleScope, duplicateScope);
+
+            var refused = await Assert.ThrowsAsync<PostgresException>(() => migrator.MigrateAsync(latestMigration));
+
+            Assert.Contains("more than one policy head", refused.MessageText, StringComparison.Ordinal);
+            Assert.Contains($"Project/{duplicateScope}", refused.MessageText, StringComparison.Ordinal);
+            Assert.Contains(seeded[1].PolicyId, refused.MessageText, StringComparison.Ordinal);
+            Assert.Contains(seeded[2].PolicyId, refused.MessageText, StringComparison.Ordinal);
+            Assert.DoesNotContain(singleScope, refused.MessageText, StringComparison.Ordinal);
+            Assert.DoesNotContain(headIndex, await db.Database.GetAppliedMigrationsAsync());
+            Assert.Equal(before, await ReadMigrationHeadsAsync(singleScope, duplicateScope));
+
+            await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+            await using (var removeDuplicate = new NpgsqlCommand(
+                "DELETE FROM projects_config.native_acs_policy_heads WHERE scope_id = @scope_id",
+                connection))
+            {
+                removeDuplicate.Parameters.AddWithValue("scope_id", duplicateScope);
+                await removeDuplicate.ExecuteNonQueryAsync();
+            }
+            await migrator.MigrateAsync(latestMigration);
+
+            Assert.Contains(headIndex, await db.Database.GetAppliedMigrationsAsync());
+            Assert.Equal(
+                before.Where(head => head.StartsWith(singleScope, StringComparison.Ordinal)),
+                await ReadMigrationHeadsAsync(singleScope, duplicateScope));
+            var kept = await new NativeAcsPolicyStore(
+                    new TestDbContextFactory(CreateDbContextOptions()), TimeProvider.System)
+                .FindPolicyIdAsync(NativeAcsPolicyScopeType.Project, singleScope, CancellationToken.None);
+            Assert.Equal(seeded[0].PolicyId, kept);
+        }
+        finally
+        {
+            await migrator.MigrateAsync(beforeHeadIndex);
+            await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+            await using (var cleanup = new NpgsqlCommand(
+                "DELETE FROM projects_config.native_acs_policy_heads WHERE scope_id = ANY(@scope_ids)",
+                connection))
+            {
+                cleanup.Parameters.AddWithValue("scope_ids", new[] { singleScope, duplicateScope });
+                await cleanup.ExecuteNonQueryAsync();
+            }
+            await migrator.MigrateAsync(latestMigration);
+        }
+    }
+
+    private async Task<string[]> ReadMigrationHeadsAsync(params string[] scopeIds)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var read = new NpgsqlCommand(
+            """
+            SELECT scope_id || '|' || policy_id || '|' || current_revision::text
+                || '|' || created_at::text || '|' || updated_at::text
+            FROM projects_config.native_acs_policy_heads
+            WHERE scope_id = ANY(@scope_ids)
+            ORDER BY scope_id, policy_id
+            """,
+            connection);
+        read.Parameters.AddWithValue("scope_ids", scopeIds);
+        var rows = new List<string>();
+        await using var reader = await read.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            rows.Add(reader.GetString(0));
+        return [.. rows];
     }
 
     [Fact]

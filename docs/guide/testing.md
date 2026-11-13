@@ -116,6 +116,21 @@ goldens against the existing Policy adapter. Native tests are skipped when the
 pinned OPA executable is not available or the host is not Linux. These tests do
 not activate ACS or change the deployed v4 Policy path.
 
+## Test the canonical Policy API
+
+Run the Projects & Config policy tests and the Gateway route-contract test from
+the repository root:
+
+```powershell
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --filter "FullyQualifiedName~NativeAcsPolicy"
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --filter "FullyQualifiedName~PlatformPolicyRoutesAreBoundedAndExcludedFromMcp"
+```
+
+The Projects & Config tests use a disposable PostgreSQL container. Docker must
+be available. These controlled tests check the source API and database state;
+they do not call a live API, activate policy, or prove that a deployed image
+contains the pinned ACS assets.
+
 ## Test project-wide Knowledge discovery
 
 Run the Knowledge service suite to check authorization, existing provider

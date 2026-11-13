@@ -1580,6 +1580,7 @@
           "Agentweaver.Abstractions": "[1.7.0, )",
           "Agentweaver.Identity": "[1.7.0, )",
           "Agentweaver.ObjectStore.AzureBlob": "[1.0.2, )",
+          "Agentweaver.Policy.Acs": "[1.0.0, )",
           "Agentweaver.Providers": "[1.1.0, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",

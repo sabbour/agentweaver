@@ -12,5 +12,6 @@
     <PackageReference Include="AgentControlSpecification" Version="0.4.0-beta.0" />
     <PackageReference Include="YamlDotNet" Version="18.0.0" />
     <ProjectReference Include="..\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
+    <InternalsVisibleTo Include="Agentweaver.Policy.Acs.Tests" />
   </ItemGroup>
 </Project>

@@ -5,6 +5,7 @@ ENV TMPDIR=/src TEMP=/src TMP=/src
 COPY Directory.Build.props global.json NuGet.Config ./
 COPY eng/acs/ eng/acs/
 COPY packages/Agentweaver.Abstractions/ packages/Agentweaver.Abstractions/
+COPY packages/Agentweaver.Policy.Acs/ packages/Agentweaver.Policy.Acs/
 COPY packages/Agentweaver.Identity/ packages/Agentweaver.Identity/
 COPY packages/Agentweaver.AgentRuntime/ packages/Agentweaver.AgentRuntime/
 COPY packages/Agentweaver.Providers/ packages/Agentweaver.Providers/

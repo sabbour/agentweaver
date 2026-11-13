@@ -57,6 +57,7 @@ public static class GatewayRouteCatalog
     public const long SourceControlWorkspaceTreeMaximumResponseBytes = 56L * 1024 * 1024;
     /// <summary>A 1 MiB UTF-8 file can expand to 6 MiB when JSON-escaped, plus bounded response metadata.</summary>
     public const long SourceControlWorkspaceFileMaximumResponseBytes = 7L * 1024 * 1024;
+    public const long NativeAcsPolicyMaximumHttpBytes = 5L * 1024 * 1024;
 
     public static ImmutableArray<GatewayRoute> Routes { get; } = BuildRoutes();
 
@@ -417,6 +418,20 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Projects, "/platform/components", "/api/platform/components",
             "getPlatformComponents", "Read active platform components",
             forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/policies/platform", "/api/policies/platform/",
+            "readPlatformNativeAcsPolicy", "Read the current canonical Platform Policy",
+            forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
+        Add("POST", GatewayOwner.Projects, "/policies/platform/validate", "/api/policies/platform/validate",
+            "validatePlatformNativeAcsPolicy", "Validate a complete Platform Policy artifact",
+            body: true, maximumRequestBodyBytes: NativeAcsPolicyMaximumHttpBytes,
+            forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
+        Add("PUT", GatewayOwner.Projects, "/policies/platform", "/api/policies/platform/",
+            "writePlatformNativeAcsPolicy", "Write a complete Platform Policy at an expected revision",
+            body: true, maximumRequestBodyBytes: NativeAcsPolicyMaximumHttpBytes,
+            forwardTenantSelector: true, exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: NativeAcsPolicyMaximumHttpBytes, excludeFromMcp: true);
 
         var sourceControl = "/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}";
         void SourceControl(

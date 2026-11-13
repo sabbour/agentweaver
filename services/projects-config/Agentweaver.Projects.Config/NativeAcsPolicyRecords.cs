@@ -28,6 +28,15 @@ public sealed record NativeAcsPolicyWriteReceipt(
     Guid OutboxId,
     bool Replayed);
 
+public sealed record NativeAcsPolicyReadResult(
+    NativeAcsPolicyScopeType ScopeType,
+    string ScopeId,
+    string PolicyId,
+    long Revision,
+    string ContentSha256,
+    NativeAcsArtifact Artifact,
+    DateTimeOffset UpdatedAt);
+
 public sealed class NativeAcsPolicyHeadRecord
 {
     public NativeAcsPolicyScopeType ScopeType { get; set; }
