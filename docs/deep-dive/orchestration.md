@@ -678,7 +678,10 @@ frozen manifest, advances the fence, and writes a checkpoint with recovery
 lineage. It keeps `dispatchHeld` true while it restores saved children with
 proven-unsent native work. The continuation registers the root and every
 required child before it bootstraps any child. It does not send a new task
-message during recovery.
+message during recovery. AgentHost must restore a compatible native cache or
+saved turn history before it can report readiness. Configuration-only,
+zero-turn child state is not supported by this recovery path, so the owner
+keeps the hold active.
 
 If a child completed native work before the checkpoint joined its result,
 Orchestrator reads the original prompt and result material and checks their

@@ -254,6 +254,16 @@ verified result import and hold release, rejection with the hold retained, and
 one-time import on retry. Do not run these PostgreSQL tests locally. Controlled
 tests do not prove a live Environment or Host recovery.
 
+`CheckpointRecoveryRequiresCacheOrSavedTurnHistory` checks that the checkpoint
+recovery guard rejects missing cache and saved turn history. A fresh
+session and configuration-only, zero-turn state do not count as restored
+material. This unit test does not exercise Host activation or material
+endpoints. Run it with:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter FullyQualifiedName~CheckpointRecoveryRequiresCacheOrSavedTurnHistory
+```
+
 ## Test Scribe Knowledge output
 
 Run the producer, immutable-intent, and exact serialized-size tests, followed by

@@ -12,6 +12,51 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed partial class RuntimeSessionRecoveryTests
 {
     [Fact]
+    public void CheckpointRecoveryRequiresCacheOrSavedTurnHistory()
+    {
+        var operationId = Guid.NewGuid();
+        var registration = RuntimeCopilotSessionTests.Registration();
+        var empty = new RuntimeSessionRecovery(
+            new(registration.Binding.ProjectId, registration.Binding.RunId, registration.Binding.SessionId),
+            registration.Binding.TenantId,
+            null,
+            Array.Empty<(string Role, string Content)>())
+        {
+            JournalEvidence = new(1, new string('a', 64))
+        };
+        var journal = empty with { Turns = [("user", "saved turn")] };
+        var journalWithoutProof = empty with
+        {
+            Turns = [("user", "saved turn")],
+            JournalEvidence = null
+        };
+
+        Assert.Equal("runtime_checkpoint_recovery_material_unavailable",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeSessionBootstrap.RequireCheckpointRecoveryMaterial(operationId, null)).Code);
+        Assert.Equal("runtime_checkpoint_recovery_material_unavailable",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeSessionBootstrap.RequireCheckpointRecoveryMaterial(operationId, empty)).Code);
+        Assert.Equal("runtime_checkpoint_recovery_material_unavailable",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeSessionBootstrap.RequireCheckpointRecoveryMaterial(
+                    operationId, journal, RuntimeSessionRecoveryMode.Fresh)).Code);
+        Assert.Equal("runtime_checkpoint_recovery_material_unavailable",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeSessionBootstrap.RequireCheckpointRecoveryMaterial(
+                    operationId, empty, RuntimeSessionRecoveryMode.JournalRebuild)).Code);
+        Assert.Equal("runtime_checkpoint_recovery_material_unavailable",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeSessionBootstrap.RequireCheckpointRecoveryMaterial(
+                    operationId, journalWithoutProof, RuntimeSessionRecoveryMode.JournalRebuild)).Code);
+
+        RuntimeSessionBootstrap.RequireCheckpointRecoveryMaterial(null, null);
+        RuntimeSessionBootstrap.RequireCheckpointRecoveryMaterial(operationId, journal);
+        RuntimeSessionBootstrap.RequireCheckpointRecoveryMaterial(
+            operationId, journal, RuntimeSessionRecoveryMode.JournalRebuild);
+    }
+
+    [Fact]
     public void ReplacementCallSequenceRequiresTheCurrentHostRegistrationAndNoCalls()
     {
         var registration = RuntimeCopilotSessionTests.Registration();

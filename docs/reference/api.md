@@ -1326,6 +1326,9 @@ does not send another child task message. In its final owner transaction, it
 imports a completed-but-unjoined result only after it verifies the saved result
 material, child session and fence, and native accounting against the frozen
 manifest. A missing, malformed, or mismatched result keeps the hold active.
+The replacement Host must restore a compatible native cache or saved turn
+history before it can report readiness. Configuration-only, zero-turn child
+state is not supported by this recovery path and keeps the hold active.
 After recovery is ready, ordinary dispatch can send the saved message for a
 member that was pending and unsent. Retry an accepted request only with the
 same idempotency key. A new key does not bypass the hold. Unsupported or
