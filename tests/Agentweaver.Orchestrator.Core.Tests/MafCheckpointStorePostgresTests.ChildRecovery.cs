@@ -641,6 +641,12 @@ public sealed partial class MafCheckpointStorePostgresTests
             _binding with { ExecutionFence = recovered.ExecutionFence });
         static Task NoGate(CancellationToken _) => Task.CompletedTask;
 
+        var servedSelection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+            context, manifest.Root.ProjectId, manifest.Root.RunId, CancellationToken.None);
+        Assert.Equal(
+            CoordinationOwnerStore.HashSelection(_selection.Selection),
+            CoordinationOwnerStore.HashSelection(servedSelection.Selection));
+
         var result = await continuation.ContinueCheckpointRecoveryAsync(
             context, _actor, runtimeActor, recovered, rootIntent, registrationOwner,
             checkpointStore, fixture.Owner, NoGate, NoGate, CancellationToken.None);
