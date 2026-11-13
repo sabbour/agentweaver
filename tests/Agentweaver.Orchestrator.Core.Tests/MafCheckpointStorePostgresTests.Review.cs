@@ -375,9 +375,11 @@ public sealed partial class MafCheckpointStorePostgresTests
         string modelReference = "model:provider/alpha")
     {
         // Give this PostgreSQL case a realistic provider snapshot so restart recovery can revalidate the pin.
+        const string projectId = "project-1";
+        var runId = Guid.NewGuid().ToString("D");
         var selection = new EffectiveRunSelection(
-            "project-1", Guid.NewGuid().ToString("D"), 1, 1, 1, "context-v1",
-            CreateReviewSelectionSnapshot(modelReference));
+            projectId, runId, 1, 1, 1, "context-v1",
+            CreateReviewSelectionSnapshot(projectId, runId, modelReference));
         _selection = new AuthorizedRunSelection(
             selection,
             new ProjectsAuthorizationContext(
@@ -408,7 +410,8 @@ public sealed partial class MafCheckpointStorePostgresTests
         return resolution.Context;
     }
 
-    private static JsonElement CreateReviewSelectionSnapshot(string modelReference)
+    private static JsonElement CreateReviewSelectionSnapshot(
+        string projectId, string runId, string modelReference)
     {
         // The accepted snapshot and server catalog must agree exactly for durable binding recovery.
         var capabilities = ReviewSandboxCapabilities();
@@ -422,6 +425,12 @@ public sealed partial class MafCheckpointStorePostgresTests
         };
         return JsonSerializer.SerializeToElement(new
         {
+            projectId,
+            runId,
+            projectRevision = 1,
+            projectConfigurationRevision = 1,
+            platformRuntimeRevision = 1,
+            contextRevision = "context-v1",
             projectConfiguration = new
             {
                 blueprintWorkflowReferences = Array.Empty<object>(),
@@ -437,7 +446,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                 maxConcurrentChildren = 32,
                 maxWallTimeSeconds = 3600
             },
-            modelSelection = new { reference = modelReference },
+            modelSelection = new { reference = modelReference, sourceMode = "hostedCopilot" },
             providers = new[]
             {
                 new EffectiveProviderSelection(
@@ -652,21 +661,7 @@ public sealed partial class MafCheckpointStorePostgresTests
             if (path == selectionPath)
             {
                 SelectionReadCount++;
-                var snapshot = selection.Snapshot;
-                var acceptedSelection = new
-                {
-                    projectId = selection.ProjectId,
-                    runId = selection.RunId,
-                    projectRevision = selection.ProjectRevision,
-                    projectConfigurationRevision = selection.ProjectConfigurationRevision,
-                    platformRuntimeRevision = selection.PlatformRuntimeRevision,
-                    contextRevision = selection.ContextRevision,
-                    projectConfiguration = snapshot.GetProperty("projectConfiguration"),
-                    runLimits = snapshot.GetProperty("runLimits"),
-                    modelSelection = snapshot.GetProperty("modelSelection"),
-                    providers = snapshot.GetProperty("providers")
-                };
-                return Task.FromResult(CreateResponse(request, acceptedSelection));
+                return Task.FromResult(CreateResponse(request, selection.Snapshot));
             }
 
             throw new InvalidOperationException($"Unexpected fake Projects route '{path}'.");
