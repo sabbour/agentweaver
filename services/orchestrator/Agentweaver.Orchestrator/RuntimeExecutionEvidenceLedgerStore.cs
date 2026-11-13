@@ -247,7 +247,7 @@ internal sealed record RuntimeRootTurnReplayLedgerReceipt(
 }
 
 /// <summary>Stores append-only Orchestrator-owned execution evidence in the shared runtime-evidence ledger.</summary>
-internal sealed class RuntimeExecutionEvidenceLedgerStore(string schema)
+internal sealed partial class RuntimeExecutionEvidenceLedgerStore(string schema)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -546,11 +546,14 @@ internal sealed class RuntimeExecutionEvidenceLedgerStore(string schema)
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 39),
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 43),
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 45),
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 50),
                 to_regclass(@table) IS NOT NULL,
                 EXISTS (SELECT 1 FROM pg_constraint
                     WHERE conrelid = to_regclass(@table) AND conname = 'maf_runtime_evidence_receipts_receipt_kind_check'
                       AND contype = 'c' AND convalidated AND pg_get_constraintdef(oid) =
-                        CASE WHEN (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 45) = 1
+                        CASE WHEN (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 50) = 1
+                             THEN @supersessionKindCheck
+                             WHEN (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 45) = 1
                              THEN @replayKindCheck
                              WHEN (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 43) = 1
                              THEN @kindCheck ELSE @legacyKindCheck END),
@@ -587,6 +590,8 @@ internal sealed class RuntimeExecutionEvidenceLedgerStore(string schema)
             "CHECK (((receipt_kind)::text = ANY ((ARRAY['numeric-limit-denial'::character varying, 'replacement-comparison'::character varying, 'numeric-limit-native-no-send'::character varying, 'native-root-turn-completion'::character varying])::text[])))");
         command.Parameters.AddWithValue("replayKindCheck", NpgsqlDbType.Text,
             "CHECK (((receipt_kind)::text = ANY ((ARRAY['numeric-limit-denial'::character varying, 'replacement-comparison'::character varying, 'numeric-limit-native-no-send'::character varying, 'native-root-turn-completion'::character varying, 'native-root-turn-replay'::character varying])::text[])))");
+        command.Parameters.AddWithValue("supersessionKindCheck", NpgsqlDbType.Text,
+            "CHECK (((receipt_kind)::text = ANY ((ARRAY['numeric-limit-denial'::character varying, 'replacement-comparison'::character varying, 'numeric-limit-native-no-send'::character varying, 'native-root-turn-completion'::character varying, 'native-root-turn-replay'::character varying, 'checkpoint-recovery-supersession'::character varying])::text[])))");
         command.Parameters.AddWithValue("legacyKindCheck", NpgsqlDbType.Text,
             "CHECK (((receipt_kind)::text = ANY ((ARRAY['numeric-limit-denial'::character varying, 'replacement-comparison'::character varying, 'numeric-limit-native-no-send'::character varying])::text[])))");
         command.Parameters.AddWithValue(
@@ -596,16 +601,20 @@ internal sealed class RuntimeExecutionEvidenceLedgerStore(string schema)
             throw new InvalidOperationException("The runtime-evidence ledger schema could not be verified.");
         var applied = reader.GetInt64(0);
         var replayMigration = reader.GetInt64(3);
-        if (applied == 0 && !reader.GetBoolean(4) ||
+        var supersessionMigration = reader.GetInt64(4);
+        if (applied == 0 && !reader.GetBoolean(5) ||
             applied == 0 && requireApplied)
             throw new CoordinationException("database_update_pending", StatusCodes.Status503ServiceUnavailable);
         if (applied == 0)
             return false;
         if (applied != 1 || reader.GetInt64(1) != 1 || reader.GetInt64(2) is < 0 or > 1 ||
-            replayMigration is < 0 or > 1 || replayMigration == 1 && reader.GetInt64(2) != 1 ||
-            !reader.GetBoolean(4) || !reader.GetBoolean(5) || reader.GetInt64(6) != 9 ||
-            !reader.GetBoolean(7) || !reader.GetBoolean(8) || !reader.GetBoolean(9) ||
-            !reader.GetBoolean(10) || !reader.GetBoolean(11))
+            replayMigration is < 0 or > 1 || supersessionMigration is < 0 or > 1 ||
+            replayMigration == 1 && reader.GetInt64(2) != 1 ||
+            supersessionMigration == 1 && replayMigration != 1 ||
+            !reader.GetBoolean(5) || !reader.GetBoolean(6) ||
+            reader.GetInt64(7) != (supersessionMigration == 1 ? 10 : 9) ||
+            !reader.GetBoolean(8) || !reader.GetBoolean(9) || !reader.GetBoolean(10) ||
+            !reader.GetBoolean(11) || !reader.GetBoolean(12))
             throw new InvalidOperationException("The numeric-limit no-send ledger schema is inconsistent.");
         return true;
     }

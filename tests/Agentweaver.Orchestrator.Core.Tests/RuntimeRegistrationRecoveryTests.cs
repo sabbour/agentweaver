@@ -19,6 +19,10 @@ public sealed class RuntimeRegistrationRecoveryTests
     [InlineData("checkpoint")]
     [InlineData("decision")]
     [InlineData("phase")]
+    [InlineData("recovery-checkpoint-hash")]
+    [InlineData("supersedes-operation")]
+    [InlineData("supersession-receipt")]
+    [InlineData("supersession-payload-hash")]
     public void RecoveryProgressCannotRewriteItsAdmission(string change)
     {
         var current = new CheckpointRecoveryStatus(
@@ -29,7 +33,11 @@ public sealed class RuntimeRegistrationRecoveryTests
             RecoveryCheckpointRevision = 2,
             DecisionStateVersion = 2,
             GateRequestId = "gate",
-            GateAuthorizedActorId = "actor"
+            GateAuthorizedActorId = "actor",
+            RecoveryCheckpointHash = new string('c', 64),
+            SupersedesOperationId = Guid.NewGuid(),
+            SupersessionReceiptId = Guid.NewGuid(),
+            SupersessionPayloadHash = new string('d', 64)
         };
         var progress = current with { CurrentStep = "bootstrap", RuntimeInstanceId = Guid.NewGuid() };
         CoordinationOwnerStore.RequireImmutableCheckpointRecoveryAdmission(current, progress);
@@ -43,11 +51,67 @@ public sealed class RuntimeRegistrationRecoveryTests
             "checkpoint" => progress with { RecoveryCheckpointId = "other" },
             "decision" => progress with { DecisionStateVersion = 3 },
             "phase" => progress with { Phase = "unknown" },
+            "recovery-checkpoint-hash" => progress with { RecoveryCheckpointHash = new string('e', 64) },
+            "supersedes-operation" => progress with { SupersedesOperationId = Guid.NewGuid() },
+            "supersession-receipt" => progress with { SupersessionReceiptId = Guid.NewGuid() },
+            "supersession-payload-hash" => progress with { SupersessionPayloadHash = new string('f', 64) },
             _ => throw new ArgumentOutOfRangeException(nameof(change))
         };
 
         var error = Assert.Throws<CoordinationException>(() =>
             CoordinationOwnerStore.RequireImmutableCheckpointRecoveryAdmission(current, changed));
+        Assert.Equal("checkpoint_recovery_progress_conflict", error.Code);
+    }
+
+    [Theory]
+    [InlineData("recovery-checkpoint-hash")]
+    [InlineData("supersedes-operation")]
+    [InlineData("supersession-receipt")]
+    [InlineData("supersession-payload-hash")]
+    public void RecoveryProgressCannotChangeOrDropSupersessionAnchors(string field)
+    {
+        var current = new CheckpointRecoveryStatus(
+            "pending", "source", 1, 1, 2, Guid.NewGuid(), 1)
+        {
+            SourceCheckpointHash = new string('a', 64),
+            RecoveryCheckpointId = "recovery",
+            RecoveryCheckpointRevision = 2,
+            RecoveryCheckpointHash = new string('c', 64),
+            SupersedesOperationId = Guid.NewGuid(),
+            SupersessionReceiptId = Guid.NewGuid(),
+            SupersessionPayloadHash = new string('d', 64),
+            DecisionStateVersion = 2
+        };
+        var dropped = field switch
+        {
+            "recovery-checkpoint-hash" => current with { RecoveryCheckpointHash = null },
+            "supersedes-operation" => current with { SupersedesOperationId = null },
+            "supersession-receipt" => current with { SupersessionReceiptId = null },
+            "supersession-payload-hash" => current with { SupersessionPayloadHash = null },
+            _ => throw new ArgumentOutOfRangeException(nameof(field))
+        };
+
+        var error = Assert.Throws<CoordinationException>(() =>
+            CoordinationOwnerStore.RequireImmutableCheckpointRecoveryAdmission(current, dropped));
+        Assert.Equal("checkpoint_recovery_progress_conflict", error.Code);
+    }
+
+    [Fact]
+    public void SupersessionReverseLinksAreDerivedOnly()
+    {
+        var current = new CheckpointRecoveryStatus(
+            "pending", "source", 1, 1, 2, Guid.NewGuid(), 1)
+        {
+            SourceCheckpointHash = new string('a', 64),
+            RecoveryCheckpointId = "recovery",
+            RecoveryCheckpointRevision = 2,
+            DecisionStateVersion = 2
+        };
+
+        var error = Assert.Throws<CoordinationException>(() =>
+            CoordinationOwnerStore.RequireImmutableCheckpointRecoveryAdmission(
+                current, current with { SupersededByOperationId = Guid.NewGuid() }));
+
         Assert.Equal("checkpoint_recovery_progress_conflict", error.Code);
     }
 

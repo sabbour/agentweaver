@@ -160,26 +160,40 @@ internal sealed class MafExecutionCheckpointStore
         MafExecutionCheckpointSnapshot source,
         Guid operationId,
         long decisionStateVersion,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CheckpointRecoverySupersessionReceipt? supersession = null)
     {
         if (operationId == Guid.Empty || source.Info.SessionId != _binding.Identity.SessionId ||
             source.State.Revision == long.MaxValue || source.PayloadHash.Length != 64 ||
-            !source.PayloadHash.All(Uri.IsHexDigit) || decisionStateVersion <= source.State.DecisionStateVersion)
+            !source.PayloadHash.All(Uri.IsHexDigit) || decisionStateVersion <= source.State.DecisionStateVersion ||
+            supersession is not null &&
+                (supersession.SuccessorOperationId != operationId ||
+                 supersession.SuccessorSourceCheckpointId != source.Info.CheckpointId ||
+                 supersession.SuccessorSourceCheckpointHash != source.PayloadHash ||
+                 supersession.SuccessorSourceFence != _binding.ExecutionFence))
             throw new CoordinationException(
                 "checkpoint_recovery_checkpoint_invalid", StatusCodes.Status409Conflict);
 
         var nextFence = checked(_binding.ExecutionFence + 1);
+        var lineage = new MafCheckpointRecoveryLineage(
+            source.Info.CheckpointId,
+            source.State.Revision,
+            source.PayloadHash,
+            _binding.ExecutionFence,
+            operationId,
+            nextFence);
+        if (supersession is not null)
+            lineage = lineage with
+            {
+                SupersedesOperationId = supersession.SupersedesOperationId,
+                SupersessionReceiptId = supersession.ReceiptId,
+                SupersessionPayloadHash = supersession.CanonicalPayloadHash
+            };
         var state = source.State with
         {
             Revision = checked(source.State.Revision + 1),
             DecisionStateVersion = decisionStateVersion,
-            RecoveryLineage = new MafCheckpointRecoveryLineage(
-                source.Info.CheckpointId,
-                source.State.Revision,
-                source.PayloadHash,
-                _binding.ExecutionFence,
-                operationId,
-                nextFence)
+            RecoveryLineage = lineage
         };
         var binding = _binding with { ExecutionFence = nextFence };
         var checkpointId = $"recovery-{operationId:N}";

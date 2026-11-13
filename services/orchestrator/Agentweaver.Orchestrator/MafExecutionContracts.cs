@@ -370,7 +370,17 @@ internal sealed record MafCheckpointRecoveryLineage(
     string SourceCheckpointHash,
     long SourceExecutionFence,
     Guid RecoveryOperationId,
-    long RecoveryExecutionFence);
+    long RecoveryExecutionFence)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? SupersedesOperationId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? SupersessionReceiptId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SupersessionPayloadHash { get; init; }
+}
 
 /// <summary>
 /// A checkpoint state paired with the database checkpoint metadata that identifies its parent.
@@ -743,7 +753,12 @@ internal static class MafExecutionCheckpointContract
             (!IsIdentifier(lineage.SourceCheckpointId) || lineage.SourceCheckpointRevision < 1 ||
              !IsHash(lineage.SourceCheckpointHash) || lineage.SourceExecutionFence < 1 ||
              lineage.RecoveryOperationId == Guid.Empty ||
-             lineage.RecoveryExecutionFence != lineage.SourceExecutionFence + 1))
+             lineage.RecoveryExecutionFence != lineage.SourceExecutionFence + 1 ||
+             (lineage.SupersedesOperationId is null) != (lineage.SupersessionReceiptId is null) ||
+             (lineage.SupersedesOperationId is null) != (lineage.SupersessionPayloadHash is null) ||
+             lineage.SupersedesOperationId == lineage.RecoveryOperationId ||
+             lineage.SupersessionReceiptId == Guid.Empty ||
+             lineage.SupersessionPayloadHash is not null && !IsHash(lineage.SupersessionPayloadHash)))
             throw new ArgumentException("MAF checkpoint recovery lineage is invalid.", nameof(state));
         MafScribeGateContract.ValidateState(state);
         if (state.Progress.WorkItems.Any(item =>
