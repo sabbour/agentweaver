@@ -484,7 +484,8 @@ internal sealed class CoordinatorDecisionOwnerStore
         ReadConfirmedWorkPlanStateInTransactionAsync(
             connection, transaction, actor, identity, selection, null,
             expectedStateVersion, expectedFence, expectedWorkPlanId,
-            "checkpoint_recovery_checkpoint_stale", cancellationToken, requireDispatchable: false);
+            "checkpoint_recovery_checkpoint_stale", cancellationToken,
+            requireDispatchable: false, rejectRecoveryHold: false);
 
     // Returns true when the backlog has recorded a promotion of this plan in the run.
     private async Task<bool> IsWorkPlanPromotedAsync(
@@ -537,7 +538,8 @@ internal sealed class CoordinatorDecisionOwnerStore
         string expectedWorkPlanId,
         string staleCode,
         CancellationToken cancellationToken,
-        bool requireDispatchable = true)
+        bool requireDispatchable = true,
+        bool rejectRecoveryHold = true)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
@@ -566,7 +568,7 @@ internal sealed class CoordinatorDecisionOwnerStore
             throw new CoordinationException(
                 staleCode, StatusCodes.Status409Conflict);
 
-        if (await CheckpointRecoveryHold.IsHeldAsync(
+        if (rejectRecoveryHold && await CheckpointRecoveryHold.IsHeldAsync(
                 connection, transaction, _schema, identity.ProjectId, identity.RunId, cancellationToken)
             .ConfigureAwait(false))
             throw new CoordinationException(
