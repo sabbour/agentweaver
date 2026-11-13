@@ -6,6 +6,8 @@ using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.AgentRuntime;
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
@@ -21,7 +23,9 @@ public sealed partial class MafCheckpointStorePostgresTests
 {
     private const string ReviewSandboxProviderId = "sandbox.review-test";
     private const string ReviewSandboxResourceId = "review-test-resource";
+    private const string ReviewModelConnectionId = "11111111-1111-1111-1111-111111111111";
     private WorkPlanRunSelectionContext _reviewSelectionContext = null!;
+    private RuntimeModelBindingPin? _reviewModelBindingPin;
 
     [Theory]
     [InlineData(CoordinatorGateChoices.Approve, true)]
@@ -389,8 +393,17 @@ public sealed partial class MafCheckpointStorePostgresTests
                     "project", selection.ProjectId,
                     [new ProjectsPermissionGrant("acceptRunSelection", 1)])]));
         var identity = new SessionIdentity(selection.ProjectId, selection.RunId, "root");
+        var admission = withCreditGuard
+            ? CoordinatorRunAdmissionTests.Receipt(_selection) with
+            {
+                ModelBindingPin = CreateReviewModelBindingPin(modelReference)
+            }
+            : null;
+        _reviewModelBindingPin = admission?.ModelBindingPin;
         var root = await new CoordinationOwnerStore(_fixture.DataSource, _schema)
-            .AcceptRootAsync(_actor, _selection, identity.SessionId, CancellationToken.None);
+            .AcceptRootAsync(_actor, _selection, identity.SessionId, CancellationToken.None,
+                admission is null ? null : _ => Task.FromResult(admission),
+                admission is null ? null : _ => Task.CompletedTask);
         _binding = new MafCheckpointBinding(
             identity, _actor, root.ExecutionFence, "maf-test-sdk", modelReference, null);
         var checkpoints = new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null);
@@ -434,6 +447,13 @@ public sealed partial class MafCheckpointStorePostgresTests
             runLimits["copilotSoftCreditLimit"] = 3;
             runLimits["copilotHardCreditLimit"] = 5;
         }
+        var modelSelection = new Dictionary<string, object>(StringComparer.Ordinal)
+        {
+            ["reference"] = modelReference,
+            ["sourceMode"] = "hostedCopilot"
+        };
+        if (withCreditGuard)
+            modelSelection["connectionId"] = ReviewModelConnectionId;
         return JsonSerializer.SerializeToElement(new
         {
             projectId,
@@ -452,13 +472,23 @@ public sealed partial class MafCheckpointStorePostgresTests
                 casting = new[] { new { agentId = "agent-1", role = "engineer" } }
             },
             runLimits,
-            modelSelection = new { reference = modelReference, sourceMode = "hostedCopilot" },
+            modelSelection,
             providers = new[]
             {
                 new EffectiveProviderSelection(
                     ProviderCardinality.Exclusive, ProviderSeam.Sandbox, [candidate])
             }
         }, options);
+    }
+
+    private static RuntimeModelBindingPin CreateReviewModelBindingPin(string modelReference)
+    {
+        var resolver = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                [modelReference] = new("gpt-6.1-sol", ModelSourceMode.HostedCopilot)
+            });
+        return resolver.Pin(modelReference, ModelSourceMode.HostedCopilot);
     }
 
     private CoordinatorRunSelectionContextStore CreateReviewSelectionContextStore()

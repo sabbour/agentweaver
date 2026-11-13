@@ -2671,9 +2671,6 @@ internal sealed class RuntimeUsageSourceStore(
                 blocked.Result.ExecutionFence != status.ExecutionFence ||
                 blocked.Result.PreviousExecutionFence + 1 != status.ExecutionFence ||
                 status.ChildManifestSha256 != ChildCheckpointRecoveryManifestCodec.Hash(blocked.Manifest) ||
-                status.SupersededByOperationId != successor.Result.OperationId ||
-                status.SupersededByReceiptId != supersession.ReceiptId ||
-                status.SupersededByPayloadHash != supersession.CanonicalPayloadHash ||
                 supersession.SupersededRequestHash != blocked.RequestHash ||
                 supersession.SupersededManifestSha256 != status.ChildManifestSha256 ||
                 supersession.SupersededAdmissionSha256 != ComputeRecoveryAdmissionHash(
