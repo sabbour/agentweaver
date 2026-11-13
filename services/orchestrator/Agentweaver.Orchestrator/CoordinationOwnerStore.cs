@@ -2015,7 +2015,13 @@ internal sealed partial class CoordinationOwnerStore
         {
             if (checkpointRecoveryRegistration is { } recoveryRegistration)
                 await RequireCheckpointRecoveryRegistrationAsync(
-                    actor, identity, run.Fence, recoveryRegistration, cancellationToken).ConfigureAwait(false);
+                    actor,
+                    recoveryRegistration.Member is null
+                        ? identity
+                        : new SessionIdentity(identity.ProjectId, identity.RunId, session.RootSessionId),
+                    run.Fence,
+                    recoveryRegistration,
+                    cancellationToken).ConfigureAwait(false);
             else
                 await RequireNoCheckpointRecoveryHoldAsync(
                     connection, transaction, identity.ProjectId, identity.RunId, cancellationToken)

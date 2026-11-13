@@ -1488,6 +1488,19 @@ internal sealed partial class RuntimeRunStartContinuation(
                 RuntimeInstanceId = registration.RuntimeInstanceId,
                 ReceiptLinks = JsonSerializer.Serialize(readyLinks, JsonOptions)
             };
+            if (childManifest is not null)
+                readyIntent = await recoveryStore.PersistCheckpointRecoveryCleanupEvidenceAsync(
+                    readyIntent,
+                    readyIntent.ReceiptLinks,
+                    status.ExecutionFence,
+                    bootstrapId,
+                    placement.EnvironmentId,
+                    registration.RuntimeInstanceId,
+                    CancellationToken.None,
+                    currentStep: "ready",
+                    ready: true,
+                    consumeOperationId: consumeId,
+                    exchangeOperationId: exchangeId).ConfigureAwait(false);
             result = await recoveryStore.UpdateCheckpointRecoveryProgressAsync(
                 actor, result.Session, result.OperationId, readyStatus, cancellationToken, readyIntent,
                 checkpointStore, usageSources, completedUnjoinedMaterials.ToImmutable(), childManifest)
