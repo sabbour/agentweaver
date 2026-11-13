@@ -125,16 +125,15 @@ internal static class ChildCheckpointRecoveryCensus
             var native = await ReadNativeOriginAsync(
                 connection, transaction, schema, root, child, binding, selectionHash,
                 cancellationToken).ConfigureAwait(false);
-            var fixedAssociation = source.State.FixedWorkAssociations.GetValueOrDefault(binding.AssociationId);
-            var workItem = plan.Plan.Items.SingleOrDefault(item => item.Id == binding.AssociationId);
-            var expectedOriginFence = native?.ExecutionFence ?? originMember?.NativeOrigin?.ExecutionFence ??
-                (fixedAssociation is null ? originFence : null);
-            var (spawnHash, spawnFence) = await ReadSpawnCommandHashAsync(
+            var nativeOriginFence = native?.ExecutionFence ??
+                originMember?.NativeOrigin?.ExecutionFence ?? originFence;
+            var spawnHash = await ReadSpawnCommandHashAsync(
                 connection, transaction, schema, root, child, binding, actor,
-                expectedOriginFence, cancellationToken).ConfigureAwait(false);
-            var nativeOriginFence = expectedOriginFence ?? spawnFence;
+                nativeOriginFence, cancellationToken).ConfigureAwait(false);
             if (originMember is not null && originMember.SpawnCommandHash != spawnHash)
                 throw InvalidBoundary();
+            var fixedAssociation = source.State.FixedWorkAssociations.GetValueOrDefault(binding.AssociationId);
+            var workItem = plan.Plan.Items.SingleOrDefault(item => item.Id == binding.AssociationId);
             if ((fixedAssociation is null) == (workItem is null))
                 throw InvalidBoundary();
             var stepId = fixedAssociation?.StepId ?? workItem!.WorkflowStepId;
@@ -289,7 +288,7 @@ internal static class ChildCheckpointRecoveryCensus
             rootStartup, members.ToImmutable(), pins, captures, claim, reservations, otherNativeWork);
     }
 
-    internal static async Task<(string CommandHash, long ExecutionFence)> ReadSpawnCommandHashAsync(
+    internal static async Task<string> ReadSpawnCommandHashAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         string schema,
@@ -297,7 +296,7 @@ internal static class ChildCheckpointRecoveryCensus
         ChildRecoverySession child,
         RuntimeChildStartBinding binding,
         CoordinationActor actor,
-        long? expectedOriginFence,
+        long sourceFence,
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand($"""
@@ -313,10 +312,8 @@ internal static class ChildCheckpointRecoveryCensus
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
             reader.GetString(0) != root.SessionId || reader.GetString(1) != child.SessionId ||
             reader.GetString(2) != actor.Issuer || reader.GetString(3) != actor.Subject ||
-            (expectedOriginFence is { } expectedFence && reader.GetInt64(4) != expectedFence) ||
-            reader.GetString(5) != "spawn")
+            reader.GetInt64(4) != sourceFence || reader.GetString(5) != "spawn")
             throw InvalidBoundary();
-        var spawnFence = reader.GetInt64(4);
         try
         {
             using var result = JsonDocument.Parse(reader.GetString(7));
@@ -328,7 +325,7 @@ internal static class ChildCheckpointRecoveryCensus
                 identity.GetProperty("sessionId").GetString() != child.SessionId ||
                 node.GetProperty("parentSessionId").GetString() != root.SessionId ||
                 node.GetProperty("rootSessionId").GetString() != root.SessionId ||
-                node.GetProperty("executionFence").GetInt64() != spawnFence ||
+                node.GetProperty("executionFence").GetInt64() != sourceFence ||
                 node.GetProperty("stateVersion").GetInt64() != binding.InitialStateVersion)
                 throw InvalidBoundary();
         }
@@ -338,7 +335,7 @@ internal static class ChildCheckpointRecoveryCensus
             throw new CoordinationException(
                 "checkpoint_recovery_boundary_unsupported", StatusCodes.Status409Conflict, exception);
         }
-        return (reader.GetString(6), spawnFence);
+        return reader.GetString(6);
     }
 
     internal static (string Disposition, string? Reason) Classify(
