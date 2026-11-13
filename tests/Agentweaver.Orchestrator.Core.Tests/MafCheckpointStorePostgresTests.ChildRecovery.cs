@@ -986,9 +986,24 @@ public sealed partial class MafCheckpointStorePostgresTests
             CancellationToken.None, _selection, blockedCheckpointStore);
         var successorManifest = await owner.ReadCheckpointRecoveryManifestAsync(
             _actor, _binding.Identity, successor.OperationId, CancellationToken.None);
-        var (ready, _) = await ContinueCheckpointRecoveryAsync(
-            context.Fixture, successor, successorManifest);
-        AssertCheckpointRecoveryReady(ready);
+        // TEMP-DIAG #2748
+        string? failure = null;
+        RuntimeRunStartContinuation.RecoveryFailureObserver.Value = exception =>
+        {
+            failure ??= exception.ToString();
+        };
+        RunExecutionTransitionResult ready;
+        try
+        {
+            (ready, _) = await ContinueCheckpointRecoveryAsync(
+                context.Fixture, successor, successorManifest);
+        }
+        finally
+        {
+            RuntimeRunStartContinuation.RecoveryFailureObserver.Value = null;
+        }
+        Assert.True(ready.CheckpointRecovery?.Phase == "ready",
+            $"op4 not ready: {failure ?? "<no exception captured>"}");
 
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var transaction = await connection.BeginTransactionAsync();
@@ -1994,7 +2009,9 @@ public sealed partial class MafCheckpointStorePostgresTests
                 phase == SandboxStartupPhase.ImageReady ? image.CompressedPullBytes : null))
             .ToImmutableArray();
         var grant = new RuntimeGrantReceipt(
-            Guid.NewGuid(), registration.RuntimeInstanceId, registration.Revision, 1,
+            Guid.ParseExact(RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
+                $"recovery-grant\0{registration.RuntimeInstanceId:D}\0{registration.Revision}"))[..32], "N"),
+            registration.RuntimeInstanceId, registration.Revision, 1,
             registration.Binding.ActorIssuer, RuntimeCredentialPurpose.Observe,
             registration.Binding.ObservationEndpoint, RuntimeCredentialState.Active,
             new string('d', 64), now.AddMinutes(30), now);
@@ -2555,7 +2572,7 @@ public sealed partial class MafCheckpointStorePostgresTests
         Task<RuntimeUsageCostSnapshotReceipt> ReadCostSnapshotAsync(
             SdkSessionFacts facts, CancellationToken cancellationToken) =>
             registration.Binding.CopilotHardCreditLimit is not null
-                ? Task.FromResult(CreateZeroUsageEstimateSnapshot(registration, facts, dispatch.MessageId))
+                ? Task.FromResult(CreateZeroUsageEstimateSnapshot(registration, facts, dispatchId: null))
                 : NoCost(facts, cancellationToken);
         await store.ExecuteLockedAsync(registration.RuntimeInstanceId, async (connection, transaction, token) =>
         {
@@ -2675,7 +2692,7 @@ public sealed partial class MafCheckpointStorePostgresTests
     private static RuntimeUsageCostSnapshotReceipt CreateZeroUsageEstimateSnapshot(
         RuntimeRegistration registration,
         SdkSessionFacts source,
-        Guid dispatchId)
+        Guid? dispatchId)
     {
         var card = new CostRateCard(
             "child-recovery-card", "2026-10-17", SdkMeterSources.CopilotNanoAiu, "AIC",
