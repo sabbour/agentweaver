@@ -557,6 +557,8 @@ public sealed partial class MafCheckpointStorePostgresTests
     public async Task NativeChildRebindCompletesOriginalMessageThroughReplacementAccounting()
     {
         var context = await PrepareReadyNativeRebindAsync();
+        var reboundMember = Assert.Single(context.Manifest.Members);
+        Assert.Null(reboundMember.MessageRequestHash);
         var replacement = await ReadReplacementChildRegistrationAsync(context.Fixture.Child);
         var preparation = await PrepareChildNativeAsync(
             replacement, context.Fixture.Dispatch, context.Fixture.Plan, context.Fixture.Prompt, context.Checkpoint,
@@ -615,6 +617,12 @@ public sealed partial class MafCheckpointStorePostgresTests
                 return evidence;
             }, CancellationToken.None);
         Assert.Equal("priced", accountedOutput.AccountingStatus);
+        Assert.Null(await usageSources.ReadSourceCompletionAsync(
+            _binding.Identity.ProjectId,
+            _binding.Identity.RunId,
+            context.Fixture.Child.SessionId,
+            context.Fixture.Dispatch.MessageId,
+            CancellationToken.None));
 
         var latest = await context.CheckpointStore.ReadLatestAsync(CancellationToken.None);
         Assert.NotNull(latest);
@@ -666,8 +674,9 @@ public sealed partial class MafCheckpointStorePostgresTests
             var receipts = await new RuntimeExecutionEvidenceLedgerStore(_schema).ReadNativeChildRebindsAsync(
             connection, transaction, _binding.Identity.ProjectId, _binding.Identity.RunId,
             context.Fixture.Dispatch.MessageId, CancellationToken.None);
-        Assert.Single(receipts);
-        await transaction.CommitAsync();
+            var rebindReceipt = Assert.Single(receipts);
+            Assert.Equal(reboundMember.NativeOrigin!.RequestHash, rebindReceipt.MessageRequestHash);
+            await transaction.CommitAsync();
     }
 
     [Fact]
@@ -865,6 +874,117 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.Equal(receipts[0].ReceiptId, receipts[1].PriorReceiptId);
         Assert.Equal(receipts[0].CanonicalPayloadHash, receipts[1].PriorReceiptHash);
         Assert.Equal(receipts[0].OriginFingerprint, receipts[1].OriginFingerprint);
+        await transaction.CommitAsync();
+    }
+
+    [Fact]
+    public async Task NativeChildRebindCannotReleasePreparedChildWithoutReceipt()
+    {
+        var fixture = await PrepareChildRecoveryAsync(nativeState: "prepared");
+        var recovery = await fixture.Owner.RecoverRunExecutionAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, fixture.Request,
+            CancellationToken.None, _selection, _executionStore);
+        var manifest = await fixture.Owner.ReadCheckpointRecoveryManifestAsync(
+            _actor, _binding.Identity, recovery.OperationId, CancellationToken.None);
+        var options = new OrchestratorOptions(
+            _actor.Issuer, "orchestrator", "https://projects.test/", "projects",
+            "https://events.test/", "events", _schema);
+        var usageSources = new RuntimeUsageSourceStore(_fixture.DataSource, options, TimeProvider.System);
+
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        var invalid = await Assert.ThrowsAsync<CoordinationException>(() =>
+            fixture.Owner.ValidateNativeChildRebindsBeforeReleaseAsync(
+                connection, transaction, manifest, usageSources, CancellationToken.None));
+        Assert.Equal("checkpoint_recovery_native_rebind_invalid", invalid.Code);
+        await transaction.RollbackAsync();
+    }
+
+    [Fact]
+    public async Task NativeChildRebindChainsAcrossBlockedRecoveryGap()
+    {
+        var context = await PrepareReadyNativeRebindAsync();
+        var owner = context.Fixture.Owner;
+        var starts = new CoordinationRuntimeRunStartStore(_fixture.DataSource, _schema);
+        var run = await owner.ReadOwnerRunStatusAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, CancellationToken.None);
+        var rootIntent = await starts.ReadIntentForStatusAsync(
+            _binding.Identity.ProjectId, _binding.Identity.RunId, _binding.Identity.SessionId,
+            CancellationToken.None);
+        Assert.NotNull(rootIntent);
+        var rootRegistration = ReadIntentReceipt<RuntimeRegistration>(rootIntent, "registration");
+        var source = await context.CheckpointStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(source);
+        var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
+        var blockedRequest = new RecoverRunExecutionRequest(
+            run.ExecutionFence,
+            run.StateVersion,
+            $"native-rebind-gap-blocked-{Guid.NewGuid():N}",
+            "operator_recovery",
+            "test")
+        {
+            CheckpointRecovery = new CheckpointRecoveryRequest(
+                source.Info.CheckpointId,
+                source.State.Revision,
+                source.State.DecisionStateVersion,
+                rootRegistration.RuntimeInstanceId,
+                rootRegistration.Revision,
+                selectionHash.ToLowerInvariant())
+        };
+        var blocked = await owner.RecoverRunExecutionAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, blockedRequest,
+            CancellationToken.None, _selection, context.CheckpointStore);
+        var blockedManifest = await owner.ReadCheckpointRecoveryManifestAsync(
+            _actor, _binding.Identity, blocked.OperationId, CancellationToken.None);
+        var (blockedResult, _) = await ContinueCheckpointRecoveryAsync(
+            context.Fixture, blocked, blockedManifest, failRootActivation: true);
+        Assert.Equal("blocked", blockedResult.CheckpointRecovery!.Phase);
+
+        var blockedCheckpointStore = new MafExecutionCheckpointStore(
+            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
+            _binding with { ExecutionFence = blockedResult.ExecutionFence });
+        var successorSource = await blockedCheckpointStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(successorSource);
+        var currentRun = await owner.ReadOwnerRunStatusAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, CancellationToken.None);
+        var currentRootIntent = await starts.ReadIntentForStatusAsync(
+            _binding.Identity.ProjectId, _binding.Identity.RunId, _binding.Identity.SessionId,
+            CancellationToken.None);
+        Assert.NotNull(currentRootIntent);
+        var currentRootRegistration = ReadIntentReceipt<RuntimeRegistration>(
+            currentRootIntent, "registration");
+        var successorRequest = new RecoverRunExecutionRequest(
+            currentRun.ExecutionFence,
+            currentRun.StateVersion,
+            $"native-rebind-gap-ready-{Guid.NewGuid():N}",
+            "operator_recovery",
+            "test")
+        {
+            CheckpointRecovery = new CheckpointRecoveryRequest(
+                successorSource.Info.CheckpointId,
+                successorSource.State.Revision,
+                successorSource.State.DecisionStateVersion,
+                currentRootRegistration.RuntimeInstanceId,
+                currentRootRegistration.Revision,
+                selectionHash.ToLowerInvariant())
+        };
+        var successor = await owner.RecoverRunExecutionAsync(
+            _actor, _binding.Identity.ProjectId, _binding.Identity.RunId, successorRequest,
+            CancellationToken.None, _selection, blockedCheckpointStore);
+        var successorManifest = await owner.ReadCheckpointRecoveryManifestAsync(
+            _actor, _binding.Identity, successor.OperationId, CancellationToken.None);
+        var (ready, _) = await ContinueCheckpointRecoveryAsync(
+            context.Fixture, successor, successorManifest);
+        Assert.Equal("ready", ready.CheckpointRecovery!.Phase);
+
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        var receipts = await new RuntimeExecutionEvidenceLedgerStore(_schema).ReadNativeChildRebindsAsync(
+            connection, transaction, _binding.Identity.ProjectId, _binding.Identity.RunId,
+            context.Fixture.Dispatch.MessageId, CancellationToken.None);
+        Assert.Equal(2, receipts.Length);
+        Assert.True(receipts[1].SourceFence > receipts[0].DestinationFence);
+        Assert.Equal(blocked.OperationId, receipts[1].Lineage[^1].SupersedesOperationId);
         await transaction.CommitAsync();
     }
 

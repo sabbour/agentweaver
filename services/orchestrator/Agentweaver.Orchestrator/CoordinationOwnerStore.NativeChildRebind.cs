@@ -159,7 +159,7 @@ internal sealed partial class CoordinationOwnerStore
                     ?? throw new CoordinationException(
                         "checkpoint_recovery_native_rebind_conflict", StatusCodes.Status409Conflict);
                 var validatedPrior = await usageSources.ValidateNativeChildRebindChainAsync(
-                    connection, transaction, priorRegistration, native.DispatchId,
+                    connection, transaction, priorRegistration, lockedOrigin, native.DispatchId,
                     requireReleasedHold: false, cancellationToken).ConfigureAwait(false);
                 if (validatedPrior is null ||
                     validatedPrior.ReceiptId != prior.ReceiptId ||
@@ -254,6 +254,76 @@ internal sealed partial class CoordinationOwnerStore
                 [edge]);
             _ = await ledger.AppendNativeChildRebindAsync(
                 connection, transaction, receipt, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    internal async Task ValidateNativeChildRebindsBeforeReleaseAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ChildCheckpointRecoveryManifest manifest,
+        RuntimeUsageSourceStore usageSources,
+        CancellationToken cancellationToken)
+    {
+        var ledger = new RuntimeExecutionEvidenceLedgerStore(_schema[1..^1]);
+        var registrations = new RuntimeRegistrationStore(_dataSource, _schema[1..^1], _timeProvider);
+        foreach (var member in manifest.Members.Where(member => member.NativeOrigin is not null))
+        {
+            var origin = member.NativeOrigin!;
+            var requiresNewRebind = member.Disposition == "pendingUnsent" &&
+                origin.State == "prepared";
+            var receipts = await ledger.ReadNativeChildRebindsAsync(
+                connection, transaction, manifest.Root.ProjectId, manifest.Root.RunId,
+                origin.DispatchId, cancellationToken).ConfigureAwait(false);
+            if (receipts.IsEmpty)
+            {
+                if (member.PriorNativeRebindReceiptId is not null ||
+                    member.PriorNativeRebindPayloadHash is not null ||
+                    requiresNewRebind)
+                    throw new CoordinationException(
+                        "checkpoint_recovery_native_rebind_invalid", StatusCodes.Status409Conflict);
+                continue;
+            }
+
+            var latest = receipts[^1];
+            var isNewRebind = member.Disposition == "pendingUnsent" &&
+                origin.State == "prepared" &&
+                latest.RecoveryOperationId == manifest.OperationId &&
+                latest.DestinationFence == manifest.HoldFence;
+            if (requiresNewRebind && !isNewRebind)
+                throw new CoordinationException(
+                    "checkpoint_recovery_native_rebind_invalid", StatusCodes.Status409Conflict);
+            if (isNewRebind)
+            {
+                if (latest.OriginFingerprint !=
+                    NativeChildRebindOriginFingerprint.Create(manifest, member).Hash)
+                    throw new CoordinationException(
+                        "checkpoint_recovery_native_rebind_invalid", StatusCodes.Status409Conflict);
+            }
+            else if (latest.ReceiptId != member.PriorNativeRebindReceiptId ||
+                     latest.CanonicalPayloadHash != member.PriorNativeRebindPayloadHash)
+                throw new CoordinationException(
+                    "checkpoint_recovery_native_rebind_invalid", StatusCodes.Status409Conflict);
+
+            var lockedOrigin = await ChildCheckpointRecoveryCensus.ReadNativeOriginAsync(
+                connection, transaction, _schema, manifest.Root, member.Session, member.Startup.Binding,
+                manifest.SelectionHash, cancellationToken).ConfigureAwait(false);
+            if (lockedOrigin != origin)
+                throw new CoordinationException(
+                    "checkpoint_recovery_native_rebind_conflict", StatusCodes.Status409Conflict);
+
+            var registration = await registrations.ReadRevisionAsync(
+                connection, transaction, latest.RuntimeInstanceId, latest.RegistrationRevision,
+                cancellationToken).ConfigureAwait(false)
+                ?? throw new CoordinationException(
+                    "checkpoint_recovery_native_rebind_invalid", StatusCodes.Status409Conflict);
+            var validated = await usageSources.ValidateNativeChildRebindChainAsync(
+                connection, transaction, registration, lockedOrigin, origin.DispatchId,
+                requireReleasedHold: false, cancellationToken).ConfigureAwait(false);
+            if (validated is null ||
+                validated.ReceiptId != latest.ReceiptId ||
+                validated.CanonicalPayloadHash != latest.CanonicalPayloadHash)
+                throw new CoordinationException(
+                    "checkpoint_recovery_native_rebind_invalid", StatusCodes.Status409Conflict);
         }
     }
 

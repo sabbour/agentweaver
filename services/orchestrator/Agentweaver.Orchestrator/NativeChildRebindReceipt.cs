@@ -275,6 +275,18 @@ internal sealed record NativeChildRebindReceipt(
             receipt.Validate();
             edgeCount = checked(edgeCount + receipt.Lineage.Length +
                 (receipt.SupersessionReceiptId is null ? 0 : 1));
+            if (previous is not null)
+            {
+                if (receipt.SourceFence < previous.DestinationFence)
+                    throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+                var recoveryGap = receipt.SourceFence - previous.DestinationFence;
+                if (recoveryGap > 0)
+                {
+                    if (recoveryGap > MaximumLineageEdges)
+                        throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
+                    edgeCount = checked(edgeCount + checked((int)((2 * recoveryGap) - 1)));
+                }
+            }
             if (edgeCount > MaximumLineageEdges ||
                 receipt.DispatchId != dispatchId ||
                 !receiptIds.Add(receipt.ReceiptId) ||
@@ -295,7 +307,7 @@ internal sealed record NativeChildRebindReceipt(
                      receipt.PriorReceiptHash != previous.CanonicalPayloadHash ||
                      receipt.OriginFingerprint != previous.OriginFingerprint ||
                      receipt.OriginalRequestHash != previous.OriginalRequestHash ||
-                     receipt.SourceFence != previous.DestinationFence)
+                     receipt.SourceFence < previous.DestinationFence)
                 throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
 
             previous = receipt;

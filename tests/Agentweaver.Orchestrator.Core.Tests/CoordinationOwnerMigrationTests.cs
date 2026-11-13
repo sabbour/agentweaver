@@ -171,6 +171,14 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
         await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            Assert.True(await new RuntimeExecutionEvidenceLedgerStore(_schema)
+                .RequireNativeChildRebindSchemaAsync(
+                    connection, transaction, requireApplied: true, CancellationToken.None));
+            await transaction.CommitAsync();
+        }
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         await using (var after = new NpgsqlCommand($"""
             SELECT (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 51),
                    to_regclass(@destinationIndex) IS NOT NULL,
@@ -220,6 +228,12 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         {
             var invalid = await Assert.ThrowsAsync<PostgresException>(() =>
                 InsertMalformedNativeRebindAsync(projectId, runId, Guid.NewGuid(), missing));
+            Assert.Equal(PostgresErrorCodes.CheckViolation, invalid.SqlState);
+        }
+        foreach (var nullable in new[] { "nullDestinationFence", "nullPriorReceiptHash" })
+        {
+            var invalid = await Assert.ThrowsAsync<PostgresException>(() =>
+                InsertMalformedNativeRebindAsync(projectId, runId, Guid.NewGuid(), nullable));
             Assert.Equal(PostgresErrorCodes.CheckViolation, invalid.SqlState);
         }
 
@@ -379,7 +393,16 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                 ["priorReceiptId"] = null,
                 ["priorReceiptHash"] = null
             };
-            receipt.Remove(missingField);
+            if (missingField == "nullDestinationFence")
+                receipt["destinationFence"] = null;
+            else if (missingField == "nullPriorReceiptHash")
+            {
+                var prior = Guid.NewGuid();
+                receipt["priorAuthorityKey"] = $"receipt:{prior:D}";
+                receipt["priorReceiptId"] = prior;
+            }
+            else
+                receipt.Remove(missingField);
             var json = JsonSerializer.Serialize(receipt);
             await using var connection = await fixture.DataSource.OpenConnectionAsync();
             await using var insert = new NpgsqlCommand($"""

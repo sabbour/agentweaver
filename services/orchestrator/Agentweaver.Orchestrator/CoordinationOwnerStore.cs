@@ -5759,6 +5759,18 @@ internal sealed partial class CoordinationOwnerStore
                     "checkpoint_recovery_progress_conflict", StatusCodes.Status409Conflict);
         }
 
+        if (status.Phase == "ready" && childManifest is not null &&
+            childManifest.Members.Any(member =>
+                member.PriorNativeRebindReceiptId is not null ||
+                member.Disposition == "pendingUnsent" && member.NativeOrigin?.State == "prepared"))
+        {
+            if (usageSources is null)
+                throw new CoordinationException(
+                    "checkpoint_recovery_native_rebind_invalid", StatusCodes.Status409Conflict);
+            await ValidateNativeChildRebindsBeforeReleaseAsync(
+                connection, transaction, childManifest, usageSources, cancellationToken).ConfigureAwait(false);
+        }
+
         var eventType = status.Phase switch
         {
             "ready" => "orchestrator.run.checkpoint_recovery_ready",
@@ -5906,8 +5918,9 @@ internal sealed partial class CoordinationOwnerStore
                 manifest.SourceExecutionFence,
                 imported.Result,
                 cancellationToken).ConfigureAwait(false);
+            var effectiveRegistration = evidence.Recorded.Admission.Registration;
             var receipt = RuntimeChildTurnCompletionReceipt.CreateForCheckpointRecovery(
-                    registration,
+                    effectiveRegistration,
                     member.MessageId,
                     RuntimeContractValidation.NativeSessionId(registration.Binding),
                     imported.Prompt,
