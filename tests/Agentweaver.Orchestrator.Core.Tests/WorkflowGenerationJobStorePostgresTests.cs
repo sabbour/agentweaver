@@ -51,21 +51,97 @@ public sealed class WorkflowGenerationJobStorePostgresTests(CoordinationPostgres
     public async Task ConcurrentRetryAndLostAcceptanceReplyReuseOneJobAndNativeRequest()
     {
         var create = Create("same-key");
-        var responses = await Task.WhenAll(Enumerable.Range(0, 8)
-            .Select(_ => _store.CreateOrGetAsync(create, CancellationToken.None)));
+        // Each production request proposes fresh candidate IDs for the same logical request.
+        var candidates = Enumerable.Range(0, 8).Select(_ => WithFreshCandidateIds(create)).ToArray();
+        Assert.Equal(candidates.Length, candidates.Select(candidate => candidate.JobId).Distinct().Count());
+        Assert.Equal(candidates.Length, candidates.Select(candidate => candidate.NativeRequestId).Distinct().Count());
 
-        var jobIds = responses.Select(response => response.Job.JobId).Distinct().ToArray();
-        var nativeRequestIds = responses.Select(response => response.Job.NativeRequestId).Distinct().ToArray();
-        Assert.Single(jobIds);
-        Assert.Single(nativeRequestIds);
+        Task<WorkflowGenerationCreateResult[]> attempts;
+        await using (var blocker = await fixture.DataSource.OpenConnectionAsync())
+        await using (var transaction = await blocker.BeginTransactionAsync())
+        {
+            await using (var lockRun = new NpgsqlCommand($"""
+                SELECT 1 FROM "{_schema}".accepted_runs
+                WHERE project_id = @project AND run_id = @run FOR UPDATE
+                """, blocker, transaction))
+            {
+                lockRun.Parameters.AddWithValue("project", ProjectId);
+                lockRun.Parameters.AddWithValue("run", RunId);
+                await lockRun.ExecuteNonQueryAsync();
+            }
+
+            attempts = Task.WhenAll(candidates.Select(candidate =>
+                _store.CreateOrGetAsync(candidate, CancellationToken.None)));
+            try
+            {
+                await WaitForBlockedJobInsertsAsync(blocker.ProcessID, minimum: 2);
+                Assert.False(attempts.IsCompleted);
+            }
+            finally
+            {
+                await transaction.RollbackAsync();
+                await Task.WhenAny(attempts);
+            }
+        }
+        var responses = await attempts;
+
+        var winner = Assert.Single(responses
+            .Select(response => (response.Job.JobId, response.Job.NativeRequestId))
+            .Distinct());
+        Assert.Contains(candidates, candidate =>
+            candidate.JobId == winner.JobId && candidate.NativeRequestId == winner.NativeRequestId);
         Assert.Single(responses, response => response.Disposition == WorkflowGenerationCreateDisposition.Created);
         Assert.Equal(7, responses.Count(response =>
             response.Disposition == WorkflowGenerationCreateDisposition.Existing));
+        Assert.Equal(winner, Assert.Single(await ReadPersistedJobIdsAsync("same-key")));
 
-        var lostReplyRetry = await _store.CreateOrGetAsync(create, CancellationToken.None);
+        var lostReplyRetry = await _store.CreateOrGetAsync(WithFreshCandidateIds(create), CancellationToken.None);
         Assert.Equal(WorkflowGenerationCreateDisposition.Existing, lostReplyRetry.Disposition);
-        Assert.Equal(responses[0].Job.JobId, lostReplyRetry.Job.JobId);
-        Assert.Equal(responses[0].Job.NativeRequestId, lostReplyRetry.Job.NativeRequestId);
+        Assert.Equal(winner.JobId, lostReplyRetry.Job.JobId);
+        Assert.Equal(winner.NativeRequestId, lostReplyRetry.Job.NativeRequestId);
+        Assert.Equal(winner, Assert.Single(await ReadPersistedJobIdsAsync("same-key")));
+    }
+
+    private static WorkflowGenerationJobCreate WithFreshCandidateIds(WorkflowGenerationJobCreate create) =>
+        create with { JobId = Guid.NewGuid(), NativeRequestId = Guid.NewGuid() };
+
+    private async Task WaitForBlockedJobInsertsAsync(int blockerProcessId, int minimum)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var observer = await fixture.DataSource.OpenConnectionAsync(deadline.Token);
+        while (true)
+        {
+            await using var blocked = new NpgsqlCommand("""
+                SELECT count(*) FROM pg_stat_activity
+                WHERE @blocker = ANY(pg_blocking_pids(pid))
+                  AND query LIKE @table
+                """, observer);
+            blocked.Parameters.AddWithValue("blocker", blockerProcessId);
+            blocked.Parameters.AddWithValue("table", $"%\"{_schema}\".workflow_generation_jobs%");
+            if ((long)(await blocked.ExecuteScalarAsync(deadline.Token))! >= minimum)
+                return;
+            await Task.Delay(20, deadline.Token);
+        }
+    }
+
+    private async Task<List<(Guid JobId, Guid NativeRequestId)>> ReadPersistedJobIdsAsync(string idempotencyKey)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT job_id, native_request_id FROM "{_schema}".workflow_generation_jobs
+            WHERE tenant_id = @tenant AND project_id = @project AND actor_issuer = @issuer
+              AND actor_id = @actor AND idempotency_key = @key
+            """, connection);
+        command.Parameters.AddWithValue("tenant", TenantId);
+        command.Parameters.AddWithValue("project", ProjectId);
+        command.Parameters.AddWithValue("issuer", ActorIssuer);
+        command.Parameters.AddWithValue("actor", ActorId);
+        command.Parameters.AddWithValue("key", idempotencyKey);
+        var rows = new List<(Guid JobId, Guid NativeRequestId)>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            rows.Add((reader.GetGuid(0), reader.GetGuid(1)));
+        return rows;
     }
 
     [Fact]
