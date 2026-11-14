@@ -179,6 +179,7 @@ public static class NativeAcsPolicyEndpoints
         HttpContext context,
         out NativeAcsValidationResult result)
     {
+        // Run only one validator at a time; busy callers receive a retry response instead of queuing more work.
         using var slot = requestGate.TryEnterValidationSlot();
         if (slot is null)
         {

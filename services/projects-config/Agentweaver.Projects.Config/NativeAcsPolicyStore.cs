@@ -30,6 +30,7 @@ internal sealed class NativeAcsPolicyStore(
         var scopeDigest = ScopeDigest(caller, request);
 
         await using var db = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        // Keep the database authority check, head advancement, audit, and outbox writes in one serializable commit.
         await using var transaction = await db.Database
             .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
             .ConfigureAwait(false);
@@ -38,6 +39,7 @@ internal sealed class NativeAcsPolicyStore(
         {
         var authorizingGrant = await LockAndCheckAuthorityAsync(
             db, caller, request, roleGrants, cancellationToken).ConfigureAwait(false);
+        // Check current database authority before returning a saved receipt for a retry.
         var replay = await FindReceiptAsync(db, caller, request, scopeDigest, requestDigest, cancellationToken)
             .ConfigureAwait(false);
         if (replay is not null)
@@ -180,6 +182,7 @@ internal sealed class NativeAcsPolicyStore(
         });
 
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            // Use current database authority again after the writes and before commit.
             var rechecked = await LockAndCheckAuthorityAsync(
                 db, caller, request, roleGrants, cancellationToken).ConfigureAwait(false);
             if (rechecked.AssignmentId != authorizingGrant.AssignmentId ||
@@ -478,6 +481,7 @@ internal sealed class NativeAcsPolicyStore(
         return result is null or DBNull ? null : Convert.ToInt64(result, System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    // The scope digest locates one caller's retry slot.
     private static string ScopeDigest(ProjectAuthorizationContext caller, NativeAcsPolicyWriteRequest request) =>
         Hash(JsonSerializer.SerializeToUtf8Bytes(new
         {
@@ -489,6 +493,7 @@ internal sealed class NativeAcsPolicyStore(
             request.IdempotencyKey,
         }, JsonOptions));
 
+    // The request digest binds that slot to the expected revision and request metadata.
     private static string RequestDigest(NativeAcsPolicyWriteRequest request) =>
         Hash(JsonSerializer.SerializeToUtf8Bytes(new
         {

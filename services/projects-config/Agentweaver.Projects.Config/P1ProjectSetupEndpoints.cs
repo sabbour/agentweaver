@@ -367,6 +367,7 @@ internal static class P1ProjectSetupEndpoints
         if (request.HttpContext.Features.Get<IHttpRequestBodyDetectionFeature>()?.CanHaveBody != true)
             return false;
 
+        // Read at most one byte to detect unknown-length bodies without buffering their full contents.
         var probe = new byte[MaxBodyProbeBytes];
         return await request.Body.ReadAsync(probe, cancellationToken).ConfigureAwait(false) > 0;
     }

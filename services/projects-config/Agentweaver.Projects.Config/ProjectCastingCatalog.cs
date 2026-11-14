@@ -274,7 +274,7 @@ public static class ProjectCastingCatalog
         charter.Append("\nBoundaries:\n");
         foreach (var boundary in role.Boundaries)
             charter.Append("- ").Append(boundary).Append('\n');
-        // Drop the trailing newline so the charter ends on its last bullet.
+        // Remove trailing whitespace so the charter ends on its last bullet.
         return charter.ToString().TrimEnd();
     }
 

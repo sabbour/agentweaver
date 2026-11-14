@@ -228,6 +228,7 @@ public sealed class ProjectAuthorizationContext
                         if (BoundRunId is null)
                             Add(grant, ProjectAuthorizationPermission.WriteProjects);
                     }
+                    // Run-bound private knowledge needs Owner and Orchestrator authority, but grants no project writes.
                     else if (BoundProjectId is not null &&
                         BoundRunId is not null &&
                         orchestratorScope &&
@@ -405,6 +406,7 @@ public sealed class ProjectAuthorizationOwner(
         if (project is null || project.State != ProjectLifecycleState.Active)
             throw ProjectConfigException.NotFound();
 
+        // The run-binding ticket selects an actor; ResolveAsync loads that actor's current membership and grants.
         var actor = new ClaimsPrincipal(new ClaimsIdentity(
         [
             new Claim("sub", actorSubject),

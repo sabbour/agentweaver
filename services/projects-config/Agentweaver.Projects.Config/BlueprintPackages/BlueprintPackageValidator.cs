@@ -265,7 +265,7 @@ public static class BlueprintPackageValidator
 
     private static void PreflightPayloads(BlueprintPackageSource source, BlueprintPackageManifest manifest, List<string> errors)
     {
-        // Declared sizes over the limit fail early, before any payload is read.
+        // Declared sizes over the limit fail before payload content is parsed or hashed.
         if (manifest.Definitions.Any(definition => definition.Size > BlueprintPackageLimits.MaximumPayloadBytes))
             errors.Add("definition.size exceeds the payload limit.");
 

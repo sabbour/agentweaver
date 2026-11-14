@@ -6,6 +6,7 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Projects.Config;
 
+/// <summary>Maps issue-sync proof routes; grant revocation permits a Project Owner or TenantAdmin.</summary>
 public static class IssueSyncAuthorityEndpoints
 {
     internal const string Channel = "IssueSyncIdentity";
@@ -97,7 +98,7 @@ public static class IssueSyncAuthorityEndpoints
                         projectId,
                         ProjectAuthorityRole.Owner))
                     throw ProjectConfigException.Forbidden();
-                // Only an active project Owner with the configured GitHub App repository can review these files.
+                // Recheck ownership, project activity, and the selected GitHub App connection before returning its files.
                 var proof = await ReadProofAsync(actor, projectId, projects, ct);
                 var configuration = await projects.GetProjectConfigurationAsync(
                     actor, projectId, revision: null, ct);
