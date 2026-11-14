@@ -180,6 +180,7 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
         CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        // Only queued jobs transition here; an admitted request keeps its state for recovery.
         await using (var update = new NpgsqlCommand($"""
             UPDATE {_table}
             SET status = 'running', execution_phase = 'pre-send', updated_at = clock_timestamp()
@@ -220,6 +221,7 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
         }
         if (runId is null)
             return false;
+        // Check the run's recovery hold in the same transaction that changes the send phase.
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         if (await CheckpointRecoveryHold.IsHeldAsync(
                 connection, transaction, _schema, projectId, runId, cancellationToken).ConfigureAwait(false))
@@ -250,6 +252,7 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
         var current = await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadJob(reader) : null;
         await reader.DisposeAsync().ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        // Return true for a running or failed row that already crossed the send boundary.
         return current is { Status: "running" or "failed", ExecutionPhase: "send-admitted" };
     }
 
@@ -259,6 +262,7 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
         WorkflowGenerationJobResult result,
         CancellationToken cancellationToken)
     {
+        // Require both a valid artifact and its persisted native completion before changing job state.
         var job = await ReadAsync(projectId, jobId, cancellationToken).ConfigureAwait(false);
         if (job is null ||
             !HasValidResult(job, result) ||
@@ -291,6 +295,7 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
         CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        // Keep send-admitted jobs unresolved unless the caller has proof that native work is quiescent.
         await using var command = new NpgsqlCommand($"""
             UPDATE {_table}
             SET status = 'failed',
@@ -373,6 +378,7 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
                 jobs.Add(reader.GetGuid(0));
         }
 
+        // Recheck each candidate under its job lock; only stored quiescence evidence can retire the send phase.
         foreach (var jobId in jobs)
         {
             await WithExecutionLockAsync(projectId, jobId, async token =>
@@ -417,6 +423,7 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
         command.Parameters.AddWithValue("fence", job.ExecutionFence);
         command.Parameters.AddWithValue("decision", job.ExpectedDecisionStateVersion);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        // The admission row binds evidence to this job; validate the receipt payload before trusting it.
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             try
@@ -470,6 +477,7 @@ internal sealed class WorkflowGenerationJobStore(NpgsqlDataSource dataSource, st
         CancellationToken cancellationToken)
     {
         var lockKey = $"workflow-generation:{projectId}:{jobId:D}";
+        // Keep this session lock's connection open while the action runs, then release it in finally.
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using (var acquire = new NpgsqlCommand(
             "SELECT pg_try_advisory_lock(hashtextextended(@key, 0))", connection))

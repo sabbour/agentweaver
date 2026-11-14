@@ -12,6 +12,7 @@ public sealed record GenerateProjectWorkflowRequest(
     long ExpectedDecisionStateVersion,
     string Prompt)
 {
+    // Leave room for the fixed purpose prefix within the addressed-message text limit.
     internal const int MaximumPromptLength = AddressedMessageValidation.MaximumTextLength - 1024;
 
     internal void Validate()

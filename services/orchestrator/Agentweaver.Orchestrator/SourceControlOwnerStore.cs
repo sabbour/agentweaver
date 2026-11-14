@@ -50,7 +50,7 @@ internal sealed class SourceControlOwnerStore(
     /// <summary>
     /// Records a pull request that the pinned run created or reused, for the stored project pull request list.
     /// </summary>
-    /// <returns>True when the row was written; false when migration 032 isn't applied yet.</returns>
+    /// <returns>True when the pull request record is inserted or updated. False when migration 032 is not applied, the pull request record table is missing, or the migration's coverage timestamp is missing.</returns>
     /// <remarks>
     /// The write is an upsert keyed by project, run, pin, and pull request number, so a retried create or
     /// reuse is idempotent. It refreshes the title, URL, state, branches, and commits. A row recorded as
@@ -81,8 +81,8 @@ internal sealed class SourceControlOwnerStore(
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         if (await SourceControlPullRequestRecords.ReadCoverageStartAsync(
                 connection, _schema, cancellationToken).ConfigureAwait(false) is null)
-            // Migration 032 isn't applied, so there is no table. Skip the write; the create or reuse
-            // result is still returned to the caller unchanged.
+            // No coverage start is available, so skip this optional list write; the caller can still return
+            // the provider result.
             return false;
         // Upsert on the natural key. A retry or later reuse refreshes the provider fields. Two rules
         // keep provenance stable: "created" is never downgraded to "reused", and recorded_at is set
@@ -215,6 +215,8 @@ internal sealed class SourceControlOwnerStore(
         var resultFingerprint = reader.IsDBNull(7) ? null : reader.GetString(7).TrimEnd();
         var hasCompletionTime = !reader.IsDBNull(8);
         await reader.DisposeAsync().ConfigureAwait(false);
+        // Fence recovery requires a committed row, valid stored hashes, matching tenant, pin, and effect hash,
+        // a positive pull request number, and a completion time. It returns the claim with IsNew=false.
         var committedExactEffect =
             IsSha256(storedRequestFingerprint) &&
             IsSha256(storedEffectFingerprint) &&
@@ -308,6 +310,7 @@ internal sealed class SourceControlOwnerStore(
         update.Parameters.AddWithValue("number", NpgsqlDbType.Bigint, pullRequestNumber);
         if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1)
             return;
+        // A retry may find the same result already stored; accept it only for the same number and fingerprint.
         await using var read = new NpgsqlCommand($"""
             SELECT pull_request_number, result_fingerprint FROM {PullRequestOperations}
             WHERE project_id = @project AND run_id = @run AND session_id = @session
@@ -328,6 +331,7 @@ internal sealed class SourceControlOwnerStore(
                 "source_control_run_binding_changed", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>Marks a pending operation indeterminate only when it has no recorded pull request number.</summary>
     internal async Task MarkOpenPullRequestOperationIndeterminateAsync(
         SessionIdentity identity,
         Guid operationId,
@@ -720,6 +724,7 @@ internal sealed class SourceControlOwnerStore(
 
         if (pin.AcceptedRun.Fence == owner.RunFence)
             return (pin, false);
+        // Rebind an older pin only for committed-result recovery; the caller must not start a new create.
         var acceptedRun = pin.AcceptedRun;
         var currentAcceptedRun = new SourceControlAcceptedRunBinding(
             acceptedRun.Issuer,
@@ -1448,7 +1453,7 @@ internal sealed class SourceControlOwnerStore(
     }
 
     /// <summary>
-    /// Stores one signed delivery per repository and delivery identifier, and accepts duplicates only when run, pin, event, and payload digest match.
+    /// Stores one delivery per repository and delivery identifier, and accepts duplicates only when run, pin, event, and payload digest match.
     /// </summary>
     public async Task<bool> RecordWebhookDeliveryAsync(
         CoordinationActor actor,
@@ -2029,7 +2034,9 @@ internal sealed class SourceControlOwnerStore(
     }
 
     /// <summary>
-    /// Compares each capture owner, workspace, digest, length, and stored byte sequence with a proposed capture document.
+    /// Validates the record, then matches capture and event IDs, actor, tenant, pin, and selection hash.
+    /// It also matches workspace ID, incarnation ID, branch, repository, generation, base SHA, and output-tree SHA.
+    /// It checks each digest and length, and compares the stored bytes.
     /// </summary>
     private static bool CaptureMatchesDocument(
         SourceControlOutputCaptureRecord record,
@@ -2350,7 +2357,7 @@ internal sealed class SourceControlOwnerStore(
         acceptedRun.Fence == executionFence;
 
     /// <summary>
-    /// Reads or locks accepted-run, root-session, and latest-decision rows, then rejects actor, tenant, selection, writer, or fence mismatches.
+    /// Reads the accepted run, root session, and latest decision. When requested, locks only the accepted-run and root-session rows, then rejects actor, tenant, selection, writer, or fence mismatches.
     /// </summary>
     private async Task<OwnerBindingSnapshot> ReadOwnerBindingAsync(
         NpgsqlConnection connection,
@@ -2511,7 +2518,7 @@ internal sealed class SourceControlOwnerStore(
     }
 
     /// <summary>
-    /// Requires owner rows and the accepted run to match current selection revisions, root session, tenant, fence, and accepted active state.
+    /// Requires a non-completed run, active root session, accepted decision, and matching actor, selection revisions, tenant, project, run, and root session. An older accepted-run fence is allowed only when requested.
     /// </summary>
     private static void EnsureCurrentBinding(
         OwnerBindingSnapshot owner,
@@ -2639,9 +2646,6 @@ internal sealed class SourceControlOwnerStore(
             pin.IsPrivate,
             pin.PinnedAt);
 
-    /// <summary>
-    /// Deserializes a pin and resolves its provider version and capabilities through the configured catalog; invalid or unavailable bindings fail closed.
-    /// </summary>
     private SourceControlRepositoryPin RestorePin(string json) =>
         RestorePin(json, providerCatalog, providerResolver);
 
