@@ -411,6 +411,118 @@ public sealed class CliAuthTests
     }
 
     [Fact]
+    public async Task ResolvedWorkspaceSelectionSendsNoResolvedValuesAndReturnsBrokerValues()
+    {
+        var browser = new TestBrowser();
+        var vault = new MemoryVault();
+        var directory = CreateTestDirectory();
+        try
+        {
+            using var signingKey = RSA.Create(2048);
+            using var http = new HttpClient(new OidcHandler(
+                signingKey, browser, actorId: ResolvedActorId,
+                workspaceSelectionJson: ResolvedSelectionResponse()));
+            using var service = CreateService(http, vault, browser, directory);
+
+            using var selection = await service.AcquireRepositorySelectionAsync(
+                ResolvedSelectionIdentity(), ResolvedSelectionIntent(), InteractionPolicy.Allow,
+                CancellationToken.None);
+
+            Assert.Equal(2, selection.Version);
+            Assert.Equal(7, selection.ConnectionRevision);
+            Assert.Equal(70, selection.InstallationId);
+            Assert.Equal(700, selection.RepositoryId);
+            Assert.Equal("octo/repo", selection.RepositoryFullName);
+            string encodedIntent = ParseQuery(browser.AuthorizationUri!.Query)["workspace_selection_request"];
+            using var intentDocument = JsonDocument.Parse(Convert.FromBase64String(
+                encodedIntent.Replace('-', '+').Replace('_', '/') +
+                new string('=', (4 - encodedIntent.Length % 4) % 4)));
+            Assert.Equal(
+                ["actorId", "connectionId", "operationId", "projectId", "repositoryFullName", "tenantId", "version"],
+                intentDocument.RootElement.EnumerateObject().Select(property => property.Name)
+                    .Order(StringComparer.Ordinal));
+            Assert.Equal(2, intentDocument.RootElement.GetProperty("version").GetInt32());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("version", "1")]
+    [InlineData("connectionId", "\"connection_2\"")]
+    [InlineData("repositoryFullName", "\"octo/other\"")]
+    public async Task ResolvedWorkspaceSelectionRejectsMismatchedResponse(string field, string value) =>
+        await AssertResolvedSelectionRejectedAsync(field, value);
+
+    [Fact]
+    public async Task ResolvedWorkspaceSelectionRejectsDifferentOperation() =>
+        await AssertResolvedSelectionRejectedAsync("operationId", "\"readWorkspaceRepositoryFile\"");
+
+    private const string ResolvedActorId = "11111111-1111-4111-8111-111111111111";
+    private const string ResolvedTenantId = "22222222-2222-4222-8222-222222222222";
+    private const string ResolvedProjectId = "33333333-3333-4333-8333-333333333333";
+
+    private static NativeRepoAppSelectionIntent ResolvedSelectionIntent() =>
+        NativeRepoAppSelectionIntent.ForProjectRepository(
+            ResolvedActorId, ResolvedTenantId, ResolvedProjectId, "connection_1", "octo/repo",
+            "readWorkspaceRepositoryTree");
+
+    private static CliIdentity ResolvedSelectionIdentity() => new(
+        Target() with { TenantId = ResolvedTenantId },
+        ["openid", "api.read", "offline_access", "projects.admin"]);
+
+    private static string ResolvedSelectionResponse(string? field = null, string? value = null)
+    {
+        var selection = new JsonObject
+        {
+            ["version"] = 2,
+            ["actorId"] = ResolvedActorId,
+            ["tenantId"] = ResolvedTenantId,
+            ["projectId"] = ResolvedProjectId,
+            ["operationId"] = "readWorkspaceRepositoryTree",
+            ["code"] = new string('c', 64),
+            ["connectionId"] = "connection_1",
+            ["connectionRevision"] = 7,
+            ["installationId"] = 70,
+            ["repositoryId"] = 700,
+            ["repositoryFullName"] = "octo/repo",
+            ["expiresAt"] = DateTimeOffset.UtcNow.AddMinutes(5),
+        };
+        if (field is not null)
+            selection[field] = JsonNode.Parse(value!);
+        return selection.ToJsonString();
+    }
+
+    private static async Task AssertResolvedSelectionRejectedAsync(string field, string value)
+    {
+        var browser = new TestBrowser();
+        var vault = new MemoryVault();
+        var directory = CreateTestDirectory();
+        try
+        {
+            using var signingKey = RSA.Create(2048);
+            using var http = new HttpClient(new OidcHandler(
+                signingKey, browser, actorId: ResolvedActorId,
+                workspaceSelectionJson: ResolvedSelectionResponse(field, value)));
+            using var service = CreateService(http, vault, browser, directory);
+
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                service.AcquireRepositorySelectionAsync(
+                    ResolvedSelectionIdentity(), ResolvedSelectionIntent(), InteractionPolicy.Allow,
+                    CancellationToken.None));
+
+            Assert.Contains("unexpected Workspace selection", error.Message, StringComparison.Ordinal);
+            Assert.Empty(vault.Values);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task NativeWorkspaceSelectionRejectsExtraResponseFields()
     {
         string selection = JsonSerializer.Serialize(new

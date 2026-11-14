@@ -13,9 +13,9 @@ internal sealed record NativeRepoAppSelectionIntent(
     [property: JsonPropertyName("tenantId")] string TenantId,
     [property: JsonPropertyName("projectId")] string ProjectId,
     [property: JsonPropertyName("connectionId")] string ConnectionId,
-    [property: JsonPropertyName("connectionRevision")] long ConnectionRevision,
-    [property: JsonPropertyName("installationId")] long InstallationId,
-    [property: JsonPropertyName("repositoryId")] long RepositoryId,
+    [property: JsonPropertyName("connectionRevision")] long? ConnectionRevision,
+    [property: JsonPropertyName("installationId")] long? InstallationId,
+    [property: JsonPropertyName("repositoryId")] long? RepositoryId,
     [property: JsonPropertyName("repositoryFullName")] string RepositoryFullName,
     [property: JsonPropertyName("operationId")] string OperationId);
 
@@ -56,10 +56,18 @@ internal static class NativeRepoAppSelectionHandoff
         "readWorkspaceRepositoryFile",
     };
 
+    internal const int ExplicitIntentVersion = 1;
+    internal const int ResolvedIntentVersion = 2;
+
     private static readonly string[] IntentFields =
     [
         "version", "actorId", "tenantId", "projectId", "connectionId",
         "connectionRevision", "installationId", "repositoryId", "repositoryFullName", "operationId",
+    ];
+
+    private static readonly string[] ResolvedIntentFields =
+    [
+        "version", "actorId", "tenantId", "projectId", "connectionId", "repositoryFullName", "operationId",
     ];
 
     private static readonly string[] PayloadFields =
@@ -182,17 +190,35 @@ internal static class NativeRepoAppSelectionHandoff
         NativeRepoAppSelectionPayload payload,
         NativeRepoAppSelectionIntent intent,
         Guid ownerId) =>
-        payload.Version == 1 &&
+        IsValidIntent(intent) &&
+        payload.Version == intent.Version &&
         payload.ActorId == intent.ActorId &&
         payload.ActorId == ownerId.ToString("D") &&
         payload.TenantId == intent.TenantId &&
         payload.ProjectId == intent.ProjectId &&
         payload.OperationId == intent.OperationId &&
         payload.ConnectionId == intent.ConnectionId &&
-        payload.ConnectionRevision == intent.ConnectionRevision &&
-        payload.InstallationId == intent.InstallationId &&
-        payload.RepositoryId == intent.RepositoryId &&
-        payload.RepositoryFullName == intent.RepositoryFullName;
+        payload.RepositoryFullName == intent.RepositoryFullName &&
+        (payload.Version == ResolvedIntentVersion ||
+            payload.ConnectionRevision == intent.ConnectionRevision &&
+            payload.InstallationId == intent.InstallationId &&
+            payload.RepositoryId == intent.RepositoryId);
+
+    /// <summary>
+    /// Rebuilds the intent that the client sent. For version 2, the client did not send the
+    /// connection revision, installation ID, or repository ID.
+    /// </summary>
+    public static NativeRepoAppSelectionIntent RequestedIntent(NativeRepoAppSelectionPayload payload) =>
+        payload.Version == ResolvedIntentVersion
+            ? new(payload.Version, payload.ActorId, payload.TenantId, payload.ProjectId, payload.ConnectionId,
+                null, null, null, payload.RepositoryFullName, payload.OperationId)
+            : ResolvedIntent(payload);
+
+    /// <summary>Returns a full intent with the values that the payload binds.</summary>
+    public static NativeRepoAppSelectionIntent ResolvedIntent(NativeRepoAppSelectionPayload payload) =>
+        new(payload.Version, payload.ActorId, payload.TenantId, payload.ProjectId, payload.ConnectionId,
+            payload.ConnectionRevision, payload.InstallationId, payload.RepositoryId,
+            payload.RepositoryFullName, payload.OperationId);
 
     public static string HashIntent(NativeRepoAppSelectionIntent intent)
     {
@@ -225,7 +251,16 @@ internal static class NativeRepoAppSelectionHandoff
                 !string.Equals(WebEncoders.Base64UrlEncode(bytes), encoded, StringComparison.Ordinal))
                 return false;
             using var document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 8 });
-            if (!HasExactFields(document.RootElement, IntentFields) ||
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("version", out var versionElement) ||
+                versionElement.ValueKind != JsonValueKind.Number ||
+                !versionElement.TryGetInt32(out var version) ||
+                version switch
+                {
+                    ExplicitIntentVersion => !HasExactFields(document.RootElement, IntentFields),
+                    ResolvedIntentVersion => !HasExactFields(document.RootElement, ResolvedIntentFields),
+                    _ => true,
+                } ||
                 JsonSerializer.Deserialize<NativeRepoAppSelectionIntent>(document.RootElement.GetRawText(), JsonOptions)
                     is not { } parsed ||
                 !IsValidIntent(parsed))
@@ -263,21 +298,26 @@ internal static class NativeRepoAppSelectionHandoff
     }
 
     private static bool IsValidIntent(NativeRepoAppSelectionIntent intent) =>
-        intent.Version == 1 &&
-        IsCanonicalGuid(intent.ActorId) &&
-        IsCanonicalGuid(intent.TenantId) &&
-        IsCanonicalGuid(intent.ProjectId) &&
+        intent.Version switch
+        {
+            ExplicitIntentVersion =>
+                intent.ConnectionRevision > 0 && intent.InstallationId > 0 && intent.RepositoryId > 0,
+            ResolvedIntentVersion =>
+                intent.ConnectionRevision is null && intent.InstallationId is null && intent.RepositoryId is null,
+            _ => false,
+        } &&
+        intent.ActorId is { } actorId && IsCanonicalGuid(actorId) &&
+        intent.TenantId is { } tenantId && IsCanonicalGuid(tenantId) &&
+        intent.ProjectId is { } projectId && IsCanonicalGuid(projectId) &&
         intent.ConnectionId is { } connectionId &&
         IsConnectionId(connectionId) &&
-        intent.ConnectionRevision > 0 &&
-        intent.InstallationId > 0 &&
-        intent.RepositoryId > 0 &&
         intent.RepositoryFullName is { } repositoryFullName &&
         IsRepositoryFullName(repositoryFullName) &&
-        OperationIds.Contains(intent.OperationId);
+        intent.OperationId is { } operationId &&
+        OperationIds.Contains(operationId);
 
     private static bool IsValidPayload(NativeRepoAppSelectionPayload payload) =>
-        payload.Version == 1 &&
+        payload.Version is ExplicitIntentVersion or ResolvedIntentVersion &&
         IsCanonicalGuid(payload.ActorId) &&
         IsCanonicalGuid(payload.TenantId) &&
         IsCanonicalGuid(payload.ProjectId) &&

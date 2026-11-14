@@ -35,6 +35,7 @@ public sealed class NativeCliAuthIntegrationTests : IAsyncLifetime
     private HttpClient _broker = null!;
     private HttpClient _fakeIdpClient = null!;
     private (string PfxPath, string Password) _signingCertificate;
+    private bool _listDuplicateRepository;
 
     public NativeCliAuthIntegrationTests(PostgresContainerFixture postgres) => _postgres = postgres;
 
@@ -656,6 +657,210 @@ public sealed class NativeCliAuthIntegrationTests : IAsyncLifetime
         }
     }
 
+    [Fact]
+    public async Task ResolvedWorkspaceSelectionReturnsBrokerResolvedRepositoryValues()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "native-workspace-v2-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var (ownerId, tenantId, projectId, connectionId) = await PrepareResolvedSelectionAsync(directory);
+            var intent = ResolvedIntent(ownerId, tenantId, projectId, connectionId, "octo/widget");
+            var (query, verifier, _) = CreateWorkspaceAuthorization(intent);
+            var selectionBrowser = new WorkspaceSelectionBrowser(_broker, _fakeIdpClient);
+            await selectionBrowser.OpenAsync(
+                QueryHelpers.AddQueryString("/connect/authorize", query), CancellationToken.None);
+
+            Assert.Equal(1, selectionBrowser.ReviewCount);
+            Assert.Contains("octo/widget", selectionBrowser.ReviewPage, StringComparison.Ordinal);
+            Assert.Contains(
+                $"<dt>Connection ID</dt><dd><code>{WebUtility.HtmlEncode(connectionId)}</code></dd>",
+                selectionBrowser.ReviewPage,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("Connection revision", selectionBrowser.ReviewPage, StringComparison.Ordinal);
+            var row = Assert.Single(await ReadRepositorySelectionsAsync(ownerId));
+            Assert.Equal(7, row.ConnectionRevision);
+            Assert.Equal(456, row.InstallationId);
+            Assert.Equal(789, row.RepositoryId);
+
+            string authorizationCode = QueryHelpers.ParseQuery(selectionBrowser.CallbackUri!.Query)["code"].Single()!;
+            using var issuedResponse = await ExchangeWorkspaceCodeAsync(authorizationCode, verifier);
+            Assert.Equal(HttpStatusCode.OK, issuedResponse.StatusCode);
+            using var issued = JsonDocument.Parse(await issuedResponse.Content.ReadAsStringAsync());
+            JsonElement selection = issued.RootElement.GetProperty("workspace_selection");
+            Assert.Equal(2, selection.GetProperty("version").GetInt32());
+            Assert.Equal(ownerId.ToString("D"), selection.GetProperty("actorId").GetString());
+            Assert.Equal(projectId, selection.GetProperty("projectId").GetString());
+            Assert.Equal(connectionId, selection.GetProperty("connectionId").GetString());
+            Assert.Equal(7, selection.GetProperty("connectionRevision").GetInt64());
+            Assert.Equal(456, selection.GetProperty("installationId").GetInt64());
+            Assert.Equal(789, selection.GetProperty("repositoryId").GetInt64());
+            Assert.Equal("octo/widget", selection.GetProperty("repositoryFullName").GetString());
+            Assert.Equal("readWorkspaceRepositoryTree", selection.GetProperty("operationId").GetString());
+            Assert.Equal(12, selection.EnumerateObject().Count());
+
+            var tokenHandler = new JwtSecurityTokenHandler();
+            foreach (var tokenName in new[] { "access_token", "id_token" })
+            {
+                var token = tokenHandler.ReadJwtToken(issued.RootElement.GetProperty(tokenName).GetString());
+                Assert.DoesNotContain(token.Claims, claim =>
+                    claim.Type is "aw:native_repo_app_selection_payload" or "aw:native_repo_app_selection_intent_hash");
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("not-listed")]
+    [InlineData("listed-twice")]
+    [InlineData("other-connection")]
+    public async Task ResolvedWorkspaceSelectionFailsWithoutOneExactRepositoryMatch(string change)
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "native-workspace-v2-match-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var (ownerId, tenantId, projectId, connectionId) = await PrepareResolvedSelectionAsync(directory);
+            _listDuplicateRepository = change == "listed-twice";
+            var intent = ResolvedIntent(
+                ownerId, tenantId, projectId,
+                change == "other-connection" ? "other_connection" : connectionId,
+                change == "not-listed" ? "octo/missing" : "octo/widget");
+            var (query, _, state) = CreateWorkspaceAuthorization(intent);
+            var selectionBrowser = new WorkspaceSelectionBrowser(_broker, _fakeIdpClient, followCompletion: false);
+            await selectionBrowser.OpenAsync(
+                QueryHelpers.AddQueryString("/connect/authorize", query), CancellationToken.None);
+
+            Uri callback = selectionBrowser.CompletionUri!;
+            Assert.Equal("127.0.0.1", callback.Host);
+            var callbackQuery = QueryHelpers.ParseQuery(callback.Query);
+            Assert.Equal("temporarily_unavailable", callbackQuery["error"].Single());
+            Assert.Equal(state, callbackQuery["state"].Single());
+            Assert.False(callbackQuery.ContainsKey("code"));
+            Assert.Empty(await ReadRepositorySelectionsAsync(ownerId));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ResolvedWorkspaceSelectionIsNotReleasedAfterRevisionChange()
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "native-workspace-v2-exchange-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var (ownerId, tenantId, projectId, connectionId) = await PrepareResolvedSelectionAsync(directory);
+            var intent = ResolvedIntent(ownerId, tenantId, projectId, connectionId, "octo/widget");
+            var (query, verifier, _) = CreateWorkspaceAuthorization(intent);
+            var selectionBrowser = new WorkspaceSelectionBrowser(_broker, _fakeIdpClient);
+            await selectionBrowser.OpenAsync(
+                QueryHelpers.AddQueryString("/connect/authorize", query), CancellationToken.None);
+            string authorizationCode = QueryHelpers.ParseQuery(selectionBrowser.CallbackUri!.Query)["code"].Single()!;
+            await ChangeResolvedSelectionAsync("revision", connectionId);
+
+            using var response = await ExchangeWorkspaceCodeAsync(authorizationCode, verifier);
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            using var error = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("invalid_grant", error.RootElement.GetProperty("error").GetString());
+            Assert.False(error.RootElement.TryGetProperty("workspace_selection", out _));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("revision")]
+    [InlineData("installation")]
+    [InlineData("repository")]
+    public async Task ResolvedWorkspaceSelectionCompletionRejectsChangedRepositoryValues(string change)
+    {
+        var directory = Path.Combine(AppContext.BaseDirectory, "native-workspace-v2-complete-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var (ownerId, tenantId, projectId, connectionId) = await PrepareResolvedSelectionAsync(directory);
+            var intent = ResolvedIntent(ownerId, tenantId, projectId, connectionId, "octo/widget");
+            var (query, _, _) = CreateWorkspaceAuthorization(intent);
+            var selectionBrowser = new WorkspaceSelectionBrowser(_broker, _fakeIdpClient, followCompletion: false);
+            await selectionBrowser.OpenAsync(
+                QueryHelpers.AddQueryString("/connect/authorize", query), CancellationToken.None);
+            Uri completion = selectionBrowser.CompletionUri!;
+            Assert.Contains("workspace_selection_completion", completion.Query, StringComparison.Ordinal);
+            Assert.Single(await ReadRepositorySelectionsAsync(ownerId));
+            await ChangeResolvedSelectionAsync(change, connectionId);
+
+            using var response = await _broker.GetAsync(completion);
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Null(response.Headers.Location);
+            using var error = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("invalid_grant", error.RootElement.GetProperty("error").GetString());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private async Task<(Guid OwnerId, string TenantId, string ProjectId, string ConnectionId)>
+        PrepareResolvedSelectionAsync(string directory)
+    {
+        string tenantId = Guid.NewGuid().ToString("D");
+        string projectId = Guid.NewGuid().ToString("D");
+        var signedIn = await SignInWorkspaceOwnerAsync(directory, tenantId);
+        Guid ownerId = Guid.Parse(signedIn.ActorId);
+        const string connectionId = "native_workspace_v2_connection";
+        await SeedRepoAppConnectionAsync(ownerId, connectionId);
+        return (ownerId, tenantId, projectId, connectionId);
+    }
+
+    private static NativeRepoAppSelectionIntent ResolvedIntent(
+        Guid ownerId, string tenantId, string projectId, string connectionId, string repositoryFullName) =>
+        new(2, ownerId.ToString("D"), tenantId, projectId, connectionId, null, null, null,
+            repositoryFullName, "readWorkspaceRepositoryTree");
+
+    private async Task ChangeResolvedSelectionAsync(string change, string connectionId)
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        await using var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
+        var updated = change switch
+        {
+            "revision" => await db.RepoAppConnections
+                .Where(row => row.ConnectionId == connectionId)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(row => row.ConnectionRevision, 8)),
+            "installation" => await db.RepoAppInstallations
+                .Where(row => row.ConnectionId == connectionId && row.InstallationId == 456)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(
+                    row => row.RevokedAt, (DateTimeOffset?)DateTimeOffset.UtcNow)),
+            "repository" => await db.RepoAppRepositorySelections
+                .Where(row => row.ConnectionId == connectionId)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(row => row.RepositoryId, 790)),
+            _ => throw new ArgumentOutOfRangeException(nameof(change)),
+        };
+        Assert.Equal(1, updated);
+    }
+
+    private Task<HttpResponseMessage> ExchangeWorkspaceCodeAsync(string authorizationCode, string verifier) =>
+        _broker.PostAsync(
+            "/connect/token",
+            new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["grant_type"] = "authorization_code",
+                ["client_id"] = IdentityBrokerWebApplicationFactory.CliClientId,
+                ["redirect_uri"] = IdentityBrokerWebApplicationFactory.CliClientRedirectUri,
+                ["code"] = authorizationCode,
+                ["code_verifier"] = verifier,
+            }));
+
     private async Task<(CliIdentity Identity, string ActorId)> SignInWorkspaceOwnerAsync(
         string directory,
         string tenantId)
@@ -735,7 +940,7 @@ public sealed class NativeCliAuthIntegrationTests : IAsyncLifetime
         settings["IdentityBroker__GitHubRepoApp__PrivateKeySecretVersion"] = "test-version";
     }
 
-    private static void ConfigureRepoAppTestServices(IServiceCollection services)
+    private void ConfigureRepoAppTestServices(IServiceCollection services)
     {
         services.RemoveAll<ISecretRedemption>();
         services.AddSingleton<ISecretRedemption>(new RepoAppSecretRedemption());
@@ -745,7 +950,7 @@ public sealed class NativeCliAuthIntegrationTests : IAsyncLifetime
         {
             options.HttpMessageHandlerBuilderActions.Clear();
             options.HttpMessageHandlerBuilderActions.Add(builder =>
-                builder.PrimaryHandler = new RepoAppApiHandler());
+                builder.PrimaryHandler = new RepoAppApiHandler(() => _listDuplicateRepository));
         });
     }
 
@@ -785,7 +990,10 @@ public sealed class NativeCliAuthIntegrationTests : IAsyncLifetime
 
     private static string EncodeIntent(NativeRepoAppSelectionIntent intent)
     {
-        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(intent);
+        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(intent, new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        });
         try { return WebEncoders.Base64UrlEncode(bytes); }
         finally { CryptographicOperations.ZeroMemory(bytes); }
     }
@@ -852,7 +1060,7 @@ public sealed class NativeCliAuthIntegrationTests : IAsyncLifetime
             throw new InvalidOperationException("The repository-selection test does not write secrets.");
     }
 
-    private sealed class RepoAppApiHandler : HttpMessageHandler
+    private sealed class RepoAppApiHandler(Func<bool> listDuplicateRepository) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
@@ -866,7 +1074,12 @@ public sealed class NativeCliAuthIntegrationTests : IAsyncLifetime
                     "\"type\":\"Organization\"},\"repository_selection\":\"selected\"}]}",
                 "/user/installations/456/repositories?per_page=100&page=1" =>
                     "{\"repositories\":[{\"id\":789,\"full_name\":\"octo/widget\"," +
-                    "\"owner\":{\"login\":\"octo\"},\"private\":true,\"default_branch\":\"main\"}]}",
+                    "\"owner\":{\"login\":\"octo\"},\"private\":true,\"default_branch\":\"main\"}" +
+                    (listDuplicateRepository()
+                        ? ",{\"id\":790,\"full_name\":\"octo/widget\",\"owner\":{\"login\":\"octo\"}," +
+                            "\"private\":true,\"default_branch\":\"main\"}"
+                        : string.Empty) +
+                    "]}",
                 _ => throw new Xunit.Sdk.XunitException(
                     $"Unexpected controlled GitHub API path: {request.RequestUri.PathAndQuery}")
             };
@@ -880,7 +1093,8 @@ public sealed class NativeCliAuthIntegrationTests : IAsyncLifetime
     private sealed class WorkspaceSelectionBrowser(
         HttpClient broker,
         HttpClient fakeIdp,
-        bool approveReview = true) : ICliSystemBrowser, IDisposable
+        bool approveReview = true,
+        bool followCompletion = true) : ICliSystemBrowser, IDisposable
     {
         private readonly HttpClient _callbackClient = new(new SocketsHttpHandler
         {
@@ -893,6 +1107,7 @@ public sealed class NativeCliAuthIntegrationTests : IAsyncLifetime
         public string ReviewPage { get; private set; } = string.Empty;
         public string? ReviewHandle { get; private set; }
         public string? AntiforgeryToken { get; private set; }
+        public Uri? CompletionUri { get; private set; }
         public Uri? CallbackUri { get; private set; }
 
         public async Task OpenAsync(Uri authorizationUri, CancellationToken ct)
@@ -957,7 +1172,9 @@ public sealed class NativeCliAuthIntegrationTests : IAsyncLifetime
                             Assert.True(approved.StatusCode == HttpStatusCode.Redirect,
                                 $"Repository review returned {(int)approved.StatusCode}: " +
                                 await approved.Content.ReadAsStringAsync(ct));
-                            next = await broker.GetAsync(Resolve(approved.Headers.Location!), ct);
+                            CompletionUri = Resolve(approved.Headers.Location!);
+                            if (!followCompletion) return;
+                            next = await broker.GetAsync(CompletionUri, ct);
                         }
                         else if (html.Contains("name=\"consent_handle\"", StringComparison.Ordinal))
                         {

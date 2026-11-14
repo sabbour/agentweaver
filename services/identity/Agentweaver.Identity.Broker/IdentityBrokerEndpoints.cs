@@ -203,7 +203,8 @@ public static class IdentityBrokerEndpoints
                 try
                 {
                     var selectionExpiry = await connectionService.ValidateNativeSelectionAsync(
-                        userId, claimedIntent, payload.Code, ct).ConfigureAwait(false);
+                        userId, NativeRepoAppSelectionHandoff.ResolvedIntent(payload), payload.Code, ct)
+                        .ConfigureAwait(false);
                     if (selectionExpiry != payload.ExpiresAt)
                         return Forbid(Errors.InvalidGrant, "The repository review is no longer available.");
                 }
@@ -633,22 +634,36 @@ public static class IdentityBrokerEndpoints
 
         try
         {
-            var selection = await connectionService.CreateRepositorySelectionAsync(
-                userId, selectionIntent.InstallationId, selectionIntent.RepositoryId, ct).ConfigureAwait(false);
+            var resolvesRepository =
+                selectionIntent.Version == NativeRepoAppSelectionHandoff.ResolvedIntentVersion;
+            var selection = resolvesRepository
+                ? await connectionService.CreateRepositorySelectionByNameAsync(
+                    userId, selectionIntent.ConnectionId, selectionIntent.RepositoryFullName, ct)
+                    .ConfigureAwait(false)
+                : await connectionService.CreateRepositorySelectionAsync(
+                    userId, selectionIntent.InstallationId!.Value, selectionIntent.RepositoryId!.Value, ct)
+                    .ConfigureAwait(false);
             if (selection.ConnectionId != selectionIntent.ConnectionId ||
-                selection.ConnectionRevision != selectionIntent.ConnectionRevision ||
-                selection.InstallationId != selectionIntent.InstallationId ||
-                selection.RepositoryId != selectionIntent.RepositoryId ||
+                !resolvesRepository && (
+                    selection.ConnectionRevision != selectionIntent.ConnectionRevision ||
+                    selection.InstallationId != selectionIntent.InstallationId ||
+                    selection.RepositoryId != selectionIntent.RepositoryId) ||
                 !string.Equals(
                     selection.RepositoryFullName, selectionIntent.RepositoryFullName, StringComparison.Ordinal))
                 return RedirectAuthorizationError(
                     pending.RedirectUri, pending.State, Errors.AccessDenied,
                     "The requested repository selection changed. Start a new review.");
 
+            var resolvedIntent = selectionIntent with
+            {
+                ConnectionRevision = selection.ConnectionRevision,
+                InstallationId = selection.InstallationId,
+                RepositoryId = selection.RepositoryId,
+            };
             var selectionExpiry = await connectionService.ValidateNativeSelectionAsync(
-                userId, selectionIntent, selection.Code, ct).ConfigureAwait(false);
+                userId, resolvedIntent, selection.Code, ct).ConfigureAwait(false);
             var payload = new NativeRepoAppSelectionPayload(
-                1,
+                selectionIntent.Version,
                 selectionIntent.ActorId,
                 selectionIntent.TenantId,
                 selectionIntent.ProjectId,
@@ -763,6 +778,9 @@ public static class IdentityBrokerEndpoints
             "readWorkspaceRepositoryFile" => "read a repository file",
             _ => "read the repository",
         };
+        var revisionRow = intent.ConnectionRevision is { } revision
+            ? $"<div><dt>Connection revision</dt><dd><code>{revision}</code></dd></div>"
+            : string.Empty;
         return $"""
             <!doctype html>
             <html lang="en">
@@ -783,7 +801,7 @@ public static class IdentityBrokerEndpoints
             <div><dt>Project</dt><dd><code>{WebUtility.HtmlEncode(intent.ProjectId)}</code></dd></div>
             <div><dt>Tenant ID</dt><dd><code>{WebUtility.HtmlEncode(intent.TenantId)}</code></dd></div>
             <div><dt>Connection ID</dt><dd><code>{WebUtility.HtmlEncode(intent.ConnectionId)}</code></dd></div>
-            <div><dt>Connection revision</dt><dd><code>{intent.ConnectionRevision}</code></dd></div>
+            {revisionRow}
             <div><dt>Action</dt><dd>{WebUtility.HtmlEncode(action)}</dd></div>
             </dl>
             <p>This review does not grant project access. The current project owner check still applies.</p>
@@ -1057,10 +1075,7 @@ public static class IdentityBrokerEndpoints
                 payload.ExpiresAt <= timeProvider.GetUtcNow())
                 return Forbid(Errors.InvalidGrant, "The authorization grant is invalid.");
 
-            var intent = new NativeRepoAppSelectionIntent(
-                1, payload.ActorId, payload.TenantId, payload.ProjectId, payload.ConnectionId,
-                payload.ConnectionRevision, payload.InstallationId, payload.RepositoryId,
-                payload.RepositoryFullName, payload.OperationId);
+            var intent = NativeRepoAppSelectionHandoff.RequestedIntent(payload);
             if (!NativeRepoAppSelectionHandoff.MatchesIntent(payload, intent, userId) ||
                 !string.Equals(
                     selectionIntentHashClaims[0].Value,
@@ -1074,7 +1089,8 @@ public static class IdentityBrokerEndpoints
             try
             {
                 var selectionExpiry = await connectionService.ValidateNativeSelectionAsync(
-                    userId, intent, payload.Code, ct).ConfigureAwait(false);
+                    userId, NativeRepoAppSelectionHandoff.ResolvedIntent(payload), payload.Code, ct)
+                    .ConfigureAwait(false);
                 if (selectionExpiry != payload.ExpiresAt)
                     return Forbid(Errors.InvalidGrant, "The authorization grant is no longer active.");
             }

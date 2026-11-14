@@ -80,7 +80,6 @@ public sealed class CliAuthService : ICliAuthentication, INativeRepoAppSelection
             !string.Equals(identity.Target.ClientId, "agentweaver-cli", StringComparison.Ordinal) ||
             !identity.Scopes.OrderBy(scope => scope, StringComparer.Ordinal)
                 .SequenceEqual(["api.read", "offline_access", "openid", "projects.admin"], StringComparer.Ordinal) ||
-            intent.Version != 1 ||
             !string.Equals(intent.TenantId, identity.Target.TenantId, StringComparison.Ordinal) ||
             !NativeRepoAppSelectionIntentValidator.IsValid(intent))
             throw new InvalidOperationException("The native Workspace selection request is invalid.");

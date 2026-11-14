@@ -269,7 +269,7 @@ internal static class OidcProtocol
             "repositoryFullName", "expiresAt",
         ];
         if (fields.Count != required.Length || required.Any(name => !fields.ContainsKey(name)) ||
-            !fields["version"].TryGetInt32(out int version) || version != 1 ||
+            !fields["version"].TryGetInt32(out int version) || version is not (1 or 2) ||
             !fields["connectionRevision"].TryGetInt64(out long connectionRevision) || connectionRevision < 1 ||
             !fields["installationId"].TryGetInt64(out long installationId) || installationId < 1 ||
             !fields["repositoryId"].TryGetInt64(out long repositoryId) || repositoryId < 1 ||
@@ -295,7 +295,7 @@ internal static class OidcProtocol
             throw new InvalidOperationException("The Identity Broker returned an invalid Workspace selection.");
 
         return new NativeRepoAppSelection(
-            actorId, tenantId, projectId, operationId, code, connectionId,
+            version, actorId, tenantId, projectId, operationId, code, connectionId,
             connectionRevision, installationId, repositoryId, repositoryFullName, expiresAt);
     }
 
