@@ -42,7 +42,7 @@ public sealed class SourceControlOperationException(
 
 /// <summary>
 /// Implements the Source Control provider contract against GitHub's REST API.
-/// Every operation checks the pinned provider/resource/capability binding and treats uncertain writes distinctly.
+/// Context-based operations validate provider and capability bindings; the adapter distinguishes uncertain write outcomes.
 /// </summary>
 public sealed partial class GitHubSourceControlAdapter :
     ISourceControlAdapter, ISourceControlIssueAdapter, ISourceControlTeamSyncAdapter, ISourceControlWorkspaceAdapter
@@ -312,8 +312,8 @@ public sealed partial class GitHubSourceControlAdapter :
     }
 
     /// <summary>
-    /// Finds a PR carrying this persisted operation marker across open and closed states.
-    /// A pending owner operation may only be recovered; it never posts a second create.
+    /// Finds a pull request with this operation marker across open and closed states.
+    /// The caller creates only when <see cref="SourceControlPullRequestExecutionBinding.OwnerMayCreate"/> is true.
     /// </summary>
     private async Task<SourceControlPullRequest?> FindPullRequestByOperationAsync(
         SourceControlOperationContext context,
@@ -1382,7 +1382,7 @@ public sealed partial class GitHubSourceControlAdapter :
             Uri.EscapeDataString(repository.Name) +
             (relative.Length == 0 ? string.Empty : "/" + relative));
 
-    /// <summary>Requires the operation context to contain the GitHub resource, run, credential, and requested capability.</summary>
+    /// <summary>Requires matching GitHub provider IDs, source-control seams, the requested capability, a credential, and a run ID.</summary>
     /// <exception cref="SourceControlOperationException">The operation does not match the pinned provider binding.</exception>
     private static void ValidateContext(SourceControlOperationContext context, string capability)
     {

@@ -79,6 +79,7 @@ public sealed partial class GitHubSourceControlAdapter
         var listedTags = ReadWorkspaceRefs(
             tagsDocument.RootElement, SourceControlWorkspaceRefKind.Tag, WorkspaceTagPageSize);
         var tags = new SourceControlWorkspaceRef[listedTags.Count];
+        // Resolve tags with bounded concurrency while keeping each result at its listed position.
         await Parallel.ForEachAsync(
             Enumerable.Range(0, listedTags.Count),
             new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = 8 },
@@ -463,6 +464,7 @@ public sealed partial class GitHubSourceControlAdapter
 
     private static bool HasEncodedPathStructure(string path)
     {
+        // Reject decoded separators, backslashes, controls, dot segments, and escape nesting beyond eight rounds.
         var candidate = path;
         for (var depth = 0; depth < 8; depth++)
         {
@@ -481,6 +483,7 @@ public sealed partial class GitHubSourceControlAdapter
 
     private static bool IsBinarySample(ReadOnlySpan<byte> sample, bool isCompleteFile)
     {
+        // A partial UTF-8 sample may end mid-character, so flush only when it covers the complete file.
         if (sample.Contains((byte)0))
             return true;
         try

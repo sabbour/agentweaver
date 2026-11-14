@@ -374,7 +374,7 @@ public sealed partial class GitHubSourceControlAdapter
 
     private static void ValidateTeamSyncPath(string path)
     {
-        // Slash-delimited validation rejects traversal and platform-specific path aliases.
+        // Slash-delimited validation rejects empty, dot, and parent segments plus backslashes.
         if (string.IsNullOrWhiteSpace(path) ||
             path.Length > 1024 ||
             !path.StartsWith(".squad/", StringComparison.Ordinal) ||
