@@ -38,6 +38,7 @@ internal sealed class MafChildSpawnAuthorizationOwner(
             cancellationToken).ConfigureAwait(false);
 
         var existing = await store.ReadCurrentAsync(intent, authority, cancellationToken).ConfigureAwait(false);
+        // Reuse a current allow; the store rechecks its policy receipt and grant before returning it.
         if (existing is not null)
             return existing;
 

@@ -121,9 +121,8 @@ internal sealed class MafExecutionCheckpointStore
             : null;
     }
 
-    /// <summary>
-    /// Identifies fixed-work statuses that can still provide an observation for their child.
-    /// </summary>
+    /// <summary>Checks whether a fixed-work status can provide an observation for its child.</summary>
+    /// <returns><see langword="true"/> for Running, Succeeded, Failed, or Indeterminate; otherwise <see langword="false"/>.</returns>
     internal static bool IsObservationFixedWorkStatus(MafExecutionTaskStatus status) =>
         status is MafExecutionTaskStatus.Running or MafExecutionTaskStatus.Succeeded or
             MafExecutionTaskStatus.Failed or MafExecutionTaskStatus.Indeterminate;
@@ -175,6 +174,7 @@ internal sealed class MafExecutionCheckpointStore
                 "checkpoint_recovery_checkpoint_invalid", StatusCodes.Status409Conflict);
 
         var nextFence = checked(_binding.ExecutionFence + 1);
+        // Recovery advances the fence once and records the exact source checkpoint and payload hash.
         var lineage = new MafCheckpointRecoveryLineage(
             source.Info.CheckpointId,
             source.State.Revision,
@@ -210,6 +210,7 @@ internal sealed class MafExecutionCheckpointStore
             parentExecutionFence: _binding.ExecutionFence).ConfigureAwait(false);
         var persisted = await _checkpoints.ReadLatestCheckpointInTransactionAsync(
             connection, transaction, binding, cancellationToken).ConfigureAwait(false);
+        // Return the recovery snapshot only after its checkpoint is latest in this transaction.
         if (persisted is null || persisted.Value.Info.CheckpointId != checkpointId)
             throw new CoordinationException(
                 "checkpoint_recovery_checkpoint_stale", StatusCodes.Status409Conflict);
@@ -224,9 +225,8 @@ internal sealed class MafExecutionCheckpointStore
     private static string HashCheckpointPayload(JsonElement value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.GetRawText())));
 
-    /// <summary>
-    /// Reports whether the store is bound to the given session and execution fence.
-    /// </summary>
+    /// <summary>Checks whether this store matches the session, execution fence, and checkpoint store name.</summary>
+    /// <returns><see langword="true"/> only when all three bindings match; otherwise <see langword="false"/>.</returns>
     internal bool IsBoundTo(SessionIdentity identity, long executionFence) =>
         MafExecutionCheckpointContract.IsBoundTo(_binding, identity, executionFence);
 
@@ -417,9 +417,6 @@ internal sealed class MafExecutionCheckpointStore
         return intent with { WorkspaceSeed = bytes.ToImmutableArray() };
     }
 
-    /// <summary>
-    /// Opens a connection through the checkpoint owner using this store's configuration.
-    /// </summary>
     private async Task<NpgsqlConnection> _bindingConnectionAsync(CancellationToken cancellationToken) =>
         await _checkpoints.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 

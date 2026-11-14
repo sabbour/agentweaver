@@ -418,6 +418,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
         var binding = registration.Binding;
         var lineage = new Dictionary<Guid, bool>();
         var admissions = new List<(Guid RequestId, string PromptHash)>();
+        // Read one beyond the supported limit so overflow is rejected instead of hiding older admissions.
         await using (var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false))
         await using (var command = new NpgsqlCommand($"""
             SELECT request_id, prompt_hash
@@ -1181,6 +1182,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 
+    /// <summary>Checks whether a denial matches the dispatch that is still sending.</summary>
+    /// <returns><see langword="true"/> when the current sending dispatch matches every binding present in the denial; otherwise <see langword="false"/>.</returns>
     private async Task<bool> MatchesToolRejectionDispatchAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1353,6 +1356,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
         }
 
         var resultBytes = storedResult is null ? null : Encoding.UTF8.GetBytes(storedResult);
+        // These cross-owner signals are not backed by authoritative evidence yet, so the comparison remains blocked.
         var missing = new List<string>
         {
             "environment.replacement-lineage",
@@ -1548,6 +1552,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
         return (decisionReader.GetGuid(0), decisionReader.GetInt64(1), decisionReader.GetString(2));
     }
 
+    /// <summary>Checks for the exact root model-turn admission required by this request and decision.</summary>
+    /// <returns><see langword="true"/> when the admission row matches; <see langword="false"/> when no row matches. A missing table raises <see cref="CoordinationException"/>.</returns>
     private async Task<bool> HasCoordinatorRootModelTurnAdmissionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2503,6 +2509,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
     /// <summary>
     /// Checks that receipt evidence identifies the supported policy provider and a bounded options revision.
     /// </summary>
+    /// <returns><see langword="true"/> when the provider ID, adapter version, and schema version match the supported provider and the options revision is a valid identifier; otherwise <see langword="false"/>.</returns>
     private static bool IsValidPolicyProviderEvidence(PolicyEvaluationSessionPayload evidence) =>
         evidence.ProviderId == AgtPolicyProvider.ProviderId &&
         evidence.AdapterVersion == AgtPolicyProvider.AdapterVersion.ToString() &&
@@ -2512,6 +2519,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
     /// <summary>
     /// Checks whether the evidence names the active grant with matching identity, action, purpose, and fences.
     /// </summary>
+    /// <returns><see langword="true"/> only when an active grant and its run and session match the evidence; <see langword="false"/> when the grant is absent or any check fails.</returns>
     private async Task<bool> IsCurrentGrantForReceiptAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2562,6 +2570,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
     /// Checks whether an issued grant matches the evidence even if it is no longer current or effective.
     /// </summary>
     /// <remarks>This relaxed check supports persisted deny/error receipts without allowing use of a stale grant as an allow.</remarks>
+    /// <returns><see langword="true"/> when the evidence matches an issued grant that is no longer effective, with an active session and non-completed run; otherwise <see langword="false"/>.</returns>
     private async Task<bool> IsIssuedGrantForReceiptAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2694,6 +2703,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
     /// <summary>
     /// Allows only outcome and reason combinations emitted by the policy evaluator.
     /// </summary>
+    /// <returns><see langword="true"/> for an allowed outcome/reason pair; otherwise <see langword="false"/>.</returns>
     private static bool IsValidOutcomeReason(
         PolicyEvaluationOutcome outcome,
         PolicyEvaluationReasonCode reason) =>
@@ -2746,6 +2756,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
     /// <summary>
     /// Checks for a non-empty identifier of bounded length with only supported identifier characters.
     /// </summary>
+    /// <returns><see langword="true"/> when the value meets those identifier rules; otherwise <see langword="false"/>.</returns>
     private static bool IsIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= MaximumIdLength &&
         value.All(character => char.IsAsciiLetterOrDigit(character) ||

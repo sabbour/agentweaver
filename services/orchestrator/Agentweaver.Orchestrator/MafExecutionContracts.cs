@@ -496,9 +496,8 @@ internal static class MafExecutionCheckpointContract
         return state;
     }
 
-    /// <summary>
-    /// Checks that a store binding names the same session and fence as the requested execution.
-    /// </summary>
+    /// <summary>Checks whether the store binding matches the requested execution.</summary>
+    /// <returns><see langword="true"/> only when the session, execution fence, and store name match; otherwise <see langword="false"/>.</returns>
     internal static bool IsBoundTo(
         MafCheckpointBinding binding,
         SessionIdentity identity,
@@ -706,6 +705,7 @@ internal static class MafExecutionCheckpointContract
     /// <summary>
     /// Compares two BuildTest intents using their serialized contract, excluding transient seed bytes.
     /// </summary>
+    /// <returns><see langword="true"/> when the serialized contracts match; otherwise <see langword="false"/>.</returns>
     internal static bool BuildTestIntentsMatch(
         MafExecutionBuildTestIntent left,
         MafExecutionBuildTestIntent right) =>
@@ -714,6 +714,7 @@ internal static class MafExecutionCheckpointContract
             JsonSerializer.SerializeToElement(right, JsonOptions));
 
     /// <summary>Compares immutable OpenPullRequest intent data after checkpoint serialization.</summary>
+    /// <returns><see langword="true"/> when the serialized contracts match; otherwise <see langword="false"/>.</returns>
     internal static bool OpenPullRequestIntentsMatch(
         MafExecutionOpenPullRequestIntent left,
         MafExecutionOpenPullRequestIntent right) =>
@@ -722,6 +723,7 @@ internal static class MafExecutionCheckpointContract
             JsonSerializer.SerializeToElement(right, JsonOptions));
 
     /// <summary>Compares immutable Merge intent data after checkpoint serialization.</summary>
+    /// <returns><see langword="true"/> when the serialized contracts match; otherwise <see langword="false"/>.</returns>
     internal static bool MergeIntentsMatch(MafExecutionMergeIntent left, MafExecutionMergeIntent right) =>
         JsonElement.DeepEquals(
             JsonSerializer.SerializeToElement(left, JsonOptions),
@@ -981,6 +983,7 @@ internal static class MafExecutionCheckpointContract
     /// <summary>
     /// Checks whether a value is a bounded identifier containing only supported identifier characters.
     /// </summary>
+    /// <returns><see langword="true"/> when the value meets those identifier rules; otherwise <see langword="false"/>.</returns>
     private static bool IsIdentifier(string? value) =>
         IsMetadataValue(value, 128) && value!.All(character =>
             char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-' or ':');
@@ -988,9 +991,12 @@ internal static class MafExecutionCheckpointContract
     /// <summary>
     /// Checks whether a value is a 64-character hexadecimal digest.
     /// </summary>
+    /// <returns><see langword="true"/> for a 64-character hexadecimal value; otherwise <see langword="false"/>.</returns>
     private static bool IsHash(string? value) =>
         value is { Length: 64 } && value.All(Uri.IsHexDigit);
 
+    /// <summary>Compares child-turn completion receipts after checkpoint serialization.</summary>
+    /// <returns><see langword="true"/> when the serialized receipts match; otherwise <see langword="false"/>.</returns>
     private static bool ChildTurnReceiptsMatch(
         RuntimeChildTurnCompletionReceipt left, RuntimeChildTurnCompletionReceipt right) =>
         JsonElement.DeepEquals(
@@ -1000,6 +1006,7 @@ internal static class MafExecutionCheckpointContract
     /// <summary>
     /// Checks that metadata is present, bounded, and free of control characters.
     /// </summary>
+    /// <returns><see langword="true"/> when the value meets those metadata rules; otherwise <see langword="false"/>.</returns>
     private static bool IsMetadataValue(string? value, int maximumLength = 256) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= maximumLength &&
         !value.Any(char.IsControl);

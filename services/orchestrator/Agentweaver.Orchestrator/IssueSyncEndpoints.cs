@@ -18,6 +18,7 @@ internal static class IssueSyncEndpoints
                 ?? throw new CoordinationException("issue_sync_not_configured", 404);
             if (project.TenantId != proof.TenantId)
                 throw new CoordinationException("issue_sync_project_denied", 403);
+            // The database read and remote authority check are separate, so check project authority again before returning settings.
             await ReadOwnerAsync(projectId, context, client, options);
             return Results.Ok(project);
         }));
@@ -57,6 +58,7 @@ internal static class IssueSyncEndpoints
             await store.ConfigureAsync(projectId, proof.TenantId, request.Settings, grant, request.ExpectedRevision,
                 async ct =>
                 {
+                    // Recheck authority after grant lookup and before the store commits its transaction.
                     var refreshed = await ReadOwnerAsync(projectId, context, client, options);
                     if (refreshed != proof)
                         throw new CoordinationException("issue_sync_project_authority_changed", 403);

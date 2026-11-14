@@ -331,6 +331,8 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
                 throw new RuntimeAuthorizationException("checkpoint_recovery_dispatch_held");
     }
 
+    /// <summary>Inserts the one-time consumption row for this spawn intent.</summary>
+    /// <returns><see langword="true"/> if this call inserted the row; <see langword="false"/> if the intent was already consumed.</returns>
     private async Task<bool> InsertConsumptionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,

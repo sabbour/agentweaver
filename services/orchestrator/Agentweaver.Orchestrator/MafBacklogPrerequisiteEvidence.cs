@@ -284,6 +284,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
             StringComparer.Ordinal);
         var failedContextTasks = ImmutableDictionary.CreateBuilder<string, BacklogPrerequisiteExecutionState>(
             StringComparer.Ordinal);
+        // Read selection contexts outside the database transaction; the next transaction rechecks each owner binding.
         foreach (var (taskId, binding) in bindings)
         {
             try
@@ -632,6 +633,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
             catch (CoordinationException exception) when (
                 exception.Code == "maf_execution_output_witness_plan_incomplete")
             {
+                // An incomplete plan has no admissible witness yet, so the prerequisite remains unverified.
             }
         }
         return new MafBacklogAcceptedRootEvidence(
@@ -842,7 +844,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
     /// <param name="captures">Current capture records read from the source-control owner.</param>
     /// <param name="mergeIntents">Current merge intents associated with the capture.</param>
     /// <param name="ownerEvidence">Receives the rebuilt JSON when the inputs satisfy the witness shape.</param>
-    /// <returns><see langword="true"/> when a valid canonical representation was produced.</returns>
+    /// <returns><see langword="true"/> when both arrays have an accepted witness shape and serialization succeeds; <see langword="false"/> when an array is default or the witness shape fails. Serialization contract errors propagate.</returns>
     internal static bool TryRebuildCurrentOwnerEvidence(
         MafExecutionOwnerEvidenceBinding root,
         string tenantId,
@@ -898,7 +900,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
     /// <param name="capture">Receives the single capture row when present.</param>
     /// <param name="merge">Receives the optional merge row.</param>
     /// <param name="noOutput">Receives the single no-output row when present.</param>
-    /// <returns><see langword="true"/> only for one valid no-output row or a capture row with an optional merge row.</returns>
+    /// <returns><see langword="true"/> for one valid no-output row or one capture row with an optional merge row; <see langword="false"/> for every other row shape.</returns>
     internal static bool TryParseOwnerEvidence(
         JsonElement evidence,
         out MafExecutionOwnerEvidenceCaptureRow? capture,
@@ -964,6 +966,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
     /// <summary>
     /// Deserializes one owner-evidence row with strict JSON member handling.
     /// </summary>
+    /// <returns><see langword="true"/> when deserialization returns a value; <see langword="false"/> when it returns null or raises a JSON or argument error.</returns>
     private static bool TryDeserializeOwnerEvidence<T>(JsonElement value, out T? result)
         where T : class
     {
@@ -982,6 +985,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
     /// <summary>
     /// Checks the capture proof contract without allowing malformed persisted evidence to escape as an exception.
     /// </summary>
+    /// <returns><see langword="true"/> when validation succeeds; <see langword="false"/> when validation raises an argument error.</returns>
     private static bool ValidCaptureProof(ProducedRunCaptureProof proof)
     {
         try
@@ -995,9 +999,8 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         }
     }
 
-    /// <summary>
-    /// Confirms that current source-control owner state still matches the accepted root evidence.
-    /// </summary>
+    /// <summary>Checks whether the source-control owner snapshot matches the accepted root and decision.</summary>
+    /// <returns><see langword="true"/> when the accepted and writer actors, tenant, selection hash, run and session fences, root session, and accepted decision version and state match; otherwise <see langword="false"/>.</returns>
     private static bool IsCurrentOwnerBinding(
         SourceControlOwnerStore.OwnerBindingSnapshot owner,
         MafBacklogAcceptedRootEvidence root) =>
@@ -1031,6 +1034,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
             step.Mode == WorkflowStepMode.Platform &&
             step.PlatformGate == WorkflowPlatformGate.Merge);
 
+        // A no-output proof is complete only when the plan has no Merge step that needs separate evidence.
         if (root.OutputSet is { Obligations.IsEmpty: true } &&
             root.OutputWitness is not null &&
             mergeStepCount == 0 &&
@@ -1202,6 +1206,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
     /// <summary>
     /// Compares every task and claim field that must remain stable between preparation and the claim transaction.
     /// </summary>
+    /// <returns><see langword="true"/> when the prepared and current claim tuples match; otherwise <see langword="false"/>.</returns>
     private static bool SameClaim(MafBacklogTaskClaimTuple left, MafBacklogTaskClaimTuple right) =>
         left.Task == right.Task &&
         left.TaskRevision == right.TaskRevision &&
@@ -1222,6 +1227,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
     /// <summary>
     /// Compares the root, actor, tenant, accepted selection, and decision version across two owner reads.
     /// </summary>
+    /// <returns><see langword="true"/> when both owner reads describe the same root binding; otherwise <see langword="false"/>.</returns>
     private static bool SameRootBinding(AcceptedRootBinding left, AcceptedRootBinding right) =>
         SameClaim(left.Claim, right.Claim) &&
         left.Root == right.Root &&
@@ -1240,6 +1246,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
     /// <summary>
     /// Compares prepared accepted-root evidence with a newly read root binding.
     /// </summary>
+    /// <returns><see langword="true"/> when the prepared root evidence still matches the current binding; otherwise <see langword="false"/>.</returns>
     private static bool SameRootBinding(
         MafBacklogAcceptedRootEvidence prepared,
         AcceptedRootBinding current) =>
@@ -1258,6 +1265,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
     /// <summary>
     /// Compares the complete effective run selection, including its serialized snapshot.
     /// </summary>
+    /// <returns><see langword="true"/> when the selections match; otherwise <see langword="false"/>.</returns>
     private static bool SameSelection(EffectiveRunSelection left, EffectiveRunSelection right) =>
         left.ProjectId == right.ProjectId &&
         left.RunId == right.RunId &&
@@ -1270,6 +1278,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
     /// <summary>
     /// Compares checkpoint identity and canonical validated state.
     /// </summary>
+    /// <returns><see langword="true"/> when both checkpoints have the same session, ID, and canonical state; otherwise <see langword="false"/>.</returns>
     private static bool SameCheckpoint(
         MafExecutionCheckpointSnapshot left,
         MafExecutionCheckpointSnapshot right) =>
@@ -1281,6 +1290,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
     /// <summary>
     /// Compares obligations, missing associations, and witness identity between root evidence reads.
     /// </summary>
+    /// <returns><see langword="true"/> when both reads have the same output evidence; otherwise <see langword="false"/>.</returns>
     private static bool SameOutputEvidence(
         MafBacklogAcceptedRootEvidence left,
         MafBacklogAcceptedRootEvidence right) =>
@@ -1291,6 +1301,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
     /// <summary>
     /// Compares work-plan identity, digest, and ordered obligations for two output sets.
     /// </summary>
+    /// <returns><see langword="true"/> when both output sets match, including when both are null; otherwise <see langword="false"/>.</returns>
     private static bool SameOutputSet(
         MafBacklogOutputSetSnapshot? left,
         MafBacklogOutputSetSnapshot? right) =>
@@ -1304,6 +1315,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
     /// <summary>
     /// Compares all persisted witness bindings and canonical output-set bytes.
     /// </summary>
+    /// <returns><see langword="true"/> when both witnesses match, including when both are null; otherwise <see langword="false"/>.</returns>
     private static bool SameOutputWitness(
         MafExecutionOutputWitnessRecord? left,
         MafExecutionOutputWitnessRecord? right) =>
@@ -1324,6 +1336,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
     /// <summary>
     /// Compares capture, merge, and no-output owner proofs by their complete persisted contents.
     /// </summary>
+    /// <returns><see langword="true"/> when both initialized proof arrays match in order; otherwise <see langword="false"/>.</returns>
     private static bool SameOwnerProofs(
         ImmutableArray<MafBacklogOwnerProof> left,
         ImmutableArray<MafBacklogOwnerProof> right)
@@ -1356,6 +1369,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
     /// <summary>
     /// Classifies errors that mean current owner evidence could not be read.
     /// </summary>
+    /// <returns><see langword="true"/> only for the owner-unavailable error codes listed below; otherwise <see langword="false"/>.</returns>
     private static bool IsUnavailableBinding(CoordinationException exception) =>
         exception.Code is
             "backlog_prerequisite_binding_unavailable" or
@@ -1367,6 +1381,7 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
     /// <summary>
     /// Classifies errors that mean a previously prepared owner binding is now stale.
     /// </summary>
+    /// <returns><see langword="true"/> only for the stale-binding error codes listed below; otherwise <see langword="false"/>.</returns>
     private static bool IsStaleBinding(CoordinationException exception) =>
         exception.Code is
             "backlog_prerequisite_binding_stale" or

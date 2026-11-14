@@ -16,6 +16,7 @@ internal sealed class IssueSyncWorker(IServiceScopeFactory scopes, ILogger<Issue
                     await engine.CycleAsync(project, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
+            // Database errors retry on the next tick; other exceptions escape the worker.
             catch (Npgsql.NpgsqlException error)
             {
                 logger.LogError(error, "Issue sync persistence unavailable; retrying the next polling cycle.");
