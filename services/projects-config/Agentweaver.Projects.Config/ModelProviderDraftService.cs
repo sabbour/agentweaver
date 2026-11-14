@@ -84,6 +84,7 @@ public sealed class ModelProviderDraftService(
         var requestFingerprint = Hash(new SaveFingerprint(fingerprintInput, request.ExpectedRevision));
         var configurationHash = Hash(fingerprintInput);
 
+        // Check completed operations first so a lost response can be replayed after later edits.
         var replay = await ReadReplayAsync(
                 request.OperationId,
                 providerId,
@@ -169,6 +170,7 @@ public sealed class ModelProviderDraftService(
             }
             else
             {
+                // Repeat the expected-revision check in the update to close the race after the earlier head read.
                 var updated = await db.ModelProviderDrafts
                     .Where(head =>
                         head.ProviderId == providerId &&
@@ -205,6 +207,7 @@ public sealed class ModelProviderDraftService(
             if (exception is ModelProviderDraftException { Code: "model_provider_draft_conflict" } ||
                 IsUniqueConflict(exception))
             {
+                // A concurrent identical save may have committed; its matching durable revision is the replay result.
                 var concurrentReplay = await ReadReplayAsync(
                         request.OperationId,
                         providerId,
@@ -451,6 +454,7 @@ public sealed class ModelProviderDraftService(
 
     private void DetachTrackedProvider(string providerId)
     {
+        // Detach the head and revision records this operation added, so a failed save cannot leave them pending in the scoped context and a successful save does not leave them tracked.
         foreach (var entry in db.ChangeTracker.Entries<ModelProviderDraftHeadRecord>()
                      .Where(entry => entry.Entity.ProviderId == providerId)
                      .ToArray())
