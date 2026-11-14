@@ -7,8 +7,9 @@ import { runP1DispatchRecoveryProbes } from '../../azure/p1-dispatch-recovery-pr
 import '../../azure/p1-dispatch-recovery-probes/tests/numeric-denials.test.mjs';
 
 test('validated numeric owner evidence survives aggregation without satisfying either required probe', async () => {
-  const [{ receipt }] = JSON.parse(readFileSync(new URL(
-    '../../azure/p1-dispatch-recovery-probes/tests/producer-vectors.json', import.meta.url), 'utf8'));
+  const { receipt } = JSON.parse(readFileSync(new URL(
+    '../../azure/p1-dispatch-recovery-probes/tests/producer-vectors.json', import.meta.url), 'utf8'))
+    .denialVectors[0];
   const expected = Object.fromEntries(Object.entries(receipt).filter(([key]) => ![
     'contractVersion', 'receiptId', 'observedCount', 'sendStateBeforeHash',
     'sendStateAfterHash', 'recordedAt', 'canonicalPayloadHash',
