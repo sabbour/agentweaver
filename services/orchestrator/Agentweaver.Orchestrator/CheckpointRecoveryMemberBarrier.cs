@@ -8,6 +8,8 @@ internal static class CheckpointRecoveryMemberBarrier
     internal static ImmutableArray<ChildRecoveryMember> RequiredMembers(
         ChildCheckpointRecoveryManifest manifest)
     {
+        // An unresolved member blocks recovery. Only pendingUnsent members need a registration before
+        // dispatch resumes.
         if (manifest.Members.Any(member => member.Disposition == "unresolved"))
             throw new CoordinationException(
                 "checkpoint_recovery_boundary_unsupported", StatusCodes.Status409Conflict);

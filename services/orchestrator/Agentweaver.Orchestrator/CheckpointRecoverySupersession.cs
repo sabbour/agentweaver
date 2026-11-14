@@ -88,11 +88,14 @@ internal sealed record CheckpointRecoverySupersessionReceipt(
             receiptId,
             superseded.OperationId,
             "");
+        // Hash the receipt with an empty hash field, then store the hash. Validate computes it the same way.
         return (receipt with { CanonicalPayloadHash = ComputePayloadHash(receipt) }).Validate();
     }
 
     internal CheckpointRecoverySupersessionReceipt Validate()
     {
+        // The successor must restart from the same checkpoint and fence where the superseded
+        // operation stopped, and the stored hash must match the payload.
         if (ContractVersion != 1 ||
             string.IsNullOrWhiteSpace(TenantId) ||
             string.IsNullOrWhiteSpace(ProjectId) ||
@@ -124,6 +127,7 @@ internal sealed record CheckpointRecoverySupersessionReceipt(
         return this;
     }
 
+    // The ID comes from both operation IDs, so a retry of the same supersession gets the same ID.
     internal static Guid ReceiptIdFor(Guid supersededOperationId, Guid successorOperationId)
     {
         var value = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
@@ -154,6 +158,7 @@ internal sealed record CheckpointRecoverySupersessionSource(
 {
     internal static string ChildIdentityHash(ChildCheckpointRecoveryManifest manifest)
     {
+        // Sort members by association ID so the hash does not depend on manifest order.
         var members = manifest.Members
             .OrderBy(member => member.AssociationId, StringComparer.Ordinal)
             .Select(member => new

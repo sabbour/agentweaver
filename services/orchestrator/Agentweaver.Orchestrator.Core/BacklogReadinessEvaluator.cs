@@ -157,6 +157,8 @@ public static class BacklogReadinessEvaluator
             }
             var prerequisiteIsCompleted = prerequisite.State is
                 BacklogPrerequisiteExecutionState.Merged or BacklogPrerequisiteExecutionState.Completed;
+            // Completed evidence counts only while the prerequisite task is still Claimed. If the task went
+            // back to Backlog or Ready, the evidence is from an earlier claim.
             if (prerequisiteIsCompleted &&
                 prerequisiteTask.State != BacklogTaskState.Claimed)
             {

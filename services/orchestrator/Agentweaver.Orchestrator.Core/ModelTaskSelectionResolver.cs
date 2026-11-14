@@ -31,6 +31,8 @@ public static class ModelTaskSelectionResolver
                 (selection.AgentId is null ||
                  string.Equals(selection.AgentId, agentId, StringComparison.Ordinal)))
             .ToArray();
+        // Return null when a matching route is invalid, or when two or more routes share the top
+        // specificity (role = 1, agent = 2, both = 3). The method does not guess between them.
         if (matching.Length == 0 || matching.Any(selection => !IsValid(selection)))
             return null;
 
