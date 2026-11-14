@@ -1235,7 +1235,7 @@ marker reports `complete: false` and
 `incompleteReason: "legacy_or_uninstrumented_history"`. Missing native-send,
 tool-execution, or consumption proof remains `unavailable`; an empty result or
 an owner reservation does not prove that native work ran. A
-`ToolPermissionRejected` fact means the runtime recorded a rejection decision
+`toolPermissionRejected` fact means the runtime recorded a rejection decision
 for an exact tool-call limit denial. It does not confirm SDK delivery or tool
 execution. Version 1 remains unchanged. See [runtime observation contracts](./contracts.md#runtime-observation-v2)
 for the response fields and evidence limits.

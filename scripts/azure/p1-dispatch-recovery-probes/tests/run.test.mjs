@@ -224,17 +224,17 @@ test('missing live inputs keep both required acceptance slots blocked', async ()
 test('read-only owner observations are recorded but cannot claim dispatch or cleanup acceptance', async () => {
   const calls = [];
   const runtime = {
-    registration: { state: 'Available', value: { runtimeInstanceId: 'runtime-a', revision: 2, state: 'Active' } },
+    registration: { state: 'available', value: { runtimeInstanceId: 'runtime-a', revision: 2, state: 'active' } },
     execution: {
-      state: 'Available',
+      state: 'available',
       value: {
         observation: { status: 'Succeeded', checkpointId: 'checkpoint-a' },
         checkpointParent: { hasParentMetadata: true, parentCheckpointId: null },
       },
     },
-    creditGuard: { state: 'Unknown', value: null },
-    dispatches: { state: 'Available', value: { items: [], truncated: false } },
-    toolReservations: { state: 'Available', value: { items: [], truncated: false } },
+    creditGuard: { state: 'available', value: { copilotAicFloor: 0 } },
+    dispatches: { state: 'available', value: { items: [], truncated: false } },
+    toolReservations: { state: 'available', value: { items: [], truncated: false } },
   };
   const environment = {
     environmentId: 'environment-a',
@@ -266,7 +266,7 @@ test('read-only owner observations are recorded but cannot claim dispatch or cle
   assert.equal(result.ownerObservation.value.acceptanceEvidence, false);
   assert.equal(result.ownerObservation.value.raceObserved, false);
   assert.equal(result.ownerObservation.value.cleanupVerified, false);
-  assert.equal(result.ownerObservation.value.runtime.creditGuard.state, 'Unknown');
+  assert.deepEqual(result.ownerObservation.value.runtime.creditGuard, { copilotAicFloor: 0 });
   assert.equal(result.ownerObservation.value.environment.providerAttempts.count, 1);
   assert.equal(result.liveObservations.creditDenials.status, 'not-requested');
   assert.ok(result.probes.every(probe => probe.status === 'blocked'));

@@ -78,7 +78,7 @@ function summarizeOwnerObservation(runtime, environment) {
       registration: runtime.registration.value,
       execution: execution.observation,
       checkpointParent: execution.checkpointParent,
-      creditGuard: guard.state === 'Available' ? guard.value : { state: guard.state },
+      creditGuard: guard.state === 'available' ? guard.value : { state: guard.state },
       dispatches: {
         count: runtime.dispatches.value.items.length,
         truncated: runtime.dispatches.value.truncated,

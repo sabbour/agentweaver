@@ -32,7 +32,7 @@ function reseal(receipt) {
 
 async function runCase(receipt, { pin = pinFor(vectors[1].receipt), result, input } = {}) {
   const calls = [];
-  const name = pin.expected.limitKind === 'ModelTurns' ? 'modelTurns' : 'toolCalls';
+  const name = pin.expected.limitKind === 'modelTurns' ? 'modelTurns' : 'toolCalls';
   const report = await runP1DispatchRecoveryProbes({
     numericDenialInput: input ?? { [name]: pin },
     numericDenialDependencies: {
@@ -68,6 +68,7 @@ test('real C# producer vectors hash exactly, including nullable checkpoint and e
     '0f85121ad647c5e6d5369a25a08bd1b66acbd29f469a0349c1649021217a9203',
   ];
   for (const [index, vector] of vectors.entries()) {
+    assert.equal(vector.receipt.limitKind, index < 2 ? 'modelTurns' : 'toolCalls');
     assert.equal(vector.receipt.canonicalPayloadHash, expectedHashes[index]);
     assert.equal(createHash('sha256').update(vector.canonicalPayload).digest('hex'), expectedHashes[index]);
     assert.equal(numericDenialPayloadHash(vector.receipt), expectedHashes[index]);
@@ -126,8 +127,8 @@ test('a missing or invalid sibling never erases a genuine partial receipt', asyn
 });
 
 test('model/tool denial thresholds include the exact accepted limit, not the preceding count', async () => {
-  for (const limitKind of ['ModelTurns', 'ToolCalls']) {
-    for (const acceptedLimit of [1, 2, limitKind === 'ModelTurns' ? 1000 : 10000]) {
+  for (const limitKind of ['modelTurns', 'toolCalls']) {
+    for (const acceptedLimit of [1, 2, limitKind === 'modelTurns' ? 1000 : 10000]) {
       for (const delta of [-1, 0, 1]) {
         const receipt = reseal({ ...vectors[1].receipt, limitKind, acceptedLimit, observedCount: acceptedLimit + delta });
         const { item } = await runCase(receipt, { pin: pinFor(receipt) });
@@ -142,7 +143,7 @@ test('resealed wrong attempt, owner, source, grant, selection, fence, limit and 
     projectId: 'other', runId: 'other', rootSessionId: 'other', sessionId: 'other',
     runtimeInstanceId: otherId, registrationRevision: 8, sourceRegistrationRevision: 8,
     sourceGrantId: otherId, sourceHash: otherHash, grantId: otherId, grantRevision: 'other',
-    executionFence: 10, acceptedSelectionHash: otherHash, ownerRevision: 4, limitKind: 'ToolCalls',
+    executionFence: 10, acceptedSelectionHash: otherHash, ownerRevision: 4, limitKind: 'toolCalls',
     acceptedLimit: 1, attemptId: otherId, requestHash: otherHash, dispatchId: otherId,
     checkpointId: 'other', checkpointRevision: 5, checkpointHash: otherHash,
     checkpointDecisionStateVersion: 6, workPlanId: 'other', associationId: 'other',
@@ -177,6 +178,12 @@ test('malformed, incomplete, unsafe numeric, changed-send-state and bad hash evi
     const { item } = await runCase(null, { result });
     assert.equal(item.status, 'blocked');
   }
+});
+
+test('rejects PascalCase numeric denial limit kinds from HTTP receipts', async () => {
+  const { item } = await runCase({ ...vectors[1].receipt, limitKind: 'ModelTurns' });
+  assert.equal(item.status, 'blocked');
+  assert.equal(item.code, 'numeric_denial_read_invalid');
 });
 
 test('timestamps preserve .NET ticks, normalize zero fractions, and reject stale, future and invalid dates', async () => {

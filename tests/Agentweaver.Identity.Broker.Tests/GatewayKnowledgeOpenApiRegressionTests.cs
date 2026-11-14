@@ -5,7 +5,9 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.IdentityModel.Tokens;
 using Xunit;
@@ -14,6 +16,20 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class GatewayKnowledgeOpenApiRegressionTests
 {
+    private static string[] SerializeEnumValues<TEnum>(JsonSerializerOptions options)
+        where TEnum : struct, Enum =>
+        Enum.GetValues<TEnum>()
+            .Select(value => JsonSerializer.SerializeToElement(value, options).GetString()!)
+            .ToArray();
+
+    private static string[] OpenApiEnumValues(JsonElement schemas, string schemaName, string propertyName)
+    {
+        var schema = schemas.GetProperty(schemaName).GetProperty("properties").GetProperty(propertyName);
+        if (schema.TryGetProperty("anyOf", out var anyOf))
+            schema = anyOf[0];
+        return schema.GetProperty("enum").EnumerateArray().Select(value => value.GetString()!).ToArray();
+    }
+
     [Fact]
     public async Task ProjectKnowledgeSearchPublishesOnlyPendingProposalStateFilter()
     {
@@ -115,6 +131,55 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
     }
 
     [Fact]
+    public async Task RuntimeObservationOpenApiEnumsMatchOwnerWireSerialization()
+    {
+        var ownerJsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        // Match Orchestrator Program.cs ConfigureHttpJsonOptions, including its property-level status override.
+        ownerJsonOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa), () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException("OpenAPI must not call owners."));
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
+
+        var sectionStates = SerializeEnumValues<RuntimeObservationSectionState>(ownerJsonOptions);
+        foreach (var name in new[]
+        {
+            "RuntimeObservationRegistrationSection",
+            "RuntimeObservationExecutionSection",
+            "RuntimeObservationCreditGuardSection",
+            "RuntimeObservationDispatchesSection",
+            "RuntimeObservationToolReservationsSection",
+            "RuntimeObservationCount",
+            "RuntimeObservationEvidenceLink",
+        })
+            Assert.Equal(sectionStates, OpenApiEnumValues(schemas, name, "state"));
+
+        Assert.Equal(
+            SerializeEnumValues<RuntimeObservationRegistrationState>(ownerJsonOptions),
+            OpenApiEnumValues(schemas, "RuntimeObservationRegistration", "state"));
+        Assert.Equal(
+            SerializeEnumValues<RuntimeObservationFactKind>(ownerJsonOptions),
+            OpenApiEnumValues(schemas, "RuntimeObservationV2Fact", "kind"));
+        Assert.Equal(
+            SerializeEnumValues<RuntimeObservationLimitKind>(ownerJsonOptions),
+            OpenApiEnumValues(schemas, "RuntimeObservationV2Fact", "limitKind"));
+
+        var executionStatuses = Enum.GetValues<RuntimeExecutionTaskStatus>()
+            .Select(status => JsonSerializer.SerializeToElement(
+                new RuntimeObservationExecution(
+                    1, "root", "session", 1, "plan", "association", 1, "checkpoint", 1, 1, status).Validate(),
+                ownerJsonOptions).GetProperty("status").GetString()!)
+            .ToArray();
+        Assert.Equal(
+            executionStatuses,
+            OpenApiEnumValues(schemas, "RuntimeObservationExecution", "status"));
+    }
+
+    [Fact]
     public async Task RuntimeObservationV2PublishesStablePagingAndExactAttemptLookup()
     {
         using var rsa = RSA.Create(2048);
@@ -157,9 +222,6 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             history.GetProperty("required").EnumerateArray().Select(property => property.GetString()));
         var fact = schemas.GetProperty("RuntimeObservationV2Fact");
         Assert.False(fact.GetProperty("additionalProperties").GetBoolean());
-        Assert.Contains("ToolPermissionRejected",
-            fact.GetProperty("properties").GetProperty("kind").GetProperty("enum")
-                .EnumerateArray().Select(value => value.GetString()));
         Assert.Contains("checkpointId",
             fact.GetProperty("required").EnumerateArray().Select(property => property.GetString()));
         Assert.Contains("accountedThroughLedgerEventCount",
@@ -833,11 +895,6 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             new[] { "contractVersion", "registration", "execution", "creditGuard", "dispatches", "toolReservations" },
             observation.GetProperty("required").EnumerateArray()
                 .Select(property => property.GetString()).ToArray());
-        var section = schemas.GetProperty("RuntimeObservationCreditGuardSection");
-        Assert.Equal(
-            new[] { "Available", "Unknown", "Unavailable" },
-            section.GetProperty("properties").GetProperty("state").GetProperty("enum")
-                .EnumerateArray().Select(value => value.GetString()).ToArray());
         var dispatch = schemas.GetProperty("RuntimeObservationDispatch");
         foreach (var forbiddenField in new[]
         {
