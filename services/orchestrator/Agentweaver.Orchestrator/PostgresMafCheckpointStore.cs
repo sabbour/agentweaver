@@ -102,9 +102,6 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
     internal PostgresMafCheckpointStore ForRun(MafCheckpointBinding binding) =>
         new(_dataSource, _schema.Trim('"'), _objectStore, _timeProvider, ValidateBinding(binding));
 
-    /// <summary>
-    /// Opens a PostgreSQL connection from the configured data source.
-    /// </summary>
     internal ValueTask<NpgsqlConnection> OpenConnectionAsync(CancellationToken cancellationToken) =>
         _dataSource.OpenConnectionAsync(cancellationToken);
 
@@ -221,9 +218,6 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         return (new CheckpointInfo(sessionId, checkpointId), parent?.CheckpointId, true);
     }
 
-    /// <summary>
-    /// Creates a bound store view using the supplied object-store cache reference.
-    /// </summary>
     internal PostgresMafCheckpointStore ForCacheReference(ObjectKey? cacheReference)
     {
         var binding = RequireBinding();
@@ -411,6 +405,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         var selectionHashPredicate = requireCompletedRootEvidence
             ? "AND checkpoint.accepted_selection_hash = @selectionHash"
             : string.Empty;
+        // Read two leaves so a fork is rejected instead of choosing one checkpoint arbitrarily.
         await using var command = new NpgsqlCommand($"""
             SELECT checkpoint.checkpoint_id, checkpoint.parent_checkpoint_id,
                    checkpoint.has_parent_metadata, checkpoint.payload
@@ -506,6 +501,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
                 CheckpointCacheRecovery.RebuildFromJournal, "object_store_unavailable");
         using var cachedObject = await _objectStore.ReadAsync(cacheKey.Value, cancellationToken)
             .ConfigureAwait(false);
+        // The cache read is outside the database transaction; recheck current owner state before using its result.
         await using var revalidationConnection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var revalidationTransaction = await revalidationConnection.BeginTransactionAsync(cancellationToken);
         var refreshedBinding = await ReadCurrentBindingAsync(
@@ -605,9 +601,6 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         return new CurrentBinding(selectionHash);
     }
 
-    /// <summary>
-    /// Checks whether the named checkpoint exists within the specified bound run and fence.
-    /// </summary>
     private async Task<bool> CheckpointExistsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,

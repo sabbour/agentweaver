@@ -32,6 +32,7 @@ internal sealed class MafRubberduckReviewExecutor(
             await requireCurrentAsync(intent, cancellationToken).ConfigureAwait(false);
             if (ensureRootCompletionAsync is not null)
             {
+                // A saved review receipt is terminal; a root-completion outage must not rerun the owner.
                 try
                 {
                     await ensureRootCompletionAsync(intent, completed, cancellationToken).ConfigureAwait(false);
