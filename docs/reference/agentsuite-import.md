@@ -67,6 +67,8 @@ verdicts in `parity.json`. The .NET tests require the same verdicts and error li
 A single-name Docker Hub reference is checked with the `library/` prefix before the 255-byte
 repository-path limit is applied.
 
+Octal tar header fields do not permit a leading sign.
+
 After native validation passes, Agentweaver refuses two more cases:
 
 - A model `endpointEnv` or `secretRefs` (`agentsuite_secret_reference`). Packages never carry
