@@ -1280,6 +1280,241 @@ public sealed class EnvironmentEgressManagerTests
         Assert.Equal(1, reconciled.Binding.AppliedIntentGeneration);
     }
 
+    private static RuntimeOwnerContext FirstStartOwner() =>
+        new(1, "https://identity.example", "actor-a", TenantId, ProjectId, RunId, "session-a",
+            RuntimeActionContract.CoordinatorRootStepId, "model", "turn-a", 1, 2, 3,
+            "signed-selection-revision-1", new string('a', 64), 1, 0, 1, 1);
+
+    private static ApplyEnvironmentEgressRequest FirstStartRequest() =>
+        ApplyRequest(environmentId: RuntimeRunStartKeys.EnvironmentId(FirstStartOwner()));
+
+    private static async Task<(FakeProjectsConfigClient Projects, FakeCiliumPolicyResourceStore Store,
+        FakeEnvironmentLifecycleStore Lifecycle, EnvironmentEgressManager Manager, Guid OperationId)>
+        FailFirstStartAtKubernetesReadAsync(ApplyEnvironmentEgressRequest request)
+    {
+        var projects = new FakeProjectsConfigClient(VerificationAuthorization(), Selection());
+        var store = new FakeCiliumPolicyResourceStore { FailGetOnce = true };
+        var lifecycle = new FakeEnvironmentLifecycleStore(request.Fence);
+        var manager = Manager(projects, store, lifecycle);
+
+        var failed = await manager.ApplyCoordinatorFirstStartAndVerifyAsync(
+            Caller(), FirstStartOwner(), request, CancellationToken.None);
+
+        Assert.False(failed.ReadyForDispatch);
+        Assert.Equal("upstream_unavailable", failed.FailureCode);
+        var effect = Assert.IsType<EnvironmentNetworkEffectReservation>(lifecycle.LastEffect);
+        Assert.Equal(EnvironmentNetworkEffectState.ReconciliationRequired, effect.State);
+        Assert.Equal(0, store.CreateCount);
+        return (projects, store, lifecycle, manager, effect.OperationId);
+    }
+
+    [Fact]
+    public async Task FirstStartRetryReDrivesApplyAfterTransientKubernetesReadFailure()
+    {
+        var request = FirstStartRequest();
+        var (_, store, lifecycle, manager, operationId) = await FailFirstStartAtKubernetesReadAsync(request);
+
+        var retried = await manager.ApplyCoordinatorFirstStartAndVerifyAsync(
+            Caller(), FirstStartOwner(), request, CancellationToken.None);
+
+        Assert.True(retried.ReadyForDispatch, retried.FailureMessage);
+        Assert.NotNull(retried.Binding);
+        Assert.Equal(1, store.CreateCount);
+        Assert.Equal(EnvironmentNetworkEffectState.Reconciled, lifecycle.Effect(operationId).State);
+
+        var replayed = await manager.ApplyCoordinatorFirstStartAndVerifyAsync(
+            Caller(), FirstStartOwner(), request, CancellationToken.None);
+
+        Assert.True(replayed.ReadyForDispatch, replayed.FailureMessage);
+        Assert.Equal(1, store.CreateCount);
+        Assert.Equal(0, store.ReplaceCount);
+        Assert.Equal(EnvironmentNetworkEffectState.Reconciled, lifecycle.Effect(operationId).State);
+    }
+
+    [Fact]
+    public async Task FirstStartRetryKeepsConflictingLivePolicyAndUnresolvedEffect()
+    {
+        var request = FirstStartRequest();
+        var (_, store, lifecycle, manager, operationId) = await FailFirstStartAtKubernetesReadAsync(request);
+        var compilation = EgressIntentCompiler.Compile(Selection());
+        Assert.True(compilation.IsSuccess, compilation.Failure?.Message);
+        var selector = EnvironmentEgressSelector.Create(
+            request.Fence.Owner.EnvironmentId, TenantId, ProjectId, RunId, Options().Namespace);
+        var created = await new CiliumEgressPolicyAdapter(store, Options())
+            .ApplyAsync(selector, compilation.Intent!, 1, 0, CancellationToken.None);
+        var conflicting = created with
+        {
+            Spec = created.Spec with { EnableDefaultDeny = new CiliumDefaultDeny(Ingress: false, Egress: false) }
+        };
+        store.Update(conflicting);
+        var writesBeforeRetry = (store.CreateCount, store.ReplaceCount);
+
+        var retried = await manager.ApplyCoordinatorFirstStartAndVerifyAsync(
+            Caller(), FirstStartOwner(), request, CancellationToken.None);
+
+        Assert.False(retried.ReadyForDispatch);
+        Assert.Equal("generation_conflict", retried.FailureCode);
+        Assert.Equal(writesBeforeRetry, (store.CreateCount, store.ReplaceCount));
+        Assert.Same(conflicting, Assert.Single(store.Resources.Values));
+        Assert.Equal(EnvironmentNetworkEffectState.ReconciliationRequired, lifecycle.Effect(operationId).State);
+    }
+
+    [Fact]
+    public async Task GeneralApplyRetryStillRefusesUnresolvedEffect()
+    {
+        var projects = new FakeProjectsConfigClient(AuthorizationContext(), Selection());
+        var store = new FakeCiliumPolicyResourceStore { FailGetOnce = true };
+        var lifecycle = new FakeEnvironmentLifecycleStore(ApplyRequest().Fence);
+        var manager = Manager(projects, store, lifecycle);
+
+        var failed = await manager.ApplyAndVerifyAsync(Caller(), ApplyRequest(), CancellationToken.None);
+        var retried = await manager.ApplyAndVerifyAsync(Caller(), ApplyRequest(), CancellationToken.None);
+
+        Assert.Equal("upstream_unavailable", failed.FailureCode);
+        Assert.False(retried.ReadyForDispatch);
+        Assert.Equal("environment_effect_reconciliation_required", retried.FailureCode);
+        Assert.Equal(0, store.CreateCount);
+        Assert.Equal(EnvironmentNetworkEffectState.ReconciliationRequired, lifecycle.LastEffect!.State);
+    }
+
+    [Fact]
+    public async Task FirstStartRetryWithStaleFenceMakesNoKubernetesWrite()
+    {
+        var request = FirstStartRequest();
+        var (_, store, lifecycle, manager, operationId) = await FailFirstStartAtKubernetesReadAsync(request);
+        lifecycle.AdvanceFence(request.Fence.Owner);
+
+        var retried = await manager.ApplyCoordinatorFirstStartAndVerifyAsync(
+            Caller(), FirstStartOwner(), request, CancellationToken.None);
+
+        Assert.False(retried.ReadyForDispatch);
+        Assert.Equal("environment_fence_stale", retried.FailureCode);
+        Assert.Equal(0, store.CreateCount);
+        Assert.Equal(0, store.ReplaceCount);
+        Assert.Equal(EnvironmentNetworkEffectState.ReconciliationRequired, lifecycle.Effect(operationId).State);
+    }
+
+    [Fact]
+    public async Task FirstStartRetryWithChangedRunSelectionMakesNoKubernetesWrite()
+    {
+        var request = FirstStartRequest();
+        var (projects, store, lifecycle, manager, operationId) = await FailFirstStartAtKubernetesReadAsync(request);
+        projects.Selection = Selection() with { ProjectConfigurationRevision = 99 };
+
+        var exception = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            manager.ApplyCoordinatorFirstStartAndVerifyAsync(
+                Caller(), FirstStartOwner(), request, CancellationToken.None));
+
+        Assert.Equal("runtime_start_owner_context_stale", exception.Code);
+        Assert.Equal(0, store.CreateCount);
+        Assert.Equal(0, store.ReplaceCount);
+        Assert.Equal(EnvironmentNetworkEffectState.ReconciliationRequired, lifecycle.Effect(operationId).State);
+    }
+
+    [Fact]
+    public async Task FirstStartRetryWithChangedAuthorizationMakesNoKubernetesWrite()
+    {
+        var request = FirstStartRequest();
+        var (projects, store, lifecycle, manager, operationId) = await FailFirstStartAtKubernetesReadAsync(request);
+        var original = VerificationAuthorization();
+        projects.Enqueue(
+            original,
+            original,
+            original with { MembershipRevision = original.MembershipRevision + 1 });
+
+        var retried = await manager.ApplyCoordinatorFirstStartAndVerifyAsync(
+            Caller(), FirstStartOwner(), request, CancellationToken.None);
+
+        Assert.False(retried.ReadyForDispatch);
+        Assert.Equal("authorization_changed", retried.FailureCode);
+        Assert.Equal(0, store.CreateCount);
+        Assert.Equal(0, store.ReplaceCount);
+        Assert.Equal(EnvironmentNetworkEffectState.ReconciliationRequired, lifecycle.Effect(operationId).State);
+    }
+
+    [Fact]
+    public async Task FirstStartRetryReArmsFailedEffectAfterTransientProjectsConfigFailure()
+    {
+        var request = FirstStartRequest();
+        var projects = new FakeProjectsConfigClient(VerificationAuthorization(), Selection());
+        var store = new FakeCiliumPolicyResourceStore();
+        var lifecycle = new FakeEnvironmentLifecycleStore(request.Fence);
+        var manager = Manager(projects, store, lifecycle);
+        var failOnce = true;
+        Task RequireCurrent(CancellationToken _)
+        {
+            if (!failOnce)
+                return Task.CompletedTask;
+            failOnce = false;
+            throw new HttpRequestException("Projects & Config is unavailable.");
+        }
+
+        var failed = await manager.ApplyCoordinatorFirstStartAndVerifyAsync(
+            Caller(), FirstStartOwner(), request, CancellationToken.None, RequireCurrent);
+
+        Assert.Equal("upstream_unavailable", failed.FailureCode);
+        var operationId = lifecycle.LastEffect!.OperationId;
+        Assert.Equal(EnvironmentNetworkEffectState.Failed, lifecycle.Effect(operationId).State);
+        Assert.Equal(0, store.CreateCount);
+
+        var retried = await manager.ApplyCoordinatorFirstStartAndVerifyAsync(
+            Caller(), FirstStartOwner(), request, CancellationToken.None, RequireCurrent);
+
+        Assert.True(retried.ReadyForDispatch, retried.FailureMessage);
+        Assert.Equal(1, store.CreateCount);
+        Assert.Equal(EnvironmentNetworkEffectState.Completed, lifecycle.Effect(operationId).State);
+    }
+
+    [Fact]
+    public async Task FirstStartRetryWithStaleOwnerContextNeverWritesPolicy()
+    {
+        var request = FirstStartRequest();
+        var projects = new FakeProjectsConfigClient(VerificationAuthorization(), Selection());
+        var store = new FakeCiliumPolicyResourceStore();
+        var lifecycle = new FakeEnvironmentLifecycleStore(request.Fence);
+        var manager = Manager(projects, store, lifecycle);
+        static Task RequireCurrent(CancellationToken _) =>
+            throw new RuntimeAuthorizationException("runtime_start_owner_context_stale");
+
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var exception = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                manager.ApplyCoordinatorFirstStartAndVerifyAsync(
+                    Caller(), FirstStartOwner(), request, CancellationToken.None, RequireCurrent));
+            Assert.Equal("runtime_start_owner_context_stale", exception.Code);
+        }
+
+        Assert.Equal(0, store.CreateCount);
+        Assert.Equal(0, store.ReplaceCount);
+        Assert.Equal(EnvironmentNetworkEffectState.Failed, lifecycle.LastEffect!.State);
+    }
+
+    [Fact]
+    public async Task GeneralApplyRetryStillRefusesFailedEffect()
+    {
+        var projects = new FakeProjectsConfigClient(AuthorizationContext(), Selection());
+        var store = new FakeCiliumPolicyResourceStore();
+        var lifecycle = new FakeEnvironmentLifecycleStore(ApplyRequest().Fence);
+        var manager = Manager(projects, store, lifecycle);
+        var failOnce = true;
+        Task RequireCurrent(CancellationToken _)
+        {
+            if (!failOnce)
+                return Task.CompletedTask;
+            failOnce = false;
+            throw new HttpRequestException("Projects & Config is unavailable.");
+        }
+
+        var failed = await manager.ApplyAndVerifyAsync(
+            Caller(), ApplyRequest(), CancellationToken.None, RequireCurrent);
+        var retried = await manager.ApplyAndVerifyAsync(
+            Caller(), ApplyRequest(), CancellationToken.None, RequireCurrent);
+
+        Assert.Equal("upstream_unavailable", failed.FailureCode);
+        Assert.Equal("environment_effect_not_reusable", retried.FailureCode);
+        Assert.Equal(0, store.CreateCount);
+    }
+
     internal sealed class FakeProjectsConfigClient(
         IEnumerable<ProjectAuthorizationContextResponse> authorizations,
         EffectiveNetworkPolicySelection selection) : IProjectsConfigClient
@@ -1296,6 +1531,13 @@ public sealed class EnvironmentEgressManagerTests
 
         public int AuthorizationReads { get; private set; }
         public int SelectionReads { get; private set; }
+        public EffectiveNetworkPolicySelection Selection { get; set; } = selection;
+
+        public void Enqueue(params ProjectAuthorizationContextResponse[] authorizations)
+        {
+            foreach (var authorization in authorizations)
+                _authorizations.Enqueue(authorization);
+        }
 
         public Task<ProjectAuthorizationContextResponse> GetAuthorizationContextAsync(
             CurrentCallerRequest caller,
@@ -1315,11 +1557,11 @@ public sealed class EnvironmentEgressManagerTests
             CancellationToken cancellationToken)
         {
             SelectionReads++;
-            return Task.FromResult(selection);
+            return Task.FromResult(Selection);
         }
     }
 
-    internal class FakeEnvironmentLifecycleStore : IEnvironmentLifecycleStore
+    internal class FakeEnvironmentLifecycleStore : IEnvironmentLifecycleStore, IEnvironmentFirstStartNetworkEffectStore
     {
         private readonly Dictionary<(string Tenant, string Project, string Run, string Environment), EnvironmentLifecycleSnapshot>
             _owners = [];
@@ -1337,6 +1579,17 @@ public sealed class EnvironmentEgressManagerTests
         public bool FailCompletion { get; init; }
         public int OwnerSnapshotReads { get; private set; }
         public EnvironmentNetworkEffectReservation? LastEffect { get; private set; }
+
+        public EnvironmentNetworkEffectReservation Effect(Guid operationId) => _effects[operationId];
+
+        public void AdvanceFence(EnvironmentOwnerIdentity owner)
+        {
+            var current = _owners[Key(owner)];
+            _owners[Key(owner)] = current with
+            {
+                Fence = new EnvironmentGenerationFence(owner, current.Fence.LifecycleGeneration + 1)
+            };
+        }
 
         public Task<EnvironmentLifecycleSnapshot?> GetAsync(
             EnvironmentOwnerIdentity owner,
@@ -1386,9 +1639,50 @@ public sealed class EnvironmentEgressManagerTests
             long expectedPreviousPolicyGeneration,
             EnvironmentNetworkEffectKind kind,
             string idempotencyKey,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken) =>
+            Reserve(fence, resourceId, policyGeneration, expectedPreviousPolicyGeneration, kind, idempotencyKey,
+                reuseFailed: false);
+
+        public Task<EnvironmentNetworkEffectReservation> ReserveFirstStartNetworkEffectAsync(
+            EnvironmentGenerationFence fence,
+            string resourceId,
+            long policyGeneration,
+            long expectedPreviousPolicyGeneration,
+            EnvironmentNetworkEffectKind kind,
+            string idempotencyKey,
+            CancellationToken cancellationToken) =>
+            Reserve(fence, resourceId, policyGeneration, expectedPreviousPolicyGeneration, kind, idempotencyKey,
+                reuseFailed: true);
+
+        public void SetEffectState(Guid operationId, EnvironmentNetworkEffectState state) =>
+            _effects[operationId] = _effects[operationId] with { State = state };
+
+        private (long VerifiedGeneration, bool HasUnresolvedEffect) PolicyState(
+            EnvironmentOwnerIdentity owner,
+            string resourceId)
         {
-            _ = RequireActiveAsync(fence, cancellationToken);
+            var resourceEffects = _effects.Values.Where(effect =>
+                effect.Fence.Owner == owner &&
+                string.Equals(effect.ResourceId, resourceId, StringComparison.Ordinal)).ToArray();
+            return (
+                resourceEffects
+                    .Where(effect => effect.State is EnvironmentNetworkEffectState.Completed or
+                        EnvironmentNetworkEffectState.Reconciled)
+                    .MaxBy(effect => effect.PolicyGeneration)?.PolicyGeneration ?? 0,
+                resourceEffects.Any(effect => effect.State is EnvironmentNetworkEffectState.Reserved or
+                    EnvironmentNetworkEffectState.ReconciliationRequired));
+        }
+
+        private Task<EnvironmentNetworkEffectReservation> Reserve(
+            EnvironmentGenerationFence fence,
+            string resourceId,
+            long policyGeneration,
+            long expectedPreviousPolicyGeneration,
+            EnvironmentNetworkEffectKind kind,
+            string idempotencyKey,
+            bool reuseFailed)
+        {
+            _ = RequireActiveAsync(fence, CancellationToken.None);
             var idempotency = (Key(fence.Owner), idempotencyKey);
             if (_effectKeys.TryGetValue(idempotency, out var priorOperationId))
             {
@@ -1401,23 +1695,27 @@ public sealed class EnvironmentEgressManagerTests
                     throw new EnvironmentLifecycleException(
                         "environment_effect_idempotency_conflict",
                         "The effect idempotency key was reused for a different operation.");
+                if (reuseFailed && prior.State == EnvironmentNetworkEffectState.Failed)
+                {
+                    var (verified, unresolved) = PolicyState(fence.Owner, resourceId);
+                    if (!unresolved && verified == expectedPreviousPolicyGeneration)
+                    {
+                        var rearmed = prior with { State = EnvironmentNetworkEffectState.Reserved, Replayed = false };
+                        _effects[prior.OperationId] = rearmed;
+                        LastEffect = rearmed;
+                        return Task.FromResult(rearmed);
+                    }
+                }
                 var replayed = prior with { Replayed = true };
                 LastEffect = replayed;
                 return Task.FromResult(replayed);
             }
 
-            var resourceEffects = _effects.Values.Where(effect =>
-                effect.Fence.Owner == fence.Owner &&
-                string.Equals(effect.ResourceId, resourceId, StringComparison.Ordinal)).ToArray();
-            if (resourceEffects.Any(effect => effect.State is EnvironmentNetworkEffectState.Reserved or
-                EnvironmentNetworkEffectState.ReconciliationRequired))
+            var (currentGeneration, hasUnresolvedEffect) = PolicyState(fence.Owner, resourceId);
+            if (hasUnresolvedEffect)
                 throw new EnvironmentLifecycleException(
                     "environment_effect_reconciliation_required",
                     "A pending or unresolved provider effect blocks this network-policy resource.");
-            var currentGeneration = resourceEffects
-                .Where(effect => effect.State is EnvironmentNetworkEffectState.Completed or
-                    EnvironmentNetworkEffectState.Reconciled)
-                .MaxBy(effect => effect.PolicyGeneration)?.PolicyGeneration ?? 0;
             if (currentGeneration != expectedPreviousPolicyGeneration)
                 throw new EnvironmentLifecycleException(
                     "stale_policy_generation",
@@ -1494,6 +1792,8 @@ public sealed class EnvironmentEgressManagerTests
                     "The owner ledger is unavailable.");
             if (!_effects.TryGetValue(operationId, out var reservation) || reservation.Fence != fence)
                 throw new EnvironmentLifecycleException("environment_effect_unknown", "Unknown effect.");
+            if (reservation.State != EnvironmentNetworkEffectState.Reserved)
+                return Task.FromResult(reservation with { Replayed = true });
             var state = CompleteAsStale
                 ? EnvironmentNetworkEffectState.ReconciliationRequired
                 : effectMayHaveApplied
@@ -1803,7 +2103,10 @@ public sealed class EnvironmentEgressManagerTests
         private long _version;
 
         public bool FailCreate { get; init; }
-        public bool HideReads { get; init; }
+        public bool HideReads { get; set; }
+        public bool FailGetOnce { get; set; }
+        public int CreateCount { get; private set; }
+        public int ReplaceCount { get; private set; }
         public IReadOnlyDictionary<(string Namespace, string Name), CiliumNetworkPolicyDocument> Resources => _resources;
 
         public void Update(CiliumNetworkPolicyDocument policy) =>
@@ -1814,6 +2117,11 @@ public sealed class EnvironmentEgressManagerTests
             string name,
             CancellationToken cancellationToken)
         {
+            if (FailGetOnce)
+            {
+                FailGetOnce = false;
+                throw new HttpRequestException("kubernetes api name resolution failed");
+            }
             if (HideReads)
                 return Task.FromResult<CiliumNetworkPolicyDocument?>(null);
             _resources.TryGetValue((@namespace, name), out var policy);
@@ -1824,6 +2132,7 @@ public sealed class EnvironmentEgressManagerTests
             CiliumNetworkPolicyDocument policy,
             CancellationToken cancellationToken)
         {
+            CreateCount++;
             if (FailCreate)
                 throw new HttpRequestException("kubernetes api unavailable");
             var key = (policy.Metadata.Namespace, policy.Metadata.Name);
@@ -1846,6 +2155,7 @@ public sealed class EnvironmentEgressManagerTests
             string expectedResourceVersion,
             CancellationToken cancellationToken)
         {
+            ReplaceCount++;
             var key = (policy.Metadata.Namespace, policy.Metadata.Name);
             if (!_resources.TryGetValue(key, out var current) ||
                 current.Metadata.ResourceVersion != expectedResourceVersion)

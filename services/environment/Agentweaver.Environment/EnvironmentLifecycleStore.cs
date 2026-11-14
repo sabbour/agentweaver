@@ -23,7 +23,8 @@ public sealed class EnvironmentLifecycleException(
 /// </summary>
 public sealed class EnvironmentLifecycleStore(
     NpgsqlDataSource dataSource,
-    TimeProvider timeProvider) : IEnvironmentLifecycleStore, IEnvironmentWorkspaceRecoveryStore
+    TimeProvider timeProvider) : IEnvironmentLifecycleStore, IEnvironmentWorkspaceRecoveryStore,
+        IEnvironmentFirstStartNetworkEffectStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const string Schema = "\"environment\"";
@@ -594,13 +595,39 @@ public sealed class EnvironmentLifecycleStore(
     }
 
     /// <summary>Reserves one generation-fenced network effect, replaying only an identical idempotency request.</summary>
-    public async Task<EnvironmentNetworkEffectReservation> ReserveNetworkEffectAsync(
+    public Task<EnvironmentNetworkEffectReservation> ReserveNetworkEffectAsync(
         EnvironmentGenerationFence fence,
         string resourceId,
         long policyGeneration,
         long expectedPreviousPolicyGeneration,
         EnvironmentNetworkEffectKind kind,
         string idempotencyKey,
+        CancellationToken cancellationToken) =>
+        ReserveNetworkEffectCoreAsync(
+            fence, resourceId, policyGeneration, expectedPreviousPolicyGeneration, kind, idempotencyKey,
+            reuseFailed: false, cancellationToken);
+
+    /// <summary>Reserves a first-start network effect and re-arms a matching effect that failed before any provider call.</summary>
+    public Task<EnvironmentNetworkEffectReservation> ReserveFirstStartNetworkEffectAsync(
+        EnvironmentGenerationFence fence,
+        string resourceId,
+        long policyGeneration,
+        long expectedPreviousPolicyGeneration,
+        EnvironmentNetworkEffectKind kind,
+        string idempotencyKey,
+        CancellationToken cancellationToken) =>
+        ReserveNetworkEffectCoreAsync(
+            fence, resourceId, policyGeneration, expectedPreviousPolicyGeneration, kind, idempotencyKey,
+            reuseFailed: true, cancellationToken);
+
+    private async Task<EnvironmentNetworkEffectReservation> ReserveNetworkEffectCoreAsync(
+        EnvironmentGenerationFence fence,
+        string resourceId,
+        long policyGeneration,
+        long expectedPreviousPolicyGeneration,
+        EnvironmentNetworkEffectKind kind,
+        string idempotencyKey,
+        bool reuseFailed,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(fence);
@@ -629,48 +656,44 @@ public sealed class EnvironmentLifecycleStore(
                 throw new EnvironmentLifecycleException(
                     "environment_effect_idempotency_conflict",
                     "The Environment effect idempotency key was already used for a different policy operation.");
+            var prior = existing.Value.Reservation;
+            if (reuseFailed &&
+                prior.State == EnvironmentNetworkEffectState.Failed &&
+                prior.Fence == fence)
+            {
+                var (verifiedGeneration, unresolved) = await ReadNetworkPolicyStateAsync(
+                    connection, transaction, fence.Owner, resourceId, cancellationToken).ConfigureAwait(false);
+                if (!unresolved && verifiedGeneration == expectedPreviousPolicyGeneration)
+                {
+                    await using var rearm = new NpgsqlCommand($"""
+                        UPDATE {OwnerEffects}
+                        SET effect_state = 'Reserved', completed_at = NULL
+                        WHERE operation_id = @operation_id
+                          AND effect_kind = 'NetworkPolicy' AND effect_state = 'Failed'
+                        """, connection, transaction);
+                    rearm.Parameters.AddWithValue("operation_id", NpgsqlDbType.Uuid, prior.OperationId);
+                    if (await rearm.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                        throw new EnvironmentLifecycleException(
+                            "environment_effect_completion_conflict",
+                            "The failed provider operation changed while it was re-armed.");
+                    await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                    return prior with { State = EnvironmentNetworkEffectState.Reserved, Replayed = false };
+                }
+            }
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            return existing.Value.Reservation with { Replayed = true };
+            return prior with { Replayed = true };
         }
 
-        await using (var policyState = new NpgsqlCommand($"""
-            SELECT COALESCE((
-                SELECT policy_generation
-                FROM {OwnerEffects}
-                WHERE tenant_id = @tenant_id AND project_id = @project_id
-                  AND run_id = @run_id AND environment_id = @environment_id
-                  AND effect_kind = 'NetworkPolicy'
-                  AND resource_id = @resource_id
-                  AND effect_state IN ('Completed', 'Reconciled')
-                ORDER BY policy_generation DESC
-                LIMIT 1
-            ), 0),
-            EXISTS (
-                SELECT 1 FROM {OwnerEffects}
-                WHERE tenant_id = @tenant_id AND project_id = @project_id
-                  AND run_id = @run_id AND environment_id = @environment_id
-                  AND effect_kind = 'NetworkPolicy'
-                  AND resource_id = @resource_id
-                  AND effect_state IN ('Reserved', 'ReconciliationRequired')
-            )
-            """, connection, transaction))
-        {
-            AddOwnerParameters(policyState, fence.Owner);
-            policyState.Parameters.AddWithValue("resource_id", NpgsqlDbType.Text, resourceId);
-            await using var reader = await policyState.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-            var currentPolicyGeneration = reader.GetInt64(0);
-            var hasUnresolvedEffect = reader.GetBoolean(1);
-            await reader.DisposeAsync().ConfigureAwait(false);
-            if (hasUnresolvedEffect)
-                throw new EnvironmentLifecycleException(
-                    "environment_effect_reconciliation_required",
-                    "A pending or unresolved provider effect blocks this network-policy resource.");
-            if (expectedPreviousPolicyGeneration != currentPolicyGeneration)
-                throw new EnvironmentLifecycleException(
-                    "stale_policy_generation",
-                    "The expected previous Cilium policy generation does not match the Environment owner's last verified applied generation.");
-        }
+        var (currentPolicyGeneration, hasUnresolvedEffect) = await ReadNetworkPolicyStateAsync(
+            connection, transaction, fence.Owner, resourceId, cancellationToken).ConfigureAwait(false);
+        if (hasUnresolvedEffect)
+            throw new EnvironmentLifecycleException(
+                "environment_effect_reconciliation_required",
+                "A pending or unresolved provider effect blocks this network-policy resource.");
+        if (expectedPreviousPolicyGeneration != currentPolicyGeneration)
+            throw new EnvironmentLifecycleException(
+                "stale_policy_generation",
+                "The expected previous Cilium policy generation does not match the Environment owner's last verified applied generation.");
 
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {OwnerEffects}
@@ -3295,6 +3318,41 @@ public sealed class EnvironmentLifecycleStore(
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
             ? (reader.GetString(0), reader.GetInt64(1), ParseLifecycleState(reader.GetString(2)), reader.GetGuid(3))
             : null;
+    }
+
+    private static async Task<(long VerifiedGeneration, bool HasUnresolvedEffect)> ReadNetworkPolicyStateAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        EnvironmentOwnerIdentity owner,
+        string resourceId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT COALESCE((
+                SELECT policy_generation
+                FROM {OwnerEffects}
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND run_id = @run_id AND environment_id = @environment_id
+                  AND effect_kind = 'NetworkPolicy'
+                  AND resource_id = @resource_id
+                  AND effect_state IN ('Completed', 'Reconciled')
+                ORDER BY policy_generation DESC
+                LIMIT 1
+            ), 0),
+            EXISTS (
+                SELECT 1 FROM {OwnerEffects}
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND run_id = @run_id AND environment_id = @environment_id
+                  AND effect_kind = 'NetworkPolicy'
+                  AND resource_id = @resource_id
+                  AND effect_state IN ('Reserved', 'ReconciliationRequired')
+            )
+            """, connection, transaction);
+        AddOwnerParameters(command, owner);
+        command.Parameters.AddWithValue("resource_id", NpgsqlDbType.Text, resourceId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+        return (reader.GetInt64(0), reader.GetBoolean(1));
     }
 
     private static async Task<(string Fingerprint, EnvironmentNetworkEffectReservation Reservation)?>

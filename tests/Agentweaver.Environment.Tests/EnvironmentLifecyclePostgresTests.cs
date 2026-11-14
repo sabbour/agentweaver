@@ -298,6 +298,111 @@ public sealed class EnvironmentLifecyclePostgresTests(EnvironmentPostgresFixture
             CancellationToken.None);
     }
 
+    [Fact]
+    public async Task FirstStartReserveReArmsOnlyAMatchingFailedEffect()
+    {
+        var store = fixture.CreateStore();
+        var owner = NewOwner();
+        var fence = (await RegisterAsync(store, owner)).Snapshot.Fence;
+        const string resourceId = "namespace/policy";
+        var failed = await ReserveFailedAsync(store, fence, resourceId, "apply-1");
+
+        var plainReplay = await store.ReserveNetworkEffectAsync(
+            fence, resourceId, 1, 0, EnvironmentNetworkEffectKind.Apply, "apply-1", CancellationToken.None);
+        Assert.Equal(EnvironmentNetworkEffectState.Failed, plainReplay.State);
+        Assert.True(plainReplay.Replayed);
+
+        var mismatch = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
+            store.ReserveFirstStartNetworkEffectAsync(
+                fence, resourceId, 2, 0, EnvironmentNetworkEffectKind.Apply, "apply-1", CancellationToken.None));
+        Assert.Equal("environment_effect_idempotency_conflict", mismatch.Code);
+
+        var rearmed = await store.ReserveFirstStartNetworkEffectAsync(
+            fence, resourceId, 1, 0, EnvironmentNetworkEffectKind.Apply, "apply-1", CancellationToken.None);
+        Assert.Equal(failed.OperationId, rearmed.OperationId);
+        Assert.Equal(EnvironmentNetworkEffectState.Reserved, rearmed.State);
+        Assert.False(rearmed.Replayed);
+        var completed = await store.CompleteNetworkEffectAsync(
+            rearmed.OperationId, fence, effectMayHaveApplied: true, exactGenerationVerified: true,
+            CancellationToken.None);
+        Assert.Equal(EnvironmentNetworkEffectState.Completed, completed.State);
+    }
+
+    [Fact]
+    public async Task FirstStartReserveDoesNotReArmWhileAnotherEffectIsUnresolved()
+    {
+        var store = fixture.CreateStore();
+        var owner = NewOwner();
+        var fence = (await RegisterAsync(store, owner)).Snapshot.Fence;
+        const string resourceId = "namespace/policy";
+        var failed = await ReserveFailedAsync(store, fence, resourceId, "apply-1");
+        _ = await store.ReserveNetworkEffectAsync(
+            fence, resourceId, 2, 0, EnvironmentNetworkEffectKind.Apply, "apply-2", CancellationToken.None);
+
+        var replayed = await store.ReserveFirstStartNetworkEffectAsync(
+            fence, resourceId, 1, 0, EnvironmentNetworkEffectKind.Apply, "apply-1", CancellationToken.None);
+
+        Assert.Equal(failed.OperationId, replayed.OperationId);
+        Assert.Equal(EnvironmentNetworkEffectState.Failed, replayed.State);
+        Assert.True(replayed.Replayed);
+    }
+
+    [Fact]
+    public async Task FirstStartReserveDoesNotReArmStaleOrOldFenceEffects()
+    {
+        var store = fixture.CreateStore();
+        var owner = NewOwner();
+        var oldFence = (await RegisterAsync(store, owner)).Snapshot.Fence;
+        const string resourceId = "namespace/policy";
+        var failed = await ReserveFailedAsync(store, oldFence, resourceId, "apply-failed");
+        var stale = await store.ReserveNetworkEffectAsync(
+            oldFence, resourceId, 1, 0, EnvironmentNetworkEffectKind.Apply, "apply-stale", CancellationToken.None);
+        await store.TransitionAsync(
+            Transition(owner, oldFence.LifecycleGeneration, EnvironmentLifecycleState.Active, "advance"),
+            CancellationToken.None);
+        var staleCompletion = await store.CompleteNetworkEffectAsync(
+            stale.OperationId, oldFence, effectMayHaveApplied: false, exactGenerationVerified: false,
+            CancellationToken.None);
+        Assert.Equal(EnvironmentNetworkEffectState.Stale, staleCompletion.State);
+        var currentFence = new EnvironmentGenerationFence(owner, oldFence.LifecycleGeneration + 1);
+
+        var oldFenceRetry = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
+            store.ReserveFirstStartNetworkEffectAsync(
+                oldFence, resourceId, 1, 0, EnvironmentNetworkEffectKind.Apply, "apply-failed",
+                CancellationToken.None));
+        Assert.Equal("environment_fence_stale", oldFenceRetry.Code);
+        foreach (var key in new[] { "apply-stale", "apply-failed" })
+        {
+            var currentFenceRetry = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
+                store.ReserveFirstStartNetworkEffectAsync(
+                    currentFence, resourceId, 1, 0, EnvironmentNetworkEffectKind.Apply, key,
+                    CancellationToken.None));
+            Assert.Equal("environment_effect_idempotency_conflict", currentFenceRetry.Code);
+        }
+
+        Assert.Equal(
+            EnvironmentNetworkEffectState.Stale,
+            (await store.GetNetworkEffectAsync(stale.OperationId, currentFence, CancellationToken.None)).State);
+        Assert.Equal(
+            EnvironmentNetworkEffectState.Failed,
+            (await store.GetNetworkEffectAsync(failed.OperationId, currentFence, CancellationToken.None)).State);
+    }
+
+    private static async Task<EnvironmentNetworkEffectReservation> ReserveFailedAsync(
+        EnvironmentLifecycleStore store,
+        EnvironmentGenerationFence fence,
+        string resourceId,
+        string idempotencyKey)
+    {
+        var reservation = await store.ReserveFirstStartNetworkEffectAsync(
+            fence, resourceId, 1, 0, EnvironmentNetworkEffectKind.Apply, idempotencyKey, CancellationToken.None);
+        var failed = await store.CompleteNetworkEffectAsync(
+            reservation.OperationId, fence, effectMayHaveApplied: false, exactGenerationVerified: false,
+            CancellationToken.None);
+        Assert.Equal(EnvironmentNetworkEffectState.Failed, failed.State);
+        return failed;
+    }
+
     private static EnvironmentOwnerIdentity NewOwner()
     {
         var suffix = Guid.NewGuid().ToString("N");

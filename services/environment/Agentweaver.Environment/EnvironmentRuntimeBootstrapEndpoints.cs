@@ -215,6 +215,11 @@ public static class EnvironmentRuntimeBootstrapEndpoints
                 context.Request.Headers["X-Agentweaver-Tenant"].SingleOrDefault())).ConfigureAwait(false));
         }
         catch (RuntimeAuthorizationException failure)
+            when (failure.Code is "upstream_unavailable" or "upstream_timeout")
+        {
+            return Results.Json(new { code = failure.Code }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (RuntimeAuthorizationException failure)
         {
             return Results.Json(new { code = failure.Code }, statusCode: StatusCodes.Status403Forbidden);
         }
