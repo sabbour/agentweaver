@@ -21,7 +21,7 @@ public sealed record GitHubAppInstallationCredential(
 
 /// <summary>
 /// Mints repository-scoped GitHub App installation tokens from a redeemed private key.
-/// It validates the granted permission set and invalidates the supplied key after every attempt.
+/// It validates the granted permission set and invalidates the supplied key after argument validation succeeds.
 /// </summary>
 public sealed class GitHubAppInstallationTokenIssuer
 {
@@ -160,7 +160,7 @@ public sealed class GitHubAppInstallationTokenIssuer
     /// </summary>
     /// <param name="installationId">Positive GitHub App installation ID.</param>
     /// <param name="repositoryId">Positive numeric repository ID that limits the token.</param>
-    /// <param name="appPrivateKey">One-use PEM private-key credential; invalidated after the attempt.</param>
+    /// <param name="appPrivateKey">One-use PEM private-key credential; invalidated after argument validation succeeds.</param>
     /// <param name="issueWriteRequested">Whether the optional issues:write grant is required.</param>
     /// <param name="cancellationToken">Cancels the outbound API request.</param>
     /// <returns>A token credential and digest of the permissions actually granted.</returns>
@@ -312,7 +312,7 @@ public sealed class GitHubAppInstallationTokenIssuer
         JsonElement permissionsElement,
         bool issueWriteRequested, bool issuesOnly, string? contentsPermission)
     {
-        // Validate every granted key against the exact permission mode requested by the caller.
+        // Reject keys and levels above the permission ceiling requested by the caller.
         if (permissionsElement.ValueKind != JsonValueKind.Object)
             throw new JsonException("The GitHub response permissions were invalid.");
 

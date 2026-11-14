@@ -134,6 +134,7 @@ public sealed class ProviderCatalog
             if (selected.ContainsKey(selection.Seam))
                 return ProviderResult<ProviderCatalog>.Failure(
                     ProviderErrorCode.DuplicateDefault, $"Seam '{selection.Seam}' has multiple defaults.");
+                // A disabled default stays in the catalog; the resolver returns ProviderDisabled when it selects it.
             if (!entries.TryGetValue(selection.ProviderId, out var registration))
                 return ProviderResult<ProviderCatalog>.Failure(
                     ProviderErrorCode.ProviderNotFound, $"Default provider '{selection.ProviderId}' is not registered.");

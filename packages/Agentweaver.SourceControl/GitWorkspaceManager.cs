@@ -348,7 +348,7 @@ public sealed class GitWorkspaceManager
             string.Empty);
     }
 
-    /// <summary>Holds the managed workspace revision stable across an owner-authorized write.</summary>
+    /// <summary>Acquires the workspace revision lock. Callers must check write authority separately.</summary>
     /// <exception cref="GitWorkspaceException">The workspace is absent, invalid, or outside its configured root.</exception>
     public async Task<IAsyncDisposable> AcquireWorkspaceRevisionLeaseAsync(
         string runId,
@@ -1023,7 +1023,7 @@ public sealed class GitWorkspaceManager
         return files.MoveToImmutable();
     }
 
-    /// <summary>Rejects absolute, traversal, control-character, and Git metadata paths in a captured tree.</summary>
+    /// <summary>Rejects absolute, traversal, control-character, and repository-root <c>.git</c> paths in a captured tree.</summary>
     private static void ValidateCapturedPath(string path)
     {
         if (string.IsNullOrWhiteSpace(path) ||
@@ -1179,7 +1179,7 @@ public sealed class GitWorkspaceManager
     /// <param name="maximumOutputBytes">Maximum accepted stdout size.</param>
     /// <param name="emptyGitConfig">Empty global configuration that prevents user settings from affecting the command.</param>
     /// <param name="remoteUri">Optional remote URI that determines whether GitHub authorization is attached.</param>
-    /// <param name="credential">Optional credential invalidated by its caller after the Git operation.</param>
+    /// <param name="credential">Optional credential used for GitHub authorization.</param>
     /// <param name="cancellationToken">Cancels the process wait and any standard-input write.</param>
     /// <param name="gitIndexFile">Optional private index for capture operations.</param>
     /// <param name="standardInput">Optional bounded input stream bytes.</param>
@@ -1439,7 +1439,7 @@ public sealed class GitWorkspaceManager
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..32].ToLowerInvariant();
 
-    /// <summary>Allows only absolute HTTPS or file remotes without embedded credentials or extra URI components.</summary>
+    /// <summary>Requires absolute HTTPS or file URIs without user information, a query, or a fragment.</summary>
     /// <exception cref="GitWorkspaceException">The repository resolver returns a disallowed or malformed URI.</exception>
     private static void ValidateRemoteUri(Uri uri)
     {
