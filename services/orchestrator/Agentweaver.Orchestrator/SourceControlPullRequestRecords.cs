@@ -21,7 +21,7 @@ internal static class SourceControlPullRequestRecords
     public const string UnavailableCode = "pull_request_records_unavailable";
 
     /// <summary>
-    /// Reads when record coverage started, or null when migration 032 isn't applied.
+    /// Reads the coverage start, or returns null when the migration row, table, or timestamp is missing.
     /// </summary>
     /// <param name="connection">An open connection to the coordination owner database.</param>
     /// <param name="quotedSchema">The validated, quoted coordination schema name.</param>
@@ -41,8 +41,8 @@ internal static class SourceControlPullRequestRecords
             """, connection);
         command.Parameters.AddWithValue(
             "records", NpgsqlDbType.Text, $"{quotedSchema}.source_control_pull_requests");
-        // No row means 032 isn't applied. Npgsql may return timestamptz as a UTC DateTime or as a
-        // DateTimeOffset depending on settings, so accept both.
+        // No row means the migration row or table is missing. Npgsql may return timestamptz as a UTC
+        // DateTime or as a DateTimeOffset depending on settings, so accept both.
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return value is DateTime applied
             ? new DateTimeOffset(DateTime.SpecifyKind(applied, DateTimeKind.Utc))

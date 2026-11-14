@@ -252,7 +252,7 @@ internal sealed class SpendBudgetExposureStore(
         // project bucket, and without the lock two of them could each see room for one more dispatch and
         // both be admitted. The advisory lock is transaction scoped, so PostgreSQL releases it on commit or
         // rollback. The buckets are already sorted, so every caller takes the locks in the same order and
-        // can't deadlock. Tenant and project are part of the lock key so other tenants never wait.
+        // can't deadlock. Tenant and project scope the lock key to the owner.
         foreach (var item in applicable)
         {
             await using var lockCommand = new NpgsqlCommand(

@@ -64,6 +64,7 @@ public static partial class CoordinationEndpoints
                 cancellationToken).ConfigureAwait(false);
             if (existing is not null)
             {
+                // Reuse the stored job and native request ID so an idempotent retry cannot start a second request.
                 if (WorkflowGenerationExecution.RequestFingerprint(request, existing) != existing.RequestFingerprint)
                     throw new CoordinationException("idempotency_key_conflict", StatusCodes.Status409Conflict);
                 var acceptedSelectionHash =
@@ -85,6 +86,7 @@ public static partial class CoordinationEndpoints
                         projectId, request.RunId, request.SessionId, existingTree, existingStatus);
                     var decision = await decisions.ReadCurrentAsync(
                         actor, existingIdentity, selection, cancellationToken).ConfigureAwait(false);
+                    // After send admission, allow recovery past pre-plan state; current selection and registration still must match below.
                     if (existing.ExecutionPhase != "send-admitted")
                         CoordinationEndpoints.RequirePrePlanState(decision, request.ExpectedDecisionStateVersion);
                     var existingRegistration = await registrations.ReadCurrentForSessionAsync(
@@ -262,6 +264,7 @@ public static partial class CoordinationEndpoints
                     .Equals(job.AcceptedSelectionHash, StringComparison.OrdinalIgnoreCase))
                 throw WorkflowGenerationExecution.NotFound();
         }
+        // Hide forbidden or missing authority as not found so callers cannot probe job ownership.
         catch (CoordinationException exception) when (
             exception.StatusCode is StatusCodes.Status403Forbidden or StatusCodes.Status404NotFound)
         {
@@ -296,6 +299,7 @@ public static partial class CoordinationEndpoints
         CoordinationActor actor)
     {
         var authority = selection.Authorization;
+        // Require both project permissions at a positive role revision on this bound project.
         if (authority.ContractVersion != 1 || authority.Issuer != actor.Issuer ||
             authority.ActorId != actor.Subject || authority.BoundProjectId != projectId ||
             authority.BoundRunId != runId || string.IsNullOrWhiteSpace(authority.TenantId) ||
@@ -379,6 +383,7 @@ internal sealed class WorkflowGenerationBackgroundService(
     protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
         Parallel.ForEachAsync(
             queue.ReadAllAsync(stoppingToken),
+            // Bound concurrent native turns; each worker still gets its own dependency scope.
             new ParallelOptions { MaxDegreeOfParallelism = 2, CancellationToken = stoppingToken },
             async (work, token) =>
             {
@@ -448,6 +453,7 @@ internal sealed class WorkflowGenerationExecutor(
                 throw new CoordinationException(
                     "workflow_generation_binding_stale", StatusCodes.Status409Conflict);
 
+            // A stored completion can recover a worker that stopped before saving the workflow result.
             var stored = await actionGrants.ReadRootTurnCompletionAsync(
                 context, current.Registration, job.NativeRequestId, job.PromptSha256, cancellationToken)
                 .ConfigureAwait(false);
@@ -468,6 +474,7 @@ internal sealed class WorkflowGenerationExecutor(
             }
             else
             {
+                // Retry a possible send only from its recorded indeterminate state, with the same native request ID.
                 if (job.ExecutionPhase == "send-admitted" &&
                     (job.Status != "failed" ||
                      job.FailureCode != "workflow_generation_outcome_indeterminate"))
@@ -495,6 +502,7 @@ internal sealed class WorkflowGenerationExecutor(
                     ?? throw new CoordinationException(
                         "workflow_generation_host_not_ready", StatusCodes.Status503ServiceUnavailable);
                 CoordinationEndpoints.ValidateHostReadiness(readiness, current.Registration, timeProvider);
+                // Recheck authority after host readiness and immediately before the send boundary.
                 var priorRegistration = current.Registration;
                 current = await ReadCurrentAsync(context, work, job, cancellationToken).ConfigureAwait(false);
                 CoordinationEndpoints.RequirePrePlanState(current.Decision, job.ExpectedDecisionStateVersion);
@@ -502,6 +510,7 @@ internal sealed class WorkflowGenerationExecutor(
                     current.SelectionHash != job.AcceptedSelectionHash)
                     throw new CoordinationException(
                         "workflow_generation_binding_stale", StatusCodes.Status409Conflict);
+                // Persist the possible-send boundary before making the remote call.
                 if (!await jobs.MarkSendAdmittedAsync(
                         job.ProjectId, job.JobId, cancellationToken).ConfigureAwait(false))
                     return;
@@ -554,6 +563,7 @@ internal sealed class WorkflowGenerationExecutor(
                     job.ProjectId, job.JobId, result, cancellationToken).ConfigureAwait(false))
             {
                 var latest = await jobs.ReadAsync(job.ProjectId, job.JobId, cancellationToken).ConfigureAwait(false);
+                // If cancellation won the completion race, mark the job quiesced; otherwise the result remains indeterminate.
                 if (latest?.Status is "cancelled")
                     await jobs.MarkQuiescedAsync(job.ProjectId, job.JobId, cancellationToken).ConfigureAwait(false);
                 else
@@ -568,6 +578,7 @@ internal sealed class WorkflowGenerationExecutor(
         catch (Exception exception)
         {
             var failureCode = MapFailure(exception, sendAdmitted);
+            // Before send admission no native work can remain; afterward, require verified completion and a terminal validation failure.
             var quiesced = !sendAdmitted || completionVerified &&
                 failureCode is ("workflow_generation_artifact_invalid" or "workflow_generation_role_unresolved");
             await jobs.FailAsync(
@@ -714,6 +725,7 @@ internal sealed class WorkflowGenerationExecutor(
         RuntimeRegistration registration,
         RuntimeHostReadinessReceipt readiness)
     {
+        // The durable job must survive caller disconnects and can use only read-only tools.
         var proof = new RuntimeHostSessionProof(
             1,
             registration,
@@ -838,6 +850,7 @@ internal static class WorkflowGenerationExecution
 
     internal static string PurposeBoundPrompt(string prompt) => PromptPrefix + prompt;
 
+    // Queue normal queued/running phases; retry a failed send-admitted job only for an indeterminate outcome.
     internal static bool CanEnqueue(WorkflowGenerationJob job) =>
         job.Status is "queued" or "running" &&
         job.ExecutionPhase is "queued" or "pre-send" or "send-admitted" ||
