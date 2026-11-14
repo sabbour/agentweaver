@@ -74,6 +74,7 @@ internal static class CopilotConnectionModel
             entity.HasKey(row => new { row.ConnectionId, row.Revision });
             entity.Property(row => row.SecretId).HasMaxLength(256);
             entity.Property(row => row.SecretVersion).HasMaxLength(256);
+            // Keep the revision history tied to its connection instead of allowing a parent delete to erase it.
             entity.HasOne<CopilotConnectionRecord>().WithMany()
                 .HasForeignKey(row => row.ConnectionId).OnDelete(DeleteBehavior.Restrict);
         });

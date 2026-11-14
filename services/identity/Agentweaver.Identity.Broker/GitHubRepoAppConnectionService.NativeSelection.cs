@@ -16,6 +16,7 @@ internal sealed partial class GitHubRepoAppConnectionService
             throw new GitHubRepoAppConnectionException(GitHubRepoAppConnectionFailure.RepositoryUnavailable);
         var codeHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(code)));
         var now = _timeProvider.GetUtcNow();
+        // The intent comes from the client or from an earlier protected payload, so it is only a snapshot; the current selection, connection, and installation state must still match.
         var selection = await _db.RepoAppRepositorySelections.AsNoTracking()
             .SingleOrDefaultAsync(row => row.CodeHash == codeHash && row.OwnerId == ownerId, cancellationToken)
             .ConfigureAwait(false);

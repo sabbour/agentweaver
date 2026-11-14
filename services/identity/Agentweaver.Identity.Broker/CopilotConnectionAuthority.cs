@@ -483,7 +483,7 @@ public sealed class CopilotConnectionAuthority(
         }
         catch
         {
-            // A refresh may have consumed its upstream token. Never replay that rotation.
+            // GitHub may consume an authorization code or refresh token before failure; do not replay the exchange.
             await MarkFailureAsync(row, failureState);
             throw;
         }
@@ -549,6 +549,7 @@ public sealed class CopilotConnectionAuthority(
             throw Denied("copilot_connection_owner_denied");
         var context = await RuntimeOwnerHttpTransport.SendAsync<ProjectAuthorizationContextResponse>(
             projects, options.ProjectsOwnerAddress, "/api/authorization/context", actor, null, cancellationToken);
+        // A platform-scoped credential needs read authority for both the target project and platform defaults.
         var canReadProject = context.EffectiveAuthority.Any(resource =>
             resource.Permissions.Any(permission =>
                 permission.Permission == ProjectAuthorizationPermission.ReadProjects &&
@@ -631,6 +632,7 @@ public sealed class CopilotConnectionAuthority(
     private async Task MarkFailureAsync(CopilotConnectionRecord row, CopilotConnectionState state)
     {
         db.ChangeTracker.Clear();
+        // Use a bounded token to record the failure even if the request was canceled.
         using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var current = await ReadAsync(row.ConnectionId, cleanup.Token);
         if (current.Revision == row.Revision &&
@@ -657,6 +659,7 @@ public sealed class CopilotConnectionAuthority(
     private DateTimeOffset Now()
     {
         var now = time.GetUtcNow();
+        // Match PostgreSQL timestamp precision so a stored value does not round past its source.
         return new(now.UtcTicks - now.UtcTicks % 10, TimeSpan.Zero);
     }
     private static string Hash(string value) => RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(value));

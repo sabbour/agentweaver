@@ -118,6 +118,7 @@ public static class CopilotConnectionEndpoints
         context.Response.Headers.CacheControl = "no-store";
         try
         {
+            // Keep protected state in the POST body instead of exposing it in a URL.
             if (context.Request.Query.Count != 0)
                 throw new RuntimeAuthorizationException("copilot_connection_callback_invalid");
             var authority = context.RequestServices.GetService<CopilotConnectionAuthority>();

@@ -615,6 +615,7 @@ public static class IdentityBrokerEndpoints
             .Where(row => row.HandleHash == hash && row.ConsumedAt == null &&
                 row.ExpiresAt > now && row.SubjectUserId == userId &&
                 row.NativeRepoAppSelectionReview)
+            // Consume the review before GitHub calls so a failed submission needs a new review.
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(row => row.ConsumedAt, now)
                 .SetProperty(row => row.WorkspaceSelectionRequest, (string?)null), ct);
@@ -1104,6 +1105,7 @@ public static class IdentityBrokerEndpoints
                 new OpenIddictParameter(BuildWorkspaceSelectionResponse(payload));
         }
 
+        // The ticket forms the one-time response; do not copy its opaque payload into issued tokens.
         RemoveNativeRepoAppSelectionClaims(result.Principal);
         return Results.SignIn(
             result.Principal, properties,
