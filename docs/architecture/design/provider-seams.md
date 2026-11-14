@@ -1218,7 +1218,7 @@ is sent.
 Projects stores one repository identity and an explicit Source Control authentication
 mode. Legacy secret mode uses versioned API and checkout `SecretRef`s plus an optional
 webhook `SecretRef`; configurations that omit `authMode` remain in secret mode.
-GitHub App mode uses a stable Identity-owned `appConnectionId`, has no API or checkout
+GitHub App mode uses a stable Identity-owned `identityConnectionId`, has no API or checkout
 `SecretRef`, and does not store provider tokens or numeric installation/repository IDs.
 The short-lived, actor-bound repository-selection code is submitted only in the initial
 authorized Orchestrator `/pin` request; it is never persisted in project/run
@@ -1322,7 +1322,7 @@ flowchart LR
     Browser["Retained browser"]
     Gateway["Gateway BFF"]
     Identity["Identity Broker"]
-    Config["Accepted config: githubApp + appConnectionId"]
+    Config["Accepted config: githubApp + identityConnectionId"]
     Source["Source Control owner"]
     Core["Projects & Core"]
     Store["Source Control owner store"]

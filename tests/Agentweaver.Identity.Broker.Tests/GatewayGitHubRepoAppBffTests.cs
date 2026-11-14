@@ -1,5 +1,6 @@
 extern alias GatewayHost;
 
+using Agentweaver.Abstractions;
 using System.Collections.Concurrent;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
@@ -155,9 +156,25 @@ public sealed class GatewayGitHubRepoAppBffTests
                 new[] { "secret", "githubApp" },
                 sourceControlConfiguration.GetProperty("authMode").GetProperty("enum")
                     .EnumerateArray().Select(value => value.GetString()));
+            var ownerJsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            ownerJsonOptions.Converters.Add(
+                new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+            var ownerSettings = new SourceControlProjectSettings(
+                new SourceControlRepositoryIdentity("octo", "repo"),
+                apiSecretReference: null,
+                authMode: SourceControlAuthMode.GitHubApp,
+                identityConnectionId: "app-conn_123");
+            var ownerSettingsJson = JsonSerializer.SerializeToElement(ownerSettings, ownerJsonOptions);
+            var ownerConnectionProperty = ownerSettingsJson.EnumerateObject().Single(property =>
+                property.Value.ValueKind == JsonValueKind.String &&
+                property.Value.GetString() == "app-conn_123");
+            Assert.Equal("identityConnectionId", ownerConnectionProperty.Name);
+            Assert.True(sourceControlConfiguration.TryGetProperty(
+                ownerConnectionProperty.Name, out var connectionIdSchema));
             Assert.Equal(
                 "string",
-                sourceControlConfiguration.GetProperty("appConnectionId").GetProperty("type").GetString());
+                connectionIdSchema.GetProperty("type").GetString());
+            Assert.False(sourceControlConfiguration.TryGetProperty("appConnectionId", out _));
             Assert.DoesNotContain(
                 sourceControlSchema.GetProperty("required").EnumerateArray(),
                 required => required.GetString() == "apiSecretReference");

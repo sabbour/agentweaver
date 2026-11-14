@@ -2719,12 +2719,12 @@ function RunGitHubAppPanel({
   projectId,
   runId,
   sessionId,
-  appConnectionId,
+  identityConnectionId,
 }: {
   projectId: string;
   runId: string;
   sessionId: string;
-  appConnectionId: string;
+  identityConnectionId: string;
 }) {
   const { apiCall } = useAuth();
   const binding = useMemo(() => ({ projectId, runId }), [projectId, runId]);
@@ -2740,7 +2740,7 @@ function RunGitHubAppPanel({
   const [notice, setNotice] = useState<{ intent: 'info' | 'success' | 'warning'; text: string } | null>(null);
   const popupRef = useRef<Window | null>(null);
   const connectionMatches = connection?.state === 'connected' &&
-    connection.connectionId === appConnectionId;
+    connection.connectionId === identityConnectionId;
   const statusUnavailable = !statusLoading && connection === null && error != null;
 
   const loadConnection = useCallback(async (): Promise<RepoAppConnectionStatus | null> => {
@@ -2748,7 +2748,7 @@ function RunGitHubAppPanel({
     try {
       const next = await repoAppBrokerClient.getStatus();
       setConnection(next);
-      if (next.state !== 'connected' || next.connectionId !== appConnectionId) {
+      if (next.state !== 'connected' || next.connectionId !== identityConnectionId) {
         setRepositories([]);
         setRepositoriesLoaded(false);
       }
@@ -2761,7 +2761,7 @@ function RunGitHubAppPanel({
     } finally {
       setStatusLoading(false);
     }
-  }, [appConnectionId]);
+  }, [identityConnectionId]);
 
   const loadRepositories = useCallback(async () => {
     setRepositoriesLoading(true);
@@ -2804,7 +2804,7 @@ function RunGitHubAppPanel({
         text: 'GitHub returned to Agentweaver. Refreshing repository access.',
       });
       void loadConnection().then((next) => {
-        if (next?.state === 'connected' && next.connectionId === appConnectionId)
+        if (next?.state === 'connected' && next.connectionId === identityConnectionId)
           void loadRepositories();
         else
           setNotice({
@@ -2815,7 +2815,7 @@ function RunGitHubAppPanel({
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [appConnectionId, loadConnection, loadRepositories]);
+  }, [identityConnectionId, loadConnection, loadRepositories]);
 
   const openPopup = (): Window | null => {
     const popup = window.open(
@@ -2884,7 +2884,7 @@ function RunGitHubAppPanel({
   return (
     <Panel title="GitHub App repository access">
       <p className="v1-muted">
-        This run uses the GitHub App connection <code>{appConnectionId || 'not configured'}</code>.
+        This run uses the GitHub App connection <code>{identityConnectionId || 'not configured'}</code>.
         Choose a repository below to use it for this run.
       </p>
       {statusLoading ? <Loading label="Checking GitHub App connection…" /> : statusUnavailable ? (
@@ -2901,7 +2901,7 @@ function RunGitHubAppPanel({
             : 'The GitHub App user connection requires attention before it can be used.'}
         </p>
       )}
-      {connection?.state === 'connected' && connection.connectionId !== appConnectionId && (
+      {connection?.state === 'connected' && connection.connectionId !== identityConnectionId && (
         <MessageBar intent="warning">
           <MessageBarBody>
             Your project uses a different GitHub App connection. Review{' '}
@@ -3413,7 +3413,7 @@ function RunPage() {
                   projectId={projectId}
                   runId={runId}
                   sessionId={currentRunStatus.rootSessionId}
-                  appConnectionId={currentSelection.projectConfiguration.sourceControl.appConnectionId ?? ''}
+                  identityConnectionId={currentSelection.projectConfiguration.sourceControl.identityConnectionId ?? ''}
                 />
               ) : (
                 <EmptyState title="No repository changes" description="This run does not use a GitHub App repository connection, so it has no branch or pull request to show." />

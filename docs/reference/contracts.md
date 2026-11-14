@@ -517,7 +517,7 @@ actor/project/redirect authority is added.
 
 For accepted project configuration, optional `sourceControl.authMode` is
 `secret` or `githubApp`; older configurations that omit it remain legacy secret
-mode without rewriting omitted defaults. `sourceControl.appConnectionId` is the
+mode without rewriting omitted defaults. `sourceControl.identityConnectionId` is the
 stable Identity reference for GitHub App mode, and `apiSecretReference` remains
 for secret mode only. The existing run-bound
 `POST /api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/pin`

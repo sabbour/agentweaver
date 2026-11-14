@@ -15,7 +15,7 @@ function fixture(): ProjectConfiguration {
     providerOverrides: [{ seam: 'memory', providerId: 'native' }],
     orderedProviderOverrides: [{ seam: 'tools', providerIds: ['first', 'second'] }],
     agentCharters: [], casting: [], blueprintWorkflowReferences: [], skills: [], runLimits: {},
-    sourceControl: { authMode: 'githubApp', appConnectionId: 'saved-connection' },
+    sourceControl: { authMode: 'githubApp', identityConnectionId: 'saved-connection' },
   };
 }
 

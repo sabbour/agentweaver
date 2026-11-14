@@ -1768,7 +1768,7 @@ else if (route.OperationId is
             ("defaultWorkflowId", NullableStr()), ("skills", Arr(Ref("SkillCatalogSetting"))),
             ("egressNarrowing", Nullable(Arr(Ref("NetworkEgressRule")))),
             ("runLimits", Ref("CopilotRunLimitOverrides")), ("sourceControl", Nullable(Obj([],
-                ("authMode", Enum("secret", "githubApp")), ("appConnectionId", Str()),
+                ("authMode", Enum("secret", "githubApp")), ("identityConnectionId", Str()),
                 ("repository", Obj(["owner", "name"], ("owner", Str()), ("name", Str()))),
                 ("apiSecretReference", Ref("SecretRef")), ("checkoutSecretReference", Ref("SecretRef")),
                 ("webhookSecretReference", Ref("SecretRef")))))),

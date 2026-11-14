@@ -30,7 +30,7 @@ test('Workspace: browse a pinned file and fit the retained reader at 390 pixels'
       sourceControl: {
         repository: { owner: 'octo', name: 'repo' },
         authMode: 'githubApp',
-        appConnectionId: 'connection-1',
+        identityConnectionId: 'connection-1',
       },
     },
   };
