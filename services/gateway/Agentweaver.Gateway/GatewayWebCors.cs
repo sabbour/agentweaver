@@ -27,6 +27,7 @@ public static class GatewayWebCors
                 .WithOrigins(origin)
                 .WithMethods("GET")
                 .WithHeaders("Accept"));
+            // Only the connection policy allows credentials. The Copilot connection flow sends a Broker cookie.
             cors.AddPolicy(CopilotConnectionsPolicyName, policy => policy
                 .WithOrigins(origin)
                 .WithMethods("GET", "POST")
@@ -37,6 +38,7 @@ public static class GatewayWebCors
                 var headers = new List<string> { "Authorization", "Accept" };
                 if (route.HasJsonBody) headers.Add("Content-Type");
                 if (route.ForwardTenantSelector) headers.Add("X-Agentweaver-Tenant");
+                // Casting generation sends a second bearer for the Projects write.
                 if (route.OperationId is "formulateCastingProposal" or "analyzeCastingProposal")
                     headers.Add("X-Agentweaver-Project-Authorization");
                 if (!route.ForwardRequestHeaders.IsDefaultOrEmpty)

@@ -53,8 +53,8 @@ public sealed record GatewayOptions(
             RequiredHttpsRoot(owners["IdentityBrokerAddress"], "Gateway:Owners:IdentityBrokerAddress"),
             RequiredHttpsRoot(configuration["Gateway:WebOrigin"], "Gateway:WebOrigin"),
             TimeSpan.FromSeconds(timeoutSeconds),
-            // Environment is optional so existing deployments start without it. When it is set, it gets
-            // the same HTTPS root validation as the required owners.
+            // Environment and AgentHost are optional so existing deployments start without them. When one is
+            // set, it gets the same HTTPS root validation as the required owners.
             owners["Environment"] is null
                 ? null
                 : RequiredHttpsRoot(owners["Environment"], "Gateway:Owners:Environment"),
@@ -63,7 +63,7 @@ public sealed record GatewayOptions(
                 : RequiredHttpsRoot(owners["AgentHost"], "Gateway:Owners:AgentHost"));
     }
 
-    /// <summary>Requires an HTTPS audience without credentials, query, or fragment.</summary>
+    /// <summary>Requires an HTTPS audience without credentials, query, fragment, or leading or trailing white space.</summary>
     private static string RequiredHttpsAudience(string? value)
     {
         if (string.IsNullOrWhiteSpace(value) || !string.Equals(value, value.Trim(), StringComparison.Ordinal))

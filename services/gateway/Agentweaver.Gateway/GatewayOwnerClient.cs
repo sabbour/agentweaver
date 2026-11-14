@@ -74,6 +74,9 @@ public sealed partial class GatewayOwnerClient(
                 context.Response.Headers.CacheControl = "no-store";
             var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
             using var timeout = CreateOwnerTimeout(cancellationToken);
+            // The setup routes take no body or query. The Transfer-Encoding check rejects an HTTP/1.1 chunked
+            // body. An HTTP/2 or HTTP/3 body can have neither header, so when CanHaveBody is true,
+            // HasP1SetupBodyAsync reads one byte to find the body. The request fails before any owner call.
             if (route.OperationId is ("createP1InvocationSetup" or "readP1InvocationSetup") &&
                 (context.Request.ContentLength is > 0 ||
                  context.Request.Headers.ContainsKey("Transfer-Encoding") ||
@@ -93,6 +96,8 @@ public sealed partial class GatewayOwnerClient(
                     .ConfigureAwait(false);
                 return;
             }
+            // Check a replay page and its query, then return the projected page. The Gateway reads the
+            // whole owner page, up to MaximumRunEventPageBytes (1 MiB), and does not stream it to the caller unchanged.
             if (route.Owner == GatewayOwner.Events &&
                 route.OperationId == "replayRunEvents" &&
                 route.Method == "GET" &&
@@ -273,6 +278,8 @@ public sealed partial class GatewayOwnerClient(
                 input.Goal,
                 existingRoleIds,
                 roles);
+            // Build the prompt again from current owner data and reject a different caller prompt.
+            // The model gets only a prompt that matches the current owner data.
             if (!string.Equals(expectedPrompt, input.Prompt, StringComparison.Ordinal))
                 throw CastingGenerationRequestFailure("casting_generation_prompt_mismatch");
 
@@ -1252,6 +1259,7 @@ public sealed partial class GatewayOwnerClient(
             }
             finally
             {
+                // Clear the request body, which holds the callback state, after the Broker call.
                 CryptographicOperations.ZeroMemory(body);
             }
         }
@@ -1302,6 +1310,8 @@ public sealed partial class GatewayOwnerClient(
     {
         try
         {
+            // Accept a request query only when the endpoint passes a checked owner query. The raw
+            // request query is never forwarded, so a caller cannot add values that the Broker reads.
             if (context.Request.Query.Count > 0 && ownerQueryString is null ||
                 context.Request.Query.Count == 0 && ownerQueryString is not null)
                 throw new GatewayOwnerFailureException(
@@ -1792,6 +1802,8 @@ public sealed partial class GatewayOwnerClient(
         {
             while (true)
             {
+                // Read at most one byte more than the limit. This finds an oversized body
+                // without reading all of it.
                 var count = await context.Request.Body.ReadAsync(
                     buffer.AsMemory(0, (int)Math.Min(buffer.Length, maximumBytes - body.Length + 1)),
                     cancellationToken).ConfigureAwait(false);
@@ -1887,6 +1899,7 @@ public sealed partial class GatewayOwnerClient(
     {
         var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
         var expiresAt = authentication.Principal?.GetExpirationDate();
+        // Use the exp claim when the principal has no expiration date.
         if (expiresAt is null &&
             long.TryParse(
                 authentication.Principal?.FindFirst("exp")?.Value,
@@ -1984,6 +1997,8 @@ public sealed partial class GatewayOwnerClient(
 
     private static string ExpandWorkspaceFilePath(string path, HttpContext context)
     {
+        // Reject an encoded slash or backslash in the raw request path. Only a literal slash
+        // separates path segments.
         var requestPath = context.Request.Path.ToUriComponent();
         if (requestPath.Contains("%2f", StringComparison.OrdinalIgnoreCase) ||
             requestPath.Contains("%5c", StringComparison.OrdinalIgnoreCase) ||
@@ -2006,6 +2021,8 @@ public sealed partial class GatewayOwnerClient(
             path.Split('/').Length > 64 ||
             path.Split('/').Any(segment => segment is "" or "." or ".."))
             return false;
+        // Decode up to 8 times. Reject the path if a decode adds a slash, a backslash, a control
+        // character, or an empty, ".", or ".." segment, or if it still changes after 8 decodes.
         var candidate = path;
         for (var depth = 0; depth < 8; depth++)
         {
@@ -2024,8 +2041,8 @@ public sealed partial class GatewayOwnerClient(
 
     private Uri BuildOwnerUri(GatewayOwner owner, string pathAndQuery)
     {
-        // The Environment owner address is optional configuration. Without it, return a clear 503 to the
-        // client instead of letting GetOwnerBaseAddress throw and surface as a 500.
+        // The Environment and AgentHost owner addresses are optional configuration. Without one, return a
+        // clear 503 to the client instead of letting GetOwnerBaseAddress throw and surface as a 500.
         if (owner == GatewayOwner.Environment && options.EnvironmentOwnerBaseAddress is null)
             throw new GatewayOwnerFailureException(
                 StatusCodes.Status503ServiceUnavailable,
@@ -2122,6 +2139,8 @@ public sealed partial class GatewayOwnerClient(
 
     private string? RewriteLocation(Uri location, GatewayOwner owner)
     {
+        // Map only a same-owner /api/ Location to the public /api/v1 path. Drop any other Location,
+        // so internal owner addresses are not exposed to the caller.
         string pathAndQuery;
         if (location.IsAbsoluteUri)
         {
