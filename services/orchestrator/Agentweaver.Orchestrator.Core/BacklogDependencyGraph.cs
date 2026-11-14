@@ -83,6 +83,8 @@ public sealed class BacklogDependencyGraph
                     "The task position cannot be incremented.");
             updated = updated with { Position = position };
         }
+        // An edit that changes nothing succeeds before the editable check, so a repeated edit of an
+        // archived or held task returns no change.
         if (updated == task)
             return BacklogCoreResult<BacklogTaskEdit>.Success(new BacklogTaskEdit(this, false));
         if (task!.IsArchived || task.IsAutomationInvocationPending)

@@ -265,6 +265,8 @@ public static partial class CoordinationEndpoints
                     throw new CoordinationException("backlog_project_authority_changed", StatusCodes.Status409Conflict);
             }
             var result = await operation(Revalidate, context.RequestAborted).ConfigureAwait(false);
+            // Write operations check authority again inside the store transaction. A read checks it here, after
+            // the read, so a caller that lost access gets no result.
             if (!write)
                 await Revalidate(context.RequestAborted).ConfigureAwait(false);
             return result;

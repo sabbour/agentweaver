@@ -106,6 +106,8 @@ public static partial class CoordinationEndpoints
             var promptHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(request.Prompt));
             var storedCompletion = await actionGrants.ReadRootTurnCompletionAsync(
                 context, registration, request.RequestId, promptHash, cancellationToken).ConfigureAwait(false);
+            // This request and prompt already completed on the current registration. Return the stored
+            // Events material and do not call the host again. Authority and registration are checked again first.
             if (storedCompletion is not null &&
                 storedCompletion.Completion.Registration == registration)
             {
@@ -148,6 +150,8 @@ public static partial class CoordinationEndpoints
                     replayActor.Bearer.Invalidate();
                 }
             }
+            // The stored completion is from an earlier registration. Continue only when a verified host
+            // replacement links that registration to the current one.
             if (storedCompletion is not null)
                 await RequireCompletedReplacementReplayAsync(
                     starts,
@@ -238,6 +242,8 @@ public static partial class CoordinationEndpoints
                 currentStatus.ExecutionFence, selectionHash, timeProvider);
             var output = CastingGenerationExecutionContract.ReadOutput(
                 hostResponse, RuntimeContractValidation.NativeSessionId(registration.Binding));
+            // The replacement host replayed a turn that an earlier host completed. Check the stored receipt,
+            // the replacement operation, and the stored material before the replay is recorded.
             if (hostResponse.RootCompletion is null && hostResponse.RootReplay is { } replay)
             {
                 var retryPromptHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(request.Prompt));
@@ -388,6 +394,8 @@ public static partial class CoordinationEndpoints
                 request.RequestId, runId, output, recordedCompletion.Completion.ToEvidence()));
         }, cancellationToken);
 
+    // A retry after host replacement is allowed only when the receipts prove that the new host
+    // restored the completed turn from the saved native cache.
     private static async Task RequireCompletedReplacementReplayAsync(
         CoordinationRuntimeRunStartStore starts,
         string projectId,

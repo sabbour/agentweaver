@@ -88,6 +88,9 @@ internal static class CastingGenerationExecutionContract
 
     internal static string ReadOutput(RuntimeA2AResponse response, string expectedContextId)
     {
+        // Accept only one agent message in the expected context with one non-empty text part. The text
+        // must fit the message limit and have no control characters other than CR, LF, and tab. Any
+        // other shape is an invalid host answer, so the call fails as unavailable.
         if (response is null ||
             response.Kind != "message" ||
             response.MessageId == Guid.Empty ||

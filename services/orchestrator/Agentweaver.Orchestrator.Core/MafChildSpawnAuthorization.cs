@@ -351,7 +351,7 @@ public static class MafChildSpawnAuthorizationContract
             evidence.ReasonCode == PolicyEvaluationReasonCode.Allowed;
     }
 
-    /// <summary>Returns the existing receipt column's stable item key without creating fixed work as a plan item.</summary>
+    /// <summary>Returns the work item ID for the receipt. Fixed work has no plan item, so its workflow step ID fills the column.</summary>
     public static string ReceiptWorkItemId(MafChildSpawnAuthorizationIntent intent) =>
         intent switch
         {

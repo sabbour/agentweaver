@@ -4,6 +4,7 @@ using Npgsql;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>Decides whether child-join checkpoint recovery holds dispatch for a run.</summary>
 internal static class CheckpointRecoveryHold
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -17,6 +18,8 @@ internal static class CheckpointRecoveryHold
         CancellationToken cancellationToken,
         bool forUpdate = false)
     {
+        // Lock the accepted run row so its execution fence cannot change while the recovery records
+        // are checked.
         var lockClause = forUpdate ? "FOR UPDATE" : "FOR SHARE";
         long fence;
         await using (var run = new NpgsqlCommand($"""
@@ -58,6 +61,7 @@ internal static class CheckpointRecoveryHold
                 if (IsHeldPayload(result.RootElement, progress.RootElement, fence))
                     return true;
             }
+            // A recovery record that cannot be read holds dispatch (fail closed).
             catch (Exception exception) when (exception is JsonException or InvalidOperationException or
                                                KeyNotFoundException or FormatException or CoordinationException)
             {
@@ -79,6 +83,8 @@ internal static class CheckpointRecoveryHold
         {
             recovery = resultRoot.GetProperty("checkpointRecovery");
             var operationFence = resultRoot.GetProperty("executionFence").GetInt64();
+            // A record from an earlier fence does not apply. A record from a later fence is unexpected,
+            // so it holds dispatch.
             if (operationFence < fence)
                 return false;
             if (operationFence > fence)
@@ -103,6 +109,7 @@ internal static class CheckpointRecoveryHold
                 hash.All(Uri.IsHexDigit) &&
                 EncodingUtf8ByteCount(manifest.GetString()!) <= ChildCheckpointRecoveryManifestCodec.MaximumBytes;
 
+            // A child-join record with a missing or inconsistent boundary, fence, or manifest holds dispatch.
             if (!IsChildJoinBoundary(recovery, "boundaryKind") ||
                 progressBoundary.ValueKind != JsonValueKind.String ||
                 progressBoundary.GetString() != "childJoin" ||
@@ -124,6 +131,8 @@ internal static class CheckpointRecoveryHold
                     StringComparison.Ordinal))
                 return true;
 
+            // Release dispatch only when the result and the progress both show the ready phase, dispatch
+            // released, and all members ready.
             var ready = operation.CheckpointRecovery is
                 {
                     Phase: "ready",

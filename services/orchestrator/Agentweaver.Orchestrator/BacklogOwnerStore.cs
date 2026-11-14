@@ -361,6 +361,8 @@ internal sealed class BacklogOwnerStore
         if (!graph.IsSuccess)
             return await RollbackFailureAsync<BacklogDependencyGraph>(
                 transaction, graph.Issues).ConfigureAwait(false);
+        // Queue positions cannot be saved before migration 035, so fail as unavailable instead of
+        // returning an order that is not stored.
         if (!await HasQueuePositionMigrationAsync(connection, transaction, cancellationToken).ConfigureAwait(false))
             throw new CoordinationException("backlog_position_unavailable", StatusCodes.Status503ServiceUnavailable);
 
@@ -401,6 +403,8 @@ internal sealed class BacklogOwnerStore
         if (!graph.IsSuccess)
             return await RollbackFailureAsync<BacklogDependencyGraph>(
                 transaction, graph.Issues).ConfigureAwait(false);
+        // Queue positions cannot be saved before migration 035, so fail as unavailable instead of
+        // returning an order that is not stored.
         if (!await HasQueuePositionMigrationAsync(connection, transaction, cancellationToken).ConfigureAwait(false))
             throw new CoordinationException("backlog_position_unavailable", StatusCodes.Status503ServiceUnavailable);
 
@@ -620,6 +624,8 @@ internal sealed class BacklogOwnerStore
                 []);
             if (!preflight.IsSuccess)
                 return BacklogCoreResult<BacklogTaskClaimReceipt>.Failure(preflight.Issues);
+            // The preflight passes no prerequisite evidence, so missing-snapshot blockers are expected here.
+            // The check under the graph lock decides them.
             var blockingIssues = preflight.Value!.Blockers
                 .Where(issue => issue.Code != BacklogIssueCode.MissingPrerequisiteSnapshot)
                 .ToImmutableArray();
@@ -680,6 +686,7 @@ internal sealed class BacklogOwnerStore
             return BacklogCoreResult<BacklogTaskClaimReceipt>.Success(existingClaim.ToReceipt(task));
         }
 
+        // One run can own only one task claim.
         await using (var runClaim = new NpgsqlCommand($"""
             SELECT 1
             FROM {_tasks}
@@ -694,6 +701,8 @@ internal sealed class BacklogOwnerStore
                     "backlog_claim_conflict", StatusCodes.Status409Conflict);
         }
 
+        // A new claim must start at the root's first decision state. A later version means the root
+        // already made other decisions.
         if (initializedRoot.StateVersion != 1)
             throw new CoordinationException("backlog_claim_conflict", StatusCodes.Status409Conflict);
 
@@ -804,6 +813,8 @@ internal sealed class BacklogOwnerStore
             reader.GetString(12),
             reader.GetInt64(13),
             reader.GetInt64(14));
+        // Two matching claims mean the binding is not unique, so return no candidate instead of
+        // picking one.
         if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             return null;
         if (candidate.TaskState != BacklogTaskState.Claimed || candidate.IsArchived ||

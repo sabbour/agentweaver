@@ -81,6 +81,8 @@ public sealed class ChiefOfStaffStore
         CoordinationIdentity.ValidateIdentity(projectId, "project_id");
         CoordinationIdentity.ValidateIdentity(runId, "run_id");
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        // The insert selects from the run request, so it writes a row only when this caller started
+        // the run. An existing binding is kept.
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_schema}.chief_of_staff_conversations
                 (conversation_id, tenant_id, owner_issuer, owner_subject, project_id, run_id)
@@ -126,6 +128,7 @@ public sealed class ChiefOfStaffStore
             throw new CoordinationException("page_size_invalid", StatusCodes.Status400BadRequest);
         var after = cursor is null ? null : DecodeCursor(cursor, pageSize);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        // Read one extra row to know whether another page exists.
         var rows = await ReadConversationsAsync(
             connection, actor, tenantId, null, null, null, after, pageSize + 1, cancellationToken).ConfigureAwait(false);
         var hasMore = rows.Count > pageSize;
@@ -171,6 +174,8 @@ public sealed class ChiefOfStaffStore
         var outcome = ValidateOutcome(request.Outcome);
         var notes = ValidateNotes(request.Notes);
         var keyHash = Hash(idempotencyKey);
+        // Leave checklist item IDs out of the fingerprint. The store generates an ID for each item
+        // without one, so the IDs can differ between retries of the same request.
         var fingerprint = Hash(JsonSerializer.Serialize(new
         {
             outcome,
@@ -180,6 +185,8 @@ public sealed class ChiefOfStaffStore
 
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        // Lock the caller's list so the replay check, the limit check, and the new position use one
+        // consistent state.
         await LockListAsync(connection, transaction, actor, tenantId, cancellationToken).ConfigureAwait(false);
 
         await using (var existing = new NpgsqlCommand($"""
@@ -205,6 +212,7 @@ public sealed class ChiefOfStaffStore
         }
 
         var id = NewId();
+        // No row is inserted when the list is full, which gives priority_limit_reached.
         await using (var insert = new NpgsqlCommand($"""
             WITH current AS (
                 SELECT count(*) AS total, coalesce(max(position) + 1, 0) AS next_position
@@ -528,6 +536,8 @@ public sealed class ChiefOfStaffStore
         var identityProjection = repositoryIdentity
             ? "l.provider_id, l.repository_owner, l.repository_name"
             : "NULL::varchar, NULL::varchar, NULL::varchar";
+        // Run and conversation links are checked against owner rows. Other kinds have no owner row here,
+        // so they count as found.
         await using (var select = new NpgsqlCommand($"""
             SELECT l.priority_id, l.link_id, l.kind, l.project_id, l.run_id, l.conversation_id, l.item_number,
                 l.artifact_id, l.created_at,
@@ -732,6 +742,7 @@ public sealed class ChiefOfStaffStore
 
     private static ConversationCursor DecodeCursor(string value, int pageSize)
     {
+        // A cursor is valid only with the page size that created it.
         if (value.Length is 0 or > 1024)
             throw new CoordinationException("cursor_invalid", StatusCodes.Status400BadRequest);
         try

@@ -67,8 +67,8 @@ public sealed record GuardrailsStagePlanResult(
 }
 
 /// <summary>
-/// Builds the ordered Guardrails stage plan from the platform catalog. Only platform-enabled checks resolve,
-/// in platform order. A project or accepted selection can't add a disabled or unknown check or change the order.
+/// Builds the ordered Guardrails stage plan from the platform catalog. Without an accepted selection, the platform
+/// order applies. A selection can add, remove, or move only checks that the catalog lets projects override.
 /// Each check is pinned to its adapter version, options schema, options revision, resource, and negotiated capabilities.
 /// </summary>
 public sealed class GuardrailsStagePlanResolver
@@ -125,9 +125,9 @@ public sealed class GuardrailsStagePlanResolver
         if (GuardrailsProviderCapabilities.For(stage, contentClass) is not { } stageCapability)
             return Fail(GuardrailsReasonCode.UnsupportedStageOrContent);
 
-        // Ask the shared provider resolver for the ordered Guardrails set. The catalog decides which checks are
-        // enabled and in what order. The accepted IDs, when present, can only narrow or confirm that set; they
-        // can't add or reorder checks. Every check must support the adapter contract, the options schema,
+        // Ask the shared provider resolver for the ordered Guardrails set. Without accepted IDs, the catalog order
+        // applies. Accepted IDs replace that order, but checks that the catalog does not let projects override
+        // must stay present and in platform order. Every check must support the adapter contract, the options schema,
         // prompt injection detection, and this stage's capability.
         var resolver = new ProviderResolver(_catalog);
         var resolution = resolver.ResolveOrdered(new OrderedProviderResolutionRequest(
