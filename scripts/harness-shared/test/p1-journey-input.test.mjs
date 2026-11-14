@@ -135,13 +135,39 @@ test('accepts an execution plan without caller-created owner receipts', () => {
   assert.equal(Object.hasOwn(value.pins, 'ownerFences'), false);
 });
 
-test('rejects the removed denied-actor fixture field', () => {
-  const oldManifest = planInput();
-  oldManifest.fixturePlan.deniedActor = {
-    actorId: 'different-actor',
-    tenantId: 'controlled-tenant',
-  };
-  assert.throws(() => validateP1RunnerPlanInput(oldManifest, { now }), /runner fixture plan must contain exactly/);
+function releasedManifest(deniedActor = { actorId: 'different-actor', tenantId: 'controlled-tenant' }) {
+  const value = planInput();
+  value.fixturePlan.deniedActor = deniedActor;
+  return value;
+}
+
+test('rejects the denied-actor fixture field unless the caller allows it', () => {
+  assert.throws(() => validateP1RunnerPlanInput(releasedManifest(), { now }), /runner fixture plan must contain exactly/);
+});
+
+test('accepts and ignores a valid released denied actor when allowed', () => {
+  const value = validateP1RunnerPlanInput(releasedManifest(), { allowDeniedActor: true });
+  assert.equal(value.environment.actorId, 'controlled-actor');
+  assert.equal(Object.hasOwn(value.fixturePlan, 'deniedActor'), false);
+  assert.equal(validateP1RunnerPlanInput(planInput(), { allowDeniedActor: true }).fixturePlan.gate, null);
+});
+
+test('rejects a malformed denied actor even when allowed', () => {
+  for (const deniedActor of [
+    null,
+    'different-actor',
+    ['different-actor', 'controlled-tenant'],
+    { actorId: 'different-actor' },
+    { tenantId: 'controlled-tenant' },
+    { actorId: 'different-actor', tenantId: 'controlled-tenant', role: 'reader' },
+    { actorId: '', tenantId: 'controlled-tenant' },
+    { actorId: 'different-actor', tenantId: ' ' },
+    { actorId: 7, tenantId: 'controlled-tenant' },
+    { actorId: 'controlled-actor', tenantId: 'controlled-tenant' },
+  ]) {
+    assert.throws(() => validateP1RunnerPlanInput(releasedManifest(deniedActor), { allowDeniedActor: true }),
+      /denied actor/, JSON.stringify(deniedActor));
+  }
 });
 
 test('requires a positive expected platform-runtime revision in runner fixture plans', () => {

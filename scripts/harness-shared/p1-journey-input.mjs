@@ -142,7 +142,7 @@ function validateFixtureOwnership(input, pins, now) {
 }
 
 /** Validate the requested journey and fixture setup plan without accepting caller-supplied ownership. */
-function validatePlan(input, { pins }) {
+function validatePlan(input, { environment, pins }, { allowDeniedActor = false } = {}) {
   if (Object.hasOwn(pins, 'ownerFences') || Object.hasOwn(pins, 'fixtureScope')) {
     throw new Error('Runner plans cannot contain caller-supplied owner fences or fixture receipts.');
   }
@@ -154,7 +154,19 @@ function validatePlan(input, { pins }) {
   const fixturePlanKeys = [
     'expectedPlatformRuntimeRevision', 'selectionContext', 'gate', 'message',
   ];
-  requireExactKeys(plan, fixturePlanKeys, 'runner fixture plan');
+  // Released 1.0.16 manifests can carry an optional deniedActor; only reconcile and recovery cleanup accept it.
+  const hasDeniedActor = allowDeniedActor && Object.hasOwn(plan, 'deniedActor');
+  requireExactKeys(plan, hasDeniedActor ? [...fixturePlanKeys, 'deniedActor'] : fixturePlanKeys,
+    'runner fixture plan');
+  if (hasDeniedActor) {
+    const denied = plan.deniedActor;
+    requireExactKeys(denied, ['actorId', 'tenantId'], 'denied actor');
+    requireString(denied.actorId, 'denied actor ID');
+    requireString(denied.tenantId, 'denied actor tenant ID');
+    if (denied.actorId === environment.actorId && denied.tenantId === environment.tenantId) {
+      throw new Error('The denied actor must be different from the selected P1 actor.');
+    }
+  }
   if (!Number.isSafeInteger(plan.expectedPlatformRuntimeRevision)
     || plan.expectedPlatformRuntimeRevision < 1) {
     throw new Error('A positive expected platform runtime revision is required in the runner fixture plan.');
@@ -197,13 +209,17 @@ function validatePlan(input, { pins }) {
   } else if (plan.message !== null) {
     throw new Error('A message plan is only valid for the message journey.');
   }
+  if (hasDeniedActor) {
+    const { deniedActor: _ignored, ...fixturePlan } = plan;
+    return { fixturePlan, journey: input.journey };
+  }
   return { fixturePlan: plan, journey: input.journey };
 }
 
 /** Validate a setup plan that will be used to create a runner-owned P1 fixture. */
 export function validateP1RunnerPlanInput(input, options = {}) {
   const base = validateP1StaticInput(input);
-  return { ...base, ...validatePlan(input, base) };
+  return { ...base, ...validatePlan(input, base, options) };
 }
 
 /** Validate the exact environment pins and active fixture scope before a P1 journey runs. */
