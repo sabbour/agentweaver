@@ -97,6 +97,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
             receipt.SourceGrant.ExpiresAt > registration.ExpiresAt || !actor.Bearer.IsUsable())
             throw new RuntimeAuthorizationException("runtime_activation_receipt_invalid");
         cancellationToken.ThrowIfCancellationRequested();
+        // Resume authority can change while the Host call runs, so check the same request again.
         if (request.ResumeBootstrap is { } verifiedResume)
         {
             if (receipt.SourceGrant.ExpiresAt <= timeProvider.GetUtcNow())
@@ -143,6 +144,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
         var receipt = await SendToHostAsync<RuntimeBootstrapDeliveryReceipt>(
             placement,
             endpoint.AbsolutePath, actor, request, cancellationToken).ConfigureAwait(false);
+        // Recheck the grant and placement because either can change during the Host call.
         var currentPlacement = await ReadPlacementAsync(
             registration, actor, cancellationToken, request.CheckpointRecoveryOperationId).ConfigureAwait(false);
         RequireGrant(await verifier.VerifyPendingBootstrapDeliveryAsync(

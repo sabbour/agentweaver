@@ -40,6 +40,7 @@ public sealed partial class EnvironmentP1CreationReader(
                     throw Denied();
                 var result = await ReadUnderOwnerLockAsync(
                     dataSource, timeProvider, binding, context, pod, token).ConfigureAwait(false);
+                // Recheck Core's binding after the owner read so an intervening change cannot pass.
                 var after = await core.ReadCurrentAsync(actor, projectId, runId, token).ConfigureAwait(false);
                 if (after != binding || !actor.Bearer.IsUsable())
                     throw new RuntimeAuthorizationException("p1_invocation_binding_changed");
@@ -120,6 +121,7 @@ public sealed partial class EnvironmentP1CreationReader(
         NpgsqlConnection connection, NpgsqlTransaction transaction, EnvironmentGenerationFence fence,
         string volumeId, long volumeGeneration, SandboxPodObservation pod, CancellationToken token)
     {
+        // Fetch one extra row so the exact-four check below detects duplicate links.
         await using var command = new NpgsqlCommand("""
             SELECT operation_id, resource_kind, resource_id, lifecycle_generation,
                    contract_version, core_invocation_id, setup_invocation_id, setup_receipt_hash,

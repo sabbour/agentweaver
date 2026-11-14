@@ -26,6 +26,7 @@ public sealed partial class EnvironmentP1CreationReader
         DateTimeOffset now)
     {
         var records = retained.ToArray();
+        // The evidence chain needs one completed record for each of its four resources.
         var environment = Require("Environment", fence.Owner.EnvironmentId);
         var metadata = Require("WorkspaceVolumeMetadata", volumeId);
         var volume = Require("WorkspaceVolume", volumeId, storage.Generation);
@@ -54,6 +55,7 @@ public sealed partial class EnvironmentP1CreationReader
             if (matches.Length != 1 || matches[0].State != "Completed")
                 throw Denied();
             var receipt = matches[0].Receipt;
+            // PostgreSQL stores these timestamps at microsecond precision.
             if (receipt.OperationId == Guid.Empty || receipt.CreatedAt.UtcTicks / 10 < binding.AcceptedAt.UtcTicks / 10 ||
                 receipt.CompletedAt < receipt.CreatedAt || receipt.CompletedAt > now)
                 throw Denied();

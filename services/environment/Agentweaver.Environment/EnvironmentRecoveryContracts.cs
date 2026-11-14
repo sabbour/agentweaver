@@ -91,6 +91,7 @@ internal sealed record EnvironmentRecoveryCursor(
     public static string Encode(EnvironmentRecoveryCursor cursor)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(cursor, JsonOptions);
+        // Emit unpadded Base64url so the cursor is safe in query parameters.
         return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 
@@ -111,6 +112,7 @@ internal sealed record EnvironmentRecoveryCursor(
             var cursor = JsonSerializer.Deserialize<EnvironmentRecoveryCursor>(
                 Convert.FromBase64String(base64),
                 JsonOptions);
+            // A page token must continue the same owner, environment, and lifecycle query.
             if (cursor is null ||
                 cursor.Version != 1 ||
                 !string.Equals(cursor.TenantId, tenantId, StringComparison.Ordinal) ||

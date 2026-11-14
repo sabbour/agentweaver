@@ -21,6 +21,7 @@ internal static class EnvironmentP1InvocationBindingVerifier
         if (binding is null)
             throw new RuntimeAuthorizationException("p1_invocation_binding_missing");
 
+        // The saved invocation must match both Core's request and current project authorization.
         if (binding.ContractVersion != 1 ||
             binding.CoreInvocationId != expectation.CoreInvocationId ||
             binding.SetupInvocationId != expectation.SetupInvocationId ||
