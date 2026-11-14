@@ -865,9 +865,6 @@ public sealed record RunExecutionTransitionResult(
     public CheckpointRecoveryStatus? CheckpointRecovery { get; init; }
 }
 
-/// <summary>
-/// Reports an accepted checkpoint recovery that still needs Host continuation.
-/// </summary>
 public sealed record CheckpointRecoveryStatus(
     string Phase,
     string SourceCheckpointId,

@@ -1574,6 +1574,7 @@ public static partial class CoordinationEndpoints
             var delivery = await store.ClaimOutboundAsync(
                 actor, result.OwnerMessageId, cancellationToken).ConfigureAwait(false);
             if (delivery is null)
+                // Without the claim, this request cannot safely admit to Events; return the persisted owner result.
                 return Results.Accepted(value: result);
             var outbound = await store.ReadOutboundMessageAsync(
                 result.OwnerMessageId, cancellationToken).ConfigureAwait(false);
@@ -1975,6 +1976,7 @@ public static partial class CoordinationEndpoints
                                 actor, result.Session, selection, token).ConfigureAwait(false);
                             if (recoveryStatus.BoundaryKind == "childJoin")
                             {
+                                // Child-join admission pins the accepted selection as well as the gate tuple.
                                 var gate = current.State.PendingGate;
                                 if (current.StateVersion != recoveryStatus.DecisionStateVersion ||
                                     current.State.Fence != result.ExecutionFence ||
