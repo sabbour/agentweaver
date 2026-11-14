@@ -12,7 +12,7 @@ internal sealed partial class AgentSuiteNativeValidator
     /// <summary>Upstream <c>validateToolProvider</c>.</summary>
     private string? ValidateToolProvider(J provider, byte[] raw)
     {
-        // Some checks need the raw JSON (field presence, original key order), so "raw" is
+        // Some checks need the raw JSON (field presence and the raw variant digests), so "raw" is
         // passed alongside the decoded "provider". All errors are collected, not just the first.
         var errs = new List<string?> { ValidateRawToolPolicyFields(raw) };
         if (provider["schemaVersion"].S != AgentSuiteTypes.SpecVersion || provider["mediaType"].S != AgentSuiteTypes.MediaTypeToolProvider)
@@ -159,8 +159,8 @@ internal sealed partial class AgentSuiteNativeValidator
         return Go.Join(errs);
     }
 
-    // Go lowercases Unicode letters too. That small difference doesn't matter here, because the
-    // result is only used to compare header names, and those must be ASCII anyway.
+    // Go strings.ToLower and ToLowerInvariant can map some non-ASCII letters differently. This does not
+    // change the result: a valid header name is ASCII, and an invalid name gets the same error.
     private static string GoToLower(string value) => value.ToLowerInvariant();
 
     // Headers managed by the HTTP/MCP transport; a package may not set them.

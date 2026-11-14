@@ -285,6 +285,9 @@ internal static class AgentSuiteValidator
             return null;
         if (extensions.Length != 1)
             return InvalidProjectTeamMetadata(profileErrors);
+        // Every composition of the agent must resolve each native requirement, and a remote provider has no
+        // bundled variant to resolve. So the export lists remote providers here, and they are added to the
+        // agent tool requirements. Each one must be a catalog provider with a remote block, listed once.
 
         var entry = content.Get(AgentSuiteProjectTeamExtension.ContentPath(agentId));
         if (entry is not { Type: "file", Bytes: { } bytes } ||

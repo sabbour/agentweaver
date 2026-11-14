@@ -278,7 +278,9 @@ internal static class AgentSuiteImportPlanner
             provider.HasBundledVariants,
             remote,
             tools,
-            // Only remote providers without header secrets can be bound to an Environment connection.
+            // The kind is "remote-mcp" only for a remote provider without header secrets; other providers are
+            // "unsupported". A remote provider with header secrets can still be bound, but the agents that use
+            // it get the tool_connection_header_secrets_unsupported blocker.
             remote is { Headers.IsEmpty: true } ? RemoteMcpKind : "unsupported");
     }
 

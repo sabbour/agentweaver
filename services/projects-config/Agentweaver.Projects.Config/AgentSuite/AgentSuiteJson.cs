@@ -262,8 +262,9 @@ internal static class AgentSuiteJson
                     }
                     // The text JCS would write for this number.
                     var transformed = CanonicalJson.FormatNumber(parsed);
-                    // Only integer literals are compared. An integer above 2^53 cannot be stored exactly in a
-                    // double, so its canonical form is a different integer and the document is rejected as lossy.
+                    // Only integer literals that fit in a long are compared. Some integers above 2^53 cannot be
+                    // stored exactly in a double; their canonical form is a different integer, so the document is
+                    // rejected as lossy. Larger integer literals are not compared here.
                     // Non-integer literals (1.50, 1e2) may be reformatted but keep their value, so they pass.
                     if (long.TryParse(current.Text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var integer))
                     {
