@@ -1130,6 +1130,7 @@ async function waitForJob(kubectl, deps, name, timeoutSeconds) {
       .map(status => status.state?.waiting?.reason).find(reason => FAILED_PULL.has(reason));
     if (waiting) return `could not start its container (${waiting})`;
     if (deps.now().getTime() > deadline) return `did not finish within ${timeoutSeconds} seconds`;
+    // Widen each polling interval, capped at 15 seconds, to reduce API requests for long Jobs.
     await deps.sleep(Math.min(5000 * (attempt + 1), 15_000));
   }
 }

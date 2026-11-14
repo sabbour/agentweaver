@@ -298,6 +298,7 @@ function providerFingerprint(configMapName, configMapData, secretKeyRef) {
 }
 
 function providerConfigMapName(data) {
+  // The map is immutable, so new data gets a new name and activation switches the Deployment reference.
   return `${BASE_CONFIG_MAP}-${configMapHash(data).slice(0, 16)}`;
 }
 
@@ -813,6 +814,7 @@ function activateInCluster(plan, base, { execKubectl }, config) {
   let currentState;
   try {
     current = readState();
+    // Bind activation to the exact ConfigMap and Deployment versions the caller reviewed.
     if (current.baseMap.metadata?.resourceVersion !== config.expectedConfigResourceVersion) {
       resourceVersionConflict(`ConfigMap/${BASE_CONFIG_MAP}`, REVISION_FLAG_FIELDS.config);
     }
@@ -928,6 +930,7 @@ function activateInCluster(plan, base, { execKubectl }, config) {
       ...(isRecord(oldAnnotations) ? oldAnnotations : {}),
       ...plan.rendered.deployment.podTemplateAnnotations,
     };
+    // Test the object, version, and active ConfigMap before switching its reference and environment.
     const patch = [
       { op: 'test', path: '/metadata/uid', value: current.deployment.metadata.uid },
       { op: 'test', path: '/metadata/resourceVersion', value: current.deployment.metadata.resourceVersion },
@@ -983,6 +986,7 @@ function activateInCluster(plan, base, { execKubectl }, config) {
       if (error instanceof IdentityBrokerProviderSetupError) throw error;
       throw activationError('preflight', names, safePreflightCause(error));
     }
+    // A write may reach the API before the client sees an error; report readback instead of claiming rollback.
     let readback = {};
     try {
       const actual = readState();

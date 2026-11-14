@@ -186,6 +186,7 @@ export function renderEventsProfile(input) {
     key => modelBindingFieldPattern.test(key) || key === rateCardKey ||
       azureModelRatePattern.test(key) ||
       azureCostFields.some(field => key === `${azureCostPrefix}${field}`));
+  // Use the checked-in rate card when no target-specific value is supplied.
   const resolvedData = Object.hasOwn(data, rateCardKey)
     ? data : { ...data, [rateCardKey]: defaultRateCardJson };
   for (const key of requiredConfiguration) {

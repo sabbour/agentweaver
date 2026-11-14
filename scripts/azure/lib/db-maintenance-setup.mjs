@@ -164,6 +164,7 @@ function withSetupKubectl(exec, target, action) {
   } catch (error) {
     failure = error;
   }
+  // Always remove the temporary kubeconfig; preserve the setup error if cleanup also fails.
   try {
     rmSync(directory, { recursive: true, force: true });
   } catch (cleanupError) {

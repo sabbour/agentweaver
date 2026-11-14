@@ -81,6 +81,7 @@ export function projectIdentityRoutingReadback(value) {
         hostnames: value.spec?.hostnames, parentRefs: value.spec?.parentRefs?.map(reference),
         rules: value.spec?.rules?.map(item => ({
           filters: item.filters?.map(() => ({})),
+          // Keep paths and match-key presence, but do not expose unrelated match values.
           matches: item.matches?.map(match => Object.fromEntries(Object.entries(match)
             .map(([key, field]) => [key, key === 'path' ? field : true]))),
           backendRefs: item.backendRefs?.map(backend => ({
@@ -237,6 +238,7 @@ export function observeExistingP0BrokerRouting({
   const apiListener = gateway.spec?.listeners?.find(item => item.name === 'api');
   const observedBrokerHost = route.spec?.hostnames?.[0];
   const legacyHost = hostname.replace(/^agentweaver\./, 'identity-broker.');
+  // Before application routes exist, accept the old hostname so alignment can move it to the managed host.
   const permittedBrokerHost = requireApplicationRoutes ? hostname : [hostname, legacyHost].includes(observedBrokerHost)
     ? observedBrokerHost : hostname;
   const listenerNames = gateway.spec?.listeners?.map(item => item.name) ?? [];
