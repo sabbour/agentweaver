@@ -213,7 +213,7 @@ public static class CoordinationOwnerMigrator
     }
 
     /// <summary>
-    /// Checks that the recorded migration versions, tables, columns, and immutability guards are current.
+    /// Verifies required schema state and accepts optional migrations only when absent or fully applied.
     /// </summary>
     /// <exception cref="InvalidOperationException">The schema is missing an expected migration or database object.</exception>
     public static async Task VerifyAsync(
@@ -230,8 +230,8 @@ public static class CoordinationOwnerMigrator
         // record, the spend_budget_reservations table, and the spend_budget_accounting_cursors table.
         // Six columns cover version 030: its migration record, its two tables, and its three unique indexes.
         // Two columns cover version 031: its migration record and the promotion dismissal table.
-        // Additive migrations 032, 033, and 035-051 remain optional to readiness.
-        // so the owner can start before maintenance applies the reviewed plan; accept only complete shapes.
+        // Additive migrations 032, 033, and 035-051 are optional at readiness.
+        // This lets the owner start before maintenance applies them. Only complete shapes are accepted.
         await using var command = new NpgsqlCommand($"""
             SELECT
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 1),

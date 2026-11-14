@@ -246,6 +246,7 @@ internal static class ChildCheckpointRecoveryManifestCodec
 
         internal void Include<T>(T value)
         {
+            // Charge records as they are collected so an oversized census fails before the full manifest is assembled.
             _bytes += JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions).Length;
             if (_bytes > MaximumBytes)
                 throw new CoordinationException(
@@ -302,6 +303,7 @@ internal static class ChildCheckpointRecoveryManifestCodec
             var manifest = JsonSerializer.Deserialize<ChildCheckpointRecoveryManifest>(bytes, JsonOptions)
                 ?? throw new JsonException();
             var encoded = Encode(manifest);
+            // A matching digest does not make alternate JSON encodings interchangeable.
             if (!string.Equals(encoded.Json, json, StringComparison.Ordinal))
                 throw new JsonException();
             return manifest;
@@ -348,6 +350,7 @@ internal static class ChildCheckpointRecoveryManifestCodec
 
     private static void WriteCanonical(Utf8JsonWriter writer, JsonElement value)
     {
+        // Property order is canonicalized for stable hashes; array order remains part of the evidence.
         switch (value.ValueKind)
         {
             case JsonValueKind.Object:

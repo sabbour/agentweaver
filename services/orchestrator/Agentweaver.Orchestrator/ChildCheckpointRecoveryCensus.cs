@@ -20,6 +20,7 @@ internal static class ChildCheckpointRecoveryCensus
         SessionIdentity root,
         CancellationToken cancellationToken)
     {
+        // Stable key order keeps concurrent recoveries from taking overlapping child locks in opposite order.
         await using var command = new NpgsqlCommand($"""
             SELECT session_id, parent_session_id, root_session_id, writer_issuer, writer_subject,
                    execution_fence, lifecycle_state, turn_state, logical_turn_ordinal,
@@ -75,6 +76,7 @@ internal static class ChildCheckpointRecoveryCensus
             throw InvalidBoundary();
         var originFence = originManifest?.SourceExecutionFence ?? sourceFence;
         var originRootStartup = originManifest?.RootStartup ?? rootStartup;
+        // Recovery state can name a child in several independent ways; require the union to match locked sessions.
         var expected = new HashSet<string>(StringComparer.Ordinal);
         expected.UnionWith(source.State.PendingDispatches.Keys);
         expected.UnionWith(source.State.FixedWorkAssociations.Keys);
@@ -347,6 +349,7 @@ internal static class ChildCheckpointRecoveryCensus
         bool hasResult,
         bool hasReceipt)
     {
+        // A terminal task is joined only after native accounting and both owner records are present.
         if (native is { State: "sending" or "terminal_pending_accounting" or "indeterminate" })
             return ("unresolved", "native_send_or_accounting_unresolved");
         if (intent is null &&
@@ -360,6 +363,7 @@ internal static class ChildCheckpointRecoveryCensus
         }
         if (native is { State: "completed" })
         {
+            // Keep completed work unjoined only while its child remains active and its native accounting is complete.
             if (hasResult || hasReceipt || intent is null ||
                 progress != MafExecutionTaskStatus.Running ||
                 child.Lifecycle != "active" || child.TurnState != "active" ||
@@ -369,6 +373,7 @@ internal static class ChildCheckpointRecoveryCensus
                 return ("unresolved", "original_child_material_unavailable");
             return ("completedUnjoined", null);
         }
+        // Resume is safe only when owner evidence shows no native send occurred and child startup remains usable.
         if (hasResult || hasReceipt || intent is null || progress != MafExecutionTaskStatus.Running ||
             child.Lifecycle != "active" ||
             child.TurnState is "completed" or "failed" or "indeterminate")
@@ -402,6 +407,7 @@ internal static class ChildCheckpointRecoveryCensus
         RuntimeChildStartBinding binding,
         string selectionHash,
         string? workItemBindingHash) =>
+        // A receipt may predate the final native revision, but it cannot cite a later one.
         native is not null &&
         native.TerminalOutcome == "native-completed" &&
         receipt.RequestId == binding.DispatchMessageId &&
@@ -512,6 +518,7 @@ internal static class ChildCheckpointRecoveryCensus
             {
                 var previous = originMember.Startup;
                 var originalPlacement = previous.Placement;
+                // A retry may carry the original bootstrap or one admitted for this recovery.
                 var bootstrapMismatch = bootstrap is null || registration is null ||
                      hasCurrentBootstrap
                          ? bootstrap is null || registration is null ||
@@ -761,6 +768,7 @@ internal static class ChildCheckpointRecoveryCensus
             reader.IsDBNull(29) ? null : reader.GetString(29),
             reader.IsDBNull(30) ? null : reader.GetInt64(30),
             reader.GetFieldValue<DateTimeOffset>(31));
+        // A child can bind to only one native dispatch; a second row makes the source ambiguous.
         if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             throw InvalidBoundary();
         return origin;
@@ -839,6 +847,7 @@ internal static class ChildCheckpointRecoveryCensus
         int observedCount,
         CancellationToken cancellationToken)
     {
+        // Every run-level native dispatch must map to a census member.
         await using var command = new NpgsqlCommand($"""
             SELECT count(*)
             FROM {schema}.maf_execution_dispatches
@@ -954,6 +963,7 @@ internal static class ChildCheckpointRecoveryCensus
                 title = reader.GetString(8),
                 description = reader.IsDBNull(9) ? null : reader.GetString(9)
             }));
+        // The run has at most one recorded claim; reject a second match instead of choosing one.
         if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             throw InvalidBoundary();
         return claim;
@@ -1000,6 +1010,7 @@ internal static class ChildCheckpointRecoveryCensus
         ChildCheckpointRecoveryManifestCodec.ByteBudget budget,
         CancellationToken cancellationToken)
     {
+        // Capture unresolved work owned by other subsystems in the same recovery boundary.
         await using var command = new NpgsqlCommand($"""
             SELECT kind, id, state, evidence FROM (
                 SELECT 'rootModelTurn' AS kind, admission.request_id::text AS id, 'admitted' AS state,

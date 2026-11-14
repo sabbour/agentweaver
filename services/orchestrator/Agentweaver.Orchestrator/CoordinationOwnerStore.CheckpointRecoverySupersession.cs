@@ -23,6 +23,7 @@ internal sealed partial class CoordinationOwnerStore
         ChildCheckpointRecoveryManifest successorManifest,
         CancellationToken cancellationToken)
     {
+        // Lock the saved child-join recovery before comparing its boundary with successor evidence.
         await using var command = new NpgsqlCommand($"""
             SELECT operation_id, request_hash, result::text, progress::text, phase_version
             FROM {_executionOperations}
@@ -124,6 +125,7 @@ internal sealed partial class CoordinationOwnerStore
         {
             if (member.NativeOriginProvenAbsent && member.NativeOrigin is null)
                 continue;
+            // Only an origin that is still prepared and has no provider outcome or accounting can be carried forward.
             if (member.NativeOrigin is not { } native || member.NativeOriginProvenAbsent ||
                 native.State != "prepared" || native.OwnerRevision != 1 ||
                 native.TerminalOutcome is not null || native.SourceReportStatus != "unknown" ||
@@ -263,6 +265,7 @@ internal sealed partial class CoordinationOwnerStore
 
         var sessions = expected.Keys.Order(StringComparer.Ordinal).ToArray();
         var entries = new List<object>(sessions.Length);
+        // Keep the full root-and-child startup set locked while validating its replacement evidence.
         await using var command = new NpgsqlCommand($"""
             SELECT root_session_id, accepted_selection_hash, execution_fence, intent_id, state,
                    environment_id, runtime_instance_id, receipt_links::text, cleanup_obligation, row_version
@@ -388,6 +391,7 @@ internal sealed partial class CoordinationOwnerStore
             JsonSerializer.SerializeToUtf8Bytes(entries, JsonOptions)));
     }
 
+    // Exclude recovery-specific fence, placement, profile, and endpoint values from the identity comparison.
     private static string ComputeRecoveryBindingIdentityHash(RuntimeBinding binding) =>
         RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(
             binding with
