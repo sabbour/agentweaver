@@ -46,6 +46,7 @@ public sealed class PlatformEgressReconciler(
     public async Task<PlatformEgressReconcileResult> ReconcileAsync(CancellationToken cancellationToken)
     {
         var snapshot = await ReadSourceAsync(cancellationToken).ConfigureAwait(false);
+        // Stop retrying if the admitted source keeps changing during this pass.
         for (var read = 1; ; read++)
         {
             if (snapshot is null)
@@ -125,6 +126,11 @@ public sealed class PlatformEgressReconciler(
         }
     }
 
+    /// <summary>
+    /// Returns true when the current snapshot is valid, its source ID, revision, hash, checkpoint, and mode
+    /// match the expected snapshot, and its destination intent hash matches <paramref name="intentHash"/>;
+    /// otherwise, false.
+    /// </summary>
     private static bool SameAdmission(
         PlatformEgressPolicySnapshot current,
         PlatformEgressPolicySnapshot expected,

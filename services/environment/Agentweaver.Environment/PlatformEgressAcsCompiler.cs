@@ -27,6 +27,7 @@ public static class PlatformEgressAcsCompiler
 
         var destinations = policy.ApprovedDestinations
             .Concat(policy.SystemDestinations)
+            // Canonical ordering keeps the compiled snapshot stable when input order changes.
             .OrderBy(destination => destination.Host, StringComparer.Ordinal)
             .ThenBy(destination => destination.Port)
             .ToImmutableArray();

@@ -385,6 +385,10 @@ public static class RemoteMcpConnectionEndpoints
         return endpoints;
     }
 
+    /// <summary>
+    /// Returns true only when the request is authenticated and has a Bearer header with a non-empty parameter
+    /// accepted by <see cref="CurrentCallerRequest"/>; otherwise, false.
+    /// </summary>
     private static bool TryReadCaller(HttpContext context, out CurrentCallerRequest? caller)
     {
         caller = null;

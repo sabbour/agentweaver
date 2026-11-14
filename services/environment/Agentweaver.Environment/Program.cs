@@ -367,7 +367,10 @@ internal sealed class KubernetesServiceAccountHandler : DelegatingHandler
         return response;
     }
 
-    /// <summary>Validates the server name and chain against every root in the configured CA snapshot.</summary>
+    /// <summary>
+    /// Returns true only when a certificate is present, its name matches, and its chain builds to a root in
+    /// the configured CA; otherwise, false.
+    /// </summary>
     private static bool ValidateClusterCertificate(
         X509Certificate? certificate,
         X509Chain? peerChain,
@@ -387,6 +390,7 @@ internal sealed class KubernetesServiceAccountHandler : DelegatingHandler
 
             using var leaf = X509CertificateLoader.LoadCertificate(certificate.Export(X509ContentType.Cert));
             using var chain = new X509Chain();
+            // Use the projected cluster CA rather than the host's system trust store.
             chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
             foreach (var root in roots)
                 chain.ChainPolicy.CustomTrustStore.Add(root);
