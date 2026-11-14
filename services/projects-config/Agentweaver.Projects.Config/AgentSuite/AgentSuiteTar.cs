@@ -614,9 +614,6 @@ internal sealed class GoTarReader(GoReader reader)
                 trimmed = trimmed[..nul];
             ulong value = 0;
             var digits = trimmed;
-            // This accepts one leading '+'. Go strconv.ParseUint does not, so Go rejects such a field.
-            if (digits.Length > 0 && digits[0] == '+')
-                digits = digits[1..];
             if (digits.Length == 0)
             {
                 Failed = true;
