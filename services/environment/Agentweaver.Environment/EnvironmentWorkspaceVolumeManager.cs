@@ -33,6 +33,7 @@ public sealed class EnvironmentWorkspaceVolumeManager(
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Proof);
         ArgumentNullException.ThrowIfNull(request.Proof.Registration);
+        // Environment must derive flush evidence from the current Host proof, not from caller-supplied data.
         if (request.WorkspaceFlush is not null)
             throw new RuntimeAuthorizationException("runtime_suspend_resolve_evidence_not_allowed");
         var delivery = runtimeDelivery ??
@@ -355,6 +356,10 @@ public sealed class EnvironmentWorkspaceVolumeManager(
         return snapshot;
     }
 
+    /// <summary>
+    /// Reads status under fresh ReadProjects authority; when an owner lifecycle exists, it rechecks the
+    /// lifecycle and authority before returning.
+    /// </summary>
     public async Task<EnvironmentWorkspaceVolumeStatus?> InspectStatusAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -388,6 +393,10 @@ public sealed class EnvironmentWorkspaceVolumeManager(
             .ConfigureAwait(false);
         return status;
     }
+    /// <summary>
+    /// Lists one bounded page under WriteProjects and ReadRunSelection authority, and rechecks both before
+    /// returning the page.
+    /// </summary>
     public async Task<EnvironmentRecoveryPage<EnvironmentRunSummary>> ListRunEnvironmentsAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -421,6 +430,10 @@ public sealed class EnvironmentWorkspaceVolumeManager(
             hasMore);
     }
 
+    /// <summary>
+    /// Returns null when the Environment is absent; otherwise, returns a bounded page tied to its lifecycle
+    /// generation and rechecks the owner and caller authority.
+    /// </summary>
     public async Task<EnvironmentRecoveryPage<EnvironmentWorkspaceVolumeStatus>?> ListWorkspaceVolumesAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -446,6 +459,7 @@ public sealed class EnvironmentWorkspaceVolumeManager(
         }
         var afterId = cursor is null
             ? string.Empty
+            // A cursor from another Environment generation cannot continue in this lifecycle.
             : EnvironmentRecoveryCursor.Decode(
                 cursor,
                 authorization.TenantId,
@@ -497,6 +511,7 @@ public sealed class EnvironmentWorkspaceVolumeManager(
             string runId,
             CancellationToken cancellationToken)
     {
+        // Recovery listings require both project write access and separate access to the run selection.
         var authorization = await ReadCurrentAuthorizationContextAsync(
             caller, projectId, runId, tenantId: null, cancellationToken).ConfigureAwait(false);
         RequirePermission(
@@ -523,6 +538,7 @@ public sealed class EnvironmentWorkspaceVolumeManager(
         EffectiveNetworkPolicySelection originalSelection,
         CancellationToken cancellationToken)
     {
+        // Recheck authority and every selection revision so a page cannot return under stale owner state.
         var current = await ReadCurrentAuthorizationContextAsync(
             caller, projectId, runId, original.TenantId, cancellationToken).ConfigureAwait(false);
         if (!SameAuthorizationContext(original, current) ||
@@ -855,6 +871,10 @@ public sealed class EnvironmentWorkspaceVolumeManager(
             throw new ProjectsConfigApiException(code, message);
     }
 
+    /// <summary>
+    /// Returns true when the specified project resource has the requested permission with a positive role
+    /// revision; otherwise, false.
+    /// </summary>
     private static bool HasPermission(
         ProjectAuthorizationContextResponse authorization,
         string projectId,
@@ -865,6 +885,10 @@ public sealed class EnvironmentWorkspaceVolumeManager(
             resource.Permissions.Any(grant =>
                 grant.Permission == permission && grant.RoleRevision > 0));
 
+    /// <summary>
+    /// Returns true when contract version, issuer, actor ID, tenant, membership revision, bound project/run, and
+    /// sorted resource-type/ID and permission/role-revision entries are equal; otherwise, false.
+    /// </summary>
     private static bool SameAuthorizationContext(
         ProjectAuthorizationContextResponse left,
         ProjectAuthorizationContextResponse right)

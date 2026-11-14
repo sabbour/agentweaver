@@ -17,7 +17,7 @@ public sealed class RemoteMcpConnectionException(string code, string message, in
     public int StatusCode { get; } = statusCode;
 }
 
-/// <summary>Validated draft values used to create or replace a Remote MCP connection configuration.</summary>
+/// <summary>Creating the configuration validates these values.</summary>
 public sealed record RemoteMcpConnectionDraft(
     string DisplayName,
     string EndpointUri,

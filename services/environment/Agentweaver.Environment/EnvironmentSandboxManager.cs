@@ -23,7 +23,10 @@ public sealed record SandboxProvisionApiRequest(
     /// <summary>Exact Core invocation expected for this P1-specific Sandbox provider creation.</summary>
     public P1InvocationBindingExpectation? P1Binding { get; init; }
 
-    /// <summary>Validates workspace, generation, mount, and idempotency fields before provider work begins.</summary>
+    /// <summary>
+    /// Rejects invalid request identity and generations before lease reservation; mount validity is checked
+    /// during attachment negotiation.
+    /// </summary>
     public SandboxProvisionApiRequest Validate()
     {
         _ = new WorkspaceVolumeReference("project", VolumeId, VolumeResourceGeneration).Validate();
@@ -168,6 +171,7 @@ public sealed class EnvironmentSandboxManager(
         Func<CancellationToken, Task> requireCurrent,
         CancellationToken cancellationToken)
     {
+        // A child needs its own turn and step identity; the coordinator root identity cannot authorize it.
         if (expectedOwner.AgentId == RuntimeActionContract.CoordinatorRootStepId ||
             expectedOwner.LogicalTurnOrdinal < 1 ||
             string.IsNullOrWhiteSpace(expectedOwner.WorkflowStepId))
@@ -184,6 +188,7 @@ public sealed class EnvironmentSandboxManager(
         CancellationToken cancellationToken)
     {
         request.Validate();
+        // Replacement may use only the workspace and network pins from the placement it replaces.
         if (provision.VolumeId != request.PreviousPlacement.WorkspaceVolumeId ||
             provision.VolumeResourceGeneration != request.PreviousPlacement.WorkspaceResourceGeneration ||
             provision.DataGeneration != request.PreviousPlacement.WorkspaceDataGeneration ||
@@ -210,6 +215,7 @@ public sealed class EnvironmentSandboxManager(
         var selection = await egressManager.GetAuthorizedRunEnvironmentSelectionAsync(
             caller, owner, cancellationToken).ConfigureAwait(false);
         var networkSelection = selection.RunSelection;
+        // Recheck actor and run-selection state before reserving a lease.
         if (selection.Authorization.TenantId != expectedOwner.TenantId ||
             selection.Authorization.Issuer != expectedOwner.ActorIssuer ||
             selection.Authorization.ActorId != expectedOwner.ActorId ||
@@ -2731,6 +2737,7 @@ public sealed class EnvironmentSandboxManager(
         return recovery;
     }
 
+    /// <summary>Returns true when the attachments have equal JSON structure and values; otherwise, false.</summary>
     private static bool SameSandboxWorkspaceAttachment(
         SandboxWorkspaceAttachment left,
         SandboxWorkspaceAttachment right) =>
@@ -2931,6 +2938,10 @@ public sealed class EnvironmentSandboxManager(
         return value.GetString()!;
     }
 
+    /// <summary>
+    /// Returns true when resource references and resource/data generations match and both snapshots have
+    /// equal non-null provider bindings; otherwise, false.
+    /// </summary>
     private static bool SameWorkspace(WorkspaceContext left, WorkspaceContext right) =>
         left.Snapshot.Resource == right.Snapshot.Resource &&
         left.Snapshot.ResourceGeneration == right.Snapshot.ResourceGeneration &&
@@ -3054,7 +3065,11 @@ public sealed class EnvironmentSandboxManager(
         };
     }
 
-    /// <summary>Compares the lease revision and fencing values that identify one current placement.</summary>
+    /// <summary>
+    /// Returns true when both leases are null, or when their operation ID, owner fence, resource generation,
+    /// lease revision, current and provider fencing generations, state, current flag, and expiry are equal;
+    /// otherwise, false.
+    /// </summary>
     internal static bool SameCurrentPlacementLease(
         SandboxLeaseSnapshot? left,
         SandboxLeaseSnapshot? right) =>

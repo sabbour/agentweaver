@@ -476,6 +476,10 @@ internal static class RemoteMcpMetadataParser
             throw Invalid($"MCP tool input schema {keyword} must be a non-negative integer.");
     }
 
+    /// <summary>
+    /// For a JSON number, returns true and sets <paramref name="result"/> when its exact value is a
+    /// non-negative Int32 (including negative zero); otherwise, returns false.
+    /// </summary>
     private static bool TryGetNonNegativeInt32(JsonElement value, out int result)
     {
         result = 0;
@@ -568,6 +572,7 @@ internal static class RemoteMcpMetadataParser
             }
             catch
             {
+                // The caller cannot dispose a document that failed validation before it was returned.
                 document.Dispose();
                 throw;
             }

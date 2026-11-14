@@ -923,7 +923,7 @@ public sealed class WorkspaceVolumeService
         return FlushResult(reservation, completion, null, providerRequest);
     }
 
-    /// <summary>Compares the complete suspend-bound flush request by serialized value.</summary>
+    /// <summary>Returns true when the serialized requests have equal JSON values; otherwise, false.</summary>
     private static bool SameFlushRequest(WorkspaceVolumeFlushRequest expected, WorkspaceVolumeFlushRequest actual) =>
         JsonElement.DeepEquals(
             JsonSerializer.SerializeToElement(expected, SpecificationJsonOptions),
@@ -1189,6 +1189,11 @@ public sealed class WorkspaceVolumeService
         return reservation;
     }
 
+    /// <summary>
+    /// Returns true when references are identical (including two nulls), or when both non-null bindings have
+    /// equal provider ID, adapter version, options schema version/revision/snapshot, and release descriptor;
+    /// otherwise, false.
+    /// </summary>
     private static bool ProviderBindingsEqual(
         WorkspaceVolumeProviderBindingSnapshot? left,
         WorkspaceVolumeProviderBindingSnapshot? right) =>
