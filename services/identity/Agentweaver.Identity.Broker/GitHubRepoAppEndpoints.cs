@@ -114,6 +114,7 @@ internal static class GitHubRepoAppEndpoints
         }
 
         var callbackCookie = context.Request.Cookies[GitHubRepoAppConnectionService.CallbackCookie];
+        // Clear the one-use browser cookie before any owner or provider failure can return the callback.
         DeleteCallbackCookie(context);
         context.Response.Headers.CacheControl = "no-store";
         if (ownerId is null)

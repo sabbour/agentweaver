@@ -25,6 +25,7 @@ public static class IdentityBrokerInternalTlsConfiguration
             string.IsNullOrWhiteSpace(defaultCertificateKeyPath))
             throw new InvalidOperationException("The Broker HTTPS endpoint requires default certificate paths.");
 
+        // The Broker service name gets its internal certificate; other SNI names keep the configured default.
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
             [$"{HttpsEndpoint}:Sni:{InternalServiceHost}:Certificate:Path"] = InternalCertificatePath,

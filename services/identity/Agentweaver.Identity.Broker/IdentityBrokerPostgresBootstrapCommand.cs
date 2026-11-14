@@ -354,6 +354,7 @@ internal static class IdentityBrokerPostgresBootstrapCommand
     private static NpgsqlDataSource CreateDataSource(string connectionString, string postgresHost)
     {
         var builder = new NpgsqlDataSourceBuilder(connectionString);
+        // Connect through the installer tunnel but validate TLS against the PostgreSQL host name.
         builder.UseSslClientAuthenticationOptionsCallback(options => options.TargetHost = postgresHost);
         return builder.Build();
     }
@@ -427,6 +428,7 @@ internal static class IdentityBrokerPostgresBootstrapCommand
         IdentityBrokerPostgresBootstrapOptions options,
         CancellationToken cancellationToken)
     {
+        // PostgreSQL rejects CREATE DATABASE inside a transaction, so it precedes the role and schema transactions.
         await using (var createDatabase = new NpgsqlCommand(
             $"CREATE DATABASE {QuoteIdentifier(options.DatabaseName)}", adminConnection))
             await createDatabase.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);

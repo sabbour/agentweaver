@@ -715,6 +715,7 @@ internal sealed partial class GitHubRepoAppConnectionService
                     ownerId.ToString(), projectId, runId, cancellationToken).ConfigureAwait(false))
                 throw new GitHubRepoAppConnectionException(GitHubRepoAppConnectionFailure.RunBindingInvalid);
 
+            // The first mint pins the granted permission set; later mints must match it.
             if (latestSelection.PermissionDigest is not null &&
                 !string.Equals(
                     latestSelection.PermissionDigest,
@@ -1009,6 +1010,7 @@ internal sealed partial class GitHubRepoAppConnectionService
                 "github-repo-app-user-refresh",
                 current.ConnectionId,
                 cancellationToken).ConfigureAwait(false);
+            // GitHub may consume this token once the refresh request starts; an ambiguous failure must not retry it.
             providerRotationStarted = true;
             rotated = await _provider.RefreshAsync(oldRefreshToken, cancellationToken).ConfigureAwait(false);
             var accessRef = await _secretWriter.WriteVersionAsync(
@@ -1223,6 +1225,7 @@ internal sealed partial class GitHubRepoAppConnectionService
         CancellationToken cancellationToken)
     {
         var current = await ReloadConnectionAsync(expected.ConnectionId, cancellationToken).ConfigureAwait(false);
+        // Token refresh changes the credential revision; reauthorization changes this selection-bound revision.
         if (current.OwnerId != expected.OwnerId ||
             current.ConnectionRevision != expected.ConnectionRevision ||
             current.State != RepoAppConnectionState.Connected)

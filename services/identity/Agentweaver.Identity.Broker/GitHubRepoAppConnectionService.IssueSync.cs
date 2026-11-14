@@ -10,6 +10,7 @@ internal sealed partial class GitHubRepoAppConnectionService
     internal async Task<GitHubAppInstallationCredential> MintIssueSyncTokenAsync(IssueSyncGrant grant,
         IssueSyncGrantAuthority authority, GitHubAppInstallationTokenIssuer issuer, CancellationToken ct)
     {
+        // Recheck the grant around provider and key operations so a stale selection cannot release a token.
         await authority.RequireAsync(grant.GrantId, ct);
         var selection = await _db.RepoAppRepositorySelections.AsNoTracking()
             .SingleOrDefaultAsync(row => row.CodeHash == grant.SelectionHash &&

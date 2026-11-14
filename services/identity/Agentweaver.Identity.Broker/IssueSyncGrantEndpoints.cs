@@ -40,6 +40,7 @@ internal static class IssueSyncGrantEndpoints
                 await ReadOwnerAsync<IssueSyncRevocationProof>(context, projectId, "issue-sync-grant-revocation"), context.RequestAborted);
             return new { revoked = true };
         }));
+        // These anonymous routes require the pinned Orchestrator TLS peer before returning authority or credentials.
         app.MapPost("/internal/issue-sync/grants/{grantId:guid}/token",
             (Guid grantId, HttpContext context, IssueSyncGrantAuthority authority,
                 GitHubRepoAppConnectionService connections, GitHubAppInstallationTokenIssuer issuer) =>

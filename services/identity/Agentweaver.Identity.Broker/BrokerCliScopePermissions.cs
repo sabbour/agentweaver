@@ -74,6 +74,7 @@ internal static class BrokerCliScopePermissions
                 $"Client '{ClientId}' does not match the exact prior public CLI registration. " +
                 "No permissions were changed.");
 
+        // Refuse to overwrite other permission changes; this migration adds only its explicit marker.
         current.Permissions.Add(AllRegisteredScopes);
         await applications.UpdateAsync(application, current, cancellationToken);
     }
@@ -138,6 +139,7 @@ internal static class BrokerScopePermissionHandlers
     internal static async ValueTask<bool> IsScopePermissionCheckEnabledAsync(
         string? clientId, IOpenIddictApplicationManager applications, CancellationToken cancellationToken)
     {
+        // Only a migrated CLI registration skips OpenIddict's per-scope permission check.
         if (!string.Equals(clientId, BrokerCliScopePermissions.ClientId, StringComparison.Ordinal))
             return true;
 

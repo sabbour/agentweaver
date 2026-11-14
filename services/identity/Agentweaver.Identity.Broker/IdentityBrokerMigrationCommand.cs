@@ -127,6 +127,7 @@ internal static class IdentityBrokerMigrationCommand
         await using var provider = services.BuildServiceProvider();
         using var scope = provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
+        // Keep the exact prior-registration check and the permission update atomic.
         await using var transaction = await db.Database.BeginTransactionAsync(
             System.Data.IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
         await BrokerCliScopePermissions.MigrateAsync(
