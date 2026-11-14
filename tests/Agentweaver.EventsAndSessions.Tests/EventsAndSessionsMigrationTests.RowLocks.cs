@@ -130,6 +130,7 @@ public sealed partial class EventsAndSessionsMigrationTests
                 $"""SELECT "{column}" FROM "{_schema}"."{table}" {clause}""", connection, transaction);
             Assert.NotNull(await read.ExecuteScalarAsync());
         }
+        // A failed statement aborts the transaction, so each savepoint lets the next privilege check run.
         await transaction.SaveAsync("before_update");
         var update = await Assert.ThrowsAsync<PostgresException>(() =>
             ExecuteAsync($"""UPDATE "{_schema}"."{table}" SET "{column}" = "{column}" """));

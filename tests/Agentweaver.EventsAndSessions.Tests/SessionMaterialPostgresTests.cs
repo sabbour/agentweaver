@@ -437,6 +437,7 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
         await using var dataSource = NpgsqlDataSource.Create(connectionString);
         var journal = new PostgresSessionsJournal(dataSource, _options);
         var store = new SessionMaterialStore(journal, _objects);
+        // Both writes wait for the second to reach storage; serialization would time out instead of passing.
         var bothWritesReachedObjectStore = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var writeCount = 0;
@@ -498,6 +499,7 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
         Task ReadAuthority(SessionMaterialBinding _, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
+            // Revoke on the final check, after the object read, so the bytes cannot reach the caller.
             if (++checks == 2)
                 throw new RuntimeAuthorizationException("read_authority_changed");
             return Task.CompletedTask;
