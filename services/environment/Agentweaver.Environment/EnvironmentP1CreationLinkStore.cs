@@ -184,10 +184,12 @@ internal static class EnvironmentP1CreationLinkStore
                     "p1_creation_link_not_retained",
                     "The Environment operation was not reserved with this exact current P1 binding.");
             var linkState = reader.GetString(0);
+            // A late provider result cannot replace a recorded failure or uncertain result.
             if (linkState is "Failed" or "Uncertain")
                 return;
             if (linkState == "Completed")
             {
+                // A completed link is immutable; retries must carry the same result and provider binding.
                 var existingBindingJson = reader.IsDBNull(8) ? null : reader.GetString(8);
                 var expectedBindingJson = providerBinding is null
                     ? null
@@ -370,6 +372,7 @@ internal static class EnvironmentP1CreationLinkStore
     private static string? NullableString(NpgsqlDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
 
+    // Compare JSON values, not serialized property order, when checking a replayed binding.
     private static bool SameJson(string? left, string? right) =>
         left is null || right is null
             ? left is null && right is null
@@ -422,6 +425,7 @@ internal static class EnvironmentP1CreationLinkStore
 
     private static DateTimeOffset PostgresTimestamp(DateTimeOffset value)
     {
+        // PostgreSQL stores these timestamps at microsecond precision.
         var utcTicks = value.UtcTicks;
         return new DateTimeOffset(utcTicks - utcTicks % 10, TimeSpan.Zero);
     }
