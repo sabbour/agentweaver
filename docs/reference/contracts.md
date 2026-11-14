@@ -806,7 +806,7 @@ marker. Without one, the response reports
 Sections use `unknown` when the owner has no source state and `unavailable`
 when the owner cannot establish the requested evidence. Reservations do not
 prove native sends, consumption, or tool execution. For a tool-call limit
-denial, a separate `ToolPermissionRejected` fact can show that the runtime
+denial, a separate `toolPermissionRejected` fact can show that the runtime
 recorded a rejection decision after the owner confirmed the exact denial and
 active MAF dispatch.
 This does not prove that the SDK received the decision or that the tool did

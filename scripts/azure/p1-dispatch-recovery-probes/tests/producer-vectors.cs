@@ -3,6 +3,7 @@
 #:property RestorePackagesWithLockFile=false
 
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Identity;
 
 var hash = new string('b', 64);
@@ -27,4 +28,6 @@ foreach (var kind in new[] { RuntimeNumericLimitKind.ModelTurns, RuntimeNumericL
         });
     }
 }
-Console.WriteLine(JsonSerializer.Serialize(vectors, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+var httpOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+httpOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+Console.WriteLine(JsonSerializer.Serialize(vectors, httpOptions));

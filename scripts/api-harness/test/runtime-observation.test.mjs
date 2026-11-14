@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { AgentweaverClient } from '../lib/client.mjs';
-import { RuntimeObservationClient } from '../lib/runtime-observation-client.mjs';
+import {
+  RuntimeObservationClient,
+  validateRuntimeObservationV1,
+} from '../lib/runtime-observation-client.mjs';
 
 const operationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const attemptId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -34,16 +37,16 @@ const owner = {
 const runtimeObservation = {
   contractVersion: 1,
   registration: {
-    state: 'Available',
+    state: 'available',
     value: {
       runtimeInstanceId,
       revision: 2,
-      state: 'Active',
+      state: 'active',
       expiresAt: '2026-10-14T12:00:00Z',
     },
   },
   execution: {
-    state: 'Available',
+    state: 'available',
     value: {
       contractVersion: 2,
       observation: {
@@ -63,9 +66,9 @@ const runtimeObservation = {
       checkpointParent: { hasParentMetadata: true, parentCheckpointId: null },
     },
   },
-  creditGuard: { state: 'Unknown', value: null },
-  dispatches: { state: 'Available', value: { items: [], truncated: false } },
-  toolReservations: { state: 'Available', value: { items: [], truncated: false } },
+  creditGuard: { state: 'unknown', value: null },
+  dispatches: { state: 'available', value: { items: [], truncated: false } },
+  toolReservations: { state: 'available', value: { items: [], truncated: false } },
 };
 const providerAttempts = {
   contractVersion: 1,
@@ -303,7 +306,7 @@ test('reads current runtime and Environment owner evidence with exact paths, fen
       operationId,
     });
 
-    assert.equal(runtime.creditGuard.state, 'Unknown');
+    assert.equal(runtime.creditGuard.state, 'unknown');
     assert.equal(runtime.execution.value.observation.sessionId, owner.sessionId);
     assert.equal(environment.environmentId, 'environment-a');
     assert.equal(environment.fence.lifecycleGeneration, 3);
@@ -348,6 +351,13 @@ test('reads current runtime and Environment owner evidence with exact paths, fen
   } finally {
     await host.close();
   }
+});
+
+test('rejects PascalCase runtime observation section states', () => {
+  const observation = structuredClone(runtimeObservation);
+  observation.registration.state = 'Available';
+  assert.throws(() => validateRuntimeObservationV1(observation, owner),
+    /registration does not match the runtime observation contract/);
 });
 
 test('rejects malformed runtime observations and Environment fence changes', async () => {

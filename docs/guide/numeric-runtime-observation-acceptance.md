@@ -109,7 +109,7 @@ CLI authorization context matches the selected actor, tenant, project, and run;
 the child session is bound to the selected run and current execution fence; the
 accepted tool-call limit and reservation count match the input; and the
 complete history contains an admitted tool reservation and a numeric
-`ToolPermissionRejected` fact. The normal CLI and `rest` exact lookups must
+`toolPermissionRejected` fact. The normal CLI and `rest` exact lookups must
 return the same fact.
 
 The rejection fact means the runtime recorded a rejection decision after the
@@ -163,13 +163,13 @@ A `passed` result for `numeric-model-turn-no-send` means:
 - `acceptedLimits.maxModelTurns` equals `expectedMaxModelTurns`.
 - The run-wide `totals.modelSlotsReserved` value is available and equals
   `expectedMaxModelTurns`. A larger value is over-admission and does not pass.
-- The history has at least `expectedMaxModelTurns` `ModelTurnReserved` facts
+- The history has at least `expectedMaxModelTurns` `modelTurnReserved` facts
   that match the current-authority rule.
-- A `Denied` fact has `limitKind` `ModelTurns`, `stage` `rootAuthorization`,
+- A `denied` fact has `limitKind` `modelTurns`, `stage` `rootAuthorization`,
   `reasonCode` `limit_reached`, and an available owner decision.
-- A `NativeNoSend` fact for the same attempt has an available native no-send
+- A `nativeNoSend` fact for the same attempt has an available native no-send
   section with a complete range and zero events.
-- The exact `api invoke` and `rest` lookups return the same `NativeNoSend`
+- The exact `api invoke` and `rest` lookups return the same `nativeNoSend`
   fact.
 
 This result does not cover child sessions or `maxPromptTokens`. A child
@@ -181,19 +181,19 @@ A `passed` result for `numeric-hard-credit-no-send` means:
 
 - The binding is the root session at its current execution fence.
 - `acceptedLimits.copilotHardCreditLimit` is set.
-- A `Denied` fact has `limitKind` `CopilotHardCredits`, `stage`
+- A `denied` fact has `limitKind` `copilotHardCredits`, `stage`
   `nativeTurnBegin`, and `reasonCode` `hard_credit_limit_reached`. Its
   `configuredValue` equals the accepted limit, and its `observedValue` is not
   less than that limit. Both values use the unit `nanoAiu`. A denial with a
   different configured value is from an old configuration and does not pass.
-- A `NativeNoSend` fact for the same dispatch has the same configured value
+- A `nativeNoSend` fact for the same dispatch has the same configured value
   and an available native no-send section with a complete range and zero
   events.
-- At least one `CreditGuardChanged` fact shows `hardCapExhausted`. The
+- At least one `creditGuardChanged` fact shows `hardCapExhausted`. The
   observed credit floor does not decrease in sequence order.
-- If `expectedSoftWarning` is `true`, at least one `CreditGuardChanged` fact
+- If `expectedSoftWarning` is `true`, at least one `creditGuardChanged` fact
   shows `softWarningEmitted`.
-- The exact `api invoke` and `rest` lookups return the same `NativeNoSend`
+- The exact `api invoke` and `rest` lookups return the same `nativeNoSend`
   fact.
 
 This result does not prove the exact spend of other model turns.

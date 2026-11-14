@@ -1089,6 +1089,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await AssertStatusAsync(firstObservationResponse, HttpStatusCode.OK);
         Assert.True(firstObservationResponse.Headers.CacheControl?.NoStore);
         var firstObservationBody = await firstObservationResponse.Content.ReadAsStringAsync(cancellationToken);
+        using var firstObservationJson = JsonDocument.Parse(firstObservationBody);
+        var rawRegistration = firstObservationJson.RootElement.GetProperty("registration");
+        Assert.Equal("available", rawRegistration.GetProperty("state").GetString());
+        Assert.Equal("active", rawRegistration.GetProperty("value").GetProperty("state").GetString());
+        var rawExecutionStatus = firstObservationJson.RootElement.GetProperty("execution")
+            .GetProperty("value").GetProperty("observation").GetProperty("status").GetString();
+        Assert.NotNull(rawExecutionStatus);
+        Assert.Contains(rawExecutionStatus, Enum.GetNames<RuntimeExecutionTaskStatus>());
         var currentObservation = Assert.IsType<RuntimeObservationV1>(
             JsonSerializer.Deserialize<RuntimeObservationV1>(firstObservationBody, CoordinationJsonOptions));
         _ = currentObservation.Validate();

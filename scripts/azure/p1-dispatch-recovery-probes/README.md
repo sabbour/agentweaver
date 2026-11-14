@@ -74,7 +74,7 @@ lookup/identity fields from the accepted owner context, not a caller receipt:
 | Owner | `projectId`, `runId`, `rootSessionId`, `sessionId`, `ownerRevision`, `executionFence`, `acceptedSelectionHash` |
 | Registration and source | `runtimeInstanceId`, `registrationRevision`, `sourceRegistrationRevision`, `sourceGrantId`, `sourceHash` |
 | Action and attempt | `grantId`, `grantRevision`, `attemptId`, `requestHash` |
-| Accepted limit | `limitKind` (`ModelTurns` or `ToolCalls`, matching the case), `acceptedLimit` |
+| Accepted limit | `limitKind` (`modelTurns` or `toolCalls`, matching the case), `acceptedLimit` |
 | Dispatch/checkpoint | `dispatchId`, `checkpointId`, `checkpointRevision`, `checkpointHash`, `checkpointDecisionStateVersion`, `workPlanId`, `associationId` |
 
 Use explicit `null` values for absent dispatch/checkpoint fields, as in the
@@ -101,12 +101,14 @@ comes from the authorized fixed owner route. HTTP clients must return the
 actual `{ receipt }` result; `null` means missing evidence, not success.
 
 Hashing matches the C# producer's default `JsonSerializer` bytes: PascalCase
-declaration order, explicit nulls, default string escaping, string enum names,
-and `DateTimeOffset` formatting with its retained offset and fractional ticks.
-It is not a sorted-key or camelCase JavaScript JSON hash. The controlled vectors
-in `tests/producer-vectors.json` were emitted by the actual
-`RuntimeNumericLimitDenialReceipt.Seal` and HTTP serializer. Regenerate them
-from the repository root with .NET 10:
+property names and enum names, declaration order, explicit nulls, default
+string escaping, and `DateTimeOffset` formatting with its retained offset and
+fractional ticks. The HTTP receipt and input pins use camelCase `limitKind`
+values (`modelTurns` or `toolCalls`); the hash uses the PascalCase C# enum name.
+This is not a sorted-key or camelCase JavaScript JSON hash. The controlled
+vectors in `tests/producer-vectors.json` contain the HTTP form and were emitted
+by the actual `RuntimeNumericLimitDenialReceipt.Seal` and HTTP serializer.
+Regenerate them from the repository root with .NET 10:
 
 ```powershell
 dotnet run --file scripts\azure\p1-dispatch-recovery-probes\tests\producer-vectors.cs --verbosity quiet | Set-Content -Encoding utf8 scripts\azure\p1-dispatch-recovery-probes\tests\producer-vectors.json

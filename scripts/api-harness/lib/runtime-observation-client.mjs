@@ -71,8 +71,8 @@ function requireUuid(value, label) {
 /** Validate the state/value relationship of one independently available observation section. */
 function validateSection(value, label, validateValue) {
   exactKeys(value, ['state', 'value'], label);
-  if (!['Available', 'Unknown', 'Unavailable'].includes(value.state)
-    || (value.state === 'Available') !== (value.value !== null)) {
+  if (!['available', 'unknown', 'unavailable'].includes(value.state)
+    || (value.state === 'available') !== (value.value !== null)) {
     throw new TypeError(`${label} does not match the runtime observation contract.`);
   }
   if (value.value !== null) validateValue(value.value);
@@ -83,7 +83,7 @@ function validateRegistration(value) {
   exactKeys(value, ['runtimeInstanceId', 'revision', 'state', 'expiresAt'], 'registration');
   requireUuid(value.runtimeInstanceId, 'registration.runtimeInstanceId');
   requirePositiveInteger(value.revision, 'registration.revision');
-  if (!['Active', 'Revoked'].includes(value.state)) {
+  if (!['active', 'revoked'].includes(value.state)) {
     throw new TypeError('registration.state does not match the runtime observation contract.');
   }
   requireDate(value.expiresAt, 'registration.expiresAt');
@@ -242,11 +242,11 @@ export function validateRuntimeObservationV1(value, expected) {
   validateSection(value.creditGuard, 'creditGuard', validateCreditGuard);
   validateSection(value.dispatches, 'dispatches', validateDispatches);
   validateSection(value.toolReservations, 'toolReservations', validateToolReservations);
-  if (value.registration.state !== 'Available'
-    || value.registration.value?.state !== 'Active'
-    || value.execution.state !== 'Available'
-    || value.dispatches.state !== 'Available'
-    || value.toolReservations.state !== 'Available') {
+  if (value.registration.state !== 'available'
+    || value.registration.value?.state !== 'active'
+    || value.execution.state !== 'available'
+    || value.dispatches.state !== 'available'
+    || value.toolReservations.state !== 'available') {
     throw new TypeError('Required runtime observation sections are not currently available.');
   }
   return value;

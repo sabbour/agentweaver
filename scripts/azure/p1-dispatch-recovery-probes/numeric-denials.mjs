@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
 
 const route = '/internal/runtime/actions/numeric-denials/read';
-// Declaration order and PascalCase are from RuntimeNumericLimitDenialReceipt's default
-// JsonSerializer serialization, not the camelCase HTTP serializer.
+// The hash uses PascalCase property names and enum values; HTTP limitKind is camelCase.
 const fields = [
   'contractVersion', 'receiptId', 'projectId', 'runId', 'rootSessionId', 'sessionId',
   'runtimeInstanceId', 'registrationRevision', 'sourceRegistrationRevision', 'sourceGrantId',
@@ -25,6 +24,7 @@ const positiveFields = ['registrationRevision', 'sourceRegistrationRevision', 'e
   'ownerRevision', 'acceptedLimit', 'checkpointRevision', 'checkpointDecisionStateVersion'];
 const checkpointFields = ['checkpointId', 'checkpointRevision', 'checkpointHash',
   'checkpointDecisionStateVersion', 'workPlanId', 'associationId'];
+const hashedLimitKind = { modelTurns: 'ModelTurns', toolCalls: 'ToolCalls' };
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const positive = value => Number.isSafeInteger(value) && value > 0;
 const guid = value => typeof value === 'string' &&
@@ -51,7 +51,7 @@ function validateIdentity(value) {
         !positive(value[key])) ||
       value.sourceRegistrationRevision !== value.registrationRevision ||
       typeof value.grantRevision !== 'string' || !value.grantRevision.trim() ||
-      !['ModelTurns', 'ToolCalls'].includes(value.limitKind) ||
+      !['modelTurns', 'toolCalls'].includes(value.limitKind) ||
       value.acceptedLimit > 2147483647 ||
       checkpointFields.some(key => (value[key] === null) !== (value.checkpointId === null))) {
     throw new Error('Numeric denial owner, source, limit, or checkpoint identity is invalid.');
@@ -101,6 +101,7 @@ export function numericDenialPayloadHash(receipt) {
   const entries = fields.map(key => {
     let value = key === 'canonicalPayloadHash' ? '' : receipt[key];
     if (key === 'recordedAt') value = timestamp(value).canonical;
+    if (key === 'limitKind') value = hashedLimitKind[value];
     return `${dotnetString(key[0].toUpperCase() + key.slice(1))}:${
       // The DateTimeOffset writer emits '+' literally, unlike the default string encoder.
       typeof value === 'string' && key !== 'recordedAt' ? dotnetString(value) : JSON.stringify(value)}`;
@@ -119,7 +120,7 @@ export function validateNumericDenialInput(input) {
     validateIdentity(pin.expected);
     const after = timestamp(pin.recordedAfter).ticks;
     const before = timestamp(pin.recordedBefore).ticks;
-    if (after > before || pin.expected.limitKind !== (name === 'modelTurns' ? 'ModelTurns' : 'ToolCalls')) {
+    if (after > before || pin.expected.limitKind !== name) {
       throw new Error('Numeric denial case or observation interval is invalid.');
     }
   }
