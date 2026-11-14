@@ -48,6 +48,7 @@ public sealed partial class GatewayOwnerClient(
     private const long MaximumOwnerErrorBytes = 64 * 1024;
     private const long MaximumRunEventPageBytes = 1024 * 1024;
     private const int MaximumSseCursorLength = 8192;
+    private const int CopilotCallbackRelayMaximumBytes = 16 * 1024;
     private const string TenantSelectorHeader = ProjectAuthorizationContextContract.TenantSelectorHeader;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -1211,7 +1212,6 @@ public sealed partial class GatewayOwnerClient(
         {
             context.Response.Headers.CacheControl = "no-store";
             if (context.Request.Query.Count != 0 ||
-                context.Request.ContentLength is > 16 * 1024 ||
                 context.Request.ContentType is not { } contentType ||
                 !MediaTypeHeaderValue.TryParse(contentType, out var parsed) ||
                 !string.Equals(parsed.MediaType, "application/json", StringComparison.OrdinalIgnoreCase))
@@ -1220,8 +1220,26 @@ public sealed partial class GatewayOwnerClient(
                     "application/problem+json",
                     ProblemBody("copilot_callback_relay_request_invalid", StatusCodes.Status400BadRequest));
 
-            using var requestBody = new StreamContent(context.Request.Body);
-            var body = await ReadBoundedAsync(requestBody, 16 * 1024, cancellationToken).ConfigureAwait(false);
+            if (context.Request.ContentLength is > CopilotCallbackRelayMaximumBytes)
+                throw RequestBodyTooLarge();
+
+            byte[] body;
+            try
+            {
+                using var requestBody = new StreamContent(context.Request.Body);
+                body = await ReadBoundedAsync(
+                    requestBody, CopilotCallbackRelayMaximumBytes, cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidDataException)
+            {
+                throw RequestBodyTooLarge();
+            }
+            catch (BadHttpRequestException exception) when (
+                exception.StatusCode == StatusCodes.Status413PayloadTooLarge)
+            {
+                throw RequestBodyTooLarge();
+            }
+
             using var timeout = CreateOwnerTimeout(cancellationToken);
             try
             {

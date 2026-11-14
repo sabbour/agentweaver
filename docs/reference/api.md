@@ -372,8 +372,12 @@ All authenticated Copilot operations require an unbound bearer and current
 scope. These permissions require `api.read` and `projects.admin`. Existing
 connections also require the original owner issuer and actor.
 
-The Gateway callback relay accepts only a bounded JSON body with `state`. It
-forwards that state to the Broker without a bearer and returns the fixed
+The Gateway callback relay accepts a JSON body with `state`, up to 16 KiB. A
+larger body returns `413` with `request_body_too_large`, with or without
+`Content-Length`. The Gateway does not forward an oversized body. A query
+string, a missing media type, or a media type other than `application/json`
+returns `400` with `copilot_callback_relay_request_invalid`. The Gateway
+forwards the state to the Broker without a bearer and returns the fixed
 `http://127.0.0.1:49173/oauth/callback` address only when the protected state
 is valid and pending. The state expires after five minutes. The completion
 operation consumes it once and still requires the callback cookie and the

@@ -673,7 +673,7 @@ public sealed class GatewayCastingRegressionTests
     }
 
     /// <summary>Streams the same JSON bytes with or without a computable Content-Length.</summary>
-    private sealed class ImportBodyContent(byte[] body, bool unknownLength) : HttpContent
+    internal sealed class ImportBodyContent(byte[] body, bool unknownLength) : HttpContent
     {
         /// <summary>Writes the exact boundary payload to the outgoing request.</summary>
         protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>

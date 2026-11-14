@@ -7,6 +7,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.IdentityModel.Tokens;
 using Xunit;
@@ -67,6 +68,63 @@ public sealed class GatewayCopilotConnectionBffTests
         Assert.Null(forwarded.Tenant);
         Assert.Null(forwarded.Cookie);
         Assert.Equal("{\"state\":\"protected-state\"}", forwarded.Body);
+    }
+
+    [Theory]
+    [InlineData(-1, false)]
+    [InlineData(0, false)]
+    [InlineData(1, false)]
+    [InlineData(-1, true)]
+    [InlineData(0, true)]
+    [InlineData(1, true)]
+    public async Task CopilotCallbackRelayEnforcesRequestBodyLimitBeforeForwarding(
+        int sizeOffset, bool unknownLength)
+    {
+        const int maximumBytes = 16 * 1024;
+        const string emptyBody = "{\"state\":\"\"}";
+        var body = Encoding.UTF8.GetBytes(
+            "{\"state\":\"" + new string('s', maximumBytes + sizeOffset - emptyBody.Length) + "\"}");
+        using var rsa = RSA.Create(2048);
+        var ownerCalls = 0;
+        byte[]? forwardedBody = null;
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa),
+            () => new HttpClientHandler(),
+            async (owner, request, cancellationToken) =>
+            {
+                Assert.Equal(GatewayHost::Agentweaver.Gateway.GatewayOwner.IdentityBroker, owner);
+                ownerCalls++;
+                forwardedBody = await request.Content!.ReadAsByteArrayAsync(cancellationToken);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        callbackUri = "http://127.0.0.1:49173/oauth/callback",
+                    }),
+                };
+            });
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "/api/connections/copilot-user/v1/callback-relay")
+        {
+            Content = new GatewayCastingRegressionTests.ImportBodyContent(body, unknownLength),
+        };
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        using var response = await gateway.Client.SendAsync(request);
+
+        Assert.Equal(sizeOffset > 0 ? HttpStatusCode.RequestEntityTooLarge : HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(sizeOffset > 0 ? 0 : 1, ownerCalls);
+        if (sizeOffset > 0)
+        {
+            Assert.True(response.Headers.CacheControl?.NoStore);
+            using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("request_body_too_large", problem.RootElement.GetProperty("code").GetString());
+        }
+        else
+        {
+            Assert.Equal(body, forwardedBody);
+        }
     }
 
     [Fact]
