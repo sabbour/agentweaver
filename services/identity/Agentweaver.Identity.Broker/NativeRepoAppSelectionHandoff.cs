@@ -92,6 +92,7 @@ internal static class NativeRepoAppSelectionHandoff
         encoded = null;
         var values = query[RequestParameter];
         if (values.Count == 0) return true;
+        // Only an interactive, unbound native CLI authorization can carry this selection.
         if (values.Count != 1 || values[0] is not { } value ||
             request.ClientId != NativeClientId ||
             request.ResponseType != OpenIddictConstants.ResponseTypes.Code ||
@@ -132,6 +133,7 @@ internal static class NativeRepoAppSelectionHandoff
         return TryDecodeIntent(encoded, out intent);
     }
 
+    // Resume review only for the same owner and the original unbound CLI authorization.
     public static bool IsValidReviewContinuation(
         PendingAuthorization pending,
         NativeRepoAppSelectionIntent intent,
@@ -172,6 +174,7 @@ internal static class NativeRepoAppSelectionHandoff
         {
             var json = protector.Unprotect(protectedPayload);
             using var document = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = 8 });
+            // Protected bytes still need an exact schema before the payload can be trusted.
             if (!HasExactFields(document.RootElement, PayloadFields) ||
                 JsonSerializer.Deserialize<NativeRepoAppSelectionPayload>(document.RootElement.GetRawText(), JsonOptions)
                     is not { } parsed ||
@@ -214,7 +217,6 @@ internal static class NativeRepoAppSelectionHandoff
                 null, null, null, payload.RepositoryFullName, payload.OperationId)
             : ResolvedIntent(payload);
 
-    /// <summary>Returns a full intent with the values that the payload binds.</summary>
     public static NativeRepoAppSelectionIntent ResolvedIntent(NativeRepoAppSelectionPayload payload) =>
         new(payload.Version, payload.ActorId, payload.TenantId, payload.ProjectId, payload.ConnectionId,
             payload.ConnectionRevision, payload.InstallationId, payload.RepositoryId,
@@ -289,6 +291,7 @@ internal static class NativeRepoAppSelectionHandoff
     private static bool HasExactFields(JsonElement element, IReadOnlyCollection<string> required)
     {
         if (element.ValueKind != JsonValueKind.Object) return false;
+        // Reject duplicate names instead of accepting ambiguous JSON.
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (var property in element.EnumerateObject())
         {

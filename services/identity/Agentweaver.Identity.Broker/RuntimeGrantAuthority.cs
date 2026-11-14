@@ -133,6 +133,7 @@ public sealed class RuntimeGrantAuthority(
         await RequireSameCurrentAsync(registration, cancellationToken, checkpointRecoveryOperationId);
         if (connection is not null)
         {
+            // The connection can rotate while the grant is written; do not return its stale secret reference.
             var currentConnection = await connections!.RequireCurrentAsync(binding, cancellationToken);
             RequireSameConnection(connection, currentConnection);
         }
@@ -425,6 +426,7 @@ public sealed class RuntimeGrantAuthority(
             RequireLive(consumed);
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+            // Commit and dispose the consume transaction, then recheck the current registration in a new transaction that locks the grant again.
             await transaction.DisposeAsync();
             await RequireCurrentForProofAsync(verified, cancellationToken);
             return receipt;
@@ -623,6 +625,7 @@ public sealed class RuntimeGrantAuthority(
         }
         finally
         {
+            // A post-commit failure must revoke the new grant instead of leaving an undelivered credential active.
             if (!transferred)
             {
                 issued?.Invalidate();
@@ -686,6 +689,7 @@ public sealed class RuntimeGrantAuthority(
             verified.Original is not null && (IsAuthorityLoss(error.Code) ||
                 error.Code is "runtime_grant_expired" or "runtime_credential_unavailable" or "runtime_actor_unavailable"))
         {
+            // Revoke only if this proof still names the current credential material.
             db.ChangeTracker.Clear();
             await using var transaction = await db.Database.BeginTransactionAsync(CancellationToken.None);
             var current = await LockCurrentAsync(proof.GrantId, CancellationToken.None);
@@ -751,6 +755,7 @@ public sealed class RuntimeGrantAuthority(
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         var current = await LockCurrentAsync(proof.GrantId, cancellationToken);
         var original = await VerifyStoredProofAsync(verified, cancellationToken);
+        // A stale request must not revoke a replacement that uses different credential material.
         var controlsCurrent = current.VerifierHash == original.VerifierHash &&
             current.RegistrationHash == original.RegistrationHash &&
             current.State != RuntimeCredentialState.Revoked;
@@ -954,6 +959,7 @@ public sealed class RuntimeGrantAuthority(
     private DateTimeOffset Now()
     {
         var value = timeProvider.GetUtcNow();
+        // PostgreSQL timestamps retain microsecond precision; use the same precision for comparisons.
         return new DateTimeOffset(value.UtcTicks - value.UtcTicks % 10, TimeSpan.Zero);
     }
 

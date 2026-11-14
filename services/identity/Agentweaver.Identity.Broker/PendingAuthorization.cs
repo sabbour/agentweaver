@@ -3,10 +3,9 @@ namespace Agentweaver.Identity.Broker;
 /// <summary>
 /// A short-lived, server-persisted record of an in-flight authorization request that is
 /// waiting on either external login or explicit consent. The opaque handle returned to the
-/// caller is never stored directly: only its SHA-256 hash is persisted, so a leaked log line
-/// or database row cannot be replayed as the handle itself. Protocol parameters and
-/// project/run selectors live here across redirects; selectors remain untrusted until the
-/// grant authority confirms the authenticated subject's active binding.
+/// caller is never stored directly; the database keeps only its SHA-256 hash. Protocol
+/// parameters and project/run selectors live here across redirects; selectors remain
+/// untrusted until the grant authority confirms the authenticated subject's active binding.
 /// </summary>
 public sealed class PendingAuthorization
 {
