@@ -81,7 +81,10 @@ internal sealed partial class CoordinationOwnerStore
         return row;
     }
 
-    /// <summary>Bounds connection and request-lock ownership, including downstream calls, to thirty seconds.</summary>
+    /// <summary>
+    /// Uses a shared 30-second deadline. Legacy delivery stays under the request lock; P1 delivery
+    /// follows the root-binding commit.
+    /// </summary>
     internal async Task<StartProjectRunResponse> StartProjectRunAsync(
         CoordinationActor actor, string tenantId, string projectId, string runId,
         Func<ProjectRunRequestRow, CancellationToken, Task> deliverFirstMessage,
@@ -103,7 +106,10 @@ internal sealed partial class CoordinationOwnerStore
         }
     }
 
-    /// <summary>Holds the durable request lock while idempotent admission and delivery finish within the shared deadline.</summary>
+    /// <summary>
+    /// Serializes run acceptance and legacy delivery. P1 delivery starts after the root-binding
+    /// transaction commits.
+    /// </summary>
     private async Task<StartProjectRunResponse> StartProjectRunWithinDeadlineAsync(
         CoordinationActor actor, string tenantId, string projectId, string runId,
         Func<ProjectRunRequestRow, CancellationToken, Task> deliverFirstMessage,

@@ -40,6 +40,8 @@ internal sealed partial class CoordinationOwnerStore
             selection.Selection.ProjectId, selection.Selection.RunId, forUpdate: true, cancellationToken)
             .ConfigureAwait(false)
             ?? throw new CoordinationException("p1_setup_provenance_unavailable", StatusCodes.Status409Conflict);
+        // Bind only when the saved setup receipt still matches the current actor, membership,
+        // project revisions, and selection.
         var selectionHash = HashSelection(selection.Selection).ToLowerInvariant();
         if (provenance.ContractVersion != 1 ||
             provenance.SetupInvocationId != setupInvocationId ||

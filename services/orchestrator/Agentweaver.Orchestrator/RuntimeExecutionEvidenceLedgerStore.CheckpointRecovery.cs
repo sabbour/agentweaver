@@ -34,6 +34,7 @@ internal sealed partial class RuntimeExecutionEvidenceLedgerStore
             connection, transaction, receipt.ProjectId, receipt.RunId, receipt.SupersedesOperationId,
             cancellationToken).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("checkpoint_recovery_supersession_conflict");
+        // A duplicate key is a replay only when the stored receipt is identical.
         if (stored != receipt)
             throw new RuntimeAuthorizationException("checkpoint_recovery_supersession_conflict");
         return stored;

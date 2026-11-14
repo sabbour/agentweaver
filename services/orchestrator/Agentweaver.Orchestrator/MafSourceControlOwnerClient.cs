@@ -154,7 +154,7 @@ internal sealed class MafSourceControlOwnerClient(
         string intentId,
         CancellationToken cancellationToken)
     {
-        // The owner serializes execution and resolves merge_started without repeating a possibly applied effect.
+        // A started intent may have merged remotely; the owner marks it uncertain instead of repeating the merge.
         var (status, response) = await SendAsync<MergeIntentResponse>(
             SourceControlPath(identity) + "/merge-intents/" + Uri.EscapeDataString(intentId) + "/execute",
             actor,

@@ -282,6 +282,7 @@ internal sealed record NativeChildRebindReceipt(
                 var recoveryGap = receipt.SourceFence - previous.DestinationFence;
                 if (recoveryGap > 0)
                 {
+                    // Bound missing transitions too, so fence gaps cannot hide an oversized recovery chain.
                     if (recoveryGap > MaximumLineageEdges)
                         throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
                     edgeCount = checked(edgeCount + checked((int)((2 * recoveryGap) - 1)));
