@@ -40,7 +40,7 @@ public sealed class EnvironmentEgressManager(
     IEnvironmentLifecycleStore lifecycleStore)
 {
     /// <summary>
-    /// Reserves, applies, and verifies a policy generation; provider and authority failures return a not-ready result.
+    /// Reserves, applies, and verifies a policy generation; known provider and authority failures return a not-ready result.
     /// </summary>
     public Task<EnvironmentEgressOperationResult> ApplyAndVerifyAsync(
         CurrentCallerRequest caller,
@@ -320,6 +320,7 @@ public sealed class EnvironmentEgressManager(
                 "The run-bound Environment authority changed while the first-start policy was applied.");
     }
 
+    /// <summary>Checks that the caller, run selection, and root or child turn match the first-start owner context.</summary>
     private static void RequireFirstStartOwnerSelection(
         RuntimeOwnerContext expectedOwner,
         EnvironmentOwnerIdentity environmentOwner,
@@ -997,6 +998,7 @@ public sealed class EnvironmentEgressManager(
         CancellationToken cancellationToken) =>
         GetAuthorizedSelectionAsync(caller, owner, cancellationToken);
 
+    /// <summary>Checks the run-bound read grant before and after reading the accepted selection.</summary>
     internal async Task<AuthorizedSelection> GetAuthorizedRunEnvironmentSelectionAsync(
         CurrentCallerRequest caller,
         EnvironmentOwnerIdentity owner,
@@ -1414,7 +1416,9 @@ public sealed class EnvironmentEgressManager(
         return result.Intent!;
     }
 
-    /// <summary>Resolves the selected network provider and checks that its options match the configured adapter.</summary>
+    /// <summary>
+    /// Resolves the selected L3/L4 candidate, checks its options, and rejects unsupported layers or capabilities.
+    /// </summary>
     private static (ProviderResolver Resolver, NetworkPolicyResolution Resolution) ResolveNetworkProvider(
         AuthorizedSelection selection,
         CiliumEgressProviderOptions options,

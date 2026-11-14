@@ -136,6 +136,7 @@ public sealed class EnvironmentLifecycleManager(
             if (!actor.Bearer.IsUsable())
                 throw new RuntimeAuthorizationException("runtime_start_actor_expired");
             var current = await ReadOwnerContextAsync(token).ConfigureAwait(false);
+            // For recovery, allow the current owner and decision versions; require all other owner fields to match.
             var expected = checkpointRecoveryOperationId is null
                 ? expectedOwner
                 : expectedOwner with
