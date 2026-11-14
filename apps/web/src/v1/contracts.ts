@@ -1585,7 +1585,7 @@ export type SourceControlAuthMode = 'secret' | 'githubApp';
 /** Project's repository and secret references for source-control access. */
 export interface SourceControlProjectSettings {
   authMode?: SourceControlAuthMode;
-  appConnectionId?: string;
+  identityConnectionId?: string;
   repository?: { owner: string; name: string };
   apiSecretReference?: { id: string; version: string } | null;
   checkoutSecretReference?: { id: string; version: string } | null;

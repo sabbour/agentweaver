@@ -20,7 +20,7 @@ connecting one does not connect the other.
 3. Complete GitHub authorization in the tracked popup.
 4. Wait for the app to reload connection status from the Identity Broker.
 5. In **Repository**, set **Sign-in method** to **GitHub App**. In
-   **Advanced**, set `sourceControl.appConnectionId` to the matching Identity
+   **Advanced**, set `sourceControl.identityConnectionId` to the matching Identity
    connection ID. Select **Save changes**.
 
 **Expected result:** The Broker reports the connection state. A popup
@@ -83,7 +83,7 @@ not prove that a runtime loaded or used the repository.
   [the provider setup procedure](../guide/deploy-to-azure.md#configure-the-optional-github-providers);
   do not retry the connection until setup is complete.
 - A project configured for a different App connection cannot use the displayed
-  connection until you update `sourceControl.appConnectionId`.
+  connection until you update `sourceControl.identityConnectionId`.
 
 ## Requests
 

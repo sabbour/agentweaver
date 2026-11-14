@@ -1780,7 +1780,8 @@ describe('v1 web project scoping', () => {
     const selection = selectionSnapshot('p1', 'r1');
     selection.projectConfiguration.sourceControl = {
       authMode: 'githubApp',
-      appConnectionId: 'identity-app-1',
+      identityConnectionId: 'identity-app-1',
+      repository: { owner: 'octo', name: 'agentweaver' },
     };
     mocks.getRunSelection.mockResolvedValue(selection);
     mocks.getRepoAppStatus.mockResolvedValue({
@@ -1836,6 +1837,8 @@ describe('v1 web project scoping', () => {
     render(<App />);
 
     await screen.findByRole('heading', { name: 'GitHub App repository access' });
+    expect(screen.getByText(/This run uses the GitHub App connection/).textContent)
+      .toContain('identity-app-1');
     await screen.findByText('octo', { selector: 'strong' });
     fireEvent.click(screen.getByRole('button', { name: 'Install GitHub App for this run' }));
     await waitFor(() => expect(mocks.beginRepoAppInstallationSetup).toHaveBeenCalledWith(popup, undefined));
@@ -1874,7 +1877,7 @@ describe('v1 web project scoping', () => {
     const selection = selectionSnapshot('p1', 'r1');
     selection.projectConfiguration.sourceControl = {
       authMode: 'githubApp',
-      appConnectionId: 'identity-app-1',
+      identityConnectionId: 'identity-app-1',
     };
     mocks.getRunSelection.mockResolvedValue(selection);
     mocks.getRepoAppStatus.mockResolvedValue({
@@ -1952,7 +1955,7 @@ describe('v1 web project scoping', () => {
     const selection = selectionSnapshot('p1', 'r1');
     selection.projectConfiguration.sourceControl = {
       authMode: 'githubApp',
-      appConnectionId: 'identity-app-1',
+      identityConnectionId: 'identity-app-1',
     };
     mocks.getRunSelection.mockResolvedValue(selection);
     if (usageState === 'unavailable')
@@ -2055,7 +2058,7 @@ describe('v1 web project scoping', () => {
     const selection = selectionSnapshot('p1', 'r1');
     selection.projectConfiguration.sourceControl = {
       authMode: 'githubApp',
-      appConnectionId: 'identity-app-1',
+      identityConnectionId: 'identity-app-1',
     };
     mocks.getRunSelection.mockResolvedValue(selection);
     mocks.getRepoAppStatus.mockRejectedValue(new Error('Identity Broker owner unavailable'));
@@ -2078,7 +2081,7 @@ describe('v1 web project scoping', () => {
     const selection = selectionSnapshot('p1', 'r1');
     selection.projectConfiguration.sourceControl = {
       authMode: 'githubApp',
-      appConnectionId: 'project-app-1',
+      identityConnectionId: 'project-app-1',
     };
     mocks.getRunSelection.mockResolvedValue(selection);
     mocks.getRepoAppStatus.mockResolvedValue({
@@ -2095,7 +2098,9 @@ describe('v1 web project scoping', () => {
 
     expect(await screen.findByText(/Your project uses a different GitHub App connection/)).toBeTruthy();
     expect(screen.getByRole('link', { name: 'project settings' })).toBeTruthy();
-    expect(screen.queryByText(/sourceControl\.appConnectionId/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Load repositories' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pin repository to this run' })).toBeNull();
+    expect(screen.queryByText(/sourceControl\.identityConnectionId/)).toBeNull();
   });
 
   it('shows an operator action when the Repo App provider is not configured', async () => {
@@ -2105,7 +2110,7 @@ describe('v1 web project scoping', () => {
     const selection = selectionSnapshot('p1', 'r1');
     selection.projectConfiguration.sourceControl = {
       authMode: 'githubApp',
-      appConnectionId: 'identity-app-1',
+      identityConnectionId: 'identity-app-1',
     };
     mocks.getRunSelection.mockResolvedValue(selection);
     mocks.getRepoAppStatus.mockRejectedValue(new RepoAppBrokerError(
