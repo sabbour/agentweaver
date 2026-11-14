@@ -205,7 +205,7 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
     }
     let validated;
     try {
-      validated = await readP1SignInInput(argv);
+      validated = await readP1SignInInput(argv, { allowDeniedActor: true });
     } catch (error) {
       io.error?.(error.message);
       return 2;
@@ -273,7 +273,7 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
     let validated;
     let savedEvidence;
     try {
-      validated = await readP1SignInInput(argv);
+      validated = await readP1SignInInput(argv, { allowDeniedActor: true });
       savedEvidence = await readP1RecoveryEvidence(options.reconcileevidence);
       if (!isValidP1RecoveryEvidence(savedEvidence, {
         invocationId: options.recovercleanup,

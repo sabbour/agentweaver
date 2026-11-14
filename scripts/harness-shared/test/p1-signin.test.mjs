@@ -117,6 +117,12 @@ function validInput() {
   };
 }
 
+function releasedInput(deniedActor = { actorId: 'denied-actor', tenantId: ENVIRONMENT.tenantId }) {
+  const value = validInput();
+  value.fixturePlan.deniedActor = deniedActor;
+  return value;
+}
+
 function validRecoveryEvidence() {
   const invocationId = '5749fb6f-543b-427d-a04e-b7f836180ef4';
   const projectId = 'fixture-project';
@@ -1093,41 +1099,43 @@ test('launcher dry-run delegates without browser auth or evidence output', async
 });
 
 test('recovery cleanup dry-run checks local evidence without sign-in, browser, network, or writes', async () => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-recovery-dry-run-'));
-  const manifestPath = path.join(directory, 'input.json');
-  const savedPath = path.join(directory, 'reconciliation.json');
-  const outputPath = path.join(directory, 'cleanup.json');
-  await writeFile(manifestPath, JSON.stringify(validInput()), 'utf8');
-  await writeFile(savedPath, JSON.stringify(validRecoveryEvidence()), 'utf8');
-  const output = [];
-  let browserLoads = 0;
-  let signIns = 0;
-  let apiClients = 0;
-  try {
-    const code = await runP1SigninCli([
-      '--recover-cleanup', '5749fb6f-543b-427d-a04e-b7f836180ef4',
-      '--input', manifestPath,
-      '--reconcile-evidence', savedPath,
-      '--output', outputPath,
-      '--dry-run',
-    ], {}, {
-      log: message => output.push(message),
-      error: message => output.push(message),
-    }, {
-      loadChromium: async () => { browserLoads += 1; },
-      signIn: async () => { signIns += 1; },
-      createSetupApi: () => { apiClients += 1; },
-    });
+  for (const manifest of [validInput(), releasedInput()]) {
+    const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-recovery-dry-run-'));
+    const manifestPath = path.join(directory, 'input.json');
+    const savedPath = path.join(directory, 'reconciliation.json');
+    const outputPath = path.join(directory, 'cleanup.json');
+    await writeFile(manifestPath, JSON.stringify(manifest), 'utf8');
+    await writeFile(savedPath, JSON.stringify(validRecoveryEvidence()), 'utf8');
+    const output = [];
+    let browserLoads = 0;
+    let signIns = 0;
+    let apiClients = 0;
+    try {
+      const code = await runP1SigninCli([
+        '--recover-cleanup', '5749fb6f-543b-427d-a04e-b7f836180ef4',
+        '--input', manifestPath,
+        '--reconcile-evidence', savedPath,
+        '--output', outputPath,
+        '--dry-run',
+      ], {}, {
+        log: message => output.push(message),
+        error: message => output.push(message),
+      }, {
+        loadChromium: async () => { browserLoads += 1; },
+        signIn: async () => { signIns += 1; },
+        createSetupApi: () => { apiClients += 1; },
+      });
 
-    assert.equal(code, 0);
-    assert.equal(browserLoads, 0);
-    assert.equal(signIns, 0);
-    assert.equal(apiClients, 0);
-    assert.match(output.join('\n'), /Each write uses its current expected revision and is sent once/);
-    assert.match(output.join('\n'), /No browser, network request, target write, or evidence output/);
-    await assert.rejects(access(outputPath), { code: 'ENOENT' });
-  } finally {
-    await rm(directory, { recursive: true, force: true });
+      assert.equal(code, 0);
+      assert.equal(browserLoads, 0);
+      assert.equal(signIns, 0);
+      assert.equal(apiClients, 0);
+      assert.match(output.join('\n'), /Each write uses its current expected revision and is sent once/);
+      assert.match(output.join('\n'), /No browser, network request, target write, or evidence output/);
+      await assert.rejects(access(outputPath), { code: 'ENOENT' });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 });
 
@@ -1461,82 +1469,139 @@ test('invalid surface lists never open a browser', async () => {
 });
 
 test('reconcile launcher signs in once and never invokes the live journey runner', async () => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-reconcile-launcher-'));
-  const inputPath = path.join(directory, 'input.json');
-  const outputPath = path.join(directory, 'reconciliation.json');
-  const invocationId = '5749fb6f-543b-427d-a04e-b7f836180ef4';
-  const signIns = [];
-  const apiCalls = [];
-  let journeyRuns = 0;
-  await writeFile(inputPath, JSON.stringify(validInput()), 'utf8');
-  const api = {
-    operations: new Map([
-      ['listProjects', { method: 'GET', path: '/api/v1/projects' }],
-      ['getAuthorizationContext', { method: 'GET', path: '/api/v1/authorization/context' }],
-    ]),
-    async discover() {},
-    async invoke(operationId) {
-      apiCalls.push(operationId);
-      if (operationId === 'listProjects') {
+  for (const manifest of [validInput(), releasedInput()]) {
+    const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-reconcile-launcher-'));
+    const inputPath = path.join(directory, 'input.json');
+    const outputPath = path.join(directory, 'reconciliation.json');
+    const invocationId = '5749fb6f-543b-427d-a04e-b7f836180ef4';
+    const signIns = [];
+    const apiCalls = [];
+    let journeyRuns = 0;
+    await writeFile(inputPath, JSON.stringify(manifest), 'utf8');
+    const api = {
+      operations: new Map([
+        ['listProjects', { method: 'GET', path: '/api/v1/projects' }],
+        ['getAuthorizationContext', { method: 'GET', path: '/api/v1/authorization/context' }],
+      ]),
+      async discover() {},
+      async invoke(operationId) {
+        apiCalls.push(operationId);
+        if (operationId === 'listProjects') {
+          return {
+            status: 200,
+            transientResponseBody: [{
+              projectId: 'run-5-project',
+              name: `p1-${invocationId}`,
+              state: 'active',
+              revision: 2,
+              configurationRevision: 1,
+              createdAt: '2026-10-13T00:00:00.000Z',
+              updatedAt: '2026-10-13T00:00:00.000Z',
+              effectiveRoles: [],
+            }],
+          };
+        }
         return {
           status: 200,
-          transientResponseBody: [{
-            projectId: 'run-5-project',
-            name: `p1-${invocationId}`,
-            state: 'active',
-            revision: 2,
-            configurationRevision: 1,
-            createdAt: '2026-10-13T00:00:00.000Z',
-            updatedAt: '2026-10-13T00:00:00.000Z',
-            effectiveRoles: [],
-          }],
+          transientResponseBody: {
+            contractVersion: 1,
+            issuer: ENVIRONMENT.issuer,
+            actorId: ENVIRONMENT.actorId,
+            tenantId: ENVIRONMENT.tenantId,
+            boundProjectId: null,
+            boundRunId: null,
+            effectiveAuthority: [],
+          },
         };
-      }
-      return {
-        status: 200,
-        transientResponseBody: {
-          contractVersion: 1,
-          issuer: ENVIRONMENT.issuer,
-          actorId: ENVIRONMENT.actorId,
-          tenantId: ENVIRONMENT.tenantId,
-          boundProjectId: null,
-          boundRunId: null,
-          effectiveAuthority: [],
+      },
+    };
+    try {
+      const code = await runP1SigninCli([
+        '--reconcile', invocationId,
+        '--input', inputPath,
+        '--output', outputPath,
+      ], {}, { log() {}, error: assert.fail }, {
+        signIn: async request => {
+          signIns.push(request);
+          return jwt({ actorId: request.actorId, scopes: request.scopes });
         },
-      };
-    },
-  };
+        chromium: {},
+        withBrowserContext: async (_options, useContext) => useContext({}),
+        createSetupApi: ({ setupToken }) => {
+          assert.equal(setupToken, jwt({ scopes: P1_SETUP_SCOPES }));
+          return api;
+        },
+        async runP1() {
+          journeyRuns += 1;
+          return 0;
+        },
+      });
+      assert.equal(code, 1);
+      assert.equal(signIns.length, 1);
+      assert.deepEqual(signIns[0].scopes, P1_SETUP_SCOPES);
+      assert.equal(signIns[0].projectId, undefined);
+      assert.equal(signIns[0].runId, undefined);
+      assert.deepEqual(apiCalls, ['listProjects', 'getAuthorizationContext']);
+      assert.equal(journeyRuns, 0);
+      const evidence = JSON.parse(await readFile(outputPath, 'utf8'));
+      assert.equal(evidence.verdict, 'needs review');
+      assert.equal(evidence.actions.newJourneyStarted, false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test('reconcile launcher rejects a malformed denied actor before browser launch', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-reconcile-denied-'));
+  const inputPath = path.join(directory, 'input.json');
+  const outputPath = path.join(directory, 'reconciliation.json');
   try {
-    const code = await runP1SigninCli([
-      '--reconcile', invocationId,
-      '--input', inputPath,
-      '--output', outputPath,
-    ], {}, { log() {}, error: assert.fail }, {
-      signIn: async request => {
-        signIns.push(request);
-        return jwt({ actorId: request.actorId, scopes: request.scopes });
-      },
-      chromium: {},
-      withBrowserContext: async (_options, useContext) => useContext({}),
-      createSetupApi: ({ setupToken }) => {
-        assert.equal(setupToken, jwt({ scopes: P1_SETUP_SCOPES }));
-        return api;
-      },
-      async runP1() {
-        journeyRuns += 1;
-        return 0;
-      },
-    });
-    assert.equal(code, 1);
-    assert.equal(signIns.length, 1);
-    assert.deepEqual(signIns[0].scopes, P1_SETUP_SCOPES);
-    assert.equal(signIns[0].projectId, undefined);
-    assert.equal(signIns[0].runId, undefined);
-    assert.deepEqual(apiCalls, ['listProjects', 'getAuthorizationContext']);
-    assert.equal(journeyRuns, 0);
-    const evidence = JSON.parse(await readFile(outputPath, 'utf8'));
-    assert.equal(evidence.verdict, 'needs review');
-    assert.equal(evidence.actions.newJourneyStarted, false);
+    for (const deniedActor of [
+      { actorId: 'denied-actor' },
+      { actorId: ENVIRONMENT.actorId, tenantId: ENVIRONMENT.tenantId },
+    ]) {
+      await writeFile(inputPath, JSON.stringify(releasedInput(deniedActor)), 'utf8');
+      const errors = [];
+      const code = await runP1SigninCli([
+        '--reconcile', '5749fb6f-543b-427d-a04e-b7f836180ef4',
+        '--input', inputPath,
+        '--output', outputPath,
+      ], {}, { log() {}, error: message => errors.push(message) }, {
+        loadChromium: async () => assert.fail('a malformed manifest must not launch a browser'),
+        withBrowserContext: () => assert.fail('a malformed manifest must not open a browser context'),
+        signIn: () => assert.fail('a malformed manifest must not sign in'),
+      });
+      assert.equal(code, 2);
+      assert.match(errors.join('\n'), /P1 sign-in input is invalid/);
+      await assert.rejects(access(outputPath), { code: 'ENOENT' });
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('UI launcher keeps rejecting a released manifest with a denied actor before browser launch', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-ui-denied-'));
+  const inputPath = path.join(directory, 'input.json');
+  await writeFile(inputPath, JSON.stringify(releasedInput()), 'utf8');
+  try {
+    for (const [extra, expected] of [[['--dry-run'], 2], [[], 1]]) {
+      const errors = [];
+      const code = await runP1SigninCli([
+        '--surface', 'ui',
+        '--input', inputPath,
+        '--output', path.join(directory, 'evidence.jsonl'),
+        ...extra,
+      ], {}, { log() {}, error: message => errors.push(message) }, {
+        loadChromium: async () => assert.fail('a rejected manifest must not launch a browser'),
+        withBrowserContext: () => assert.fail('a rejected manifest must not open a browser context'),
+        signIn: () => assert.fail('a rejected manifest must not sign in'),
+        runP1: () => assert.fail('a rejected manifest must not start a journey'),
+      });
+      assert.equal(code, expected);
+      assert.ok(errors.length > 0);
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

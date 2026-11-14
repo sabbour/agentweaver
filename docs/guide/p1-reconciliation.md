@@ -10,8 +10,11 @@ evidence; do not generate a replacement ID.
 npm run harness:p1:signin-run -- --reconcile <invocation-id> --input <manifest.json> --output <reconciliation.json>
 ```
 
-Use the same manifest that identifies the approved target and setup actor. The
-command validates it, signs in once with the existing registered client and
+Use the same manifest that identifies the approved target and setup actor.
+Reconciliation and recovery cleanup also accept a `v1.0.16` manifest that
+contains the optional `fixturePlan.deniedActor` object, and they ignore that
+object. The command validates the manifest, signs in once with the existing
+registered client and
 setup scopes, then reads the Gateway contract, visible project list, current
 authorization context, role assignments for one visible matching project,
 and audit events linked to the invocation. It writes one redacted JSON

@@ -16,7 +16,9 @@ npm run harness:p1:signin-run -- --reconcile <invocation-id> --input <manifest.j
 ```
 
 Use the same target manifest that identifies the approved environment and setup
-actor. The command uses one interactive sign-in with the existing registered
+actor. Reconciliation and recovery cleanup also accept a `v1.0.16` manifest
+that contains the optional `fixturePlan.deniedActor` object, and they ignore
+that object. The command uses one interactive sign-in with the existing registered
 client and setup scopes. It reads the Gateway contract, visible project list,
 the actor's current authorization context, the matched project's active role
 assignments, and the authority-audit records linked to the invocation.

@@ -674,7 +674,7 @@ export async function authorizeP1InBrowser({
 }
 
 /** Read only the P1 manifest identity needed to request the setup and fixture tokens. */
-export async function readP1SignInInput(argv) {
+export async function readP1SignInInput(argv, options = {}) {
   const inputIndex = argv.indexOf('--input');
   if (inputIndex < 0 || !argv[inputIndex + 1] || argv[inputIndex + 1].startsWith('--')) {
     throw new Error('A P1 input manifest is required before sign-in.');
@@ -682,7 +682,7 @@ export async function readP1SignInInput(argv) {
   let input;
   try {
     input = JSON.parse(await readFile(path.resolve(argv[inputIndex + 1]), 'utf8'));
-    return validateP1RunnerPlanInput(input);
+    return validateP1RunnerPlanInput(input, options);
   } catch {
     throw new Error('P1 sign-in input is invalid; check the manifest before retrying.');
   }
