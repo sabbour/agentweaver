@@ -34,6 +34,7 @@ public sealed class RuntimeModelBindingsResolver
         }
         ConfigurationRevision = configurationRevision;
         _bindings = bindings.ToImmutableDictionary(StringComparer.Ordinal);
+        // Sort every unordered map before hashing so equivalent configuration has the same pin.
         var models = _bindings.OrderBy(item => item.Key, StringComparer.Ordinal).Select(item => new
             {
                 Reference = item.Key,
@@ -188,7 +189,6 @@ public sealed class RuntimeModelBindingsResolver
             ProviderType = model.Provider?.Type
         };
 
-    /// <summary>Validates version, model source, provider type, revision, and configuration digest.</summary>
     public static void ValidatePin(RuntimeModelBindingPin pin)
     {
         ArgumentNullException.ThrowIfNull(pin);

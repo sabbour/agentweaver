@@ -100,6 +100,7 @@ public sealed record RuntimeHostReplacementRecovery(
         RuntimeContractValidation.ValidateHash(evidence.NativeEventIntervalSha256);
         RuntimeContractValidation.ValidateHash(evidence.CacheBaselineCursorSha256);
         RuntimeContractValidation.ValidateHash(evidence.CacheBaselineAfterCursorSha256);
+        // Replay stays within the same coordinator-root session and model binding, with no tool effects.
         if (string.IsNullOrWhiteSpace(NativeCacheBaselineCursor) ||
             NativeCacheBaselineCursor.Length > 4096 ||
             NativeCacheBaselineCursor.Any(char.IsControl) ||
@@ -292,7 +293,6 @@ public sealed record RuntimeHostRecoveryReceipt(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeHostNativeCallSequenceEvidence? ReplacementCallSequence { get; init; }
 
-    /// <summary>Validates recovery evidence against the registration and matching SDK source.</summary>
     public RuntimeHostRecoveryReceipt ValidateFor(RuntimeRegistration registration)
     {
         ArgumentNullException.ThrowIfNull(registration);
@@ -306,6 +306,7 @@ public sealed record RuntimeHostRecoveryReceipt(
             !Enum.IsDefined(RecoveryMode))
             throw new RuntimeAuthorizationException("runtime_recovery_receipt_invalid");
 
+        // Each recovery mode accepts only its own source; a fresh session has neither cache nor journal.
         if (RecoveryMode == RuntimeHostRecoveryMode.NativeCache)
         {
             var cache = NativeCacheAcknowledgment
@@ -342,6 +343,7 @@ public sealed record RuntimeHostRecoveryReceipt(
             throw new RuntimeAuthorizationException("runtime_recovery_receipt_invalid");
         if (ReplacementReconstructionInterval is { } interval)
         {
+            // Replacement reconstruction must leave both the native cursor and call counters unchanged.
             RuntimeContractValidation.ValidateHash(interval.StartCursorSha256);
             RuntimeContractValidation.ValidateHash(interval.EndCursorSha256);
             if (RecoveryMode != RuntimeHostRecoveryMode.NativeCache ||

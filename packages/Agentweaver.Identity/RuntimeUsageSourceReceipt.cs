@@ -69,7 +69,6 @@ public static class RuntimeUsageCostSnapshotContract
     /// <summary>Maximum number of accounting receipt references accepted per snapshot.</summary>
     public const int MaximumReceiptReferences = 512;
 
-    /// <summary>Validates scope, uniqueness, attribution, and optional native-turn binding.</summary>
     public static void ValidateRequest(RuntimeUsageCostSnapshotRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -172,7 +171,6 @@ public static class RuntimeUsageCostSnapshotContract
         return pricedSubtotal;
     }
 
-    /// <summary>Checks published-rate identity, explicit Unpriced shape, totals, and arithmetic consistency.</summary>
     public static decimal ValidatePricedCopilotSnapshot(
         CostBinding? binding, CostPrice quote, UsageRunTotals copilotTotals,
         string modelId, string tenantId, string projectId, string runId)
@@ -260,11 +258,18 @@ public static class RuntimeUsageCostSnapshotContract
         }
     }
 
+    /// <summary>
+    /// Returns true for a nonblank reason of at most 1,024 characters with no control characters; false otherwise.
+    /// </summary>
     private static bool ValidUnpricedReason(string? reason) =>
         !string.IsNullOrWhiteSpace(reason) && reason.Length <= 1024 &&
         !reason.Any(char.IsControl);
 
-    /// <summary>Allows only the pre-token-rate Unpriced snapshot shape with omitted amount groups.</summary>
+    /// <summary>
+    /// Returns true only when the rate card has multipliers but no token rates, the quote is Unpriced AIC
+    /// with no amount and a valid reason, the quote card matches the binding card, and totals use the
+    /// legacy omitted-amount shape; returns false otherwise.
+    /// </summary>
     private static bool IsLegacyUnpricedOmission(
         CostBinding? binding, CostPrice quote, UsageRunTotals totals) =>
         binding?.RateCard is { ModelTokenRates.Count: 0, ModelMultipliers.Count: > 0 } card &&
@@ -346,7 +351,10 @@ internal static class RuntimeUsageCostTotalsContract
         }
     }
 
-    /// <summary>Checks a Copilot total's AIC unit and nonnegative event and amount fields.</summary>
+    /// <summary>
+    /// Returns true only for a non-null Copilot AIC total with nonnegative counts and amount, and with zero
+    /// amount when no events are priced; returns false otherwise.
+    /// </summary>
     internal static bool ValidCopilotAmount(UsageAmountTotal? amount) =>
         amount is not null &&
         amount.MeterSource == SdkMeterSources.CopilotNanoAiu &&
@@ -356,11 +364,15 @@ internal static class RuntimeUsageCostTotalsContract
         amount.Amount >= 0 &&
         (amount.PricedEvents > 0 || amount.Amount == 0);
 
-    /// <summary>Derives pricing completeness from explicit Unpriced event counts.</summary>
+    /// <summary>Returns true when every amount has zero unpriced events; false otherwise.</summary>
     internal static bool AmountsAreFullyPriced(ImmutableArray<UsageAmountTotal> amounts) =>
         amounts.All(amount => amount.UnpricedEvents == 0);
 
-    /// <summary>Recognizes the historical Unpriced totals shape that omitted amount groups.</summary>
+    /// <summary>
+    /// Returns true only when the run has positive events, is incomplete, and has no amount groups, and
+    /// each present agent is incomplete with a nonnegative event count and an initialized empty amount array,
+    /// with all agent event counts summing to the run count; false otherwise.
+    /// </summary>
     internal static bool HasLegacyUnpricedTotalsShape(UsageRunTotals totals)
     {
         if (totals.Events <= 0 || !totals.Amounts.IsEmpty || totals.IsFullyPriced ||
@@ -378,7 +390,10 @@ internal static class RuntimeUsageCostTotalsContract
         }
     }
 
-    /// <summary>Checks that each run amount equals the sum of its per-agent amounts.</summary>
+    /// <summary>
+    /// Returns true when each run amount has a unique key and matches the summed agent amount, priced-event,
+    /// and unpriced-event values for that key; false otherwise.
+    /// </summary>
     internal static bool RunAmountsMatchAgents(UsageRunTotals totals)
     {
         var agentAmounts = new Dictionary<(string MeterSource, string Unit), UsageAmountTotal>();
@@ -412,6 +427,10 @@ internal static class RuntimeUsageCostTotalsContract
         return true;
     }
 
+    /// <summary>
+    /// Returns true when exactly one Copilot AIC total covers the represented priced amount and event counts;
+    /// returns false otherwise.
+    /// </summary>
     private static bool IncludesRepresentedAmounts(
         ImmutableArray<UsageAmountTotal> amounts,
         long pricedEvents,
@@ -489,7 +508,6 @@ public static class RuntimeUsageCostReconciliationContract
     /// <summary>Maximum number of accounting receipts accepted in a reconciliation request.</summary>
     public const int MaximumReceiptReferences = 512;
 
-    /// <summary>Checks model, rate-card, turn, revisions, and unique receipt identities.</summary>
     public static void ValidateRequest(RuntimeUsageCostReconciliationRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -612,7 +630,6 @@ public static class RuntimeUsageSourceReceiptContract
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
-    /// <summary>Checks the receipt version, ID, usage binding, and canonical payload digest.</summary>
     public static void Validate(RuntimeUsageSourceReceipt receipt)
     {
         ArgumentNullException.ThrowIfNull(receipt);
@@ -624,7 +641,6 @@ public static class RuntimeUsageSourceReceiptContract
             throw new RuntimeAuthorizationException("runtime_usage_receipt_hash_invalid");
     }
 
-    /// <summary>Validates source, attribution, model, measurement, and event identity against registration.</summary>
     public static void ValidateUsage(RuntimeRegistration registration, UsageSubmission usage)
     {
         ArgumentNullException.ThrowIfNull(usage);
@@ -656,7 +672,10 @@ public static class RuntimeUsageSourceReceiptContract
         ValidateAccounting(source, usage.SdkAccounting, measurement.ProviderUnits);
     }
 
-    /// <summary>Accepts hosted Nano AIU or token usage and the existing BYOK token shape.</summary>
+    /// <summary>
+    /// Returns true for hosted Nano AIU, hosted token usage without provider units and with a null or
+    /// token unit, or BYOK token usage without provider units and with both token counts; false otherwise.
+    /// </summary>
     private static bool HasSupportedMeasurementShape(SdkSessionFacts source, UsageMeasurement measurement)
     {
         if (source.SourceMode == "hosted-copilot")
@@ -668,7 +687,6 @@ public static class RuntimeUsageSourceReceiptContract
             measurement.OutputTokens is not null;
     }
 
-    /// <summary>Checks optional SDK accounting state and its source-session identity.</summary>
     public static void ValidateAccounting(
         SdkSessionFacts source, SdkUsageAccountingObservation? accounting, decimal? reportedNanoAiu)
     {
@@ -747,6 +765,10 @@ public static class RuntimeUsageSourceReceiptContract
     /// True only when the caller proved, from its own model bindings, that the accepted <c>openai</c>
     /// pin resolves to an Azure OpenAI v1 endpoint. Such a receipt is then checked as Azure BYOK.
     /// </param>
+    /// <returns>
+    /// True when that endpoint flag is set or the source or registered model pin claims Azure BYOK;
+    /// false otherwise. A true result does not validate the claim.
+    /// </returns>
     public static bool ClaimsAzureByok(RuntimeUsageSourceReceipt receipt, bool azureOpenAIEndpoint = false) =>
         azureOpenAIEndpoint ||
         // A receipt claims Azure BYOK when either side says so: the SDK source that the runtime
@@ -842,6 +864,10 @@ public static class RuntimeUsageSourceReceiptContract
         return (pin, provider);
     }
 
+    /// <summary>
+    /// Returns true when the accepted mode matches hosted Copilot with Nano AIU, or BYOK with token
+    /// metering and no multiplier; returns false otherwise.
+    /// </summary>
     private static bool MatchesSourceMode(ModelSourceMode? mode, SdkSessionFacts source) => mode switch
     {
         ModelSourceMode.HostedCopilot =>
@@ -852,12 +878,10 @@ public static class RuntimeUsageSourceReceiptContract
         _ => false
     };
 
-    /// <summary>Hashes the canonical registration and usage submission.</summary>
     public static string Hash(RuntimeRegistration registration, UsageSubmission usage) =>
         RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(
             new CanonicalSourceUsage(registration, usage), JsonOptions));
 
-    /// <summary>Hashes the registration and SDK source facts used by usage receipts.</summary>
     public static string HashSource(RuntimeRegistration registration, SdkSessionFacts source) =>
         RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(
             new { Registration = registration, Source = source }, JsonOptions));

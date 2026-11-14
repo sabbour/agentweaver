@@ -162,6 +162,7 @@ public sealed record RuntimeObservationV2Fact(
         var requiresLimit = Kind is RuntimeObservationFactKind.Denied or
             RuntimeObservationFactKind.NativeNoSend or RuntimeObservationFactKind.ToolPermissionRejected;
         var hasToolPermissionEvidence = ToolPermission.State == RuntimeObservationSectionState.Available;
+        // A child-preparation denial can occur before the owner creates a dispatch row.
         var noDispatchRevision = Kind == RuntimeObservationFactKind.Denied &&
             LimitKind == RuntimeObservationLimitKind.CopilotHardCredits &&
             Stage == "childPreparation" && OwnerRevision is null;
@@ -341,6 +342,7 @@ public sealed record RuntimeObservationV2History(
 
     public RuntimeObservationV2History Validate()
     {
+        // Exact-attempt lookups may omit sequence numbers; paged history requires them to validate event order.
         if (SnapshotId == Guid.Empty || HighWatermark < 0 ||
             Complete != (IncompleteReason is null) ||
             Items is null || Items.Count > MaximumItems ||

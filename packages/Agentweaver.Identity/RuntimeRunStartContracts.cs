@@ -175,6 +175,9 @@ public sealed record RuntimeRunStartCleanupProjection(
         RuntimeContractValidation.ValidateHash(AcceptedSelectionHash);
         if (EnvironmentId is not null)
             RuntimeContractValidation.ValidateIdentifier(EnvironmentId);
+        // Version 1 uses CancellationFence and allows only cancellation. Version 2 requires CancellationFence = 0
+        // and records every final state, including cancellation, with TerminalFence. Cancelled needs
+        // TerminalFence > ExecutionFence; completed, failed, or indeterminate need TerminalFence >= ExecutionFence.
         var terminalFenceValid = ContractVersion switch
         {
             1 => RunState == "cancelled" &&
@@ -275,6 +278,11 @@ public sealed record RuntimeRunStartCleanupAttempt(
         return this;
     }
 
+    /// <summary>
+    /// Returns true when the operation, generations, and idempotency key match and either this attempt
+    /// has no resource reference or both attempts reference the same resource; false otherwise. A null
+    /// argument throws.
+    /// </summary>
     public bool Matches(RuntimeRunStartCleanupAttempt other) =>
         SandboxOperationId == other.SandboxOperationId &&
         ResourceGeneration == other.ResourceGeneration &&
@@ -513,6 +521,7 @@ public static class RuntimeRunStartKeys
             tenantId, projectId, runId,
             IdempotencyKey(tenantId, projectId, runId, sessionId, acceptedSelectionHash)
         };
+        // Length prefixes keep field boundaries distinct when identifiers contain delimiters.
         var canonical = string.Concat(fields.Select(field => $"{field.Length}:{field}"));
         return "env-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
             .ToLowerInvariant();
@@ -544,6 +553,7 @@ public static class RuntimeRunStartKeys
             tenantId, projectId, runId, sessionId,
             acceptedSelectionHash.ToLowerInvariant()
         };
+        // Length prefixes keep field boundaries distinct when identifiers contain delimiters.
         var canonical = string.Concat(fields.Select(field => $"{field.Length}:{field}"));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
     }

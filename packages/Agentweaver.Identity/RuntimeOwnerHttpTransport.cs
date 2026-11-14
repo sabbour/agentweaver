@@ -56,9 +56,9 @@ public static class RuntimeOwnerHttpTransport
     }
 
     /// <summary>
-    /// Validates an owner certificate against the mounted root and requires server-auth usage.
-    /// It rebuilds the chain because the backend root is not in system trust; the handler still
-    /// checks the configured owner hostname.
+    /// Returns true only when the certificate has no non-chain TLS errors, chains to the mounted root,
+    /// and has server-auth usage; returns false when those checks fail. The handler checks the owner
+    /// hostname, and this method rebuilds the chain because the backend root is not in system trust.
     /// </summary>
     internal static bool ValidateServerCertificate(
         X509Certificate? certificate,
@@ -289,7 +289,10 @@ public static class RuntimeOwnerHttpTransport
         }
     }
 
-    /// <summary>Sends a bounded owner request and returns a typed JSON body for success or coded failure statuses.</summary>
+    /// <summary>
+    /// Returns the status and a deserialized JSON contract for success or JSON failure responses. A
+    /// non-JSON failure returns the status with a null body.
+    /// </summary>
     public static async Task<(System.Net.HttpStatusCode StatusCode, TResponse? Body)> SendBoundedOutcomeAsync<TResponse>(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
         object body, int maximumBytes, CancellationToken cancellationToken)
@@ -431,7 +434,6 @@ public static class RuntimeOwnerHttpTransport
         return bytes;
     }
 
-    /// <summary>Implements the standard authenticated JSON request with no-store and redirect checks.</summary>
     private static async Task<TResponse?> SendCoreAsync<TResponse>(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
         object? body, bool allowNotFound, CancellationToken cancellationToken,
@@ -535,6 +537,10 @@ public static class RuntimeOwnerHttpTransport
         }
     }
 
+    /// <summary>
+    /// Returns true only for a no-store JSON response within the size and depth limits whose object has
+    /// one string <c>error</c> property equal to <c>runtime_model_turn_limit_exhausted</c>; false otherwise.
+    /// </summary>
     private static async Task<bool> IsExactNumericTurnLimitDenialAsync(
         HttpResponseMessage response, CancellationToken cancellationToken)
     {
