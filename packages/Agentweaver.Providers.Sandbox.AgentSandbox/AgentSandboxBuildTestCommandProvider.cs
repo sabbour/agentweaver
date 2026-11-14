@@ -662,7 +662,7 @@ public sealed partial class AgentSandboxProvider
                 $"The exact BuildTest {expectedRole} Cilium policy does not enforce its pinned offline selector.");
     }
 
-    /// <summary>Compares every accepted execution and collector option using ordinal sequence equality.</summary>
+    /// <summary>Returns true only when both accepted execution and collector settings are equal; allowed executables and collector arguments must also match in order. Otherwise false.</summary>
     private static bool SameExecutionOptions(
         SandboxBuildTestAcceptedExecutionOptions left,
         SandboxBuildTestAcceptedExecutionOptions right) =>
@@ -1049,7 +1049,7 @@ public sealed partial class AgentSandboxProvider
             throw ProviderResourceMismatch("The BuildTest scheduling gate was changed unexpectedly.");
     }
 
-    /// <summary>Requires the exact Linux/amd64 and configured RuntimeClass node selector.</summary>
+    /// <summary>Returns true when the single nodeSelector object has exactly the expected keys and values; missing, extra, or duplicate keys return false. Non-string values and a non-object spec throw.</summary>
     private static bool NodeSelectorMatches(
         JsonElement spec,
         ImmutableDictionary<string, string> expected)
@@ -1087,7 +1087,7 @@ public sealed partial class AgentSandboxProvider
                 string.Equals(value, pair.Value, StringComparison.Ordinal));
     }
 
-    /// <summary>Checks the non-root UID/GID, supplemental group, and runtime-default seccomp settings.</summary>
+    /// <summary>Returns true only when the required non-root identity, supplemental group, and RuntimeDefault seccomp restrictions match; otherwise false. Extra fields are allowed.</summary>
     private static bool PodSecurityContextMatches(JsonElement spec)
     {
         var security = TryGetObject(spec, "securityContext");
@@ -1099,7 +1099,7 @@ public sealed partial class AgentSandboxProvider
             ReadOptionalString(value, "seccompProfile", "type") == "RuntimeDefault";
     }
 
-    /// <summary>Requires non-root execution, no privilege escalation, a read-only root, and dropped capabilities.</summary>
+    /// <summary>Returns true only for the pinned non-root, read-only, least-privilege container profile; otherwise false. Added capabilities and JSON <c>privileged: true</c> fail, but an absent or non-boolean <c>privileged</c> value is not rejected here.</summary>
     private static bool ContainerSecurityContextMatches(JsonElement container)
     {
         var security = TryGetObject(container, "securityContext");
@@ -1122,7 +1122,7 @@ public sealed partial class AgentSandboxProvider
             (added is null || added.Value.GetArrayLength() == 0);
     }
 
-    /// <summary>Compares container resource requests and limits against the accepted CPU, memory, and storage bounds.</summary>
+    /// <summary>Returns true only when requests and limits exactly meet the accepted resource bounds with no extra resource names; otherwise false. Non-string quantities or duplicate keys throw.</summary>
     private static bool ContainerResourcesMatch(
         JsonElement container,
         SandboxBuildTestAcceptedExecutionOptions options)
@@ -1135,7 +1135,7 @@ public sealed partial class AgentSandboxProvider
         return ResourceQuantityMatches(requests, options) && ResourceQuantityMatches(limits, options);
     }
 
-    /// <summary>Requires exactly the accepted three resource quantities and no additional resource keys.</summary>
+    /// <summary>Returns true when the map has exactly the accepted CPU, memory, and ephemeral-storage values and no extra keys; otherwise false.</summary>
     private static bool ResourceQuantityMatches(
         ImmutableDictionary<string, string> quantities,
         SandboxBuildTestAcceptedExecutionOptions options) =>
@@ -1144,7 +1144,7 @@ public sealed partial class AgentSandboxProvider
         quantities.GetValueOrDefault("memory") == options.MemoryLimit &&
         quantities.GetValueOrDefault("ephemeral-storage") == options.EphemeralStorageLimit;
 
-    /// <summary>Checks the exact workspace PVC mount and optional private helper state volume.</summary>
+    /// <summary>Returns true when the workspace storage mapping and access mode match the accepted request and the required array counts match; otherwise false. Enclosing validation checks private helper contents. Malformed non-object fields can throw.</summary>
     private static bool WorkspaceVolumeMatches(
         JsonElement spec,
         JsonElement container,
@@ -1173,7 +1173,7 @@ public sealed partial class AgentSandboxProvider
             mountReadOnly == readOnly;
     }
 
-    /// <summary>Requires the collector environment variable to reference the current Pod UID field.</summary>
+    /// <summary>Returns true only when env has one entry named for the collector Pod UID and sourced from <c>v1</c> <c>metadata.uid</c>; otherwise false. Malformed non-object env paths can throw.</summary>
     private static bool CollectorUidEnvironmentMatches(JsonElement container)
     {
         var env = TryGetArray(container, "env");
@@ -1185,7 +1185,7 @@ public sealed partial class AgentSandboxProvider
             ReadOptionalString(item, "valueFrom", "fieldRef", "fieldPath") == "metadata.uid";
     }
 
-    /// <summary>Compares a JSON string array with accepted values using ordinal equality and exact length.</summary>
+    /// <summary>Returns true when the named JSON array has the same length, string values, and order as the accepted sequence; otherwise false. A non-object parent throws.</summary>
     private static bool JsonStringArrayMatches(
         JsonElement parent,
         string name,
@@ -1310,6 +1310,7 @@ public sealed partial class AgentSandboxProvider
         var expectedFingerprint = new SandboxBuildTestApiRequest(
             expected.Checkpoint,
             request.ExpectedBinding).ComputeRequestFingerprint(expected);
+        // An absent command version means contract 1; contract 2 must be explicit.
         if (expected.Outputs.IsEmpty && expected.WorkspaceSource is null ||
             (collectorRequest.AcceptedCommandContractVersion ?? 1) != expected.ContractVersion ||
             collectorRequest.OperationId != expected.OperationId ||
@@ -1339,10 +1340,11 @@ public sealed partial class AgentSandboxProvider
             request.AcceptedCommand.ExecutionOptions.MaximumFileOutputBytes,
             request.AcceptedCommand.Outputs)
         {
+            // Contract 1 is represented by null; contract 2 must be carried explicitly.
             AcceptedCommandContractVersion = request.AcceptedCommand.ContractVersion == 2 ? 2 : null
         }.Validate();
 
-    /// <summary>Compares all checkpoint identity and revision fields used to pin the accepted command.</summary>
+    /// <summary>Returns true when both references identify the same accepted checkpoint and execution fence, including the same selection hash; otherwise false.</summary>
     private static bool SameCheckpoint(
         SandboxBuildTestCheckpointReference left,
         SandboxBuildTestCheckpointReference right) =>

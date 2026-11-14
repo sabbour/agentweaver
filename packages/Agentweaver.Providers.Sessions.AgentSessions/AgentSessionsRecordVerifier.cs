@@ -11,7 +11,6 @@ using Google.Protobuf.Reflection;
 
 namespace Agentweaver.Providers.Sessions.AgentSessions;
 
-/// <summary>Pinned AgentSessions source and contract identity for the P2 proof of concept.</summary>
 public static class AgentSessionsPin
 {
     /// <summary>Upstream repository that defines the record format.</summary>
@@ -164,7 +163,7 @@ public static class AgentSessionsRecordVerifier
         return Verify(document);
     }
 
-    /// <summary>Verifies every record from sequence 1 with an empty previous hash, plus fork lineage.</summary>
+    /// <summary>Accepts only export format v1 from the pinned commit and contract version, then verifies the record chain and, when parent lineage is present, its FORK marker. It does not check the repository field.</summary>
     public static AgentSessionsVerification Verify(AgentSessionsExportDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
@@ -235,8 +234,8 @@ public static class AgentSessionsRecordVerifier
     }
 
     /// <summary>
-    /// Verifies both chains and proves the child copied the parent's records 1 through the fork boundary
-    /// byte for byte, followed by its FORK marker.
+    /// Verifies both chains and requires the child prefix through the fork boundary to equal the parent's
+    /// records except for fence values; the child chain must also contain the required FORK marker.
     /// </summary>
     public static AgentSessionsVerification VerifyFork(AgentSessionsExportDocument parent, AgentSessionsExportDocument child)
     {
@@ -261,6 +260,7 @@ public static class AgentSessionsRecordVerifier
         return childResult;
     }
 
+    /// <summary>Returns true for canonical padded base64 that decodes to a bounded Event with no unknown fields; decoding or schema failures return false with a code and error. Null input throws.</summary>
     private static bool TryDecodeEvent(string base64, out Event ev, out string code, out string error)
     {
         ev = new Event();
@@ -299,12 +299,14 @@ public static class AgentSessionsRecordVerifier
         }
     }
 
+    /// <summary>Returns true if the wire message contains an unknown field or incompatible wire type, including nested messages; malformed wire data can throw.</summary>
     private static bool ContainsUnknownFields(byte[] bytes, MessageDescriptor descriptor)
     {
         using var input = new CodedInputStream(bytes);
         return ContainsUnknownFields(input, descriptor);
     }
 
+    /// <summary>Returns true if this message contains an unknown field or incompatible wire type, including nested messages; malformed wire data can throw.</summary>
     private static bool ContainsUnknownFields(CodedInputStream input, MessageDescriptor descriptor)
     {
         // Map entries have synthetic message descriptors, so scan their raw bytes before map parsing discards extras.
@@ -331,6 +333,7 @@ public static class AgentSessionsRecordVerifier
         return false;
     }
 
+    /// <summary>Returns true when the field accepts this wire type, including length-delimited encoding for packed repeated scalars; otherwise false.</summary>
     private static bool HasCompatibleWireType(FieldDescriptor field, WireFormat.WireType wireType)
     {
         var expected = field.FieldType switch
@@ -350,6 +353,7 @@ public static class AgentSessionsRecordVerifier
                 field.IsPacked && wireType == WireFormat.WireType.LengthDelimited);
     }
 
+    /// <summary>Returns true for canonical invariant decimal Int64 text, including exactly "0" and nonzero negative values; false for missing, empty, non-canonical, or out-of-range text. Null input returns false.</summary>
     private static bool TryParseInt64(string? text, out long value)
     {
         value = 0;
@@ -358,6 +362,7 @@ public static class AgentSessionsRecordVerifier
             value.ToString(CultureInfo.InvariantCulture) == text;
     }
 
+    /// <summary>Returns true only for 64 lowercase hexadecimal characters; otherwise false. Null input throws.</summary>
     private static bool IsHash(string value) =>
         value.Length == 64 && value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
 }

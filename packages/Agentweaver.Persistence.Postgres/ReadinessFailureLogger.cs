@@ -27,7 +27,7 @@ public sealed class ReadinessFailureLogger
     public ReadinessFailureLogger(ILogger logger) =>
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-    /// <summary>Writes a failure warning unless one was logged during the previous minute.</summary>
+    /// <summary>Returns true only after reserving the one-minute process-local slot and logging; returns false when a slot was reserved less than one Stopwatch-measured minute ago. A null exception or logger failure throws; a logger failure still leaves the slot reserved.</summary>
     public bool TryLog(Exception exception)
     {
         ArgumentNullException.ThrowIfNull(exception);

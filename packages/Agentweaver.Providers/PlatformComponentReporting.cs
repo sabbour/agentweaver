@@ -94,7 +94,7 @@ public static class PlatformComponentCatalogReporter
 
     /// <summary>
     /// Creates a descriptor for a built-in implementation that has no provider catalog registration.
-    /// The adapter version is the version of the assembly that contains the implementation.
+    /// The adapter version is the implementation assembly version, or 1.0 when it has no version.
     /// </summary>
     /// <param name="providerArea">Provider contract area the implementation serves.</param>
     /// <param name="id">Stable implementation identifier.</param>
@@ -164,8 +164,8 @@ public sealed record PlatformComponentServiceAuthenticationOptions(
     public const string OwnerRoute = "/internal/platform/components";
 
     /// <summary>
-    /// Reads the optional settings. Returns null when the section is absent and throws when it is
-    /// partial or invalid, so a misconfigured owner fails at startup instead of reporting wrongly.
+    /// Returns null only when all three settings are absent. A partial section or any invalid value
+    /// throws, so a misconfigured owner fails at startup instead of reporting wrongly.
     /// </summary>
     /// <param name="configuration">Service configuration.</param>
     /// <param name="publicAudiences">Public audiences that the private audience must not equal.</param>
@@ -194,6 +194,7 @@ public sealed record PlatformComponentServiceAuthenticationOptions(
         return new PlatformComponentServiceAuthenticationOptions(authorityUri, audienceUri, callerSubject.Trim());
     }
 
+    /// <summary>Returns true for an absolute HTTPS URI with a host and no user info, query, or fragment; otherwise false.</summary>
     private static bool TryHttps(string? value, out Uri uri)
     {
         uri = null!;

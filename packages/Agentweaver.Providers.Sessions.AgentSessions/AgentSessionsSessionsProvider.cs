@@ -14,7 +14,7 @@ public sealed record AgentSessionsProviderOptions(
     string OptionsRevision,
     int OptionsSchemaVersion = 1)
 {
-    /// <summary>Requires token-shaped identifiers, a positive generation, and options schema version 1.</summary>
+    /// <summary>Requires token-shaped identifiers, a generation of at least 1 (zero is invalid), and options schema version 1.</summary>
     /// <exception cref="ArgumentException">One or more option values are invalid.</exception>
     public void Validate()
     {
@@ -23,6 +23,7 @@ public sealed record AgentSessionsProviderOptions(
             throw new ArgumentException("AgentSessions provider options are invalid.");
     }
 
+    /// <summary>Returns true for a non-empty token of at most <paramref name="maxLength"/> ASCII letters, digits, dot, underscore, hyphen, or colon; otherwise false.</summary>
     private static bool IsToken(string value, int maxLength) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= maxLength &&
         value.All(character => char.IsAsciiLetterOrDigit(character) ||

@@ -105,7 +105,7 @@ public sealed partial class AgentSandboxProvider
         return address.GetString();
     }
 
-    /// <summary>Checks the single supported named HTTPS service port and its container target.</summary>
+    /// <summary>Returns true only for a port named https on TCP 8443 whose target is https or 8443; otherwise false. A malformed non-object port can throw.</summary>
     private static bool IsAgentHostServicePort(JsonElement port) =>
         ReadOptionalString(port, "name") == "https" &&
         TryGetInt64(port, "port", out var servicePort) &&
@@ -114,7 +114,7 @@ public sealed partial class AgentSandboxProvider
         (ReadOptionalString(port, "targetPort") == "https" ||
          TryGetInt64(port, "targetPort", out var targetPort) && targetPort == 8443);
 
-    /// <summary>Checks one lower-case DNS label used in a verified runtime service name.</summary>
+    /// <summary>Returns true for a 1-to-63 character lower-case ASCII DNS label that starts and ends with a letter or digit; otherwise false. Null input throws.</summary>
     private static bool IsRuntimeDnsLabel(string label) =>
         label.Length is > 0 and <= 63 &&
         label[0] is >= 'a' and <= 'z' or >= '0' and <= '9' &&

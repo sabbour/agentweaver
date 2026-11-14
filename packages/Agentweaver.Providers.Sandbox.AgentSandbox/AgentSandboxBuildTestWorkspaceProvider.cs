@@ -244,7 +244,7 @@ public sealed partial class AgentSandboxProvider
         }
     }
 
-    /// <summary>Checks whether the named container has a current running status.</summary>
+    /// <summary>Returns true when the named container has a status entry with a running-state object; otherwise false. Malformed non-object entries can throw.</summary>
     private static bool WorkspaceContainerRunning(JsonElement pod, string statusesName, string containerName) =>
         TryGetObject(pod, "status") is { } status && TryGetArray(status, statusesName) is { } entries &&
         entries.EnumerateArray().Any(entry => ReadOptionalString(entry, "name") == containerName &&
