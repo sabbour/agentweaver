@@ -419,7 +419,7 @@ public static class ProjectConfigurationValidator
                     "Enabled skills without imported pins may only be preserved unchanged from the previous configuration.");
         }
 
-        // Treat newly introduced legacy-shaped enabled entries as disabled for validation, then preserve old bytes only when unchanged.
+        // Temporarily disable unpinned legacy entries for validation; the earlier equality check permits only unchanged ones.
         var strictSkills = configuration.Skills
             .Select(skill => skill is { Enabled: true } && IsUnpinned(skill)
                 ? skill with { Enabled = false }
@@ -464,6 +464,7 @@ public static class ProjectConfigurationValidator
             return;
         var usesAppConnection = sourceControl.AuthMode == SourceControlAuthMode.GitHubApp;
         var usesSecret = sourceControl.AuthMode is null or SourceControlAuthMode.Secret;
+        // A missing mode keeps the legacy secret form; GitHub App mode cannot also carry either API or checkout secret.
         if (sourceControl.Repository is null ||
             (!usesAppConnection && !usesSecret) ||
             usesSecret &&

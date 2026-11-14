@@ -357,8 +357,8 @@ public sealed class ProjectRoleAssignmentService(
     }
 
     /// <summary>
-    /// Runs one change in a new serializable transaction, retrying only serialization failures that happen
-    /// before commit. Missing runtime grants map to a stable unavailable response.
+    /// Runs one change in a new serializable transaction and retries known serialization failures up to a fixed limit.
+    /// Exhausted retries return a conflict; missing runtime grants map to a stable unavailable response.
     /// </summary>
     private async Task<T> RunSerializableAsync<T>(
         Func<ProjectsConfigDbContext, Task<T>> change,
@@ -380,6 +380,7 @@ public sealed class ProjectRoleAssignmentService(
                 ProjectAuthorityRules.IsSerializationFailure(exception) &&
                 attempt < ProjectAuthorityRules.MaxSerializationRetries - 1)
             {
+                // Use a non-cancelled token so request cancellation does not skip rollback.
                 await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception exception) when (ProjectAuthorityRules.IsSerializationFailure(exception))

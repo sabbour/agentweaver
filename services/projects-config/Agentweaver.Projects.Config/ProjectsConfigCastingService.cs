@@ -530,6 +530,7 @@ public sealed partial class ProjectsConfigService
     private static void RequireCompletedCastingGeneration(
         ProjectCastingGenerationRequestRecord? generation)
     {
+        // Proposals not created by generation (for example manual, imported, or transferred proposals) have no generation row. Generated proposals allow edits and confirmation only after generation completes.
         if (generation is null || generation.State == ProjectCastingGenerationRequestState.Completed)
             return;
         if (generation.State == ProjectCastingGenerationRequestState.Stale)
@@ -552,6 +553,7 @@ public sealed partial class ProjectsConfigService
                     return await RunCastingProposalTransactionAsync(db, operation, cancellationToken)
                         .ConfigureAwait(false);
 
+                // Only a factory can supply a fresh context for another attempt; the injected-context path runs once.
                 await using var context = await dbContextFactory.CreateDbContextAsync(cancellationToken)
                     .ConfigureAwait(false);
                 return await RunCastingProposalTransactionAsync(context, operation, cancellationToken)

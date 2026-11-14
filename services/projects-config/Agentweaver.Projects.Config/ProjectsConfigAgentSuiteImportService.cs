@@ -395,12 +395,12 @@ public sealed partial class ProjectsConfigService
         // Record equality compares immutable arrays by reference rather than by their contents.
         JsonSerializer.Serialize(left, JsonOptions) == JsonSerializer.Serialize(right, JsonOptions);
 
-    // Decodes the base64 archive. The size check runs on the text first, so oversized input is never decoded.
+    // Bound the encoded text before decoding; the caller validates the decoded byte count afterward.
     private static byte[] DecodeAgentSuiteArchive(string archive)
     {
         if (string.IsNullOrEmpty(archive))
             throw ProjectConfigException.Invalid("invalid_agentsuite_archive", "The archive is empty.");
-        // Base64 uses 4 characters per 3 bytes, so this is the longest text that can decode within the limit.
+        // Round the byte limit up to a full four-character Base64 block.
         if (archive.Length > (AgentSuiteValidator.MaxArchiveBytes + 2) / 3 * 4)
             throw ProjectConfigException.Invalid(
                 "agentsuite_archive_too_large",

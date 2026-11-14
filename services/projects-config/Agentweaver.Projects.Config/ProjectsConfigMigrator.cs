@@ -202,6 +202,7 @@ public static class ProjectsConfigMigrator
         builder.UseNpgsql(connection, npgsql =>
             npgsql.MigrationsHistoryTable("__ef_migrations_history", ProjectsConfigDbContext.Schema));
         await using var context = new ProjectsConfigDbContext(builder.Options);
+        // The supplied transaction owns atomicity, so the generated script must not start or commit a separate transaction.
         var script = context.GetService<IMigrator>()
             .GenerateScript(options: MigrationsSqlGenerationOptions.NoTransactions);
         await using (var migration = new NpgsqlCommand(script, connection, transaction))
