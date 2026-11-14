@@ -94,6 +94,7 @@ internal sealed partial class RuntimeRunStartContinuation
         var exchangeId = RuntimeRunStartKeys.ReplacementOperationId(
             result.OperationId, member.Session.SessionId, "checkpoint-exchange");
 
+        // Persist the prior placement and registration before retirement, so recovery can resume if the owner reply is lost.
         SetPreviousCheckpointRecoveryEvidence(
             links,
             result.OperationId,

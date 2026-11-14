@@ -431,6 +431,7 @@ internal sealed class RuntimeObservationV2Store(NpgsqlDataSource dataSource, str
 
         var streamId = StreamId(scope.ProjectId, scope.RunId);
         var head = await ReadHeadAsync(connection, transaction, streamId, cancellationToken).ConfigureAwait(false);
+        // Keep the first page's stream head in the cursor so later pages exclude newer facts.
         var state = cursor is null
             ? new CursorState(1, scope, pageSize, head, 0, Guid.NewGuid())
             : await DecodeCursorAsync(
@@ -753,6 +754,7 @@ internal sealed class RuntimeObservationV2Store(NpgsqlDataSource dataSource, str
         var noSend = JsonSerializer.Deserialize<RuntimeNativeTurnNoSendReceipt>(
             reader.GetString(0), JsonOptions)
             ?? throw new RuntimeAuthorizationException("runtime_native_turn_no_send_invalid");
+        // More than one matching witness makes the legacy no-send evidence ambiguous.
         if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             throw new RuntimeAuthorizationException("runtime_native_turn_no_send_conflict");
         if (noSend.DispatchId != denial.DispatchId ||
@@ -792,6 +794,7 @@ internal sealed class RuntimeObservationV2Store(NpgsqlDataSource dataSource, str
         var fact = JsonSerializer.Deserialize<RuntimeObservationV2Fact>(reader.GetString(0), JsonOptions)
             ?.Validate()
             ?? throw new RuntimeAuthorizationException("runtime_observation_v2_fact_corrupt");
+        // Only a guard for the root session, accepted selection, and fence in this scope is current.
         if (fact.Kind != RuntimeObservationFactKind.CreditGuardChanged ||
             fact.SessionId != scope.RootSessionId ||
             !fact.AcceptedSelectionHash.Equals(scope.SelectionHash, StringComparison.OrdinalIgnoreCase) ||

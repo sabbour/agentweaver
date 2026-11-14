@@ -7,8 +7,8 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Agentweaver.Orchestrator;
 
 /// <summary>
-/// Resolves the current accepted runtime owner context for a child session and its selected work.
-/// It verifies both model-work items and fixed-work associations against owner state before returning runtime configuration.
+/// Resolves the current accepted runtime owner context for a session and its selected work.
+/// For child sessions, it verifies model-work items and fixed-work associations against owner state before returning runtime configuration.
 /// </summary>
 public static partial class CoordinationEndpoints
 {

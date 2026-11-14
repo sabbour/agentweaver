@@ -159,6 +159,7 @@ internal sealed class RuntimeRegistrationStore
             currentRead.Value.BindingJson,
             currentRead.Value.BindingHash);
 
+        // A replay is valid only after one revocation that kept the same binding and expiry.
         var replayedRevocation =
             current.Revision == expected.Revision + 1 &&
             current.State == RuntimeRegistrationState.Revoked &&

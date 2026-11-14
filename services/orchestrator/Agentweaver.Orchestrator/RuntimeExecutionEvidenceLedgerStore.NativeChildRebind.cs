@@ -56,6 +56,7 @@ internal sealed partial class RuntimeExecutionEvidenceLedgerStore
                 connection, transaction, requireApplied: false, cancellationToken).ConfigureAwait(false))
             return [];
 
+        // Fetch one row beyond the lineage limit so an overlong chain is rejected, not truncated.
         await using var command = new NpgsqlCommand($"""
             SELECT receipt_id, attempt_id, payload_hash, receipt_json::text
             FROM {_table}
