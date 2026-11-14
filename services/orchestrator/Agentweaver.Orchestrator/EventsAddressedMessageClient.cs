@@ -639,9 +639,6 @@ internal sealed class EventsAddressedMessageClient(
         return result.Claim;
     }
 
-    /// <summary>
-    /// Marks a claimed message as presented to its recipient.
-    /// </summary>
     /// <param name="context">The authenticated request context forwarded to the owner.</param>
     /// <param name="recipient">The session holding the claim.</param>
     /// <param name="messageId">The claimed message identifier.</param>
@@ -662,9 +659,6 @@ internal sealed class EventsAddressedMessageClient(
             new AddressedMessageClaimFenceRequest(claimFence),
             cancellationToken);
 
-    /// <summary>
-    /// Acknowledges receipt of a claimed addressed message.
-    /// </summary>
     /// <param name="context">The authenticated request context forwarded to the owner.</param>
     /// <param name="recipient">The session holding the claim.</param>
     /// <param name="messageId">The claimed message identifier.</param>

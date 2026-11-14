@@ -11,9 +11,6 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Returns a completed suspend or resume operation, including its validated immutable manifest.
-/// </summary>
 internal sealed record SessionSuspendResumeOperationSnapshot(
     Guid OperationId,
     SessionIdentity Identity,
@@ -27,9 +24,6 @@ internal sealed record SessionSuspendResumeOperationSnapshot(
     JsonElement Progress,
     bool IsDuplicate);
 
-/// <summary>
-/// Holds the mutable phase, progress, and optional manifest for one owner-tracked suspend or resume operation.
-/// </summary>
 internal sealed record SessionSuspendResumeOperationRecord(
     Guid OperationId,
     SessionIdentity Identity,
@@ -45,9 +39,6 @@ internal sealed record SessionSuspendResumeOperationRecord(
     string? ManifestHash,
     bool IsDuplicate);
 
-/// <summary>
-/// Combines a validated suspended manifest with the placement release request derived from committed evidence.
-/// </summary>
 internal sealed record SessionSuspendResumeSourceEvidence(
     SessionSuspendResumeManifest Manifest,
     string ManifestHash,
@@ -59,9 +50,9 @@ internal sealed record SessionSuspendResumeSourceEvidence(
 internal sealed partial class CoordinationOwnerStore
 {
     /// <summary>
-    /// Confirms that a host-suspend request matches the active owner operation and current accepted run binding.
+    /// Keeps a host-suspend callback tied to its persisted operation and current owner fence.
     /// </summary>
-    /// <remarks>The stored operation phase, fence, request hash, actor, and resolved request are checked under row locks.</remarks>
+    /// <remarks>The run, session, and operation rows stay locked until the callback has been checked.</remarks>
     internal async Task RequireCurrentSessionSuspendAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -176,6 +167,7 @@ internal sealed partial class CoordinationOwnerStore
     /// <summary>
     /// Confirms that a placement-release request exactly matches the committed suspend operation.
     /// </summary>
+    /// <remarks>Row locks keep the owner fence and committed manifest stable until the release is checked.</remarks>
     internal async Task RequireCurrentSessionSuspendReleaseAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -956,8 +948,9 @@ internal sealed partial class CoordinationOwnerStore
     }
 
     /// <summary>
-    /// Reads and verifies the suspended source manifest and its committed suspend operation.
+    /// Verifies that a resume source is a committed suspended manifest with the expected owner and claim fences.
     /// </summary>
+    /// <remarks>Share locks keep the manifest and suspend operation stable through validation.</remarks>
     private async Task<SessionSuspendResumeSourceEvidence> ReadResumeSourceEvidenceAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1615,8 +1608,9 @@ internal sealed partial class CoordinationOwnerStore
     }
 
     /// <summary>
-    /// Reads an existing operation and its manifest, checking phase, fence, hash, and stored progress consistency.
+    /// Checks an idempotent replay against its request, fence, and any phase-specific manifest evidence.
     /// </summary>
+    /// <remarks>The row lock keeps operation phase and progress stable through replay validation.</remarks>
     private async Task<SessionSuspendResumeOperationRecord?> ReadExistingSessionSuspendResumeOperationRecordAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1800,9 +1794,6 @@ internal sealed partial class CoordinationOwnerStore
                 "suspend_resume_operation_stale", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Serializes operation progress as a JSON object using the strict suspend/resume contract options.
-    /// </summary>
     private static JsonElement SerializeSessionSuspendResumeProgress(SessionSuspendResumeProgress progress)
     {
         var value = JsonSerializer.SerializeToElement(progress, JsonOptions);
@@ -1812,7 +1803,7 @@ internal sealed partial class CoordinationOwnerStore
     }
 
     /// <summary>
-    /// Rejects progress that is not an object or exceeds the stored size bound.
+    /// Caps retained progress so one suspend or resume operation cannot grow the stored row without bound.
     /// </summary>
     private static void RequireBoundedProgress(JsonElement progress)
     {
@@ -1900,9 +1891,6 @@ internal sealed partial class CoordinationOwnerStore
         return evidence.ToImmutable();
     }
 
-    /// <summary>
-    /// Creates a validated interrupted manifest containing the evidence that was unavailable.
-    /// </summary>
     private static SessionSuspendResumeManifest CreateInterruptedManifest(
         SessionIdentity identity,
         Guid manifestId,
@@ -1996,7 +1984,7 @@ internal sealed partial class CoordinationOwnerStore
     }
 
     /// <summary>
-    /// Checks that progress references the same manifest identity and serialized manifest content.
+    /// Checks that saved progress names the same manifest and missing-evidence list.
     /// </summary>
     private static void RequireMatchingProgress(
         JsonElement progress,
@@ -2026,7 +2014,7 @@ internal sealed partial class CoordinationOwnerStore
     }
 
     /// <summary>
-    /// Requires the selected actor, tenant, revisions, run, and accepted selection to match current owner state.
+    /// Rechecks the caller's project permission and accepted selection against current owner state.
     /// </summary>
     private static void RequireCurrentAuthorizedSelection(
         CoordinationActor actor,
@@ -2061,9 +2049,6 @@ internal sealed partial class CoordinationOwnerStore
                 "accepted_run_selection_stale", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Validates suspend/resume operation kind, idempotency key, and optional source-manifest identity.
-    /// </summary>
     private static void ValidateSessionSuspendResumeRequest(
         SessionSuspendResumeOperationKind kind,
         string idempotencyKey,

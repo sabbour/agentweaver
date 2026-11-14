@@ -523,7 +523,7 @@ internal static class CoordinatorWorkflowCatalog
             StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>Reads the accepted reference and effort identity from one model-selection object.</summary>
+    /// <summary>Reads the accepted model reference and defaults an omitted reasoning effort to High.</summary>
     private static (string Reference, string ReasoningEffort) ReadModelSelectionIdentity(
         JsonElement modelSelection)
     {

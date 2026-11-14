@@ -332,6 +332,7 @@ internal sealed class CoordinationRuntimeRunStartStore
             reader.GetString(12),
             reader.GetBoolean(13),
             reader.GetInt64(14));
+        // Status must not choose an arbitrary intent when persisted rows are ambiguous.
         if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             throw new CoordinationException("runtime_start_intent_ambiguous", StatusCodes.Status409Conflict);
         return intent;
@@ -418,6 +419,7 @@ internal sealed class CoordinationRuntimeRunStartStore
             connection, transaction, currentIntent, registration, completion, cancellationToken)
             .ConfigureAwait(false);
 
+        // The intent row lock serializes this check with other replacement admissions.
         await using (var pending = new NpgsqlCommand($"""
             SELECT 1 FROM {_schema}.runtime_replacement_operations
             WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
@@ -654,6 +656,7 @@ internal sealed class CoordinationRuntimeRunStartStore
         }
 
         var edges = new List<(RuntimeRegistration Previous, RuntimeRegistration Current)>();
+        // A replacement may depend on an earlier operation, so retry rows until their predecessor is linked.
         while (pending.Count > 0)
         {
             var progressed = false;
@@ -820,6 +823,7 @@ internal sealed class CoordinationRuntimeRunStartStore
         if (!await TableExistsAsync(connection, null, "runtime_run_start_intents", cancellationToken)
                 .ConfigureAwait(false))
             throw new CoordinationException("runtime_start_cleanup_unavailable", StatusCodes.Status409Conflict);
+        // Version 1 accepts cancellation only; version 2 also requires a marker for other terminal states.
         if (contractVersion == 2 &&
             !await IsTerminalCleanupGuardInstalledAsync(connection, null, _schema, cancellationToken)
                 .ConfigureAwait(false))
@@ -919,6 +923,9 @@ internal sealed class CoordinationRuntimeRunStartStore
         await HasUnresolvedNativeWorkAsync(
             connection, transaction, _schema, projectId, runId, cancellationToken).ConfigureAwait(false);
 
+    /// <summary>
+    /// Returns true if an unaccounted dispatch, root admission, or workflow-generation job remains; otherwise, returns false.
+    /// </summary>
     internal static async Task<bool> HasUnresolvedNativeWorkAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -983,6 +990,9 @@ internal sealed class CoordinationRuntimeRunStartStore
         return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
     }
 
+    /// <summary>
+    /// Returns true only when migration 047 and its enabled terminal-cleanup trigger are installed; otherwise, returns false.
+    /// </summary>
     internal static async Task<bool> IsTerminalCleanupGuardInstalledAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -1086,6 +1096,10 @@ internal sealed class CoordinationRuntimeRunStartStore
             pending == 0 ? "complete" : "pending", complete + pending, pending, complete);
     }
 
+    /// <summary>
+    /// Returns true when a child cleanup is incomplete or a non-root runtime registration remains active.
+    /// Returns false when neither condition is present.
+    /// </summary>
     private async Task<bool> HasIncompleteChildCleanupAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -1117,6 +1131,10 @@ internal sealed class CoordinationRuntimeRunStartStore
         return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
     }
 
+    /// <summary>
+    /// Returns true when a child intent lacks a cleanup obligation or an active registration lacks unfinished cleanup.
+    /// Returns false when neither condition is present.
+    /// </summary>
     private async Task<bool> HasUntrackedCleanupResourcesAsync(
         NpgsqlConnection connection,
         string tenantId,
@@ -1185,6 +1203,7 @@ internal sealed class CoordinationRuntimeRunStartStore
                 reader.IsDBNull(11) ? null : reader.GetGuid(11),
                 reader.GetString(12), reader.GetBoolean(13), reader.GetInt64(14)));
         }
+        // Read one past the supported limit so cleanup never silently omits later intents.
         if (intents.Count > 101)
             throw new CoordinationException("runtime_start_cleanup_limit_exceeded", StatusCodes.Status409Conflict);
         return intents;
@@ -1493,6 +1512,7 @@ internal sealed class CoordinationRuntimeRunStartStore
             throw new CoordinationException(
                 "runtime_start_retirement_receipt_invalid", StatusCodes.Status409Conflict);
 
+        // New operation IDs keep the next bootstrap separate from the retired attempt's receipts.
         var retired = new
         {
             intent.BootstrapOperationId,
@@ -1587,6 +1607,7 @@ internal sealed class CoordinationRuntimeRunStartStore
             throw new CoordinationException("runtime_start_owner_stale", StatusCodes.Status409Conflict);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        // Keep the run row locked until the ready transition commits, so terminal completion cannot race this check.
         await using (var run = new NpgsqlCommand($"""
             SELECT accepted_selection_hash, execution_fence, execution_state
             FROM {_schema}.accepted_runs
@@ -1819,6 +1840,7 @@ internal sealed class CoordinationRuntimeRunStartStore
         return false;
     }
 
+    // NUL separators keep the advisory-lock input parts distinct before hashing.
     private static string LockKey(RuntimeRunStartIntent intent) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\0',
             intent.TenantId, intent.ProjectId, intent.RunId, intent.RootSessionId,
@@ -1828,6 +1850,7 @@ internal sealed class CoordinationRuntimeRunStartStore
     {
         public async ValueTask DisposeAsync()
         {
+            // CancellationToken.None ensures the unlock is attempted; a failed unlock releases only when the pooled connection is reset on next use or physically closed.
             try
             {
                 await using var command = new NpgsqlCommand(
