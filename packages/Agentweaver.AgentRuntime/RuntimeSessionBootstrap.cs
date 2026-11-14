@@ -269,6 +269,7 @@ public sealed class RuntimeSessionBootstrap(
                 runtimeInstanceId, operationId, actor, cancellationToken)
             : owner.ReadCurrentAsync(runtimeInstanceId, actor, cancellationToken);
 
+    /// <summary>For recovery, NativeCache needs a cache; JournalRebuild needs turns and journal evidence through a positive position. With no mode, either is accepted.</summary>
     internal static void RequireCheckpointRecoveryMaterial(
         Guid? operationId,
         RuntimeSessionRecovery? recovery,

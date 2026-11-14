@@ -108,6 +108,7 @@ public sealed class RuntimeActionHttpClient(HttpClient client, Uri orchestratorA
         RequireAsync(registration, actionId, input, requireCurrentAuthority, cancellationToken,
             dispatchId: dispatchId, costTurnId: costTurnId, eventId: eventId);
 
+    /// <summary>Records a denied tool call; after an HTTP request failure, it rechecks authority and retries once within the same timeout.</summary>
     internal async Task RecordNativeToolPermissionRejectionAsync(
         RuntimeNativeToolPermissionRejectionRequest request,
         Func<CancellationToken, Task> requireCurrentAuthority,
