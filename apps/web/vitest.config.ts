@@ -7,6 +7,14 @@ export default defineConfig({
   cacheDir: '.vite/vitest',
   test: {
     environment: 'happy-dom',
+    // Auth tests dispatch Broker callback messages, so their silent-sign-in frames need a page.
+    environmentOptions: {
+      happyDOM: {
+        settings: {
+          enableIframePageLoading: true,
+        },
+      },
+    },
     globals: false,
     setupFiles: ['./src/test/setup.ts'],
     coverage: {
