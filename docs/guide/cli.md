@@ -289,6 +289,8 @@ See [runtime observation contracts](../reference/contracts.md#runtime-observatio
 for the response fields and limits.
 The [numeric runtime observation case](./numeric-runtime-observation-acceptance.md)
 checks a retained child-session denial through both `api invoke` and `rest`.
+Its root model-turn and hard-credit cases check a retained root-session denial
+and its native no-send witness in the same way.
 
 ## Make a direct Gateway request
 

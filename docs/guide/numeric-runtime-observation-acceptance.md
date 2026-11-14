@@ -3,7 +3,8 @@
 Use this case to inspect a workflow-bound child session that already has a
 numeric tool-call denial. The case reads status, usage, and runtime-observation
 data through the native CLI. It does not create a run, send a message, or call a
-model.
+model. To check root model-turn or hard-credit evidence, see
+[Check root model-turn and hard-credit no-send evidence](#check-root-model-turn-and-hard-credit-no-send-evidence).
 
 This case checks source behavior through a configured non-production target.
 It does not prove that the target is deployed or ready for release.
@@ -122,6 +123,85 @@ command is not a pass. Review the redacted command records before you retry.
 The script does not create or clean up the run. Use the normal owner commands
 to finish or cancel only a run that you own. Do not repeat a command if its
 write outcome is uncertain.
+
+## Check root model-turn and hard-credit no-send evidence
+
+The same script has two more read-only cases. Each case reads the **root**
+session of an existing run that already reached a limit. The script does not
+drive the run to the limit. Use the same procedure as above, with these
+changes:
+
+| Case | Example input | Case-specific input |
+| --- | --- | --- |
+| `numeric-model-turn-no-send` | `scripts/acceptance/api/examples/numeric-model-turn-no-send.json` | `expectedMaxModelTurns`: the accepted `maxModelTurns` value, from `1` to `10000`. |
+| `numeric-hard-credit-no-send` | `scripts/acceptance/api/examples/numeric-hard-credit-no-send.json` | `expectedSoftWarning`: `true` if the run must show a soft-credit warning; otherwise `false`. |
+
+Set `target.sessionId` to the root session of the run. The input does not
+include `expectedMaxToolCalls` or a credit value. The hard-credit case reads
+the configured limit from `acceptedLimits.copilotHardCreditLimit`.
+
+### Current-authority rule
+
+A root-session history contains facts from all sessions, execution fences,
+and accepted selections of the run. The script uses a fact as evidence only
+when all of these conditions are true:
+
+- The fact `sessionId` is the selected root session.
+- The fact `executionFence` is the binding `currentExecutionFence`.
+- The fact `acceptedSelectionHash` is the binding `acceptedSelectionHash`.
+
+The script applies this rule to each denial, native no-send, model-turn
+reservation, and credit-guard fact. It also applies the rule to the facts that
+the exact `api invoke` and `rest` lookups return. If no fact matches, the
+result is `blocked`, and the reason names the mismatch.
+
+### Model-turn result
+
+A `passed` result for `numeric-model-turn-no-send` means:
+
+- The binding is the root session at its current execution fence.
+- `acceptedLimits.maxModelTurns` equals `expectedMaxModelTurns`.
+- The run-wide `totals.modelSlotsReserved` value is available and equals
+  `expectedMaxModelTurns`. A larger value is over-admission and does not pass.
+- The history has at least `expectedMaxModelTurns` `ModelTurnReserved` facts
+  that match the current-authority rule.
+- A `Denied` fact has `limitKind` `ModelTurns`, `stage` `rootAuthorization`,
+  `reasonCode` `limit_reached`, and an available owner decision.
+- A `NativeNoSend` fact for the same attempt has an available native no-send
+  section with a complete range and zero events.
+- The exact `api invoke` and `rest` lookups return the same `NativeNoSend`
+  fact.
+
+This result does not cover child sessions or `maxPromptTokens`. A child
+model-turn denial has no native no-send witness.
+
+### Hard-credit result
+
+A `passed` result for `numeric-hard-credit-no-send` means:
+
+- The binding is the root session at its current execution fence.
+- `acceptedLimits.copilotHardCreditLimit` is set.
+- A `Denied` fact has `limitKind` `CopilotHardCredits`, `stage`
+  `nativeTurnBegin`, and `reasonCode` `hard_credit_limit_reached`. Its
+  `configuredValue` equals the accepted limit, and its `observedValue` is not
+  less than that limit. Both values use the unit `nanoAiu`. A denial with a
+  different configured value is from an old configuration and does not pass.
+- A `NativeNoSend` fact for the same dispatch has the same configured value
+  and an available native no-send section with a complete range and zero
+  events.
+- At least one `CreditGuardChanged` fact shows `hardCapExhausted`. The
+  observed credit floor does not decrease in sequence order.
+- If `expectedSoftWarning` is `true`, at least one `CreditGuardChanged` fact
+  shows `softWarningEmitted`.
+- The exact `api invoke` and `rest` lookups return the same `NativeNoSend`
+  fact.
+
+This result does not prove the exact spend of other model turns.
+
+For all three cases, each result that is not a pass is `blocked`, and the
+script exits with code `2`. Read the `reason` field to see the failed check.
+An unavailable or unknown section is never treated as proof that nothing was
+sent.
 
 ## Next step
 
