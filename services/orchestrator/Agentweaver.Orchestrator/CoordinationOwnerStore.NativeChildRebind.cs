@@ -23,6 +23,7 @@ internal sealed partial class CoordinationOwnerStore
         if (required.Length == 0)
             return;
 
+        // Lock by session ID so competing recovery paths use the same row order.
         await using var command = new NpgsqlCommand($"""
             SELECT session_id, parent_session_id, root_session_id, detached, execution_fence,
                    lifecycle_state, turn_state, logical_turn_ordinal, state_version,
@@ -109,6 +110,7 @@ internal sealed partial class CoordinationOwnerStore
             .ToArray();
         foreach (var member in members)
         {
+            // Only a prepared dispatch with no terminal or accounting evidence can move to a new runtime binding.
             if (member.NativeOrigin is not { } native ||
                 native.State != "prepared" || native.OwnerRevision != 1 ||
                 native.TerminalOutcome is not null || native.SourceReportStatus != "unknown" ||
@@ -173,6 +175,7 @@ internal sealed partial class CoordinationOwnerStore
             var source = await usageSources.ReadSourceAsync(
                 connection, transaction, registration.RuntimeInstanceId, cancellationToken).ConfigureAwait(false)
                 ?? throw new RuntimeAuthorizationException("runtime_sdk_source_unknown");
+            // The replacement host may differ, but the model and cost bindings must stay fixed.
             if (source.Receipt.RegistrationRevision != registration.Revision ||
                 source.Receipt.SourceGrantId != readiness.SourceGrant.GrantId ||
                 source.ConfigurationHash != readiness.SourceGrant.ConfigurationHash ||
