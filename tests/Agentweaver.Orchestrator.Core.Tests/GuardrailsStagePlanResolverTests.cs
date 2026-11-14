@@ -243,6 +243,59 @@ public sealed class GuardrailsStagePlanResolverTests
         Assert.Equal(Convert.ToHexString(SHA256.HashData(content)), evidence.ContentDigest);
     }
 
+    [Fact]
+    public async Task DroppedPromptShieldsBodyWithholdsAtTheGate()
+    {
+        const string prompt = "sensitive prompt fixture";
+        const string exceptionText = "response-body-secret";
+        var stream = new PromptShieldsClassifierTests.ResponseBodyStream(
+            [], new HttpIOException(HttpRequestError.ResponseEnded, exceptionText));
+        var handler = new PromptShieldsClassifierTests.StubHandler((_, _) =>
+            PromptShieldsClassifierTests.DroppedResponse(stream));
+        var catalog = CreateCatalog([Catalog(ShieldsId, true)], [ShieldsId]);
+        var resolver = new GuardrailsStagePlanResolver(catalog,
+        [
+            new GuardrailsCheckRegistration<PromptShieldsClassifierOptions>(
+                Options(ShieldsId), PromptShieldsClassifierTests.Create(handler), "shields-resource", 1)
+        ]);
+        var plan = resolver.Resolve("run-1", GuardrailsContentStage.UserInput, GuardrailsContentClass.Text, null);
+        Assert.True(plan.IsSuccess);
+
+        var policyProvider = new AgtPolicyProvider();
+        var policyOptions = new AgtPolicyProviderOptions("policy-resource", 1, "policy-revision-1", [PlatformAllowModelTurn]);
+        var policyCatalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
+            [policyProvider.CreateRegistration(policyOptions)],
+            [new ProviderSelection(ProviderSeam.Policy, AgtPolicyProvider.ProviderId)],
+            []).Value);
+        var policyPin = Assert.IsType<PinnedProviderBinding>((await policyProvider.ResolveNegotiateAndPinAsync(
+            new ProviderResolver(policyCatalog), policyOptions, "run-1")).Value);
+        var run = new GuardrailsAcceptedRunBinding(
+            "https://identity.test/", "actor-1", "tenant-1", "project-1", "run-1", "session-1",
+            "model.turn", "runtime-action", "1.1.1", new string('a', 64), "grant-1", "1", 3,
+            policyPin, policyOptions, [], [plan.Plan!]);
+        var content = Encoding.UTF8.GetBytes(prompt);
+        var journal = new Journal();
+        var gate = new GuardrailsContentGate(policyProvider, new CurrentAuthority(), journal);
+
+        var result = await gate.EvaluateAsync(run, new GuardrailsContentRequest(
+            Guid.NewGuid(), "model-turn-1", new string('b', 64), GuardrailsContentStage.UserInput,
+            GuardrailsContentClass.Text, null, ImmutableArray.Create(content)));
+
+        Assert.Equal(GuardrailsDecision.Withhold, result.Decision);
+        Assert.Equal(GuardrailsReasonCode.ProviderUnavailable, result.ReasonCode);
+        Assert.Empty(result.Findings);
+        Assert.Single(handler.Calls);
+        var evidence = Assert.Single(journal.Evidence);
+        var check = Assert.Single(evidence.Checks);
+        Assert.Equal(ShieldsId, check.ProviderId);
+        Assert.Equal(GuardrailsCheckOutcome.Failed, check.Outcome);
+        foreach (var sensitiveValue in new[] { prompt, "token-1", exceptionText })
+        {
+            Assert.DoesNotContain(sensitiveValue, JsonSerializer.Serialize(result));
+            Assert.DoesNotContain(sensitiveValue, JsonSerializer.Serialize(evidence));
+        }
+    }
+
     private static GuardrailsStagePlanResolver Resolver(
         ProviderRegistration[] registrations,
         ImmutableArray<string> order) =>
