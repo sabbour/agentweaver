@@ -200,6 +200,8 @@ internal static partial class SourceControlEndpoints
             path.Split('/').Any(segment => segment is "" or "." or ".."))
             return false;
         var candidate = path;
+        // Check each decoding layer so encoded separators, traversal segments, and controls cannot bypass the initial checks.
+        // Reject paths that still change after eight decoding passes.
         for (var depth = 0; depth < 8; depth++)
         {
             var decoded = Uri.UnescapeDataString(candidate);
@@ -506,7 +508,7 @@ internal static partial class SourceControlEndpoints
 
     private static void ValidateProjectTeamSyncSelectionCode(string? value)
     {
-        // Selection codes are opaque secrets and must never be accepted through a URL or an unbounded body.
+        // Selection codes are secrets: routes read them from a header or bounded body, never from a URL.
         if (value is null || !IsExactIdentityRepositorySelectionCode(value))
             throw new CoordinationException(
                 "team_sync_selection_invalid", StatusCodes.Status400BadRequest);
@@ -1763,9 +1765,6 @@ internal static partial class SourceControlEndpoints
         SourceControlOutputCaptureRecord record)
         => ToOutputCaptureSummary(record.Proof, record.EventPosition);
 
-    /// <summary>
-    /// Converts a capture or summary record to the public metadata view; a missing Events position is an integrity failure.
-    /// </summary>
     private static SourceControlOutputCaptureSummaryView ToOutputCaptureSummary(
         SourceControlOutputCaptureSummary record)
         => ToOutputCaptureSummary(record.Proof, record.EventPosition);
@@ -2426,7 +2425,7 @@ internal static partial class SourceControlEndpoints
     }
 
     /// <summary>
-    /// Serializes recovery of a merge-started intent and marks it outcome-uncertain rather than repeating a possibly completed remote merge.
+    /// Marks a merge-started intent uncertain without querying or retrying the remote merge, because the saved marker precedes that call.
     /// </summary>
     private static async Task<IResult> ResolveInterruptedMergeAsync(
         HttpContext context,
@@ -2934,7 +2933,7 @@ internal static partial class SourceControlEndpoints
     }
 
     /// <summary>
-    /// Requires an API-purpose secret for ordinary credentials and ensures GitHub App pins do not also retain static credentials.
+    /// For GitHub App pins, requires API and checkout credential references to be absent; otherwise, requires API purpose.
     /// </summary>
     private static void EnsureApiCredential(SourceControlRepositoryPin pin)
     {
@@ -2965,7 +2964,7 @@ internal static partial class SourceControlEndpoints
     }
 
     /// <summary>
-    /// Requires issue-write support from both the provider pin and the GitHub App permission binding.
+    /// Requires the provider's negotiated issue-write capability and rejects a GitHub App binding that denies it.
     /// </summary>
     private static void EnsureIssueWriteCapability(SourceControlRepositoryPin pin)
     {

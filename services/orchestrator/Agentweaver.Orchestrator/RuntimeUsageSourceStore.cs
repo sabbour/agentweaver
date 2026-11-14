@@ -924,8 +924,8 @@ internal sealed class RuntimeUsageSourceStore(
         ValidateNativePreparation(root, checkpoint, intent, registration, source.Source, message);
         if (source.SourceGrantId != message.Message.Metadata.Runtime.SourceGrantId)
             throw new RuntimeAuthorizationException("runtime_sdk_source_conflict");
-        // Lock the root session row. The session must still be active and must still carry the
-        // execution fence from the registration; otherwise a newer owner has taken over the run.
+        // Lock the root session row and require it to be active with the registration's execution fence.
+        // No match rejects admission but does not identify which condition failed.
         await using (var owner = new NpgsqlCommand($"""
             SELECT session_id FROM {_sessions}
             WHERE project_id = @project AND run_id = @run AND session_id = @root
@@ -1783,8 +1783,9 @@ internal sealed class RuntimeUsageSourceStore(
     }
 
     /// <summary>
-    /// Selects the one complete fixed-credit denial pair for the exact current registration and source grant.
+    /// Returns the complete fixed-credit denial pair only when exactly one matches the current registration and source grant.
     /// </summary>
+    /// <returns>The unique pair, or a result with <c>Receipt</c> and <c>Evidence</c> set to null when no unique pair exists.</returns>
     internal async Task<RuntimeFixedCreditGuardSelectionResult> SelectFixedCreditGuardWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeGrantReceipt grant, RuntimeSdkSourceReceipt sourceReceipt,
@@ -1959,7 +1960,7 @@ internal sealed class RuntimeUsageSourceStore(
         $"coordination/{registration.Binding.ProjectId}/{registration.Binding.RunId}/fixed-credit-denials";
 
     /// <summary>
-    /// Derives the stable fixed-credit guard event ID from registration, fence, stage, and request.
+    /// Derives the stable event ID from runtime ID, registration revision, fence, stage, and request ID.
     /// </summary>
     private static Guid FixedCreditGuardEventId(RuntimeFixedCreditGuardReceipt receipt) =>
         Guid.ParseExact(RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
@@ -1975,7 +1976,7 @@ internal sealed class RuntimeUsageSourceStore(
             Encoding.UTF8.GetBytes($"fixed-credit-no-send\0{guardReceiptHash}"))[..32], "N");
 
     /// <summary>
-    /// Rejects an existing fixed-credit guard event when any stable request or source binding changed.
+    /// Requires the registration and its hash, request hash, source hash, and source grant ID and revision to match.
     /// </summary>
     private static void RequireFixedCreditGuardReplay(
         RuntimeFixedCreditGuardReceipt existing, RuntimeFixedCreditGuardReceipt requested)
@@ -2361,7 +2362,7 @@ internal sealed class RuntimeUsageSourceStore(
     }
 
     /// <summary>
-    /// Verifies that the dispatch row matches the runtime, source, model, prompt, and request in its admission receipt.
+    /// Compares the child session, runtime ID, revision, fence, binding/source hashes, model reference/ID, prompt hash, and request hash with the admission and source values.
     /// </summary>
     private static void RequireOriginNativeDispatch(
         NativeDispatch dispatch, RuntimeNativeTurnAdmissionReceipt admission, string sourceHash)
@@ -2378,6 +2379,10 @@ internal sealed class RuntimeUsageSourceStore(
             throw new RuntimeAuthorizationException("runtime_native_turn_admission_invalid");
     }
 
+    /// <summary>
+    /// Validates saved rebind receipts against their recovery manifests and the current source.
+    /// </summary>
+    /// <remarks>Without receipts, the dispatch must match its original admission. With receipts, only the last receipt for the current registration is accepted; a held recovery blocks it when requested.</remarks>
     private async Task<NativeChildRebindReceipt?> RequireNativeDispatchBindingAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2567,6 +2572,10 @@ internal sealed class RuntimeUsageSourceStore(
         return current;
     }
 
+    /// <summary>
+    /// Validates a dispatch against its locked recovery origin and any saved rebind receipts.
+    /// </summary>
+    /// <returns>The current rebind receipt, or <see langword="null"/> when no rebind receipts exist for the dispatch.</returns>
     internal async Task<NativeChildRebindReceipt?> ValidateNativeChildRebindChainAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2598,6 +2607,10 @@ internal sealed class RuntimeUsageSourceStore(
             requireReleasedHold).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Validates every superseded activation-recovery operation between two rebind receipts.
+    /// </summary>
+    /// <remarks>Each blocked operation must match its supersession receipt and pending-unsent child; the chain must end at the prior destination fence.</remarks>
     private async Task RequireNativeChildRebindRecoveryGapAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2771,6 +2784,10 @@ internal sealed class RuntimeUsageSourceStore(
         return new(requestHash, resultJson, terminalStatusJson, phaseVersion, result, manifest);
     }
 
+    /// <summary>
+    /// Requires the recovery source checkpoint to descend from the saved rebind anchor on its destination fence.
+    /// </summary>
+    /// <remarks>Each parent link must be contiguous, and both endpoint payloads must match their saved hashes.</remarks>
     private async Task RequireRecoveryCheckpointDescendantAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2839,6 +2856,9 @@ internal sealed class RuntimeUsageSourceStore(
                 throw new RuntimeAuthorizationException("checkpoint_recovery_native_rebind_invalid");
     }
 
+    /// <summary>
+    /// Hashes the recovery operation, fence and run-state versions, checkpoint bindings, child manifest, boundary, and gate identity.
+    /// </summary>
     private static string ComputeRecoveryAdmissionHash(
         RunExecutionTransitionResult result,
         CheckpointRecoveryStatus status) =>
@@ -2861,6 +2881,9 @@ internal sealed class RuntimeUsageSourceStore(
             status.GateAuthorizedActorId
         }, JsonOptions));
 
+    /// <summary>
+    /// Reads a ready recovery manifest only when its operation, root, destination fence, and anchor match the rebind receipt.
+    /// </summary>
     private async Task<ChildCheckpointRecoveryManifest> ReadNativeRebindManifestAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2897,6 +2920,9 @@ internal sealed class RuntimeUsageSourceStore(
         return CoordinationOwnerStore.ReadCheckpointRecoveryManifest(operation, progress);
     }
 
+    /// <summary>
+    /// Compares the runtime ID, revision, fence, selection/binding/source hashes, prompt/request hashes, model reference/ID, cost-binding hash, cost and hard-cap flags, and creation time.
+    /// </summary>
     private static bool MatchesNativeOrigin(NativeDispatch dispatch, ChildRecoveryNativeOrigin native)
     {
         return dispatch.RuntimeInstanceId == native.RuntimeInstanceId &&
@@ -2916,10 +2942,10 @@ internal sealed class RuntimeUsageSourceStore(
     }
 
     /// <summary>
-    /// Reads the bound root checkpoint and requires that it still contains this running dispatch intent.
+    /// Requires the current root checkpoint to contain this running dispatch, or validates its saved recovery rebind.
     /// </summary>
-    /// <returns>The hash of the exact stored checkpoint payload after all dispatch bindings match.</returns>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when the checkpoint is no longer latest or its intent, revision, fence, or progress changed.</exception>
+    /// <returns>The payload hash for the validated checkpoint.</returns>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the checkpoint or rebind is missing, or the dispatch, decision, fence, or progress differs.</exception>
     private async Task<string> RequireNativeCheckpointAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeNativeTurnAdmissionReceipt admission, NativeDispatch dispatch, CancellationToken cancellationToken,
@@ -2982,6 +3008,10 @@ internal sealed class RuntimeUsageSourceStore(
         return RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(payload));
     }
 
+    /// <summary>
+    /// Validates the saved rebind anchor and its latest checkpoint descendant before reusing a prepared dispatch.
+    /// </summary>
+    /// <remarks>The anchor hash, recovery lineage, decision version, egress receipt, and running progress must still match.</remarks>
     private async Task<(string CheckpointId, long Revision, string PayloadHash)>
         RequireReboundNativeCheckpointAsync(
         NpgsqlConnection connection,
@@ -2992,6 +3022,7 @@ internal sealed class RuntimeUsageSourceStore(
         NativeChildRebindReceipt rebind,
         CancellationToken cancellationToken)
     {
+        // Two leaves are enough to detect an ambiguous latest checkpoint before following its chain to the anchor.
         await using var command = new NpgsqlCommand($"""
             WITH RECURSIVE leaves AS (
                 SELECT checkpoint.checkpoint_id, checkpoint.parent_checkpoint_id,
@@ -3195,7 +3226,7 @@ internal sealed class RuntimeUsageSourceStore(
         RuntimeObservationV2Fact ObservationFact);
 
     /// <summary>
-    /// Reads and revalidates the SDK source receipt for an active runtime registration.
+    /// Reads the SDK source receipt and validates its source facts, revision, and canonical hash against the supplied registration.
     /// </summary>
     /// <exception cref="RuntimeAuthorizationException">Thrown when the source is missing or its registration revision or hash is inconsistent.</exception>
     internal async Task<RuntimeSdkSourceReceipt> ReadCurrentSourceAsync(

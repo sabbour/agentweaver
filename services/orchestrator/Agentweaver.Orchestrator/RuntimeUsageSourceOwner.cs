@@ -236,8 +236,9 @@ internal sealed class RuntimeUsageSourceOwner(
     }
 
     /// <summary>
-    /// Selects the unique complete fixed-credit denial pair for the authenticated current runtime authority.
+    /// Returns the complete fixed-credit denial pair only when exactly one matches the current runtime authority.
     /// </summary>
+    /// <returns>The unique pair, or a result with <c>Receipt</c> and <c>Evidence</c> set to null when no unique pair exists.</returns>
     internal Task<RuntimeFixedCreditGuardSelectionResult> SelectCurrentFixedCreditGuardAsync(
         HttpContext context, RuntimeFixedCreditGuardSelectionRequest request,
         CancellationToken cancellationToken)
@@ -670,7 +671,7 @@ internal sealed class RuntimeUsageSourceOwner(
     /// Reads a usage receipt only when the caller's current accepted selection still matches its registration scope.
     /// </summary>
     /// <exception cref="CoordinationException">Thrown when the requested receipt does not exist.</exception>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when tenant, selection revisions, or accepted selection hash differs.</exception>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the tenant, current selection revisions, accepted selection hash, or snapshot changes.</exception>
     internal async Task<RuntimeUsageSourceReceipt> ReadReceiptAsync(
         HttpContext context, string projectId, string runId, string sessionId,
         Guid receiptId, CancellationToken cancellationToken)
@@ -697,7 +698,7 @@ internal sealed class RuntimeUsageSourceOwner(
     }
 
     /// <summary>
-    /// Reads a native source-completion manifest after confirming the accepted selection stayed unchanged.
+    /// Reads a native source-completion manifest after the tenant and selection snapshot stay unchanged across the read.
     /// </summary>
     /// <exception cref="CoordinationException">Thrown when source-completion evidence is unavailable.</exception>
     /// <exception cref="RuntimeAuthorizationException">Thrown when request identifiers or manifest scope are invalid.</exception>
@@ -749,7 +750,7 @@ internal sealed class RuntimeUsageSourceOwner(
     /// <summary>
     /// Requires the bearer and observation credential to remain valid within the active registration lifetime.
     /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when the registration or either credential has expired.</exception>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the registration has expired or either credential is not usable.</exception>
     private void RequireLive(
         RuntimeRegistration registration, SecretCredential bearer, SecretCredential credential)
     {
