@@ -22,7 +22,7 @@ public sealed class IssueSyncGrant
     public DateTimeOffset CreatedAt { get; set; }
 }
 
-/// <summary>Append-only mint evidence, never credential material.</summary>
+/// <summary>Mint outcome evidence without credential material.</summary>
 public sealed class IssueSyncMintAudit
 {
     public Guid AuditId { get; set; }
@@ -95,6 +95,7 @@ internal sealed class IssueSyncGrantAuthority(IdentityBrokerDbContext db, IIssue
             selection.ProjectId is not null || selection.ConnectionId != proof.ConnectionId ||
             !string.Equals(selection.RepositoryFullName, proof.Repository.FullName, StringComparison.OrdinalIgnoreCase))
             throw new RuntimeAuthorizationException("issue_sync_selection_invalid");
+        // The conditional update claims this code once, even when requests race.
         var claimed = await db.RepoAppRepositorySelections.Where(row => row.CodeHash == hash &&
             row.ProjectId == null && row.ConsumedAt == null && row.ExpiresAt > now)
             .ExecuteUpdateAsync(set => set.SetProperty(row => row.ProjectId, proof.ProjectId)
@@ -123,6 +124,7 @@ internal sealed class IssueSyncGrantAuthority(IdentityBrokerDbContext db, IIssue
         catch (RuntimeAuthorizationException error) when (
             error.Code is "issue_sync_creator_not_owner" or "issue_sync_project_inactive")
         {
+            // Revoke only after Projects confirms that this grant's authority has ended.
             await db.IssueSyncGrants.Where(row => row.GrantId == id).ExecuteUpdateAsync(
                 set => set.SetProperty(row => row.Active, false), ct);
             throw;
@@ -132,6 +134,7 @@ internal sealed class IssueSyncGrantAuthority(IdentityBrokerDbContext db, IIssue
 
     internal async Task RequireProjectAsync(IssueSyncGrant grant, CancellationToken ct)
     {
+        // The stored grant does not replace a check of the current Projects selection.
         var current = await projects.ReadAsync(
             new IssueSyncAuthorityQuery(grant.ProjectId, grant.TenantId, grant.CreatorId.ToString("D")), ct);
         if (current != Proof(grant))

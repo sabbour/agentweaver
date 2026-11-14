@@ -89,9 +89,8 @@ if (verifyPostgresBootstrap)
 
 IdentityBrokerInternalTlsConfiguration.Configure(builder);
 
-// Explicit, fail-closed configuration: every broker setting (issuer, signing material,
-// external provider, client list) must be supplied by the host. Production TLS has no
-// development certificate fallback.
+// The host must supply the required issuer, signing, external-provider, and client settings.
+// Production TLS has no development-certificate fallback.
 var identityOptions = builder.Configuration
     .GetSection(IdentityBrokerOptions.SectionName)
     .Get<IdentityBrokerOptions>()
@@ -527,7 +526,6 @@ if (identityOptions.GitHubRepoApp is not null)
 }
 if (runtimeBootstrapOptions is not null)
     app.MapIdentityRuntimeCredentialEndpoints();
-// Secrets always resolve through the configured Azure Key Vault redemption implementation.
 var secretsDescriptor = PlatformComponentCatalogReporter.BuiltInDescriptor(
     ProviderSeam.Secrets, "azure-key-vault", typeof(AzureKeyVaultSecretRedemption));
 app.MapPlatformComponentOwner(platformComponentAuthentication, async (services, ct) =>

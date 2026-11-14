@@ -2010,6 +2010,7 @@ internal sealed class RemoteMcpOAuthManagementService(
             snapshot.Configuration.ConfigurationRevision != snapshot.Head.CurrentConfigurationRevision)
             throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
 
+        // The head selects the revision. Read that exact configuration and match it to the snapshot before use.
         var configuration = await RuntimeOwnerHttpTransport.ReadOptionalAsync<EnvironmentConfiguration>(
             environment, _environmentOwnerAddress,
             $"{path}/configurations/{snapshot.Head.CurrentConfigurationRevision}",
@@ -2149,6 +2150,7 @@ internal sealed class RemoteMcpOAuthManagementService(
             configuration.Revision == row.ConfigurationRevision &&
             configuration.Hash == row.EnvironmentConfigurationHash &&
             configuration.IdentityBindingReference is null;
+        // A link may have committed before its caller lost the response; accept only the same operation reference.
         var isReplay =
             configuration.Revision > row.ConfigurationRevision &&
             configuration.IdentityBindingReference == row.IdentityBindingReference;
