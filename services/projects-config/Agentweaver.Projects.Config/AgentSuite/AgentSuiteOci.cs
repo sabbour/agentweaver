@@ -396,7 +396,6 @@ internal static class AgentSuiteOci
                 // Padding is valid only in the third or fourth quantum position and ends the input.
                 if (count < 2)
                     return $"illegal base64 data at input byte {position}";
-                var start = position;
                 position++;
                 // Two characters so far means the group needs "==" (two padding characters).
                 if (count == 2)
@@ -404,7 +403,7 @@ internal static class AgentSuiteOci
                     while (position < input.Length && input[position] is (byte)'\r' or (byte)'\n')
                         position++;
                     if (position >= input.Length || input[position] != '=')
-                        return $"illegal base64 data at input byte {(position >= input.Length ? input.Length : start)}";
+                        return $"illegal base64 data at input byte {(position >= input.Length ? input.Length : position - 1)}";
                     position++;
                 }
                 // Only newlines may follow the padding.
@@ -434,10 +433,8 @@ internal static class AgentSuiteOci
             }
         }
         // Standard base64 must be padded, so a leftover partial group is an error.
-        // The offset matches Go only for a group of one character. For two or three characters, Go
-        // reports the input length minus the group size, but this code reports the input length.
         if (count != 0)
-            return $"illegal base64 data at input byte {input.Length - (input.Length > 0 && count == 1 ? 1 : 0)}";
+            return $"illegal base64 data at input byte {input.Length - count}";
         data = [.. output];
         return null;
     }

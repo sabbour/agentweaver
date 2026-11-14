@@ -1,4 +1,6 @@
+using System.Text;
 using System.Text.Json;
+using JsonNode = System.Text.Json.Nodes.JsonNode;
 using Agentweaver.Projects.Config.AgentSuite;
 using Xunit;
 
@@ -141,6 +143,51 @@ public sealed class AgentSuiteParityTests
         AssertBlobsCoverContent("team-model-secret-refs", result);
     }
 
+    [Theory]
+    [InlineData("AA", 0)]
+    [InlineData("AAA", 0)]
+    [InlineData("AAAAAA", 4)]
+    [InlineData("AA\r\n", 2)]
+    [InlineData("AA=\nX", 3)]
+    [InlineData("AA=\r\nX", 4)]
+    [InlineData("A", 0)]
+    [InlineData("AA=", 3)]
+    [InlineData("AA=\r\n", 5)]
+    [InlineData("AA=X", 2)]
+    [InlineData("AAé", 2)]
+    public void MalformedEmbeddedManifestDataMatchesGoErrorOffset(string data, int offset)
+    {
+        var result = ValidateManifestData(data);
+
+        Assert.Equal([
+            $"index.json manifest descriptor 0: descriptor data must be a base64 string: illegal base64 data at input byte {offset}",
+        ], result.NativeErrors.ToArray());
+        Assert.Null(result.Graph);
+        Assert.Empty(result.Blobs);
+        Assert.False(result.Accepted);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EmbeddedManifestDataAcceptsBase64WithOptionalNewlines(bool addNewline)
+    {
+        var files = AgentSuiteArchives.ReadDirectory(Path.Combine(AgentSuiteArchives.FixturesRoot, "valid"));
+        var index = JsonNode.Parse(files["index.json"])!.AsObject();
+        var descriptor = index["manifests"]!.AsArray()[0]!.AsObject();
+        var digest = descriptor["digest"]!.GetValue<string>();
+        var manifest = files[$"blobs/sha256/{digest["sha256:".Length..]}"];
+        var data = Convert.ToBase64String(manifest);
+        if (addNewline)
+            data = data.Insert(data.Length / 2, "\r\n");
+        descriptor["data"] = data;
+        files["index.json"] = Encoding.UTF8.GetBytes(index.ToJsonString());
+
+        var result = AgentSuiteValidator.ValidateOciLayout(files);
+
+        Assert.True(result.Accepted, string.Join("\n", result.NativeErrors));
+    }
+
     private static void AssertBlobsCoverContent(string fixture, AgentSuiteValidationResult result)
     {
         // Every regular file in the content layer must appear as a blob ...
@@ -154,6 +201,15 @@ public sealed class AgentSuiteParityTests
 
     private static AgentSuiteValidationResult Validate(string fixture) =>
         AgentSuiteValidator.ValidateOciLayout(AgentSuiteArchives.ReadDirectory(Path.Combine(AgentSuiteArchives.FixturesRoot, fixture)));
+
+    private static AgentSuiteValidationResult ValidateManifestData(string data)
+    {
+        var files = AgentSuiteArchives.ReadDirectory(Path.Combine(AgentSuiteArchives.FixturesRoot, "valid"));
+        var index = JsonNode.Parse(files["index.json"])!.AsObject();
+        index["manifests"]!.AsArray()[0]!.AsObject()["data"] = data;
+        files["index.json"] = Encoding.UTF8.GetBytes(index.ToJsonString());
+        return AgentSuiteValidator.ValidateOciLayout(files);
+    }
 
     // parity.json holds the verdicts the pinned Go validator produced for each fixture.
     private static IReadOnlyList<Verdict> Verdicts() =>

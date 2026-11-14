@@ -31,6 +31,22 @@ public sealed class AgentSuiteProfileTests
         AssertArchiveInvalid(ValidLayoutEntries().Append(new TarEntry("link", [], '2') { LinkName = "index.json" }));
 
     [Fact]
+    public void InvalidGlobalPaxValueStillFailsOuterTarByEntryType()
+    {
+        var entries = ValidLayoutEntries().Append(
+            new TarEntry("global", "12 uid=nope\n"u8.ToArray(), 'g'));
+        var archive = AgentSuiteArchives.Tar(entries);
+        var result = AgentSuiteValidator.Validate(AgentSuiteArchiveFormat.OciLayoutTar, archive);
+
+        var error = Assert.Single(result.ProfileErrors);
+        Assert.Equal(AgentSuiteValidator.ArchiveInvalidCode, error.Code);
+        Assert.Equal("The archive entry \"global\" is not a regular file or directory.", error.Message);
+        Assert.Null(result.Graph);
+        Assert.Empty(result.Blobs);
+        Assert.False(result.Accepted);
+    }
+
+    [Fact]
     // A second index.json would make the layout ambiguous.
     public void DuplicateOuterEntryIsRefused() =>
         AssertArchiveInvalid(ValidLayoutEntries().Append(TarEntry.File("index.json", "{}")));

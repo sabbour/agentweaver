@@ -44,6 +44,50 @@ public sealed class AgentSuiteContentLayerTests
             "agentsuite.json tar modification time must be the Unix epoch");
 
     [Fact]
+    public void InvalidGlobalPaxValueIsIgnoredByTarReader()
+    {
+        var archive = AgentSuiteArchives.Tar([
+            new TarEntry("global", "12 uid=nope\n"u8.ToArray(), 'g'),
+        ]);
+        var tar = new GoTarReader(new GoReader(new MemoryStream(archive)));
+
+        Assert.Null(tar.Next(out var header));
+        Assert.Equal("global", header!.Name);
+        Assert.Equal(GoTarReader.TypeXGlobalHeader, header.Typeflag);
+    }
+
+    [Fact]
+    public void InvalidGlobalPaxValueReportsTimestampErrorBeforeTypeError() =>
+        AssertRejected(Layer([
+            new TarEntry("global", "12 uid=nope\n"u8.ToArray(), 'g'),
+        ]), "global tar modification time must be the Unix epoch");
+
+    [Fact]
+    public void GlobalPaxPathOverrideIsAppliedBeforeContentRejection()
+    {
+        var archive = AgentSuiteArchives.Tar([
+            new TarEntry("global", "17 path=override\n"u8.ToArray(), 'g'),
+        ]);
+        var tar = new GoTarReader(new GoReader(new MemoryStream(archive)));
+
+        Assert.Null(tar.Next(out var header));
+        Assert.Equal("override", header!.Name);
+        AssertRejected(AgentSuiteArchives.Gzip(archive), "override tar modification time must be the Unix epoch");
+    }
+
+    [Fact]
+    public void InvalidLocalPaxValueStillFailsContentRead() =>
+        AssertRejected(Layer([
+            new TarEntry("file", []) { Pax = new Dictionary<string, string> { ["uid"] = "nope" } },
+        ]), "read content tar: archive/tar: invalid header");
+
+    [Fact]
+    public void MalformedGlobalPaxRecordStillFailsContentRead() =>
+        AssertRejected(Layer([
+            new TarEntry("global", "bad\n"u8.ToArray(), 'g'),
+        ]), "read content tar: archive/tar: invalid header");
+
+    [Fact]
     // A PAX "atime" record adds a non-reproducible access time, which is not allowed.
     public void PaxAccessTimeMustBeUnset() =>
         AssertRejected(Mutate(entry => entry with { Pax = new Dictionary<string, string> { ["atime"] = "1" } }),
