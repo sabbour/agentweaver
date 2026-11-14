@@ -234,7 +234,7 @@ internal sealed partial class CoordinationOwnerStore
     }
 
     /// <summary>
-    /// Reads and locks the accepted root and latest decision envelope for a prerequisite claim.
+    /// Reads the latest decision envelope and locks its accepted run and root for a prerequisite claim.
     /// </summary>
     /// <returns>The current root, owner actor, tenant, accepted selection, hash, and decision version.</returns>
     /// <exception cref="CoordinationException">The root binding, accepted selection, or persisted decision envelope is missing, stale, or corrupt.</exception>
@@ -926,6 +926,7 @@ internal sealed partial class CoordinationOwnerStore
         }
 
         var pendingRequestId = Guid.NewGuid().ToString("N");
+        // Stage registration behind a savepoint so a failed final authority check can keep the fork unregistered.
         await using (var savepoint = new NpgsqlCommand(
             "SAVEPOINT session_fork_registration", connection, transaction))
             await savepoint.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -1443,9 +1444,6 @@ internal sealed partial class CoordinationOwnerStore
             CoordinationIdentity.ValidateIdentity(workPlanItemId, nameof(request.WorkPlanItemId));
     }
 
-    /// <summary>
-    /// Validates a fork request's source, target, event, cursor, and idempotency fields.
-    /// </summary>
     internal static void ValidateForkRequest(CoordinationSessionForkRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -2658,7 +2656,7 @@ internal sealed partial class CoordinationOwnerStore
     }
 
     /// <summary>
-    /// Checks whether a pending fork command already reserves the requested target session identifier.
+    /// Checks whether a pending or unregistered fork still reserves the target session identifier.
     /// </summary>
     private async Task<bool> IsForkTargetReservedAsync(
         NpgsqlConnection connection,
@@ -2744,9 +2742,6 @@ internal sealed partial class CoordinationOwnerStore
         return null;
     }
 
-    /// <summary>
-    /// Ensures the Events fork result is bound to the expected source, target, event, cursor, and fork kind.
-    /// </summary>
     private static void ValidateEventsForkResult(
         SessionIdentity source,
         CoordinationSessionForkRequest request,
@@ -4366,6 +4361,7 @@ internal sealed partial class CoordinationOwnerStore
             throw new CoordinationException(
                 "checkpoint_recovery_progress_conflict", StatusCodes.Status409Conflict);
 
+        // Move the existing guard to the new fence without resetting the accepted credit limits.
         await using var update = new NpgsqlCommand($"""
             UPDATE {_schema}.maf_execution_run_guards
             SET execution_fence = @nextFence, owner_revision = owner_revision + 1,
@@ -4435,6 +4431,11 @@ internal sealed partial class CoordinationOwnerStore
         return registration;
     }
 
+    /// <summary>
+    /// Throws <c>checkpoint_recovery_boundary_unsupported</c> when history is outside the supported child-recovery boundary.
+    /// Returns <see langword="true"/> only when <paramref name="allowCommittedOpenPullRequest"/> is set and there is exactly one running Open PR intent; the caller must verify that intent's committed Open PR owner operation.
+    /// Returns false for supported history that does not require committed Open PR verification.
+    /// </summary>
     internal static bool RequireNoChildJoinPlatformHistory(
         MafExecutionCheckpoint checkpoint,
         bool hasRegisteredChild = false,
@@ -4557,6 +4558,9 @@ internal sealed partial class CoordinationOwnerStore
             OperationId = intent.OperationId
         };
 
+    /// <summary>
+    /// Rejects gate recovery when the checkpoint records child-work progress or platform-operation intents.
+    /// </summary>
     internal static void RequireGateCheckpointBoundary(MafExecutionCheckpoint checkpoint)
     {
         var unresolvedProgress = checkpoint.Progress.WorkItems.Values
@@ -4602,6 +4606,10 @@ internal sealed partial class CoordinationOwnerStore
             : Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    /// <summary>
+    /// Checks the retained root startup intent against the requested recovery fence and registration.
+    /// </summary>
+    /// <remarks>When child evidence is required, it also validates the retained registration, placement, and bootstrap receipts.</remarks>
     private async Task<ChildRecoveryRootStartup?> RequireCheckpointRecoveryRuntimeAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -4711,6 +4719,10 @@ internal sealed partial class CoordinationOwnerStore
             bootstrap.GrantId, bootstrap.ConfigurationHash, priorStarts);
     }
 
+    /// <summary>
+    /// Checks that a recovery registration authorization still matches its pending or ready recovery operation and, for child work, its manifest member.
+    /// Throws <c>checkpoint_recovery_registration_stale</c> if it is stale.
+    /// </summary>
     internal async Task RequireCheckpointRecoveryRegistrationAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -6128,6 +6140,9 @@ internal sealed partial class CoordinationOwnerStore
                 "checkpoint_recovery_progress_conflict", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Verifies the held recovery operation named by the checkpoint's recovery lineage.
+    /// </summary>
     private async Task<ChildCheckpointRecoveryManifest> ReadCheckpointRecoveryOriginManifestAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -6246,6 +6261,9 @@ internal sealed partial class CoordinationOwnerStore
         string TenantId,
         string SelectionHash);
 
+    /// <summary>
+    /// Re-reads the root and each pending child startup intent and current registration before recovery can be marked ready.
+    /// </summary>
     private async Task<bool> AreCheckpointRecoveryMembersReadyAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -7200,10 +7218,6 @@ internal sealed partial class CoordinationOwnerStore
             throw new CoordinationException("run_owner_mismatch", StatusCodes.Status403Forbidden);
     }
 
-    /// <summary>
-    /// Rejects stale-fence, failed-run, or non-active session state before active work proceeds.
-    /// </summary>
-    /// <exception cref="CoordinationException">The session is stale, inactive, or requires run recovery.</exception>
     private static void RequireCurrentActiveSession(SessionRow session, AcceptedRunRow run)
     {
         if (session.ExecutionFence != run.Fence)
@@ -7260,6 +7274,9 @@ internal sealed partial class CoordinationOwnerStore
         return $"turn-{Convert.ToHexStringLower(SHA256.HashData(bytes))}";
     }
 
+    /// <summary>
+    /// Keeps the coordinator-root runtime binding stable for a run fence, without tying it to a child turn ordinal.
+    /// </summary>
     internal static string CreateCoordinatorRootRuntimeTurnId(
         SessionIdentity identity,
         long executionFence)
