@@ -42,6 +42,7 @@ param appRoutingDnsZoneResourceIds array = []
 
 var clusterName = '${namePrefix}-aks'
 var networkContributorRoleId = '4d97b98b-1d4f-4787-a291-c67834d212e7'
+// The managed default domain is enabled only when no custom DNS zones are configured.
 var managedDefaultDomainRequested = empty(appRoutingDnsZoneResourceIds)
 
 resource existingVnet 'Microsoft.Network/virtualNetworks@2023-09-01' existing = {
