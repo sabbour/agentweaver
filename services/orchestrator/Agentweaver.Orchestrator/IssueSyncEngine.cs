@@ -189,6 +189,7 @@ internal sealed class IssueSyncEngine(IssueSyncStore store, BacklogOwnerStore ba
         // On first attachment an existing repository link reads provider content; a pending export starts from local content.
         var desired = receipt?.Baseline is { } baseline ? Merge(local, remoteContent, baseline) :
             receipt?.CreatePending == true ? local : remoteContent;
+        // Keep the marker on exported issues so a lost create response can be recovered without another POST.
         var marker = receipt?.CreatePending == true || remote.Body != remoteContent.Body;
         var external = desired with { Body = marker ? WithMarker(desired.Body, project.ProjectId, taskReference.TaskId) : desired.Body };
         if (remote != external)

@@ -93,7 +93,6 @@ internal sealed class GuardrailsEvidenceStore : IGuardrailsEvidenceJournal
             // The SELECT always returns one row; no row means something unexpected happened, so fail closed.
             if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 return GuardrailsJournalAppendStatus.Unavailable;
-            // This call inserted the row.
             if (reader.GetBoolean(0))
                 return GuardrailsJournalAppendStatus.Appended;
             // The CTE snapshot can't see a row inserted concurrently by another statement; treat that as unavailable.
