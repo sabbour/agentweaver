@@ -96,7 +96,7 @@
     },
     {
       "name": "v1-native-workspace-acceptance",
-      "concept": "Superseded Workspace repository-read flow",
+      "concept": "Workspace repository review with the native CLI",
       "docs": ["docs/guide/azure-acceptance.md"]
     }
   ]

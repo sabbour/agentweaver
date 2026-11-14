@@ -1221,6 +1221,10 @@ A request with a missing field, an extra field, or another version fails with
 `invalid_request`. A version `2` request that contains `connectionRevision`,
 `installationId`, or `repositoryId` fails.
 
+The CLI `workspace refs`, `workspace tree`, and `workspace file` commands send a
+version `2` request. They read `connectionId` and `repositoryFullName` from the
+project configuration.
+
 The Broker shows a review page to the signed-in user. The page shows the
 repository, project, tenant, connection ID, and action. For version `1`, it also
 shows the connection revision. The Broker calls GitHub only when the user

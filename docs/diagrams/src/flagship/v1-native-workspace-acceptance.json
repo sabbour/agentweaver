@@ -1,18 +1,18 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Superseded Workspace repository-read flow",
-  "alt": "Historical flow only. The former native acceptance runner has been removed. The current read-only Gateway case does not select a Workspace repository or read repository files; issue #2752 tracks that separate case.",
+  "title": "Workspace repository review with the native CLI",
+  "alt": "The agentweaver workspace refs, tree, or file command opens one browser review for one read. The operator approves the repository and action at the Identity Broker. The CLI gets a single-use selection and sends it to the Gateway for one bounded read.",
   "autonumber": true,
   "participants": [
     {
       "id": "native-cli",
-      "label": "Former native CLI",
-      "subLabel": "Retired acceptance entrypoint",
+      "label": "Native CLI",
+      "subLabel": "agentweaver workspace refs, tree, or file",
       "icon": "box",
       "fluentIcon": "tool",
       "badge": {
-        "text": "Superseded",
+        "text": "--interactive",
         "tone": "lavender"
       }
     },
@@ -59,7 +59,7 @@
         "broker",
         "gateway"
       ],
-      "label": "Historical flow only. The current read-only Gateway case does not include Workspace repository reads. See issue #2752."
+      "label": "The CLI reads the actor, tenant, connection, and repository name from the Gateway. It sends a version 2 Workspace intent."
     },
     {
       "type": "message",
@@ -121,7 +121,7 @@
       "type": "message",
       "from": "native-cli",
       "to": "gateway",
-      "label": "Read refs, tree and file with the required selection header",
+      "label": "Read refs, tree, or file once with the required selection header",
       "line": "solid",
       "arrow": "filled"
     },

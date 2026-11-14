@@ -347,6 +347,57 @@ are redacted. Opaque responses report the output path and byte count. Raw
 response headers are not surfaced (`headers` is empty). Exit codes are `0`
 for 2xx, `1` for other statuses or failures, and `130` for cancellation.
 
+## Review a project repository
+
+The `workspace` commands read the Repo App repository of a project. Each
+command reads the project repository from the project configuration. Then it
+opens one browser approval for one read.
+
+```text
+agentweaver workspace refs --project <project-id> --interactive [--cursor <2-10000>] [target options]
+agentweaver workspace tree --project <project-id> --ref <commit-sha> --interactive [target options]
+agentweaver workspace file --project <project-id> --ref <commit-sha> --path <repository-path> --interactive [--output <new-file>] [target options]
+```
+
+- `refs` lists branches and tags. To get the next page, use the `nextCursor`
+  value from the result with `--cursor`.
+- `tree` lists the files and directories at one commit.
+- `file` reads one UTF-8 text file at one commit. The result shows the size,
+  the SHA-256 hash, and the Git blob SHA. It does not show the file content.
+  To keep the content, use `--output` with a new file path. The command does
+  not replace a file that exists.
+
+Use these rules:
+
+- `--interactive` is necessary. Without it, the command stops before it sends a
+  request.
+- `--project` is the project GUID. Do not use `--project-id` or `--run-id`. The
+  command uses an identity that is not bound to a project or run, with the
+  `projects.admin` scope.
+- `--ref` must be the full 40-character commit SHA. Use `refs` to find it.
+- `--path` must be a relative repository path with `/` between the parts. The
+  command stops before the approval if the path has `.` or `..` parts, a `\`,
+  or an encoded `/` or `\`.
+- The target options are `--gateway-url`, `--broker-issuer`, `--client-id`,
+  `--api-audience`, and `--tenant-id`, or their environment variables.
+
+The command first signs you in, if necessary. It then shows the repository and
+the action on stderr and opens the browser. Approve the review in the browser.
+A selection is good for one read only. Each new command opens a new approval.
+
+| Message | What to do |
+| --- | --- |
+| A fresh Workspace repository selection requires --interactive. | Run the command again with `--interactive`. |
+| The project does not use a GitHub App repository connection. | Configure the source control of the project. |
+| Sign-in was canceled or access was denied. | Run the command again and approve the review. |
+| The Identity Broker could not complete sign-in. | Make sure that the GitHub App installation can see the repository with the exact name and case, and that the connection is current. Then run the command again. |
+| The Identity Broker returned an unexpected Workspace selection. | Run the command again. If the error occurs again, report it. |
+| The Gateway request failed with HTTP status N (code). | Check your project role and the input values. Then run the command again. |
+| The Gateway returned an unexpected Workspace response. | Do not use the result. Report the error. |
+| The file is binary and cannot be read. | The command reads only text files. |
+
+Exit codes are `0` for success, `1` for a failure, and `130` for cancellation.
+
 ## Configure a BYOK model binding
 
 `models byok` plans an Azure OpenAI BYOK model binding. It does not need a
@@ -374,3 +425,5 @@ full procedure, see
 The checked-in case script checks Gateway discovery and the signed-in actor’s authorization context through normal CLI commands. It runs auth status, api operations, api describe, and rest; it does not mutate resources, send model requests, or launch a browser.
 
 For the input fields, exact apphost requirements, dry run, and evidence results, follow [Run a read-only CLI API case](./api-acceptance-migration.md). Use only an explicitly approved non-production target. The read-only case does not prove full API or P1 acceptance.
+
+To check the `workspace` commands, follow [Run the Workspace repository-read case](./api-acceptance-migration.md#run-the-workspace-repository-read-case).

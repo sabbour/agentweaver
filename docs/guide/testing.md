@@ -799,6 +799,11 @@ session. It does not create a run or call a model. The same script also has
 root model-turn and hard-credit no-send cases. These cases use only facts from
 the current session, execution fence, and accepted selection.
 
+Use the [Workspace repository-read case](./api-acceptance-migration.md#run-the-workspace-repository-read-case)
+to read one project repository file through the `agentweaver workspace`
+commands. It opens browser approvals, so it needs `--interactive` and a person
+who approves each review.
+
 ## Record release acceptance results
 
 For version-level coverage and sign-off, use the single

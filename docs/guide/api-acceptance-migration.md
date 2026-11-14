@@ -109,11 +109,46 @@ An unauthenticated actor or missing Gateway operation is `blocked` (exit code
 `failed` (exit code `1`). A failed or interrupted run is not a pass. Review the
 redacted command records before you retry.
 
-The Workspace repository-read case remains blocked until the normal CLI
-supports a fresh repository review selection. Track that capability in
-[issue #2752](https://github.com/sabbour/agentweaver/issues/2752). Do not use
-internal CLI types, extract a selection code, or bypass sensitive-header
-guards.
+## Run the Workspace repository-read case
+
+The `workspace-repository-read` case reads one file from the Repo App
+repository of a project through the `agentweaver workspace` commands. It makes
+no changes. It opens three or more browser approvals, so a person must approve
+each one as the expected actor.
+
+Before you begin, make sure that you have these items:
+
+- An approved non-production target.
+- A project that uses a GitHub App repository connection.
+- A GitHub App installation that can see the exact `owner/name` repository.
+- A sign-in as the expected actor with `agentweaver auth login --scope
+  projects.admin` and the target options, without `--project-id` or
+  `--run-id`.
+
+Copy `scripts/acceptance/api/examples/workspace-repository-read.json` to a new
+local JSON file. Set the same fields as the read-only case, and set the
+`fixture` fields: `projectId`, `repository` (`owner/name` with the exact case),
+`refKind` (`branch` or `tag`), `refName`, `commitSha`, `filePath`, `byteLength`,
+and `sha256` of the file.
+
+```powershell
+$env:AGENTWEAVER_CLI_PATH = "C:\approved\agentweaver.exe"
+node scripts/acceptance/api/workspace-repository-read.mjs --input .\workspace-case.json --output .\evidence\workspace-repository-read-001 --interactive
+```
+
+The script runs `--version`, `api operations`, `auth status`, and `rest` for the
+authorization context. If the actor or tenant is not the expected one, the case
+fails before any approval. Then the script runs `workspace refs` until it finds
+the ref, `workspace tree`, and `workspace file`. It compares the ref, the commit,
+the file size, the SHA-256 hash, and the Git blob SHA. It never writes the file
+content to the evidence. Each workspace command can wait 11 minutes for the
+browser approvals.
+
+A missing sign-in, a Broker error, or an approval that does not complete in time
+is `blocked` (exit code `2`). A mismatch or an unexpected response is `failed`
+(exit code `1`). Until a live run with approved input passes, treat this case as
+blocked. Do not use internal CLI types, extract a selection code, or bypass
+sensitive-header guards.
 
 ## Next step
 

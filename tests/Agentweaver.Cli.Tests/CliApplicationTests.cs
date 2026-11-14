@@ -22,6 +22,9 @@ public sealed class CliApplicationTests
         Assert.Equal(0, versionCode);
         Assert.Contains("agentweaver api operations", output.ToString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("agentweaver rest --method GET|HEAD", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("agentweaver workspace refs --project", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("agentweaver workspace tree --project", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("agentweaver workspace file --project", output.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("agentweaver test", output.ToString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Agentweaver 1.x CLI 1.0.0 (source unbound, tree unbound)", output.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("1.0.0+", output.ToString(), StringComparison.Ordinal);
@@ -40,6 +43,18 @@ public sealed class CliApplicationTests
 
         Assert.Equal(1, result);
         Assert.Contains("Unknown command: test", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UnknownWorkspaceCommandFails()
+    {
+        var error = new StringWriter();
+        var result = await CliApplication.RunAsync(
+            ["workspace", "branches", "--interactive"],
+            new CliRuntimeOptions(Error: error));
+
+        Assert.Equal(1, result);
+        Assert.Contains("Unknown Workspace command: branches", error.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
