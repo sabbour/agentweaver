@@ -1,6 +1,6 @@
 # Legacy MCP harness adapter
 
-This retained adapter uses the released 0.x MCP client pattern and its exact SDK `1.29.0` pin.
+This retained adapter uses the released 0.x MCP client pattern and its exact SDK `1.32.0` pin.
 It uses Streamable HTTP at the exact `/mcp` path.
 The adapter discovers tools from the live MCP server. It does not add persona
 actors or another protocol framework.
