@@ -249,6 +249,7 @@ export function validateAuthorizationContext(context, input) {
 }
 
 export function childEnvironment(env) {
+  // The case supplies target selectors explicitly; ambient values must not redirect a command.
   const childEnv = { ...env };
   const excluded = new Set([...TARGET_ENV, 'AGENTWEAVER_CLI_PATH']);
   for (const key of Object.keys(childEnv)) {
@@ -272,6 +273,7 @@ function matchesToolLimitRejection(fact, sessionId) {
 }
 
 function historyFacts(pages, firstHistory) {
+  // Every page must share one snapshot and high-watermark, or concurrent writes can mix history views.
   if (pages.some(page => page.history?.complete !== true
     || !Array.isArray(page.history?.items)
     || !Object.hasOwn(page.history, 'nextCursor')
@@ -472,6 +474,7 @@ function hardCreditEvidence(input, pages) {
       && isUuid(fact.dispatchId)),
     binding, sessionId, 'hard-credit denial',
   );
+  // A denial under an earlier accepted limit does not prove that the current limit was enforced.
   const configured = denials.filter(fact => fact.configuredValue === limit);
   if (configured.length === 0) {
     throw new Error('The current hard-credit denial has a configured value that is different from the accepted copilotHardCreditLimit. The denial is from an old configuration.');
@@ -674,6 +677,7 @@ async function persistResult(handle, result) {
 }
 
 function recordArgs(args) {
+  // Keep opaque continuation values out of the saved command evidence.
   return args.map((value, index) => {
     if (args[index - 1] === '--query' && value.startsWith('cursor=')) return 'cursor=[REDACTED]';
     return value;
@@ -749,6 +753,7 @@ async function runCase(options, env = process.env) {
     let query = { pageSize: PAGE_SIZE };
     let pageNumber = 0;
     const seenCursors = new Set();
+    // Repeated cursors or an unending history must not trap a live acceptance run.
     while (true) {
       pageNumber += 1;
       if (pageNumber > 1000) throw new Error('The history exceeded the 1000-page safety limit.');

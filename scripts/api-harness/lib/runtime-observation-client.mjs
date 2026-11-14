@@ -391,6 +391,7 @@ function validateLateCleanupItem(item, expectedFence, expectedOwner) {
     'providerObservation',
   ], 'late-resource cleanup item');
   requireEnvironmentFence(item.sourceFence, expectedOwner, 'lateCleanup.sourceFence');
+  // A prior lifecycle may still own cleanup evidence, but a future lifecycle cannot.
   if (item.sourceFence.lifecycleGeneration > expectedFence.lifecycleGeneration) {
     throw new Error('A late-resource cleanup source fence is newer than the current Environment fence.');
   }

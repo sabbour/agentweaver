@@ -76,6 +76,7 @@ function validateUrl(value, name, originOnly) {
   } catch {
     throw new Error(`The ${name} must be an absolute HTTPS URL.`);
   }
+  // Cleartext is allowed only for loopback fixtures; remote acceptance targets must use HTTPS.
   const localHttp = url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if ((!localHttp && url.protocol !== 'https:')
     || url.username
@@ -145,6 +146,7 @@ export function buildCommands(input) {
 }
 
 export function childEnvironment(env) {
+  // The case supplies target selectors explicitly; ambient values must not redirect a command.
   const childEnv = { ...env };
   const excluded = new Set([...TARGET_ENV, 'AGENTWEAVER_CLI_PATH']);
   for (const key of Object.keys(childEnv)) {

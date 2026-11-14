@@ -134,6 +134,7 @@ def assert_build_sources_clean(root: Path) -> None:
         "scripts/cli-dotnet",
         ".github/workflows/v1-cli-package.yml",
     ]
+    # The receipt pins committed inputs, so packaging must not include unrecorded source or build changes.
     status = checked_run(
         ["git", "status", "--porcelain", "--untracked-files=all", "--", *paths],
         root,
@@ -154,6 +155,7 @@ def project_version(project: Path, root: Path) -> str:
 def output_directory(root: Path, rid: str) -> Path:
     candidate = root / "artifacts" / "cli" / rid
     relative = candidate.relative_to(root)
+    # Reject links in every path component before creating output under the repository.
     cursor = root
     for part in relative.parts:
         cursor = cursor / part
@@ -225,6 +227,7 @@ def write_archive(stream: BinaryIO, rid: str, files: Mapping[str, Path | bytes])
     normalized = {validate_distribution_path(name): source for name, source in files.items()}
     if len(normalized) != len(files) or len({name.casefold() for name in normalized}) != len(normalized) or APPHOSTS[rid] not in normalized:
         raise PackageError(f"Archive must include exactly one root apphost for {rid}.")
+    # Fixed timestamps, ownership, ordering, and compression keep the archive reproducible.
     if info.format == "zip":
         with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
             for name in sorted(normalized):
@@ -253,6 +256,7 @@ def write_archive(stream: BinaryIO, rid: str, files: Mapping[str, Path | bytes])
 def archive_inventory(stream: BinaryIO, rid: str) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
     seen: set[str] = set()
+    # Archives also run on Windows, where names that differ only by case collide.
     folded_names: set[str] = set()
 
     def add(name: str, content: BinaryIO, mode: int, regular: bool) -> None:
@@ -407,6 +411,7 @@ def external_smoke_executable(executable: Path, root: Path) -> Path:
 def run_smoke(executable: Path, rid: str, version: str, commit: str, tree: str, root: Path) -> None:
     if runtime_rid() != rid:
         raise PackageError(f"Runtime smoke for {rid} requires a native {rid} runner.")
+    # Run outside the checkout so the smoke test exercises the extracted archive, not source files.
     executable = external_smoke_executable(executable, root)
     cwd = external_working_directory(root)
     with OpenApiFixture() as server:
@@ -519,6 +524,7 @@ def build_package(rid: str, smoke: bool = False, root: Path = ROOT) -> dict[str,
         publish_dir = work / "publish"
         checked_run(restore_arguments(project, commit, tree), root)
         checked_run(publish_arguments(project, rid, publish_dir, commit, tree), root)
+        # Reject a source move during publish so the receipt cannot describe a different build input.
         if git_value(root, "HEAD") != commit or git_value(root, "HEAD^{tree}") != tree:
             raise PackageError("The source commit/tree changed during publish.")
         assert_build_sources_clean(root)
