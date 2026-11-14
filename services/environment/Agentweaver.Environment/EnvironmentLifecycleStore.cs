@@ -56,6 +56,7 @@ public sealed class EnvironmentLifecycleStore(
     {
         ValidateRecoveryPage(tenantId, projectId, runId, afterEnvironmentId, take);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        // The recovery flag also covers uncertain Sandbox attempts and volume cleanup.
         await using var command = new NpgsqlCommand($"""
             SELECT owner.environment_id, owner.lifecycle_generation, owner.state,
                    policy.policy_generation, policy.effect_state,
@@ -141,6 +142,7 @@ public sealed class EnvironmentLifecycleStore(
             afterVolumeId,
             take);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        // Rebuild each volume from its latest completed state and its original Create specification.
         await using var command = new NpgsqlCommand($"""
             WITH volume_ids AS (
                 SELECT DISTINCT resource_id AS volume_id
@@ -449,6 +451,7 @@ public sealed class EnvironmentLifecycleStore(
             cancellationToken).ConfigureAwait(false);
         if (previous is not null)
         {
+            // A replay must keep the original request and the exact saved invocation binding, when present.
             if (!string.Equals(previous.Value.Fingerprint, fingerprint, StringComparison.Ordinal))
                 throw new EnvironmentLifecycleException(
                     "environment_idempotency_conflict",
@@ -491,6 +494,7 @@ public sealed class EnvironmentLifecycleStore(
                 cancellationToken).ConfigureAwait(false);
 
         if (p1Binding is not null)
+            // Check authority before writing the bound lifecycle result and again before commit.
             await beforeCommitCheck!(cancellationToken).ConfigureAwait(false);
 
         var now = timeProvider.GetUtcNow();
@@ -772,7 +776,7 @@ public sealed class EnvironmentLifecycleStore(
         VerifyNetworkPolicyGenerationAsync(fence, resourceId, policyGeneration,
             acquireOwnerLock: true, cancellationToken);
 
-    /// <summary>Reads the verified policy generation without reacquiring a lock already held by the caller.</summary>
+    /// <summary>Reads the verified policy generation without taking the Environment owner lock.</summary>
     public Task ReadVerifiedNetworkPolicyGenerationAsync(
         EnvironmentGenerationFence fence,
         string resourceId,
@@ -995,6 +999,7 @@ public sealed class EnvironmentLifecycleStore(
             throw new EnvironmentLifecycleException(
                 "environment_fence_stale",
                 "The Environment lifecycle fence is stale.");
+        // The latest completed effect supplies state; the first completed Create keeps the original specification.
         await using var command = new NpgsqlCommand($"""
             SELECT o.lifecycle_generation, latest.target_transition_revision,
                    latest.target_resource_generation, latest.target_data_generation,
@@ -1054,7 +1059,7 @@ public sealed class EnvironmentLifecycleStore(
         return snapshot;
     }
 
-    /// <summary>Creates the initial volume row and stores its serialized specification under the owner fence.</summary>
+    /// <summary>Records the initial volume state and immutable specification under the owner fence.</summary>
     public async Task<EnvironmentWorkspaceVolumeSnapshot> CreateWorkspaceVolumeAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -1203,7 +1208,7 @@ public sealed class EnvironmentLifecycleStore(
             durableFlushVerified: false,
             cancellationToken);
 
-    /// <summary>Commits a P1 provider result and immutable invocation link in the same Environment transaction.</summary>
+    /// <summary>Commits the provider result with its invocation link; verified results require an authority recheck.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteP1WorkspaceVolumeProvisionAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1229,7 +1234,7 @@ public sealed class EnvironmentLifecycleStore(
             beforeCommitCheck: beforeCommitCheck,
             p1Binding: binding);
 
-    /// <summary>Reconciles a provision reservation with the resource observed from the storage provider.</summary>
+    /// <summary>Marks a provision operation as reconciled under its Environment owner fence.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeProvisionReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1281,7 +1286,7 @@ public sealed class EnvironmentLifecycleStore(
             durableFlushVerified: false,
             cancellationToken);
 
-    /// <summary>Reconciles a replacement operation against provider state after an uncertain result.</summary>
+    /// <summary>Marks a replacement operation as reconciled under its Environment owner fence.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeReplaceReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1332,7 +1337,7 @@ public sealed class EnvironmentLifecycleStore(
             durableFlushVerified: false,
             cancellationToken);
 
-    /// <summary>Reconciles a bind reservation against the provider's observed attachment state.</summary>
+    /// <summary>Marks a bind operation as reconciled under its Environment owner fence.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeBindReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1383,7 +1388,7 @@ public sealed class EnvironmentLifecycleStore(
             durableFlushVerified: false,
             cancellationToken);
 
-    /// <summary>Reconciles an unbind reservation against the provider's observed attachment state.</summary>
+    /// <summary>Marks an unbind operation as reconciled under its Environment owner fence.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeUnbindReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1434,7 +1439,7 @@ public sealed class EnvironmentLifecycleStore(
             durableFlushVerified: false,
             cancellationToken);
 
-    /// <summary>Reconciles an attachment reservation against the provider's actual state.</summary>
+    /// <summary>Marks an attach operation as reconciled under its Environment owner fence.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeAttachReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1466,7 +1471,7 @@ public sealed class EnvironmentLifecycleStore(
             specificationJson: null,
             cancellationToken);
 
-    /// <summary>Records successful detachment for the exact Sandbox and volume generations.</summary>
+    /// <summary>Records the detach result for the exact Sandbox and volume generations.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeDetachAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1487,7 +1492,7 @@ public sealed class EnvironmentLifecycleStore(
             cancellationToken,
             beforeCommitCheck: beforeCommitCheck);
 
-    /// <summary>Reconciles a detach reservation against the provider's actual state.</summary>
+    /// <summary>Marks a detach operation as reconciled under its Environment owner fence.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeDetachReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1520,7 +1525,7 @@ public sealed class EnvironmentLifecycleStore(
             specificationJson: null,
             cancellationToken);
 
-    /// <summary>Completes a flush after recording provider verification and advancing the volume data generation.</summary>
+    /// <summary>Records the flush result and advances the data generation only on verified completion.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeFlushAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1540,7 +1545,7 @@ public sealed class EnvironmentLifecycleStore(
             durableFlushVerified,
             cancellationToken);
 
-    /// <summary>Completes a flush and stores its validated runtime-host evidence for later resume checks.</summary>
+    /// <summary>Records the flush result and any validated producer evidence for later resume checks.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeFlushAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1559,7 +1564,7 @@ public sealed class EnvironmentLifecycleStore(
             effectVerified, durableFlushVerified: effectVerified, cancellationToken, evidence, beforeCommitCheck);
     }
 
-    /// <summary>Reconciles a flush after checking retained provider evidence and the expected data generation.</summary>
+    /// <summary>Marks a flush operation as reconciled under its Environment owner fence.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeFlushReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1600,7 +1605,7 @@ public sealed class EnvironmentLifecycleStore(
         GetRetainedWorkspaceVolumeFlushEvidenceAsync(
             environmentFence, environmentFence, volumeId, targetTransitionRevision, cancellationToken);
 
-    /// <summary>Reads retained flush evidence from a source Environment after its workspace has been released.</summary>
+    /// <summary>Reads retained flush evidence for a source Environment lifecycle generation.</summary>
     public async Task<WorkspaceVolumeFlushEvidence?> GetRetainedWorkspaceVolumeFlushEvidenceAsync(
         EnvironmentGenerationFence currentFence,
         EnvironmentGenerationFence sourceFence,
@@ -1652,7 +1657,7 @@ public sealed class EnvironmentLifecycleStore(
         return operation?.FlushEvidence;
     }
 
-    /// <summary>Completes release after verifying the reservation and recording provider cleanup state.</summary>
+    /// <summary>Records the provider's Release result after checking the exact reservation.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeReleaseAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1670,7 +1675,7 @@ public sealed class EnvironmentLifecycleStore(
             durableFlushVerified: false,
             cancellationToken);
 
-    /// <summary>Reconciles a release operation against the storage provider's observed resource state.</summary>
+    /// <summary>Marks a release operation as reconciled under its Environment owner fence.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeReleaseReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1681,7 +1686,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Release,
             cancellationToken);
 
-    /// <summary>Claims one pending cleanup with a bounded lease so only one worker processes it at a time.</summary>
+    /// <summary>Claims pending or expired cleanup with a bounded lease so only one worker processes it at a time.</summary>
     public async Task<EnvironmentWorkspaceVolumeCleanupLease?> ClaimWorkspaceVolumeCleanupAsync(
         EnvironmentGenerationFence environmentFence,
         Guid? sourceReplaceOperationId,
@@ -1702,6 +1707,7 @@ public sealed class EnvironmentLifecycleStore(
             .ConfigureAwait(false);
 
         var leaseId = Guid.NewGuid();
+        // Do not clean an old resource while the latest completed state still uses its generation.
         await using var command = new NpgsqlCommand($"""
             WITH candidate AS (
                 SELECT work.work_id
@@ -1798,7 +1804,7 @@ public sealed class EnvironmentLifecycleStore(
         return lease;
     }
 
-    /// <summary>Completes or records failure for the cleanup item held by the supplied cleanup lease.</summary>
+    /// <summary>Completes released cleanup or blocks retained work using the supplied lease.</summary>
     public async Task<EnvironmentWorkspaceVolumeCleanupStatus> CompleteWorkspaceVolumeCleanupAsync(
         EnvironmentWorkspaceVolumeCleanupLease lease,
         WorkspaceVolumeReleaseReceipt receipt,
@@ -1899,7 +1905,7 @@ public sealed class EnvironmentLifecycleStore(
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Reads cleanup status for one owner, returning null when no cleanup is pending.</summary>
+    /// <summary>Reads cleanup status for one owner, returning null when no matching cleanup exists.</summary>
     public async Task<EnvironmentWorkspaceVolumeCleanupStatus?> GetWorkspaceVolumeCleanupStatusAsync(
         EnvironmentGenerationFence environmentFence,
         Guid sourceReplaceOperationId,
@@ -1911,6 +1917,7 @@ public sealed class EnvironmentLifecycleStore(
                 "A source replace operation ID cannot be empty.",
                 nameof(sourceReplaceOperationId));
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        // Cleanup records stay visible to the active owner after their source generation ends.
         await using var command = new NpgsqlCommand($"""
             SELECT work_id, source_replace_operation_id, volume_id, resource_generation,
                    work.state, lease_revision, lease_expires_at
@@ -2065,6 +2072,7 @@ public sealed class EnvironmentLifecycleStore(
         }
 
         var now = timeProvider.GetUtcNow();
+        // Create metadata and release of an unprovisioned request need no provider call.
         var ownerOnlyTransition = request.Operation == EnvironmentWorkspaceVolumeOperation.Create ||
             (request.Operation == EnvironmentWorkspaceVolumeOperation.Release &&
              request.ExpectedResourceGeneration == 0);
@@ -2226,6 +2234,7 @@ public sealed class EnvironmentLifecycleStore(
         var metadataRetry = (expectedOperation is EnvironmentWorkspaceVolumeOperation.Bind or
                 EnvironmentWorkspaceVolumeOperation.Unbind) &&
             operation.State == EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired;
+        // Only Release, Flush, Bind, and Unbind can complete a reconciliation-required operation through retry.
         if (beforeCommitCheck is not null)
             await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
         if (operation.State != EnvironmentWorkspaceVolumeTransitionState.Reserved && !releaseRetry && !flushRetry && !metadataRetry)
@@ -2279,6 +2288,7 @@ public sealed class EnvironmentLifecycleStore(
                     ? EnvironmentWorkspaceVolumeTransitionState.Failed
                     : EnvironmentWorkspaceVolumeTransitionState.Stale;
 
+        // Keep a possible provider effect reconcilable when its owner fence is no longer current.
         if (!complete)
         {
             await UpdateWorkspaceVolumeEffectStateAsync(
@@ -2352,7 +2362,7 @@ public sealed class EnvironmentLifecycleStore(
             replayed: false);
     }
 
-    /// <summary>Reconciles a reserved volume effect after comparing the provider's actual state with its target.</summary>
+    /// <summary>Marks a reconciliation-required operation as reconciled under its Environment owner fence.</summary>
     private async Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeTransitionReconciledCoreAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,
@@ -2412,6 +2422,7 @@ public sealed class EnvironmentLifecycleStore(
         DateTimeOffset createdAt,
         CancellationToken cancellationToken)
     {
+        // Cleanup uses the old provider binding and the immutable Create policy.
         var oldResource = operation.ExpectedResource
             ?? throw new EnvironmentLifecycleException(
                 "environment_volume_cleanup_source_missing",
@@ -2469,6 +2480,7 @@ public sealed class EnvironmentLifecycleStore(
             $"replace-cleanup:{operation.OperationId:N}").Validate();
         var sharedDelete = specification.BindingMode == WorkspaceVolumeBindingMode.Shared &&
             specification.ReclaimPolicy == WorkspaceVolumeReclaimPolicy.Delete;
+        // Shared Delete stays blocked because Environment has no authoritative reference registry.
         var workId = Guid.NewGuid();
         await using var insert = new NpgsqlCommand($"""
             INSERT INTO {WorkspaceVolumeCleanup}
@@ -2951,6 +2963,7 @@ public sealed class EnvironmentLifecycleStore(
                 "environment_volume_transition_invalid",
                 "The workspace-volume operation is not valid for its current owner-recorded state.")
         };
+        // Only Provision and Replace advance the resource generation; Flush advances the data generation.
         var targetResourceGeneration = request.Operation switch
         {
             EnvironmentWorkspaceVolumeOperation.Provision or EnvironmentWorkspaceVolumeOperation.Replace =>
@@ -3105,7 +3118,7 @@ public sealed class EnvironmentLifecycleStore(
             FlushEvidence = operation.FlushEvidence
         };
 
-    /// <summary>Blocks Environment release while any Sandbox lease or workspace-volume resource remains active.</summary>
+    /// <summary>Blocks Environment release while provider effects, leases, or cleanup remain unresolved.</summary>
     private static async Task EnsureOwnerResourcesReleasedAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -3176,7 +3189,7 @@ public sealed class EnvironmentLifecycleStore(
                 "Environment release requires every owner-recorded provider effect to be released or reconciled first.");
     }
 
-    /// <summary>Blocks a lifecycle generation advance until the prior Sandbox lease is released.</summary>
+    /// <summary>Blocks a lifecycle generation advance while prior Sandbox resources or cleanup remain unresolved.</summary>
     private static async Task EnsureSandboxReleasedBeforeFenceAdvanceAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -3522,9 +3535,11 @@ public sealed class EnvironmentLifecycleStore(
     private static JsonElement ParseSpecification(string specificationJson)
     {
         using var document = JsonDocument.Parse(specificationJson);
+        // Clone the value so it remains valid after its JsonDocument is disposed.
         return document.RootElement.Clone();
     }
 
+    // The callers use NUL separators so distinct field boundaries stay distinct.
     private static string Fingerprint(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 

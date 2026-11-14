@@ -128,6 +128,7 @@ public static class EnvironmentRuntimeBootstrapEndpoints
                 {
                     request.Validate();
                     var recoveryQuery = context.Request.Query["checkpointRecoveryOperationId"];
+                    // Reject duplicate or malformed recovery parameters before placement lookup.
                     if (recoveryQuery.Count > 1 ||
                         recoveryQuery.Count == 1 &&
                         (!Guid.TryParse(recoveryQuery[0], out var recoveryId) || recoveryId == Guid.Empty ||

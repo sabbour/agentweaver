@@ -358,6 +358,7 @@ public sealed class EnvironmentRuntimePlacementReader(
         var bootstrap = await ProjectBootstrapProfileAsync(
             placement, profileId, profiles, profileReplacements, token, ownerContext: ownerContext)
             .ConfigureAwait(false);
+        // Reject the result if owner context changed while placement and profile data were read.
         await RequireSameOwnerContextAsync(
             actor,
             ownerContext,
@@ -434,6 +435,7 @@ public sealed class EnvironmentRuntimePlacementReader(
             !replacement.MatchesSourceProfile(sourceRegistration!, profileId))
             throw new RuntimeAuthorizationException("runtime_bootstrap_profile_replacement_conflict");
 
+        // The saved source profile targets its old lease; a replacement profile must match the new lease.
         if (placement.RuntimeResume is { } resume)
         {
             var binding = resume.SourceRelease.HostReceipt.Registration.Binding;
@@ -519,6 +521,7 @@ public sealed class EnvironmentRuntimePlacementReader(
             if (resume.SourceManifest.EnvironmentFence!.Owner != owner ||
                 placement.LifecycleGeneration != checked(resume.SourceManifest.EnvironmentFence.LifecycleGeneration + 1))
                 throw new RuntimeAuthorizationException("runtime_resume_profile_stale");
+            // The original profile still names the saved Sandbox; replacement profiles use this placement.
             profileResource = profileId == binding.ProfileId
                 ? new(ProviderSeam.Sandbox, binding.PlacementProviderId!,
                     binding.PlacementUid, binding.PlacementGeneration)
